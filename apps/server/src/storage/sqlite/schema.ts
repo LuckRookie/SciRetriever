@@ -441,8 +441,24 @@ export const DEVICE_CONNECTION_SCHEMA = [
   "CREATE TABLE device_pairings(code_sha256 TEXT PRIMARY KEY CHECK(length(code_sha256)=64),connection_id TEXT NOT NULL UNIQUE,expires_at TEXT NOT NULL,used_at TEXT,FOREIGN KEY(connection_id) REFERENCES device_connections(connection_id) ON DELETE CASCADE) STRICT",
   "CREATE TABLE device_exchange_limits(bucket TEXT PRIMARY KEY,window_start INTEGER NOT NULL,attempts INTEGER NOT NULL CHECK(attempts>0)) STRICT",
 ] as const;
-/** M1 additions are collected here; 03/08 extend this same offline migration. */
-export const IMPORT_SCHEMA_V16 = [...DEVICE_CONNECTION_SCHEMA] as const;
+export const IMPORT_SESSION_SCHEMA = [
+  "CREATE TABLE import_libraries(library_key TEXT PRIMARY KEY,system TEXT NOT NULL,external_library_id TEXT NOT NULL,identity_scope TEXT NOT NULL,name TEXT NOT NULL,created_at TEXT NOT NULL) STRICT",
+  "CREATE TABLE external_object_mappings(library_key TEXT NOT NULL,object_kind TEXT NOT NULL CHECK(object_kind IN ('record','group','file','annotation')),external_id TEXT NOT NULL,internal_id TEXT NOT NULL,content_sha256 TEXT,observation_id TEXT,PRIMARY KEY(library_key,object_kind,external_id),FOREIGN KEY(library_key) REFERENCES import_libraries(library_key) ON DELETE RESTRICT) STRICT",
+  "CREATE TABLE import_sessions(session_id TEXT PRIMARY KEY,library_key TEXT NOT NULL,library_json TEXT NOT NULL CHECK(json_valid(library_json)),format TEXT NOT NULL,scope TEXT NOT NULL,file_name TEXT,import_user_tags INTEGER NOT NULL CHECK(import_user_tags IN (0,1)),state TEXT NOT NULL CHECK(state IN ('collecting','awaiting-confirmation','importing','completed','cancelled')),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,confirmed_at TEXT,finished_at TEXT,last_file_at TEXT,initiated_by TEXT NOT NULL,origin TEXT NOT NULL CHECK(origin IN ('web','cli','mcp')),batch_id TEXT,metadata_complete INTEGER NOT NULL DEFAULT 0 CHECK(metadata_complete IN (0,1)),record_count INTEGER NOT NULL DEFAULT 0 CHECK(record_count>=0),summary_json TEXT,FOREIGN KEY(library_key) REFERENCES import_libraries(library_key),FOREIGN KEY(batch_id) REFERENCES intake_batches(batch_id)) STRICT",
+  "CREATE UNIQUE INDEX import_sessions_active_library ON import_sessions(library_key) WHERE state IN ('collecting','awaiting-confirmation','importing')",
+  "CREATE INDEX import_sessions_order ON import_sessions(created_at DESC,session_id DESC)",
+  "CREATE INDEX import_sessions_expiry ON import_sessions(state,created_at,last_file_at)",
+  "CREATE TABLE import_parts(session_id TEXT NOT NULL,sequence INTEGER NOT NULL CHECK(sequence>=0 AND sequence<1024),artifact_id TEXT NOT NULL,record_count INTEGER NOT NULL CHECK(record_count>=0),PRIMARY KEY(session_id,sequence),FOREIGN KEY(session_id) REFERENCES import_sessions(session_id) ON DELETE CASCADE,FOREIGN KEY(artifact_id) REFERENCES artifact_objects(artifact_id) ON DELETE RESTRICT) STRICT",
+  "CREATE TABLE import_staged_keys(session_id TEXT NOT NULL,object_kind TEXT NOT NULL,external_id TEXT NOT NULL,sequence INTEGER NOT NULL,PRIMARY KEY(session_id,object_kind,external_id),FOREIGN KEY(session_id,sequence) REFERENCES import_parts(session_id,sequence) ON DELETE CASCADE) STRICT",
+  "CREATE TABLE import_record_results(session_id TEXT NOT NULL,sequence INTEGER NOT NULL,record_index INTEGER NOT NULL,external_id TEXT NOT NULL,disposition TEXT NOT NULL CHECK(disposition IN ('created','enriched','matched','conflict','rejected')),literature_id TEXT,meta_literature_id TEXT,reason TEXT,PRIMARY KEY(session_id,sequence,record_index),FOREIGN KEY(session_id) REFERENCES import_sessions(session_id) ON DELETE CASCADE,FOREIGN KEY(literature_id) REFERENCES literatures(literature_id) ON DELETE SET NULL) STRICT",
+  "CREATE TABLE import_files(file_id TEXT PRIMARY KEY,session_id TEXT NOT NULL,external_id TEXT NOT NULL,record_external_id TEXT NOT NULL,literature_id TEXT NOT NULL,file_name TEXT NOT NULL,size_bytes INTEGER,expected_sha256 TEXT,action TEXT NOT NULL CHECK(action IN ('upload','hash')),status TEXT NOT NULL CHECK(status IN ('pending','uploaded','existing','conflict')),sha256 TEXT,reason TEXT,UNIQUE(session_id,external_id),FOREIGN KEY(session_id) REFERENCES import_sessions(session_id),FOREIGN KEY(literature_id) REFERENCES literatures(literature_id) ON DELETE CASCADE) STRICT",
+  "CREATE INDEX import_files_pending ON import_files(session_id,status,file_id)",
+] as const;
+/** M1 additions are collected here; 08 extends this same offline migration. */
+export const IMPORT_SCHEMA_V16 = [
+  ...DEVICE_CONNECTION_SCHEMA,
+  ...IMPORT_SESSION_SCHEMA,
+] as const;
 export const SCHEMA_MANIFEST = [
   ...SCHEMA_MANIFEST_V15.map((sql) =>
     sql.replace("CHECK(schema_version=15)", "CHECK(schema_version=16)"),

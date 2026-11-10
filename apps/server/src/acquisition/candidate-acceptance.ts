@@ -111,7 +111,10 @@ export class CandidateAcceptanceService {
     if (!facts) throw new CandidateAcceptanceError("literature-not-found");
     // Reject stale or misattributed inputs before invoking PDF tools.
     requireCurrentCandidate(facts, input.metadata_snapshot, candidate);
-    if (candidate.source_name === "manual-pdf" && facts.primary_asset)
+    const userSupplied =
+      candidate.source_name === "manual-pdf" ||
+      candidate.source_name === "import";
+    if (userSupplied && facts.primary_asset)
       throw new LiteraturePublicationError("primary-asset-conflict");
     check();
     // Acquisition establishes file validity, not article identity. Parsing may
@@ -150,21 +153,16 @@ export class CandidateAcceptanceService {
         }),
       provenance: {
         provenance_id: await stableId("candidate-publication", input),
-        source_kind:
-          candidate.source_name === "manual-pdf" ? "user" : "asset-provider",
+        source_kind: userSupplied ? "user" : "asset-provider",
         source_name: candidate.source_name,
-        source_record_id:
-          candidate.source_name === "manual-pdf"
-            ? null
-            : (candidate.source_record_id ?? candidate.transfer_id),
+        source_record_id: userSupplied
+          ? null
+          : (candidate.source_record_id ?? candidate.transfer_id),
         observed_at: candidate.capture!.captured_at,
         input_sha256: candidate.sha256,
         parameters_sha256: null,
       },
-      source_url:
-        candidate.source_name === "manual-pdf"
-          ? null
-          : candidate.capture!.source_url,
+      source_url: userSupplied ? null : candidate.capture!.source_url,
       identity: "unverified",
     });
     check();

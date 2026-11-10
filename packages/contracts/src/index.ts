@@ -1,6 +1,7 @@
 import { parseNetworkReadiness, type NetworkReadiness } from "./network.js";
 export * from "./network.js";
 export * from "./device-connections.js";
+export * from "./import-sessions.js";
 import {
   parseAcquisitionAttempts,
   parseAcquisitionRouteState,
@@ -3437,6 +3438,16 @@ export function parseMetadataObservation(value: unknown): MetadataObservation {
     if (
       provenance.source_record_id === null ||
       provenance.input_sha256 === null
+    )
+      fail();
+  } else if (
+    provenance.source_kind === "user" &&
+    provenance.source_name === "import"
+  ) {
+    if (
+      provenance.source_record_id === null ||
+      provenance.input_sha256 === null ||
+      provenance.parameters_sha256 !== null
     )
       fail();
   } else if (

@@ -314,7 +314,7 @@ AcquirePdfCounts
   matched, process, skipped_has_pdf, skipped_unavailable, over_limit
 ```
 
-- **批次**：每次主题发现、引用扩展和书目导入各形成一个批次，入口不论 Web、CLI 还是 MCP。成员与身份发布在同一事务提交；同一篇按 created > enriched > matched 计一次。`counts.hits` 是成员数；`legacy` 批次的 hits 不满足 created + enriched + matched 等式。异常或进程退出的批次保留已接纳的成员，状态读作 `interrupted`。列表按 `created_at` 倒序翻页，人工改名为单行 1–120 字。
+- **批次**：每次主题发现、引用扩展和导入会话确认各形成一个批次，旧三端书目入口也经会话确认。设备 HTTP 的 origin 为 web，会话的 initiated_by 区分设备与 local:web/cli/mcp；接口见[导入会话 HTTP](01-product-interface.md#242-导入会话-http)，导入规则见[书目交换](03-literature-materials.md#61-书目交换规则)。成员与身份发布在同一事务提交；同一篇按 created > enriched > matched 计一次。`counts.hits` 是成员数；`legacy` 批次的 hits 不满足 created + enriched + matched 等式。异常或进程退出的批次保留已接纳的成员，状态读作 `interrupted`。列表按 `created_at` 倒序翻页，人工改名为单行 1–120 字。
 - **词频**（层次与排列见 [ADR 0053](../decisions/0053-scope-terms-led-by-tags.md)）：对一个 `LibraryQuery` 的全部命中统计标签、作者关键词和主题词，同篇同词计一次，按篇数降序、词升序，每层最多 30 个。
   - 标签只计 `active` 的标签直接标注的篇数，主次都算；`tag_id` 即标签筛选用的 ID。标签筛选包含子标签，所以父标签筛出的篇数可能多于词频。
   - 作者关键词规范化后等于某个 `active` 标签的名称或别名时，`tag` 给出该标签，否则为 `None`。

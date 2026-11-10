@@ -86,11 +86,7 @@ import {
   type QueryOperation,
 } from "../entry/query-operations.js";
 import { type LiteratureSelector } from "../entry/selectors.js";
-import {
-  decodeBibliography,
-  importBibliography,
-  type BibliographyInputFormat,
-} from "../literature/bibliography-import.js";
+import type { BibliographyInputFormat } from "../literature/bibliography-import.js";
 import { LiteratureNotFoundError } from "../literature/query.js";
 import { ArticleIdentityError } from "../parsing/article-identity.js";
 import { ParsingFailure } from "../parsing/ports.js";
@@ -1654,11 +1650,12 @@ async function execute(
       invalidInput();
     const bytes = await inputBytes(path, options);
     const value = await withApplication(options, async (app) => {
-      const decoded = decodeBibliography(bytes, format);
-      return importBibliography(decoded, app.identity, {
-        database: app.database,
-        file_name: path === "-" ? null : (path.split("/").at(-1) ?? format),
-      });
+      return app.importSessions.importBibliography(
+        bytes,
+        format,
+        path === "-" ? null : (path.split("/").at(-1) ?? format),
+        "cli",
+      );
     });
     return output(value, options);
   }

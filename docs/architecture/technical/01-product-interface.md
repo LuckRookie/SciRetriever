@@ -117,7 +117,7 @@ QueryApplication 的状态为 ready、not-initialized、unavailable。缺库不�
 
 令牌仅通过 `Authorization: Bearer ...` 使用；URL/path/query 中的认证材料在路由前拒绝。令牌请求忽略 Origin/跨站提示但保留 Host 地址检查，不信任转发头，也不宽开 CORS；未携带令牌的 Web/SDK 接口继续原认证。携带 Authorization 时绝不回退到同一请求的 Web Cookie。令牌不能登录、取得 Web client/CSRF、访问配置/凭据、管理设备或观看 Browser WebSocket。
 
-用途为 `capture/import/read/operate`，非空且彼此不隐含；本块没有登记业务接口。唯一登记点 `bootstrap/device-routes.ts::deviceBusinessRoutes(application)` 返回用途—接口表，`DeviceRouteRegistry` 只允许新 import/capture 命名空间和 `/mcp`，每个精确方法/路径（允许受限 `:id`）列出可接受的用途。MCP 后续还须按工具检查用途。未登记的所有既有 query/maintenance/管理路径均拒绝令牌。每次认证从 catalog 核对撤销并更新 last_used_at，无跨请求授权缓存；撤销不回滚先前已接纳的操作。
+用途为 `capture/import/read/operate`，非空且彼此不隐含；当前导入会话登记为 `import`，见[导入会话 HTTP](#242-导入会话-http)。唯一登记点 `bootstrap/device-routes.ts::deviceBusinessRoutes(application)` 返回用途—接口表，`DeviceRouteRegistry` 只允许新 import/capture 命名空间和 `/mcp`，每个精确方法/路径（允许受限 `:id`）列出可接受的用途。MCP 后续还须按工具检查用途。未登记的所有既有 query/maintenance/管理路径均拒绝令牌。每次认证从 catalog 核对撤销并更新 last_used_at，无跨请求授权缓存；撤销不回滚先前已接纳的操作。
 
 Web 管理均为 POST，要求登录 Cookie、工作台 Cookie、client_id、同源、`X-Workbench-Csrf` 和 `X-Sciretriever-Protocol-Version:1`。封套为 `{protocol_version:1,request}` / `{protocol_version:1,result}`：
 
@@ -133,6 +133,48 @@ Web 管理均为 POST，要求登录 Cookie、工作台 Cookie、client_id、同
 任一有效令牌可 GET `/api/v1/device-connections/instructions` 与 `/api/v1/device-connections/skill`，下载固定构建产物 `apps/server/dist/agent-access/instructions.md`（1 MiB 上限）和 `skill.zip`（8 MiB 上限）。内容和打包由独立构建工作提供；产物不存在、不是普通单硬链接文件或超限时返回 `device-artifact-unavailable`（503），不读取个人文件。成功响应 no-store/nosniff，分别为 Markdown、ZIP 附件。
 
 设备错误统一为 `{protocol_version:1,code}`：`device-input-invalid`/`device-pairing-invalid`/`device-token-in-url`（400），`device-address-mismatch`/`device-purpose-forbidden`（403），`device-pairing-expired`/`device-pairing-used`（409），`device-exchange-rate-limited`（429，Retry-After 60），`device-token-invalid`/`device-revoked`（401），`device-connection-missing`（404），`device-artifact-unavailable`/`device-unavailable`（503）。实际 SQLite 损坏保留 `catalog-corrupt`（503）和 `maintenance_hint:"verify-catalog"`；未知内部异常不透传。Web 原有认证错误保持。持久化与迁移见[设备认证存储](07-versioned-storage.md#8-设备认证存储)。
+
+#### 2.4.2 导入会话 HTTP
+
+`workbench/import-http.ts` 在设备用途表登记 `/api/v1/import/` 路由。设备以 Bearer 令牌及 `import` 用途调用；登录 Web 用户经既有 Cookie、client_id、Origin 和 POST CSRF 规则调用同一处理函数。不带设备 Authorization 的请求不获得设备身份，带 Authorization 的请求不回退 Cookie。
+
+JSON POST 要求 `X-Sciretriever-Protocol-Version: 1`、`Content-Type: application/json`，输入 `{protocol_version:1,request}`，成功 `{protocol_version:1,result}`；未知字段拒绝。下面路径都以 `/api/v1/import` 为前缀，`:session_id`、`:file_id` 为服务返回的 UUID：
+
+| 方法与路径                                        | request                                                                                                                        | result                                                |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------- |
+| GET `/instructions`                               | 无正文、无需协议头                                                                                                             | 支持格式、中性模型、端点、限制、错误码与认证说明      |
+| POST `/sessions`                                  | `{format,library:{system,library_id,identity:"global"\|"local",name},scope,import_user_tags?:boolean,file_name?:string\|null}` | `{session}`                                           |
+| POST `/sessions/list`                             | `{cursor?:session_id\|null,limit?:number}`                                                                                     | `{items,next_cursor}`                                 |
+| POST `/sessions/:session_id/status`               | `{}`                                                                                                                           | `{session}`                                           |
+| POST `/sessions/:session_id/data`                 | `{sequence,data}`                                                                                                              | `{session}`                                           |
+| POST `/sessions/:session_id/preview`              | `{}`                                                                                                                           | `{session,estimated:true,summary}`                    |
+| POST `/sessions/:session_id/confirm`              | `{}`                                                                                                                           | `{session}`                                           |
+| POST `/sessions/:session_id/files`                | `{cursor?:file_id\|null,limit?:number,pending?:boolean}`                                                                       | `{items,next_cursor}`                                 |
+| POST `/sessions/:session_id/files/:file_id/hash`  | `{sha256}`                                                                                                                     | `{file}`                                              |
+| POST `/sessions/:session_id/files/:file_id/bytes` | 原始 PDF 字节流，无 JSON 封套                                                                                                  | `{file}`                                              |
+| POST `/sessions/:session_id/finish`               | `{}`                                                                                                                           | `{session}`                                           |
+| POST `/sessions/:session_id/cancel`               | `{}`                                                                                                                           | `{session}`                                           |
+| POST `/sessions/:session_id/report`               | `{cursor?:"sequence:record_index"\|null,limit?:number}`                                                                        | `{session,estimated:false,summary,items,next_cursor}` |
+
+`files.pending` 默认为 true；终态报告用 false 读取全部文件及冲突/缺失项。分页默认 50、最多 200。会话列表按创建时间/ID 倒序，报告按输入序号/条号，文件按 ID。书目阶段 `metadata_complete=false` 时文件清单仍会增长，完成后从空 cursor 重读最终清单。
+
+JSON（含封套）最多 8 MiB，会话暂存数据共 256 MiB、50,000 条记录（含拒绝项）、1,024 段（序号 0–1,023）、10,000 个组、层级深度 128。每记录最多 1,000 组、1,000 用户标签、100 文件、10,000 批注，每批注最多 128 个矩形；精确字符串限制在 `IMPORT_LIMITS` 和合同 parser。PDF bytes 仅接受 application/pdf 或 application/octet-stream，不接受压缩正文，无文件大小上限；边写边算 SHA-256，至少保留 256 MiB 磁盘空间。现有手动 PDF 上传的 16 MiB 限制独立保留。
+
+会话、记录、分组、文件、批注与报告的字段在 `packages/contracts/src/import-sessions.ts`；业务含义见[导入模型与会话规则](03-literature-materials.md#61-书目交换规则)。接口说明直接从同一服务的路由表与限制生成，供外部 Agent 查询，不依赖 skill 包，也不提供新的服务器文件读取能力。
+
+失败响应为 `{protocol_version:1,code}`。设备与 Web 认证码沿用上一节；导入错误如下：
+
+| HTTP | code                                                                                                                                                                                                                                                                                                   |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 400  | `import-input-invalid`、`import-format-unsupported`、`import-local-identity-required`、`import-data-conflict`、`import-group-missing`、`import-group-cycle`、`import-group-depth`、`import-folder-target-missing`、`import-file-hash-mismatch`、`import-file-size-mismatch`、`import-upload-cancelled` |
+| 404  | `import-session-missing`、`import-file-missing`、`import-literature-missing`                                                                                                                                                                                                                           |
+| 409  | `import-library-busy`、`import-session-state`、`import-data-changed`、`import-metadata-pending`、`import-file-hash-required`、`import-file-upload-required`、`import-file-conflict`、`import-source-stale`                                                                                             |
+| 413  | `import-request-too-large`、`import-session-limit`                                                                                                                                                                                                                                                     |
+| 422  | `import-pdf-invalid`                                                                                                                                                                                                                                                                                   |
+| 507  | `import-disk-space`                                                                                                                                                                                                                                                                                    |
+| 503  | `import-disk-unavailable`、`import-unavailable`、`import-closed`                                                                                                                                                                                                                                       |
+
+真实 SQLite 损坏仍返回 `catalog-corrupt` 和 `maintenance_hint:"verify-catalog"`，内部异常不透传。首轮文件哈希与已有 PDF 冲突是 HTTP 200 的 file.status=conflict；已结算文件的不同字节重放才是 `import-file-conflict` 错误。逐条身份/分组原因在报告中，不把部分成功伪装成整场失败。
 
 ### 2.5 新请求与结果语义
 

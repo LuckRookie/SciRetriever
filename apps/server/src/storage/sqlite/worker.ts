@@ -194,6 +194,7 @@ export interface DiscoveryPublication {
 }
 
 export interface IdentityReadRequest {
+  readonly target_literature_id?: string;
   readonly observation_id: string;
   readonly provider_record_key: {
     readonly source_name: string;
@@ -286,6 +287,14 @@ function parseDiscoveryPublication(value: unknown): DiscoveryPublication {
 }
 
 export type SqliteCommand =
+  | {
+      readonly kind: "import_read";
+      readonly action: import("./import-engine.js").ImportRead;
+    }
+  | {
+      readonly kind: "import_write";
+      readonly action: import("./import-engine.js").ImportWrite;
+    }
   | {
       readonly kind: "device_connections";
       readonly command: import("./device-connection-engine.js").DeviceStorageCommand;
@@ -1244,6 +1253,8 @@ export class SqliteWorker {
       "get_literature",
       "list_literature",
       "find_literature_by_identifiers",
+      "identity_read",
+      "import_read",
       "get_asset",
       "get_observation",
       "get_provider_relation",

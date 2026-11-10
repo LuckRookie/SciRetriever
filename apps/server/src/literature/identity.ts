@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
   canonicalJsonBytes,
   parseLiterature,
+  parseLiteratureId,
   parseMetaLiterature,
   parseMetadataObservation,
   sha256,
@@ -53,7 +54,9 @@ type AcceptedProjection = Exclude<
 >;
 type IdentityFact = IdentityReadContext["facts"][number];
 
-function rejected(reason: string): LiteratureIdentityDecision {
+function rejected(
+  reason: string,
+): Exclude<LiteratureIdentityDecision, { readonly disposition: "accepted" }> {
   return { disposition: "rejected", reason };
 }
 
@@ -338,6 +341,7 @@ export class LiteratureIdentityService {
     options: {
       readonly intake_batch_id?: import("@sciretriever/contracts").IntakeBatchId;
       readonly intake_exclude_ids?: readonly string[];
+      readonly target_literature_id?: string;
     } = {},
   ): Promise<LiteratureIdentityDecision> {
     const observation = parseMetadataObservation(value);
@@ -346,18 +350,44 @@ export class LiteratureIdentityService {
         observation,
         options.intake_batch_id,
         options.intake_exclude_ids,
+        options.target_literature_id,
       ),
     );
   }
 
-  private async observeAdmitted(
-    observation: MetadataObservation,
-    intakeBatchId?: import("@sciretriever/contracts").IntakeBatchId,
-    excludeIds: readonly string[] = [],
-  ): Promise<LiteratureIdentityDecision> {
-    const context = await this.database.readIdentity(
-      await identityReadRequest(observation),
+  /** Read-only identity assessment: never publishes observations, projections or batches. */
+  async preview(value: unknown, targetLiteratureId?: string) {
+    const assessment = await this.assess(
+      parseMetadataObservation(value),
+      targetLiteratureId,
     );
+    if ("disposition" in assessment)
+      return {
+        disposition: "conflict" as const,
+        literature_id: null,
+        reason: assessment.reason,
+      };
+    return {
+      disposition: assessment.current
+        ? ("matched" as const)
+        : ("created" as const),
+      literature_id: assessment.current?.literature_id ?? null,
+      reason: null,
+    };
+  }
+
+  private async assess(
+    observation: MetadataObservation,
+    targetLiteratureId?: string,
+  ) {
+    const target =
+      targetLiteratureId === undefined
+        ? undefined
+        : parseLiteratureId(targetLiteratureId);
+    const context = await this.database.readIdentity({
+      ...(await identityReadRequest(observation)),
+      ...(target ? { target_literature_id: target } : {}),
+    });
     let owner: Literature | null;
     try {
       owner = observationOwner(context, observation);
@@ -378,6 +408,31 @@ export class LiteratureIdentityService {
       identity.literature.literature_id !== owner.literature_id
     )
       return rejected("observation-owner-identity-conflict");
+    if (target) {
+      const pinned = context.literatures.find(
+        (item) => item.literature_id === target,
+      );
+      if (!pinned) return rejected("external-target-missing");
+      if (owner && owner.literature_id !== target)
+        return rejected("external-identity-conflict");
+      if (
+        identity.decision === "matched" &&
+        identity.literature.literature_id !== target
+      )
+        return rejected("external-identity-conflict");
+      const oldKeys = stableIdentifierKeys(pinned.metadata);
+      const newKeys = stableIdentifierKeys(observation.metadata);
+      if (
+        newKeys.some(([namespace, value]) =>
+          oldKeys.some(
+            ([oldNamespace, oldValue]) =>
+              oldNamespace === namespace && oldValue !== value,
+          ),
+        )
+      )
+        return rejected("stable-identifier-conflict");
+      owner = pinned;
+    }
     const current =
       owner ?? (identity.decision === "matched" ? identity.literature : null);
     const currentFact = current
@@ -395,6 +450,18 @@ export class LiteratureIdentityService {
       field_states: currentFact?.field_states ?? [],
     });
     if (acceptance.outcome === "rejected") return rejected(acceptance.reason);
+    return { context, current, currentFact, acceptance };
+  }
+
+  private async observeAdmitted(
+    observation: MetadataObservation,
+    intakeBatchId?: import("@sciretriever/contracts").IntakeBatchId,
+    excludeIds: readonly string[] = [],
+    targetLiteratureId?: string,
+  ): Promise<LiteratureIdentityDecision> {
+    const assessment = await this.assess(observation, targetLiteratureId);
+    if ("disposition" in assessment) return assessment;
+    const { context, current, currentFact, acceptance } = assessment;
     const publication = current
       ? await this.existingPublication(
           context,

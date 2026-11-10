@@ -5,11 +5,8 @@ import {
   parseLiteratureId,
 } from "@sciretriever/contracts";
 import { ProcessingTaskError } from "../application/jobs/processing.js";
-import {
-  decodeBibliography,
-  importBibliography,
-  type BibliographyInputFormat,
-} from "../literature/bibliography-import.js";
+import type { BibliographyInputFormat } from "../literature/bibliography-import.js";
+import { intakeOrigin } from "../literature/intake.js";
 import { operationRecord as inputRecord } from "./query-operations.js";
 import { runMetadataTask } from "./metadata-task.js";
 export function createMetadataOperations(app: Application) {
@@ -115,16 +112,11 @@ export function createMetadataOperations(app: Application) {
         !["bibtex", "biblatex", "ris", "csl-json"].includes(r.format as string)
       )
         throw new ContractValidationError();
-      return importBibliography(
-        decodeBibliography(
-          new TextEncoder().encode(r.content),
-          r.format as BibliographyInputFormat,
-        ),
-        app.identity,
-        {
-          database: app.database,
-          file_name: (r.file_name ?? null) as string | null,
-        },
+      return app.importSessions.importBibliography(
+        new TextEncoder().encode(r.content),
+        r.format as BibliographyInputFormat,
+        (r.file_name ?? null) as string | null,
+        intakeOrigin(),
       );
     },
   };

@@ -69,6 +69,16 @@ it("migrates exact schema 15 to 16 atomically, preserves all facts and enables d
       expect(result.after[table], table).toBe(n);
     expect(result.after.device_connections).toBe(0);
     expect(result.after.device_pairings).toBe(0);
+    for (const table of [
+      "import_libraries",
+      "external_object_mappings",
+      "import_sessions",
+      "import_parts",
+      "import_staged_keys",
+      "import_record_results",
+      "import_files",
+    ])
+      expect(result.after[table], table).toBe(0);
     expect((await inspectCatalogSchema(path)).schema_version).toBe(
       SCHEMA_VERSION,
     );

@@ -1109,15 +1109,21 @@ MaterialRef 的目标设计将已接纳 Asset/关系和 hash 作为最小材料�
 
 ### 6.1 书目交换规则
 
-导入记录由 Entry codec 转换为现有 `LiteratureMetadata`，并由 `packages/contracts` 的书目边界合同 只组合输入序号等边界信息，再交给 `literature/bibliography.ts`：
+导入会话由 Entry 编排，Literature 拥有身份和书目接纳。中性 `ImportRecord` 组合外部编号、现有 `LiteratureMetadata`、原始 source_type、组引用、用户标签、文件与批注；`ImportGroup` 表达来源分组树，`ImportFile` 表达附件编号、文件名、媒体类型、首选状态及可选大小/SHA-256。外部编号和本系统的稳定文献标识分开。精确类型在 `packages/contracts/src/import-sessions.ts`，HTTP、上限及错误见[导入会话 HTTP](01-product-interface.md#242-导入会话-http)。
 
-- 形成普通 `MetadataObservation`，其 provenance 固定为 `source_kind = "user"`、`source_name = "bibliographic-import"`、`source_record_id = None`，不建立 `ImportedMetadata`；
-- 使用同一保守身份规则创建或命中 `Literature`，不能因来源是用户而强行合并稳定标识符冲突的记录；
-- 未命中时返回 `created`；命中后，非空导入值补齐缺失字段或替换当前 Provider 值时返回 `enriched`；命中且当前统一投影不变时返回 `matched`。首次与当前 Provider 值相同的用户记录仍保存 user observation，只有相同规范化 user observation 已存在时才复用既有事实；输入不合格、缺少最低识别信息或稳定标识符明确冲突时返回 `rejected`；
-- 导入 observation 的非空书目信息优先于全部 Provider observations，Provider 只能补缺；导入 keywords 可以进入统一初始 metadata，完整 Analysis 后仍由全文关键词替换；
-- 单条错误只拒绝该条；
-- 外部工具数据库 ID、附件绝对路径、同步状态、插件字段、界面设置、笔记和集合层级不进入核心数据库；
-- 不长期保存原始书目文件、外部工具对象、导入批次历史或其它过程来源细节。
+`literature/import-adapters.ts` 统一登记 `records`、BibTeX/BibLaTeX、RIS、CSL JSON；适配器为纯函数，原始数据进，中性记录与不导入的内容计数出，不联网、不读文件、不写库。书目格式沿用原 decoder；单条解析/最小身份不合格计 rejected，其它记录继续。外部工具原始对象、同步状态、插件字段和笔记不扩展 LiteratureMetadata；批注当前只分类计数，supported 进入 deferred，未写入阅读批注。
+
+来源库优先使用其全局唯一编号；只有本地编号时，由设备连接号限定范围。来源键为 SHA-256(canonical JSON `["sciretriever.import-source.v1", system, scope, library_id]`)，scope 为 global 或 device:<connection_id>，设备编号只由认证推导。Web/CLI/stdio 没有设备身份时仅交 local 拒绝 `import-local-identity-required`；不共享默认命名空间，不凭文件名或主机名伪造全局号。先以本地号、后以全局号导入会形成独立来源，不自动合并。
+
+外部编号对应先定位记录，再由同一保守身份规则核对稳定标识冲突与歧义；无 DOI 的记录也可以按对应继续导入。目标已删除时报告 external-target-missing，不猜测重绑。规范化记录哈希相同则不重复 observation，仅记录批次命中和补文件夹成员；变化形成新的不可变 user/import observation，source_record_id 为 `[library_key,external_id]` 的 JSON，input_sha256 为记录哈希。导入非空值按现有用户来源优先级处理，不能覆盖人工锁、READY 元数据或已有内容；当前统一值变化分 enriched，不变为 matched，首次无匹配为 created。
+
+分组按外部编号导成来源库根文件夹下的层级，空组和多处归属保留；用户标签可关闭，否则变成根下“标签”中的子文件夹，不进入受控词表。只建一次、只补成员，不跟随来源改名、移动或删除。重名加序号，名称截到现有 Folder 合同的 128 个 UTF-16 单位且不拆 surrogate。用户删除已对应文件夹后不恢复它，报告缺失对应。
+
+会话依次为 collecting、awaiting-confirmation、importing、completed/cancelled。同一来源最多一个活动会话。分次数据按序号替换；预览只读身份投影，不写文献、来源或预览缓存。确认重新判定，形成[入库批次](06-retrieval-context.md#216-入库批次范围词频与-pdf-获取范围)，逐条接纳并检查点保存；部分成功不回滚，重启或重复确认从检查点续跑。取消停止余下工作、结算本进程在途发布，已提交事实保留。未确认 7 天取消，导入中 7 天无新结算文件则结束；原始分段在结束时回收，结果/对应长期保存。持久化及重放边界见[导入存储](07-versioned-storage.md#9-导入会话与外部编号对应)。
+
+文件清单区分 upload（缺主 PDF）和 hash（只需 SHA-256）。已有主 PDF 不替换；同哈希记 existing，不同记 conflict。上传从磁盘 descriptor 验证可读/非加密 PDF，按 ADR 0029 标为文章身份 unverified；接纳保留上传开始时的 metadata CAS，不调用模型或 Parser。重复上传只核对哈希，不重复发布；中断从零重发。文件到齐自动结束，显式 finish 可保留逐个缺失项。
+
+旧三端书目入口内部走同一会话，原请求、结果和逐条拒绝语义不变。因没有来源库号，每次建立不可复用的 adhoc:<UUID> 内部 scope，不建立可续导外部对应；observation 仍为 user/bibliographic-import，source_record_id/input/parameters hash 均为空。完全相同的规范化用户 observation 继续复用既有事实，失败时结算临时会话，不遗留活动会话，也不撤销已经接纳的文献。
 
 只要 `Literature` 已形成可转换的当前 `LiteratureMetadata` 即可导出，不要求 PDF、解析或内容总结完成。始终导出当前接纳的 metadata，不按分析或建档状态切换另一套数据。默认每个 `MetaLiterature` 选择一个最佳可导出 Literature；用户明确要求时可以导出全部 Literature。目标格式无法表达的字段必须形成明确损失说明。
 

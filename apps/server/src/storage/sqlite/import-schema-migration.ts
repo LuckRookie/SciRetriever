@@ -52,7 +52,7 @@ export async function migrateImportSchema(path: string) {
         refuse();
       const before = offlineTableCounts(db, refuse);
       for (const sql of IMPORT_SCHEMA_V16) db.exec(sql);
-      // Future 03/08 data backfills belong here, in the same atomic migration.
+      // Additional M1 backfills belong here, in the same atomic migration.
       db.exec(
         "CREATE TEMP TABLE import_identity AS SELECT * FROM schema_identity;DROP TABLE schema_identity",
       );

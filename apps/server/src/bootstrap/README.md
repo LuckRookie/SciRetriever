@@ -31,4 +31,6 @@
 
 `agent-models.ts` 只从配置解析模型身份，供执行与预估共用；查询不因此加载凭据或创建模型传输。Application 先结清会话，再关闭过程记录清理器与数据库。
 
-`device-routes.ts` 是设备用途与业务 HTTP 接口的唯一组装登记表；当前没有开放业务接口，后续导入、HTTP MCP 和收藏在此绑定同一 Application 的 owner，不复用 Web 管理权限。
+`device-routes.ts` 是设备用途与业务 HTTP 接口的唯一组装登记表；当前登记导入会话，后续 HTTP MCP 和收藏在此绑定同一 Application 的 owner。导入 HTTP 明确复用 Web 会话准入，设备请求仍不取得 Web 管理权限。
+
+Application 创建一个共享的 ImportSessionService、FolderService 与文件接纳对象图；启动恢复未完成书目检查点，定时清理过期会话，关闭先中断并结算导入工作，再关闭 FileStore 与数据库。QueryApplication 不构造导入写入服务。

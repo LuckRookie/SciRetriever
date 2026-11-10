@@ -1,6 +1,7 @@
 import { NetworkConfigurationError } from "@sciretriever/contracts";
 import {
   handleDeviceRequest,
+  handleWebDeviceRoute,
   manageDevices,
   deviceMaterialInUrl,
   type DeviceHttpOptions,
@@ -1506,6 +1507,8 @@ export async function startWorkbenchHttp(
         return;
       }
       if (request.method === "GET") {
+        if (await handleWebDeviceRoute(request, response, url, options.devices))
+          return;
         json(response, 404, { code: "endpoint-not-found" });
         return;
       }
@@ -1528,6 +1531,8 @@ export async function startWorkbenchHttp(
         return;
       }
       if (await manageDevices(request, response, url, origin, options.devices))
+        return;
+      if (await handleWebDeviceRoute(request, response, url, options.devices))
         return;
       if (pathname === "/api/tasks" || pathname.startsWith("/api/tasks/")) {
         if (!options.tasks) {

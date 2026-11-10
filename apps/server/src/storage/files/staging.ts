@@ -262,8 +262,8 @@ export class StagingFile {
         let written: number;
         try {
           ({ bytesWritten: written } = await this.handle.write(bytes, offset));
-        } catch {
-          invalid();
+        } catch (cause) {
+          throw new FileStagingError(cause);
         }
         if (written <= 0) invalid();
         offset += written;

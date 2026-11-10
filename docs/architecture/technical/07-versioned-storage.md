@@ -132,7 +132,7 @@ Repository 负责在这些关系行和公开 TypeScript contract/read projection
 | `literature_metadata_authors`、`literature_metadata_author_affiliations` | 当前作者与单位按 ordinal 关系化保存                                                                                                                                        |
 | `literature_metadata_identifiers`、`literature_metadata_keywords`        | 当前标识符与 LLM 最终关键词；自然键去重并保持 ordinal                                                                                                                      |
 
-来源 observations 完整长期保存，但使用同样的关系化映射。`provenances` 对 Provider observation 保存 `metadata-provider` 来源字段；对书目导入 observation 固定保存 `user`、`bibliographic-import`、空 source record/input/parameters hash 和接纳时间。Catalog 不保存原始书目文件、外部工具身份、外部记录 ID 或导入批次：
+来源 observations 完整长期保存，但使用同样的关系化映射。`provenances` 对 Provider observation 保存 `metadata-provider` 来源字段；旧书目文件入口保存 `user/bibliographic-import` 及空 source record/input/parameters hash；有来源身份的导入会话保存 `user/import`、规范化的来源库/记录定位与记录内容 hash。原始书目文件字节不进入 Catalog；通用外部对应与会话见[导入会话与外部编号对应](#9-导入会话与外部编号对应)：
 
 | 表组                                                                                  | 保存内容与关键约束                                                                                                                             |
 | ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -212,7 +212,7 @@ Catalog 只为会改变未来自动目标选择的稳定缺失保存一张最小
 - LibraryQuery/LibrarySearchRequest/LiteratureReferenceRequest 的调用现场、cursor、SearchItem/SearchPage、LiteratureAssetView、LiteratureDetail、LiteratureReferenceItem/Page 和 ReferenceDetail 查询投影；
 - 每个中间请求的任意调试副本；有效文档与结果依赖不是可随意清除的缓存；
 - 用户本地 PDF 的绝对路径和原文件；
-- SQLite 大型 BLOB、原始书目导入文件、外部导入对象/记录 ID、导入批次历史和导出文件。
+- SQLite 大型 BLOB、原始书目导入文件字节、来源工具的完整私有对象和导出文件；通用外部编号、导入会话与批次按各自合同保存。
 
 其中需要向用户呈现的稳定脱敏 failure 进入本次 Report；日志可以旁路输出安全诊断，但不能替代 Report。failure 不建立 Catalog current-failure 投影，不能恢复外部现场或决定 Literature 状态。自动 PDF 获取耗尽不保存失败内容，它只是影响下次自动选择的当前事实。
 
@@ -316,7 +316,7 @@ Storage 还实现 Literature 拥有的 artifact read Port。输入只接受已�
 4. 单个 Discovery source result 或最终 run status；完成后输入和已确认结果不可修改，且不写入过程 counts；
 5. 来源和目标 Literature 都已接纳后的权威 Reference 与第一项 ReferenceSupport 整体幂等发布，以及既有 Reference 的后续 support 幂等追加；
 6. Acquisition 正常遍历全部当前自动路径后，为具体 Literature 幂等建立自动获取耗尽事实；提交成功后才能返回 `NoPrimaryPdf`，临时或系统失败不能调用该 publication；
-7. 导入记录形成的不可变 user/bibliographic-import MetadataObservation、身份接纳、当前统一初始元数据更新和已有自动 PDF 获取耗尽事实清除；首次匹配 Provider 值的 user observation 仍插入，只有相同规范化 user observation 已存在的完全重复 matched 才复用既有行；`READY` 时只保存新 observation 而不拆开替换当前 metadata/content；原始导入文件、外部工具身份、导入批次和本次运行报告不进入事务；
+7. 导入记录的不可变用户 MetadataObservation、身份接纳、当前统一初始元数据更新、自动 PDF 获取耗尽事实清除及入库批次成员；新会话逐条结果/外部对应在随后短事务检查点保存，稳定 observation ID 支持中途崩溃重放。旧书目文件入口沿用完全重复 user/bibliographic-import 的语义复用；`READY` 时不拆开替换当前 metadata/content。原始导入字节留在 FileStore，不作为 SQLite BLOB；
 8. 自动或手动主 Asset 文件事实、唯一 `primary-pdf` LiteratureAsset 关系与已有自动获取耗尽事实清除；手动输入绝对路径不进入行；
 9. 用户明确重试自动 PDF 获取前，删除对应 Literature 的自动获取耗尽事实；
 10. 新 RawParse 的不可变版本登记与对应资产/profile 当前指针切换；
@@ -473,3 +473,23 @@ Analysis 的 `processor_result_summaries` 保存已发布结果用量/覆盖摘�
 `schema.ts` 冻结 `SCHEMA_MANIFEST_V15` 与 fingerprint 仅供离线工具证明输入，不增加 opener 支持的布局。`scripts/migrate-import-v16.mjs` 对显式绝对路径的离线 15 库执行 15→16：catalog admission、精确输入布局及完整检查、拒绝 queued/running 任务和运行中建档、事务内 DDL 和身份替换、全部旧表行数不变、输出布局及外键检查，成功才提交。M1 的后续导入/收藏表追加到同一个 `IMPORT_SCHEMA_V16`，回填放在同一迁移事务，不自动另起版本。已有 14→15 工具固定目标仍为 15，随后须显式执行 15→16；schema 不匹配时运行入口拒绝服务，不做隐式转换。
 
 设备 HTTP 形状、错误和用途登记的唯一接口说明见[设备连接](01-product-interface.md#241-设备连接与按用途准入)。
+
+## 9. 导入会话与外部编号对应
+
+Entry 的 ImportSessionService 提交通用工作流状态，Literature、FolderService 与 Acquisition 分别拥有文献、文件夹与主 PDF。它们共用同一个 catalog admission 和 FileStore；不建立来源专用表。`IMPORT_SCHEMA_V16` 的 7 张导入表与[设备表](#8-设备认证存储)由同一个 15→16 脚本创建：
+
+| 表                       | 字段与约束                                                                                                                                                                                                                                                          |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| import_libraries         | library_key PK；system、external_library_id、identity_scope、name、created_at；来源身份是规范化 hash，显示名不参与匹配                                                                                                                                              |
+| external_object_mappings | PK(library_key,object_kind,external_id)；internal_id、nullable content_sha256/observation_id；kind 为 record/group/file/annotation，library_key FK RESTRICT；多类目标不设单一目标 FK，保留对应供 owner 检查已删除目标                                               |
+| import_sessions          | session_id PK；library_key FK、library_json、format、scope、file_name、import_user_tags、state、生命周期时间、initiated_by/origin、batch_id FK、metadata_complete、record_count、summary_json；活动状态对 library_key 的部分唯一索引；按创建时间与状态/过期时间索引 |
+| import_parts             | PK(session_id,sequence)，sequence 在 0–1,023；artifact_id FK RESTRICT、record_count；session FK CASCADE                                                                                                                                                             |
+| import_staged_keys       | PK(session_id,object_kind,external_id)，同一会话跨段去重；(session_id,sequence) FK→import_parts CASCADE，替换序号时相应旧键一起退役                                                                                                                                 |
+| import_record_results    | PK(session_id,sequence,record_index)；external_id、disposition、nullable literature_id/meta_literature_id/reason；文献删除时置空 literature_id；报告保留接纳结果                                                                                                    |
+| import_files             | file_id PK、session_id FK、UNIQUE(session_id,external_id)；record_external_id、literature_id FK CASCADE、file_name、size_bytes、expected_sha256、action、status、sha256、reason；pending 索引按会话/状态/ID                                                         |
+
+原始分段以规范 JSON 保存为 `imports/sources/<hash-prefix>/<hash>.json`；artifact_objects 保存相对引用、媒体类型、字节数和 SHA-256，import_parts 只引用登记。替换及终态退役使用既有 write-ahead reclamation ticket；先删除引用后回收字节，仍被其它活跃引用使用的对象不能删除。启动/定时维护还会清理终态遗留引用，避免提交后崩溃永久保留原始数据。
+
+确认与建立批次在同一事务固定状态。单条身份与批次成员按原发布事务接纳；结果、来源对应和文件清单在短事务中检查点保存。结果前崩溃时，用来源键、外部号与内容哈希派生的稳定 observation ID 重放，并恢复原批次分类；不把已接纳文献当作整场事务回滚。文件落库使用既有不可变 candidate publication；同文件的结算在 admission 内重读状态和哈希，完成/取消在本进程等待在途发布结算。跨进程来源活动唯一性由索引保证；不宣称与另一进程正在进行的文件发布有跨进程取消事务。
+
+会话终结后保留外部对应、逐条结果、文件结算与摘要，删除原始数据。报告的记录统计逐条计数，批次成员按文献去重；生命周期与业务分类见[书目交换规则](03-literature-materials.md#61-书目交换规则)。历史书目导入不补造来源库/外部编号，迁移保存全部旧事实行数；未来收藏表继续并入同一 M1 schema 16 迁移，不由打开路径隐式升级。

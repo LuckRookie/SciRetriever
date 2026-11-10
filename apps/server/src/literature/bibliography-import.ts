@@ -401,6 +401,7 @@ function parseBibRecord(entryType: string, payload: string): Fields {
   if (keyEnd <= 0 || text(body.slice(0, keyEnd)) === null)
     throw new Error("missing BibTeX key");
   const fields: Record<string, string> = { type: entryType.toLowerCase() };
+  fields.__external_id = text(body.slice(0, keyEnd))!;
   let position = keyEnd + 1;
   while ((position = skip(body, position, " ,\t\r\n")) < body.length) {
     const match = /^[A-Za-z][A-Za-z0-9_-]*/u.exec(body.slice(position));
@@ -530,6 +531,8 @@ function parseRisGroup(group: RisGroup): Fields {
     type: typeMap[type] ?? type,
     source_type: type,
   };
+  const externalId = firstTag("ID", "AN");
+  if (externalId) result.__external_id = externalId;
   const put = (name: string, value: string | null) => {
     if (value !== null) result[name] = value;
   };
@@ -679,6 +682,10 @@ function cslFields(value: unknown): Fields {
     throw new Error("CSL record is invalid");
   const record = value as Record<string, unknown>;
   const result: Record<string, string> = {};
+  if (typeof record.id === "string" && text(record.id))
+    result.__external_id = text(record.id)!;
+  else if (typeof record.id === "number" && Number.isFinite(record.id))
+    result.__external_id = String(record.id);
   const optional = (sourceName: string, targetName = sourceName) => {
     const raw = record[sourceName];
     if (raw === undefined || raw === null) return;
@@ -809,6 +816,27 @@ function parseFields(
   if (format === "bibtex" || format === "biblatex") return parseBibtex(source);
   if (format === "ris") return parseRis(source);
   return parseCsl(source);
+}
+
+/** Source-local keys for the session adapter; never turn these into identifiers. */
+export function bibliographyRecordIds(
+  source: Uint8Array,
+  format: BibliographyInputFormat,
+): readonly (string | null)[] {
+  try {
+    const encoding =
+      source[0] === 0xff && source[1] === 0xfe
+        ? "utf-16le"
+        : source[0] === 0xfe && source[1] === 0xff
+          ? "utf-16be"
+          : "utf-8";
+    return parseFields(
+      format,
+      new TextDecoder(encoding, { fatal: true }).decode(source),
+    ).map((fields) => fields?.__external_id ?? null);
+  } catch {
+    return [];
+  }
 }
 
 export function decodeBibliography(

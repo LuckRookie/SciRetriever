@@ -1,6 +1,7 @@
 import type { ArtifactRef } from "@sciretriever/contracts";
 
 const directories = {
+  "import-source": "imports/sources",
   "original-pdf": "originals/pdf",
   "parser-markdown": "parsed/markdown",
   "parser-resource": "parsed/resources",

@@ -28,6 +28,24 @@ export interface DeviceRoute {
     connection: DeviceConnection,
     parameters: Readonly<Record<string, string>>,
   ): Promise<void>;
+  /** Explicit opt-in after the ordinary Web session/client/CSRF admission. */
+  handleWeb?(
+    request: IncomingMessage,
+    response: ServerResponse,
+    parameters: Readonly<Record<string, string>>,
+  ): Promise<void>;
+}
+
+export async function handleWebDeviceRoute(
+  request: IncomingMessage,
+  response: ServerResponse,
+  url: URL,
+  options: DeviceHttpOptions | undefined,
+): Promise<boolean> {
+  const registered = options?.routes?.find(request.method, url.pathname);
+  if (!registered?.route.handleWeb) return false;
+  await registered.route.handleWeb(request, response, registered.parameters);
+  return true;
 }
 /** Only future import/capture/MCP business surfaces can be registered. */
 export class DeviceRouteRegistry {

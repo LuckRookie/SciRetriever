@@ -59,6 +59,14 @@ const deviceModule = await import(
     import.meta.url,
   ).href
 );
+const importModule = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./import-engine.ts"
+      : "./import-engine.js",
+    import.meta.url,
+  ).href
+);
 const folderModule = await import(
   new URL(
     import.meta.url.endsWith(".ts")
@@ -1513,6 +1521,21 @@ function identityRead(r: Dynamic): Dynamic {
     )
       fail();
     const seeds = new Set<Dynamic>();
+    if (r.target_literature_id !== undefined) {
+      if (
+        typeof r.target_literature_id !== "string" ||
+        !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(
+          r.target_literature_id,
+        )
+      )
+        fail();
+      if (
+        db
+          .prepare("SELECT 1 FROM literatures WHERE literature_id=?")
+          .get(r.target_literature_id)
+      )
+        seeds.add(r.target_literature_id);
+    }
     const addOwners = (ids: Dynamic) => {
       for (const observationId of ids) {
         const owner = db
@@ -4624,6 +4647,36 @@ port.on("message", (message: WorkerMessage) => {
       fail();
     let value;
     switch (message.command.kind) {
+      case "import_read":
+      case "import_write":
+        try {
+          const command = message.command;
+          value = {
+            ok: true,
+            value:
+              command.kind === "import_read"
+                ? readTransaction(() =>
+                    importModule.readImportStorage(db, command.action),
+                  )
+                : importModule.writeImportStorage(
+                    db,
+                    command.action,
+                    intakeModule.writeIntakeBatch,
+                  ),
+          };
+        } catch (error) {
+          throwCatalogCorruption(error);
+          const code =
+            error &&
+            typeof error === "object" &&
+            "code" in error &&
+            typeof error.code === "string" &&
+            error.code.startsWith("import-")
+              ? error.code
+              : "import-unavailable";
+          value = { ok: false, code };
+        }
+        break;
       case "device_connections":
         value = deviceModule.runDeviceStorage(db, message.command.command);
         break;

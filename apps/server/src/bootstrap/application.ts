@@ -1,4 +1,8 @@
 import { DeviceConnectionService } from "../workbench/device-connections.js";
+import {
+  ImportSessionService,
+  type ImportSessionOptions,
+} from "../entry/import-sessions.js";
 import { ProxyUnavailableError } from "../network/egress.js";
 import { outboundEgress } from "../configuration/egress.js";
 import {
@@ -226,6 +230,7 @@ import {
 import { dshTagModel } from "../tags/model.js";
 import { TagService } from "../tags/service.js";
 export interface Application {
+  readonly importSessions: ImportSessionService;
   readonly deviceConnections: DeviceConnectionService;
   readonly restartAdmission?: RestartAdmission;
   readonly archiveArrangement: ArchiveArrangementAccess;
@@ -459,6 +464,7 @@ export type ApplicationStage =
   | "agents"
   | "schema";
 export interface ApplicationOptions {
+  readonly importSessions?: ImportSessionOptions;
   /** Poll timing seam; null gives isolated tests explicit ownership of index phases. */
   readonly indexRefreshIntervalMs?: number | null;
   readonly networkBudget?: NetworkBudgetCoordinator;
@@ -746,6 +752,7 @@ async function createApplicationOwned(
   let pageImages: MupdfPageRenderer | undefined;
   let completion: LiteratureCompletionService | undefined;
   let manualPdf: ManualPdfIngestionService | undefined;
+  let importSessions: ImportSessionService | undefined;
   let pdfAcquisition: PdfAcquisitionPort | null = null;
   let execution: Application["execution"] = null;
   // Deferred callbacks must read the live execution context, but they are created
@@ -815,6 +822,7 @@ async function createApplicationOwned(
       // Keep dependants before their stores and permits. A failed release must not
       // stop later owners from releasing resources or erase another cleanup error.
       const releases: readonly (() => void | Promise<void>)[] = [
+        async () => importSessions?.close(),
         async () => processingTasks?.close(),
         async () => processorService?.close(),
         async () => processorRetention?.close(),
@@ -1793,6 +1801,20 @@ async function createApplicationOwned(
               configurationOwner.authorizeCurrentCredential(request)),
         });
     const identity = new LiteratureIdentityService(database, writes);
+    const folders = new FolderService(database);
+    importSessions = new ImportSessionService(
+      database,
+      identity,
+      folders,
+      files,
+      writes,
+      artifactRecovery,
+      options.importSessions,
+    );
+    if (options.importSessions?.maintain !== false)
+      void importSessions
+        .sweep()
+        .catch(() => logger.warn("Import recovery failed"));
     const topicDiscovery = new TopicDiscoveryService(
       metadata.service,
       identity,
@@ -1867,7 +1889,21 @@ async function createApplicationOwned(
       value ? guardRuntimeMethods(value, methods, admission) : null;
     const application: Application = {
       restartAdmission: admission,
-      folders: new FolderService(database),
+      folders,
+      importSessions: guardRuntimeMethods(
+        importSessions,
+        [
+          "importBibliography",
+          "create",
+          "putData",
+          "confirm",
+          "reportHash",
+          "upload",
+          "finish",
+          "cancel",
+        ],
+        admission,
+      ),
       marks: new MarkService(database, (id) => library.detail(id)),
       translation,
       fullTextTranslation: new FullTextTranslation({
