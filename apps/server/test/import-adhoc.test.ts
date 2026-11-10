@@ -52,6 +52,62 @@ async function fixture() {
 async function* chunks(bytes: Uint8Array) {
   yield bytes;
 }
+
+it.each(["bibtex", "biblatex", "ris"] as const)(
+  "delivers a PDF named by the %s export through the one-off session file channel",
+  async (format) => {
+    const f = await fixture();
+    try {
+      const source =
+        format === "ris"
+          ? "TY  - JOUR\nID  - attachment\nTI  - Attached paper\nL1  - files/123/Attached.pdf\nL1  - files/123/other.pdf\nL1  - files/123/note.html\nER  -\n"
+          : "@article{attachment,title={Attached paper},file={Full Text PDF:files/123/Attached.pdf:application/pdf;Other:files/123/other.pdf:PDF;Snapshot:files/123/note.html:text/html}}";
+      const s = await f.create(
+        `attachments.${format === "ris" ? "ris" : "bib"}`,
+        format,
+      );
+      await f.app.importSessions.putData(s.session_id, 0, source);
+      const preview = await f.app.importSessions.preview(s.session_id);
+      expect(preview.summary.records.created).toBe(1);
+      expect(preview.summary.files).toMatchObject({
+        upload: 1,
+        hash: 0,
+        missing: 1,
+      });
+      expect(preview.summary.excluded).toEqual([
+        { kind: "additional-file", count: 1 },
+        { kind: "non-pdf-file", count: 1 },
+      ]);
+      expect(f.count("literatures")).toBe(0);
+      const confirmed = await f.app.importSessions.confirm(s.session_id);
+      expect(confirmed).toMatchObject({ state: "importing", pending_files: 1 });
+      const file = (await f.app.importSessions.missingFiles(s.session_id))
+        .items[0]!;
+      expect(file).toMatchObject({
+        external_id: "files/123/Attached.pdf",
+        file_name: "Attached.pdf",
+        action: "upload",
+      });
+      await f.app.importSessions.upload(
+        s.session_id,
+        file.file_id,
+        chunks(workbenchPdf()),
+      );
+      const report = await f.app.importSessions.report(s.session_id);
+      expect(report.session.state).toBe("completed");
+      expect(report.summary.files).toMatchObject({ uploaded: 1, missing: 0 });
+      expect(report.summary.excluded).toEqual(preview.summary.excluded);
+      expect(
+        (await f.app.library.detail(file.literature_id)).primary_pdf!
+          .article_identity_status,
+      ).toBe("unverified");
+    } finally {
+      await f.close();
+    }
+  },
+  30000,
+);
+
 it("isolates simultaneous file sessions while deduplicating repeated bibliography and preserving manual metadata", async () => {
   const f = await fixture();
   try {
@@ -260,8 +316,12 @@ it("allows file sessions for all local actors and preserves real CLI/stdio bibli
       { kind: "device", connection_id: randomUUID() },
     );
     expect(device.library.identity).toBe("adhoc");
-    const path = join(f.home, "batch-fixture.bib");
-    await writeFile(path, bibliography);
+    const path = join(f.home, "batch-fixture.bib"),
+      withAttachment = bibliography.replace(
+        "year={2026}",
+        "year={2026},file={Full Text PDF:files/123/never-read.pdf:application/pdf}",
+      );
+    await writeFile(path, withAttachment);
     const cli = await runCli(["import", "metadata", "bibtex", path, "--json"], {
       home: f.home,
     });
@@ -272,7 +332,7 @@ it("allows file sessions for all local actors and preserves real CLI/stdio bibli
       name: "import_bibliography",
       arguments: {
         format: "bibtex",
-        content: bibliography,
+        content: withAttachment,
         file_name: "batch-fixture.bib",
       },
     });
@@ -297,6 +357,14 @@ it("allows file sessions for all local actors and preserves real CLI/stdio bibli
         .filter((s) => s.file_name === "batch-fixture.bib")
         .map((s) => s.library.name),
     ).toEqual(["batch-fixture.bib", "batch-fixture.bib"]);
+    for (const s of sessions.filter(
+      (s) => s.file_name === "batch-fixture.bib",
+    )) {
+      expect(s).toMatchObject({ state: "completed", pending_files: 0 });
+      expect(
+        (await f.app.importSessions.missingFiles(s.session_id)).items,
+      ).toEqual([]);
+    }
   } finally {
     await client.close();
     await host.close();

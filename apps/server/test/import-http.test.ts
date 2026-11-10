@@ -8,6 +8,7 @@ import {
   type DevicePurpose,
 } from "@sciretriever/contracts";
 import { createApplication } from "../src/bootstrap/application.js";
+import { createMetadataOperations } from "../src/entry/metadata-operations.js";
 import { deviceBusinessRoutes } from "../src/bootstrap/device-routes.js";
 import { startWorkbenchHttp } from "../src/workbench/http.js";
 import { ProductionWorkbenchSession } from "../src/workbench/production-session.js";
@@ -34,6 +35,7 @@ it("shares the exact import handlers between authenticated Web and import-purpos
       ["/auth", { contentType: "text/html", body: "login" }],
     ]),
     access: workbenchTestAccess,
+    importBibliography: createMetadataOperations(app).importBibliography,
     devices: {
       service: app.deviceConnections,
       routes: deviceBusinessRoutes(app),
@@ -262,6 +264,45 @@ it("shares the exact import handlers between authenticated Web and import-purpos
       ).toBe("completed");
     }
     expect(fileKeys.size).toBe(2);
+    const legacy = await fetch(
+      `${server.origin}/api/import?client_id=${grant.client_id}`,
+      {
+        method: "POST",
+        headers: { ...webHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          format: "bibtex",
+          file_name: "legacy-attachments.bib",
+          content:
+            "@article{legacy,title={Legacy attached paper},file={Full Text PDF:files/123/never-read.pdf:application/pdf}}",
+        }),
+      },
+    );
+    expect(legacy.status).toBe(200);
+    expect(await legacy.json()).toEqual({
+      report: {
+        format: "bibtex",
+        intake_batch_id: expect.any(String),
+        items: [
+          {
+            record_index: 0,
+            disposition: "created",
+            literature_id: expect.any(String),
+            meta_literature_id: expect.any(String),
+            reason: null,
+          },
+        ],
+      },
+    });
+    const legacySession = (await app.importSessions.list()).items.find(
+      (s) => s.file_name === "legacy-attachments.bib",
+    )!;
+    expect(legacySession).toMatchObject({
+      state: "completed",
+      pending_files: 0,
+    });
+    expect(
+      (await app.importSessions.missingFiles(legacySession.session_id)).items,
+    ).toEqual([]);
     const docs = await fetch(server.origin + "/api/v1/import/instructions", {
       headers: deviceHeaders,
     });

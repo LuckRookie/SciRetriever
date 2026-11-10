@@ -69,7 +69,11 @@ export interface BibliographyDecodeOptions {
 }
 
 type Fields = Readonly<Record<string, string>>;
-type ParsedFields = Fields | null;
+interface ParsedRecord {
+  readonly fields: Fields;
+  readonly attachment_fields: readonly string[];
+}
+type ParsedFields = ParsedRecord | null;
 
 function assertUnicodeScalars(value: string): void {
   for (let index = 0; index < value.length; index += 1) {
@@ -359,12 +363,15 @@ const unescapeBib = (value: string): string =>
 function readBibValue(
   body: string,
   position: number,
+  preserveEscapes = false,
 ): readonly [string, number] {
+  const decode = (value: string) =>
+    preserveEscapes ? value : unescapeBib(value);
   if (position >= body.length) throw new Error("missing BibTeX value");
   const marker = body[position]!;
   if (marker === "{") {
     const end = matchingClose(body, position, "{", "}");
-    return [unescapeBib(body.slice(position + 1, end)), end + 1];
+    return [decode(body.slice(position + 1, end)), end + 1];
   }
   if (marker === '"') {
     let escaped = false;
@@ -373,14 +380,15 @@ function readBibValue(
       if (escaped) escaped = false;
       else if (character === "\\") escaped = true;
       else if (character === '"')
-        return [unescapeBib(body.slice(position + 1, current)), current + 1];
+        return [decode(body.slice(position + 1, current)), current + 1];
     }
     throw new Error("unbalanced BibTeX quote");
   }
   let end = position;
   while (end < body.length && !",#".includes(body[end]!)) end += 1;
-  const value = text(body.slice(position, end));
-  if (value === null) throw new Error("empty BibTeX value");
+  const raw = body.slice(position, end);
+  const value = preserveEscapes ? raw.trim() : text(raw);
+  if (!value) throw new Error("empty BibTeX value");
   return [value, end];
 }
 
@@ -411,16 +419,16 @@ function parseBibRecord(entryType: string, payload: string): Fields {
     position = skip(body, position + match[0].length);
     if (body[position] !== "=") throw new Error("missing BibTeX equals");
     position = skip(body, position + 1);
-    let [value, next] = readBibValue(body, position);
+    let [value, next] = readBibValue(body, position, name === "file");
     position = skip(body, next);
     while (body[position] === "#") {
       position = skip(body, position + 1);
-      const component = readBibValue(body, position);
+      const component = readBibValue(body, position, name === "file");
       value += component[0];
       next = component[1];
       position = skip(body, next);
     }
-    fields[name] = text(value) ?? "";
+    fields[name] = name === "file" ? value : (text(value) ?? "");
     if (position < body.length && body[position] !== ",")
       throw new Error("malformed BibTeX separator");
     if (position < body.length) position += 1;
@@ -442,7 +450,11 @@ function parseBibtex(source: string): readonly ParsedFields[] {
       starts[index + 1]?.index ?? source.length,
     );
     try {
-      records.push(parseBibRecord(entryType, payload));
+      const fields = parseBibRecord(entryType, payload);
+      records.push({
+        fields,
+        attachment_fields: fields.file === undefined ? [] : [fields.file],
+      });
     } catch {
       records.push(null);
     }
@@ -502,7 +514,7 @@ function risGroups(source: string): readonly RisGroup[] {
   return groups;
 }
 
-function parseRisGroup(group: RisGroup): Fields {
+function parseRisGroup(group: RisGroup): ParsedRecord {
   if (!group.complete) throw new Error("incomplete RIS record");
   const values = new Map<string, string[]>();
   for (const [tag, value] of group.pairs)
@@ -572,7 +584,7 @@ function parseRisGroup(group: RisGroup): Fields {
     const match = /^(PMID|PMCID|arXiv):\s*(\S+)$/iu.exec(note);
     if (match) result[match[1]!.toLowerCase()] ??= match[2]!;
   }
-  return result;
+  return { fields: result, attachment_fields: values.get("L1") ?? [] };
 }
 
 function parseRis(source: string): readonly ParsedFields[] {
@@ -802,7 +814,7 @@ function parseCsl(source: string): readonly ParsedFields[] {
     try {
       const scanner = new JsonKeyScanner(rawItems[index]!, true);
       scanner.finish();
-      return cslFields(value);
+      return { fields: cslFields(value), attachment_fields: [] };
     } catch {
       return null;
     }
@@ -818,11 +830,14 @@ function parseFields(
   return parseCsl(source);
 }
 
-/** Source-local keys for the session adapter; never turn these into identifiers. */
-export function bibliographyRecordIds(
+/** Raw source-local fields for the pure adapter, not public paths or identities. */
+export function bibliographyRecordInputs(
   source: Uint8Array,
   format: BibliographyInputFormat,
-): readonly (string | null)[] {
+): readonly {
+  external_id: string | null;
+  attachment_fields: readonly string[];
+}[] {
   try {
     const encoding =
       source[0] === 0xff && source[1] === 0xfe
@@ -833,7 +848,10 @@ export function bibliographyRecordIds(
     return parseFields(
       format,
       new TextDecoder(encoding, { fatal: true }).decode(source),
-    ).map((fields) => fields?.__external_id ?? null);
+    ).map((record) => ({
+      external_id: record?.fields.__external_id ?? null,
+      attachment_fields: record?.attachment_fields ?? [],
+    }));
   } catch {
     return [];
   }
@@ -916,9 +934,9 @@ export function decodeBibliography(
         record_index,
         status: "decoded" as const,
         observation: observation(
-          value,
+          value.fields,
           ids,
-          text(value.source_type ?? value.type),
+          text(value.fields.source_type ?? value.fields.type),
           format,
         ),
         reason: null,

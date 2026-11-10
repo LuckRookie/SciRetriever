@@ -9,10 +9,11 @@ import {
   type ImportAdapterResult,
 } from "@sciretriever/contracts";
 import {
-  bibliographyRecordIds,
+  bibliographyRecordInputs,
   decodeBibliography,
   type BibliographyInputFormat,
 } from "./bibliography-import.js";
+import { bibliographyAttachments } from "./bibliography-attachments.js";
 
 export const nativeImportAdapter: ImportAdapter = {
   format: "records",
@@ -73,7 +74,8 @@ export function bibliographyAdapter(
       }
       if (typeof value !== "string") throw new ContractValidationError();
       const bytes = Buffer.from(value),
-        keys = bibliographyRecordIds(bytes, format);
+        inputs = bibliographyRecordInputs(bytes, format),
+        excluded = new Map<string, number>();
       let id = 0;
       const deterministicId = () =>
         `00000000-0000-4000-8000-${String(++id).padStart(12, "0")}`;
@@ -83,10 +85,17 @@ export function bibliographyAdapter(
         provenanceId: deterministicId,
         observedAt: () => "1970-01-01T00:00:00Z",
       });
-      return {
-        groups: [],
-        excluded: [],
-        items: decoded.items.map((item) => ({
+      const items = decoded.items.map((item) => {
+        const input = inputs[item.record_index];
+        const attachments = bibliographyAttachments(
+          input?.attachment_fields ?? [],
+          format === "bibtex" || format === "biblatex",
+          sequence,
+          item.record_index,
+        );
+        for (const e of attachments.excluded)
+          excluded.set(e.kind, (excluded.get(e.kind) ?? 0) + e.count);
+        return {
           record_index: item.record_index,
           reason: item.reason,
           record:
@@ -94,16 +103,20 @@ export function bibliographyAdapter(
               ? null
               : {
                   external_id:
-                    keys[item.record_index] ??
-                    `${sequence}:${item.record_index}`,
+                    input?.external_id ?? `${sequence}:${item.record_index}`,
                   metadata: item.observation.metadata,
                   source_type: item.observation.source_type,
                   groups: [],
                   user_tags: [],
-                  files: [],
+                  files: attachments.files,
                   annotations: [],
                 },
-        })),
+        };
+      });
+      return {
+        groups: [],
+        excluded: [...excluded].map(([kind, count]) => ({ kind, count })),
+        items,
       };
     },
   };

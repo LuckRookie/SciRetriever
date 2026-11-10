@@ -1114,6 +1114,10 @@ MaterialRef 的目标设计将已接纳 Asset/关系和 hash 作为最小材料�
 
 `literature/import-adapters.ts` 统一登记 `records`、BibTeX/BibLaTeX、RIS、CSL JSON；适配器为纯函数，原始数据进，中性记录与不导入的内容计数出，不联网、不读文件、不写库。书目格式沿用原 decoder；单条解析/最小身份不合格计 rejected，其它记录继续。外部工具原始对象、同步状态、插件字段和笔记不扩展 LiteratureMetadata；批注当前只分类计数，supported 进入 deferred，未写入阅读批注。
 
+书目会话从 BibTeX/BibLaTeX 的 `file` 和 RIS 的各条 `L1` 读取附件。`file` 按未转义的分号分附件，支持 `说明:路径:媒体类型`、`:路径:PDF` 与单独路径；冒号、分号、反斜杠的转义在拆分后还原，Windows 盘符属于路径。`L1` 每条为完整路径，不按冒号或分号拆分；CSL JSON 没有标准附件字段，不推断 files。媒体类型为 application/pdf、类型名为 PDF，或文件名扩展名为 .pdf（均忽略大小写）时视作 PDF；每条记录只保留第一个有效 PDF，输出 `preferred:true`、media_type=application/pdf，大小和哈希为空。其余 PDF 仅计 `additional-file`，非 PDF 仅计 `non-pdf-file`。
+
+附件 `file_name` 取路径末段，相对引用的 `external_id` 使用还原转义后的相对路径，反斜杠归一为斜杠。绝对路径、Windows 盘符/UNC、本机 home 简写及 `internal-pdf://`、`file://` 只生成 `local-file:<分段序号>:<记录序号>:<附件序号>:<文件名>`，不返回本机目录；两种文件 URI 只解码一次百分号转义。引用继续受中性合同的 1,024 字符、控制字符、文件名及 `.`/`..` 路径组件校验；其他 URI、带 query/fragment 的文件 URI或不合法路径以 `invalid-file-reference` 计数，不使整条书目失败。适配器只产出引用，不尝试读取文件、下载或按文件名查找字节。
+
 来源库优先使用其全局唯一编号；只有本地编号时，由设备连接号限定范围。来源键为 SHA-256(canonical JSON `["sciretriever.import-source.v1", system, scope, library_id]`)，scope 为 global 或 device:<connection_id>，设备编号只由认证推导。Web/CLI/stdio 没有设备身份时仅交 local 拒绝 `import-local-identity-required`；不共享默认命名空间，不凭文件名或主机名伪造全局号。先以本地号、后以全局号导入会形成独立来源，不自动合并。
 
 外部编号对应先定位记录，再由同一保守身份规则核对稳定标识冲突与歧义；无 DOI 的记录也可以按对应继续导入。目标已删除时报告 external-target-missing，不猜测重绑。规范化记录哈希相同则不重复 observation，仅记录批次命中和补文件夹成员；变化形成新的不可变 user/import observation，source_record_id 为 `[library_key,external_id]` 的 JSON，input_sha256 为记录哈希。导入非空值按现有用户来源优先级处理，不能覆盖人工锁、READY 元数据或已有内容；当前统一值变化分 enriched，不变为 matched，首次无匹配为 created。
@@ -1126,9 +1130,9 @@ MaterialRef 的目标设计将已接纳 Asset/关系和 hash 作为最小材料�
 
 无来源库号的导出文件以 `library:null` 创建一次性会话，Web、导入用途设备和本机入口均可使用；服务端每次生成独立的 `adhoc:<UUID>` scope。读取投影为 `{system:"file",library_id:"",identity:"adhoc",name:file_name??""}`，不把文件名、内容哈希或本地库号伪装成全局身份。同名文件可同时导入；同一会话仍可按 session ID 续传，但另一个会话不能续用此来源对应，调用方也不能显式指定 adhoc 或其 scope。批次名称优先使用 file_name，未给时用格式名，沿用既有 120 字符上限。
 
-一次性会话的书目 observation 仍为 `user/bibliographic-import`，source_record_id/input/parameters hash 均为空；重复的规范化用户 observation 复用原事实，字段优先级与旧入口一致。分组与用户标签按旧文件导入行为忽略并报告计数，import_user_tags 归一为 false；不保存可续导的记录、组或文件对应，也不覆盖用户整理。中性记录中存在首选 PDF 引用时，预览、文件清单、上传/哈希、结束与报告仍走同一文件通道；不凭上传文件名推断论文归属。书目格式能否产出附件引用由适配器决定，未声明的附件不能伪造清单。
+一次性会话的书目 observation 仍为 `user/bibliographic-import`，source_record_id/input/parameters hash 均为空；重复的规范化用户 observation 复用原事实，字段优先级与旧入口一致。分组与用户标签按旧文件导入行为忽略并报告计数，import_user_tags 归一为 false；不保存可续导的记录、组或文件对应，也不覆盖用户整理。中性记录中存在首选 PDF 引用时，预览、文件清单、上传/哈希、结束与报告仍走同一文件通道；不凭上传文件名推断论文归属。
 
-旧 Web/CLI/stdio 书目入口内部用同一 null-library 创建路径，原请求、结果、编码处理和逐条拒绝语义不变。失败时结算临时会话，不遗留活动会话，也不撤销已经接纳的文献。
+旧 Web `/api/import`、CLI/stdio 书目入口内部用同一 null-library 创建路径，原请求、结果、编码处理和逐条拒绝语义不变；这些一步完成的入口忽略附件，不生成待交文件。失败时结算临时会话，不遗留活动会话，也不撤销已经接纳的文献。
 
 只要 `Literature` 已形成可转换的当前 `LiteratureMetadata` 即可导出，不要求 PDF、解析或内容总结完成。始终导出当前接纳的 metadata，不按分析或建档状态切换另一套数据。默认每个 `MetaLiterature` 选择一个最佳可导出 Literature；用户明确要求时可以导出全部 Literature。目标格式无法表达的字段必须形成明确损失说明。
 
