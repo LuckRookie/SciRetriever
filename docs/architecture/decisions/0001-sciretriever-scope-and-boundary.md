@@ -2,7 +2,7 @@
 
 类型：决策（ADR）
 负责：SciRetriever 的范围与数据边界
-状态：Accepted；部分被取代：知识压缩与证据目标见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)，通用提取见 [ADR 0027](0027-extraction-capabilities-and-caller-defined-records.md)；单篇可读全文改由校订稿承担、LiteratureContent 退役，见 [ADR 0037](0037-literature-archive-and-proofread-text.md)
+状态：Accepted；部分被取代：知识压缩与证据目标见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)，通用提取见 [ADR 0027](0027-extraction-capabilities-and-caller-defined-records.md)；单篇可读全文改由校订稿承担、LiteratureContent 退役，见 [ADR 0037](0037-literature-archive-and-proofread-text.md)；产品定位的表述部分被 [ADR 0059](0059-general-literature-knowledge-base.md) 取代：人和 Agent 是并列的服务对象
 
 - Date: 2026-07-20
 - Revised: 2026-08-06

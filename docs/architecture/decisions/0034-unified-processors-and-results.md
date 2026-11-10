@@ -2,7 +2,7 @@
 
 类型：决策（ADR）
 负责：统一处理器接口与结果格式
-状态：Accepted；部分被 [ADR 0037](0037-literature-archive-and-proofread-text.md) 取代：算子只读就绪文献的校订稿；单篇算子无依赖；多篇算子先逐篇再汇总；结果过时只标记、不自动重算；增加区块级仲裁
+状态：Accepted；部分被 [ADR 0037](0037-literature-archive-and-proofread-text.md) 取代：算子只读就绪文献的校订稿；单篇算子无依赖；多篇算子先逐篇再汇总；结果过时只标记、不自动重算；增加区块级仲裁；部分被 [ADR 0044](0044-knowledge-processing-platform.md) 取代：执行形态、材料准入、多篇输入与复用键，见该 ADR 的“部分取代”；部分被 [ADR 0060](0060-two-level-full-text.md) 取代：单篇算子可以读取初稿或校订稿，见该 ADR 第 4 节
 
 - Date: 2026-10-18
 - Amends: [ADR 0027](0027-extraction-capabilities-and-caller-defined-records.md)

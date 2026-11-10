@@ -2,7 +2,7 @@
 
 类型：决策（ADR）
 负责：科研 Agent 知识组件与人类协作边界
-状态：Accepted；部分被 [ADR 0037](0037-literature-archive-and-proofread-text.md) 取代：增加页码区域定位与按部分组织的文档；硬校验只保证抄录保真；人工直接输入的页面版本校验被 [ADR 0042](0042-browser-screencast-and-direct-input.md) 取代
+状态：Accepted；部分被 [ADR 0037](0037-literature-archive-and-proofread-text.md) 取代：增加页码区域定位与按部分组织的文档；硬校验只保证抄录保真；人工直接输入的页面版本校验被 [ADR 0042](0042-browser-screencast-and-direct-input.md) 取代；产品定位的表述部分被 [ADR 0059](0059-general-literature-knowledge-base.md) 取代：人和 Agent 是并列的服务对象；第 3 节“不设业务预算”对知识加工部分被 [ADR 0044](0044-knowledge-processing-platform.md) 第 6 节的软预算取代
 
 - Date: 2026-09-25
 - Last amended: 2026-10-15

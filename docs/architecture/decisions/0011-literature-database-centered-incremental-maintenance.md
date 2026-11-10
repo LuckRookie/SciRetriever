@@ -2,7 +2,7 @@
 
 类型：决策（ADR）
 负责：以文献数据库为中心的增量维护
-状态：Accepted；部分被取代：产品目的为科研 Agent 知识供给，见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)；长期保留的结果改为原始解析、校订稿、结构注释、元数据字段状态与标签词表，见 [ADR 0037](0037-literature-archive-and-proofread-text.md)
+状态：Accepted；部分被取代：产品目的为科研 Agent 知识供给，见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)；长期保留的结果改为原始解析、校订稿、结构注释、元数据字段状态与标签词表，见 [ADR 0037](0037-literature-archive-and-proofread-text.md)；产品定位的表述部分被 [ADR 0059](0059-general-literature-knowledge-base.md) 取代：人和 Agent 是并列的服务对象
 
 - Date: 2026-08-08
 - Last amended: 2026-09-27

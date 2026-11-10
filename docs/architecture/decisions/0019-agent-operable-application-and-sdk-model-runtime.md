@@ -2,7 +2,7 @@
 
 类型：决策（ADR）
 负责：Agent 可编排应用边界与 SDK 驱动模型运行时
-状态：Accepted；产品操作范围被 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md) 扩展：科研 Agent 为主要程序消费者，新增证据、知识压缩、检索与人类协作
+状态：Accepted；产品操作范围被 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md) 扩展：科研 Agent 为主要程序消费者，新增证据、知识压缩、检索与人类协作；产品定位的表述部分被 [ADR 0059](0059-general-literature-knowledge-base.md) 取代：人和 Agent 是并列的服务对象
 
 - Date: 2026-08-26
 - Last amended: 2026-10-15
