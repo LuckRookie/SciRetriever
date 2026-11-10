@@ -17,6 +17,7 @@ export type DeviceStorageCommand =
     }
   | { kind: "authenticate"; token_sha256: string; now: string }
   | { kind: "list"; after: string | null }
+  | { kind: "check"; connection_id: string }
   | { kind: "rename"; connection_id: string; name: string }
   | { kind: "revoke"; connection_id: string; now: string };
 type Row = Record<string, import("node:sqlite").SQLOutputValue>;
@@ -33,6 +34,16 @@ function safe(row: Row): DeviceConnection {
 }
 /** Only derived authentication material crosses the storage boundary. */
 export function runDeviceStorage(db: DatabaseSync, r: DeviceStorageCommand) {
+  if (r.kind === "check") {
+    const d = db
+      .prepare("SELECT * FROM device_connections WHERE connection_id=?")
+      .get(r.connection_id);
+    if (!d || d.paired_at === null || d.token_sha256 === null)
+      return { code: "device-token-invalid" };
+    return d.revoked_at !== null
+      ? { code: "device-revoked" }
+      : { connection: safe(d) };
+  }
   db.exec("BEGIN IMMEDIATE");
   try {
     let result: unknown;

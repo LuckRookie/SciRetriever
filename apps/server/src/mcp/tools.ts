@@ -1,5 +1,5 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { METADATA_FIELDS } from "@sciretriever/contracts";
+import { METADATA_FIELDS, type DevicePurpose } from "@sciretriever/contracts";
 
 const text = { type: "string" };
 const id = {
@@ -233,6 +233,23 @@ export const BROWSER_MAINTENANCE_TOOLS: readonly Tool[] = [
   ),
 ];
 export const QUERY_TOOLS: readonly Tool[] = [
+  tool(
+    "import_session_status",
+    "Read a persisted import session without initializing the library or resuming import work.",
+    object({ session_id: id }),
+  ),
+  tool(
+    "import_session_report",
+    "Read the actual import report with bounded record pagination. Files and import data use the import HTTP API, not MCP.",
+    object(
+      {
+        session_id: id,
+        cursor: nullable({ type: "string", pattern: "^\\d{1,4}:\\d{1,6}$" }),
+        limit: { type: "integer", minimum: 1, maximum: 200 },
+      },
+      ["session_id"],
+    ),
+  ),
   tool(
     "processor_runs",
     "List bounded processor runs with actor, source selection, four part-outcome counts and staleness. Filters are conjunctive.",
@@ -1339,3 +1356,32 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
     false,
   ),
 ];
+
+/** HTTP transport restrictions only; every allowed definition/handler remains shared with stdio. */
+export const HTTP_MCP_EXCLUDED_TOOLS = [
+  "import_bibliography",
+  "begin_pdf_upload",
+  "append_pdf_upload",
+  "commit_pdf_upload",
+  "discard_pdf_upload",
+] as const;
+export function httpMcpPurpose(name: string): "read" | "operate" | null {
+  if (
+    name.startsWith("configuration_") ||
+    name.startsWith("device_") ||
+    name.startsWith("browser_") ||
+    name.startsWith("runtime_") ||
+    HTTP_MCP_EXCLUDED_TOOLS.some((n) => n === name)
+  )
+    return null;
+  if (QUERY_TOOLS.some((t) => t.name === name)) return "read";
+  if (MAINTENANCE_TOOLS.some((t) => t.name === name)) return "operate";
+  return null;
+}
+export function httpMcpAllowed(
+  name: string,
+  purposes: readonly DevicePurpose[],
+): boolean {
+  const purpose = httpMcpPurpose(name);
+  return purpose !== null && purposes.includes(purpose);
+}

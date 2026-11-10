@@ -32,6 +32,13 @@ export function requireDevicePurpose(
 }
 /** Authentication owner; never use generic operation/audit wrappers for secrets. */
 export class DeviceConnectionService {
+  private readonly revokedListeners = new Set<(connectionId: string) => void>();
+  onRevoked(listener: (connectionId: string) => void) {
+    this.revokedListeners.add(listener);
+    return () => {
+      this.revokedListeners.delete(listener);
+    };
+  }
   constructor(
     private readonly db: SqliteWorker,
     private readonly now: () => number = Date.now,
@@ -99,6 +106,13 @@ export class DeviceConnectionService {
       now: new Date(this.now()).toISOString(),
     });
   }
+  /** Revalidate an already authenticated transport binding; never an HTTP authentication substitute. */
+  requireActive(connectionId: string) {
+    return this.store<{ connection: DeviceConnection }>({
+      kind: "check",
+      connection_id: deviceConnectionId(connectionId),
+    });
+  }
   list(value: unknown) {
     const r = deviceRecord(value, ["cursor"]);
     return this.store<{
@@ -115,12 +129,15 @@ export class DeviceConnectionService {
       ...parseDeviceRenameRequest(value),
     });
   }
-  revoke(value: unknown) {
+  async revoke(value: unknown) {
     const r = deviceRecord(value, ["connection_id"]);
-    return this.store<{ connection: DeviceConnection }>({
+    const result = await this.store<{ connection: DeviceConnection }>({
       kind: "revoke",
       connection_id: deviceConnectionId(r.connection_id),
       now: new Date(this.now()).toISOString(),
     });
+    for (const listener of this.revokedListeners)
+      listener(result.connection.connection_id);
+    return result;
   }
 }

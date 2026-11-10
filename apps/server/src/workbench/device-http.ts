@@ -17,7 +17,7 @@ import {
 import { catalogCorruption } from "../storage/sqlite/errors.js";
 
 export interface DeviceRoute {
-  readonly method: "GET" | "POST";
+  readonly method: "GET" | "POST" | "DELETE";
   /** Anchored literal path, with optional :id segments. No wildcard/implicit subtree grants. */
   readonly path: string;
   /** Any one explicitly registered purpose suffices. No purpose implies another. */
@@ -54,7 +54,10 @@ export class DeviceRouteRegistry {
     expression: RegExp;
     keys: string[];
   }[] = [];
-  constructor(routes: readonly DeviceRoute[] = []) {
+  constructor(
+    routes: readonly DeviceRoute[] = [],
+    private readonly dispose?: () => Promise<void>,
+  ) {
     for (const route of routes) {
       if (
         !route.purposes.length ||
@@ -88,6 +91,9 @@ export class DeviceRouteRegistry {
         keys,
       });
     }
+  }
+  close(): Promise<void> {
+    return this.dispose?.() ?? Promise.resolve();
   }
   find(method: string | undefined, path: string) {
     for (const entry of this.routes) {
@@ -256,7 +262,13 @@ export async function handleDeviceRequest(
   const downloadRoute =
     /^\/api\/v1\/device-connections\/(instructions|skill)$/u.test(url.pathname);
   const authorization = request.headers.authorization;
-  if (!exchange && !downloadRoute && authorization === undefined) return false;
+  if (
+    !exchange &&
+    !downloadRoute &&
+    url.pathname !== "/mcp" &&
+    authorization === undefined
+  )
+    return false;
   try {
     if (!options) throw new DeviceConnectionError("device-unavailable");
     if (url.search) throw new DeviceConnectionError("device-token-in-url");

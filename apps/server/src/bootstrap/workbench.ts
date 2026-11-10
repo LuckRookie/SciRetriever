@@ -512,7 +512,7 @@ async function startProductionWorkbenchOwned(
     http = await startWorkbenchHttp({
       devices: {
         service: app.deviceConnections,
-        routes: deviceBusinessRoutes(app),
+        routes: deviceBusinessRoutes(app, query),
       },
       ...(options.access ? { access: options.access } : {}),
       session,
@@ -833,7 +833,7 @@ export async function startSyntheticWorkbench(options: {
     http = await startWorkbenchHttp({
       devices: {
         service: application.deviceConnections,
-        routes: deviceBusinessRoutes(application),
+        routes: deviceBusinessRoutes(application, query),
       },
       ...(options.access ? { access: options.access } : {}),
       session,

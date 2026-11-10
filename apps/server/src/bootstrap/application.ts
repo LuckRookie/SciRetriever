@@ -1,6 +1,7 @@
 import { DeviceConnectionService } from "../workbench/device-connections.js";
 import {
   ImportSessionService,
+  ImportSessionReadService,
   type ImportSessionOptions,
 } from "../entry/import-sessions.js";
 import { ProxyUnavailableError } from "../network/egress.js";
@@ -363,6 +364,7 @@ export type ProcessorReader = Pick<
   | "records"
 >;
 export interface QueryApplication {
+  readonly importSessions?: Pick<ImportSessionReadService, "status" | "report">;
   readonly archiveArrangement?: ArchiveArrangementAccess;
   readonly usageEstimate?: (
     request: unknown,
@@ -2174,12 +2176,14 @@ export async function createQueryApplication(
   let context: MaterialContextService | null = null;
   let knowledgeContext: KnowledgeContextService | null = null;
   let processorRead: SqliteProcessorStorage | null = null;
+  const importSessions = new ImportSessionReadService(database);
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> => {
     // Publish the shared result before a resource callback can reenter close.
     closing ??= Promise.resolve().then(async () => {
       const failures: unknown[] = [];
       for (const release of [
+        () => importSessions.close(),
         async () => processorRead?.close(),
         async () => knowledgeContext?.close(),
         async () => context?.close(),
@@ -2367,6 +2371,7 @@ export async function createQueryApplication(
       (part, signal) => archiveReuse.textWork(part, signal),
     );
     return {
+      importSessions,
       usageEstimate: (value, signal) => estimating.estimate(value, signal),
       readiness: {
         status: "ready",

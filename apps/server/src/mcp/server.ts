@@ -19,6 +19,7 @@ import {
 import {
   ContractValidationError,
   parseLiteratureId,
+  type DevicePurpose,
 } from "@sciretriever/contracts";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import {
@@ -62,9 +63,18 @@ import {
   BROWSER_QUERY_TOOLS,
   MAINTENANCE_TOOLS,
   QUERY_TOOLS,
+  httpMcpAllowed,
 } from "./tools.js";
 
 export interface McpOptions {
+  /** Internal HTTP admission. Never a request argument; device grants are independent. */
+  readonly deviceAccess?: {
+    readonly purposes: readonly DevicePurpose[];
+    readonly actor: string;
+    readonly authorize?: () => Promise<readonly DevicePurpose[]>;
+  };
+  /** Borrowed Web owners are closed by Web, never by an MCP connection. */
+  readonly sharedApplications?: boolean;
   /** Explicit local owner of live Browser sessions; no discovery through shared storage. */
   readonly workbenchUrl?: string;
   readonly maintenance?: boolean;
@@ -99,7 +109,7 @@ export function createMcpServer(options: McpOptions = {}) {
     { name: "sciretriever", version: "0.1.0" },
     { capabilities: { tools: {} } },
   );
-  const tools = [
+  const declaredTools = [
     ...QUERY_TOOLS,
     ...(options.maintenance ? MAINTENANCE_TOOLS : []),
     ...(browserOrigin
@@ -109,6 +119,11 @@ export function createMcpServer(options: McpOptions = {}) {
         ]
       : []),
   ];
+  const tools = options.deviceAccess
+    ? declaredTools.filter((t) =>
+        httpMcpAllowed(t.name, options.deviceAccess!.purposes),
+      )
+    : declaredTools;
   const ajv = new Ajv2020({ strict: false, allErrors: false });
   const validators = new Map(
     tools.map((tool) => [tool.name, ajv.compile(tool.inputSchema)]),
@@ -144,7 +159,17 @@ export function createMcpServer(options: McpOptions = {}) {
     )();
     return query;
   };
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    if (stop.signal.aborted) unavailable();
+    const purposes =
+      (await options.deviceAccess?.authorize?.()) ??
+      options.deviceAccess?.purposes;
+    return {
+      tools: options.deviceAccess
+        ? tools.filter((t) => httpMcpAllowed(t.name, purposes!))
+        : tools,
+    };
+  });
   const call = async (
     name: string,
     args: Record<string, unknown>,
@@ -458,6 +483,8 @@ export function createMcpServer(options: McpOptions = {}) {
       export_bibliography: "bibliography-export",
       inspect_task: "task-detail",
       status: "status",
+      import_session_status: "import-session-status",
+      import_session_report: "import-session-report",
       intake_batches: "intake-batches",
       library_facets: "library-facets",
       acquire_pdf_preview: "acquire-pdf-preview",
@@ -484,6 +511,11 @@ export function createMcpServer(options: McpOptions = {}) {
         if (stop.signal.aborted) unavailable();
         const args = request.params.arguments ?? {};
         const name = request.params.name;
+        const purposes =
+          (await options.deviceAccess?.authorize?.()) ??
+          options.deviceAccess?.purposes;
+        if (options.deviceAccess && !httpMcpAllowed(name, purposes!))
+          throw new ProductOperationError("device-purpose-forbidden");
         if (
           ["document_role", "proofread_decide", "proofread_revoke"].includes(
             name,
@@ -516,12 +548,14 @@ export function createMcpServer(options: McpOptions = {}) {
         return result(
           await withActivity(
             {
-              actor: server.getClientVersion()?.name
-                ? `mcp:${server
-                    .getClientVersion()!
-                    .name.replace(/[\p{Cc}\p{Cf}]/gu, "")
-                    .slice(0, 80)}`
-                : machineActor("mcp"),
+              actor:
+                options.deviceAccess?.actor ??
+                (server.getClientVersion()?.name
+                  ? `mcp:${server
+                      .getClientVersion()!
+                      .name.replace(/[\p{Cc}\p{Cf}]/gu, "")
+                      .slice(0, 80)}`
+                  : machineActor("mcp")),
             },
             () =>
               call(
@@ -597,7 +631,8 @@ export function createMcpServer(options: McpOptions = {}) {
       const opened = await Promise.allSettled([app, query]);
       const failures: unknown[] = [];
       try {
-        await closeSourceProbes(sourceConfiguration(configurationOwner));
+        if (!options.sharedApplications)
+          await closeSourceProbes(sourceConfiguration(configurationOwner));
       } catch (error) {
         failures.push(error);
       }
@@ -606,7 +641,7 @@ export function createMcpServer(options: McpOptions = {}) {
       } catch (error) {
         failures.push(error);
       }
-      for (const value of opened)
+      for (const value of options.sharedApplications ? [] : opened)
         if (value.status === "fulfilled" && value.value) {
           try {
             await value.value.close();

@@ -10,7 +10,7 @@
 
 内部由产品协议、CLI/HTTP 适配、人类工作台与输入输出边界组成。配置是共享支撑，本篇集中说明其编辑、发布和凭据合同；它仍由 Configuration owner 实现，不属于文献业务规则。公共中性合同也在本篇说明基础规则，具体文献、文档、查询和产物字段分别归其所属模块正文。
 
-当前已提供 TypeScript/CLI、配置页、独立查询 Web 及单篇三用途知识分析/阅读，单篇长文另有显式分段请求；集合综合的有界执行、只读准备/阅读、HTTP 和 Web 入口已接通；MCP stdio 已接入统一 Application；部分人类协作能力仍有独立验收范围。代码字段、已有合同和目标草案在相应小节区分。
+当前已提供 TypeScript/CLI、配置页、独立查询 Web 及单篇三用途知识分析/阅读，单篇长文另有显式分段请求；集合综合的有界执行、只读准备/阅读、HTTP 和 Web 入口已接通；MCP stdio 与 HTTP 已接入统一 Application；部分人类协作能力仍有独立验收范围。代码字段、已有合同和目标草案在相应小节区分。
 
 本篇目录：
 
@@ -117,7 +117,7 @@ QueryApplication 的状态为 ready、not-initialized、unavailable。缺库不�
 
 令牌仅通过 `Authorization: Bearer ...` 使用；URL/path/query 中的认证材料在路由前拒绝。令牌请求忽略 Origin/跨站提示但保留 Host 地址检查，不信任转发头，也不宽开 CORS；未携带令牌的 Web/SDK 接口继续原认证。携带 Authorization 时绝不回退到同一请求的 Web Cookie。令牌不能登录、取得 Web client/CSRF、访问配置/凭据、管理设备或观看 Browser WebSocket。
 
-用途为 `capture/import/read/operate`，非空且彼此不隐含；当前导入会话登记为 `import`，见[导入会话 HTTP](#242-导入会话-http)。唯一登记点 `bootstrap/device-routes.ts::deviceBusinessRoutes(application)` 返回用途—接口表，`DeviceRouteRegistry` 只允许新 import/capture 命名空间和 `/mcp`，每个精确方法/路径（允许受限 `:id`）列出可接受的用途。MCP 后续还须按工具检查用途。未登记的所有既有 query/maintenance/管理路径均拒绝令牌。每次认证从 catalog 核对撤销并更新 last_used_at，无跨请求授权缓存；撤销不回滚先前已接纳的操作。
+用途为 `capture/import/read/operate`，非空且彼此不隐含；当前导入会话登记为 `import`，见[导入会话 HTTP](#242-导入会话-http)。唯一登记点 `bootstrap/device-routes.ts::deviceBusinessRoutes(application)` 返回用途—接口表，`DeviceRouteRegistry` 只允许新 import/capture 命名空间和 `/mcp`，每个精确方法/路径（允许受限 `:id`）列出可接受的用途。MCP 同时在列出和调用工具处检查用途，见[HTTP 版 MCP](#http-版-mcp)。未登记的所有既有 query/maintenance/管理路径均拒绝令牌。每次认证从 catalog 核对撤销并更新 last_used_at，无跨请求授权缓存；撤销不回滚先前已接纳的操作。
 
 Web 管理均为 POST，要求登录 Cookie、工作台 Cookie、client_id、同源、`X-Workbench-Csrf` 和 `X-Sciretriever-Protocol-Version:1`。封套为 `{protocol_version:1,request}` / `{protocol_version:1,result}`：
 
@@ -1195,7 +1195,9 @@ Model 不能导入或暴露：
 
 以下数据结构代码块使用语言中立记法：`str` 表示字符串、`int` 表示通过整数约束的 number、`None` 表示 JSON null，`tuple[T, ...]` 表示有序只读数组。它们描述字段与约束，不是可导入的 Python API。当前 TypeScript 示例使用 `readonly` 和 `null`；JSON 字段名保持兼容，不因语言迁移改名。
 
-## 7. MCP stdio 适配
+## 7. MCP 适配
+
+### stdio
 
 正式适配使用官方 MCP TypeScript SDK，`sciretriever mcp` 默认只读，`--maintenance` 增加
 显式维护工具；具体命令、schema 和行为见[Agent 接口指南](../../guides/agent-interface.md)。
@@ -1208,7 +1210,30 @@ MCP 复用 Application/QueryApplication；stdio stdout 仅承载 JSON-RPC，调�
 
 MCP 服务进程存续期间任务可在工具调用之间继续；关闭进程会停止在途工作并保留已提交事实，
 停止后不继续后台执行。重启后的未知项需显式恢复，不自动重放收费调用。新进程读取任务
-通过只读 QueryApplication，不触发恢复。当前传输不扩展为远程多租户或常驻 daemon。
+通过只读 QueryApplication，不触发恢复。stdio 不创建常驻 daemon；HTTP 复用下述 Web owner，仍无远程多租户身份。
+
+### HTTP 版 MCP
+
+按 ADR 0058，正式与合成工作台的同一地址提供 `/mcp`（Streamable HTTP），使用仓库既有的 MCP SDK 1.27.1。POST 接受 MCP JSON-RPC，GET 是可选的 SDK SSE 通道，DELETE 关闭协议会话；每次请求都要求设备 Bearer 令牌。认证沿用[设备连接](#241-设备连接与按用途准入)，不以 Cookie 或 session ID 代替令牌，也不授予原 Web/配置端点权限。
+
+SDK 初始化生成 `Mcp-Session-Id`，后续请求带同一 ID 和令牌；会话绑定 connection_id，另一设备不能借此进入。`Mcp-Protocol-Version`、初始化与取消通知由 SDK 处理；不保存 event store，断线不承诺重放旧响应，应按稳定任务/结果 ID 查询事实。协议会话只在进程内，重启后重新初始化，不形成业务状态或 catalog 表。
+
+工具声明与处理只维护在 `mcp/tools.ts` 和 `mcp/server.ts`。HTTP 规则由 `httpMcpPurpose/httpMcpAllowed` 定义，并在 tools/list 和 tools/call 两处执行：
+
+| 设备用途         | 工具                                                                   |
+| ---------------- | ---------------------------------------------------------------------- |
+| read             | stdio 的 `QUERY_TOOLS`，去除 `configuration_*`；包括只读导入状态与报告 |
+| operate          | stdio `MAINTENANCE_TOOLS` 中的业务工具，去除配置和输入传输工具         |
+| read + operate   | 上述并集；两种用途互不隐含                                             |
+| capture / import | 不授予 MCP 权限；导入会话继续走[导入 HTTP](#242-导入会话-http)         |
+
+HTTP 不提供 `configuration_*`、`device_*`、`browser_*`、`runtime_*`，也不提供 `import_bibliography`、`begin_pdf_upload`、`append_pdf_upload`、`commit_pdf_upload`、`discard_pdf_upload`。导入数据与文件不经 MCP；stdio 的这些既有能力及 `--workbench-url` 保持。未知或用途不足的工具既不列出，调用也以 `device-purpose-forbidden` 拒绝。
+
+两种传输新增 `import_session_status({session_id}) → {session}` 和 `import_session_report({session_id,cursor?,limit?}) → {session,estimated:false,summary,items,next_cursor}`。报告分页沿用 03 的 sequence:record_index 游标、默认 50/最多 200。QueryApplication 只组装既有 ImportSessionReadService，不创建写入 Application、恢复会话或推进导入。模型与分类见[书目交换规则](03-literature-materials.md#61-书目交换规则)。工具成功仍采用既有 MCP `{content,structuredContent:{protocol_version:1,result}}`；业务失败为 isError=true 与 result.failure.code，不回显内部异常。
+
+MCP HTTP 总 JSON 上限 10 MiB，以容纳原有 `proofread_save`；各工具参数继续受原来 1 MiB+4 KiB 或该工具 9 MiB 限额，回执保持 4 MiB。协议会话最多 64、每设备 8；没有在途 HTTP/SSE 的会话空闲 30 分钟后清理（每分钟及新请求时检查）。服务关闭、显式 DELETE 或 Web 设备撤销会关闭连接；撤销取消在途调用，已经接纳的 durable 任务继续由业务 owner 管理。MCP 连接只借用 Web 的 Application/QueryApplication，不关闭共享 owner。审计身份固定为 `mcp:device:<connection_id>`，不采用客户端自报名称；认证与 Cookie 不传给 SDK 请求上下文。
+
+认证失败沿用设备错误封套。MCP 适配层返回标准 JSON-RPC error，data.code 为 mcp-input-invalid（400）、mcp-request-too-large（413）、mcp-session-required（400）、mcp-session-missing（404）、mcp-session-limit（429，Retry-After 60）或 mcp-unavailable（503）；跨设备 session ID 为 device-purpose-forbidden（403）。SDK 的协议/版本错误保持其标准 JSON-RPC 响应。连接状态不是授权缓存，下一次 HTTP 和工具请求继续核对 catalog 中的有效性。
 
 ### 显式连接现有运行时
 

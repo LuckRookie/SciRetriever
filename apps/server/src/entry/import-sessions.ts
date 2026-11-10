@@ -151,12 +151,81 @@ async function* uploadChunks(
       .catch(() => undefined);
   }
 }
-/** Durable import workflow. Literature and Acquisition remain the owners of their facts. */
-export class ImportSessionService {
+/** Import projections shared by read-only and durable workflow object graphs. */
+export class ImportSessionReadService {
+  protected readonly stop = new AbortController();
+  protected readonly pending = new Set<Promise<unknown>>();
+  constructor(protected readonly database: SqliteWorker) {}
+  protected tracked<T>(work: () => Promise<T>): Promise<T> {
+    if (this.stop.signal.aborted)
+      return Promise.reject(new ImportSessionError("import-closed"));
+    const pending = work();
+    this.pending.add(pending);
+    void pending.then(
+      () => this.pending.delete(pending),
+      () => this.pending.delete(pending),
+    );
+    return pending;
+  }
+  protected async read<T>(action: ImportRead): Promise<T> {
+    const r = await this.database.run<{ ok: boolean; value: T; code?: string }>(
+      { kind: "import_read", action },
+    );
+    if (!r.ok) throw new ImportSessionError(r.code ?? "import-unavailable");
+    return r.value;
+  }
+  protected stored(id: string) {
+    return this.read<StoredImportSession>({ op: "session", session_id: id });
+  }
+  status(id: string) {
+    return this.tracked(async () => publicSession(await this.stored(id)));
+  }
+  list(cursor: string | null = null, limit = 50) {
+    return this.tracked(async () => {
+      const r = await this.read<{
+        items: StoredImportSession[];
+        next_cursor: string | null;
+      }>({ op: "sessions", cursor, limit });
+      return { ...r, items: r.items.map(publicSession) };
+    });
+  }
+  protected async summary(s: StoredImportSession) {
+    const counts = await this.read<Pick<ImportSummary, "records" | "files">>({
+      op: "aggregate",
+      session_id: s.session_id,
+    });
+    return { ...(s.summary ?? blank()), ...counts };
+  }
+  report(
+    id: string,
+    cursor: string | null = null,
+    limit: number = IMPORT_LIMITS.page_items,
+  ) {
+    return this.tracked(async () => {
+      const s = await this.stored(id),
+        page = await this.read<{
+          items: ImportRecordResult[];
+          next_cursor: string | null;
+        }>({ op: "results", session_id: id, cursor, limit });
+      return {
+        session: publicSession(s),
+        estimated: false as const,
+        summary: await this.summary(s),
+        ...page,
+      };
+    });
+  }
+
+  async close() {
+    this.stop.abort();
+    await Promise.allSettled([...this.pending]);
+  }
+}
+
+/** Durable workflow; its read projections are the exact same read-only service. */
+export class ImportSessionService extends ImportSessionReadService {
   private readonly adapters: ReadonlyMap<string, ImportAdapter>;
   private readonly now: () => number;
-  private readonly stop = new AbortController();
-  private readonly pending = new Set<Promise<unknown>>();
   private readonly confirmations = new Map<string, Promise<ImportSession>>();
   private readonly stopping = new Set<string>();
   private readonly uploads = new Map<string, Set<Promise<unknown>>>();
@@ -166,7 +235,7 @@ export class ImportSessionService {
   private timer: ReturnType<typeof setInterval> | undefined;
   private maintenance: Promise<void> | undefined;
   constructor(
-    private readonly database: SqliteWorker,
+    database: SqliteWorker,
     private readonly identity: LiteratureIdentityService,
     private readonly folders: FolderService,
     private readonly files: FileStore,
@@ -174,6 +243,7 @@ export class ImportSessionService {
     private readonly recovery: ArtifactRecovery,
     options: ImportSessionOptions = {},
   ) {
+    super(database);
     this.adapters = importAdapters(options.adapters);
     this.now = options.now ?? Date.now;
     this.resources = new BrowserDownloadResources({
@@ -192,24 +262,6 @@ export class ImportSessionService {
       this.timer.unref();
     }
   }
-  private tracked<T>(work: () => Promise<T>): Promise<T> {
-    if (this.stop.signal.aborted)
-      return Promise.reject(new ImportSessionError("import-closed"));
-    const pending = work();
-    this.pending.add(pending);
-    void pending.then(
-      () => this.pending.delete(pending),
-      () => this.pending.delete(pending),
-    );
-    return pending;
-  }
-  private async read<T>(action: ImportRead): Promise<T> {
-    const r = await this.database.run<{ ok: boolean; value: T; code?: string }>(
-      { kind: "import_read", action },
-    );
-    if (!r.ok) throw new ImportSessionError(r.code ?? "import-unavailable");
-    return r.value;
-  }
   private async write<T = unknown>(action: ImportWrite): Promise<T> {
     const r = await this.database.run<{ ok: boolean; value: T; code?: string }>(
       { kind: "import_write", action },
@@ -217,23 +269,8 @@ export class ImportSessionService {
     if (!r.ok) throw new ImportSessionError(r.code ?? "import-unavailable");
     return r.value;
   }
-  private stored(id: string) {
-    return this.read<StoredImportSession>({ op: "session", session_id: id });
-  }
   formats(): readonly string[] {
     return [...this.adapters.keys()];
-  }
-  status(id: string) {
-    return this.tracked(async () => publicSession(await this.stored(id)));
-  }
-  list(cursor: string | null = null, limit = 50) {
-    return this.tracked(async () => {
-      const r = await this.read<{
-        items: StoredImportSession[];
-        next_cursor: string | null;
-      }>({ op: "sessions", cursor, limit });
-      return { ...r, items: r.items.map(publicSession) };
-    });
   }
   create(value: unknown, actor: ImportActor) {
     return this.tracked(() =>
@@ -985,32 +1022,6 @@ export class ImportSessionService {
       }),
     );
   }
-  private async summary(s: StoredImportSession) {
-    const counts = await this.read<Pick<ImportSummary, "records" | "files">>({
-      op: "aggregate",
-      session_id: s.session_id,
-    });
-    return { ...(s.summary ?? blank()), ...counts };
-  }
-  report(
-    id: string,
-    cursor: string | null = null,
-    limit: number = IMPORT_LIMITS.page_items,
-  ) {
-    return this.tracked(async () => {
-      const s = await this.stored(id),
-        page = await this.read<{
-          items: ImportRecordResult[];
-          next_cursor: string | null;
-        }>({ op: "results", session_id: id, cursor, limit });
-      return {
-        session: publicSession(s),
-        estimated: false as const,
-        summary: await this.summary(s),
-        ...page,
-      };
-    });
-  }
   private async cleanParts(id: string) {
     await this.writes.run(async () => {
       const parts = await this.read<ImportPart[]>({
@@ -1455,9 +1466,8 @@ export class ImportSessionService {
       }
     });
   }
-  async close() {
-    this.stop.abort();
+  override async close() {
     if (this.timer) clearInterval(this.timer);
-    await Promise.allSettled([...this.pending]);
+    await super.close();
   }
 }

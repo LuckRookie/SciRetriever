@@ -2366,7 +2366,10 @@ export async function startWorkbenchHttp(
     close: async () => {
       if (closing) return;
       closing = true;
-      const screenClose = await Promise.allSettled([screencast.close()]);
+      const screenClose = await Promise.allSettled([
+        screencast.close(),
+        options.devices?.routes?.close(),
+      ]);
       access.close();
       stopUploads.abort();
       queryHandler?.close();
@@ -2380,7 +2383,8 @@ export async function startWorkbenchHttp(
       server.closeAllConnections();
       await done;
       await Promise.allSettled([...pending]);
-      if (screenClose[0]?.status === "rejected") throw screenClose[0].reason;
+      for (const result of screenClose)
+        if (result.status === "rejected") throw result.reason;
     },
   };
 }
