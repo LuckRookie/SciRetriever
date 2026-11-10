@@ -8,74 +8,78 @@
 
 1. 算子是只含数据的公共声明加上仓库内实现，执行器里没有任何按算子 id 的分支；结果条目的引用绑定到具体字段或陈述，集合条目可以有多个来源文献；
 2. 合同骨架能承载以后各块的产出类型：结果身份与复用键分开、覆盖与判断两条轴、三种证据根、封闭的字段类型、以结果为输入的引用、类型到视图的注册表；本块只登记 `report`、`answer`、`records`；
-3. 持续阅读会话是底层能力，任何单篇算子都能使用；
+3. 持续阅读会话是底层能力，任何单篇算子都能使用；读到的每个片段带文本等级（初稿片段另带核对依据，值由计划 21 的初稿提供）；
 4. `summary@3` 跑在公共会话上，`summary@2` 的现有回归测试通过（证明协议与信息传递，不证明真实质量）；
 5. 所有旧结果仍可读、可导出、可作证据；旧版本经隔离的旧执行入口运行：停止新建前照常可提交，停止后只排空。
+
+本块只交付合同与会话，不交付新的结果页面。三种类型的页面、Agent 的分层读取与带出处的导出由 02、03 交付（规格 8.12）。`summary@3` 的结果沿用现有的总结页面与机器读取。
 
 规格见[知识加工规格](../../architecture/technical/05-knowledge-processing.md) 8.1、8.2、8.4、8.5、8.11–8.13。
 
 ## 进入条件
 
-- 计划 14 的 07 已由 worker 收尾，worker 空闲；
-- 计划 14、15 的未提交改动已确认归属（Owner 决定提交或保留），本块派活时列出可改目录。
+- 无前置块。G-adr 已通过（2026-11-10）。
+- Owner 已指定本块的实施者。
+- 开工前确认工作树中其它活动计划（计划 18–21）的未提交改动归属；派活时列出本块可改的目录。
+- 1.7 另需 B0 基准与 G-real、G-lib 授权；不阻塞 1.1–1.6。
 
 ## 责任边界
 
-worker 执行；Claude 审阅 diff 与验证。触达 `packages/contracts/src/processors.ts`、`apps/server/src/analysis/`（`processor.ts`、`processor-registry.ts`、`processor-knowledge.ts`、`knowledge-session.ts`、`summary-response.ts`、`processor-evidence.ts`）、`apps/server/src/storage/processor-results.ts`、`apps/server/src/application/jobs/processors.ts`、`apps/server/src/bootstrap/application.ts`。不改界面文件；`apps/web/src/app/data/` 只在合同变化需要时适配。
+worker 执行；总设计师 审阅 diff 与验证。触达 `packages/contracts/src/processors.ts`、`apps/server/src/analysis/`（`processor.ts`、`processor-registry.ts`、`processor-knowledge.ts`、`knowledge-session.ts`、`summary-response.ts`、`processor-evidence.ts`）、`apps/server/src/storage/processor-results.ts`、`apps/server/src/application/jobs/processors.ts`、`apps/server/src/bootstrap/application.ts`。不改界面文件；`apps/web/src/app/data/` 只在合同变化需要时适配。
 
 ## Tasks
 
 - [ ] **1.1 公共声明合同**
-  - 落实草案 8.4 的声明形状与 8.2 的 `answer` 结构。G-adr 前 `requires` 只接受 `main-proofread`、`body-section`（`tags`、`metadata:<字段>` 属冲突条目）。
-  - 输出：类型、parser、合同测试（合法声明；未知 `requires`、未知 `output_kind`、`scope` 非 `document`、含执行函数的声明均拒绝）。
-  - 本任务只增加新形状，不删除现行 `Processor.map` 与集合算子；它们在 02 的 2.7 删除。
+  - 落实规格 8.4 的声明形状与 8.2 的 `answer` 结构。`requires` 接受规格 8.4 的全部条件：`main-text`、`main-proofread`、`body-section`、`tags`、`metadata:<字段>`；`main-text` 与 `main-proofread` 同时声明时拒绝。
+  - 输出：类型、parser、合同测试（合法声明；未知 `requires`、两种正文条件同时出现、未知 `output_kind`、`scope` 非 `document`、含执行函数的声明均拒绝）。
+  - 本任务只增加新形状，不删除现行 `Processor.map` 与集合算子；它们在 02 的 2.14 删除。
 - [ ] **1.1a 结果条目外壳修正**
-  - 按草案 8.2 修正现行 ProcessorResult：条目按产出类型区分；集合结果的条目可带多个来源文献并按实际文献去重；引用绑定到字段路径、陈述或答案，不用扁平引用列表；覆盖独立于条目。
+  - 按规格 8.2 修正现行 ProcessorResult：条目按产出类型区分；集合结果的条目可带多个来源文献并按实际文献去重；引用绑定到字段路径、陈述或答案，不用扁平引用列表；覆盖独立于条目。
   - 沿用现有执行、版本与来源外壳，不新建外壳，不迁移旧结果；旧结果经 1.2 的解码器照常读取。
   - 验收：合同测试覆盖多来源集合条目、字段级引用、“条目为空但覆盖不完整”不被读作完整零结果；同一篇的多条结果在来源计数中只算一篇。
 - [ ] **1.1b 合同骨架**
-  - 落实草案 8.1 的身份与复用键：现行独立 `result_id` 与比较身份的分离延续到新合同；复用键纳入上游结果 hash。读取的元数据进入复用键属冲突条目（ADR 0037），G-adr 前不纳入。
-  - 落实草案 8.11 的覆盖与判断两个字段；判断取值随产出类型登记。
-  - 落实草案 8.1 的三种证据根：本块实现校订稿位置与冻结元数据两种；人工决定只定义合同形状，由 09 使用。
-  - 落实草案 8.2 末段的字段类型集合：类型与 parser；`spec_schema`、`output_schema` 超出集合的在注册时拒绝。
-  - 运行输入引用冻结的集合清单（ID 与内容 hash），供 02 的汇总使用；G-adr 前只接受同一快照逐篇运行的清单。
+  - 落实规格 8.1 的身份与复用键：现行独立 `result_id` 与比较身份的分离延续到新合同；复用键纳入上游结果 hash、算子读取的元数据或标签、每篇输入的文本等级。
+  - 落实规格 8.11 的覆盖与判断两个字段；判断取值随产出类型登记。外框留出每篇输入的文本等级与两个计数（依据初稿、依据校订稿的文献数），由 04 的 4.6 填写。
+  - 落实规格 8.1 的三种证据根：本块实现文本位置（带文本等级）与冻结元数据两种；文本位置合同含初稿片段的核对依据字段，取值由计划 21 的初稿提供；人工决定只定义合同形状，由 09 使用。
+  - 落实规格 8.2 末段的字段类型集合：类型与 parser；`spec_schema`、`output_schema` 超出集合的在注册时拒绝。
+  - 运行输入引用冻结的集合清单（ID 与内容 hash），可以是一份或多份，来自任何已冻结的运行（规格 8.7），供 02 的汇总使用。
   - 产出类型注册表：每种类型登记校验器、判断取值与视图标识；本块登记三种，新增类型由对应块登记，执行器不按类型名分支。
-  - 条目投影：核实现有可重建的记录投影（`processor_record_projection`）能否承载各类型条目的查询（按条目种类、来源文献、核对状态筛选与分页）。能承载的，新类型条目都写进这一投影、不单独建表；不能承载的，写明需要的表结构交 Claude，并入根 README 的两个 G-schema 窗口。结论写进交接记录。
-  - 验收：合同测试覆盖“同一复用键下部分与完整结果并存”“判断为未定但覆盖完整”“引用不存在的上游条目被拒”“未登记类型被拒”。
+  - 条目投影：核实现有可重建的记录投影（`processor_record_projection`）能否承载各类型条目的查询（按条目种类、来源文献、核对状态筛选与分页）。能承载的，新类型条目都写进这一投影、不单独建表；不能承载的，写明需要的表结构交 总设计师，并入根 README 的 G-schema 窗口。结论写进交接记录。
+  - 验收：合同测试覆盖“同一复用键下部分与完整结果并存”“判断为未定但覆盖完整”“引用不存在的上游条目被拒”“未登记类型被拒”“读取的元数据或文本等级不同则复用键不同”。
 - [ ] **1.2 版本化旧结果解码**
   - 把旧结果（`summary@1/@2`、`labels@2`、`records@2`、`knowledge-synthesis@2`）的读取、导出与引用解析改为按结果中记录的版本选择解码器，不依赖活动注册表中是否还有该算子。
   - 验收：从注册表移除某旧版本后，该版本的历史结果仍可读、导出、解析引用（直接测试）；旧结果不命中任何新版本的复用键。
 - [ ] **1.3 公共阅读会话**
   - 把 `analyzeDocumentSession` 泛化为算子可用的底层会话：入参为冻结输入、算子的提示词与产出 schema；工具固定为 `read_document`、`read_segments`、`search_document`、`view_image`、`reading_status`。
-  - 工具只能访问冻结的部分、章节和资源；邻段与搜索不越过声明范围；覆盖由实际读取记录得出。
+  - 工具只能访问冻结的部分、章节和资源；邻段与搜索不越过声明范围；覆盖由实际读取记录得出。读到的片段带文本等级（规格 8.5）。
   - 提交由平台按 `output_kind` 统一校验（引用属于本次输入、类型、范围），错误反馈到同一会话；引用不存在片段的新提交退回修正，不再放行。
-  - 新执行路径不再出现 `p.id === "summary"` 一类分支。现行 `ProcessorContext.summarize` 与 `processor-summary-scope` 特例移入隔离的版本化旧执行入口（草案 8.13）：`summary@2` 在 02 的 2.8 停止新建之前照常可提交并经此入口执行，之后只排空；旧队列排空后在 02 的 2.7 删除。
+  - 新执行路径不再出现 `p.id === "summary"` 一类分支。现行 `ProcessorContext.summarize` 与 `processor-summary-scope` 特例移入隔离的版本化旧执行入口（规格 8.13）：`summary@2` 在 02 的 2.13 停止新建之前照常可提交并经此入口执行，之后只排空；旧队列排空后在 02 的 2.14 删除。
 - [ ] **1.4 `summary@3`**
   - 用公共会话重写总结，`purpose` 只保留 `overview | detailed`（问题模式由 02 的 `qa@1` 承担）；方法 hash 与 `@2` 不同。
-  - `summary@2` 在 02 的 2.8 与 `labels@2` 一起停止新建（在此之前它的问题模式是唯一的整篇问答入口）；`@2` 的排队任务按原版本完成。
+  - `summary@2` 在 02 的 2.13 与 `labels@2` 一起停止新建（在此之前它的问题模式是唯一的整篇问答入口）；`@2` 的排队任务按原版本完成。
 - [ ] **1.5 机器入口列出声明**
   - `list_operators`（CLI、MCP、HTTP 共用应用边界）返回公共声明；不返回实现细节、绝对路径或凭据。
 - [ ] **1.6 验证**（见下节），交接记录写明命令与结果。
-- [ ] **1.7 E0 基准对比**〔worker 运行，Claude 对比，须 G-real〕
-  - 在 B0 基准快照上分别运行 `summary@2` 与 `summary@3`，Claude 按根 README“基准与效果检查点”的方法对比，结论交 Owner。只用于发现会话迁移造成的退化；未获授权时记为“效果待验”，不阻塞 02。
+- [ ] **1.7 E0 基准对比**〔worker 运行，总设计师 对比；须 G-real、G-lib〕
+  - 在 B0 基准快照上分别运行 `summary@2` 与 `summary@3`，总设计师 按根 README“基准与效果检查点”的方法对比，结论交 Owner。只用于发现会话迁移造成的退化；未获授权时记为“效果待验”，不阻塞 04、02。
 
 ## 集成与影响
 
-- 调用方：Web 运行页与结果页（`apps/web/src/app/features/processing/`）、MCP `processor_query`、CLI processors 命令。Web 只需看到 `summary@3` 出现在可运行列表；Claude 在本块末核对界面，有缺口记入 02 的 2.6。
-- 无 catalog 表结构变化；若实现中发现需要，停下交 Claude，再交 Owner（G-schema）。
+- 调用方：Web 运行页与结果页（`apps/web/src/app/features/processing/`）、MCP `processor_query`、CLI processors 命令。Web 只需看到 `summary@3` 出现在可运行列表；总设计师 在本块末核对界面，有缺口记入 02 的 2.12。
+- 无 catalog 表结构变化；若实现中发现需要，停下交 总设计师，再交 Owner（G-schema）。
 
 ## 验证
 
 命令按根 README 的验证路线；本块的定向测试文件如下。
 
 - 合同：`packages/contracts/test/processors-contract.test.ts` 增加 1.1–1.1b 的正负例。
-- 会话：在 `dsh-document-session.test.ts`、`dsh-corrected-reading.test.ts` 基础上，用 fake 模型覆盖正文与图片读取、越界读取与越界引用被拒、引用不存在片段被退回后修正、提前提交（未读完）在覆盖中如实体现、取消。
+- 会话：在 `dsh-document-session.test.ts`、`dsh-corrected-reading.test.ts` 基础上，用 fake 模型覆盖正文与图片读取、越界读取与越界引用被拒、引用不存在片段被退回后修正、提前提交（未读完）在覆盖中如实体现、取消、片段带文本等级。
 - 回归：`processor-summary-citations.test.ts`、`processor-workflow.test.ts`、`processor-reliability.test.ts` 对 `summary@3` 通过；改动的断言须在交接记录说明原因。
 - 兼容：1.2 的直接测试；`processor-storage.test.ts`、`processor-freshness.test.ts` 通过；停止新建前可以提交 `summary@2`，停止后提交被拒、已排队任务继续排空；排队中的任务在进程重启后经旧执行入口按原版本完成，不升级方法。
 - 执行器无 id 分支：在测试中注册一个 fake 单篇算子，仅用公共接口即可使用会话、提交并发布结果。
 - `pnpm quick`。
 
-未覆盖：真实论文上的总结质量（G-real）。
+未覆盖：真实论文上的总结质量（G-real）；初稿片段的核对依据（计划 21 交付初稿后由 04 的 4.3 验证）。
 
 ## 退出条件
 
@@ -83,8 +87,8 @@ worker 执行；Claude 审阅 diff 与验证。触达 `packages/contracts/src/pr
 - 合同骨架合入：身份与复用键、覆盖与判断、证据根、字段类型、结果引用、类型注册表；
 - 公共会话可被任意单篇算子使用，执行器无按 id 分支；
 - `summary@3` 可运行，旧结果兼容测试通过；
-- 02、03 可以在公共会话上实现新算子。
+- 04、02、03 可以在公共会话与合同骨架上实现。
 
 ## 恢复与交接
 
-失败时保留分支上的已完成 Task 与失败日志（本机 `sandbox/reports/2026-10-2x-plan16-01/`），交接记录写明停在哪个 Task。若公共会话导致 `summary@3` 回归无法消除，退回：保留 1.1、1.2，`summary@3` 不上线，交 Claude 重新判断会话边界。
+失败时保留分支上的已完成 Task 与失败日志（本机 `sandbox/reports/plan16-01/`），交接记录写明停在哪个 Task。若公共会话导致 `summary@3` 回归无法消除，退回：保留 1.1、1.2，`summary@3` 不上线，交 总设计师 重新判断会话边界。
