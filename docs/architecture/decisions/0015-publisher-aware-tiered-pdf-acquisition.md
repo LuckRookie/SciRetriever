@@ -42,13 +42,13 @@ direct
   -> browser
 ```
 
-| 阶段 | 当前来源归类 |
-| --- | --- |
-| direct | 已有主 PDF 线索；arXiv ID、PMCID 可以确定构造的公开 PDF 地址 |
-| publisher-api | Elsevier Article/Object、Wiley TDM 等有文章级适用证据的专用服务 |
-| general-api | CORE、Unpaywall 等跨出版社聚合或开放获取 API |
-| public-web | DOI/文章落地页的有界 HTTP 与静态 PDF 解析、显式启用的 Sci-Hub 镜像 |
-| browser | 独立准入的通用 Browser Agent |
+| 阶段          | 当前来源归类                                                       |
+| ------------- | ------------------------------------------------------------------ |
+| direct        | 已有主 PDF 线索；arXiv ID、PMCID 可以确定构造的公开 PDF 地址       |
+| publisher-api | Elsevier Article/Object、Wiley TDM 等有文章级适用证据的专用服务    |
+| general-api   | CORE、Unpaywall 等跨出版社聚合或开放获取 API                       |
+| public-web    | DOI/文章落地页的有界 HTTP 与静态 PDF 解析、显式启用的 Sci-Hub 镜像 |
+| browser       | 独立准入的通用 Browser Agent                                       |
 
 每家服务在自己的 Provider 定义中声明阶段；是否需要凭据继续由独立的能力与认证合同决定。来源同阶段以配置顺序为基础，出版社 API 可按唯一名称候选稳定优先，不可用的已选来源必须保留稳定失败，不能静默移出耗尽集合。旧 `public / authorized-api` 认证分组兼容公开调用方，但不再决定五层优先级。
 

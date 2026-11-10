@@ -9,6 +9,7 @@
 - [计划20：导入系统、Agent 接入与网页收藏](2026-11-09-zotero-import/README.md)。
 - [计划19：全文阅读](2026-11-05-reader-fulltext/README.md)。
 - [计划18：出网代理](2026-11-05-outbound-proxy/README.md)。
+- [计划16：知识加工平台与研究任务](2026-10-24-operator-plugins/README.md)。
 
 已完成、取消或被替代的计划从[历史索引](../archive/README.md)查找；验收数字、授权记录与残余事项留在各计划中。
 
