@@ -165,6 +165,20 @@ MetaLiterature 成员关系只由 `literatures.meta_literature_id` 保存；不�
 
 Asset 保存 hash/大小/媒体类型与规范相对引用。raw_parses 按资产/profile 保存原始解析版本，raw_parse_current 是明确的当前指针。proofread_versions 保存校订版本，manual decisions 不被自动覆盖。complete 校订稿显式发布 DocumentVersion v2；原始解析不直接成为默认全文。内容均在 FileStore，SQLite 不保存大型 BLOB。
 
+**目标（尚未实现）：初稿的存储。** 按 [ADR 0060](../decisions/0060-two-level-full-text.md) 与[文档与证据 8.2、8.3](04-document-evidence.md#83-初稿的结构与核对依据)，初稿是 DocumentVersion 的一级。目标 schema 17 这样保存它：
+
+- **版本行。** 初稿与校订稿放在同一张 `document_versions` 表里，不另建表。现有的默认关系、资源闭包表以及加工结果、提取回执、身份核验对文档版本的外键因此直接覆盖初稿。表要重建：
+  - `schema_version` 取 2 或 3；
+  - `proofread_id`、`proofread_content_sha256` 改为可空，只在 2 时必填；
+  - 新增可空列 `raw_parse_id`、`raw_parse_result_sha256`、`page_layer_sha256`、`draft_method_sha256`，以及初稿内容的 artifact 四列（路径、SHA-256、字节数、媒体类型），只在 3 时必填；
+  - CHECK 保证两组列按 `schema_version` 恰好一组非空；`raw_parse_id` 外键指向 `raw_parses`，初稿内容外键指向 `artifact_objects`，都是 `ON DELETE RESTRICT`；
+  - 依赖这张表的视图与触发器（文献状态投影、检索来源水位等）随表一起替换，覆盖范围不变。
+- **当前初稿。** `draft_current(part_asset_id PK, part_sha256, document_version_id, revision)` 记录每个部分的当前初稿，形式同 `proofread_current`，按 CAS 更新。默认文本按[文档与证据 8.5](04-document-evidence.md#85-默认文本内容版本与证据)由它和校订稿共同求出。
+- **版本事实。** `draft_version_facts(document_version_id PK, differs_segments, differences, image_only_pages)`，在登记初稿版本的同一事务写入，之后不改。三个数都能从初稿内容重算；保存它们是为了文献库筛选与排序不读文件（[有意保存与有意推导](#236-有意保存与有意推导)）。
+- **文件。** 初稿内容（含差异记录）、Markdown 与结构都是 create-if-absent 的不可变文件。新分类目录为 `parsed/draft/content` 与 `parsed/draft/markdown`；结构沿用 `parsed/structure`，图片沿用原始解析的资源对象，不复制。catalog 只存引用、hash、字节数与上面的计数。
+- **对原始解析的保护。** 初稿行对 `raw_parse_id` 的外键就是保护，不另建 pin 表，也不往 `raw_parse_pins` 写行（该表仍只记校订稿）。原始解析退役（`retire`）的“仍在使用”判断增加一条：有文档版本引用它时返回 `raw-parse-in-use`，不能靠外键错误报出。
+- **迁移。** 16 → 17 是显式离线迁移，规则同[第 8 节](#8-设备认证存储)：精确输入布局与完整检查、拒绝运行中的任务和建档、事务内 DDL 与身份替换、全部旧表行数不变。现有校订稿行逐列不变，迁移不产生任何内容版本事件，不形成初稿。初稿只在迁移之后由解析或补形成操作（文档与证据 8.11）产生。
+
 #### 2.3.5 自动 PDF 获取耗尽
 
 Catalog 只为会改变未来自动目标选择的稳定缺失保存一张最小关系表：
@@ -405,6 +419,16 @@ Owner 已授权在转换副本删除旧总结、旧知识、旧算子结果和 m
 Literature 拥有元数据与引用；Parsing 拥有原始结果；Proofread 拥有矫正/人工决定；Document 拥有固定表示与结构注释；Tags 拥有词表/赋值；Archive 编排步骤和就绪；Analysis 拥有结果/集合。Storage 执行已确认的事务和引用保护，不推断业务结论。
 
 内容与描述版本事件在同一事务发布。单篇算子只因所读部分的内容变化过时；描述变化不会让其失效。快照不可变，多篇结果依赖固定成员和版本。原始解析被校订稿引用、校订稿被文档引用、文档被结果/外部回执引用时受保护，不能凭“可重建”清理。
+
+**目标（尚未实现）：两级文本的写入所有权。**
+
+- Document 拥有初稿版本、当前初稿指针与初稿版本事实（[2.3.4](#234-asset原始解析与校订稿)）。形成初稿的写入由 Parsing 的解析操作或 Document 的补形成维护操作发起，经 Document 的发布 Port 提交；默认关系仍由 Document 按独立 CAS 更新。
+- 被有效结果引用的初稿版本与校订稿一样受保护：`processor_result_documents` 等外键已覆盖。初稿版本引用的原始解析同样不能退役。
+- “找不到”的引用投影：`processor_unfound_citations(result_id, record_id, pointer, document_version_id, PRIMARY KEY(result_id, record_id, pointer, document_version_id))`。每行是一个用时核对为 `not-found` 的值，以及它的来源所引用的初稿版本。
+  - 写入方是 Analysis，在发布结果的同一事务内写入，结果删除时级联删除；Storage 只执行写入与约束。
+  - 只为引用初稿版本（`schema_version` 3）的来源写行。schema 17 之前不存在初稿，所以没有已发布结果需要回填。
+  - 它是可重建投影：内容由结果文件确定，可从结果文件重建，不是第二份事实。
+  - `processor_result_documents` 在 schema 17 增加按 `document_version_id` 的索引，两项聚合（[文档与证据 8.7](04-document-evidence.md#87-选择校订范围的事实)）都按版本查索引，不扫描全部结果。
 
 ### 4.3 投影与只读应用
 

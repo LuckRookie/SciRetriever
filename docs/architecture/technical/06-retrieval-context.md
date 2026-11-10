@@ -114,6 +114,8 @@ CONTENT_READY
 
 `LibraryQuery` 不加入 Collection、Provider 私有字段、observation 内容筛选、citation count 范围、URL/OA/license、普通失败/history、Report/log/attempt、Parser/LLM identity、文件路径、sort、pagination、cursor、include flag 或 raw SQL/FTS 字段。`QuerySelector` 只复用这个查询条件，不复用列表请求的排序、limit 或 cursor。
 
+按文本等级和选择校订范围的事实筛选，是目标合同，见 [2.1.7](#217-目标接口尚未实现文本等级与选择校订范围的事实)。
+
 #### 2.1.2 搜索请求与页面
 
 ```text
@@ -150,6 +152,8 @@ LibrarySearchPage
 每个 `LiteratureSearchItem` 表示一篇具体 `Literature`，不按 `MetaLiterature` 折叠。不同 Provider 的重复记录已经作为同一 Literature 的多个 observations 收敛，不制造多个列表项；同一 MetaLiterature 下的不同明确版本仍分别出现，并通过 `literature.meta_literature_id` 归组。`Literature` 已经包含当前完整 `LiteratureMetadata` 和派生 `LiteratureStatus`，因此 SearchItem 不在顶层重复 metadata/status；revision/hash、第一缺失步骤和人工 PDF 标记是当前读取上下文的补充。
 
 列表不嵌入 MetadataObservations、资产、ParserResult、LiteratureContent、Reference/Support、Discovery cause 或 artifact 字节。`LibrarySearchPage` 是一次读取结果，不另套 Entry Report。
+
+条目的 `text_level`、`draft_facts` 与按它们排序的键是目标合同，见 [2.1.7](#217-目标接口尚未实现文本等级与选择校订范围的事实)。
 
 #### 2.1.3 LiteratureDetail
 
@@ -210,6 +214,8 @@ LiteratureDetail
 - `missing_step` 与上述 current facts 使用同一 truth table。
 
 Detail 可以返回 `LiteratureContent.sections/references` 等已结构化文本，但不嵌入 PDF、Parser Markdown、Parser resources 或规范 LiteratureContent Markdown 的完整 artifact 字节。调用方通过稳定 `Asset`/`ArtifactRef` 使用独立 artifact read 操作取得字节。ProviderRelationObservation 全部待扩展边、完整 Reference/Support、DiscoveryRun 历史、Report/log/failure、Network/Parser/LLM 运行现场和机器绝对路径都不进入 Detail；它们在确有读取需求时使用各自独立查询。
+
+各部分默认文本的等级（`LiteratureAssetView.default_text`）是目标合同，见 [2.1.7](#217-目标接口尚未实现文本等级与选择校订范围的事实)。
 
 `LibraryQuery`、`LibrarySearchRequest`、`LiteratureSearchItem`、`LibrarySearchPage`、`LiteratureAssetView`、`LiteratureDetail`、`LiteratureReferenceRequest`、`LiteratureReferenceItem`、`LiteratureReferencePage` 和 `ReferenceDetail` 都是 query-side TypeScript contract，不是可持久化业务主体。Storage 只能从当前权威行和 artifact 引用组装它们，不能为这些投影建立第二份可修改事实。
 
@@ -323,6 +329,73 @@ AcquirePdfCounts
   - `query`：服务端展开全部命中，不受前端已加载行数限制；先跳过已有主 PDF 的和已标记无法获取的，再按 `sort` 取前 `limit` 篇，其余计入 `over_limit`。
   - `literatures`：调用方明确点名的文献全部处理，包括已有 PDF（重新获取）和已标记无法获取的；`process = matched`，三项跳过都为 0。
   - 成员在创建任务时固定，之后入库的文献不加入。任务保存 `scope: {selector, counts}`，任务列表、详情和运行记录返回同一份；旧任务为 `None`。
+- 补形成初稿的维护操作复用 `AcquirePdfSelector`，计数与跳过规则另行规定，见[文档与证据 8.11](04-document-evidence.md#811-补形成初稿的维护操作)（目标，尚未实现）。
+
+#### 2.1.7 目标接口（尚未实现）：文本等级与选择校订范围的事实
+
+本节按 [ADR 0060](../decisions/0060-two-level-full-text.md) 规定查询读取中的文本等级，以及 [文档与证据 8.7](04-document-evidence.md#87-选择校订范围的事实) 的四项事实怎样筛选和排序。取值的含义归文档与证据第 8 节；本节只规定字段、位置与查询语义。本节尚未实现，上文的现行合同不变。
+
+**共用类型。**
+
+```text
+TextLevel = "draft" | "proofread"
+
+DraftFacts
+  differs_segments: int      # 取 text-layer-differs 的片段数
+  differences: int           # 差异条数
+  image_only_pages: int      # image-only 页数
+  citing_results: int        # 读取了该初稿、内容未过时的加工结果数
+  unfound_citations: int     # 引用该初稿片段、用时核对为“找不到”的值数
+```
+
+`DraftFacts` 只对默认文本是初稿的部分给出，其余为 null。各字段的来源与计数口径见文档与证据 8.7。
+
+**作用于哪个部分。** 文献库条目、`LibraryQuery` 的新筛选与 `LibrarySort` 的新排序键都只看主 PDF 这一部分的默认文本，与 `long_document` 相同。补充材料的等级与事实在文献详情和建档状态里按部分给出，不参加文献库的筛选和排序。
+
+**文献库条目（`LiteratureSearchItem`）。** 增加两个可选字段，与 `long_document` 并列：
+
+- `text_level: TextLevel | null`：主 PDF 默认文本的等级；没有默认文本为 null。
+- `draft_facts: DraftFacts | null`。
+
+**文献详情（`LiteratureDetail`）。** 继承上面两个字段（主 PDF）。`LiteratureAssetView` 另增加可选的 `default_text`，按部分给出：
+
+```text
+default_text: { document_version_id, text_level: TextLevel, draft_facts: DraftFacts | None } | None
+```
+
+PDF 部分没有默认文本时为 null；非 PDF 资产没有这个字段。
+
+**建档状态（`ArchiveState`）。** `parts[]` 的每一项增加 `text_level: TextLevel | null` 与 `draft_facts: DraftFacts | null`，与该项的 `long_document`、`document_version_id` 并列，描述同一个默认版本。顶层表示主 PDF，与现有 `long_document` 的规则相同。
+
+**`LibraryQuery` 的新筛选。** 全部可选，省略表示不筛选：
+
+| 字段                    | 类型                    | 匹配                                                                              |
+| ----------------------- | ----------------------- | --------------------------------------------------------------------------------- |
+| `text_levels`           | `tuple[TextLevel, ...]` | 主 PDF 默认文本的等级在其中，内部 OR；没有默认文本的文献不匹配；空 tuple 等同省略 |
+| `has_draft_differences` | `bool \| None`          | true：主 PDF 默认文本是初稿且 `differs_segments > 0`；false：是初稿且为 0         |
+| `has_image_only_pages`  | `bool \| None`          | 同上，按 `image_only_pages`                                                       |
+| `cited_by_results`      | `bool \| None`          | 同上，按 `citing_results`                                                         |
+| `has_unfound_citations` | `bool \| None`          | 同上，按 `unfound_citations`                                                      |
+
+- 后四项为 true 或 false 时都只匹配主 PDF 默认文本是初稿的文献；默认文本是校订稿或没有默认文本的文献两种取值都不匹配。
+- 字段之间仍是 AND。省略的字段不进入规范化的查询，所以已有请求、cursor、`QuerySelector` 与任务里保存的 selector 的字节都不变。
+
+**`LibrarySort` 的新排序键。**
+
+| 键                       | 主排序                                             |
+| ------------------------ | -------------------------------------------------- |
+| `draft-differences-desc` | `differs_segments` 降序，相同时 `differences` 降序 |
+| `image-only-pages-desc`  | `image_only_pages` 降序                            |
+| `citing-results-desc`    | `citing_results` 降序                              |
+| `unfound-citations-desc` | `unfound_citations` 降序                           |
+
+- 主 PDF 默认文本不是初稿的文献没有这些值，排在有值的文献之后，与缺年份的规则相同。最后都用 `literature_id` 打破并列。
+- cursor 与规范化 query、sort 和稳定位置绑定，规则同 2.1.2。事实在两次翻页之间可能变化，后续页按当时的事实读取。
+- 凡是接受 `LibrarySort` 的地方（例如 `AcquirePdfSelector` 的 `query` 范围）都接受这些键，含义相同。
+
+**查找命中。** 材料 Context 与混合 Context 的 `MaterialContextItem` 增加可选字段 `text_level`：`kind = "source-text"` 时为命中片段所在固定版本的等级；`kind = "metadata"` 时没有这个字段。它来自命中已核验的固定版本，不来自索引条目；索引条目与游标不变。
+
+**一致性。** 同一次读取中，条目、详情、建档状态和命中的 `text_level` 与 `document_version_id` 来自同一个只读快照，与默认关系一致，规则同 2.1.3。
 
 ### 2.2 查询
 
@@ -573,7 +646,7 @@ Context 是临时读取结果，不持久化成 KnowledgeArtifact。若用户要
 
 `retrieval-context.ts` 定义 `MaterialContextRequest/MaterialContextBundle`，固定查询、范围、类型、版本、字节预算与续读位置。当前无 tokenizer；请求与使用方式见[读取指南](../../guides/library-query.md#上下文检索)。
 
-材料投影使用当前 schema 的 `retrieval_*` 表，保留元数据和全部已接纳固定文档版本，默认文档与显式历史版本仍分别筛选。没有新增表、schema 版本或自动迁移。索引是可重建投影，不成为正文或元数据的事实来源。
+材料投影使用当前 schema 的 `retrieval_*` 表，保留元数据和全部已接纳固定文档版本，默认文档与显式历史版本仍分别筛选。没有新增表、schema 版本或自动迁移。索引是可重建投影，不成为正文或元数据的事实来源。初稿进入索引、命中带 `text_level` 是目标合同，见 [2.1.7](#217-目标接口尚未实现文本等级与选择校订范围的事实)。
 
 **读取**：`active()` 只读单例指针和 ready generation 的标量计数；不逐项重数 entries/FTS。冷连接和外部 `data_version` 变化后的重连只核对 schema identity、固定数量的 retrieval DDL 与触发器、active 是否存在且 ready、已知损坏标记和 source revision。查询不运行 PRAGMA integrity_check/foreign_key_check、FTS integrity-check、整份哈希或来源指纹扫描。普通打开、Web 初始化探针、显式目录库核验与真实损坏错误的规则归[存储技术篇](07-versioned-storage.md#5-存储完整性验证)。显式 `storage retrieval-inspect` 仍保留完整检查，不由搜索触发。
 
@@ -605,13 +678,13 @@ index-status 另有三个可选字段。`index_state=ready|missing|corrupt` 在�
 
 显式增量刷新和后台重建共用持久队列与工作者锁。sidecar 的私有 rebuild_requested/rebuild_settled 记录最新重建意图与已结算序列，不进入 IndexRefreshStatus；旧 sidecar 缺这些字段仍可读。它们区分正在执行的操作和排队意图，保留重建期间的新请求，并使取消/进程关闭后的重建下次继续按重建执行。已结算的失败不会无限重建；显式新请求可重试。请求在通过认证并持久接纳后属于 Application，浏览器连接断开不取消；关闭 Application 则停止本次执行并保留未完成意图。
 
-| 动作 | HTTP | CLI | MCP |
-| --- | --- | --- | --- |
-| 读取状态 | POST /api/v1/query/index-status，request `{}` | maintenance index-status | index_status |
-| 增量刷新 | POST /api/v1/maintenance/index-refresh，request `{kind:"refresh"}` | maintenance refresh-index | refresh_index |
-| 完整重建/修复 | POST /api/v1/maintenance/rebuild-index，request `{kind:"rebuild"}` | maintenance rebuild-index | rebuild_index |
-| 后台重建 | 同上，request `{kind:"rebuild",background:true}` | 使用同步重建命令 | rebuild_index，`{background:true}` |
-| 完整核验 | POST /api/v1/maintenance/verify-index，request `{kind:"verify"}` | maintenance verify-index | verify_index |
+| 动作          | HTTP                                                               | CLI                       | MCP                                |
+| ------------- | ------------------------------------------------------------------ | ------------------------- | ---------------------------------- |
+| 读取状态      | POST /api/v1/query/index-status，request `{}`                      | maintenance index-status  | index_status                       |
+| 增量刷新      | POST /api/v1/maintenance/index-refresh，request `{kind:"refresh"}` | maintenance refresh-index | refresh_index                      |
+| 完整重建/修复 | POST /api/v1/maintenance/rebuild-index，request `{kind:"rebuild"}` | maintenance rebuild-index | rebuild_index                      |
+| 后台重建      | 同上，request `{kind:"rebuild",background:true}`                   | 使用同步重建命令          | rebuild_index，`{background:true}` |
+| 完整核验      | POST /api/v1/maintenance/verify-index，request `{kind:"verify"}`   | maintenance verify-index  | verify_index                       |
 
 HTTP 继续使用 protocol_version=1 封套和现有维护认证/Origin/CSRF。增量刷新和后台重建立即返回 IndexRefreshStatus，后续通过 index-status 读取进度；不带 background 的同步重建继续返回原 generation receipt，并可由请求取消。CLI refresh-index 等到队列结算后返回状态，失败输出同一状态且退出码 3；MCP refresh_index 立即返回排队状态。显式成功重建清除失败，验证不自动修复源或投影。其它短命进程退出时可留下已接纳请求，由长驻 Web 或下一次 Application 续跑。scheduled 只表示排队事实，不承诺固定完成时间。
 

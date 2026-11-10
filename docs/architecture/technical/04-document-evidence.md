@@ -230,6 +230,8 @@ interface DocumentResource {
 
 表示 hash 覆盖输入绑定、parser result、builder/locator 版本、规范化结构、Markdown 与资源闭包；不包含机器路径、创建时间或默认关系 revision。hash 相同不自动合并业务身份或 provenance。
 
+当前校订稿的 DocumentRef 是 `schema_version: 2`（第 4 节）。初稿的 DocumentRef 取 `schema_version: 3`，绑定原始解析、页面文字层与初稿方法，是目标合同，见 [8.3](#83-初稿的结构与核对依据)。
+
 结构条目至少能定位章节和有序文本片段。表格、图片、图注与页码是明确能力，不是每个文档必填的假数据。无法可靠识别表格时可以返回原 Markdown 及 `table-structure-unavailable`，不能按空格随意切列。
 
 #### 3.3.2 能力描述
@@ -506,21 +508,37 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 **输入。**
 
 - 该部分部署 profile（`parsing.archive_profile`）的当前原始解析。没有它时，用已登记的 `vlm-engine-markdown-only` 原始解析。另一种 profile 的结果不形成初稿。
+- 一次解析请求只在本次发布或复用了部署 profile 的原始解析时形成初稿。请求只含另一种 profile，或部署 profile 本次失败时，不形成初稿，也不改用该部分以前的原始解析。
 - 固定 PDF 的页面分类与可见文字层，与 6.3 使用的页面工具相同，在本机运行。
-- 输入的身份和完整性按 6.2 的“来源和坐标”核验：清单身份、字节长度、SHA-256、页数和资源闭包。
+- 来源区块按 6.2 的“来源和坐标”构造，与建档整理用同一个 `ArrangementSourceBlock` 构造函数（包括可选的 `pdf_geometry`）；身份和完整性按同一处核验：清单身份、字节长度、SHA-256、页数和资源闭包。
+- 仅 Markdown 的输入按 6.2 的规则确定页归属。无法唯一确定时形成失败，对外原因为 `needs-parse`（内部的 `input-missing` 不出现在回执里）。
 
 **规则。** 只使用 ADR 0054 的规则预处理，与建档整理前的程序步骤相同：
 
-1. 程序删除页眉页脚：6.2 的 `page-chrome-v1`。
-2. 程序直接合并明确的断段：6.2 断段规则第 2 条。需要模型裁决的候选不合并，两块保持分开。
+1. 程序删除页眉页脚：6.2 的 `page-chrome-v1`，规则不变。
+2. 程序直接合并明确的断段：6.2 断段规则第 2 条，按下面的“没有章节角色时的判定”执行。需要模型裁决的候选（第 3 条的 layout 候选，以及其余前块未以句末标点结束的候选）不合并，两块保持分开。合并的接缝按第 6 条。
 3. 阅读顺序纠正：只在 6.2 所说的纠正开关启用时执行。
-4. 不做模型整理：没有章节角色，没有图注挂接，没有拆分。书目行、版权句和界面文字只由整理删除，所以初稿保留它们。
+4. 不做模型整理：没有章节角色，没有图注挂接，没有拆分。书目行、版权句和界面文字只由整理删除，所以初稿保留它们。每个保留的原始区块是一个叶块，叶块 ID 按 6.2 的规则生成（源区间为整个区块）。
+
+**没有章节角色时的判定。** 初稿只按解析类型判定“正文”和“标题”，不调用模型，不推断章节角色：
+
+- 正文：未被程序删除、解析类型为 `text` 的叶块。断段规则第 2 条要求的“双方均为正文”指这一类；“而非列表项、图注、参考条目/分图标签”等文字条件照旧。
+- 标题：解析类型为 `title` 的叶块。
+- 可跳过的独立内容（第 1 条）：程序已删除的叶块，以及解析类型为 `footnote`、`image`、`table`、`caption` 的叶块。
+- 第 1 条里“首页已归 end-matter 的单位、作者信息或日期”依赖章节角色，初稿不用。这类文字在初稿里是 `text` 类型，按正文对待：它阻断跳过，自己也可以成为合并的一方。
+- 其余保留叶块（`title`、`list`、`equation`、`reference`、`discarded` 等）阻断跳过。
 
 **渲染。**
 
 - 保留的叶块按来源顺序排列。
-- 解析标为 `title` 的区块作为标题。层级按 6.5 的程序规则：先看章节编号，再看文字层字体字号；两者都没有可靠依据时，用解析给出的 `title_level`。
-- 公式、图片、表格按 `source-order-leaves-v4` 的写法输出。图注、脚注留在来源位置。
+- 每个渲染出的段落是一个片段（segment）。没有被合并的叶块单独成一个片段。程序合并的几个叶块合成一个片段：片段 ID 与 `block_id` 取第一个叶块的 ID，`page` 与 `region` 取第一个叶块，其后各叶块按顺序写入 `continuation_regions`（没有区域的叶块不写，页码仍在差异记录里）。校订稿是每个叶块一个片段（6.5），这一点两级不同。
+- 标题叶块单独成片段，类型为 `heading`，并开始一个章节。章节的 `title` 是标题文字，`role` 与 `role_source` 为 null。第一个标题之前的内容属于 `title` 为 null、层级 2 的章节，同 6.5。
+- 标题层级按 6.5 的程序规则，有三处不同：
+  - 所有标题叶块都参加字号字体的样式统计，包括论文题名。初稿分不出题名、文末信息和参考文献的标题，所以不给它们固定层级（校订稿里题名固定为 1，文末信息与参考文献固定为 2）。
+  - 次序是：有章节编号时，层级为编号段数加 1，最大 6；否则样式层级可靠（6.5 的条件）时用样式层级；两者都不成立时取解析的 `title_level` 加 1，最大 6，`title_level` 为 null 时取 2。
+  - 初稿不使用层级 1。
+- 公式、图片、表格按 `source-order-leaves-v4` 的写法输出。图注、脚注留在来源位置。结构不写可选的 `layout`：初稿没有图注挂接，不重排文章信息与脚注。
+- 资源闭包只含渲染后正文实际引用的原始解析图片，规则同 `source-order-leaves-v4`。
 - 正文与结构的大小上限同第 4 节：正文 8 MiB，结构 16 MiB。
 
 **与文字层对比。** 程序逐个叶块与所在页的文字层对比，结果写成片段的核对依据，见 8.3。
@@ -528,53 +546,169 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 **版本。**
 
 - 初稿是不可变版本。身份由四项决定：固定 PDF 的资产 ID 与 hash、原始解析 ID 与 result hash、PDF 页面分类与文字层、初稿方法。
-- 初稿方法包括规则版本、阅读顺序开关、对比规则版本和 builder 版本，用一个方法 hash 表示。
-- 相同输入和方法得到相同字节，可以复用，不重复登记。
-- 重新解析产生新原始解析时，形成新初稿。初稿方法改变时，只在使用者显式发起时重新形成；不在启动或读取时重建。
+- 页面分类与文字层用 `page_layer_sha256` 表示：各页 `pdfPageText`（页码、分类、可见文字层、字形计数、是否有图形）组成的规范 JSON 的 SHA-256。字段与建档整理来源的 `input_sha256` 所用的页面字段相同。
+- 初稿方法用 `draft_method_sha256` 表示：规范 JSON `{chrome, breaks, reading_order, comparison, builder}` 的 SHA-256。五项依次是 `page-chrome-v1`、`paragraph-break-v3`、阅读顺序纠正开关（布尔值）、对比规则版本 `draft-compare-v1`、builder 版本 `draft-leaves-v1`。任一项改变就是新方法。
+- 相同输入和方法得到相同字节和相同 `document_version_id`，复用已有版本，不重复登记。
+- 解析操作总按当前方法形成初稿；身份相同时复用。重新解析产生新原始解析时，形成新初稿。
+- 初稿方法改变后，已有初稿不自动重新形成：不在启动、读取或建档时重建。重新形成由使用者显式发起：对单个部分重新解析，或用 8.11 的维护操作并打开 `include_older_method`。
 
 **失败。**
 
-- 初稿形成失败时，原始解析和其它部分的结果照常保留。
-- 失败原因写进解析回执的初稿结果：页面工具不可用、超过大小上限、仅 Markdown 输入无法唯一确定页归属（`needs-parse`）。
-- 可以用下面“已有的原始解析”所说的维护操作单独重试，不需要重新解析。
+- 初稿形成失败时，原始解析和其它部分的结果照常保留，不登记部分产物。
+- 失败原因是封闭取值，写进回执的初稿结果：
 
-**已有的原始解析。** 已经存在、但还没有初稿的原始解析，用一次显式的维护操作形成初稿。范围用库内筛选写明（ADR 0052）。这个操作同样不调用模型、不联网。
+| `failure_code`           | 含义                                                    |
+| ------------------------ | ------------------------------------------------------- |
+| `page-tools-unavailable` | 页面工具不可用，得不到页面分类或文字层                  |
+| `draft-too-large`        | 正文、结构或初稿内容超过上限（8.3）                     |
+| `needs-parse`            | 仅 Markdown 的输入无法唯一确定页归属，需要重新解析      |
+| `source-integrity`       | 原始解析或资源闭包的身份、字节长度或 SHA-256 核验不通过 |
+| `draft-publication`      | 文件发布或 catalog 提交失败                             |
+| `cancelled`              | 原始解析已提交、初稿提交前收到取消；原始解析保留        |
 
-**回执。** 解析回执在逐 profile 的原始结果之外，增加该部分初稿的结果：
+- 失败后可以用 8.11 的维护操作单独重试，也可以对该部分再次解析（复用原始解析，见上文“版本”）。
 
-- `formed`：新形成；
-- `reused`：复用已有初稿；
-- `failed`：失败，附原因。
+**已有的原始解析。** 已经存在、但还没有初稿的原始解析，用 8.11 的维护操作形成初稿。范围用库内筛选写明（ADR 0052）。这个操作同样不调用模型、不联网。
 
-形成后返回初稿的 `document_version_id`，以及默认文本是否改为初稿（8.5）。
+**回执。** 解析回执（`ParseDocumentReceipt`）在逐 profile 的原始结果之外增加 `draft`，表示该部分这次的初稿结果：
+
+```ts
+type DraftOutcome =
+  | {
+      readonly status: "formed" | "reused";
+      readonly raw_parse_id: string;
+      readonly document_version_id: string;
+      readonly representation_sha256: Sha256;
+      readonly default_changed: boolean;
+      readonly default_text_level: "draft" | "proofread";
+    }
+  | {
+      readonly status: "failed";
+      readonly raw_parse_id: string;
+      readonly failure_code: DraftFailureCode;
+    }
+  | {
+      readonly status: "not-formed";
+      readonly reason: "profile-not-requested" | "raw-parse-failed";
+    };
+```
+
+- `formed`：新形成；`reused`：身份相同的初稿已经存在。
+- `default_changed` 表示这次是否改了默认关系；`default_text_level` 是本次之后该部分默认文本的等级（8.5）。
+- `not-formed`：请求只含另一种 profile（`profile-not-requested`），或部署 profile 本次解析失败（`raw-parse-failed`）。
+- 原始解析提交后收到取消：初稿不提交，回执（如果返回）为 `failed` 与 `cancelled`。整次操作以取消结束、不返回回执时，结果相同：原始解析保留，没有初稿。
+- `complete parser` 维护任务的逐篇回执与建档第一步的解析使用同一个 `draft` 结果。
 
 ### 8.3 初稿的结构与核对依据
 
-**DocumentRef。** 初稿的 DocumentRef 和校订稿使用同一读取合同，区别如下：
+**DocumentRef。** 初稿的 DocumentRef 和校订稿使用同一读取合同，`schema_version` 取新值 3：
 
-- 不绑定 `proofread_id`，改为绑定原始解析与初稿方法 hash；
-- 使用初稿专用的 builder 版本；
-- `text_level` 为 `draft`；
+```ts
+interface DraftDocumentRef {
+  readonly schema_version: 3;
+  readonly text_level: "draft";
+  readonly document_id: string;
+  readonly document_version_id: string;
+  readonly representation_sha256: Sha256;
+  readonly source_material_ref: DocumentMaterialRef;
+  readonly raw_parse_id: string;
+  readonly raw_parse_result_sha256: Sha256;
+  readonly page_layer_sha256: Sha256;
+  readonly draft_method_sha256: Sha256;
+  readonly draft_content: ArtifactRef;
+  readonly builder_version: "draft-leaves-v1";
+  readonly locator_scheme: "utf8-segment-v1";
+  readonly markdown: ArtifactRef;
+  readonly structure: ArtifactRef;
+  readonly resources: readonly DocumentResource[];
+}
+type DocumentRef = ProofreadDocumentRef | DraftDocumentRef;
+```
+
+- 校订稿的 DocumentRef 仍是 `schema_version: 2`，字节与 hash 不变，不加 `text_level` 字段；它的等级由 `schema_version` 推出。读取结果（describe、文献库、证据解析等）对两级都显式给出 `text_level`。
+- 现有只接受 `schema_version: 2` 的检查遇到初稿时照旧拒绝。哪些读取方接受初稿，只按 8.10 的表逐项放开，不靠默认接收。
+- `document_id` 与校订稿相同，按文献与资产生成；`document_version_id` 按 `document_id` 与 representation hash 生成，规则同校订稿发布。
+- representation hash 是规范 JSON `{schema_version: 3, ...}` 的 SHA-256，覆盖上面除 `document_id`、`document_version_id`、`representation_sha256` 以外的全部字段：资产、原始解析 ID 与 result hash、`page_layer_sha256`、`draft_method_sha256`、初稿内容（含差异记录）、builder 与 locator、Markdown、结构和资源闭包。
 - 没有结构注释。outline 的 `role` 为 null，`title` 来自解析标题，`level` 按 8.2 的规则。
 
-每个 segment 仍保留区块 ID、UTF-8 范围、page/region 和 continuation regions。片段文字都来自解析，`source` 为 `parser`。程序的删除与合并按 6.2 的方式记录 `source=program` 与命中的规则，和初稿一起保存。
+**初稿内容。** 形成初稿时保存一份不可变的初稿内容 `draft-content-v1`（规范 JSON，`application/json`），即 `draft_content` 所指的文件：
 
-**对比规则。** 程序逐个叶块对比，单位是词和数字，不做区块仲裁：
+- `raw`：原始解析 ID、result hash 与 profile；`page_layer_sha256`；各页的页码与分类（不含文字层文字）；初稿方法的五项与 `draft_method_sha256`。
+- `source_blocks`：8.2 构造的全部来源区块，与 6.2 的 `ArrangementSourceBlock` 相同。
+- `operations`：程序的删除与合并，按 6.2 的方式记录 `source=program` 与命中的规则；合并记录有序叶块 ID 与接缝。
+- `leaves`：每个保留叶块的 ID、所在页、核对依据，以及该叶块的差异记录。
+- 上限 16 MiB，与结构相同。超过时形成失败，原因 `draft-too-large`。
 
-- 对齐方法和对齐前去掉的写法差异，都与 6.3 的“差异”相同：NFKC 归一化、文字层的断行连字符、LaTeX 记号、连接号与弯引号。表格先去掉 HTML 标记，只比印出的文字。只是分词不同的地方不算差异。
-- 每个叶块只和它所在页的文字层对比。对比结果不受整页匹配率影响：6.3 的“可信页”只决定校订请求里发不发差异，不决定初稿的核对依据。
+verified reader 只从初稿内容重建初稿：按 `draft-leaves-v1` 重新渲染 Markdown 与结构，核对它们与资源闭包的 hash，并核对初稿内容的字节、hash 及其中的原始解析绑定与 DocumentRef 一致。读取时不打开 PDF 页面工具，不重算对比，不读取原始解析的区块文件。初稿内容文件和校订稿的 manifest、blocks 一样，计入 3.4 校验证明的文件指纹与预算。
+
+**片段与叶块。** 8.2 合成的一个片段可能含多个叶块，也可能跨页：
+
+- 每个叶块各自按下面的对比规则得到一个取值，只和它自己所在页的文字层比，跨页片段也一样。
+- 片段取其中最差的一个，顺序为：`text-layer-differs` 差于 `no-text-layer`，`no-text-layer` 差于 `text-layer-match`。
+- 片段的差异记录是各叶块差异记录的并集，按叶块在片段中的顺序排列，每条注明叶块与页。
+- 只有一个叶块的片段，取值和差异就是这个叶块的。
+
+**对比规则（`draft-compare-v1`）。** 程序对每个保留叶块按下面的步骤取值，单位是词和数字，不做区块仲裁：
+
+1. 所在页不是 `text-layer`（是 `image-only` 或 `blank`）：取 `no-text-layer`。
+2. 取叶块的词。叶块文字用解析原文（表格为 HTML）。先把 HTML 标签换成空格，再解码字符引用：`&amp;`、`&lt;`、`&gt;`、`&quot;`、`&apos;`、`&nbsp;` 与数字引用解码为字符，其余命名引用换成空格。然后按 6.3 的写法归一化并切词（NFKC、LaTeX 命令与 `$…$` 内的记号、连接号与弯引号）。表格的标记因此从不算作词。
+3. 没有词（纯图片，或去掉 LaTeX 记号后什么也不剩的公式）：取 `no-text-layer`。公式叶块不单独处理，有词就照样对比。
+4. 取本页文字层的词，写法同 6.3（含文字层的断行连字符）。用 6.3 的序列匹配对齐叶块的词与文字层的词。
+5. 对上的词少于叶块词数的 30%（与 6.3 判定图内文字的门槛相同）即“找不到”：
+   - 叶块文字按 6.2 页归属的条件（`textLayerPage`：至少 4 个不同的词，含次数全部出现在另一个、且只在一个 `text-layer` 页上）找到另一页：取 `text-layer-differs`，记一条“在另一页”的差异。
+   - 找不到另一页：取 `no-text-layer`（例如图片里的文字）。
+6. 其余叶块按 6.3 的方式逐段比较：对齐范围从第一处匹配到最后一处匹配，每个不相等的段落、且两边连起来不相同（不只是分词不同）的，记一条差异。没有差异取 `text-layer-match`，有差异取 `text-layer-differs`。对上了 30% 以上但缺了很多词的叶块，缺的词就是差异，同样取 `text-layer-differs`。
+7. 对比结果不受整页匹配率影响：6.3 的“可信页”只决定校订请求里发不发差异，不决定初稿的核对依据。
+
+初稿与逐页校订共用对齐和差异提取这一步。逐页校订请求一侧保持现在的行为：照旧用解析原文取词（不去掉表格标记），照旧按可信页决定发不发差异、丢弃不可信页的差异；请求字节、方法与 `page_input_sha256` 都不变。上面第 2 步的取词与第 5 步的“另一页”判定只用于初稿。
 
 **核对依据的取值。** 初稿片段的 `basis` 取以下三种之一：
 
-| 取值                 | 显示文字           | 什么时候取这个值                                                                                                                                  |
-| -------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `text-layer-match`   | 与文字层一致       | 所在页是 `text-layer`；叶块的词在文字层中对上，归一化后没有剩下的差异                                                                             |
-| `text-layer-differs` | 与文字层有差异     | 所在页是 `text-layer`；叶块对上了，但至少剩下一处差异。或者叶块的词在本页文字层里找不到，却全部出现在另一个 `text-layer` 页上（可能是页归属错误） |
-| `no-text-layer`      | 没有文字层可以核对 | 所在页是 `image-only` 或 `blank`；或者叶块没有可比的文字（例如纯图片）；或者本页文字层没有这些词，别的页也没有（例如图片里的文字）                |
+| 取值                 | 显示文字           | 什么时候取这个值（叶块；片段取最差）                                                                                     |
+| -------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| `text-layer-match`   | 与文字层一致       | 所在页是 `text-layer`；叶块对上 30% 以上，归一化后没有剩下的差异                                                         |
+| `text-layer-differs` | 与文字层有差异     | 所在页是 `text-layer`；叶块对上 30% 以上，但至少剩下一处差异。或者叶块在本页找不到，却全部出现在另一个 `text-layer` 页上 |
+| `no-text-layer`      | 没有文字层可以核对 | 所在页是 `image-only` 或 `blank`；或者叶块没有可比的词；或者本页找不到，别的页也没有                                     |
 
-- 校订稿片段的 `basis` 仍取 `text-layer`、`image-only`、`manual`。片段的取值集合由所在版本的 `text_level` 决定。
-- 例外是长文档（6.5）里未逐页校订的页。这些页的文字没有经过校订，片段的 `basis` 取初稿的三种取值之一，按同样的对比规则计算，不再按页面类型记为 `text-layer`。用“重试指定页”校订过的页，取校订稿的取值。
-- `text-layer-differs` 就是“疑点，未处理”。每处差异记录解析文字和文字层文字，与初稿一起保存，可以按片段有界读取。差异不写进正文，也不换算成可信度分数。
+- 校订稿片段的 `basis` 仍取 `text-layer`、`image-only`、`manual`。片段的取值集合由所在版本决定：初稿取上表三种；校订稿取这三种，唯一的例外是下面的长文档。
+- 片段读取与证据解析的 `basis` 字段（`DocumentSegmentLocation.basis`）因此有六种取值；解析时按版本核对，不在本版本取值集合里的值拒绝。
+- `text-layer-differs` 就是“疑点，未处理”。差异不写进正文，也不换算成可信度分数。
+
+**差异记录（`draft-differences-v1`）。** 每条差异是：
+
+```ts
+interface DraftDifference {
+  readonly leaf_id: string;
+  readonly page_index: number; // 叶块所在页，从 0 起
+  readonly kind: "mismatch" | "elsewhere";
+  readonly parsed: string;
+  readonly text_layer: string;
+  readonly other_page_index: number | null;
+}
+```
+
+- `mismatch`：对比第 6 步的一段差异。`parsed` 与 `text_layer` 是两边归一化后的词，用一个空格连接，不是原文字节；一边为空表示缺词或多词。`other_page_index` 为 null。
+- `elsewhere`：对比第 5 步找到另一页。`parsed` 是叶块全部的词，`text_layer` 为空串，`other_page_index` 是那一页。
+- 差异按叶块保存在初稿内容的 `leaves` 里，读取时按片段组织（上文“片段与叶块”）。它们在初稿内容里，所以受 representation hash 覆盖，不另设文件；大小计入初稿内容的 16 MiB 上限，单条不截断。
+- 形成时同时算出三个计数并保存为 catalog 事实（07 §2.3.4）：取 `text-layer-differs` 的片段数、差异条数、`image-only` 页数。它们由初稿内容确定，同一版本不变。
+
+**差异的有界读取。** 操作名 `draft-differences`，形式与校订对照（`corrections`）相同：
+
+- 请求：`{document_version_id, segment_id, max_bytes, continuation}`。`max_bytes` 为 1 到 65536 的整数；首次 `continuation` 为 null。
+- 结果：`{document, segment_id, location, text_level, basis, encoding: "json-utf8", text, actual_range, total_bytes, continuation}`。`text` 是该片段差异列表（`DraftDifference[]`，可能为空）规范 JSON 的有界字节片段，不截断 UTF-8 字符；按 `continuation` 收集后再解析，可以无损读取。`location` 同片段读取，页码从 1 起。
+- 继续位置绑定版本、片段与字节位置，不能用于别的版本。
+- 版本不是初稿（`schema_version` 不是 3）时返回 `document-unsupported`；片段不存在时按请求无效拒绝。
+- HTTP 为 `POST /api/v1/query/document-draft-differences`，CLI 为 `sciretriever document draft-differences --request FILE|-`，MCP 为 `document_read` 的 `draft-differences` 操作。三者共用同一合同与上限，设备连接的用途为 `read`。
+- 读取不形成初稿，不打开页面工具，不调用模型。
+
+**长文档。** 长文档（6.5）里未逐页校订的页（`unreviewed`）的文字没有经过校订：
+
+- 这些页上叶块的 `basis` 取初稿的三种取值之一，用上面的对比规则逐叶块计算；校订稿每个叶块一个片段，所以不需要片段合并。叶块带人工文字锁时取 `manual`，与现在相同。
+- 计算在形成校订内容时进行，写进 `ArchiveTextBundleV2` 叶块的 `basis`。校订内容中 `basis` 的取值集合因此扩展为六种：三种初稿取值只允许出现在 `unreviewed` 页的叶块上，其余页仍按页面类型取 `text-layer` 或 `image-only`，或取 `manual`。所需的页面分类与文字层已经在建档来源里，不另调用页面工具。
+- 用“重试指定页”校订过的页（`accepted`），取校订稿的取值。
+- 只对本规则上线后新形成的长文档校订内容生效，渲染使用新 builder `source-order-leaves-v5`。v5 与 v4 的渲染完全相同，只多接受上述三种取值；v4 遇到它们拒绝。普通文献继续使用 v4，字节不变。
+- 已发布的版本不重写、不重新发布，按记录的 builder（v3、v4）照旧重建，hash 不变。
+- 长文档校订稿不保存差异记录。`draft-differences` 对它返回 `document-unsupported`；疑点的具体差异可以在该部分的初稿上读取。
 
 **人工修改。** 初稿是程序产物，不接受人工改字。人工修改通过建档进行（6.6）。
 
@@ -595,14 +729,23 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 - 初稿的说明文字固定为：“未经校订，文字可能含解析错误；以 PDF 为准”。
 - 长文档的等级显示为校订稿，同时保留 6.5 的“长文档”标记和说明文字。
 - Markdown 正文不加等级标记。Web 上的摆放见[页面规格](../web/page-specs.md#阅读页)。
+- describe 的结果增加 `text_level: "draft" | "proofread"`。初稿另有 `draft_summary: {differs_segments, differences, image_only_pages}`，即 8.3 保存的三个计数；校订稿没有这个字段。
+- 文献库、文献详情、建档状态与查找命中的字段名和位置见[查询技术篇 2.1.7](06-retrieval-context.md#217-目标接口尚未实现文本等级与选择校订范围的事实)。
 
 ### 8.5 默认文本、内容版本与证据
 
 **默认文本。** 每个部分的默认文本按下面的规则确定：
 
 - 该部分有当前有效的校订稿时，默认文本是校订稿。“当前有效”指校订完整，并且它依据的原始解析仍是该 profile 的当前原始解析。
-- 没有当前有效的校订稿时，默认文本是当前初稿。
-- 默认关系的更新仍是独立 CAS（第 4 节）。初稿形成、校订稿发布和重新解析都按这条规则更新默认关系。默认文本改变时请求全文索引刷新，同 6.5。
+- 没有当前有效的校订稿时，默认文本是当前有效的初稿。“当前初稿”是该部分最近一次形成或复用、并登记为当前的初稿（07 §2.3.4 的当前指针）；“当前有效”指它依据的原始解析仍是该 profile 的当前原始解析。
+- 两者都没有时，该部分没有默认文本。默认关系删除，不保留一个已失效的版本。读取默认文本返回现有的缺口 `document-missing`；阅读、查找和加工把这个部分当作没有文本。
+- 默认关系的更新仍是独立 CAS（第 4 节）。下面三种写入都在各自的事务内按上面三条重新求默认文本：原始解析当前指针切换、初稿形成（含复用并登记为当前）、校订稿发布。默认文本改变或删除时请求全文索引刷新，同 6.5。
+
+边界情形：
+
+- 重新解析：新原始解析成为当前后，旧校订稿与旧初稿都不再有效，默认关系先删除；同一次操作形成新初稿后，默认文本是新初稿。初稿形成失败时，该部分保持没有默认文本，直到再次解析或 8.11 的维护操作形成初稿，或者完成新的校订。
+- 部署 profile 改变：已有的初稿与校订稿不重写，按 `document_version_id` 照旧可读，默认关系不因配置改变而变化。按新 profile 形成新初稿时，当前初稿才换成新的，默认文本再按上面三条重新求：旧 profile 的校订稿只要它依据的原始解析仍是该 profile 的当前原始解析，就仍然有效并优先。
+- 补充材料：每个补充材料 PDF 是独立的部分，同样适用上面全部规则。文献库按主 PDF 显示与筛选（8.4），阅读页按部分显示。
 
 阅读页、查找和加工默认使用默认文本。调用方可以按 `document_version_id` 读取另一级文本，前提是该版本仍然可读。
 
@@ -615,7 +758,7 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 
 **过时。**
 
-- 一个部分的默认文本改变时，内容版本随之改变。依据旧内容版本的加工结果经现有事件标为过时，不自动重算。这包括从初稿升级为校订稿，以及重新解析形成新初稿。
+- 一个部分的默认文本改变时，内容版本随之改变。依据旧内容版本的加工结果经现有事件标为过时，不自动重算。这包括从初稿升级为校订稿、重新解析形成新初稿，以及默认关系被删除（这时内容版本为 null）。
 - 过时的结果仍然可读。它的证据继续解析到原来那份初稿的片段。
 
 **证据。**
@@ -629,7 +772,8 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 
 - 算子输入取每个部分的默认文本，同时取得它的 `text_level` 和内容版本。READY 不是读取的前提。
 - 运行限定“只用校订稿”时，默认文本是初稿的部分记为输入缺失，不读取初稿。
-- 初稿没有章节角色。按角色限定读取范围时，在初稿上返回整篇文本，并在覆盖说明里注明“初稿没有章节角色，读取了整篇”。这时不返回 `structure-role-unavailable` 缺口。整篇包括初稿保留的书目行和参考文献表。
+- 初稿没有章节角色。按角色限定读取范围时（`segments` 带 `roles`，或算子声明了角色范围），在初稿上返回整篇文本，结果带 `coverage_note`，取值固定为“初稿没有章节角色，读取了整篇”。这时不返回 `structure-role-unavailable` 缺口。整篇包括初稿保留的书目行和参考文献表。
+- 这句说明文字由本模块的读取结果给出，以本节为准。知识加工原样写进结果的覆盖说明，不另写一句。
 - 用时核对（提取值与所引片段的文字比对）在初稿上同样执行。核对结果旁显示片段的文本等级和核对依据。
 - 原始解析不进入算子上下文。
 
@@ -637,14 +781,19 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 
 为了帮助使用者决定校订哪些文献，每个以初稿为默认文本的部分提供下列事实。它们都不调用模型：
 
-| 事实                       | 来源                                                                   |
-| -------------------------- | ---------------------------------------------------------------------- |
-| 疑点数量                   | 初稿中取 `text-layer-differs` 的片段数与差异处数，形成初稿时计算并保存 |
-| 是否含有扫描页             | 页面分类中 `image-only` 页的数量，形成初稿时保存                       |
-| 是否被加工结果引用         | 读取了该初稿内容版本、且未过时的加工结果数，由知识加工的结果记录统计   |
-| 是否有“找不到”的引用指向它 | 用时核对为“找不到”、且引用该初稿片段的值的数量，由同一结果记录统计     |
+| 事实                       | 字段                              | 来源                                                                   |
+| -------------------------- | --------------------------------- | ---------------------------------------------------------------------- |
+| 疑点数量                   | `differs_segments`、`differences` | 初稿中取 `text-layer-differs` 的片段数与差异条数，形成初稿时计算并保存 |
+| 是否含有扫描页             | `image_only_pages`                | 页面分类中 `image-only` 页的数量，形成初稿时保存                       |
+| 是否被加工结果引用         | `citing_results`                  | 读取了该初稿版本、且未过时的加工结果数，读取时聚合                     |
+| 是否有“找不到”的引用指向它 | `unfound_citations`               | 用时核对为“找不到”、且引用该初稿片段的值的数量，读取时聚合             |
 
-- 这些事实可以用于文献库的筛选和排序，并在机器入口的文献库读取中返回。校订范围仍用库内筛选写明（ADR 0052），只在使用者明确发起建档时校订，系统不自动校订。
+- 前三个字段属于初稿版本本身，形成后不变（8.3）。
+- `citing_results`：只计内容未过时的结果，即 `processor_result_freshness` 为 `current`；内容已过时的不计。算子方法版本较旧（`processor_result_currentness` 因方法记为过时）不影响计数，因为结果仍然读了这份文字。只计输入记录里有这个初稿 `document_version_id` 的结果（`processor_result_documents`）；同一结果计一次。
+- `unfound_citations`：只计同样未过时的结果。一个值（结果、记录、字段指针）有任一来源的用时核对状态为 `not-found`，且该来源引用这个初稿版本的片段，计一次。
+- 逐值核对的结果现在只在结果文件里。知识加工在发布结果的同一事务内写入一张可重建的投影，每个“找不到”的值与它引用的初稿版本一行；结构与写入所有权见[存储技术篇 4.2](07-versioned-storage.md#42-数据与写入所有权)。读取时只按版本聚合这张投影，不打开结果文件。
+- 这些事实只对默认文本是初稿的部分给出；默认文本是校订稿或没有默认文本时为 null。
+- 它们可以用于文献库的筛选和排序，并在机器入口的文献库读取中返回，字段与位置见[查询技术篇 2.1.7](06-retrieval-context.md#217-目标接口尚未实现文本等级与选择校订范围的事实)。校订范围仍用库内筛选写明（ADR 0052），只在使用者明确发起建档时校订，系统不自动校订。
 - 发起前的用量估算沿用 6.7 的 usage-estimate，按每页一次请求计算（ADR 0047）。
 
 ### 8.8 不变的规则
@@ -667,3 +816,96 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 - 文本等级在 describe、文献库读取、查找命中和证据解析中都能读到，与实际版本一致。
 - 按角色读取初稿时返回整篇并带覆盖说明；“只用校订稿”时初稿部分记为缺失。
 - 8.7 的四项事实与合成数据的已知值相等。
+- 片段取值：一个合并片段里分别有一致、无文字层、有差异的叶块时，片段取 `text-layer-differs`，差异是各叶块差异的并集；跨页片段的每个叶块只与本页比。
+- 对比：带 HTML 标记与字符引用的表格，印出的文字与文字层一致时取 `text-layer-match`；只有 LaTeX 的公式去掉记号后没有词时取 `no-text-layer`；对上 30% 以上但缺词的叶块取 `text-layer-differs`。
+- 逐页校订请求在共用对比代码前后，对同一组合成页得到逐字节相同的请求和 `page_input_sha256`。
+- 断段与层级：首页单位行（`text` 类型）阻断跳过；论文题名参加样式统计；没有编号和可靠样式时层级为 `title_level + 1`。
+- verified reader 在页面工具不可用时仍能读取已形成的初稿；改动初稿内容一个字节即核验失败。
+- 失败码：页面工具不可用、超过上限、仅 Markdown 无法定页、来源篡改、原始解析提交后取消，各得到 8.2 表中对应的码，原始解析保留。
+- 默认关系：重新解析后初稿失败时该部分没有默认文本，读取返回 `document-missing`；部署 profile 改变后旧版本仍按 ID 可读，默认文本直到形成新初稿才变化。
+- 差异读取：小 `max_bytes` 分多次续读后拼出的 JSON 与一次读出的相同；对校订稿返回 `document-unsupported`。
+- 长文档：上线后新建的长文档在 `unreviewed` 页带初稿取值、builder 为 v5；已发布的 v4 长文档按 v4 重建，hash 不变。
+- 8.10 表中每个读取方遇到初稿时的行为各有一例；8.11 的预览计数与创建任务后的成员一致。
+
+### 8.10 各读取方对初稿的处理
+
+现有读取方默认只接受校订稿（8.3）。下表逐项写明遇到初稿时接受还是返回缺口：
+
+| 读取方                                                                                  | 遇到初稿                                                                                                                                                                                                                                                |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 文档读取（describe、outline、segments、slice、resources、resource、资源字节、evidence） | 接受，结果带 `text_level`（8.4）                                                                                                                                                                                                                        |
+| 全文索引与查找（06 §4.9）                                                               | 接受。索引收入全部已接纳的固定文档版本，两级相同；命中带 `text_level`                                                                                                                                                                                   |
+| 解析后的文章身份核验（第 7 节）                                                         | 接受。它比较的是文章自身的题名、署名和标识符，不依赖文本等级。判断照旧绑定具体 DocumentVersion；当前标签对齐的是该部分当前的默认文本，不论哪一级                                                                                                        |
+| 全文翻译                                                                                | 接受，初稿是阅读辅助。来源取主 PDF 的默认文本：是初稿时取初稿的叶块，按解析类型选块（`text`、`title`、`caption`、`list`、`footnote`），`reference` 类型不翻译；初稿没有角色，作者行照常翻译。主 PDF 没有默认文本时返回现有的 `translation-not-archived` |
+| 外部提取（第 5 节例子）                                                                 | 接受。提取准备固定默认文本，不论等级；每次读取（准备的清单、片段读取、证据解析）都返回 `text_level`，初稿片段另返回 `basis`                                                                                                                             |
+| 知识加工                                                                                | 接受，规则见 8.6                                                                                                                                                                                                                                        |
+| 批注锚点校验                                                                            | 接受，规则见[用户整理 9.2](09-user-organization.md#92-初稿上的批注)                                                                                                                                                                                     |
+| 标签、元数据、参考文献                                                                  | 不接受。它们是建档步骤，只读校订稿（6.5）；初稿不提供，不返回缺口也不改读初稿                                                                                                                                                                           |
+| 整理与人工保存（6.6）                                                                   | 不接受。请求绑定 proofread ID，初稿没有，无从提交；初稿不接受人工改字（8.3）                                                                                                                                                                            |
+| 校订对照（`corrections`）                                                               | 不接受，返回 `document-unsupported`；初稿的差异用 8.3 的 `draft-differences` 读取                                                                                                                                                                       |
+| 结构注释（`document annotate`）                                                         | 不接受，返回 `document-unsupported`；初稿没有结构注释                                                                                                                                                                                                   |
+| READY 判定（6.5）                                                                       | 不变：默认文本是初稿时不成立 READY                                                                                                                                                                                                                      |
+
+### 8.11 补形成初稿的维护操作
+
+为已有的原始解析形成初稿，用一次显式的维护操作。它同时覆盖两种对象：
+
+- 没有初稿的原始解析：默认处理。
+- 初稿是用旧方法形成的：只在请求打开 `include_older_method` 时处理。8.2 的“初稿方法改变时，只在使用者显式发起时重新形成”就是指这个开关。
+
+**请求。**
+
+```text
+FormDraftsRequest
+  selector: AcquirePdfSelector            # {kind:"query",query,sort,limit} | {kind:"literatures",literature_ids}
+  include_older_method: bool = false
+  idempotency_key: str
+```
+
+- 范围的写法与获取 PDF 相同（[查询技术篇 2.1.6](06-retrieval-context.md#216-入库批次范围词频与-pdf-获取范围)）：`query` 由服务端展开全部命中，不受前端已加载行数限制；`literatures` 是点名的文献，最多 10,000 篇。
+- 对象是文献的每个部分（主 PDF 与补充材料）。每个部分只看 8.2 的输入：部署 profile 的当前原始解析，没有时用 `vlm-engine-markdown-only` 原始解析。
+- 一个部分“要处理”：它有这样的原始解析，并且该原始解析没有任何初稿；或者 `include_older_method` 为真，且它的当前初稿的 `draft_method_sha256` 不是当前方法。
+- 一篇文献“要处理”：至少有一个部分要处理。两种范围都按同一规则跳过：同样的输入和方法得到同样的字节（8.2），点名也没有可强制的事。
+
+**预览。** 提交前用同一个选择函数读出计数，不形成初稿：
+
+```text
+FormDraftsCounts
+  matched                 # 范围命中的文献数
+  process                 # 要处理的文献数
+  process_parts           # 要处理的部分数
+  skipped_has_draft       # 有原始解析的部分都已有初稿（按 include_older_method 的口径）
+  skipped_no_raw_parse    # 没有一个部分有可用的原始解析
+  over_limit              # query 范围中排在 limit 之后的要处理文献
+```
+
+`matched = process + skipped_has_draft + skipped_no_raw_parse + over_limit`；`process_parts` 不计入这个等式。`query` 范围先跳过，再按 `sort` 取前 `limit` 篇，同获取 PDF。
+
+**执行。**
+
+- 作为持久任务运行，与获取 PDF、`complete parser` 的批量维护任务相同：成员在创建时固定，之后入库或新解析的文献不加入；任务保存 `scope: {selector, counts}`，任务列表、详情和运行记录返回同一份。持久任务的目标为 `draft`。
+- 单次上限与这些任务相同：固定的目标超过 10,000 篇时拒绝创建任务，返回相同的错误。
+- 并发受 `[execution].max_concurrency` 限制。不调用模型，不联网，不解析，不建档。
+- 每个部分按 8.2 形成，默认文本按 8.5 更新，索引刷新按 6.5 排队。取消保留已提交的初稿；一个部分失败不影响其它部分和其它文献。
+
+**回执。** 每篇目标给出各部分的结果：
+
+```text
+FormDraftsPartResult
+  asset_id, part: "main" | "supplementary"
+  status: "formed" | "reused" | "failed" | "skipped"
+  document_version_id: str | None
+  failure_code: DraftFailureCode | None     # 8.2 的表
+  default_changed: bool
+```
+
+`skipped` 是不需要处理的部分（已有初稿或没有原始解析）。`reused` 只在创建任务后另一操作先形成了同一初稿时出现。
+
+**入口。**
+
+| 动作     | HTTP                                                                                 | CLI                                                  | MCP                   | 设备用途  |
+| -------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------- | --------------------- | --------- |
+| 预览     | `POST /api/v1/query/form-drafts-preview`，request `{selector, include_older_method}` | `sciretriever form-drafts preview --request FILE\|-` | `form_drafts_preview` | `read`    |
+| 创建任务 | `POST /api/v1/maintenance/form-drafts`，request `FormDraftsRequest`                  | `sciretriever form-drafts start --request FILE\|-`   | `form_drafts`         | `operate` |
+
+HTTP 使用 `protocol_version: 1` 封套与现有维护认证；任务进度与结果用现有任务读取。
