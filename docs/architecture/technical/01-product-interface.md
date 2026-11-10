@@ -180,6 +180,26 @@ JSON（含封套）最多 8 MiB，会话暂存数据共 256 MiB、50,000 条记�
 
 工作台界面地址的 `setting` 白名单包含 `devices`，`/?view=set&setting=devices` 按原 Web 登录规则进入设备设置分区；未知分区仍为 `invalid-ui-location`。这不改变 API 或设备令牌的权限。
 
+### 2.4.3 网页收藏 HTTP
+
+`bootstrap/device-routes.ts` 将以下精确路径登记为 capture 用途。业务接口只接受设备 Bearer 令牌，无 Web Cookie 准入，不授予 import、MCP 或管理权限；认证、URL 令牌拒绝和撤销规则沿用[设备连接](#241-设备连接与按用途准入)。JSON POST 的协议头、严格封套及成功封套沿用导入 HTTP，但请求含封套最多 64 KiB；未知字段拒绝。`:capture_id` 为返回的 UUID，结果和文件始终绑定最初的设备连接。
+
+| 方法与路径（前缀 `/api/v1/capture`） | request                                                                                                                                           | result                                                                      |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| POST `/lookup`                       | `{identifiers:{namespace:"doi"\|"arxiv",value:string}[]}`，1–16 项                                                                                | `{found,literature_id,title,has_pdf,sha256}`；未找到时 nullable 字段为 null |
+| POST `/folders`                      | `{cursor?:folder_id\|null,limit?:number}`                                                                                                         | `{items:FolderNode[],next_cursor}`；默认 50、最多 200，按 folder_id 排序    |
+| POST `/save`                         | `{request_id:UUID,metadata:Partial<LiteratureMetadata>,folder_ids?:UUID[],file?:{file_name,size_bytes?:number\|null,sha256?:string\|null}\|null}` | `CaptureResult`                                                             |
+| POST `/items/:capture_id/status`     | `{}`                                                                                                                                              | `CaptureResult`；尚未结算为 capture-pending                                 |
+| POST `/items/:capture_id/file/hash`  | `{sha256}`                                                                                                                                        | `{file:ImportFileStatus}`                                                   |
+| POST `/items/:capture_id/file/bytes` | 原始 PDF 字节，协议头及 Content-Type 同导入文件通道                                                                                               | `{file:ImportFileStatus}`                                                   |
+| GET `/extension`                     | capture 令牌；或原登录 Web Cookie、client_id 与同源准入                                                                                           | ZIP 附件，无 JSON 封套                                                      |
+
+`CaptureResult` 含 capture_id、batch_id、literature_id、disposition（created/enriched/matched）、metadata（`{status:"completed"|"partial"|"failed"|"unavailable",job_id:string|null,code:string|null}`）、missing_folder_ids、nullable file。file 沿用 ImportFileStatus，文件原因沿用共享通道的 `import-*` 值；HTTP 文件失败码转换为 `capture-*`。file 声明可省略，省略时不产生待交文件；有声明时每篇一份 PDF，外部引用固定为 pdf。folder_ids 最多 100；文件名、大小和哈希按原中性合同校验。页面字段、来源与补全语义见[网页收藏](03-literature-materials.md#网页收藏)。
+
+收藏错误为 `{protocol_version:1,code}`：输入、缺标识及声明不符为 400（capture-input-invalid、capture-identifier-required、capture-file-hash-mismatch、capture-file-size-mismatch、capture-upload-cancelled）；请求超限 capture-request-too-large 为 413；capture-missing/file-missing/literature-missing 为 404；capture-identity-conflict/request-conflict/pending/file-conflict/file-hash-required/file-upload-required/source-stale 为 409；capture-pdf-invalid 为 422；capture-disk-space 为 507；capture-disk-unavailable/unavailable/closed 为 503。SQLite 损坏仍是 catalog-corrupt（503，verify-catalog 提示），不透传异常、SQL 或路径。metadata.code 的 metadata-unavailable、metadata-source-failed、metadata-task-failed 是 HTTP 200 接纳结果中的补全结论，不撤销书目。
+
+安装包为 `apps/server/dist/agent-access/browser-extension.zip`，最多 16 MiB，由扩展构建工作提供；不存在、空文件、符号链接、非普通单硬链接文件、超限或读取中变化均为 device-artifact-unavailable（503）。复用说明/skill 的 no-store、nosniff、有界读取及固定附件规则。Web GET 不需要 POST CSRF，有 Authorization 时不回退 Cookie；安装包以外的收藏接口未开放 Web 分支。
+
 ### 2.5 新请求与结果语义
 
 新操作应提供的通用元信息如下；用例专属字段由其 owner 定义，不构造通用任意 `operation + payload` 来跳过类型校验：

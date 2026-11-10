@@ -77,6 +77,8 @@ it("migrates exact schema 15 to 16 atomically, preserves all facts and enables d
       "import_staged_keys",
       "import_record_results",
       "import_files",
+      "capture_daily_batches",
+      "capture_items",
     ])
       expect(result.after[table], table).toBe(0);
     expect((await inspectCatalogSchema(path)).schema_version).toBe(

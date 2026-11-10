@@ -67,6 +67,14 @@ const importModule = await import(
     import.meta.url,
   ).href
 );
+const captureModule = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./capture-engine.ts"
+      : "./capture-engine.js",
+    import.meta.url,
+  ).href
+);
 const folderModule = await import(
   new URL(
     import.meta.url.endsWith(".ts")
@@ -4647,6 +4655,30 @@ port.on("message", (message: WorkerMessage) => {
       fail();
     let value;
     switch (message.command.kind) {
+      case "capture_read":
+      case "capture_write":
+        try {
+          const c = message.command;
+          value = {
+            ok: true,
+            value:
+              c.kind === "capture_read"
+                ? readTransaction(() => captureModule.readCapture(db, c.action))
+                : captureModule.writeCapture(db, c.action, intakeModule),
+          };
+        } catch (error) {
+          throwCatalogCorruption(error);
+          const code =
+            error &&
+            typeof error === "object" &&
+            "code" in error &&
+            typeof error.code === "string" &&
+            error.code.startsWith("capture-")
+              ? error.code
+              : "capture-unavailable";
+          value = { ok: false, code };
+        }
+        break;
       case "import_read":
       case "import_write":
         try {

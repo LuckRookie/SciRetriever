@@ -55,3 +55,5 @@ HTTP 关闭先取消并排空正在处理的请求；生产组装随后停止 du
 `device-connections.ts` 拥有一次性配对、仅派生值持久化和设备认证；`device-http.ts` 在 Web 会话之前分流设备请求，统一按登记的用途准入，拒绝令牌进入 Web/配置/管理路径。设备管理继续经过原 Web client/CSRF；提交撤销后通知同进程协议连接立即失效。设备与通过原 client/同源准入的登录 Web 用户共用安装后的 agent-access 只读下载，缺失有明确错误；不在认证层生成 skill 内容。业务接口登记在源码树内的 `bootstrap/device-routes.ts`。`/mcp` 由相邻的 `mcp/http.ts` 处理 GET/POST/DELETE，工具级用途由共用 MCP server 再核对；工作台关闭先释放该 registry 的协议连接。
 
 [import-http.ts](import-http.ts) 提供 `/api/v1/import/` 下的接口说明、会话、预览/确认、文件清单/流式上传与报告。设备分支要求 import 用途；Web 分支经现有 Cookie、client_id、Origin 和 POST CSRF 后调用相同处理函数。JSON 输入有字节上限，PDF 流逐块交给 Entry，断开或会话取消时中止源流；传输层不另判文献身份或写资产。
+
+[capture-http.ts](capture-http.ts) 登记 `/api/v1/capture/` 的设备收藏查询、保存及文件通道，要求 capture 用途；JSON 封套与原始 PDF 接收复用 import-http。扩展安装包 GET 另允许原登录 Web client，复用 device-http 的固定产物读取；不提供其它 Web 收藏写接口。

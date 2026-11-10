@@ -455,9 +455,14 @@ export const IMPORT_SESSION_SCHEMA = [
   "CREATE INDEX import_files_pending ON import_files(session_id,status,file_id)",
 ] as const;
 /** M1 additions are collected here; 08 extends this same offline migration. */
+export const CAPTURE_SCHEMA = [
+  "CREATE TABLE capture_daily_batches(connection_id TEXT NOT NULL,day TEXT NOT NULL,batch_id TEXT NOT NULL UNIQUE,PRIMARY KEY(connection_id,day),FOREIGN KEY(connection_id) REFERENCES device_connections(connection_id),FOREIGN KEY(batch_id) REFERENCES intake_batches(batch_id)) STRICT",
+  "CREATE TABLE capture_items(capture_id TEXT PRIMARY KEY,connection_id TEXT NOT NULL,request_id TEXT NOT NULL,request_sha256 TEXT NOT NULL CHECK(length(request_sha256)=64),batch_id TEXT NOT NULL,literature_id TEXT,disposition TEXT CHECK(disposition IN ('created','enriched','matched')),created_at TEXT NOT NULL,result_json TEXT CHECK(result_json IS NULL OR json_valid(result_json)),file_json TEXT CHECK(file_json IS NULL OR json_valid(file_json)),UNIQUE(connection_id,request_id),FOREIGN KEY(connection_id) REFERENCES device_connections(connection_id),FOREIGN KEY(batch_id) REFERENCES intake_batches(batch_id),FOREIGN KEY(literature_id) REFERENCES literatures(literature_id) ON DELETE SET NULL) STRICT",
+] as const;
 export const IMPORT_SCHEMA_V16 = [
   ...DEVICE_CONNECTION_SCHEMA,
   ...IMPORT_SESSION_SCHEMA,
+  ...CAPTURE_SCHEMA,
 ] as const;
 export const SCHEMA_MANIFEST = [
   ...SCHEMA_MANIFEST_V15.map((sql) =>

@@ -516,4 +516,6 @@ Entry 的 ImportSessionService 提交通用工作流状态，Literature、Folder
 
 确认与建立批次在同一事务固定状态。单条身份与批次成员按原发布事务接纳；结果、来源对应和文件清单在短事务中检查点保存。结果前崩溃时，用来源键、外部号与内容哈希派生的稳定 observation ID 重放，并恢复原批次分类；不把已接纳文献当作整场事务回滚。文件落库使用既有不可变 candidate publication；同文件的结算在 admission 内重读状态和哈希，完成/取消在本进程等待在途发布结算。跨进程来源活动唯一性由索引保证；不宣称与另一进程正在进行的文件发布有跨进程取消事务。
 
-会话终结后保留外部对应、逐条结果、文件结算与摘要，删除原始数据。报告的记录统计逐条计数，批次成员按文献去重；生命周期与业务分类见[书目交换规则](03-literature-materials.md#61-书目交换规则)。历史书目导入不补造来源库/外部编号，迁移保存全部旧事实行数；未来收藏表继续并入同一 M1 schema 16 迁移，不由打开路径隐式升级。
+会话终结后保留外部对应、逐条结果、文件结算与摘要，删除原始数据。报告的记录统计逐条计数，批次成员按文献去重；生命周期与业务分类见[书目交换规则](03-literature-materials.md#61-书目交换规则)。历史书目导入不补造来源库/外部编号，迁移保存全部旧事实行数。
+
+收藏追加在同一 IMPORT_SCHEMA_V16 和 15→16 迁移中，不由打开路径隐式升级。`capture_daily_batches` 的主键为 (connection_id,day)，batch_id 唯一，分别外键到设备与入库批次；`capture_items` 保存 capture_id 主键、UNIQUE(connection_id,request_id)、request_sha256、batch_id、nullable literature_id/disposition、created_at、nullable result_json/file_json。设备/批次外键保留历史，文献删除时 literature_id 置空，不静默重绑。JSON 只保存有界接纳投影和单文件状态，没有原始页面、Cookie、令牌或大文件字节。身份发布与日批次成员原子提交；随后收藏检查点失败时，重试从已提交成员恢复原分类。结果/文件状态另用短事务提交，文件的字节发布仍由 Acquisition 所有者负责。

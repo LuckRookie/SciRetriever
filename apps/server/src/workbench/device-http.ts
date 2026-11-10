@@ -47,7 +47,7 @@ export async function handleWebDeviceRoute(
   if (request.method === "GET" && artifact) {
     try {
       if (!options) throw new DeviceConnectionError("device-unavailable");
-      await download(
+      await downloadDeviceArtifact(
         response,
         artifact[1] as keyof typeof artifactNames,
         options.artifactDirectory ?? DEVICE_ARTIFACT_DIRECTORY,
@@ -127,6 +127,7 @@ export class DeviceRouteRegistry {
 const artifactNames = {
   instructions: "instructions.md",
   skill: "skill.zip",
+  extension: "browser-extension.zip",
 } as const;
 export const DEVICE_ARTIFACT_DIRECTORY = new URL(
   "../agent-access/",
@@ -215,7 +216,7 @@ async function readBody(request: IncomingMessage): Promise<unknown> {
   }
   return parseStrictJsonObject(Buffer.concat(parts));
 }
-async function download(
+export async function downloadDeviceArtifact(
   response: ServerResponse,
   kind: keyof typeof artifactNames,
   directory: URL,
@@ -227,7 +228,12 @@ async function download(
       constants.O_RDONLY | constants.O_NOFOLLOW,
     );
     const info = await file.stat();
-    const limit = kind === "skill" ? 8 * 1024 * 1024 : 1024 * 1024;
+    const limit =
+      kind === "extension"
+        ? 16 * 1024 * 1024
+        : kind === "skill"
+          ? 8 * 1024 * 1024
+          : 1024 * 1024;
     if (
       !info.isFile() ||
       info.nlink !== 1 ||
@@ -255,7 +261,9 @@ async function download(
     const bytes = buffer.subarray(0, size);
     response.writeHead(200, {
       "Content-Type":
-        kind === "skill" ? "application/zip" : "text/markdown; charset=utf-8",
+        kind === "instructions"
+          ? "text/markdown; charset=utf-8"
+          : "application/zip",
       "Content-Disposition": `attachment; filename="sciretriever-${artifactNames[kind]}"`,
       "Cache-Control": "no-store",
     });
@@ -317,7 +325,7 @@ export async function handleDeviceRequest(
         url.pathname,
       );
     if (artifact && request.method === "GET") {
-      await download(
+      await downloadDeviceArtifact(
         response,
         artifact[1] as keyof typeof artifactNames,
         options.artifactDirectory ?? DEVICE_ARTIFACT_DIRECTORY,

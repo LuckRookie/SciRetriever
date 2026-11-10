@@ -292,6 +292,8 @@ Catalog、Report 或 `LiteratureDetail`。因此 Detail 本身不增加 `open()`
 
 #### 2.1.6 入库批次、范围词频与 PDF 获取范围
 
+网页收藏按服务端 UTC 日期归并：每个设备连接每天一个批次，默认名为“网页收藏 YYYY-MM-DD”。沿用 `kind=import`、`origin=web`，request.format 为 web-capture；专用关系把设备/日期唯一绑定到批次，不增加另一套批次合同。批次始终为 completed，每次成功收藏只补成员并更新完成时间；普通已结算批次不能因此被重新写入。重命名沿用原批次改名入口，后续收藏保留用户名称；成员按文献去重，分类保留 created > enriched > matched，PDF 计数继续从当前库读取。
+
 精确类型与解析在 `packages/contracts/src/intake.ts`；决策见 [ADR 0052](../decisions/0052-intake-batches-and-explicit-scope.md)。
 
 ```text

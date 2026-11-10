@@ -1136,6 +1136,14 @@ MaterialRef 的目标设计将已接纳 Asset/关系和 hash 作为最小材料�
 
 只要 `Literature` 已形成可转换的当前 `LiteratureMetadata` 即可导出，不要求 PDF、解析或内容总结完成。始终导出当前接纳的 metadata，不按分析或建档状态切换另一套数据。默认每个 `MetaLiterature` 选择一个最佳可导出 Literature；用户明确要求时可以导出全部 Literature。目标格式无法表达的字段必须形成明确损失说明。
 
+#### 网页收藏
+
+Entry 的 CaptureService 接纳页面字段为 `user/web-capture` observation。输入是部分中性 LiteratureMetadata，补齐空默认值并使用同一元数据合同；至少有合法 DOI 或 arXiv 标识，不能只有标题。web-capture 只有 arXiv、尚无标题时也可接纳，普通书目与 Provider 的原最小输入规则保持。客户端把 `citation_*`、Dublin Core、`prism.*` 及页面网址中读到的标识转换为中性字段，服务端不下载页面或 PDF，不接收页面 Cookie、凭据、URL、自选来源和 provenance。source_record_id 为按 namespace 排序的 DOI/arXiv 标识 JSON，input_sha256 为规范化页面元数据 hash，parameters_sha256 为空；原 observation 不被后续补全改写。
+
+保存后同步调用既有 acquire-metadata/lookup 持久任务，冻结当前来源选择、每来源 scan_limit=1，使用收藏 ID 派生的任务幂等键。结果分别返回 completed、partial、failed 或 unavailable；失败保留已接纳页面书目。Provider observation 仍由原身份和元数据字段 owner 接纳，不覆盖人工锁或页面已有用户字段。所选文件夹只补成员；不存在的文件夹在 missing_folder_ids 中报告，其它存储失败不伪装为缺失。
+
+每设备内的 request_id 是 UUID；相同 ID、相同规范化请求重放原接纳，输入改变拒绝冲突。同进程合并在途保存，跨进程由 catalog 的唯一键、稳定 observation ID 和任务幂等键保留事实。收藏上传与导入共用 ImportFileChannel，沿用磁盘保护、逐字节哈希、PDF 验收、唯一主 PDF、metadata CAS、取消与不可变发布；已有 PDF 只交哈希，相同记 existing、不同记 conflict，均不替换。PDF 不调用模型或 MinerU。接口见[收藏 HTTP](01-product-interface.md#243-网页收藏-http)，按日批次见[批次规则](06-retrieval-context.md#216-入库批次范围词频与-pdf-获取范围)。
+
 ### 6.2 Ports 与事务
 
 Literature 拥有：

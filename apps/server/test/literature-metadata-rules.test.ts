@@ -22,6 +22,28 @@ const author = (name: string, orcid: string | null = null) => ({
   orcid,
   affiliations: [],
 });
+
+it("accepts an arXiv-only captured page while retaining the ordinary bibliography minimum", () => {
+  const base = observation(
+    90,
+    "user",
+    metadata({ identifiers: [{ namespace: "arxiv", value: "2601.12345" }] }),
+  );
+  expect(acceptMetadataObservation(base)).toMatchObject({
+    outcome: "rejected",
+    reason: "missing-title-or-doi",
+  });
+  const captured = parseMetadataObservation({
+    ...base,
+    provenance: {
+      ...base.provenance,
+      source_name: "web-capture",
+      source_record_id: "arxiv:2601.12345",
+      input_sha256: "a".repeat(64),
+    },
+  });
+  expect(acceptMetadataObservation(captured).outcome).toBe("created");
+});
 const metadata = (
   overrides: Partial<LiteratureMetadata> = {},
 ): LiteratureMetadata => ({

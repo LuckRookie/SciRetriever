@@ -288,6 +288,14 @@ function parseDiscoveryPublication(value: unknown): DiscoveryPublication {
 
 export type SqliteCommand =
   | {
+      readonly kind: "capture_read";
+      readonly action: import("./capture-engine.js").CaptureRead;
+    }
+  | {
+      readonly kind: "capture_write";
+      readonly action: import("./capture-engine.js").CaptureWrite;
+    }
+  | {
       readonly kind: "import_read";
       readonly action: import("./import-engine.js").ImportRead;
     }
@@ -1255,6 +1263,7 @@ export class SqliteWorker {
       "find_literature_by_identifiers",
       "identity_read",
       "import_read",
+      "capture_read",
       "get_asset",
       "get_observation",
       "get_provider_relation",

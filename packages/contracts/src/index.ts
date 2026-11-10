@@ -33,6 +33,7 @@ export const CONTRACTS_VERSION = "v1" as const;
 export * from "./article-identity.js";
 export * from "./operations.js";
 export * from "./intake.js";
+export * from "./capture.js";
 export * from "./long-document.js";
 import {
   parseLongDocumentInfo,
@@ -3442,7 +3443,7 @@ export function parseMetadataObservation(value: unknown): MetadataObservation {
       fail();
   } else if (
     provenance.source_kind === "user" &&
-    provenance.source_name === "import"
+    ["import", "web-capture"].includes(provenance.source_name)
   ) {
     if (
       provenance.source_record_id === null ||

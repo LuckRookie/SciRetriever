@@ -37,13 +37,14 @@ export async function runMetadataTask(
   app: Application,
   value: unknown,
   signal?: AbortSignal,
+  idempotencyKey = `metadata-${randomUUID()}`,
 ) {
   const runtime = app.processingTasks;
   if (!runtime) throw new ProcessingTaskError("metadata-unavailable");
   const request = prepareMetadataTask(app, value),
     job = await runtime.submit({
       schema_version: 1,
-      idempotency_key: `metadata-${randomUUID()}`,
+      idempotency_key: idempotencyKey,
       operations: [{ operation: "acquire-metadata", request }],
     });
   await runtime.run(job.job_id, signal);

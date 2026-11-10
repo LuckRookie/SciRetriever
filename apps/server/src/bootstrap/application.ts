@@ -4,6 +4,8 @@ import {
   ImportSessionReadService,
   type ImportSessionOptions,
 } from "../entry/import-sessions.js";
+import { CaptureService, type CaptureOptions } from "../entry/capture.js";
+import { runMetadataTask } from "../entry/metadata-task.js";
 import { ProxyUnavailableError } from "../network/egress.js";
 import { outboundEgress } from "../configuration/egress.js";
 import {
@@ -231,6 +233,7 @@ import {
 import { dshTagModel } from "../tags/model.js";
 import { TagService } from "../tags/service.js";
 export interface Application {
+  readonly capture: CaptureService;
   readonly importSessions: ImportSessionService;
   readonly deviceConnections: DeviceConnectionService;
   readonly restartAdmission?: RestartAdmission;
@@ -466,6 +469,7 @@ export type ApplicationStage =
   | "agents"
   | "schema";
 export interface ApplicationOptions {
+  readonly capture?: CaptureOptions;
   readonly importSessions?: ImportSessionOptions;
   /** Poll timing seam; null gives isolated tests explicit ownership of index phases. */
   readonly indexRefreshIntervalMs?: number | null;
@@ -755,6 +759,7 @@ async function createApplicationOwned(
   let completion: LiteratureCompletionService | undefined;
   let manualPdf: ManualPdfIngestionService | undefined;
   let importSessions: ImportSessionService | undefined;
+  let capture: CaptureService | undefined;
   let pdfAcquisition: PdfAcquisitionPort | null = null;
   let execution: Application["execution"] = null;
   // Deferred callbacks must read the live execution context, but they are created
@@ -824,6 +829,7 @@ async function createApplicationOwned(
       // Keep dependants before their stores and permits. A failed release must not
       // stop later owners from releasing resources or erase another cleanup error.
       const releases: readonly (() => void | Promise<void>)[] = [
+        async () => capture?.close(),
         async () => importSessions?.close(),
         async () => processingTasks?.close(),
         async () => processorService?.close(),
@@ -1890,6 +1896,57 @@ async function createApplicationOwned(
     ): T | null =>
       value ? guardRuntimeMethods(value, methods, admission) : null;
     const application: Application = {
+      capture: guardRuntimeMethods(
+        (capture = new CaptureService(
+          database,
+          identity,
+          folders,
+          importSessions.fileChannel,
+          writes,
+          async (literatureId, captureId, signal) => {
+            if (!metadata.lookup_selection.length || !processingTasks)
+              return {
+                status: "unavailable",
+                job_id: null,
+                code: "metadata-unavailable",
+              };
+            try {
+              const result = await runMetadataTask(
+                application,
+                {
+                  kind: "lookup",
+                  literature_ids: [literatureId],
+                  scan_limit: 1,
+                },
+                signal,
+                `web-capture-${captureId}`,
+              );
+              return {
+                status:
+                  "status" in result && result.status === "COMPLETED"
+                    ? "completed"
+                    : "status" in result && result.status === "PARTIAL"
+                      ? "partial"
+                      : "failed",
+                job_id: result.job_id,
+                code:
+                  "status" in result && result.status !== "COMPLETED"
+                    ? "metadata-source-failed"
+                    : null,
+              };
+            } catch {
+              return {
+                status: "failed",
+                job_id: null,
+                code: "metadata-task-failed",
+              };
+            }
+          },
+          options.capture,
+        )),
+        ["save", "upload", "reportHash"],
+        admission,
+      ),
       restartAdmission: admission,
       folders,
       importSessions: guardRuntimeMethods(

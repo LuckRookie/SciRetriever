@@ -194,7 +194,10 @@ export function importHttpFailure(res: ServerResponse, error: unknown) {
   if (status === 413) res.setHeader("Connection", "close");
   json(res, status, { protocol_version: 1, code });
 }
-async function body(req: IncomingMessage) {
+export async function importHttpBody(
+  req: IncomingMessage,
+  maxBytes: number = IMPORT_LIMITS.request_bytes,
+) {
   if (
     req.headers["x-sciretriever-protocol-version"] !== "1" ||
     req.headers["content-type"] !== "application/json" ||
@@ -203,15 +206,13 @@ async function body(req: IncomingMessage) {
     throw new ContractValidationError();
   const chunks: Buffer[] = [];
   let total = 0;
-  if (
-    Number(req.headers["content-length"] ?? 0) > IMPORT_LIMITS.request_bytes
-  ) {
+  if (Number(req.headers["content-length"] ?? 0) > maxBytes) {
     req.resume();
     throw new ImportSessionError("import-request-too-large");
   }
   for await (const chunk of req.iterator({ destroyOnReturn: false })) {
     total += Buffer.byteLength(chunk);
-    if (total > IMPORT_LIMITS.request_bytes) {
+    if (total > maxBytes) {
       req.resume();
       throw new ImportSessionError("import-request-too-large");
     }
@@ -253,6 +254,37 @@ function page(
   }
   return { cursor, limit, pending: r.pending !== false };
 }
+export async function importHttpBytes<T>(
+  req: IncomingMessage,
+  res: ServerResponse,
+  upload: (
+    chunks: AsyncIterable<Uint8Array>,
+    signal: AbortSignal,
+    cancel: () => void,
+  ) => Promise<T>,
+): Promise<T> {
+  if (
+    req.headers["x-sciretriever-protocol-version"] !== "1" ||
+    !["application/pdf", "application/octet-stream"].includes(
+      String(req.headers["content-type"]),
+    ) ||
+    req.headers["content-encoding"] !== undefined
+  )
+    throw new ContractValidationError();
+  const stop = new AbortController(),
+    abort = () => stop.abort();
+  req.once("aborted", abort);
+  res.once("close", abort);
+  try {
+    return await upload(req, stop.signal, () => {
+      if (!req.destroyed) req.destroy();
+    });
+  } finally {
+    req.off("aborted", abort);
+    res.off("close", abort);
+  }
+}
+
 /** Both authentication modes dispatch this exact handler after their own admission. */
 export function importHttpRoutes(service: ImportSessionService): DeviceRoute[] {
   return endpoints.map(([method, path, operation]) => {
@@ -276,36 +308,19 @@ export function importHttpRoutes(service: ImportSessionService): DeviceRoute[] {
             : parseAssetId(parameters.session_id);
         let result: unknown;
         if (operation === "bytes") {
-          if (
-            req.headers["x-sciretriever-protocol-version"] !== "1" ||
-            !["application/pdf", "application/octet-stream"].includes(
-              String(req.headers["content-type"]),
-            ) ||
-            req.headers["content-encoding"] !== undefined
-          )
-            throw new ContractValidationError();
-          const stop = new AbortController(),
-            abort = () => stop.abort();
-          req.once("aborted", abort);
-          res.once("close", abort);
-          try {
-            result = {
-              file: await service.upload(
+          result = {
+            file: await importHttpBytes(req, res, (chunks, signal, cancel) =>
+              service.upload(
                 id!,
                 parseAssetId(parameters.file_id),
-                req,
-                stop.signal,
-                () => {
-                  if (!req.destroyed) req.destroy();
-                },
+                chunks,
+                signal,
+                cancel,
               ),
-            };
-          } finally {
-            req.off("aborted", abort);
-            res.off("close", abort);
-          }
+            ),
+          };
         } else {
-          const request = await body(req);
+          const request = await importHttpBody(req);
           if (operation === "create")
             result = { session: await service.create(request, actor) };
           else if (operation === "list") {

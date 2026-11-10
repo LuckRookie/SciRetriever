@@ -11,6 +11,7 @@
 - [configuration-operations.ts](configuration-operations.ts)：非交互配置预览、CAS 发布、凭据设置/移除和显式 probe；不初始化 catalog。
 
 - [import-sessions.ts](import-sessions.ts)：持久导入会话、可独立组装的 ImportSessionReadService、只读预览、逐条接纳检查点、来源对应、文件上传与七天清理；旧三端书目入口也委托此服务；无库号文件通过 library:null 建立独立 adhoc 会话，公共数据输入不接受内部预解码载荷。身份、文件夹与 PDF 发布分别调用既有 owner。
+- [capture.ts](capture.ts)：设备限定的网页收藏、只读标识/文件夹查询、按日入库、幂等接纳及已有元数据任务补全；不接收浏览器 Cookie、URL 或自定义 provenance。[import-files.ts](import-files.ts) 由收藏和导入共用，拥有流式接收、哈希重放、磁盘保护、PDF 验收、metadata CAS 与不可变发布；各工作流只保存自己的文件结算。
 - [library-transfer.ts](library-transfer.ts)：目录所有的原始材料有界读取与书目导出；调用既有文件校验和编码 owner，不接受任意服务器路径。
 - [discovery.ts](discovery.ts)：主题和引用扩展操作。
 - [pdf-acquisition.ts](pdf-acquisition.ts)：单目标 PDF 获取入口。

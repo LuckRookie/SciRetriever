@@ -36,7 +36,15 @@ export function recordIntakeMember(
   const batch = db
     .prepare("SELECT status FROM intake_batches WHERE batch_id=?")
     .get(member.batch_id);
-  if (batch?.status !== "running")
+  if (
+    batch?.status !== "running" &&
+    !(
+      batch?.status === "completed" &&
+      db
+        .prepare("SELECT 1 FROM capture_daily_batches WHERE batch_id=?")
+        .get(member.batch_id)
+    )
+  )
     throw new Error("intake batch is not running");
   db.prepare(
     "INSERT INTO intake_batch_members VALUES(?,?,?) ON CONFLICT(batch_id,literature_id) DO UPDATE SET disposition=CASE WHEN disposition='created' OR excluded.disposition='created' THEN 'created' WHEN disposition='enriched' OR excluded.disposition='enriched' THEN 'enriched' ELSE 'matched' END",

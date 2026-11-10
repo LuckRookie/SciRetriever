@@ -184,11 +184,16 @@ export class RestartAdmission {
 /**
  * Copies plain request data (objects and arrays) at call time, so a caller
  * that changes its object while the call waits for admission cannot change
- * the request. Functions, signals and class instances pass through as they are.
+ * the request. Streams, functions, signals and class instances pass through as they are.
  */
 function snapshot(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(snapshot);
   if (value === null || typeof value !== "object") return value;
+  if (
+    Symbol.asyncIterator in value &&
+    typeof value[Symbol.asyncIterator] === "function"
+  )
+    return value;
   const prototype = Object.getPrototypeOf(value) as unknown;
   if (prototype !== Object.prototype && prototype !== null) return value;
   return Object.fromEntries(

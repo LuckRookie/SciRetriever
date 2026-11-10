@@ -500,7 +500,11 @@ export function acceptMetadataObservation(
   if (
     observation.metadata.title === null &&
     !observation.metadata.identifiers.some(
-      (identifier) => identifier.namespace === "doi",
+      (identifier) =>
+        identifier.namespace === "doi" ||
+        (identifier.namespace === "arxiv" &&
+          observation.provenance.source_kind === "user" &&
+          observation.provenance.source_name === "web-capture"),
     )
   )
     return rejectedAcceptance("missing-title-or-doi");
