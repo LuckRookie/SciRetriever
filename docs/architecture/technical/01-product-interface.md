@@ -130,7 +130,7 @@ Web 管理均为 POST，要求登录 Cookie、工作台 Cookie、client_id、同
 
 `DeviceConnection` 只含 UUID connection_id、1–120 字符 name、purposes、created_at、nullable paired_at/last_used_at/revoked_at；列表不返回 token、配对码或其派生值，包含未配对与已撤销项。用途变更需重新连接。管理不走记录请求/响应的通用 operation wrapper。换令牌由 catalog 事务消费配对码，次数限制跨进程/重启共享：直接 socket peer 每 60 秒 10 次、全局 60 次；包括失败和畸形尝试。短期桶有界，不保存 peer 原值。
 
-任一有效令牌可 GET `/api/v1/device-connections/instructions` 与 `/api/v1/device-connections/skill`，下载固定构建产物 `apps/server/dist/agent-access/instructions.md`（1 MiB 上限）和 `skill.zip`（8 MiB 上限）。内容和打包由独立构建工作提供；产物不存在、不是普通单硬链接文件或超限时返回 `device-artifact-unavailable`（503），不读取个人文件。成功响应 no-store/nosniff，分别为 Markdown、ZIP 附件。
+任一有效令牌可 GET `/api/v1/device-connections/instructions` 与 `/api/v1/device-connections/skill`；未带 Authorization 的登录 Web 用户也可通过原 Cookie、工作台 Cookie、client_id 和同源准入下载（GET 不要求 CSRF）。有 Authorization 时只走设备认证，不回退 Cookie。两种入口读取同一固定构建产物 `apps/server/dist/agent-access/instructions.md`（1 MiB 上限）和 `skill.zip`（8 MiB 上限）。内容和打包由独立构建工作提供；产物不存在、不是普通单硬链接文件或超限时返回 `device-artifact-unavailable`（503），不读取个人文件。成功响应 no-store/nosniff，分别为 Markdown、ZIP 附件。
 
 设备错误统一为 `{protocol_version:1,code}`：`device-input-invalid`/`device-pairing-invalid`/`device-token-in-url`（400），`device-address-mismatch`/`device-purpose-forbidden`（403），`device-pairing-expired`/`device-pairing-used`（409），`device-exchange-rate-limited`（429，Retry-After 60），`device-token-invalid`/`device-revoked`（401），`device-connection-missing`（404），`device-artifact-unavailable`/`device-unavailable`（503）。实际 SQLite 损坏保留 `catalog-corrupt`（503）和 `maintenance_hint:"verify-catalog"`；未知内部异常不透传。Web 原有认证错误保持。持久化与迁移见[设备认证存储](07-versioned-storage.md#8-设备认证存储)。
 
@@ -140,21 +140,23 @@ Web 管理均为 POST，要求登录 Cookie、工作台 Cookie、client_id、同
 
 JSON POST 要求 `X-Sciretriever-Protocol-Version: 1`、`Content-Type: application/json`，输入 `{protocol_version:1,request}`，成功 `{protocol_version:1,result}`；未知字段拒绝。下面路径都以 `/api/v1/import` 为前缀，`:session_id`、`:file_id` 为服务返回的 UUID：
 
-| 方法与路径                                        | request                                                                                                                        | result                                                |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------- |
-| GET `/instructions`                               | 无正文、无需协议头                                                                                                             | 支持格式、中性模型、端点、限制、错误码与认证说明      |
-| POST `/sessions`                                  | `{format,library:{system,library_id,identity:"global"\|"local",name},scope,import_user_tags?:boolean,file_name?:string\|null}` | `{session}`                                           |
-| POST `/sessions/list`                             | `{cursor?:session_id\|null,limit?:number}`                                                                                     | `{items,next_cursor}`                                 |
-| POST `/sessions/:session_id/status`               | `{}`                                                                                                                           | `{session}`                                           |
-| POST `/sessions/:session_id/data`                 | `{sequence,data}`                                                                                                              | `{session}`                                           |
-| POST `/sessions/:session_id/preview`              | `{}`                                                                                                                           | `{session,estimated:true,summary}`                    |
-| POST `/sessions/:session_id/confirm`              | `{}`                                                                                                                           | `{session}`                                           |
-| POST `/sessions/:session_id/files`                | `{cursor?:file_id\|null,limit?:number,pending?:boolean}`                                                                       | `{items,next_cursor}`                                 |
-| POST `/sessions/:session_id/files/:file_id/hash`  | `{sha256}`                                                                                                                     | `{file}`                                              |
-| POST `/sessions/:session_id/files/:file_id/bytes` | 原始 PDF 字节流，无 JSON 封套                                                                                                  | `{file}`                                              |
-| POST `/sessions/:session_id/finish`               | `{}`                                                                                                                           | `{session}`                                           |
-| POST `/sessions/:session_id/cancel`               | `{}`                                                                                                                           | `{session}`                                           |
-| POST `/sessions/:session_id/report`               | `{cursor?:"sequence:record_index"\|null,limit?:number}`                                                                        | `{session,estimated:false,summary,items,next_cursor}` |
+| 方法与路径                                        | request                                                                                                                              | result                                                |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------- |
+| GET `/instructions`                               | 无正文、无需协议头                                                                                                                   | 支持格式、中性模型、端点、限制、错误码与认证说明      |
+| POST `/sessions`                                  | `{format,library:null\|{system,library_id,identity:"global"\|"local",name},scope,import_user_tags?:boolean,file_name?:string\|null}` | `{session}`                                           |
+| POST `/sessions/list`                             | `{cursor?:session_id\|null,limit?:number}`                                                                                           | `{items,next_cursor}`                                 |
+| POST `/sessions/:session_id/status`               | `{}`                                                                                                                                 | `{session}`                                           |
+| POST `/sessions/:session_id/data`                 | `{sequence,data}`                                                                                                                    | `{session}`                                           |
+| POST `/sessions/:session_id/preview`              | `{}`                                                                                                                                 | `{session,estimated:true,summary}`                    |
+| POST `/sessions/:session_id/confirm`              | `{}`                                                                                                                                 | `{session}`                                           |
+| POST `/sessions/:session_id/files`                | `{cursor?:file_id\|null,limit?:number,pending?:boolean}`                                                                             | `{items,next_cursor}`                                 |
+| POST `/sessions/:session_id/files/:file_id/hash`  | `{sha256}`                                                                                                                           | `{file}`                                              |
+| POST `/sessions/:session_id/files/:file_id/bytes` | 原始 PDF 字节流，无 JSON 封套                                                                                                        | `{file}`                                              |
+| POST `/sessions/:session_id/finish`               | `{}`                                                                                                                                 | `{session}`                                           |
+| POST `/sessions/:session_id/cancel`               | `{}`                                                                                                                                 | `{session}`                                           |
+| POST `/sessions/:session_id/report`               | `{cursor?:"sequence:record_index"\|null,limit?:number}`                                                                              | `{session,estimated:false,summary,items,next_cursor}` |
+
+`library` 必填但可为 null，表示无来源库号的导出文件；返回的 session.library 始终为对象。精确的一次性来源身份、去重、分组及批次命名见[书目交换规则](03-literature-materials.md#61-书目交换规则)。传了 global/local 对象时沿用原验证，不能自行指定 adhoc 身份或命名空间。
 
 `files.pending` 默认为 true；终态报告用 false 读取全部文件及冲突/缺失项。分页默认 50、最多 200。会话列表按创建时间/ID 倒序，报告按输入序号/条号，文件按 ID。书目阶段 `metadata_complete=false` 时文件清单仍会增长，完成后从空 cursor 重读最终清单。
 
@@ -175,6 +177,8 @@ JSON（含封套）最多 8 MiB，会话暂存数据共 256 MiB、50,000 条记�
 | 503  | `import-disk-unavailable`、`import-unavailable`、`import-closed`                                                                                                                                                                                                                                       |
 
 真实 SQLite 损坏仍返回 `catalog-corrupt` 和 `maintenance_hint:"verify-catalog"`，内部异常不透传。首轮文件哈希与已有 PDF 冲突是 HTTP 200 的 file.status=conflict；已结算文件的不同字节重放才是 `import-file-conflict` 错误。逐条身份/分组原因在报告中，不把部分成功伪装成整场失败。
+
+工作台界面地址的 `setting` 白名单包含 `devices`，`/?view=set&setting=devices` 按原 Web 登录规则进入设备设置分区；未知分区仍为 `invalid-ui-location`。这不改变 API 或设备令牌的权限。
 
 ### 2.5 新请求与结果语义
 

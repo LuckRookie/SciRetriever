@@ -22,7 +22,7 @@ const endpoints = [
     "POST",
     "/api/v1/import/sessions",
     "create",
-    "{format,library:{system,library_id,identity:global|local,name},scope,import_user_tags?:boolean,file_name?:string|null}",
+    "{format,library:null|{system,library_id,identity:global|local,name},scope,import_user_tags?:boolean,file_name?:string|null}",
   ],
   [
     "POST",
@@ -149,7 +149,7 @@ export function importInterface(formats: readonly string[]) {
     semantics: [
       "Preview is read-only and estimated; confirm decides again and checkpoints each record.",
       "One active session per source library. A repeated sequence replaces that part until confirmation.",
-      "Global library IDs are independent of device; local IDs are scoped to device connection.",
+      "Global library IDs are independent of device; local IDs are scoped to device connection. library=null creates an isolated one-off file source; it cannot resume a source namespace and uses bibliographic-import semantics.",
       "Import adds observations, folders/members and missing primary PDFs; never deletes or replaces accepted materials.",
       "Upload the preferred PDF only when action=upload; action=hash needs only sha256. Missing files are paginated; repeat uploads are idempotent.",
       "No file-size ceiling; data requests and session records have the limits above. Interrupted files restart from byte zero; accepted files remain durable.",

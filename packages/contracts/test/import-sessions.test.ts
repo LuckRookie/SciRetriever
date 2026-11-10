@@ -136,3 +136,30 @@ it("refuses file paths, multiple preferred files and oversized record lists at t
     parseImportData({ records: Array.from({ length: 50_001 }, () => record) }),
   ).toThrow();
 });
+
+it("accepts an explicit null library without allowing callers to select an adhoc identity or namespace", () => {
+  const request = {
+    format: "bibtex",
+    library: null,
+    file_name: "batch-fixture.bib",
+    scope: "one file",
+  };
+  expect(parseImportCreate(request).library).toBeNull();
+  expect(() =>
+    parseImportCreate({ ...request, identity_scope: "adhoc:chosen" }),
+  ).toThrow();
+  expect(() =>
+    parseImportCreate({
+      ...request,
+      library: {
+        system: "file",
+        library_id: "chosen",
+        identity: "adhoc",
+        name: "file",
+      },
+    }),
+  ).toThrow();
+  expect(() =>
+    parseImportCreate({ format: "bibtex", scope: "missing library" }),
+  ).toThrow();
+});

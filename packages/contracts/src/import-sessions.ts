@@ -239,29 +239,39 @@ export function parseImportCreate(value: unknown) {
     ["format", "library", "scope"],
     ["import_user_tags", "file_name"],
   );
-  const l = importObject(r.library, [
-    "system",
-    "library_id",
-    "identity",
-    "name",
-  ]);
   if (
-    !["global", "local"].includes(String(l.identity)) ||
-    (r.import_user_tags !== undefined &&
-      typeof r.import_user_tags !== "boolean")
+    r.import_user_tags !== undefined &&
+    typeof r.import_user_tags !== "boolean"
   )
     throw new ContractValidationError();
-  const system = importString(l.system, 64);
-  if (!/^[a-z0-9][a-z0-9-]*$/u.test(system))
-    throw new ContractValidationError();
-  return {
-    format: importString(r.format, 64),
-    library: {
+  let library: {
+    system: string;
+    library_id: string;
+    identity: "global" | "local";
+    name: string;
+  } | null = null;
+  if (r.library !== null) {
+    const l = importObject(r.library, [
+      "system",
+      "library_id",
+      "identity",
+      "name",
+    ]);
+    if (!["global", "local"].includes(String(l.identity)))
+      throw new ContractValidationError();
+    const system = importString(l.system, 64);
+    if (!/^[a-z0-9][a-z0-9-]*$/u.test(system))
+      throw new ContractValidationError();
+    library = {
       system,
       library_id: importString(l.library_id),
       identity: l.identity as "global" | "local",
       name: importString(l.name, 1024),
-    },
+    };
+  }
+  return {
+    format: importString(r.format, 64),
+    library,
     scope: importString(r.scope, 8192),
     file_name:
       r.file_name === undefined || r.file_name === null

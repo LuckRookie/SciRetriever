@@ -1124,7 +1124,11 @@ MaterialRef 的目标设计将已接纳 Asset/关系和 hash 作为最小材料�
 
 文件清单区分 upload（缺主 PDF）和 hash（只需 SHA-256）。已有主 PDF 不替换；同哈希记 existing，不同记 conflict。上传从磁盘 descriptor 验证可读/非加密 PDF，按 ADR 0029 标为文章身份 unverified；接纳保留上传开始时的 metadata CAS，不调用模型或 Parser。重复上传只核对哈希，不重复发布；中断从零重发。文件到齐自动结束，显式 finish 可保留逐个缺失项。
 
-旧三端书目入口内部走同一会话，原请求、结果和逐条拒绝语义不变。因没有来源库号，每次建立不可复用的 adhoc:<UUID> 内部 scope，不建立可续导外部对应；observation 仍为 user/bibliographic-import，source_record_id/input/parameters hash 均为空。完全相同的规范化用户 observation 继续复用既有事实，失败时结算临时会话，不遗留活动会话，也不撤销已经接纳的文献。
+无来源库号的导出文件以 `library:null` 创建一次性会话，Web、导入用途设备和本机入口均可使用；服务端每次生成独立的 `adhoc:<UUID>` scope。读取投影为 `{system:"file",library_id:"",identity:"adhoc",name:file_name??""}`，不把文件名、内容哈希或本地库号伪装成全局身份。同名文件可同时导入；同一会话仍可按 session ID 续传，但另一个会话不能续用此来源对应，调用方也不能显式指定 adhoc 或其 scope。批次名称优先使用 file_name，未给时用格式名，沿用既有 120 字符上限。
+
+一次性会话的书目 observation 仍为 `user/bibliographic-import`，source_record_id/input/parameters hash 均为空；重复的规范化用户 observation 复用原事实，字段优先级与旧入口一致。分组与用户标签按旧文件导入行为忽略并报告计数，import_user_tags 归一为 false；不保存可续导的记录、组或文件对应，也不覆盖用户整理。中性记录中存在首选 PDF 引用时，预览、文件清单、上传/哈希、结束与报告仍走同一文件通道；不凭上传文件名推断论文归属。书目格式能否产出附件引用由适配器决定，未声明的附件不能伪造清单。
+
+旧 Web/CLI/stdio 书目入口内部用同一 null-library 创建路径，原请求、结果、编码处理和逐条拒绝语义不变。失败时结算临时会话，不遗留活动会话，也不撤销已经接纳的文献。
 
 只要 `Literature` 已形成可转换的当前 `LiteratureMetadata` 即可导出，不要求 PDF、解析或内容总结完成。始终导出当前接纳的 metadata，不按分析或建档状态切换另一套数据。默认每个 `MetaLiterature` 选择一个最佳可导出 Literature；用户明确要求时可以导出全部 Literature。目标格式无法表达的字段必须形成明确损失说明。
 

@@ -5,7 +5,7 @@
 ## 内容入口
 
 - [index.ts](index.ts)：包公开导出与基础合同。
-- [import-sessions.ts](import-sessions.ts)：与来源无关的导入模型、纯适配器接口、会话/报告/文件状态及严格输入上限。
+- [import-sessions.ts](import-sessions.ts)：与来源无关的导入模型、纯适配器接口、会话/报告/文件状态及严格输入上限；建会话的 library 可为 null，由服务端形成一次性文件来源。
 - [intake.ts](intake.ts)：入库批次、范围内词频与 PDF 获取范围/预览的中性合同；新筛选及主题词在基础合同中解码，旧字段缺省为空。
 - [acquisition.ts](acquisition.ts)：当前/待生效来源与有界安全获取轨迹，供配置、任务和浏览器读取。
 - [document.ts](document.ts)：文档合同。

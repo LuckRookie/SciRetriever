@@ -220,6 +220,48 @@ it("shares the exact import handlers between authenticated Web and import-purpos
       expect(result.summary.files.uploaded).toBe(1);
       expect((await call(base + "/finish", {})).status).toBe(200);
     }
+    const fileKeys = new Set<string>();
+    for (const mode of ["web", "device"] as const) {
+      const call = (path: string, request: unknown) =>
+        mode === "web"
+          ? web(path, request)
+          : send(path, request, deviceHeaders);
+      const response = await call("/api/v1/import/sessions", {
+        format: "bibtex",
+        library: null,
+        file_name: "batch-fixture.bib",
+        scope: "uploaded file",
+      });
+      expect(response.status).toBe(200);
+      const s = (await response.json()).result.session;
+      expect(s.library).toEqual({
+        system: "file",
+        library_id: "",
+        identity: "adhoc",
+        name: "batch-fixture.bib",
+      });
+      fileKeys.add(s.library_key);
+      const base = `/api/v1/import/sessions/${s.session_id}`;
+      expect(
+        (
+          await call(base + "/data", {
+            sequence: 0,
+            data: "@article{same,title={HTTP one-off source}}",
+          })
+        ).status,
+      ).toBe(200);
+      const preview = (await (await call(base + "/preview", {})).json()).result;
+      expect(preview.summary.records).toMatchObject(
+        mode === "web"
+          ? { created: 1, matched: 0 }
+          : { created: 0, matched: 1 },
+      );
+      expect((await call(base + "/confirm", {})).status).toBe(200);
+      expect(
+        (await (await call(base + "/report", {})).json()).result.session.state,
+      ).toBe("completed");
+    }
+    expect(fileKeys.size).toBe(2);
     const docs = await fetch(server.origin + "/api/v1/import/instructions", {
       headers: deviceHeaders,
     });

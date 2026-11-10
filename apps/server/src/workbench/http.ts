@@ -438,6 +438,7 @@ function validUiLocation(url: URL): boolean {
         "status",
         "advanced",
         "appearance",
+        "devices",
         "archive",
       ],
     ],

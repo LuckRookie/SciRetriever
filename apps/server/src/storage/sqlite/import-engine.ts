@@ -556,7 +556,11 @@ export function writeImportStorage(
         db.prepare(
           "UPDATE import_sessions SET updated_at=?,last_file_at=? WHERE session_id=?",
         ).run(r.now, r.now, r.session_id);
-        if (r.internal_id)
+        if (
+          r.internal_id &&
+          (JSON.parse(str(s.library_json)) as ImportLibrary).identity !==
+            "adhoc"
+        )
           map(db, {
             library_key: str(s.library_key),
             object_kind: "file",

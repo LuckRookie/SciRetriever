@@ -280,35 +280,39 @@ export class ImportSessionService extends ImportSessionReadService {
   private async createOwned(
     r: ReturnType<typeof parseImportCreate>,
     actor: ImportActor,
-    adhocScope?: string,
   ) {
-    if (!adhocScope && r.library.system === "bibliography-file")
+    if (r.library?.system === "bibliography-file")
       throw new ImportSessionError("import-input-invalid");
     if (!this.adapters.has(r.format))
       throw new ImportSessionError("import-format-unsupported");
-    if (r.library.identity === "local" && actor.kind !== "device")
+    if (r.library?.identity === "local" && actor.kind !== "device")
       throw new ImportSessionError("import-local-identity-required");
-    const identity_scope =
-      adhocScope ??
-      (r.library.identity === "global"
+    const adhoc = r.library === null;
+    const library = r.library ?? {
+      system: "file",
+      library_id: "",
+      identity: "adhoc" as const,
+      name: r.file_name ?? "",
+    };
+    const identity_scope = adhoc
+      ? `adhoc:${randomUUID()}`
+      : library.identity === "global"
         ? "global"
         : actor.kind === "device"
           ? `device:${actor.connection_id}`
-          : "local");
+          : "local";
     const now = new Date(this.now()).toISOString(),
       session_id = randomUUID();
     const s: ImportSession = {
       ...r,
-      library: {
-        ...r.library,
-        identity: adhocScope ? "adhoc" : r.library.identity,
-      },
+      library,
+      import_user_tags: adhoc ? false : r.import_user_tags,
       session_id,
       library_key: hash([
         "sciretriever.import-source.v1",
-        r.library.system,
+        library.system,
         identity_scope,
-        r.library.library_id,
+        library.library_id,
       ]),
       state: "collecting",
       created_at: now,
@@ -347,75 +351,82 @@ export class ImportSessionService extends ImportSessionReadService {
     return result;
   }
   putData(id: string, sequence: number, data: unknown) {
-    return this.tracked(async () => {
-      importInteger(sequence, IMPORT_LIMITS.parts - 1);
-      const s = await this.stored(id);
-      if (
-        ["bibtex", "biblatex", "ris", "csl-json"].includes(s.format) &&
-        typeof data !== "string" &&
-        s.library.identity !== "adhoc"
-      )
-        throw new ImportSessionError("import-input-invalid");
-      const decoded = this.decode(s.format, data, sequence);
-      const bytes = canonicalJsonBytes({ import_data: data });
-      if (bytes.byteLength > IMPORT_LIMITS.request_bytes)
-        throw new ImportSessionError("import-request-too-large");
-      const stage = await this.files.stage({
-        maxBytes: IMPORT_LIMITS.request_bytes,
-        signal: this.stop.signal,
-      });
-      try {
-        await stage.write(bytes);
-        const description = await stage.seal();
-        const artifact = {
-          sha256: description.sha256,
-          byte_size: description.size,
-          media_type: "application/json",
-        };
-        const descriptor = {
-          reference: artifactReference("import-source", artifact),
-          artifact,
-        };
-        const keys: { kind: string; id: string }[] = decoded.groups.map(
-          (g) => ({ kind: "group", id: g.external_id }),
-        );
-        for (const item of decoded.items)
-          if (item.record) {
-            keys.push({ kind: "record", id: item.record.external_id });
-            for (const f of item.record.files)
-              keys.push({ kind: "file", id: f.external_id });
-          }
-        await this.writes.run(async () => {
-          const old = (
-            await this.read<ImportPart[]>({ op: "parts", session_id: id })
-          ).find((v) => v.sequence === sequence);
-          const ticket = await this.recovery.prepare([
-            descriptor,
-            ...(old
-              ? [{ reference: old.reference, artifact: old.artifact }]
-              : []),
-          ]);
-          try {
-            await this.files.publish(stage, descriptor.reference);
-            await this.write({
-              op: "part",
-              session_id: id,
-              sequence,
-              part: descriptor,
-              artifact_id: `import-source:${description.sha256}`,
-              records: decoded.items.length,
-              keys,
-              now: new Date(this.now()).toISOString(),
-            });
-          } finally {
-            await this.recovery.complete(ticket);
-          }
-        });
-        return publicSession(await this.stored(id));
-      } finally {
-        await stage.discard();
-      }
+    return this.tracked(() => this.putDataOwned(id, sequence, data));
+  }
+  private async putDataOwned(
+    id: string,
+    sequence: number,
+    data: unknown,
+    decodedBibliography = false,
+  ) {
+    importInteger(sequence, IMPORT_LIMITS.parts - 1);
+    const s = await this.stored(id);
+    if (
+      ["bibtex", "biblatex", "ris", "csl-json"].includes(s.format) &&
+      typeof data !== "string" &&
+      !decodedBibliography
+    )
+      throw new ImportSessionError("import-input-invalid");
+    const decoded = this.decode(s.format, data, sequence);
+    const bytes = canonicalJsonBytes({ import_data: data });
+    if (bytes.byteLength > IMPORT_LIMITS.request_bytes)
+      throw new ImportSessionError("import-request-too-large");
+    const stage = await this.files.stage({
+      maxBytes: IMPORT_LIMITS.request_bytes,
+      signal: this.stop.signal,
     });
+    try {
+      await stage.write(bytes);
+      const description = await stage.seal();
+      const artifact = {
+        sha256: description.sha256,
+        byte_size: description.size,
+        media_type: "application/json",
+      };
+      const descriptor = {
+        reference: artifactReference("import-source", artifact),
+        artifact,
+      };
+      const keys: { kind: string; id: string }[] = decoded.groups.map((g) => ({
+        kind: "group",
+        id: g.external_id,
+      }));
+      for (const item of decoded.items)
+        if (item.record) {
+          keys.push({ kind: "record", id: item.record.external_id });
+          for (const f of item.record.files)
+            keys.push({ kind: "file", id: f.external_id });
+        }
+      await this.writes.run(async () => {
+        const old = (
+          await this.read<ImportPart[]>({ op: "parts", session_id: id })
+        ).find((v) => v.sequence === sequence);
+        const ticket = await this.recovery.prepare([
+          descriptor,
+          ...(old
+            ? [{ reference: old.reference, artifact: old.artifact }]
+            : []),
+        ]);
+        try {
+          await this.files.publish(stage, descriptor.reference);
+          await this.write({
+            op: "part",
+            session_id: id,
+            sequence,
+            part: descriptor,
+            artifact_id: `import-source:${description.sha256}`,
+            records: decoded.items.length,
+            keys,
+            now: new Date(this.now()).toISOString(),
+          });
+        } finally {
+          await this.recovery.complete(ticket);
+        }
+      });
+      return publicSession(await this.stored(id));
+    } finally {
+      await stage.discard();
+    }
   }
   private async decodePart(format: string, part: ImportPart) {
     const data = await this.files.withVerified(
@@ -442,13 +453,18 @@ export class ImportSessionService extends ImportSessionReadService {
       summary = blank();
     for (const part of parts) {
       const data = await this.decodePart(s.format, part);
-      for (const group of data.groups) groups.set(group.external_id, group);
+      if (s.library.identity === "adhoc") {
+        if (data.groups.length)
+          addExcluded(summary, "groups", data.groups.length);
+      } else
+        for (const group of data.groups) groups.set(group.external_id, group);
       for (const e of data.excluded) addExcluded(summary, e.kind, e.count);
       for (const item of data.items)
         if (item.record) {
           const record = item.record,
             primary = selected(record);
-          for (const id of record.groups) references.add(id);
+          if (s.library.identity !== "adhoc")
+            for (const id of record.groups) references.add(id);
           for (const f of record.files)
             if (f !== primary)
               addExcluded(
@@ -510,7 +526,7 @@ export class ImportSessionService extends ImportSessionReadService {
     record: ImportRecord,
   ): MetadataObservation {
     const content = hash(record),
-      legacy = s.library.system === "bibliography-file";
+      legacy = s.library.identity === "adhoc";
     return parseMetadataObservation({
       observation_id: stableId([
         s.library_key,
@@ -684,7 +700,11 @@ export class ImportSessionService extends ImportSessionReadService {
         throw new ImportSessionError("import-data-changed");
       const now = new Date(this.now()).toISOString(),
         batchId = parseIntakeBatchId(randomUUID());
-      const label = s.library.name.slice(0, 120);
+      const label = (
+        s.library.identity === "adhoc"
+          ? (s.file_name ?? s.format)
+          : s.library.name
+      ).slice(0, 120);
       const batch: IntakeBatch = {
         batch_id: batchId,
         kind: "import",
@@ -979,6 +999,7 @@ export class ImportSessionService extends ImportSessionReadService {
       (!s.import_user_tags || !record.user_tags.length)
     )
       return;
+    if (s.library.identity === "adhoc") return;
     const root = await this.ensureFolder(s, "root", s.library.name, null),
       cache = new Map<string, string>();
     for (const id of record.groups)
@@ -1376,23 +1397,16 @@ export class ImportSessionService extends ImportSessionReadService {
     origin: "web" | "cli" | "mcp",
   ): Promise<BibliographyImportResult> {
     return this.tracked(async () => {
-      const decoded = decodeBibliography(bytes, format),
-        adhoc = randomUUID();
+      const decoded = decodeBibliography(bytes, format);
       const s = await this.createOwned(
         {
           format,
-          library: {
-            system: "bibliography-file",
-            library_id: adhoc,
-            identity: "global",
-            name: fileName ?? format,
-          },
+          library: null,
           scope: "single bibliography file",
           file_name: fileName,
           import_user_tags: false,
         },
         { kind: "local", origin },
-        `adhoc:${adhoc}`,
       );
       try {
         const batches: {
@@ -1436,7 +1450,12 @@ export class ImportSessionService extends ImportSessionReadService {
           batchBytes += entryBytes;
         }
         for (const [sequence, items] of batches.entries())
-          await this.putData(s.session_id, sequence, { legacy_decoded: items });
+          await this.putDataOwned(
+            s.session_id,
+            sequence,
+            { legacy_decoded: items },
+            true,
+          );
         const done = await this.confirm(s.session_id),
           items: ImportRecordResult[] = [];
         let cursor: string | null = null;

@@ -42,6 +42,21 @@ export async function handleWebDeviceRoute(
   url: URL,
   options: DeviceHttpOptions | undefined,
 ): Promise<boolean> {
+  const artifact =
+    /^\/api\/v1\/device-connections\/(instructions|skill)$/u.exec(url.pathname);
+  if (request.method === "GET" && artifact) {
+    try {
+      if (!options) throw new DeviceConnectionError("device-unavailable");
+      await download(
+        response,
+        artifact[1] as keyof typeof artifactNames,
+        options.artifactDirectory ?? DEVICE_ARTIFACT_DIRECTORY,
+      );
+    } catch (error) {
+      deviceFailure(response, error);
+    }
+    return true;
+  }
   const registered = options?.routes?.find(request.method, url.pathname);
   if (!registered?.route.handleWeb) return false;
   await registered.route.handleWeb(request, response, registered.parameters);
@@ -262,6 +277,7 @@ export async function handleDeviceRequest(
   const downloadRoute =
     /^\/api\/v1\/device-connections\/(instructions|skill)$/u.test(url.pathname);
   const authorization = request.headers.authorization;
+  if (downloadRoute && authorization === undefined) return false;
   if (
     !exchange &&
     !downloadRoute &&

@@ -162,6 +162,7 @@ async function fixture() {
     pair,
     routeHits,
     cookie,
+    clientId: grant.client_id,
     artifact,
     setNow: (value: number) => {
       now = value;
@@ -596,6 +597,83 @@ it("shares global exchange limits, resets windows, and revokes unconsumed pairin
     } finally {
       db.close();
     }
+  } finally {
+    await f.close();
+  }
+}, 30000);
+
+it("lets authenticated Web clients download instructions and skill with the same artifact checks", async () => {
+  const f = await fixture();
+  try {
+    const url = (kind: string) =>
+      `/api/v1/device-connections/${kind}?client_id=${f.clientId}`;
+    const headers = { Cookie: f.cookie, Origin: f.server.origin };
+    expect((await f.send(url("instructions"), undefined, headers)).status).toBe(
+      503,
+    );
+    await writeFile(
+      join(f.artifact, "instructions.md"),
+      "Synthetic Web instructions",
+    );
+    await writeFile(join(f.artifact, "skill.zip"), Buffer.from([80, 75, 3, 4]));
+    const instructions = await f.send(url("instructions"), undefined, headers);
+    expect(instructions.status).toBe(200);
+    expect(await instructions.text()).toBe("Synthetic Web instructions");
+    const skill = await f.send(url("skill"), undefined, headers);
+    expect(skill.status).toBe(200);
+    expect(skill.headers.get("content-type")).toBe("application/zip");
+    expect((await f.send(url("skill"), undefined)).status).toBe(401);
+    expect(
+      (await f.send("/api/v1/device-connections/skill", undefined, headers))
+        .status,
+    ).toBe(401);
+    expect(
+      (
+        await f.send(url("skill"), undefined, {
+          ...headers,
+          Origin: "https://outside.invalid",
+        })
+      ).status,
+    ).toBe(403);
+    const invalid = await f.send(
+      "/api/v1/device-connections/skill",
+      undefined,
+      { ...headers, Authorization: "Bearer invalid" },
+    );
+    expect(invalid.status).toBe(401);
+    expect((await invalid.json()).code).toBe("device-token-invalid");
+    await rm(join(f.artifact, "skill.zip"));
+    await symlink(
+      join(f.artifact, "instructions.md"),
+      join(f.artifact, "skill.zip"),
+    );
+    expect((await f.send(url("skill"), undefined, headers)).status).toBe(503);
+    await rm(join(f.artifact, "skill.zip"));
+    await writeFile(
+      join(f.artifact, "skill.zip"),
+      Buffer.alloc(8 * 1024 * 1024 + 1),
+    );
+    expect((await f.send(url("skill"), undefined, headers)).status).toBe(503);
+  } finally {
+    await f.close();
+  }
+}, 30000);
+
+it("accepts the devices settings deep link and keeps unknown settings rejected", async () => {
+  const f = await fixture();
+  try {
+    const good = await f.send("/?view=set&setting=devices", undefined, {
+      Cookie: f.cookie,
+    });
+    expect(good.status).toBe(200);
+    expect(await good.text()).toBe("fixture");
+    const unknown = await f.send(
+      "/?view=set&setting=unknown-devices",
+      undefined,
+      { Cookie: f.cookie },
+    );
+    expect(unknown.status).toBe(400);
+    expect((await unknown.json()).code).toBe("invalid-ui-location");
   } finally {
     await f.close();
   }
