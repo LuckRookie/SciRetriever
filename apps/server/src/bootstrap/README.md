@@ -30,3 +30,5 @@
 [上级目录](../README.md)
 
 `agent-models.ts` 只从配置解析模型身份，供执行与预估共用；查询不因此加载凭据或创建模型传输。Application 先结清会话，再关闭过程记录清理器与数据库。
+
+`device-routes.ts` 是设备用途与业务 HTTP 接口的唯一组装登记表；当前没有开放业务接口，后续导入、HTTP MCP 和收藏在此绑定同一 Application 的 owner，不复用 Web 管理权限。

@@ -11,6 +11,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { parseStrictJsonObject } from "@sciretriever/contracts";
 import type { WorkbenchStaticAsset } from "./http.js";
 import { isAuthFontPath, staticAssetCacheControl } from "./assets.js";
+import { deviceMaterialInUrl } from "./device-http.js";
 
 export interface WorkbenchAccessOptions {
   readonly host?: string;
@@ -142,7 +143,9 @@ export class WorkbenchAccess {
       ]),
     ];
   }
-  address(request: IncomingMessage): { origin: string; host: string } | null {
+  hostAddress(
+    request: IncomingMessage,
+  ): { origin: string; host: string } | null {
     // A literal IP (including NAT addresses) or localhost can name this service.
     // Host selects the request's origin, never grants authentication. Do not
     // trust forwarding headers or arbitrary DNS names (DNS rebinding).
@@ -160,7 +163,12 @@ export class WorkbenchAccess {
       url.hostname === "0.0.0.0"
     )
       return null;
-    const origin = url.origin;
+    return { origin: url.origin, host: url.host };
+  }
+  address(request: IncomingMessage): { origin: string; host: string } | null {
+    const address = this.hostAddress(request);
+    if (!address) return null;
+    const origin = address.origin;
     if (
       (request.headers.origin !== undefined &&
         request.headers.origin !== origin) ||
@@ -169,10 +177,15 @@ export class WorkbenchAccess {
       )
     )
       return null;
-    return { origin, host: url.host };
+    return address;
   }
   /** WebSocket upgrade requires an explicit same-Origin header and the existing login. */
   authenticateWebSocket(request: IncomingMessage): string | null {
+    if (
+      request.headers.authorization !== undefined ||
+      deviceMaterialInUrl(request.url ?? "")
+    )
+      return null;
     const address = this.address(request);
     if (this.closed || !address || request.headers.origin !== address.origin)
       return null;

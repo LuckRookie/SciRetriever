@@ -468,7 +468,7 @@ CLI `literature search/show/references/cited-by` 与 `export metadata/pdf/conten
 
 `startQueryOnlyWorkbench({ home, port? })` 组装独立阅读页，默认加载安装包中的 query.html/query.js。GET `/api/v1/query/status` 返回 readiness；POST `/api/v1/query/search|read|references|reference|artifact` 使用 `{ protocol_version: 1, request }`。未知输入被拒绝；缺 PDF/内容返回 gap，传输或索引错误不得伪装成空结果。
 
-服务仅监听 loopback并检查 Host/Origin。详情请求只接受稳定 ID，artifact只接受ID与已定义kind，不能从远程参数读取任意本机路径。关闭先停止新HTTP请求/结束响应流，再释放QueryApplication；CLI的operation/cleanup同时失败保留两项cause，stdout不输出原始异常或secret。
+独立只读 SDK 服务仅监听 loopback 并检查 Host/Origin；它不接纳设备令牌。正式 Web 的设备用途准入由[设备连接](01-product-interface.md#241-设备连接与按用途准入)统一拥有，未登记的既有检索接口不因 read 用途而自动开放。详情请求只接受稳定 ID，artifact只接受ID与已定义kind，不能从远程参数读取任意本机路径。关闭先停止新HTTP请求/结束响应流，再释放QueryApplication；CLI的operation/cleanup同时失败保留两项cause，stdout不输出原始异常或secret。
 
 ### 3.3 独立阅读与共享产品服务
 

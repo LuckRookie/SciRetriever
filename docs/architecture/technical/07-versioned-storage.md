@@ -12,7 +12,7 @@
 
 Catalog v6 已为单篇知识产物增加独立表与精确依赖；Catalog v7 允许版本化集合综合产物，Catalog v8 append 独立知识检索投影。正式 operator 可用本篇 §4.1.11 的精确目标 CLI 显式初始化或升级；历史单步合成门禁保留。execution 子 schema 仍单独计版本。本篇保留现有表、文件和兼容语义；文档不授权代理执行真实用户数据迁移。
 
-> 当前采用 [ADR 0037 第二版](../decisions/0037-literature-archive-and-proofread-text.md) 的原始解析、校订稿、结构、标签、建档与快照存储。唯一 schema.ts 的内部编号为 12；历史逐级迁移已删除。真实旧库仍未切换。
+> 当前采用 [ADR 0037 第二版](../decisions/0037-literature-archive-and-proofread-text.md) 的原始解析、校订稿、结构、标签、建档与快照存储。唯一 schema.ts 的当前编号为 16；显式离线迁移与设备认证存储见第 8 节。打开旧库不隐式升级，正式库迁移须另行授权。
 
 本篇目录：
 
@@ -22,6 +22,8 @@ Catalog v6 已为单篇知识产物增加独立表与精确依赖；Catalog v7 �
 - [4. 知识版本、依赖与回收](#4-知识版本依赖与回收)
 - [5. 存储完整性验证](#5-存储完整性验证)
 - [6. ADR 0037 新增存储](#6-建档与校订存储)
+- [7. 运行审查存储](#7-运行审查存储)
+- [8. 设备认证存储](#8-设备认证存储)
 
 ## 1. 模块边界与连接
 
@@ -455,3 +457,19 @@ Analysis 的 `processor_result_summaries` 保存已发布结果用量/覆盖摘�
 任务发起身份和任务、策略、固定目标同一事务发布。综合逐篇进度使用原有 execution_events 中的 processor-map-progress 事件，不新增表；每篇新算、复用、部分完成、失败和中断均固定到本次目标。task-run 的 target_id/member_offset/member_limit 按页读取，根投影不隐式装载大型快照的全部成员。共享模型生命周期在关闭时等待过程记录收尾，再释放存储。
 
 第二轮库组织新增 `snapshot_labels`（显示名与不可变快照 hash 分离）、`folders`、`folder_members`、`reading_history`。已有 `processor_result_summaries` 增加 `method_revision`，`processor_result_currentness` 只读投影将旧方法标为过时；旧统计无法代表当前三计数时返回 null，不迁移、不当作零。所有 DDL 仍在 schema.ts。schema 13 换为按文献增量更新的文献状态投影；schema 14 新增 `reading_marks`（阅读批注，ADR 0046），由 `scripts/migrate-reading-marks-v14.mjs` 从 13 显式升级。已有正式库需要授权后在副本显式更新，启动不会自动加表。
+
+## 8. 设备认证存储
+
+按 ADR 0058，Web transport 认证 owner 提交设备连接事实，Storage 仅保存派生值与生命周期。单一 schema 16 在原 15 上增加：
+
+| 表                     | 字段与约束                                                                                                                                                                |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| device_connections     | connection_id TEXT PK；name 非空、最多 120；purposes_json 合法 JSON；token_sha256 nullable UNIQUE，非空时 64 字符；created_at、nullable paired_at/last_used_at/revoked_at |
+| device_pairings        | code_sha256 TEXT PK（64 字符）；connection_id UNIQUE FK→device_connections，ON DELETE CASCADE；expires_at、nullable used_at                                               |
+| device_exchange_limits | bucket TEXT PK；window_start INTEGER；attempts 正整数                                                                                                                     |
+
+令牌和配对码均为密码学高熵随机数，catalog 只保存 SHA-256，不保存原值；原值不跨 SQLite worker 边界，不写 artifact。用途由认证 owner 的封闭列表校验，令牌派生值可为空以表示尚未配对。配对成功在同一事务中标记 used_at 并安装 token 派生值，失败/限流计数也提交以阻止重试绕过。每次认证直接核对已撤销状态，成功更新最近使用时间。交换限流表只保存固定全局桶或 socket peer 的 hash，过窗清理且行数有界。它们不推进文献状态或检索 source revision。
+
+`schema.ts` 冻结 `SCHEMA_MANIFEST_V15` 与 fingerprint 仅供离线工具证明输入，不增加 opener 支持的布局。`scripts/migrate-import-v16.mjs` 对显式绝对路径的离线 15 库执行 15→16：catalog admission、精确输入布局及完整检查、拒绝 queued/running 任务和运行中建档、事务内 DDL 和身份替换、全部旧表行数不变、输出布局及外键检查，成功才提交。M1 的后续导入/收藏表追加到同一个 `IMPORT_SCHEMA_V16`，回填放在同一迁移事务，不自动另起版本。已有 14→15 工具固定目标仍为 15，随后须显式执行 15→16；schema 不匹配时运行入口拒绝服务，不做隐式转换。
+
+设备 HTTP 形状、错误和用途登记的唯一接口说明见[设备连接](01-product-interface.md#241-设备连接与按用途准入)。

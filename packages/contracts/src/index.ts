@@ -1,5 +1,6 @@
 import { parseNetworkReadiness, type NetworkReadiness } from "./network.js";
 export * from "./network.js";
+export * from "./device-connections.js";
 import {
   parseAcquisitionAttempts,
   parseAcquisitionRouteState,

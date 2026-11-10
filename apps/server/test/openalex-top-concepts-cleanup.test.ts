@@ -157,7 +157,7 @@ it("removes all 19 top classes only from OpenAlex provider observations, repacks
     beforeDb.close();
     const result = await cleanupOpenAlexTopConcepts(e.path);
     expect(result).toMatchObject({
-      schema_version: 15,
+      schema_version: 16,
       deleted_observation_rows: 21,
       affected_observations: 3,
       reprojected_literatures: 2,

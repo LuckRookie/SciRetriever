@@ -11,6 +11,7 @@ import {
   SCHEMA_VERSION,
 } from "../src/storage/sqlite/schema.js";
 import { migrateIntakeSchema } from "../src/storage/sqlite/intake-schema-migration.js";
+import { migrateImportSchema } from "../src/storage/sqlite/import-schema-migration.js";
 import { inspectCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
 import { createQueryApplication } from "../src/bootstrap/application.js";
 import { parseIntakeBatchPage } from "@sciretriever/contracts";
@@ -133,8 +134,10 @@ it("migrates 14 to 15 with legacy and discovery cohorts, correct keyword layers,
     expect(
       check.prepare("SELECT schema_version FROM schema_identity").get()!
         .schema_version,
-    ).toBe(SCHEMA_VERSION);
+    ).toBe(15);
     check.close();
+    // The historical tool still targets 15; current openers require explicit 16.
+    expect((await migrateImportSchema(path)).to_version).toBe(SCHEMA_VERSION);
     const app = await createQueryApplication(home);
     try {
       const page = parseIntakeBatchPage(

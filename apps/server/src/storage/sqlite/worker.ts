@@ -286,6 +286,10 @@ function parseDiscoveryPublication(value: unknown): DiscoveryPublication {
 }
 
 export type SqliteCommand =
+  | {
+      readonly kind: "device_connections";
+      readonly command: import("./device-connection-engine.js").DeviceStorageCommand;
+    }
   | { readonly kind: "intake_read"; readonly value: unknown }
   | {
       readonly kind: "intake_write";
@@ -856,7 +860,8 @@ export interface ExecutionRuntimeInspection {
     | 12
     | 13
     | 14
-    | 15;
+    | 15
+    | 16;
   readonly catalog_fingerprint: string;
   readonly version: number | null;
   readonly fingerprint: string | null;

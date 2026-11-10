@@ -42,6 +42,10 @@ const SAFE_FIELD_NAMES = new Set([
   "total_bytes",
 ]);
 function safe(value: string): string {
+  value = value.replace(
+    /(?:srd1_|srp1_)[A-Za-z0-9_-]{43}|sr-connect1:[^\s"<>]+/gu,
+    "[REDACTED]",
+  );
   if (SECRET_VALUE.test(value)) return "[REDACTED]";
   return value
     .replace(/(https?:\/\/)[^/@\s]+:[^/@\s]+@/giu, "$1[REDACTED]@")

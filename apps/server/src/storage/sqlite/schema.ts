@@ -2,7 +2,7 @@ import { PROCESSOR_METHOD_REVISION } from "@sciretriever/contracts";
 import { createHash } from "node:crypto";
 
 // One current catalog layout. This is not a migration ladder or a list of supported historic layouts.
-export const SCHEMA_VERSION = 15 as const;
+export const SCHEMA_VERSION = 16 as const;
 // Inputs read by archiveStates/deriveCurrentState, including view dependencies.
 // Reading history, folders and processing outputs do not invalidate this projection.
 export const LIBRARY_STATE_INPUT_TABLES = [
@@ -426,11 +426,28 @@ export const INTAKE_SCHEMA = [
       `CREATE TRIGGER retrieval_revision_subject_terms_${event.toLowerCase()} AFTER ${event} ON literature_metadata_subject_terms BEGIN UPDATE retrieval_source_revision SET revision=revision+1 WHERE singleton=1; END`,
   ),
 ] as const;
-export const SCHEMA_MANIFEST = [
+export const SCHEMA_MANIFEST_V15 = [
   ...SCHEMA_MANIFEST_V14.map((sql) =>
     sql.replace("CHECK(schema_version=14)", "CHECK(schema_version=15)"),
   ),
   ...INTAKE_SCHEMA,
+] as const;
+export const SCHEMA_FINGERPRINT_V15 = createHash("sha256")
+  .update(JSON.stringify(SCHEMA_MANIFEST_V15))
+  .digest("hex");
+
+export const DEVICE_CONNECTION_SCHEMA = [
+  "CREATE TABLE device_connections(connection_id TEXT PRIMARY KEY,name TEXT NOT NULL CHECK(length(trim(name)) BETWEEN 1 AND 120),purposes_json TEXT NOT NULL CHECK(json_valid(purposes_json)),token_sha256 TEXT UNIQUE CHECK(token_sha256 IS NULL OR length(token_sha256)=64),created_at TEXT NOT NULL,paired_at TEXT,last_used_at TEXT,revoked_at TEXT) STRICT",
+  "CREATE TABLE device_pairings(code_sha256 TEXT PRIMARY KEY CHECK(length(code_sha256)=64),connection_id TEXT NOT NULL UNIQUE,expires_at TEXT NOT NULL,used_at TEXT,FOREIGN KEY(connection_id) REFERENCES device_connections(connection_id) ON DELETE CASCADE) STRICT",
+  "CREATE TABLE device_exchange_limits(bucket TEXT PRIMARY KEY,window_start INTEGER NOT NULL,attempts INTEGER NOT NULL CHECK(attempts>0)) STRICT",
+] as const;
+/** M1 additions are collected here; 03/08 extend this same offline migration. */
+export const IMPORT_SCHEMA_V16 = [...DEVICE_CONNECTION_SCHEMA] as const;
+export const SCHEMA_MANIFEST = [
+  ...SCHEMA_MANIFEST_V15.map((sql) =>
+    sql.replace("CHECK(schema_version=15)", "CHECK(schema_version=16)"),
+  ),
+  ...IMPORT_SCHEMA_V16,
 ] as const;
 export const SCHEMA_FINGERPRINT = createHash("sha256")
   .update(JSON.stringify(SCHEMA_MANIFEST))

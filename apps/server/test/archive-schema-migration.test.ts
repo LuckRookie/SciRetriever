@@ -1,3 +1,4 @@
+import { migrateImportSchema } from "../src/storage/sqlite/import-schema-migration.js";
 import { migrateIntakeSchema } from "../src/storage/sqlite/intake-schema-migration.js";
 import { DatabaseSync } from "node:sqlite";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
@@ -89,9 +90,10 @@ it("explicitly migrates 11 to 12 without changing row counts, keys or historical
       foreign_key_violations: 0,
     });
     await migrateIntakeSchema(path);
+    await migrateImportSchema(path);
     expect(await inspectCatalogSchema(path)).toMatchObject({
       status: "ready",
-      schema_version: 15,
+      schema_version: 16,
       schema_fingerprint: SCHEMA_FINGERPRINT,
     });
     const next = new DatabaseSync(path, { readOnly: true });

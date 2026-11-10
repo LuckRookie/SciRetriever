@@ -8,12 +8,12 @@ import {
 } from "./archive-schema-migration.js";
 import {
   INTAKE_SCHEMA,
-  SCHEMA_VERSION,
-  SCHEMA_MANIFEST,
-  SCHEMA_FINGERPRINT,
+  SCHEMA_MANIFEST_V15 as SCHEMA_MANIFEST,
+  SCHEMA_FINGERPRINT_V15 as SCHEMA_FINGERPRINT,
   SCHEMA_MANIFEST_V14,
   SCHEMA_FINGERPRINT_V14,
 } from "./schema.js";
+const SCHEMA_VERSION = 15;
 import { migrateKeywordLayers } from "./intake-metadata-migration.js";
 import { readMetadataRow } from "./metadata-rows.js";
 import { metadataIndexChunks } from "../../retrieval/index.js";

@@ -1,4 +1,10 @@
 import { NetworkConfigurationError } from "@sciretriever/contracts";
+import {
+  handleDeviceRequest,
+  manageDevices,
+  deviceMaterialInUrl,
+  type DeviceHttpOptions,
+} from "./device-http.js";
 import { catalogCorruption } from "../storage/sqlite/errors.js";
 import { ScreencastRelay } from "./screencast-relay.js";
 import {
@@ -152,6 +158,7 @@ export interface WorkbenchWorkspace {
   readonly runtime_capabilities: WorkbenchRuntimeCapabilities | null;
 }
 export interface WorkbenchHttpOptions {
+  readonly devices?: DeviceHttpOptions;
   readonly access?: WorkbenchAccessOptions;
   readonly session: WorkbenchSession | ProductionWorkbenchSession;
   /** Transport tuning for loopback measurements; production default is documented in Browser control. */
@@ -1017,6 +1024,31 @@ export async function startWorkbenchHttp(
       json(response, 503, { code: "workbench-closing" });
       return;
     }
+    if (deviceMaterialInUrl(request.url ?? "/")) {
+      json(response, 400, { protocol_version: 1, code: "device-token-in-url" });
+      return;
+    }
+    if (
+      request.headers.authorization !== undefined ||
+      /^\/api\/v1\/device-connections\/(?:exchange|instructions|skill)(?:\?|$)/u.test(
+        request.url ?? "",
+      )
+    ) {
+      const address = access.hostAddress(request);
+      let url: URL;
+      try {
+        url = new URL(request.url ?? "/", address?.origin);
+      } catch {
+        json(response, 403, { code: "origin-not-allowed" });
+        return;
+      }
+      if (!address || url.origin !== address.origin) {
+        json(response, 403, { code: "origin-not-allowed" });
+        return;
+      }
+      if (await handleDeviceRequest(request, response, url, options.devices))
+        return;
+    }
     const authorization = await access.authorize(
       request,
       response,
@@ -1495,6 +1527,8 @@ export async function startWorkbenchHttp(
         );
         return;
       }
+      if (await manageDevices(request, response, url, origin, options.devices))
+        return;
       if (pathname === "/api/tasks" || pathname.startsWith("/api/tasks/")) {
         if (!options.tasks) {
           json(response, 503, { code: "tasks-unavailable" });
@@ -2454,6 +2488,17 @@ function createQueryHttpHandler(
     workbenchCsrf?: string,
     authenticatedActor?: string,
   ): Promise<void> {
+    if (
+      deviceMaterialInUrl(request.url ?? "/") ||
+      request.headers.authorization !== undefined
+    ) {
+      json(response, 403, {
+        code: deviceMaterialInUrl(request.url ?? "/")
+          ? "device-token-in-url"
+          : "device-purpose-forbidden",
+      });
+      return;
+    }
     response.setHeader("Cache-Control", "no-store");
     response.setHeader("X-Content-Type-Options", "nosniff");
     response.setHeader("Referrer-Policy", "no-referrer");

@@ -1,3 +1,4 @@
+import { deviceBusinessRoutes } from "./device-routes.js";
 import { RestartAdmission } from "../application/restart-admission.js";
 import type { ConfigurationLifecycle } from "../configuration/apply.js";
 import { sourceConfiguration } from "../configuration/sources.js";
@@ -509,6 +510,10 @@ async function startProductionWorkbenchOwned(
     if (query.readiness.status !== "ready")
       throw new Error("workbench query unavailable");
     http = await startWorkbenchHttp({
+      devices: {
+        service: app.deviceConnections,
+        routes: deviceBusinessRoutes(app),
+      },
       ...(options.access ? { access: options.access } : {}),
       session,
       acquisition: session,
@@ -826,6 +831,10 @@ export async function startSyntheticWorkbench(options: {
     await session.refresh();
     query = await createQueryApplication(options.home);
     http = await startWorkbenchHttp({
+      devices: {
+        service: application.deviceConnections,
+        routes: deviceBusinessRoutes(application),
+      },
       ...(options.access ? { access: options.access } : {}),
       session,
       query: { application: query },

@@ -51,6 +51,14 @@ const layoutModule = await import(
     import.meta.url,
   ).href
 );
+const deviceModule = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./device-connection-engine.ts"
+      : "./device-connection-engine.js",
+    import.meta.url,
+  ).href
+);
 const folderModule = await import(
   new URL(
     import.meta.url.endsWith(".ts")
@@ -4616,6 +4624,9 @@ port.on("message", (message: WorkerMessage) => {
       fail();
     let value;
     switch (message.command.kind) {
+      case "device_connections":
+        value = deviceModule.runDeviceStorage(db, message.command.command);
+        break;
       case "folders":
         try {
           value = {

@@ -15,6 +15,10 @@ export function traceSummary(value: unknown) {
   const redact = (text: string) =>
     text
       .replace(
+        /(?:srd1_|srp1_)[A-Za-z0-9_-]{43}|sr-connect1:[^\s"<>]+/gu,
+        "[redacted]",
+      )
+      .replace(
         /(?:Bearer\s+\S+|(?:password|secret|api[_-]?key|(?:access[_-]?)?token|cookie|authorization)["']?\s*[:=]\s*[^\s,;}]+)/giu,
         "[redacted]",
       )

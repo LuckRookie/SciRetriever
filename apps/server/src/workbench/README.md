@@ -1,6 +1,6 @@
 # 工作台服务端适配
 
-提供默认对外监听、所有连接统一登录的 HTTP、页面资产、Browser 会话观看与控制，以及统一任务、文献阅读、配置和维护操作的传输边界。页面交互代码在 Web 前端源码，生产接线在 [bootstrap/workbench.ts](../bootstrap/workbench.ts)。
+提供默认对外监听、Web 统一登录与设备按用途认证的 HTTP、页面资产、Browser 会话观看与控制，以及统一任务、文献阅读、配置和维护操作的传输边界。页面交互代码在 Web 前端源码，生产接线在 [bootstrap/workbench.ts](../bootstrap/workbench.ts)。
 
 ## 内容入口
 
@@ -51,3 +51,5 @@ HTTP 关闭先取消并排空正在处理的请求；生产组装随后停止 du
 `source-presentation.ts` 只处理公开错误投影：平台错误显示 error，稳定原因码只进技术详情；Agent 停止说明与内部发布/取消事实不改写。任务与 task-run 返回 source_results，来源统计经 `/api/v1/query/source-statistics` 只读聚合。
 
 实时观看由 `screencast-relay.ts` 管理认证 WebSocket、二进制帧与有限背压，`screencast-port.ts` 定义进程内会话端口；`session.ts` 拥有控制权与活动页重绑定。`synthetic-screencast.ts` 提供明确注入的离线合成源，不是生产截图回退。
+
+`device-connections.ts` 拥有一次性配对、仅派生值持久化和设备认证；`device-http.ts` 在 Web 会话之前分流设备请求，统一按登记的用途准入，拒绝令牌进入 Web/配置/管理路径。设备管理继续经过原 Web client/CSRF。下载只读安装后的 agent-access 产物，缺失有明确错误；不在认证层生成 skill 内容。业务接口登记在源码树内的 `bootstrap/device-routes.ts`，当前表为空。

@@ -109,7 +109,30 @@ QueryApplication 的状态为 ready、not-initialized、unavailable。缺库不�
 
 该协议服务当前 Library；不能向它传入未来 KnowledgeQuery 然后声称支持文档片段。artifact 成功可以是二进制响应，失败/缺口为结构化 JSON；客户端不能无条件按 JSON 解码所有响应。`material-bytes` 按显式稳定资产 ID/hash 读取主件或补充件，不按 current 重选；流正常结束后客户端仍应校验完整 hash。它不暴露内部文件路径，也不提供任意 range 或持久读取会话。
 
-按 [ADR 0035](../decisions/0035-authenticated-remote-web-access.md)，正式 Web 默认监听所有 IPv4 网卡，所有连接统一登录，不存在本机免登录分支或固定公开 origin 配置。使用操作者指定的密码，或将自动生成的 256 位 API key 仅返回启动调用方显示。HTTP access owner 在业务路由之前保护 HTML、资料、配置与流；Host 只接受 IPv4 字面地址/localhost，Origin 必须与请求 Host 一致，不信任转发头。tab grant 绑定登录会话，注销/过期撤销观看连接。没有远程多租户身份与权限系统；MCP 仍使用原有传输，显式工作台连接复用同一登录协议。
+按 [ADR 0035](../decisions/0035-authenticated-remote-web-access.md)，正式 Web 默认监听所有 IPv4 网卡，Web 访问统一登录，不存在本机免登录分支或固定公开 origin 配置。使用操作者指定的密码，或将自动生成的 256 位 API key 仅返回启动调用方显示。HTTP access owner 在业务路由之前保护 HTML、资料、配置与流；Host 只接受 IPv4 字面地址/localhost，Web Origin 必须与请求 Host 一致，不信任转发头。tab grant 绑定登录会话，注销/过期撤销观看连接。设备连接是 [ADR 0058](../decisions/0058-import-system-and-agent-access.md) 规定的独立认证边界，见下节；不授予 Web 会话权限。没有远程多租户身份系统，已有 stdio MCP 与显式工作台连接保持原协议。
+
+#### 2.4.1 设备连接与按用途准入
+
+`workbench/device-connections.ts` 拥有一次性配对与设备认证，生产和合成 Web 组装到同一 HTTP 地址。连接码为 `sr-connect1:<encodeURIComponent(address)>:<pairing_code>`；地址只接受带明确端口的 localhost/IPv4 HTTP origin，生成时必须与已登录请求的 origin 相同。`pairing_code` 为 `srp1_` 加 32 随机字节 base64url，10 分钟后失效。`POST /api/v1/device-connections/exchange` 接受 `{pairing_code}`，一次成功后返回 `{protocol_version:1,result:{connection,token,token_type:"Bearer"}}`；token 为 `srd1_` 加独立 32 随机字节 base64url，仅该响应交付一次。敏感交付响应禁止进入普通审计、日志或前端持久状态。
+
+令牌仅通过 `Authorization: Bearer ...` 使用；URL/path/query 中的认证材料在路由前拒绝。令牌请求忽略 Origin/跨站提示但保留 Host 地址检查，不信任转发头，也不宽开 CORS；未携带令牌的 Web/SDK 接口继续原认证。携带 Authorization 时绝不回退到同一请求的 Web Cookie。令牌不能登录、取得 Web client/CSRF、访问配置/凭据、管理设备或观看 Browser WebSocket。
+
+用途为 `capture/import/read/operate`，非空且彼此不隐含；本块没有登记业务接口。唯一登记点 `bootstrap/device-routes.ts::deviceBusinessRoutes(application)` 返回用途—接口表，`DeviceRouteRegistry` 只允许新 import/capture 命名空间和 `/mcp`，每个精确方法/路径（允许受限 `:id`）列出可接受的用途。MCP 后续还须按工具检查用途。未登记的所有既有 query/maintenance/管理路径均拒绝令牌。每次认证从 catalog 核对撤销并更新 last_used_at，无跨请求授权缓存；撤销不回滚先前已接纳的操作。
+
+Web 管理均为 POST，要求登录 Cookie、工作台 Cookie、client_id、同源、`X-Workbench-Csrf` 和 `X-Sciretriever-Protocol-Version:1`。封套为 `{protocol_version:1,request}` / `{protocol_version:1,result}`：
+
+| 路由（均可带原 Web client_id）        | request                        | result                                      |
+| ------------------------------------- | ------------------------------ | ------------------------------------------- |
+| `/api/v1/device-connections/pairings` | `{address,name,purposes}`      | `{connection,expires_at,connection_code}`   |
+| `/api/v1/device-connections`          | `{cursor:null\|connection_id}` | `{items,next_cursor}`，每页 200，按 ID 升序 |
+| `/api/v1/device-connections/rename`   | `{connection_id,name}`         | `{connection}`                              |
+| `/api/v1/device-connections/revoke`   | `{connection_id}`              | `{connection}`，幂等                        |
+
+`DeviceConnection` 只含 UUID connection_id、1–120 字符 name、purposes、created_at、nullable paired_at/last_used_at/revoked_at；列表不返回 token、配对码或其派生值，包含未配对与已撤销项。用途变更需重新连接。管理不走记录请求/响应的通用 operation wrapper。换令牌由 catalog 事务消费配对码，次数限制跨进程/重启共享：直接 socket peer 每 60 秒 10 次、全局 60 次；包括失败和畸形尝试。短期桶有界，不保存 peer 原值。
+
+任一有效令牌可 GET `/api/v1/device-connections/instructions` 与 `/api/v1/device-connections/skill`，下载固定构建产物 `apps/server/dist/agent-access/instructions.md`（1 MiB 上限）和 `skill.zip`（8 MiB 上限）。内容和打包由独立构建工作提供；产物不存在、不是普通单硬链接文件或超限时返回 `device-artifact-unavailable`（503），不读取个人文件。成功响应 no-store/nosniff，分别为 Markdown、ZIP 附件。
+
+设备错误统一为 `{protocol_version:1,code}`：`device-input-invalid`/`device-pairing-invalid`/`device-token-in-url`（400），`device-address-mismatch`/`device-purpose-forbidden`（403），`device-pairing-expired`/`device-pairing-used`（409），`device-exchange-rate-limited`（429，Retry-After 60），`device-token-invalid`/`device-revoked`（401），`device-connection-missing`（404），`device-artifact-unavailable`/`device-unavailable`（503）。实际 SQLite 损坏保留 `catalog-corrupt`（503）和 `maintenance_hint:"verify-catalog"`；未知内部异常不透传。Web 原有认证错误保持。持久化与迁移见[设备认证存储](07-versioned-storage.md#8-设备认证存储)。
 
 ### 2.5 新请求与结果语义
 
@@ -963,7 +986,7 @@ optional-missing
 unsupported
 ```
 
-真实 API key、token、metric、Cookie、浏览器 session、凭据文件原文和任何可以辨识 secret 的值、掩码、长度、hash、前后缀或 fingerprint 都不能进入 `packages/contracts`。Model 也不承担读取 `~/.sciretriever/credentials.toml`、检查 owner/权限、隐藏交互、原子写入或调用 Provider；这些都是 configuration/CLI/adapter 边界行为。
+真实 Provider API key、metric、Cookie、浏览器 session、凭据文件原文和任何可以辨识这些 secret 的值、掩码、长度、hash、前后缀或 fingerprint 都不能进入普通 `packages/contracts` Model。设备配对/令牌仅在本篇 2.4.1 的专用认证交付类型中短暂存在，不成为文献事实、普通 Web 状态或审计结果。Model 也不承担读取 `~/.sciretriever/credentials.toml`、检查 owner/权限、隐藏交互、原子写入或调用 Provider；这些都是 configuration/CLI/adapter 边界行为。
 
 若 `config status` 或 `config test` 提供 JSON，结构化结果只组合非 secret 普通配置、稳定 Provider key、capability、安全状态、统一凭据 presence/origin-match、通过/失败/跳过结果和稳定 failure code。`ConfigurationRuntimeStatus` 分组表达 Storage、MinerU 与 Analysis 本地完整性；`CoreConfigurationProbeResult` 以中性 typed details 分别表达任务 Model、精确 Model、Model Provider 目录和 MinerU health-only probe，并固定 `persisted = false`。`ConfigurationProbeSummary` 同时承载 Search Metadata 结果和 Download 的 `acquisition-probe-unavailable` 限制，不把未执行外部 Acquisition probe 解释为通过。它们不包含 secret 值或其可辨识特征、原始网络异常、响应正文、测试时间、Literature 身份、DiscoveryRun 或 Report；结果只是本次非持久化配置诊断，不成为 Entry 处理 Report 或数据库 Model。认证接受与具体文献全文 entitlement 必须分别表达，不能由 Model 字段合并成一个“可下载”布尔值。
 

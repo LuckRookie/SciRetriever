@@ -1,3 +1,4 @@
+import { DeviceConnectionService } from "../workbench/device-connections.js";
 import { ProxyUnavailableError } from "../network/egress.js";
 import { outboundEgress } from "../configuration/egress.js";
 import {
@@ -225,6 +226,7 @@ import {
 import { dshTagModel } from "../tags/model.js";
 import { TagService } from "../tags/service.js";
 export interface Application {
+  readonly deviceConnections: DeviceConnectionService;
   readonly restartAdmission?: RestartAdmission;
   readonly archiveArrangement: ArchiveArrangementAccess;
   readonly archiveText: ArchiveTextPipeline | null;
@@ -2020,6 +2022,7 @@ async function createApplicationOwned(
       home,
       configuration,
       configuration_revision: configurationSnapshot.revision,
+      deviceConnections: new DeviceConnectionService(database),
       credentials,
       database,
       files,
