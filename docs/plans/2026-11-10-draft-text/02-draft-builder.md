@@ -9,17 +9,17 @@
 - 给定一份原始解析和该 PDF 的页面检查结果，一个纯函数返回初稿：
   - Markdown 正文、结构（outline 的 `role` 为 null）、资源闭包；
   - 每个片段的 `basis`：`text-layer-match`、`text-layer-differs`、`no-text-layer`；
-  - 差异记录与疑点计数；
-  - 初稿方法 hash。
+  - 初稿内容 `draft-content-v1`（含差异记录 `draft-differences-v1`）与三个计数；
+  - `page_layer_sha256`、`draft_method_sha256` 与 representation hash。
 - 相同输入得到相同字节。
 - 构建器不调用模型、不联网、不写库。
 - 逐页校订请求的行为与字节不变。
 
-规格：[04 §8.2](../../architecture/technical/04-document-evidence.md#82-初稿的形成)、[§8.3](../../architecture/technical/04-document-evidence.md#83-初稿的结构与核对依据)，以及 01 的 1.1–1.5 写入的规则。
+规格：[04 §8.2](../../architecture/technical/04-document-evidence.md#82-初稿的形成)、[§8.3](../../architecture/technical/04-document-evidence.md#83-初稿的结构与核对依据)。下文只指出小节，规则以规格为准。
 
 ## 进入条件
 
-- 01 的 1.1–1.5 已写进规格。
+- 01 已完成（规格已补齐）。
 - G1：Owner 同意开工并指定实施者。
 
 ## 责任边界
@@ -38,40 +38,39 @@
 ## Tasks
 
 - [ ] **2.1 合同类型**（`packages/contracts`）
-  - `TextLevel = "draft" | "proofread"`；初稿的三种 `basis`；片段 `basis` 的并集类型。
-  - 初稿 DocumentRef 的类型与解析函数（按 1.4）；差异记录的类型与解析函数（按 1.5）。
-  - 现有校订稿的解析函数不变：它们仍只接受 `text-layer`、`image-only`、`manual`。
+  - `TextLevel`；`DraftDocumentRef`（`schema_version: 3`，builder `draft-leaves-v1`）与 `DocumentRef` 并集；`DraftDifference`；`DraftOutcome` 与 `DraftFailureCode`；初稿内容 `draft-content-v1` 的类型与解析函数。字段见 04 §8.2“回执”“失败”与 §8.3“DocumentRef”“初稿内容”“差异记录”。
+  - `DocumentSegmentLocation.basis` 扩为六种取值，解析时按所在版本核对取值集合（04 §8.3“核对依据的取值”）。校订稿 DocumentRef（`schema_version: 2`）的解析与字节不变。
+  - 现有只接受 `schema_version: 2` 的解析函数遇到初稿照旧拒绝（04 §8.3）。
   - 输出：导出的类型与解析函数；`packages/contracts/test/` 中的合同测试。
 - [ ] **2.2 来源准备**
-  - 直接复用 `prepareArrangementSource` 校验原始解析与资源闭包，生成来源区块，不复制它的逻辑。
-  - 输入选择按 04 §8.2：部署 profile 的当前原始解析，没有时用 `vlm-engine-markdown-only`。另一种 profile 不形成初稿。
-  - 在初稿一侧把 `input-missing`（Markdown 无法唯一确定页归属）转换为 `needs-parse`。`archive/` 里的错误码不改。
-  - 阅读顺序纠正使用与建档相同的开关（当前默认关闭）；开关值进入方法 hash。
+  - 直接复用 `prepareArrangementSource` 构造并核验来源区块（含可选的 `pdf_geometry`），不复制它的逻辑（04 §8.2“输入”）。
+  - 构建器接收调用方选好的原始解析；选择规则（哪次解析形成初稿）由 04 块按 04 §8.2“输入”实现。
+  - 在初稿一侧把 `input-missing` 转换为 `needs-parse`，其余失败按 04 §8.2“失败”的表映射。`archive/` 里的错误码不改。
+  - 阅读顺序纠正使用与建档相同的开关（当前默认关闭）；开关值进入方法 hash（04 §8.2“版本”）。
 - [ ] **2.3 规则预处理（没有章节角色）**
   - 页眉页脚：原样调用 `programChromeDrops`。
-  - 断段：把 `paragraphBreakEvidence` 中与角色无关的部分（版面边界判定与“直接合并”的条件）抽成接受“正文判定”参数的函数。建档一侧传入现有的角色判定，结果逐字节不变；初稿一侧传入 1.3 规定的判定。
-  - 只执行程序直接合并（`automatic`）。需要模型裁决的候选不合并。
-  - 不做拆分、图注挂接、书目行与版权句删除（04 §8.2 第 4 条）。
-  - 删除与合并记录 `source=program` 与命中的规则。
-- [ ] **2.4 叶块与文字层对比**
-  - 从 `pageReviewPlan` 抽出逐叶块对齐的核心（`matchingBlocks`、`opcodes`、归一化），放进共用函数。
-  - 逐页校订继续用现有取词方式，输出不变。用现有 `page-review.test.ts` 与 `page-proofread.test.ts` 证明。
-  - 初稿一侧的不同之处：
-    - **先去掉 HTML 标记再取词。** 现有 `pageReviewPlan` 用 `reviewTokens(leaf.original_text)`，表格叶块的原文是 HTML，`table`、`tr`、`td` 等标记都会成为“解析有、文字层没有”的词，表格几乎都会被判为有差异。只去标记，不改其余归一化（同一文件中的 `words()` 已有去标记的写法）。
-    - **不看整页可信度。** 现有函数在页面不可信时返回空的差异列表；初稿逐叶块判定（04 §8.3）。
-    - **跨页检查。** 本页找不到的叶块，按 1.2 的条件在其它 `text-layer` 页查找。
-  - 按 1.1 把叶块的取值合并成片段的取值。
-  - 输出：每个片段的 `basis`，差异记录（解析文字与文字层文字），疑点片段数与差异处数，`image-only` 页数。
+  - 断段：把 `paragraphBreakEvidence` 中与角色无关的部分（版面边界判定与“直接合并”的条件）抽成接受“正文判定”参数的函数。建档一侧传入现有的角色判定，结果逐字节不变；初稿一侧传入 04 §8.2“没有章节角色时的判定”。
+  - 合并的范围与接缝、不做的整理、叶块 ID 的生成，见 04 §8.2“规则”第 2、4 条。
+  - 删除与合并记入初稿内容的 `operations`（04 §8.3“初稿内容”）。
+- [ ] **2.4 叶块与文字层对比**（04 §8.3“对比规则（`draft-compare-v1`）”）
+  - 从 `pageReviewPlan` 抽出对齐与差异提取这一步（`matchingBlocks`、`opcodes`），放进共用函数。
+  - 逐页校订一侧保持现在的行为，见 04 §8.3 对比规则之后的一段。用现有 `page-review.test.ts` 与 `page-proofread.test.ts` 证明。
+  - 初稿一侧按规则第 1–7 步实现。实现时要注意的现有代码：
+    - 现有 `pageReviewPlan` 用 `reviewTokens(leaf.original_text)` 取词，表格的 HTML 标记会成为词；初稿按第 2 步先换掉标签、解码字符引用；
+    - 现有函数在页面不可信时返回空的差异列表；初稿按第 7 步不看整页可信度；
+    - “另一页”判定复用 6.2 页归属的 `textLayerPage`（第 5 步）。
+  - 按 04 §8.3“片段与叶块”把叶块取值合成片段取值，差异按叶块保存。
+  - 输出：每个叶块的取值与差异、每个片段的取值，以及 04 §8.3“差异记录”末条的三个计数。
 - [ ] **2.5 渲染**
-  - 保留的叶块按来源顺序排列；解析标为 `title` 的区块作为标题；层级按 1.3。
+  - builder `draft-leaves-v1`，按 04 §8.2“渲染”：片段的组成与 `continuation_regions`、标题片段与章节、层级、不写 `layout`、资源闭包。
   - 公式、图片、表格沿用 `source-order-leaves-v4` 的写法：从 `render.ts` 抽出逐叶块的写法函数，v4 的字节不变（`archive-render-v2.test.ts` 不改断言）。
-  - 图注、脚注留在来源位置。资源闭包只含实际引用的图片。
-  - 正文 8 MiB、结构 16 MiB 上限（`document/limits.ts`），超过时返回 1.4 规定的失败码。
-  - 长循环让出事件循环，响应取消。
+  - 层级规则与校订稿不同（题名参加样式统计、不使用层级 1）：从 `source-layout.ts` 的 `headingLevels` 抽出样式统计部分，建档一侧输出不变。
+  - 上限：正文 8 MiB、结构 16 MiB（`document/limits.ts`），初稿内容 16 MiB；超过时为 `draft-too-large`。
+  - 长循环让出事件循环，响应取消（`cancelled`）。
 - [ ] **2.6 初稿内容与重建**
-  - 按 1.4 形成一份可保存的初稿内容（来源区块、程序操作、逐叶块核对结果、页面分类与文字层的 hash）。
-  - 提供“从初稿内容重建 Markdown 与结构”的函数，供 03 的可读性校验调用。重建不需要 PDF 页面工具。
-  - 计算 representation hash 与方法 hash。
+  - 形成初稿内容 `draft-content-v1`（04 §8.3“初稿内容”）。
+  - 计算 `page_layer_sha256`、`draft_method_sha256`（04 §8.2“版本”）与 representation hash（04 §8.3“DocumentRef”）。
+  - 提供“从初稿内容重建 Markdown 与结构”的函数，供 03 的可读性校验调用。重建不打开 PDF 页面工具、不重算对比、不读原始解析的区块文件（04 §8.3 verified reader 一段）。
 
 ## 集成与影响
 
@@ -82,17 +81,20 @@
 
 新增 `apps/server/test/draft-builder.test.ts`（合成 PDF 与合成原始解析，造法沿用 `archive-text-fixture.ts` 与 `proofread-fixture.ts`）。必须证明：
 
+- 04 §8.9 中属于构建器的各条：三种核对依据、片段取值、对比、断段与层级、重复构建、失败码。具体包括：
 - 文字一致的页：片段全为 `text-layer-match`，差异为零。
 - 故意改错一个词：只有该片段为 `text-layer-differs`，差异记录写出解析文字与文字层文字。
-- 表格：文字与文字层一致的 HTML 表格为 `text-layer-match`。不去标记时会失败，测试要包含这个对照。
+- 表格：带 HTML 标记与字符引用、文字与文字层一致的表格为 `text-layer-match`。测试要包含“不去标记就会判为有差异”的对照。
+- 只有 LaTeX 的公式去掉记号后没有词：`no-text-layer`；对上 30% 以上但缺词：`text-layer-differs`。
 - 页面整体不可信（大部分叶块对不上）时，对得上的叶块仍为 `text-layer-match`。
 - 扫描页（`image-only`）与空白页：`no-text-layer`；纯图片叶块：`no-text-layer`；图片里的文字（本页与他页都没有）：`no-text-layer`。
-- 放错页的片段（词全部出现在另一页）：`text-layer-differs`。
-- 多叶块片段与跨页片段按 1.1 取值。
+- 放错页的片段（词全部出现在另一页）：`text-layer-differs`，差异为 `elsewhere`。
+- 一个合并片段里分别有一致、无文字层、有差异的叶块：片段取 `text-layer-differs`，差异是并集；跨页片段的每个叶块只与本页比。
 - 页眉页脚被删除并记录规则；明确的跨页断段被合并；需要模型裁决的断段保持分开；书目行与版权句保留。
-- 没有章节角色：outline 的 `role` 为 null，标题层级按 1.3。
+- 没有章节角色：outline 的 `role` 为 null；首页单位行（`text` 类型）阻断跳过；论文题名参加样式统计；没有编号和可靠样式时层级为 `title_level + 1`。
 - 相同输入两次构建，字节、representation hash、方法 hash 都相同；改一个方法组成（如对比规则版本），方法 hash 改变。
-- 超过大小上限返回规定的失败码；取消返回取消。
+- 超过大小上限为 `draft-too-large`；来源篡改为 `source-integrity`；取消为 `cancelled`。
+- 从初稿内容重建得到相同的 Markdown 与结构；改动初稿内容一个字节即核验失败。
 - 构建过程中模型适配器与网络都没有被调用（用会抛错的假对象）。
 - Markdown-only 输入：页归属唯一时形成初稿；不唯一时返回 `needs-parse`。
 
@@ -112,4 +114,4 @@
 
 - 中断时，以测试为准判断哪些 Task 完成，不从记忆推断。
 - 抽取共用函数导致回归测试失败时，先撤回该次抽取，保留初稿一侧的独立实现，记录在本块，再找原因。
-- 规格不足以决定时停下，写回执交总设计师补 01，不自行决定。
+- 规格不足以决定时停下，写回执交总设计师补规格，不自行决定。

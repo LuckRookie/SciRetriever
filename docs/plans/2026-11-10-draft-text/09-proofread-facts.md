@@ -6,29 +6,23 @@
 
 ## Outcome
 
-每个以初稿为默认文本的部分提供四项事实：
-
-| 事实                       | 来源                                                              |
-| -------------------------- | ----------------------------------------------------------------- |
-| 疑点数量                   | 形成初稿时保存：`text-layer-differs` 的片段数与差异处数（03、04） |
-| 是否含有扫描页             | 形成初稿时保存：`image-only` 页数（03、04）                       |
-| 是否被加工结果引用         | 读了该初稿内容版本、且未过时的结果数                              |
-| 是否有“找不到”的引用指向它 | 逐值核对为“找不到”、且引用该初稿片段的值的数量（本块写投影）      |
-
-- 文献库读取在三端返回这四项（主 PDF，按 1.10）。
-- 文献库可以按它们筛选和排序，例如“疑点最多的 50 篇”“含扫描页的”。筛选结果可以作为建档的范围（ADR 0052），只在使用者明确发起建档时校订。
+- 每个以初稿为默认文本的部分提供 `DraftFacts`：形成时保存的 `differs_segments`、`differences`、`image_only_pages`，以及读取时聚合的 `citing_results`、`unfound_citations`。默认文本不是初稿时为 null。
+- 三端的文献库条目（`draft_facts`）、文献详情（含 `LiteratureAssetView.default_text`）与建档状态（`parts[].draft_facts`）返回这些事实。
+- `LibraryQuery` 的五个新筛选与 `LibrarySort` 的四个新排序键可用，只看主 PDF 的默认文本。例如“疑点最多的 50 篇”“含扫描页的”。筛选结果可以作为建档的范围（ADR 0052），只在使用者明确发起建档时校订。
+- 结果发布时写入 `processor_unfound_citations` 投影。
 - 发起建档前的用量估算沿用现有 `usage-estimate`（04 §6.7）。
 
-规格：[04 §8.7](../../architecture/technical/04-document-evidence.md#87-选择校订范围的事实)；[06 §2.1.1](../../architecture/technical/06-retrieval-context.md#211-libraryquery)（经 01 的 1.10 补齐）；01 的 1.11。
+规格：[04 §8.7](../../architecture/technical/04-document-evidence.md#87-选择校订范围的事实)（事实与计数口径）；[06 §2.1.7](../../architecture/technical/06-retrieval-context.md#217-目标接口尚未实现文本等级与选择校订范围的事实)（字段、位置、筛选、排序、cursor）；[07 §4.2](../../architecture/technical/07-versioned-storage.md#42-数据与写入所有权)（投影的结构与写入方）。
 
 ## 进入条件
 
-03、04、07 完成；01 的 1.10、1.11 已写进规格。
+03、04、07 完成。
 
 ## 责任边界
 
 - 负责：后端实施者。
-- 拥有：`LibraryQuery` 与 `LibrarySort` 的新字段（`packages/contracts/src/index.ts`）及解析；文献库查询的筛选与排序实现；“找不到”投影的写入。
+- 拥有：`DraftFacts`、`LibraryQuery` 与 `LibrarySort` 的新字段（`packages/contracts/src/index.ts`）及解析；文献库查询的筛选与排序实现；`processor_unfound_citations` 的写入。
+- 投影的写入方按 07 §4.2 是 Analysis（在发布结果的同一事务内）。本块在 Analysis 的结果发布路径里加写入，不改结果内容。
 - 触达：
   - `apps/server/src/storage/sqlite/worker-runtime.ts` 与文献库查询代码；
   - 加工结果发布的存储事务（`apps/server/src/storage/sqlite/processor-engine.ts`），写入 03 建的投影表；
@@ -37,11 +31,12 @@
 
 ## Tasks
 
-- [ ] **9.1 “找不到”投影**：结果发布时，在同一事务里把逐值核对为“找不到”的引用（文档版本、片段）写入投影表。现有结果都只引用校订稿，不需要回填；在回执中写明这一判断及其依据。
-- [ ] **9.2 计数读取**：按本页文献 ID 批量读取四项事实；“被引用”只计未过时、且读了该初稿内容版本的结果（按 1.11）。
-- [ ] **9.3 筛选与排序**：按 1.10 在 `LibraryQuery` 与 `LibrarySort` 中实现；排序有稳定的次序键；保存的筛选与“用当前结果”提交都能带上新条件。
-- [ ] **9.4 缓存与失效**：初稿形成、默认文本改变、结果发布或过时都会改变事实，相关文献的文献库状态缓存要失效。
-- [ ] **9.5 三端**：文献库读取与查询在 HTTP、CLI、MCP 一致。
+- [ ] **9.1 投影写入**：按 07 §4.2 写 `processor_unfound_citations`：只为引用初稿版本的来源写行，结果删除时级联删除。schema 17 之前没有初稿，不回填（07 §4.2）。
+- [ ] **9.2 聚合读取**：按本页文献 ID 批量读取 `DraftFacts`；`citing_results` 与 `unfound_citations` 的口径见 04 §8.7，按 `document_version_id` 查索引（03 建的索引），不扫描全部结果、不打开结果文件。
+- [ ] **9.3 字段**：文献库条目与文献详情的 `draft_facts`、`LiteratureAssetView.default_text`、建档状态 `parts[].draft_facts`（06 §2.1.7）。
+- [ ] **9.4 筛选与排序**：按 06 §2.1.7 实现 `text_levels`、`has_draft_differences`、`has_image_only_pages`、`cited_by_results`、`has_unfound_citations` 与四个排序键。省略的新字段不进入规范化查询，已有请求、cursor 与任务里保存的 selector 字节不变；接受 `LibrarySort` 的地方（包括 `AcquirePdfSelector`，因此也包括 05 的 `form-drafts`）都接受新键。
+- [ ] **9.5 缓存与失效**：初稿形成、默认文本改变、结果发布或过时都会改变事实，相关文献的文献库状态缓存要失效。
+- [ ] **9.6 三端**：文献库读取与查询在 HTTP、CLI、MCP 一致。
 
 ## 集成与影响
 
@@ -52,9 +47,11 @@
 
 新增 `apps/server/test/draft-proofread-facts.test.ts`（合成库、合成结果行），证明：
 
-- 四项事实等于合成数据的已知值（04 §8.9 最后一条）；
-- 过时的结果不计入“被引用”；校订稿上的“找不到”不计入初稿；
-- 按疑点数排序、按含扫描页筛选的结果与已知顺序一致；分页稳定；
+- 四项事实等于合成数据的已知值（04 §8.9）；
+- 内容过时的结果不计入 `citing_results`；只因算子方法较旧而过时的结果仍计入；同一结果计一次；校订稿上的“找不到”不计入初稿；
+- 默认文本是校订稿或没有默认文本时 `draft_facts` 为 null，后四个筛选 true 与 false 都不匹配它；
+- 按 `draft-differences-desc` 排序、按 `has_image_only_pages` 筛选的结果与已知顺序一致；没有值的文献排在最后；`literature_id` 打破并列；分页稳定；
+- 不带新字段的旧请求，规范化查询与 cursor 字节不变；
 - 结果发布失败时投影不留半条；
 - 事实变化后文献库读取到新值（缓存失效）。
 
@@ -70,4 +67,4 @@
 
 ## 恢复与交接
 
-9.1 依赖结果发布事务；若该事务归属有争议（计划 16 正在改结果存储），先与计划 16 确认写入位置，记入本块。
+9.1 改的是 Analysis 的结果发布事务，计划 16 也在改结果存储。开工前与计划 16 的负责人确认先后与写入位置，记入本块。
