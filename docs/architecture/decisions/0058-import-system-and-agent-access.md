@@ -2,7 +2,7 @@
 
 类型：决策（ADR）
 负责：文献库的对外地址与设备连接；与来源无关的导入模型、导入会话和来源适配器；给 Agent 用的 skill 与 HTTP 版 MCP
-状态：Proposed（2026-11-10，待 Owner 接受）
+状态：Accepted（2026-11-10，Owner 确认：“接受”）
 
 - Date: 2026-11-10
 - 依据：Owner 2026-11-10 的要求，原话如下：
@@ -26,7 +26,7 @@
   - ADR 0057 第 6 节：扩展配对令牌推广为设备连接（第 2 节）。
   - ADR 0057 第 7 节与“后果”中的建议顺序：见本决定第 9 节与“后果”。
   - [ADR 0035](0035-authenticated-remote-web-access.md)“没有第二种认证模式”与“跨站请求拒绝”：设备连接令牌成为第二种认证方式，按用途限定范围；凭令牌访问的接口不校验 Origin（第 2 节）。
-- 接受时同时修订[产品需求](../requirements.md) R7：Zotero 专属的表述改为导入系统；“保存 Zotero 编号”改为“保存外部工具的记录编号”。
+- 与[产品需求](../requirements.md) R7 的修订同时生效：Zotero 专属的表述改为导入系统；“保存 Zotero 编号”改为“保存外部工具的记录编号”。
 - Related：[ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md) MCP 与 Skill 的边界；[ADR 0029](0029-unverified-pdf-acquisition.md) PDF 验收；[ADR 0033](0033-machine-interfaces-cover-web-capabilities.md) 三端能力；[ADR 0052](0052-intake-batches-and-explicit-scope.md) 入库批次
 
 ## 背景
