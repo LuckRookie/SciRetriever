@@ -4,14 +4,15 @@
 负责：应用实现
 状态：现行
 
-组织可运行的服务端和 Web 应用。server 包含核心业务、CLI/MCP/HTTP 入口及生产组装；web 实现浏览器界面。
+组织可运行的服务端和 Web 应用。server 包含核心业务、CLI/MCP/HTTP 入口及生产组装；web 实现浏览器界面；browser-extension 是在用户自己浏览器里收藏文献的扩展。
 
 ## 下级目录
 
-| 目录                        | 职责               |
-| --------------------------- | ------------------ |
-| [server/](server/README.md) | 服务端与核心应用   |
-| [web/](web/README.md)       | Browser 工作台前端 |
+| 目录                                              | 职责                 |
+| ------------------------------------------------- | -------------------- |
+| [server/](server/README.md)                       | 服务端与核心应用     |
+| [web/](web/README.md)                             | Browser 工作台前端   |
+| [browser-extension/](browser-extension/README.md) | 网页收藏的浏览器扩展 |
 
 ## 放置边界
 

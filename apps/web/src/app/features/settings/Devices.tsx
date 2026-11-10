@@ -33,6 +33,24 @@ import { errorMessage, localTime } from "../../strings.js";
 
 export const devicesKey = ["device-connections"] as const;
 
+const DOWNLOADS = {
+  extension: {
+    label: "下载扩展安装包",
+    description: "Chrome、Edge 用，在扩展管理页以开发者模式加载。",
+    path: "/api/v1/capture/extension",
+    file: "sciretriever-browser-extension.zip",
+    missing: "扩展安装包尚未构建",
+  },
+  skill: {
+    label: "下载 skill",
+    description: "给 Agent 用的文献库使用说明。",
+    path: "/api/v1/device-connections/skill",
+    file: "sciretriever-skill.zip",
+    missing: "skill 包尚未构建",
+  },
+} as const;
+type Download = keyof typeof DOWNLOADS;
+
 /** Every connection, following the owner's cursor until the last page. */
 function useDevices() {
   const api = useApi();
@@ -72,7 +90,7 @@ export function DeviceConnections() {
     devices = useDevices();
   const [connecting, setConnecting] = useState<DeviceKind | null>(null),
     [renaming, setRenaming] = useState<DeviceConnection | null>(null),
-    [skill, setSkill] = useState("");
+    [notes, setNotes] = useState<Record<string, string>>({});
   const revoke = useMutation({
     mutationFn: (device: DeviceConnection) =>
       api.call("/api/v1/device-connections/revoke", {
@@ -80,24 +98,28 @@ export function DeviceConnections() {
       }),
     onSettled: () => void queries.invalidateQueries({ queryKey: devicesKey }),
   });
-  const download = async () => {
-    setSkill("");
+  /** A package the library builds; a missing build says so instead of failing. */
+  const download = async (kind: Download) => {
+    const { path, file, missing } = DOWNLOADS[kind];
+    setNotes((current) => ({ ...current, [kind]: "" }));
     try {
-      const response = await api.fetch("/api/v1/device-connections/skill");
+      const response = await api.fetch(path);
       if (!response.ok) await api.json(response);
       const url = URL.createObjectURL(await response.blob()),
         link = document.createElement("a");
       link.href = url;
-      link.download = "sciretriever-skill.zip";
+      link.download = file;
       link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (error) {
-      setSkill(
-        error instanceof ApiError &&
+      setNotes((current) => ({
+        ...current,
+        [kind]:
+          error instanceof ApiError &&
           error.code === "device-artifact-unavailable"
-          ? "skill 包尚未构建"
-          : errorMessage(error),
-      );
+            ? missing
+            : errorMessage(error),
+      }));
     }
   };
   return (
@@ -205,14 +227,16 @@ export function DeviceConnections() {
             ]}
           />
         )}
-        <div className="settings-device-skill">
-          <Button size="compact" onPress={download}>
-            下载 skill
-          </Button>
-          <span className="ui-description">
-            {skill || "给 Agent 用的文献库使用说明。"}
-          </span>
-        </div>
+        {(Object.keys(DOWNLOADS) as Download[]).map((kind) => (
+          <div key={kind} className="settings-device-skill">
+            <Button size="compact" onPress={() => download(kind)}>
+              {DOWNLOADS[kind].label}
+            </Button>
+            <span className="ui-description">
+              {notes[kind] || DOWNLOADS[kind].description}
+            </span>
+          </div>
+        ))}
       </Section>
       {connecting ? (
         <ConnectDialog kind={connecting} onClose={() => setConnecting(null)} />

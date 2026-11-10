@@ -1,3 +1,4 @@
+import { pathToFileURL } from "node:url";
 import { createMetadataOperations } from "../../server/src/entry/metadata-operations.js";
 import {
   workbenchTestAccess,
@@ -21,8 +22,7 @@ import {
   type WorkbenchHttpOptions,
 } from "../../server/src/workbench/http.js";
 import { ProductionWorkbenchSession } from "../../server/src/workbench/production-session.js";
-import { DeviceRouteRegistry } from "../../server/src/workbench/device-http.js";
-import { importHttpRoutes } from "../../server/src/workbench/import-http.js";
+import { deviceBusinessRoutes } from "../../server/src/bootstrap/device-routes.js";
 import { FIXTURE_LITERATURE } from "../../server/src/workbench/synthetic-fixture.js";
 
 export const missingId = "00000000-0000-0000-0000-000000005101";
@@ -101,8 +101,10 @@ export async function workspace(
       // Device connections and import sessions are the real owners.
       devices: {
         service: env.app.deviceConnections,
-        routes: new DeviceRouteRegistry(
-          importHttpRoutes(env.app.importSessions),
+        routes: deviceBusinessRoutes(
+          env.app,
+          query,
+          pathToFileURL(`${env.home}/`),
         ),
       },
       assets,

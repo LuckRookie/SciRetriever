@@ -88,6 +88,10 @@ it("preselects capture for the browser extension and requires at least one purpo
     await page.getByRole("button", { name: "下载 skill", exact: true }).click();
     await page.getByText("skill 包尚未构建").waitFor();
     await page
+      .getByRole("button", { name: "下载扩展安装包", exact: true })
+      .click();
+    await page.getByText("扩展安装包尚未构建").waitFor();
+    await page
       .getByRole("button", { name: "连接浏览器扩展", exact: true })
       .click();
     const dialog = page.getByRole("dialog", { name: "连接浏览器扩展" });
