@@ -32,7 +32,7 @@ const crc32 = (bytes) => {
 };
 
 /** A stored (uncompressed) ZIP of flat files: small, and loadable by Chrome. */
-function zip(files) {
+export function zip(files) {
   const locals = [],
     centrals = [];
   let offset = 0;

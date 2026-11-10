@@ -102,6 +102,17 @@ PDF 上传按以下顺序调用，仅在 `--maintenance` 下提供：
 
 书目支持 BibTeX、BibLaTeX、RIS、CSL-JSON。知识、综合、上下文的结构化读取结果本身可交付或保存为 JSON，保留稳定引用与证据；无需新增产物或任务来“导出”。展示型 Markdown 可由调用方从这些结果生成。
 
+## 从自己的电脑连接：设备连接与 skill
+
+桌面上的 Agent（Claude Code、Codex 等）不需要装本仓库，经用户在浏览器里打开文献库用的同一个地址连接（[ADR 0058](../architecture/decisions/0058-import-system-and-agent-access.md)）：
+
+1. 在 Web“设置 → 设备连接 → 连接 Agent”勾选用途（导入、读取，必要时操作），生成连接码，把“复制给 Agent 的话”整段交给 Agent。
+2. Agent 用连接码换得令牌，存在只有本人可读的文件里，之后下载文献库自带的使用说明（`GET /api/v1/device-connections/instructions`）或完整 skill（`/skill`，源文件在仓库 [`skills/sciretriever/`](../../skills/sciretriever/SKILL.md)）。
+3. 导入经导入会话的 HTTP 接口完成：建会话、交数据、预览、确认、交文件、结束。接口说明由文献库在 `GET /api/v1/import/instructions` 给出；会话在 Web“入库 → 导入”里实时可见，用户可以在那里确认或取消。
+4. 检索、阅读与发起任务经同一地址的 HTTP 版 MCP（`/mcp`，Streamable HTTP，请求头带令牌）；工具按连接的用途给出，与 stdio 版同一套。
+
+设备令牌不能登录 Web，不能读写配置与凭据，也不能管理设备连接；撤销后立即失效。下面“连接正在运行的 Web 服务”是在服务器上用 CLI 与 stdio 版 MCP 的方式，两者并存。
+
 ## 连接正在运行的 Web 服务
 
 活 Browser 会话和后台执行属于持有它们的服务进程。机器入口显式指定服务地址：
@@ -120,7 +131,7 @@ sciretriever jobs runtime --workbench-url http://127.0.0.1:4174 --request /absol
 
 | 范围     | 工具                                                    | 行为                                                                        |
 | -------- | ------------------------------------------------------- | --------------------------------------------------------------------------- |
-| 观察     | `browser_view/select/tabs`                        | 当前会话/观察、选择文章、列出页面；观看不暂停 Agent     |
+| 观察     | `browser_view/select/tabs`                              | 当前会话/观察、选择文章、列出页面；观看不暂停 Agent                         |
 | 控制     | `browser_control/action/activate_tab`                   | 取得/交还/暂停/恢复/取消控制，以及带页面绑定的 OperatorInput；不暴露 JS/CDP |
 | 指导     | `browser_guidance/cancel_guidance`                      | 提交或撤销当前连接的待处理指导                                              |
 | 候选     | `browser_accept_candidate/abandon_candidate`            | 既有候选操作，仍校验当前控制权与 transfer hash                              |

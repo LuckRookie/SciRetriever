@@ -101,16 +101,16 @@ export function libraryAddress(origin = location.origin): string {
   return `${url.protocol}//${url.hostname}:${url.port || (url.protocol === "https:" ? "443" : "80")}`;
 }
 
-/** Text the user pastes to an Agent on their own computer; block 06 owns the wording. */
+/** Text the user pastes to an Agent on their own computer (plan 20, block 06). */
 export function agentBrief(code: string, address: string): string {
   return [
     "请连接我的 SciRetriever 文献库，之后按我的要求使用它。",
     "",
     `连接码：${code}`,
     "",
-    `1. 连接码的格式是 sr-connect1:<编码后的地址>:<配对码>，地址是 ${address}。10 分钟内、只能用一次：向 ${address}/api/v1/device-connections/exchange 发 POST，正文 {"pairing_code":"<配对码>"}，换得令牌。`,
-    "2. 令牌只保存在只有我能读的文件里，不要打印、不要放进网址。之后每个请求带请求头 Authorization: Bearer <令牌>。",
-    `3. 先读 ${address}/api/v1/device-connections/instructions 了解怎样使用文献库，再开始。`,
+    `1. 换令牌：连接码的格式是 sr-connect1:<编码后的地址>:<配对码>，地址是 ${address}。10 分钟内、只能用一次，向 ${address}/api/v1/device-connections/exchange 发 POST，正文 {"pairing_code":"<配对码>"}。回复的 result.token 是令牌，只出现这一次。`,
+    '2. 令牌不要打印、不要显示回复的任何部分，直接写进只有我能读的文件：在 ~/.config/sciretriever/（目录权限 700）写 address（文献库地址，不带换行）和 curl.conf（权限 600，三行：header = "Authorization: Bearer <令牌>"、header = "X-Sciretriever-Protocol-Version: 1"、noproxy = "*"；文献库必须经代理才能访问时去掉最后一行）。之后的请求都用 curl --config ~/.config/sciretriever/curl.conf 带上它们。',
+    `3. 下载文献库自带的 skill：GET ${address}/api/v1/device-connections/skill（zip，解压后是 sciretriever/ 目录，放到你存放 skill 的位置，例如 Claude Code 的 ~/.claude/skills/），读 SKILL.md 后再开始；装不了 skill 时读 ${address}/api/v1/device-connections/instructions。`,
     "4. 连不上时告诉我所连的地址，提醒我检查端口映射是否开着。",
   ].join("\n");
 }

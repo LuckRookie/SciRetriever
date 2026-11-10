@@ -40,20 +40,22 @@ pnpm sciretriever web --port 4174
 
 每个由项目维护的目录都有自己的 `README.md`，说明职责、内容入口和相邻目录的分工。从下面进入，再沿各级 README 找到具体模块。目录说明帮助定位；需求、架构决定和当前行为分别由各自真相源维护。
 
-| 目录                                          | 负责的内容                                                                                |
-| --------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| [apps/](apps/README.md)                       | 应用实现：核心服务、CLI/MCP/HTTP 与 Web 界面                                              |
-| [apps/server/src/](apps/server/src/README.md) | 按业务职责划分的服务端模块地图                                                            |
-| [apps/web/](apps/web/README.md)               | React 工作台、共享组件与动效、框架无关阅读引擎和界面回归                                  |
-| [packages/](packages/README.md)               | 跨模块、跨应用共享的中性合同包                                                            |
-| [docs/](docs/README.md)                       | 需求、架构、使用指南、维护说明、提案与计划                                                |
-| [tests/](tests/README.md)                     | 随仓库分发的共享合成测试材料；正式回归在各模块的 `test/`                                  |
-| `sandbox/`                                    | 本机真实测试场地：`cases/` 用例、`runs/` 运行材料、`reports/` 报告；整个目录不随 Git 分发 |
-| [scripts/](scripts/README.md)                 | 可复用的构建与打包工具                                                                    |
-| [release/](release/README.md)                 | 构建工具使用的发布运行清单                                                                |
-| [example/](example/README.md)                 | 可共享的配置示例                                                                          |
-| [migration/](migration/README.md)             | 迁移兼容清单、固定 oracle 与历史证据；部分清单仍由测试消费                                |
-| [.github/](.github/README.md)                 | GitHub CI 工作流                                                                          |
+| 目录                                                        | 负责的内容                                                                                |
+| ----------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| [apps/](apps/README.md)                                     | 应用实现：核心服务、CLI/MCP/HTTP 与 Web 界面                                              |
+| [apps/server/src/](apps/server/src/README.md)               | 按业务职责划分的服务端模块地图                                                            |
+| [apps/web/](apps/web/README.md)                             | React 工作台、共享组件与动效、框架无关阅读引擎和界面回归                                  |
+| [apps/browser-extension/](apps/browser-extension/README.md) | 在用户自己浏览器里收藏文献的 Chrome/Edge 扩展                                             |
+| [skills/](skills/README.md)                                 | 文献库自带、给桌面 Agent 用的 skill                                                       |
+| [packages/](packages/README.md)                             | 跨模块、跨应用共享的中性合同包                                                            |
+| [docs/](docs/README.md)                                     | 需求、架构、使用指南、维护说明、提案与计划                                                |
+| [tests/](tests/README.md)                                   | 随仓库分发的共享合成测试材料；正式回归在各模块的 `test/`                                  |
+| `sandbox/`                                                  | 本机真实测试场地：`cases/` 用例、`runs/` 运行材料、`reports/` 报告；整个目录不随 Git 分发 |
+| [scripts/](scripts/README.md)                               | 可复用的构建与打包工具                                                                    |
+| [release/](release/README.md)                               | 构建工具使用的发布运行清单                                                                |
+| [example/](example/README.md)                               | 可共享的配置示例                                                                          |
+| [migration/](migration/README.md)                           | 迁移兼容清单、固定 oracle 与历史证据；部分清单仍由测试消费                                |
+| [.github/](.github/README.md)                               | GitHub CI 工作流                                                                          |
 
 ### 要做什么，去哪里
 
@@ -76,12 +78,12 @@ pnpm sciretriever web --port 4174
 
 设计时研究并借鉴过下列项目的做法。SciRetriever 没有复制它们的代码；第三方许可与归属义务见 [NOTICE](NOTICE)。
 
-| 项目 | 借鉴了什么 | 相关文档 |
-| ---- | ---------- | -------- |
-| [Mktero](https://github.com/tenglvjun/mktero)（MIT） | MinerU 结果的规则整理：页眉页脚识别、按版面证据接断段、分栏阅读顺序纠正，以及按原文排版（章节顺序、标题层级、组图、脚注位置） | [ADR 0054](docs/architecture/decisions/0054-rule-preprocessing-and-source-order-layout.md) |
-| [ScanSci PDF](https://github.com/Rimagination/scansci-pdf)（Apache-2.0） | PDF 获取的候选发现方式与分阶段获取路径 | [获取路径调研](docs/notes/pdf-acquisition-reference-paths.md)、[许可审计](docs/notes/scansci-migration-audit.md) |
-| [Zotero](https://github.com/zotero/zotero)（“Find Available PDF”与 Zotero Connector） | PDF 发现、按站点的 Translator 与下载后验证 | [获取路径调研](docs/notes/pdf-acquisition-reference-paths.md) |
-| Zotero Full-Text Downloader（2026-08-03 本地快照，没有公开仓库） | 开放来源到浏览器的回退顺序与 PDF 校验 | [获取路径调研](docs/notes/pdf-acquisition-reference-paths.md) |
+| 项目                                                                                  | 借鉴了什么                                                                                                                    | 相关文档                                                                                                         |
+| ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| [Mktero](https://github.com/tenglvjun/mktero)（MIT）                                  | MinerU 结果的规则整理：页眉页脚识别、按版面证据接断段、分栏阅读顺序纠正，以及按原文排版（章节顺序、标题层级、组图、脚注位置） | [ADR 0054](docs/architecture/decisions/0054-rule-preprocessing-and-source-order-layout.md)                       |
+| [ScanSci PDF](https://github.com/Rimagination/scansci-pdf)（Apache-2.0）              | PDF 获取的候选发现方式与分阶段获取路径                                                                                        | [获取路径调研](docs/notes/pdf-acquisition-reference-paths.md)、[许可审计](docs/notes/scansci-migration-audit.md) |
+| [Zotero](https://github.com/zotero/zotero)（“Find Available PDF”与 Zotero Connector） | PDF 发现、按站点的 Translator 与下载后验证                                                                                    | [获取路径调研](docs/notes/pdf-acquisition-reference-paths.md)                                                    |
+| Zotero Full-Text Downloader（2026-08-03 本地快照，没有公开仓库）                      | 开放来源到浏览器的回退顺序与 PDF 校验                                                                                         | [获取路径调研](docs/notes/pdf-acquisition-reference-paths.md)                                                    |
 
 ## 开发与贡献
 
