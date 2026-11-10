@@ -12,6 +12,9 @@ import {
   workbenchTestAccess,
 } from "../../server/test/workbench-auth-fixture.js";
 import { nextAssets } from "./next-workspace-fixture.js";
+import { importExport } from "./import-flow-fixture.js";
+import { DeviceRouteRegistry } from "../../server/src/workbench/device-http.js";
+import { importHttpRoutes } from "../../server/src/workbench/import-http.js";
 
 it(
   "renders actual import and discovery receipts through HTTP without mocking business endpoints",
@@ -73,6 +76,12 @@ it(
         assets: await nextAssets(),
         ...createMetadataOperations(env.app),
         query: { application: query },
+        devices: {
+          service: env.app.deviceConnections,
+          routes: new DeviceRouteRegistry(
+            importHttpRoutes(env.app.importSessions),
+          ),
+        },
         library: {
           queries: env.app.library,
           artifacts: env.app.literatureArtifacts,
@@ -85,41 +94,19 @@ it(
       await loginWorkbenchPage(page, server.origin);
       await page.goto(server.origin + "/?view=disc");
       const latest = page.locator(".intake-report").first();
-      await page.getByRole("tab", { name: "导入书目", exact: true }).click();
-      await page.getByLabel("书目文件", { exact: true }).setInputFiles({
+      // Import goes through a real import session and reports from the owner.
+      const file = {
         name: "fixture.bib",
-        mimeType: "text/plain",
-        buffer: Buffer.from(
+        content:
           "@article{import,title={Synthetic imported paper},doi={10.1000/intake-contract},year={2026}}",
-        ),
-      });
-      const importOnce = async () => {
-        await page.getByRole("button", { name: "导入", exact: true }).click();
-        const response = page.waitForResponse(
-          (r) =>
-            new URL(r.url()).pathname === "/api/import" &&
-            r.request().method() === "POST",
-        );
-        await page
-          .getByRole("dialog", { name: "导入书目", exact: true })
-          .getByRole("button", { name: "确认执行", exact: true })
-          .click();
-        const result = await response;
-        const receipt = await result.json();
-        expect(result.status(), JSON.stringify(receipt)).toBe(200);
-        return receipt;
       };
-      const receipt = await importOnce();
-      expect(receipt.report.items[0].disposition).toBe("created");
-      expect(
-        JSON.stringify(
-          await env.app.library.detail(receipt.report.items[0].literature_id),
-        ),
-      ).toContain("Synthetic imported paper");
-      await expect.poll(() => latest.textContent()).toContain("新增 1 篇");
-      await expect.poll(() => latest.textContent()).toContain("导入完成");
-      await importOnce();
-      await expect.poll(() => latest.textContent()).toContain("已存在 1 篇");
+      const first = await importExport(page, file);
+      await first.getByText("新增 1").waitFor();
+      await first.getByRole("button", { name: "返回入库" }).click();
+      const again = await importExport(page, file);
+      await again.getByText(/^(已在库|补全) 1$/u).waitFor();
+      expect(await again.getByText("新增 0").count()).toBe(1);
+      await again.getByRole("button", { name: "返回入库" }).click();
       await page.getByRole("tab", { name: "主题发现", exact: true }).click();
       await page
         .getByRole("textbox", { name: "主题或检索式", exact: true })

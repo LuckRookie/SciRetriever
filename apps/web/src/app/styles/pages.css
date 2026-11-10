@@ -1136,6 +1136,73 @@
     padding-bottom: 8px;
   }
 
+  /* Import sessions: a list of every source's sessions, and one session's page. */
+  .intake-import-sessions {
+    max-width: 960px;
+    padding-bottom: var(--space-6);
+  }
+  .intake-import-sessions > h2 {
+    margin: 0 0 var(--space-2);
+  }
+  .intake-import-session {
+    max-width: 960px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-3);
+    padding-bottom: var(--space-6);
+  }
+  .intake-import-session > * {
+    max-width: 100%;
+  }
+  .intake-import-session > .ui-definitions,
+  .intake-import-session > .ui-table-wrap,
+  .intake-import-upload {
+    align-self: stretch;
+  }
+  .intake-import-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-3);
+  }
+  .intake-import-header h2,
+  .intake-import-session h3 {
+    margin: 0;
+  }
+  .intake-import-session h3 {
+    padding-top: var(--space-2);
+    font-size: var(--text-interface);
+    font-weight: 600;
+  }
+  .intake-import-session > .ui-description {
+    margin: 0;
+  }
+  .intake-import-counts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-4);
+    color: var(--fg2);
+  }
+  .intake-import-counts strong {
+    color: var(--fg);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .intake-import-upload {
+    display: grid;
+    gap: var(--space-2);
+  }
+  .intake-import-upload p {
+    margin: 0;
+  }
+  .intake-import-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding-top: var(--space-2);
+  }
+
   /* Intake records: what came in, and how far its PDFs have got. */
   .intake-records {
     max-width: 960px;

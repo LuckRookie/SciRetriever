@@ -36,6 +36,7 @@ import {
 } from "./configuration-data.js";
 import { ApplyConfiguration } from "../sources/ApplyConfiguration.js";
 import { NetworkSettings, networkOf } from "./Network.js";
+import { DeviceConnections } from "./Devices.js";
 import {
   SourceDirectoryPanel,
   sourceDirectoryKey,
@@ -49,6 +50,7 @@ const tabs = [
   { id: "models", label: "模型" },
   { id: "parser", label: "解析与 Browser" },
   { id: "network", label: "网络" },
+  { id: "devices", label: "设备连接" },
   { id: "archive", label: "建档" },
   { id: "cred", label: "凭据" },
   { id: "status", label: "运行状态" },
@@ -529,6 +531,8 @@ export default function Settings() {
         <div className="settings-content">
           {section === "appearance" ? (
             <Appearance />
+          ) : section === "devices" ? (
+            <DeviceConnections />
           ) : section === "advanced" ? (
             <Suspense fallback={<p role="status">正在打开高级工具…</p>}>
               <Maintenance />

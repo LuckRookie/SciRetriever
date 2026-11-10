@@ -111,7 +111,7 @@ export function useIntakeBatch(batchId: string | null) {
 export const BATCH_KINDS: Record<IntakeBatch["kind"], string> = {
   topic: "主题发现",
   citation: "引用扩展",
-  import: "书目导入",
+  import: "导入",
   legacy: "早期入库",
 };
 export const BATCH_ORIGINS: Record<IntakeBatch["origin"], string> = {

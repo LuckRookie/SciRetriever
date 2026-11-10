@@ -1,17 +1,17 @@
 import { captureFeature } from "./next-feature-capture-fixture.js";
 import { expect, it } from "vitest";
 import { nextWorkspace } from "./next-workspace-fixture.js";
+import { importExport } from "./import-flow-fixture.js";
 import { missingId } from "./processor-workspace-fixture.js";
 import { workbenchPdf } from "../../server/src/workbench/synthetic-fixture.js";
-it("keeps discovery and bibliography import explicit and uploads a selected PDF without hidden processing", async () => {
+it("keeps discovery and import explicit and uploads a selected PDF without hidden processing", async () => {
   const w = await nextWorkspace({
     path: "/?view=disc",
     ready: ".intake-form",
   });
   try {
     await captureFeature(w.page, "react-intake");
-    const discoveries: unknown[] = [],
-      imports: unknown[] = [];
+    const discoveries: unknown[] = [];
     let release!: () => void;
     const held = new Promise<void>((resolve) => {
       release = resolve;
@@ -32,13 +32,6 @@ it("keeps discovery and bibliography import explicit and uploads a selected PDF 
             fixture: true,
           },
         },
-      });
-    });
-    await w.page.route("**/api/import?*", async (route) => {
-      imports.push(route.request().postDataJSON());
-      await route.fulfill({
-        status: 200,
-        json: { report: { format: "bibtex", items: [] } },
       });
     });
     await w.page
@@ -91,23 +84,13 @@ it("keeps discovery and bibliography import explicit and uploads a selected PDF 
       seed_literature_id: w.env.parseRequest.literature_id,
       direction: "references",
     });
-    await w.page.getByRole("tab", { name: "导入书目", exact: true }).click();
-    await w.page.getByLabel("书目文件", { exact: true }).setInputFiles({
+    // Bibliography import goes through an import session and its report.
+    const imported = await importExport(w.page, {
       name: "fixture.bib",
-      mimeType: "text/plain",
-      buffer: Buffer.from("@article{fixture,title={Synthetic bibliography}}"),
-    });
-    await w.page.getByRole("button", { name: "导入", exact: true }).click();
-    await w.page
-      .getByRole("dialog", { name: "导入书目", exact: true })
-      .getByRole("button", { name: "确认执行", exact: true })
-      .click();
-    await expect.poll(() => imports.length).toBe(1);
-    expect(imports[0]).toEqual({
-      format: "bibtex",
       content: "@article{fixture,title={Synthetic bibliography}}",
-      file_name: "fixture.bib",
     });
+    await imported.getByText("新增 1").waitFor();
+    await imported.getByRole("button", { name: "返回入库" }).click();
     await w.page.getByRole("tab", { name: "上传 PDF", exact: true }).click();
     await w.page.getByRole("textbox", { name: "目标文献 ID" }).fill(missingId);
     await w.page.getByLabel("PDF 文件", { exact: true }).setInputFiles({
@@ -144,23 +127,15 @@ it("records each import as a batch, narrows it by its keywords and gets PDFs for
   });
   try {
     const page = w.page;
-    await page.getByRole("tab", { name: "导入书目", exact: true }).click();
-    await page.getByLabel("书目文件", { exact: true }).setInputFiles({
+    const imported = await importExport(page, {
       name: "batch-fixture.bib",
-      mimeType: "text/plain",
-      buffer: Buffer.from(
-        [
-          "@article{a,title={Argyrodite electrolyte one},year={2021},doi={10.5555/batch-a},keywords={Argyrodite, Interface}}",
-          "@article{b,title={Argyrodite electrolyte two},year={2022},doi={10.5555/batch-b},keywords={Argyrodite}}",
-          "@article{c,title={Halide electrolyte three},year={2023},doi={10.5555/batch-c},keywords={Halide}}",
-        ].join("\n"),
-      ),
+      content: [
+        "@article{a,title={Argyrodite electrolyte one},year={2021},doi={10.5555/batch-a},keywords={Argyrodite, Interface}}",
+        "@article{b,title={Argyrodite electrolyte two},year={2022},doi={10.5555/batch-b},keywords={Argyrodite}}",
+        "@article{c,title={Halide electrolyte three},year={2023},doi={10.5555/batch-c},keywords={Halide}}",
+      ].join("\n"),
     });
-    await page.getByRole("button", { name: "导入", exact: true }).click();
-    await page
-      .getByRole("dialog", { name: "导入书目", exact: true })
-      .getByRole("button", { name: "确认执行", exact: true })
-      .click();
+    await imported.getByRole("button", { name: "返回入库" }).click();
     // The import is a persistent record, not a session receipt.
     const record = page.locator(".intake-record", {
       hasText: "batch-fixture.bib",

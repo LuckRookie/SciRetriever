@@ -277,6 +277,46 @@ export class ApiClient {
       ...(signal ? { signal } : {}),
     }).then((response) => this.json(response));
   }
+  /** A versioned owner route: `{protocol_version, request}` in, its `result` out. */
+  async call(
+    path: string,
+    request: unknown,
+    signal?: AbortSignal,
+  ): Promise<JsonRecord> {
+    const value = await this.json(
+      await this.fetch(path, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Sciretriever-Protocol-Version": "1",
+        },
+        body: JSON.stringify({ protocol_version: 1, request }),
+        ...(signal ? { signal } : {}),
+      }),
+    );
+    if (value.protocol_version !== 1) throw new Error("协议版本不匹配");
+    return record(value.result, "result");
+  }
+  /** Raw bytes to a versioned owner route, streamed by the browser. */
+  async send(
+    path: string,
+    body: Blob,
+    signal?: AbortSignal,
+  ): Promise<JsonRecord> {
+    const value = await this.json(
+      await this.fetch(path, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "X-Sciretriever-Protocol-Version": "1",
+        },
+        body,
+        ...(signal ? { signal } : {}),
+      }),
+    );
+    if (value.protocol_version !== 1) throw new Error("协议版本不匹配");
+    return record(value.result, "result");
+  }
   async query(
     name: string,
     request: unknown,

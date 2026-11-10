@@ -271,4 +271,92 @@
   .settings-network-note {
     color: var(--fg2);
   }
+  /* Device connections: a table of devices, a one-time handover in a dialog. */
+  .settings-device-actions,
+  .settings-device-row-actions,
+  .settings-device-skill {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .settings-device-skill {
+    padding-top: var(--space-4);
+  }
+  .settings-device-state[data-state="connected"] {
+    color: var(--t-green);
+  }
+  .settings-device-state[data-state="pending"] {
+    color: var(--t-yellow);
+  }
+  .settings-device-state[data-state="revoked"] {
+    color: var(--fg3);
+  }
+  .settings-device-form,
+  .settings-device-handover {
+    display: grid;
+    gap: var(--space-4);
+    min-width: 0;
+  }
+  .settings-device-purposes {
+    display: grid;
+    gap: var(--space-3);
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+  .settings-device-purposes legend {
+    padding: 0 0 var(--space-2);
+    font-weight: 600;
+  }
+  .settings-device-purpose .ui-description {
+    margin: var(--space-1) 0 0 calc(var(--control-small-height) * 0.75);
+  }
+  .settings-device-code {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+    padding: var(--space-3);
+    border: 1px solid var(--line2);
+    border-radius: var(--radius-sm);
+    background: var(--surface-sunken);
+  }
+  .settings-device-code code {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--mono);
+    overflow-wrap: anywhere;
+    user-select: all;
+  }
+  .settings-device-brief {
+    display: grid;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+  .settings-device-brief > div {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+  .settings-device-brief h3 {
+    margin: 0;
+    font-size: var(--text-interface);
+    font-weight: 600;
+  }
+  .settings-device-brief pre {
+    margin: 0;
+    max-height: 16rem;
+    overflow: auto;
+    padding: var(--space-3);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--surface-sunken);
+    font-family: var(--mono);
+    font-size: var(--text-secondary);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
 }

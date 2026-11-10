@@ -14,6 +14,7 @@ import {
 } from "../../server/src/storage/sqlite/catalog-schema.js";
 import { TypeScriptConfigurationOwner } from "../../server/src/configuration/owner.js";
 import { motionOptions, nextAssets } from "./next-workspace-fixture.js";
+import { importExport } from "./import-flow-fixture.js";
 
 async function assets() {
   const result = new Map(await nextAssets());
@@ -122,21 +123,12 @@ describe("formal Web launch and database binding", () => {
           .getByRole("main")
           .getByRole("button", { name: "入库", exact: true })
           .click();
-        await page.getByRole("tab", { name: "导入书目", exact: true }).click();
-        await page.locator('input[type="file"]').setInputFiles({
+        const imported = await importExport(page, {
           name: "fixture.bib",
-          mimeType: "text/plain",
-          buffer: Buffer.from(
+          content:
             "@article{web-fixture, title={A synthetic Web workbench article}, author={Reader, Alice}, year={2026}, doi={10.5555/web.fixture}}",
-          ),
         });
-        await page.getByRole("button", { name: "导入", exact: true }).click();
-        await page
-          .getByRole("button", { name: "确认执行", exact: true })
-          .click();
-        await expect
-          .poll(() => page.locator("main").textContent())
-          .toContain("操作已结束");
+        await imported.getByText("新增 1").waitFor();
         await page
           .getByLabel("主导航")
           .getByRole("button", { name: /^文献库/ })

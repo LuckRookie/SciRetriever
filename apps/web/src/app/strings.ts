@@ -234,6 +234,28 @@ export function serviceMessage(code: string): string {
         "browser-navigation-retry-limit":
           "同一个链接连续两次没能打开，流程停止。",
         "publication-disk-full": "存储空间不足，材料发布未完成。",
+        "device-address-mismatch":
+          "连接码里的地址与本页地址不一致，请从要连接的地址打开设置页再生成。",
+        "device-connection-missing": "这个设备连接已不存在，请刷新列表。",
+        "device-artifact-unavailable": "skill 包尚未构建。",
+        "device-unavailable": "设备连接暂不可用，请查看服务日志。",
+        "import-format-unsupported":
+          "不支持这种导出格式，请选择 BibTeX、RIS 或 CSL JSON。",
+        "import-local-identity-required":
+          "这个来源只给出了本地库号，请让 Agent 经设备连接导入。",
+        "import-session-missing": "这个导入会话已不存在，请刷新后重试。",
+        "import-file-missing": "清单里已没有这个文件，请刷新会话。",
+        "import-library-busy":
+          "同一个来源库已有进行中的导入会话，请先结束或取消它。",
+        "import-session-state": "会话状态已变化，请刷新后再操作。",
+        "import-data-changed": "会话数据在确认前有变化，请重新预览后确认。",
+        "import-request-too-large":
+          "导出文件太大，请拆成几个小于 7 MiB 的文件分别导入。",
+        "import-session-limit":
+          "超出一个会话的记录或数据上限，请拆分后分别导入。",
+        "import-metadata-pending": "书目还没导入完，稍后再结束。",
+        "import-file-hash-required":
+          "这篇文献已有 PDF，只需核对文件，不需上传。",
         "invalid-request": "请求内容无效，请检查填写的内容。",
         "invalid-input": "输入内容无效，请检查后重试。",
         "not-found": "所需内容不存在或已被移除。",
