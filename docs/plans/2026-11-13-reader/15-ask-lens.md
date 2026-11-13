@@ -17,9 +17,8 @@
 ## 进入条件
 
 - 14 退出（脉络与概览视图）。
-- 读取：`material-answers`（问过的问题与进行中的运行）、`material-answer`（按结果或按问题文字取回答与有关的要点）、`answer-progress`（进度）、`material-marks` 带 `answer_result_id`（原文里的“相关”段落）；能力报告的 `question_answering`。
+- 读取：`material-answers`（问过的问题与进行中的运行）、`material-answer`（按结果或按问题文字取回答与有关的要点）、`material-progress`（进度，`kind` 为 `answer`）、`material-marks` 带 `answer_result_id`（原文里的“相关”段落）；能力报告的 `question_answering`。
 - 显示真实结果另等计划 16：读取与能力报告由 14 的 14.9 交付，在 02 交付之前这几项读取返回空结果或 `capability-unavailable`；回答来自 02 的 2.1（`qa@1`），提问经 2.5（运行流程与确认）与 2.9（估算，`estimate`）；有关的要点来自 14 的 14.8。
-- 15.1 中 `can_start` 为假时的处理等 01 的 1.7。
 
 ## 责任边界
 
@@ -29,8 +28,8 @@
 
 ## Tasks
 
-- [ ] **15.1 提问框与估算**：提问框随 `question_answering.available` 出现与消失；回车后先用 `material-answer` 按问题文字查找（规范化后完全相同匹配），找到就直接显示，不估算；找不到时调用 `estimate`，显示估算浮层与“提问”主按钮，确认后调用 `run`。真实估算来自计划 16 的 2.9；能力报告为“可用”的前提是运行流程与估算都已可用，所以不设“无法估算”的中间状态。
-- [ ] **15.2 回答块**：标题、问题、回答正文与角标（`material-answer` 的 `sentences[]` 与 `mark`）、末行说明；进行中的步骤与进度（`answer-progress` 的 `step`、`done`、`total`）；角标就地展开（14 的 14.3）。
+- [ ] **15.1 提问框与估算**：提问框随 `question_answering.available` 出现与消失；回车后先用 `material-answer` 按问题文字查找（规范化后完全相同匹配），找到就直接显示，不估算；找不到时调用 `estimate`，显示估算浮层与“提问”主按钮，确认后调用 `run`。只能读、不能发起时（`question_answering.can_start` 为假）：提问框获得焦点即列出 `material-answers` 里已回答的问题；回车只查找已有回答，找不到就写“这个部署不能发起新的回答”，不调用 `estimate`（规格第 3.6 节）。真实估算来自计划 16 的 2.9；能力报告为“可用”的前提是运行流程与估算都已可用，所以不设“无法估算”的中间状态。
+- [ ] **15.2 回答块**：标题、问题、回答正文与角标（`material-answer` 的 `sentences[]` 与 `mark`）、末行说明；进行中的步骤与进度（`material-progress` 的 `step`、`done`、`total`、`waiting_for_confirmation`；只在 `material-answers` 列出进行中的运行时轮询，结束即停）；角标就地展开（14 的 14.3）。
 - [ ] **15.3 三个视图上的镜头**：有关的要点取 `material-answer` 返回的要点（与当前脉络版本不同时为 `null`，这时不过滤，并照规格说明）；脉络只留有关的要点并写隐藏的项数与“显示全部”；原文的“相关”段落取 `material-marks` 带 `answer_result_id`；概览只过滤“要点”一栏；原文在左页边写“相关”、书脊画蓝色刻度。
 - [ ] **15.4 开关与位置**：页眉写“按问题阅读 · 当前视图 · 依据的文本”；镜头开关时锚点不动；清除或 Esc 回到打开镜头前的位置；镜头状态只在会话内保持（不写入 04 的 4.5）。
 

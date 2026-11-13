@@ -1,12 +1,12 @@
 # 13 · 加工结果的读取层与合成结果
 
 类型：计划（结果块）
-负责：阅读页读取概览、脉络、回答与关联的唯一入口；能力报告；设计样例库与测试里的合成加工结果
+负责：阅读页读取概览、脉络、回答、关联、证据与进度的唯一入口；能力报告；设计样例库与测试里的合成加工结果
 状态：Pending
 
 ## Outcome
 
-- 阅读页只通过一个读取层取得加工结果。读取层调用知识加工规格 8.12 的九个读取操作与 8.13 的能力报告，给视图的是阅读页自己的视图模型，规格第 7 节列出的每一项都有对应字段。
+- 阅读页只通过一个读取层取得加工结果。读取层调用知识加工规格 8.12 的十个读取操作与 8.13 的能力报告，给视图的是阅读页自己的视图模型，规格第 7 节列出的每一项都有对应字段。
 - 设计样例库与测试里有四份带合成加工结果的样例：研究论文、综述、人写的笔记、按章处理的长资料（学位论文）。合成结果按规格的响应格式给出。在计划 16 交付之前，14–17 就在它们上面实现和验收。
 - 计划 16 的 14.9 交付后，读取层直接接上真实服务，视图不改。
 
@@ -32,7 +32,7 @@ R2 通过。
 ## Tasks
 
 - [ ] **13.1 读取层与视图模型**
-  - 九个读取操作各一个函数，请求与响应按规格 8.12 的表：
+  - 十个读取操作各一个函数，请求与响应按规格 8.12 的表；全部由计划 16 的 14.9 交付（`material-evidence` 的存储投影见版本化存储 4.2，同在 14.9）：
 
     | 操作                 | 阅读页的用途                                         | 由谁使用 |
     | -------------------- | ---------------------------------------------------- | -------- |
@@ -41,33 +41,38 @@ R2 通过。
     | `material-marks`     | 原文的要点标签、关键句、按问题阅读的“相关”段落，分页 | 14、15   |
     | `material-answers`   | 在这份资料上问过的问题                               | 15       |
     | `material-answer`    | 按结果或按问题文字取回答（规范化后完全相同匹配）     | 15       |
-    | `answer-progress`    | 回答进行中的进度                                     | 15       |
+    | `material-progress`  | 进行中的运行的进度（阅读层加工与回答共用）           | 14、15   |
     | `material-relations` | 引用数、按要点的关联                                 | 16       |
     | `material-topics`    | 所在主题页                                           | 16       |
     | `material-chapters`  | 长资料的章列表与各章状态                             | 17       |
+    | `material-evidence`  | 其他结果对正在读的版本的引用：证据标记与黄色刻度     | 11、10   |
 
   - 共同规则照规格：按 `literature_id` 与正在读的 `document_version_id` 寻址，长资料的一章加 `chapter_id`；列表按 `next_cursor` 续读，单个响应不超过 1 MiB；`ResultDescriptor` 的 `freshness`、`on_read_version`、`method_current` 都进视图模型；出处角标取响应里的 `mark`（`{paragraph, sentences}`，`sentences` 可以为 `null`），阅读页不自己分句。
   - 错误与空结果分开：资料没有某种结果时是 `null` 或空列表（视图显示第 3.9 节的状态）；能力不可用时是 `capability-unavailable`（视图不出现对应的入口）；`reading-target-mismatch`、`marks-version-mismatch` 按缺口显示，不当作“没有结果”。
-  - 能力报告：读 `GET /api/v1/query/status` 的 `processing_capabilities`。`reading_layers.available` 决定“概览”“脉络”两格，`question_answering.available` 决定提问框，`relations.available` 决定关联标签页里按要点的部分（引用数始终显示）。读取失败时按“不可用”处理。`can_start` 的用法等 01 的 1.7。
-  - 视图模型按规格第 7 节：共同部分、概览、脉络、回答、关联、长资料各一组类型。证据标记的数据等 01 的 1.8，阅读层运行的进度等 01 的 1.9。
+  - 能力报告：读 `GET /api/v1/query/status` 的 `processing_capabilities`。`reading_layers.available` 决定“概览”“脉络”两格，`question_answering.available` 决定提问框，`relations.available` 决定关联标签页里按要点的部分（引用数始终显示）。`can_start` 为假时，两格与提问框照常出现，所有“发起加工…”入口不出现，提问框只查找已有回答（规格第 1.3、3.6、3.9 节）。读取失败时按“不可用”处理。
+  - 视图模型按规格第 7 节：共同部分、概览、脉络、回答、关联、长资料、进度、证据各一组类型。
+  - 进度：`material-layers`、`material-answers` 的 `pending` 列出的每一项带 `task_id`，用 `material-progress` 读取；只在有 `pending` 时轮询，运行结束即停（规格第 5.2 节）。`waiting_for_confirmation` 为真时显示在等所有者确认。
+  - 证据：`material-evidence` 带 `exclude_result_ids`，填入阅读页已经单独显示的结果（当前脉络、打开着的回答，最多 10 个）；按 `next_cursor` 续读；`other_versions` 只进信息标签页的计数（规格第 1.4、2.5 节）。
   - 线上格式的类型来自 `packages/contracts`。计划 16 的 14.9 交付合同之前，线上格式暂按规格 8.12 与统一产品接口 2.4 写在一个单独文件里；合同到来时删掉该文件、改为导入（13.5），不在 Web 长期保留第二份格式。
 
 - [ ] **13.2 合成结果夹具**
-  - 四份样例，每份给出九个操作的响应（按规格的字段与形状，含 `ResultDescriptor`、`mark`、`next_cursor`）：
+  - 四份样例，每份给出十个操作的响应（按规格的字段与形状，含 `ResultDescriptor`、`mark`、`next_cursor`）：
     - 完整的概览与脉络；长资料另有 `material-chapters` 的章列表、按章的整份概览，以及带 `chapter_id` 的各章结果；
-    - 至少一个问答：一份完整回答，一份进行中（`material-answers` 里有任务、`answer-progress` 有进度）；
+    - 至少一个问答：一份完整回答，一份进行中（`material-answers` 的 `pending` 里有任务，`material-progress` 给出 `kind: answer` 的进度）；
+    - 一份阅读层加工进行中的资料（`material-layers` 的 `pending` 里有任务，`material-progress` 给出 `kind: reading-layers` 的进度），另一份在等所有者确认（`waiting_for_confirmation` 为真）；
+    - 证据：`material-evidence` 有记录表、报告、回答三种引用条目，其中一条引用它的结果已过时，一个片段的引用超过 20 条（只给最新 20 条与总数），`other_versions` 有计数；
     - 按要点的关联：`edge` 依据有已确认与候选两种，`reference` 依据一条；`citations` 的引用数，其中一份来源没有给出总数（`null`）；
     - 所在主题页一页以上。
-  - 故意包含：一处与原文不符的数字（带所引片段的原文）、一处“原文未给出”、一份没有关键图表的资料、一份 `freshness` 为 `outdated` 的结果、一份 `on_read_version` 为 `false` 的脉络（对应 `material-marks` 返回 `marks-version-mismatch`）、一处句号算不出的引用（`sentences` 为 `null`）。
-  - 另备一份能力报告为“全部可用”，一份为“全部不可用”，一份只有 `reading_layers` 可用。
+  - 故意包含：一处与原文不符的数字（带所引片段的原文）、一处“原文未给出”、一份没有关键图表的资料、一份 `freshness` 为 `outdated` 的结果、一份 `on_read_version` 为 `false` 的脉络（建在初稿上、现在读校订稿：`material-marks` 返回 `marks-version-mismatch`，出处角标所引原句来自初稿版本，其中一句在校订稿里能重新定位、一句不能）、一处句号算不出的引用（`sentences` 为 `null`）。
+  - 另备四份能力报告：全部可用；全部不可用；只有 `reading_layers` 可用；全部可用但 `can_start` 都为假（只读部署）。
   - 所有文字是合成的，标明“样例”；可以参考 `sandbox/cases/2026-11-12-reader-mockups/src/argument.js` 的样例文字，但不引用 sandbox 中的文件。
   - `mark` 按[文档与证据 3.5](../../architecture/technical/04-document-evidence.md#35-分句与出处角标目标尚未实现)的分句规则手工算好，作为夹具的期望值。
 - [ ] **13.3 让样例库提供合成结果**
-  - 在截图与测量的 Playwright 会话里，拦截 `POST /api/v1/query/material-reading` 与 `GET /api/v1/query/status`，按请求里的 `operation` 返回 13.2 的响应，能力报告取三份中的一份；测试用同一份夹具。“不可用”与“只有阅读层可用”各截一组，证明对应的入口不出现。
+  - 在截图与测量的 Playwright 会话里，拦截 `POST /api/v1/query/material-reading` 与 `GET /api/v1/query/status`，按请求里的 `operation` 返回 13.2 的响应，能力报告取四份中的一份；测试用同一份夹具。“不可用”“只有阅读层可用”“只读部署”各截一组，证明对应的入口不出现或照规格改写。
   - 手动浏览样例库（`serve`）时没有合成结果，服务也不报告能力可用，所以顶栏上没有“概览”“脉络”与提问框；在截图清单里注明这一点。
-  - `design-samples-pages.ts` 增加概览、脉络、按问题阅读、库内关联、长资料的页面。
+  - `design-samples-pages.ts` 增加概览、脉络、按问题阅读、库内关联、长资料的页面，以及两种状态：只读部署（概览、脉络与提问框获得焦点时的已答问题列表）；脉络建在别的版本上（概览、脉络与原文各一页）。
 - [ ] **13.4 查询与缓存**：结果按资料与文档版本缓存（规格第 5.1 节）；`material-layers` 的 `pending` 或结果描述变化时按规格第 5.2 节就地更新，并在页眉下方说明；轮询只在有进行中的运行时进行。
-- [ ] **13.5 接上计划 16 的合同与服务**（等计划 16 的 14.9）：删除暂存的线上格式文件，改为导入合同；在合成库上用计划 16 的测试帮助函数登记真实结果，用真实的 `material-reading` 与状态读取跑一遍 14–17 的测试，确认视图不改。回答、关联、主题页三类读取在计划 16 的对应块交付之前返回空结果或 `capability-unavailable`，这时 15、16 的真实部分照规格显示“没有”或不出现。
+- [ ] **13.5 接上计划 16 的合同与服务**（等计划 16 的 14.9）：删除暂存的线上格式文件，改为导入合同；在合成库上用计划 16 的测试帮助函数登记真实结果，用真实的 `material-reading` 与状态读取跑一遍 14–17 的测试，确认视图不改。回答、关联、主题页三类读取在计划 16 的对应块交付之前返回空结果或 `capability-unavailable`，这时 15、16 的真实部分照规格显示“没有”或不出现；`material-evidence` 与 `material-progress` 随 14.9 即有真实数据。
 
 ## 集成与影响
 
@@ -77,17 +82,18 @@ R2 通过。
 ## 验证
 
 - 新增 `apps/web/test/material-reading.test.ts`：
-  - 九个操作的请求按规格构造（寻址、`chapter_id`、`cursor`、`limit`）；
+  - 十个操作的请求按规格构造（寻址、`chapter_id`、`cursor`、`limit`、`exclude_result_ids`）；
   - 每类结果的“没有”“进行中”“过时”“不在正在读的版本上”“完整”五种情形映射正确；
   - `capability-unavailable`、`reading-target-mismatch`、`marks-version-mismatch` 与“没有结果”可区分；
   - 续读把分页拼完整，单页响应不超过 1 MiB 时也能处理截断；
   - 与原文不符、原文未给出、候选关系、`sentences` 为 `null` 在视图模型里可区分；
-  - 三份能力报告分别决定两格、提问框与按要点关联是否出现。
+  - 四份能力报告分别决定两格、提问框、按要点关联与“发起加工…”是否出现；
+  - 进度只在有 `pending` 时轮询，运行结束即停；证据排除已显示的结果，`other_versions` 不进正文。
 - 截图：新增页面能截出（内容由 14–17 渲染，本块只要求页面就绪）。
 
 ## 证据
 
-提交号；直接测试结果；九个操作与规格 8.12 的对照表；13.5 完成时的计划 16 版本。
+提交号；直接测试结果；十个操作与规格 8.12 的对照表；13.5 完成时的计划 16 版本。
 
 ## 退出条件
 
