@@ -7,16 +7,15 @@
 ## Outcome
 
 - 保存的筛选存在 catalog 里，随库备份。
-- CLI、stdio MCP、HTTP MCP 与 HTTP（Web 登录）都能读取、新建、改名、删除（以及 1.1 规定的其它操作）；设备用途 `read` 读、`operate` 写（规格 9.1）。
-- 条件在保存时按 `parseLibrarySearchRequest` 校验，不合格的拒绝。条件引用的文件夹被删除后，筛选保留，应用时命中零篇并按 1.1 的方式说明。
-- 一个离线迁移工具把精确的前一个 schema 升级到本计划的编号（暂定 19，见计划 README“schema 编号”），不改文献资产，不调用模型。若 01 的 1.3 要求改批注表，变化并入同一迁移。
+- `FilterOperation` 的 `list`、`create`、`rename`、`update`、`delete`、`import` 在 CLI `filters`、MCP `filters_query`／`filters_manage`、HTTP `/api/v1/query/filters` 与 `/api/v1/maintenance/filters` 上可用；设备用途 `read` 读、`operate` 写。`export` 在 07 块交付。
+- 名称规则、200 项上限、按名称排序、`missing_folder_id` 与错误码按规格。
+- 一个离线迁移工具把精确的前一个 schema 升级到本计划的编号（暂定 19，见计划 README“schema 编号”），一次加入 `saved_filters` 与 `reading_mark_places` 两张表（后者供 05 使用），不改文献资产，不调用模型。
 
-规格：[用户整理 9.1](../../architecture/technical/09-user-organization.md#91-保存的筛选进入文献库)（经 01 的 1.1 补齐）；设备用途见[第 6.3 节](../../architecture/technical/09-user-organization.md#63-agent-的同等授权)；迁移方式见[存储技术篇第 7 节](../../architecture/technical/07-versioned-storage.md#7-运行审查存储)与 [4.1](../../architecture/technical/07-versioned-storage.md#41-当前-schema-与显式转换)。
+规格：[用户整理 9.1](../../architecture/technical/09-user-organization.md#91-保存的筛选进入文献库)（是什么、操作、入口、浏览器导入）；两张表见[存储技术篇第 7 节](../../architecture/technical/07-versioned-storage.md#7-运行审查存储)的“用户整理的两张表”；设备用途见[第 6.3 节](../../architecture/technical/09-user-organization.md#63-agent-的同等授权)；迁移方式见[存储技术篇第 7 节](../../architecture/technical/07-versioned-storage.md#7-运行审查存储)与 [4.1](../../architecture/technical/07-versioned-storage.md#41-当前-schema-与显式转换)。
 
 ## 进入条件
 
-- 01 的 1.1 已写进规格；G1。
-- 3.1 的 DDL 清单要等 01 的 1.3 有结论（决定批注表是否随本迁移变化）。
+- G1。规格已补齐（01 完成）。
 - 3.2 起要 C1：前一个编号的迁移已合入，指纹固定。
 - 3.7 要 G-lib。
 
@@ -34,11 +33,11 @@
 ## Tasks
 
 - [ ] **3.1 DDL 清单与测试数据**
-  - 按 1.1（以及 1.3 若要求）写出表结构变化清单，记入本块回执，交总设计师核对后再写进 `schema.ts`。
+  - 按 07 第 7 节写出 `saved_filters` 与 `reading_mark_places` 的 DDL，记入本块回执，交总设计师核对后再写进 `schema.ts`。
   - 准备合成的前一编号的库：含文件夹、批注、最近阅读、加工结果，供 3.6 使用。
-- [ ] **3.2 schema 清单**：保留前一编号的清单与指纹作为迁移的精确输入；`SCHEMA_MANIFEST` 与 `SCHEMA_VERSION` 改为本计划的编号。新表不进入 `LIBRARY_STATE_INPUT_TABLES`（规格 6.1）。
-- [ ] **3.3 合同与服务**：按 1.1 实现读操作与写操作，读写分开（同 `FolderService.query` 与 `manage` 的分法）；名称规则同文件夹（规格 2.2）；条件用 `parseLibrarySearchRequest` 校验；写入在一个事务内完成，并记操作记录与操作人（规格 6.4）。
-- [ ] **3.4 三端入口**：CLI、MCP、HTTP 按 1.1 的名称；MCP 工具按设备用途列出与拒绝；设备令牌不能调用 `/api/v1/query/*` 与 `/api/v1/maintenance/*`（规格 6.3）。
+- [ ] **3.2 schema 清单**：保留前一编号的清单与指纹作为迁移的精确输入；`SCHEMA_MANIFEST` 与 `SCHEMA_VERSION` 改为本计划的编号。两张新表都不进入 `LIBRARY_STATE_INPUT_TABLES`，不推进检索 source revision（规格 6.1、07 第 7 节）。
+- [ ] **3.3 合同与服务**：`packages/contracts` 中的 `FilterOperation` 与解析；`FilterService`（`query` 只接受 `list` 与 `export`，`manage` 只接受写操作）。按 09 §9.1 实现名称规则、上限、排序、`missing_folder_id`、`update` 替换条件与排序、`import` 的逐项结果（截短、跳过、加序号、不合格列出原因）；写入在一个事务内完成，经 `executeMaintenance` 记操作记录。
+- [ ] **3.4 三端入口**：CLI `filters list` 与 `filters create|rename|update|delete|import --request FILE`；MCP `filters_query`（`read`）与 `filters_manage`（`operate`）；HTTP `POST /api/v1/query/filters` 与 `POST /api/v1/maintenance/filters`；MCP 工具按设备用途列出与拒绝；设备令牌不能调用 `/api/v1/query/*` 与 `/api/v1/maintenance/*`（规格 6.3）。
 - [ ] **3.5 schema 编号的检查**：所有写死当前编号的检查改为本计划的编号，与前一编号所在计划的列表对齐（C1）。
 - [ ] **3.6 离线迁移**：沿用现有迁移模块的结构：只接受绝对路径与精确的前一编号指纹；未知结构、已是本编号、有运行中任务时拒绝；事务内 DDL 与身份更新；完整性与外键检查；所有旧表行数不变；新表为空；回执写出耗时与核对结果。不读个人配置，不调用模型，不改文献资产，不搬迁浏览器里的数据。
 - [ ] **3.7 正式库只读副本演练**（G-lib）：在本机副本上运行脚本，记录耗时与回执；副本与报告放 `sandbox/runs/`、`sandbox/reports/`，不提交。
@@ -52,10 +51,11 @@
 ## 验证
 
 - 新增 `apps/server/test/saved-filters.test.ts`（合成库），证明：
-  - 新建、读取、改名、删除（及 1.1 规定的其它操作）的结果；
-  - 名称为空、超长、重名被拒；条件不合法被拒；超过上限被拒；
+  - `list`、`create`、`rename`、`update`、`delete` 的结果；列表按名称排序；`update` 只换条件与排序、名称不变；
+  - 名称为空、超过 128 字符、重名（规范化后）被拒为 `filter-name-conflict` 等规格的码；条件不合法为 `filter-condition-invalid`；第 201 项为 `filter-limit`；编号不存在为 `filter-not-found`；读写操作混用被拒；
+  - `import`：合格与不合格的项混在一起时只有不合格的不写入，并列出原因；超长名称截为 128；同名同条件跳过；同名不同条件加序号；再次导入同一批不新建；
   - 保存的是条件：库变化后应用同一筛选得到新的结果；
-  - 条件里的文件夹被删除后，筛选保留，应用时命中零篇并按 1.1 说明；
+  - 条件里的文件夹被删除后，筛选保留、条件不变，列表带 `missing_folder_id`，按它查询命中零篇；
   - 写入前后文献的书目、来源、资产、文本、标签、状态投影与加工结果的新旧状态不变（规格第 8 节“不改变文献事实”）；
   - 只读查询不写库；
   - Web 登录、CLI、stdio MCP、HTTP MCP 结果相同。
@@ -76,4 +76,3 @@
 
 - 迁移失败时库保持原样（事务回滚）；记录失败的核对项。
 - C1 未通过时停在 3.1，回执标明 BLOCKED。
-- 1.3 迟迟没有结论时，总设计师可以决定本迁移不含批注表的变化；那时 05 若需要表结构变化，要另一个编号，记入计划 README 的“schema 编号”。

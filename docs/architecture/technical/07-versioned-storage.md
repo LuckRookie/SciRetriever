@@ -487,6 +487,15 @@ Analysis 的 `processor_result_summaries` 保存已发布结果用量/覆盖摘�
 
 第二轮库组织新增 `snapshot_labels`（显示名与不可变快照 hash 分离）、`folders`、`folder_members`、`reading_history`。已有 `processor_result_summaries` 增加 `method_revision`，`processor_result_currentness` 只读投影将旧方法标为过时；旧统计无法代表当前三计数时返回 null，不迁移、不当作零。所有 DDL 仍在 schema.ts。schema 13 换为按文献增量更新的文献状态投影；schema 14 新增 `reading_marks`（阅读批注，ADR 0046），由 `scripts/migrate-reading-marks-v14.mjs` 从 13 显式升级。已有正式库需要授权后在副本显式更新，启动不会自动加表。
 
+**目标（尚未实现）：用户整理的两张表。** 按[用户整理 9.1、9.5](09-user-organization.md#9-尚未实现)，下一次 schema 升级增加：
+
+| 表                  | 字段与约束                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| saved_filters       | filter_id TEXT PK（随机 UUID）；name 非空、UNIQUE；query_json 合法 JSON（解析后的规范 `LibraryQuery`）；sort 非空；created_at、updated_at。不保存操作人，同 folders；不进入 `LIBRARY_STATE_INPUT_TABLES`                                                                                                                                                                           |
+| reading_mark_places | PK(mark_id,target_kind,target_id)；mark_id FK→reading_marks，ON DELETE CASCADE；target_kind 为 pdf 或 document；target_id 为 PDF sha256（64 字符）或 document_version_id；pdf_page、pdf_rects_json 与 document_start_utf8、document_end_utf8 两组按 target_kind 恰好一组非空；similarity 在 0.7–1；method 非空；located_at。是可重建的缓存，不设对文档版本的外键，同 reading_marks |
+
+两表都只由离线迁移加入，启动不自动加表；它们不推进文献状态或检索 source revision。
+
 ## 8. 设备认证存储
 
 按 ADR 0058，Web transport 认证 owner 提交设备连接事实，Storage 仅保存派生值与生命周期。单一 schema 16 在原 15 上增加：
