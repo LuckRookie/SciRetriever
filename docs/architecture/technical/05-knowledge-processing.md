@@ -1081,6 +1081,40 @@ Agent 的分层读取（需求[用2](../requirements.md#用2-agent-取用知识)
 
 按资料取用时，Agent 先取这份资料的概览，再取脉络，需要时再进原文（需求[用2](../requirements.md#用2-agent-取用知识)、8.16）。概览与脉络各自仍按上面四层读取。
 
+**按资料的阅读读取。** 阅读页对一份资料要读的内容（[阅读体验](../web/reading-experience.md)第 7 节），由下面九个读取操作给出。它们是应用层的同一组只读操作：Web 经 HTTP 调用（[统一产品接口 2.4](01-product-interface.md#24-当前只读-api)），CLI 与 MCP 调用同一组操作，得到同样的结果（[ADR 0033](../decisions/0033-machine-interfaces-cover-web-capabilities.md)）。入口与工具名见 8.13。
+
+共同规则：
+
+- 每个操作按资料寻址：`literature_id`，加上正在读的文档版本 `document_version_id`（主 PDF 或某个补充材料部分的一个版本）。版本不属于这份资料时，按请求无效拒绝（`reading-target-mismatch`）。长资料的一章另加 `chapter_id`（大纲里最高一级章节的标识，8.16）；不给时指整份资料。
+- 只读：不发起加工，不调用模型，不排队，不重算也不改写任何结果。由脉络推出的内容（8.16）在读取时按规则计算，可以用可重建的查询投影加速，结果相同。
+- 有界：列表操作的 `limit` 默认 50、最多 200，每个响应不超过 1 MiB，放不下时少给几条并给出续读位置 `next_cursor`。续读位置绑定资料、文档版本与所读结果的 ID，不能用于别的对象。
+- 证据照常携带：每个引用带文档版本、文本等级、核对依据（8.2），以及出处角标 `mark`：`{paragraph, sentences}`，按[文档与证据 3.5](04-document-evidence.md#35-分句与出处角标目标尚未实现)的规则计算，句号算不出时 `sentences` 为 `null`。
+- 结果描述 `ResultDescriptor`：`{result_id, content_sha256, producer（算子或汇总模式的 id@版本）, method_sha256, created_at, built_on: {document_version_id, text_level}, on_read_version, freshness, method_current, coverage}`。`freshness` 是 8.4 的内容过时标记（`current` 或 `outdated`）；`on_read_version` 说明它是否建在正在读的版本上；`method_current` 说明方法是否为当前版本。过时的结果照常返回，只是这样标明。
+- 部分结果不作为“当前结果”返回。一份资料的全部结果（含部分与旧结果）仍由既有的 `literature_results` 列出。
+
+选取“当前”的概览与脉络：
+
+1. 候选是这份资料这一部分（有 `chapter_id` 时是这一章）的完整脉络结果，不论建在哪个版本上。
+2. 有建在正在读的版本上的，取其中最新发布的一份；没有时，取建在其它版本上最新发布的一份，`on_read_version` 为 `false`，并给出它的 `built_on`。
+3. 概览取以这份脉络为输入的最新完整概览；没有就是 `null`，不拿以别的脉络为输入的概览来配，以免编号对不上。
+
+| 操作                 | 输入                                                                                                     | 输出                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| -------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `material-layers`    | `{literature_id, document_version_id, chapter_id?}`                                                      | `{target, mode, spine, overview, points_total, pending}`。`target` 含正在读的版本与文本等级；`mode` 为 `whole` 或 `by-chapter`；`spine` 是脉络的 `ResultDescriptor` 与外框的 `reading`；`overview` 是描述加全部节（条数有上限，8.16），`refs[]` 展开为编号、短文本与类别，关键图表另带它支撑的要点；`pending` 是这份资料上进行中或待确认的 `reading-layers` 运行（任务 ID 与状态，取自任务状态）。整份资料按章处理时，`overview` 是按章的整份概览                                                                              |
+| `material-points`    | `{literature_id, document_version_id, chapter_id?, spine_result_id, cursor?, limit?}`                    | 脉络记录按编号分页：每条的编号、要点、引用、`heading` 所指章节（标识、层级、编号、标题文字）、依据。依据带核对结果；数字不符时另带所引片段的原文（不超过 4 KiB，超出标明截断），不猜测原文中是哪个数；图表依据带它支撑的全部要点编号；引用依据带“是否在库内”的解析结果（库内文献 ID、不在库内，或初稿上无法解析）                                                                                                                                                                                                              |
+| `material-marks`     | `{literature_id, document_version_id, chapter_id?, spine_result_id, answer_result_id?, cursor?, limit?}` | 正在读的版本上有标记的片段，按文档顺序分页：每个片段的段号、对应的要点编号、关键句的位置与句号；给了 `answer_result_id` 时，另标出回答引用的“相关”片段。脉络或回答不是建在正在读的版本上时，不换算位置，返回 `marks-version-mismatch` 缺口                                                                                                                                                                                                                                                                                     |
+| `material-answers`   | `{literature_id, document_version_id, cursor?, limit?}`                                                  | 在这份资料上问过的问题，每个规范化后的问题一行：原问题文字、规范化后的文字、最新的完整回答（`ResultDescriptor` 或 `null`）、进行中或待确认的运行（任务 ID 与状态，取自任务状态）。按最近更新排序                                                                                                                                                                                                                                                                                                                               |
+| `material-answer`    | `{literature_id, document_version_id, result_id}` 或 `{literature_id, document_version_id, question}`    | `{match}`：找不到时为 `null`；找到时是描述、问题、答案类型、各句及其引用（8.2 的 `sentences[]`）或答案与引用、原因，以及有关的要点（8.16 的规则；与当前脉络的版本不同时为 `null`）。按问题查找时只做规范化后的完全相同匹配，先取建在正在读的版本上的，再取最新的                                                                                                                                                                                                                                                               |
+| `answer-progress`    | `{literature_id, job_id}`                                                                                | 取自任务状态，不读结果：`{job_id, state, step, done, total, updated_at}`；`done`、`total` 是已读与应读的节数，来自阅读会话的 `reading_status`（8.5）。任务不以这份资料为目标时按请求无效拒绝                                                                                                                                                                                                                                                                                                                                   |
+| `material-relations` | `{literature_id, document_version_id, cursor?, limit?}`                                                  | `{citations, summary, points, next_cursor}`。`citations` 是不需要加工就有的引用数目：引用与被引用的总数（来源没有给出时为 `null`）和库内数，取自引用关系（[文献与材料 2.6](03-literature-materials.md#26-文献引用与支持)）。`points` 按当前脉络的要点分组，每条关联有类别（`agrees`、`contradicts`、`cited-by`、`cites`）、依据（`edge` 是 `relations` 的边，带 `confirmed` 或 `candidate`；`reference` 是脉络的引用依据经引用关系解析，没有候选之分）、对方的文献、要点与位置、一句说明。`summary` 给出每类的总数与涉及的要点 |
+| `material-topics`    | `{literature_id, document_version_id, cursor?, limit?}`                                                  | 页面集当前入口里包含这份资料的主题页：页面 ID、标题、页面集清单版本、所依据的组（结果 ID 与组 ID）（8.9）                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `material-chapters`  | `{literature_id, document_version_id, cursor?, limit?}`                                                  | `{mode, rule, chapters, whole_overview, next_cursor}`。`mode` 与 `rule`（阈值与方法 hash）按 8.16 的长资料判定对正在读的版本算出；每章有标识、章号、作者的章标题、层级、页码范围（定位不可靠时为 `null`）、字节数，以及这一章脉络与概览的状态（`none`、`complete`、`outdated`、`running`）；`whole_overview` 是按章整份概览的描述或 `null`                                                                                                                                                                                     |
+
+- 每一章的概览、脉络与标记，用 `material-layers`、`material-points`、`material-marks` 加 `chapter_id` 读取，规则同整份资料。
+- 问题的规范化：Unicode NFKC，去掉首尾空白，把连续的空白字符（Unicode `White_Space`）换成一个空格。不改大小写，不删标点，不做近似匹配。存储与查找用同一规则；运行规范里的问题仍保存原文。
+- `material-relations` 只把端点在当前脉络上的边挂到要点下；端点在这份资料其它脉络结果上的边不换算，只在 `summary` 里计数为“未挂到当前脉络”。`relations` 结果有多个决定版本时，读最新的版本（8.8）。
+- 这些操作都只读已有内容。资料还没有某种结果时，返回 `null` 或空列表，不报错，也不建议自动加工；是否发起由使用者决定（8.6）。
+
 每一层都只读已有内容，不触发加工。需要在限额内跨结果取得知识时，使用混合 Context（[06 第 4.10 节](06-retrieval-context.md#410-处理器结果与混合-context)）。
 
 带出处的导出（需求[用3](../requirements.md#用3-人的学习与写作)）：
@@ -1100,7 +1134,16 @@ Agent 的分层读取（需求[用2](../requirements.md#用2-agent-取用知识)
   - `estimate` 返回花费与用时的区间及依据（8.6），不调用模型。
   - 付费的 `run` 与所有调用模型的辅助操作须附有效的任务授权，并满足 8.6“发起与确认”中 Agent 自行确认的条件；否则只生成待所有者确认的请求，不发生模型调用。
   - `get_result`、按条目查询与沿证据跳转按 8.12 的分层读取。
+  - 按资料的阅读读取（8.12 的九个操作）在三端是同一组操作：HTTP 为 `POST /api/v1/query/material-reading`（[统一产品接口 2.4](01-product-interface.md#24-当前只读-api)），CLI 为 `sciretriever literature reading <操作> --request FILE|-`，MCP 为 `material_reading` 工具的同名操作。它们属于查询面：stdio MCP 的只读模式即可使用；HTTP 版 MCP 上属于既有的 `read` 用途，不新增用途（[ADR 0058](../decisions/0058-import-system-and-agent-access.md) 第 2 节）。
+  - 能力报告：服务的状态读取（HTTP `GET /api/v1/query/status`、CLI `sciretriever literature status`、MCP `status`）增加 `processing_capabilities`，对阅读页依赖的三项加工各给一项：
+    - `reading_layers`：脉络、`overview` 与 `overview-by-chapter`；
+    - `question_answering`：`qa`；
+    - `relations`：`library-relations` 组合与 `relations` 类型。
+
+    每项为 `{available, versions, can_start}`：`available` 表示这个部署的这个版本实现了这项加工及 8.12 的相应读取；`versions` 列出实现它的算子、内置规范与汇总模式的 `id@版本`，不可用时为 `null`；`can_start` 表示这个部署能接受这项加工的运行（只读部署为 `false`）。它只说明服务能做什么，不说明某份资料有没有结果，也不检查模型配置是否就绪（那是配置状态，见[统一产品接口 5.8](01-product-interface.md#58-status-与-probe当前实现与目标边界)）。读取它不需要阅读页已有授权之外的授权。阅读页只在 `reading_layers.available` 时显示“概览”“脉络”两格，只在 `question_answering.available` 时显示提问框（阅读体验第 1.3 节）。
+
   - 所有者操作（确认待确认的请求、授予与撤销任务授权、发布声明式算子）只在 Web、本机 CLI 与带 `--owner` 的 stdio MCP 上执行，规则见 8.6“所有者操作”；HTTP 版 MCP 不提供这些工具。
+
 - 暂不增加按算子命名的便捷工具，以后只做薄别名。
 
 ### 8.14 声明式算子
@@ -1251,6 +1294,8 @@ Agent 的分层读取（需求[用2](../requirements.md#用2-agent-取用知识)
 - 有关的要点：同一文档版本的脉络里，引用的片段与回答某一句的引用片段相同的要点。读取时按引用计算，不调用模型；回答与脉络的文档版本不同时不给出。
 - 原文里“相关”的段落：回答各句引用的片段。
 - 进度与状态：运行的任务进度，以及阅读会话的 `reading_status`（8.5）。
+
+阅读页读取上面这些内容、按问题查找已有回答，以及读取库内关联与长资料的章列表，都用 8.12 的“按资料的阅读读取”。
 
 **库内关联**（阅读体验 3.7）：
 

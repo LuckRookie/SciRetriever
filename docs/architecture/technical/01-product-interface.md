@@ -109,6 +109,17 @@ QueryApplication 的状态为 ready、not-initialized、unavailable。缺库不�
 
 该协议服务当前 Library；不能向它传入未来 KnowledgeQuery 然后声称支持文档片段。artifact 成功可以是二进制响应，失败/缺口为结构化 JSON；客户端不能无条件按 JSON 解码所有响应。`material-bytes` 按显式稳定资产 ID/hash 读取主件或补充件，不按 current 重选；流正常结束后客户端仍应校验完整 hash。它不暴露内部文件路径，也不提供任意 range 或持久读取会话。
 
+**目标（尚未实现）：按资料的阅读读取与能力报告。** 合同与选取规则见[知识加工 8.12](05-knowledge-processing.md#812-视图机器读取与导出)的“按资料的阅读读取”与 8.13 的“能力报告”；这里只写 Web 的形式：
+
+| 路由                             | 方法与输入                                                                                                                                                                                                                                      | 结果                                                                          |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `/api/v1/query/status`           | GET，不变                                                                                                                                                                                                                                       | readiness 之外增加 `processing_capabilities`                                  |
+| `/api/v1/query/material-reading` | POST `{ protocol_version: 1, operation, request }`；operation 为 `material-layers`、`material-points`、`material-marks`、`material-answers`、`material-answer`、`answer-progress`、`material-relations`、`material-topics`、`material-chapters` | `{ protocol_version: 1, result }`，每个响应不超过 1 MiB，列表带 `next_cursor` |
+
+- 两者都是读取：不发起加工、不调用模型、不改写结果。认证与现有 query 路由相同，阅读页已有的 Web 会话即可读取；请求 wire body 沿用普通 HTTP 命令的 64 KiB 上限，严格解析封套，拒绝重复键和未知字段。
+- 能力不可用时，`material-reading` 返回 `capability-unavailable`，不返回空结果冒充“没有加工”。
+- 设备令牌不能访问这两条路由（未登记于设备路由表）；Agent 经 HTTP 版 MCP 的 `material_reading` 与 `status` 工具读取同样的内容，属于既有的 `read` 用途。
+
 按 [ADR 0035](../decisions/0035-authenticated-remote-web-access.md)，正式 Web 默认监听所有 IPv4 网卡，Web 访问统一登录，不存在本机免登录分支或固定公开 origin 配置。使用操作者指定的密码，或将自动生成的 256 位 API key 仅返回启动调用方显示。HTTP access owner 在业务路由之前保护 HTML、资料、配置与流；Host 只接受 IPv4 字面地址/localhost，Web Origin 必须与请求 Host 一致，不信任转发头。tab grant 绑定登录会话，注销/过期撤销观看连接。设备连接是 [ADR 0058](../decisions/0058-import-system-and-agent-access.md) 规定的独立认证边界，见下节；不授予 Web 会话权限。没有远程多租户身份系统，已有 stdio MCP 与显式工作台连接保持原协议。
 
 #### 2.4.1 设备连接与按用途准入
