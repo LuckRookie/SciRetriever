@@ -429,6 +429,11 @@ Literature 拥有元数据与引用；Parsing 拥有原始结果；Proofread 拥
   - 只为引用初稿版本（`schema_version` 3）的来源写行。schema 17 之前不存在初稿，所以没有已发布结果需要回填。
   - 它是可重建投影：内容由结果文件确定，可从结果文件重建，不是第二份事实。
   - `processor_result_documents` 在 schema 17 增加按 `document_version_id` 的索引，两项聚合（[文档与证据 8.7](04-document-evidence.md#87-选择校订范围的事实)）都按版本查索引，不扫描全部结果。
+- 被引片段的投影（目标，尚未实现）：`processor_result_citations(document_version_id, segment_id, result_id, entry_ref, PRIMARY KEY(document_version_id, segment_id, result_id, entry_ref))`。每行是一份结果里的一个条目对某个文档版本的一个片段的直接引用。
+  - 用途是按版本列出被引片段（[知识加工 8.12](05-knowledge-processing.md#812-视图机器读取与导出)的 `material-evidence`），不必打开结果文件。
+  - 写入方是 Analysis，在发布结果的同一事务内写入，结果删除时级联删除；Storage 只执行写入与约束。
+  - 只记直接引用文本位置的条目；汇总经上游条目的间接引用不记。
+  - 它是可重建投影：内容由结果文件确定，可从结果文件重建，不是第二份事实。它随提供 `material-evidence` 的那次结构变更加入，已发布的结果由同一次离线迁移从结果文件回填。
 
 ### 4.3 投影与只读应用
 
