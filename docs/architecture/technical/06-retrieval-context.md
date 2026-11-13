@@ -4,7 +4,7 @@
 负责：文献查询、检索投影与上下文读取；technical 中早期形式化接口（查询）
 状态：现行；目标接口单独成节
 
-[设计总览](../design.md) · [八模块技术导航](../technical.md)
+[设计总览](../design.md) · [九模块技术导航](../technical.md)
 
 本模块对应设计中的 **⑥ 知识查询与上下文**，从已有库中检索文献、材料和知识，按范围与预算返回内容、来源、证据和缺口。
 
@@ -59,11 +59,16 @@ LibraryQuery
   discovery_run_ids: tuple[DiscoveryRunId, ...]
   intake_batch_ids: tuple[IntakeBatchId, ...]
 
+  folder: {id: FolderId, include_descendants: bool} | None
+  recently_opened: bool | None
+
 LiteratureMissingStep =
     "primary-pdf"
   | "parser-result"
   | "literature-content"
 ```
+
+`folder` 按使用者的文件夹筛选，`recently_opened` 只取最近阅读过的文献；两者的含义和数据归[用户整理](09-user-organization.md#24-作为筛选条件)。
 
 全部可选单值默认为 `None`，全部多值字段默认为空 tuple；完全空的 `LibraryQuery` 表示查询全部具体 `Literature`。字符串去除边界空白后必须非空，多值字段去重并保持调用方顺序。不同字段之间使用 AND；一般多值字段内部使用 OR；`keywords` 与 `subject_terms` 内部使用 AND，即当前 metadata 必须同时具有全部给定的完整词。
 

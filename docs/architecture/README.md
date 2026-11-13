@@ -9,7 +9,7 @@
 1. [requirements](requirements.md)：通用文献知识库的目标，人和 Agent 两类服务对象，收、读、理、炼、用五件事及其验收。
 2. [ADR索引](decisions/README.md)：0026/0027/0028决定产品方向；0031选定受控 DSH/Cordis 执行基础；旧身份/来源/安全规则保留适用部分。
 3. [principles](principles.md)、[design](design.md)：稳定不变量与目标模块/数据所有权。
-4. [八模块技术导航](technical.md)：与 design 一一对应的 8 篇正文，分别给出内部结构、字段、接口、运行和存储设计。
+4. [九模块技术导航](technical.md)：与 design 一一对应的 9 篇正文，分别给出内部结构、字段、接口、运行和存储设计。
 5. [工作流](knowledge-service-workflows.md)、[统一产品接口：共享合同、结构解析与版本兼容](technical/01-product-interface.md#6-共享合同结构解析与版本兼容)：独立使用与组合时序、尚待冻结的字段和技术选择。
 6. [TS基线](typescript-baseline.md)：当前源码位置与技术责任；迁移前差异只作[历史参考](../archive/2026-10-24-docs-consolidation/docs/architecture/evolution-map.md)，进度归[计划](../plans/README.md)。
 
