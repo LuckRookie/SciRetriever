@@ -84,7 +84,7 @@ pnpm sciretriever web --port 4174
 | [ScanSci PDF](https://github.com/Rimagination/scansci-pdf)（Apache-2.0）              | PDF 获取的候选发现方式与分阶段获取路径                                                                                        | [获取路径调研](docs/notes/pdf-acquisition-reference-paths.md)、[许可审计](docs/notes/scansci-migration-audit.md) |
 | [Zotero](https://github.com/zotero/zotero)（“Find Available PDF”与 Zotero Connector） | PDF 发现、按站点的 Translator 与下载后验证                                                                                    | [获取路径调研](docs/notes/pdf-acquisition-reference-paths.md)                                                    |
 | Zotero Full-Text Downloader（2026-08-03 本地快照，没有公开仓库）                      | 开放来源到浏览器的回退顺序与 PDF 校验                                                                                         | [获取路径调研](docs/notes/pdf-acquisition-reference-paths.md)                                                    |
-| [TextFold](https://github.com/chenxiachan/textfold)（Apache-2.0）                     | 阅读页的做法：连续缩放、版面变化时固定阅读位置、就地展开回原文、用字体区分作者与机器的文字、加深关键句                        | [ADR 0061](docs/architecture/decisions/0061-reading-first-reader-and-layered-reading.md)                         |
+| [TextFold](https://github.com/chenxiachan/textfold)（Apache-2.0）                     | 阅读页的做法：连续缩放、版面变化时固定阅读位置、就地展开回原文、用字体区分作者与机器的文字                                    | [ADR 0061](docs/architecture/decisions/0061-reading-first-reader-and-layered-reading.md)                         |
 
 ## 开发与贡献
 
