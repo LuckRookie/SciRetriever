@@ -62,6 +62,9 @@ LibraryQuery
   folder: {id: FolderId, include_descendants: bool} | None
   recently_opened: bool | None
 
+  # 目标（尚未实现），见 2.1.8
+  has_primary_pdf: bool | None
+
 LiteratureMissingStep =
     "primary-pdf"
   | "parser-result"
@@ -403,6 +406,43 @@ PDF 部分没有默认文本时为 null；非 PDF 资产没有这个字段。
 **查找命中。** 材料 Context 与混合 Context 的 `MaterialContextItem` 增加可选字段 `text_level`：`kind = "source-text"` 时为命中片段所在固定版本的等级；`kind = "metadata"` 时没有这个字段。它来自命中已核验的固定版本，不来自索引条目；索引条目与游标不变。
 
 **一致性。** 同一次读取中，条目、详情、建档状态和命中的 `text_level` 与 `document_version_id` 来自同一个只读快照，与默认关系一致，规则同 2.1.3。
+
+#### 2.1.8 文献库计数与全文取得情况
+
+`LibraryCounts` 是文献库计数的读取结果。CLI 为 `literature counts --request FILE`，MCP 为 `library_counts`，HTTP 为查询路径 `library-counts`；请求是 `{query: LibraryQuery}`，三者共用同一合同。合同的边界解析在 `packages/contracts/src/library-counts.ts`。
+
+```text
+LibraryCounts
+  total: int                      # 范围内的具体版本数
+  statuses: {LiteratureStatus: int}   # 六种状态各多少个版本，合计等于 total
+  unavailable_pdf: int            # 状态为 UNREVIEWED 且有自动 PDF 获取耗尽事实的版本数
+  recently_opened: int            # 范围内最近 30 天打开过的版本数，最多计到 100
+  with_primary_pdf: int           # 目标（尚未实现）：有主 PDF 的版本数，供快速筛选“有 PDF”；“仅元数据”为 total − with_primary_pdf
+  full_text: FullTextCounts       # 目标（尚未实现），见下文
+
+FullTextCounts                    # 目标（尚未实现）
+  total: int                      # 范围内的论文数
+  obtained: int                   # 已取得全文的论文数
+  missing: int                    # 未取得全文的论文数
+  exhausted: int                  # missing 中自动途径已试完的论文数
+```
+
+**范围。** 计数的范围是请求的 `query`，但忽略其中的 `statuses` 与 `needs_manual_pdf`：它们是文献库的快速筛选，计数要给每个快速筛选显示数字，所以不受当前选中的快速筛选影响。其它条件都生效。范围为空时各数为 0。
+
+**状态计数。** `total`、`statuses`、`unavailable_pdf`、`recently_opened` 与 `with_primary_pdf` 按具体版本（`Literature`）计，与列表的单位相同（[2.2.1](#221-libraryquery-与结果单位)）。同一篇论文的预印本与正式版各计一次。
+
+**全文取得情况（目标，尚未实现）。** `full_text` 回答需求[收2](../requirements.md#收2-取得全文)“多少已经取得，多少还没有，其中多少已经试完了自动途径”，按论文计：
+
+- **单位是论文，不是版本。** 一篇论文就是一个 `MetaLiterature`，它的几个版本只计一次（需求[收4](../requirements.md#收4-规模与持续积累)：一个版本达到目标即可）。论文在范围内，当且仅当它至少有一个版本命中 `query`。判断是否取得、是否试完时看这篇论文的全部当前版本，不只看命中的版本；取法同 `selectionSnapshot` 的 matches 与 members（[2.2.1](#221-libraryquery-与结果单位)）。
+- **已取得（`obtained`）**：至少一个版本有主 PDF。之后处于什么状态都算：等待解析或建档、建档中、建档失败、就绪，以及 `EXCLUDED`。被排除的论文仍有它的全文。
+- **未取得（`missing`）**：没有一个版本有主 PDF。
+- **已试完（`exhausted`）**：`missing` 中，每个版本都有自动 PDF 获取耗尽事实的论文（耗尽事实的成立条件见[文献与材料 4.5](03-literature-materials.md#45-获取流程)）。它是 `missing` 的一部分，不是第三类。
+- **关系**：`total = obtained + missing`，`exhausted ≤ missing`。“还可以再试”是 `missing − exhausted`，入口可以这样显示，合同不另设字段。
+- **与状态计数的关系**：状态计数按版本，`full_text` 按论文，两者不能相加相减。例如一篇论文的预印本是 `UNREVIEWED`、正式版是 `READY`，状态计数里两个版本各计一次，`full_text` 里这篇论文只计一次，算已取得。
+
+**一致性与只读。** 同一次读取的全部数字来自同一个只读快照。计数不联网、不调用模型、不创建任务，不写库（规1）。这些数是查询时的聚合，不另存（[存储 2.3.6](07-versioned-storage.md#236-有意保存与有意推导)）。
+
+**筛选“有主 PDF”（目标，尚未实现）。** `LibraryQuery.has_primary_pdf` 为 true 时只匹配有主 PDF 的版本，为 false 时只匹配没有主 PDF 的版本，null 或省略时不筛选。它按版本，与列表的单位相同。省略时不进入规范化的查询，已有请求与 cursor 的字节不变。文献库从“全文取得情况”一行跳到列表时用它（[页面规格“文献库”](../web/page-specs.md#文献库)）；列表按版本列出，所以条数可以多于对应的论文数。
 
 ### 2.2 查询
 
