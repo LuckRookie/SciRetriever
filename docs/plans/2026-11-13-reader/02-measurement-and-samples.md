@@ -15,13 +15,13 @@
 ## 进入条件
 
 - G1。
-- 2.5 起需要 01 的 1.1 与 1.5（测量口径）。
+- 测量口径按规格第 8.2 节；“样子不变”的对照按规格第 10 节。
 
 ## 责任边界
 
 - 负责：前端实施者。
 - 拥有：`scripts/design-samples.mjs`；`apps/web/test/design-samples-fixture.ts`、`design-samples-pages.ts`；新增的测量工具与测试。
-- 触达：`apps/server/test/archive-fixture.ts`（只为拆出不依赖 `vitest` 的部分）；`apps/web/src/` 中发出测量标记的几处（见 2.4）。
+- 触达：`apps/server/test/archive-fixture.ts`（只为拆出不依赖 `vitest` 的部分）；`apps/web/src/` 中提供测试计数器的几处（见 2.4）。
 - 不改：样例库现有页面的路由与就绪条件；`design-rules.test.ts` 与 `design-samples.test.ts` 已有的断言；任何服务端源码。
 
 ## Tasks
@@ -35,26 +35,28 @@
 - [ ] **2.3 阅读页的样例页面**
   - 在 `design-samples-pages.ts` 中补齐第一次交付要看的阅读页状态：PDF、全文、长文档（分批载入）、只有 PDF 没有文本、只有书目、加载中（用延迟响应造出来）。
   - 样例的合成材料放在现有的合成库里；长文档样例的页数与篇幅足以出现分批载入（与计划 19 测量用的长文档同一量级）。
-- [ ] **2.4 测量标记**
-  - 在阅读页代码中，以固定名称发出 `performance.mark`（名称按 01 的 1.5）：引擎构建、PDF 字节请求、sha256 计算、worker 启动与终止、对象 URL 创建与释放。位置：`app/features/reader/Reader.tsx`（引擎构建）、`reading/transport.ts`（请求与 sha256）、`reading/pdf.ts`（worker、画布）。
-  - 只发标记，不改行为；生产构建里保留（开销可忽略），不显示任何界面。
-- [ ] **2.5 测量工具**（需 01 的 1.1、1.5）
-  - 新增 `apps/web/test/reader-smoothness.test.ts`（Vitest + Playwright，沿用 `design-samples-browser.ts` 启动样例库的方式），逐项实现规格第 8.2 节的检查：锚点保持、视图之间的位置、不出现空白画面（逐帧采样）、后台刷新、不重复下载、PDF 缩放、过渡、性能。
+- [ ] **2.4 测试计数器**
+  - 按规格第 8.2 节“测量口径”的“计数”：阅读器只在测试构建中提供计数器，记录引擎构建、PDF 字节请求、sha256 计算、worker 启动与终止、画布数、对象 URL 的创建与释放。位置：`app/features/reader/Reader.tsx`（引擎构建）、`reading/transport.ts`（请求与 sha256）、`reading/pdf.ts`（worker、画布）。
+  - 生产构建里没有计数器：用构建期常量去掉，并加一项测试确认生产包里不含它们。
+  - 只计数，不改行为，不显示任何界面。
+- [ ] **2.5 测量工具**
+  - 新增 `apps/web/test/reader-smoothness.test.ts`（Vitest + Playwright，沿用 `design-samples-browser.ts` 启动样例库的方式），按[规格第 8.2 节的测量口径](../../architecture/web/reading-experience.md#82-浏览器检查)（静止、锚点移动、有画面、视图切换的耗时、计数）逐项实现检查。第一次交付期间，阅读线按[规格第 10 节](../../architecture/web/reading-experience.md#10-新版面之前的规则)。检查项：锚点保持、视图之间的位置、不出现空白画面（逐帧采样）、后台刷新、不重复下载、PDF 缩放、过渡、性能。
   - 书脊、排版、截图三行在第二次交付才有对象，先留出结构，标为“未实现”而不是跳过后算通过。
   - 每项输出数字，写入 JSON 报告；环境变量给出报告目录时写到那里（`sandbox/reports/2026-11-13-reader/<块号>/`），否则写到系统临时目录。
   - 时限遵守 HARNESS：Playwright 操作与等待不低于 20 秒。
 - [ ] **2.6 现有代码上的基线**
-  - 在未改动的阅读页上运行 2.5，记下每项数字（预期多项不通过，例如视图切换会重建引擎）。基线截图用 2.1 的 `capture --label baseline`。
-  - 这组截图是第一次交付“样子不变”的对照（01 的 1.1）。
+  - 在未改动的阅读页上运行 2.5，记下每项数字（预期多项不通过，例如视图切换会重建引擎）。
+  - 基线截图用 2.1 的 `capture --label baseline`，三种尺寸、两种主题都截。其中规格第 10 节列出的四张（1440×900 下的文献库、PDF 视图、全文视图、打开信息栏的阅读页）是第一次交付“样子不变”的对照；如果样例库的页面清单里没有“打开信息栏的阅读页”，在 2.3 中加上。
 
 ## 集成与影响
 
 - 样例库与截图是 Owner 审阅的材料，修复后所有计划都能用。
-- 测量标记进入生产代码，但不改行为。
+- 计数器只在测试构建中存在，生产代码的行为与包内容不变。
 
 ## 验证
 
 - 2.1：上面的两条命令与 `design-samples.test.ts`。
+- 2.4：生产构建的产物里不含计数器。
 - 2.5：`reader-smoothness.test.ts` 在现有代码上能跑完并产出报告；对故意注入的回归（例如把锚点恢复关掉）能报出失败。
 - 定向运行：`pnpm vitest run apps/web/test/design-samples.test.ts apps/web/test/reader-smoothness.test.ts`。
 
