@@ -2,7 +2,8 @@
 
 类型：计划（结果块）
 负责：ADR 0057 第 5 节的扩展本体，按 ADR 0058 第 1、2 节连接文献库
-状态：实现完成，待 G4（2026-11-10，`d12cdb7`、`e9bdbee`）
+状态：Superseded（2026-11-14，由 [19](19-extension.md) 接续；9.1–9.6 的实现见 `d12cdb7`、`e9bdbee`）
+ADR 0063 之后：扩展的外壳、连接、读页与 PDF 下载由 19 在原代码上继续。改用入库接口见 19.1；页面标签原样上交见 19.2；弹窗两项见 19.3；从 Zotero 导入见 19.4–19.6。未完成的 9.7（G4 的真实试用）并入 19.8。
 
 ## Outcome
 
@@ -22,7 +23,7 @@
 
 ## 责任边界
 
-Claude：`apps/browser-extension/`（含 README）、`apps/web/` 里的下载入口、[页面规格](../../architecture/web/page-specs.md)中的扩展弹窗一节、新指南 `docs/guides/browser-extension.md`、[设计文档](../../architecture/design.md)与 `apps/README.md` 中的目录说明。
+前端实施者（当时由总设计师实现）：`apps/browser-extension/`（含 README）、`apps/web/` 里的下载入口、[页面规格](../../architecture/web/page-specs.md)中的扩展弹窗一节、新指南 `docs/guides/browser-extension.md`、[设计文档](../../architecture/design.md)与 `apps/README.md` 中的目录说明。
 
 ## Tasks
 
