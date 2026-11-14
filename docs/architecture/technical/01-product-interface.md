@@ -271,6 +271,7 @@ Web 管理均为 POST，要求登录 Cookie、工作台 Cookie、client_id、同
 | POST `/batches/:batch_id/finish`                | `{}`                                                                                                                                         | `{batch}`                                              |
 | POST `/batches/:batch_id/cancel`                | `{}`                                                                                                                                         | `{batch}`                                              |
 | POST `/batches/:batch_id/report`                | `{cursor?:"sequence:record_index"\|null,limit?:number}`                                                                                      | `{batch,estimated:false,summary,items,next_cursor}`    |
+| POST `/folders`                                 | `{}`                                                                                                                                         | `{folders:[{folder_id,parent_id,name,position}]}`      |
 | POST `/pages/preview`                           | `{page:WebPageData}`                                                                                                                         | `IntakePagePreview`                                    |
 | POST `/pages/save`                              | `{request_id,page:WebPageData,folder_ids?:UUID[],file?:IntakePageFile\|null,duplicate_decision?:{kind:"merge",literature_id}\|{kind:"new"}}` | `IntakePageResult`                                     |
 | POST `/literatures/:literature_id/pdf`          | 原始 PDF 字节；只接受网页登录与本机包装，不登记设备用途                                                                                      | `{batch_id,file}`                                      |
@@ -287,7 +288,7 @@ Web 管理均为 POST，要求登录 Cookie、工作台 Cookie、client_id、同
 
 **单篇收藏**
 
-扩展收藏当前网页只用三个请求。单篇收藏只接受带 `intake` 用途的设备令牌：开放批次与重放幂等都以设备连接为单位。网页登录调用 `/pages/preview`、`/pages/save` 返回 403 `intake-device-required`；网页上的单篇补充走补 PDF 的路由。
+扩展收藏当前网页只用三个请求；弹窗打开时另用 `/folders` 取文件夹树，供使用者选择放进哪个文件夹。`/folders` 只读，接受 `intake` 用途的设备令牌与网页登录，按文件夹服务的 `list` 返回全部文件夹，不受批次归属限制。单篇收藏只接受带 `intake` 用途的设备令牌：开放批次与重放幂等都以设备连接为单位。网页登录调用 `/pages/preview`、`/pages/save` 返回 403 `intake-device-required`；网页上的单篇补充走补 PDF 的路由。
 
 1. `/pages/preview`：返回已在库或不在库、读出的书目、是否已有 PDF、页面上的 PDF 地址，以及可能重复的候选。它不建批次，不写库。
 2. `/pages/save`：追加一条并立即确认。服务端自动归入本连接当天的开放批次，客户端不必先建批次。预览给出了可能重复的候选时，请求必须带 `duplicate_decision`，否则返回 409 `intake-decision-required`。
