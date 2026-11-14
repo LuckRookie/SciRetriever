@@ -11,7 +11,8 @@ import {
   coreProcessingFixture,
   type ModelInput,
 } from "../../server/test/core-processing-fixture.js";
-import { archiveModel } from "../../server/test/archive-fixture.js";
+// Not archive-fixture.js: the sample library loads outside Vitest.
+import { archiveModel } from "../../server/test/archive-model-fixture.js";
 import { topicDraft } from "../../server/test/tag-fixture.js";
 import { FIXTURE_LITERATURE } from "../../server/src/workbench/synthetic-fixture.js";
 import { syntheticReadingPdf } from "./reading-pdf-fixture.js";
@@ -40,6 +41,10 @@ export interface DesignSampleIds {
   result: string;
   resultHash: string;
   agent: string;
+  /** Reader samples: a long document, a 100-page PDF without text, a bibliography only. */
+  longDocument: string;
+  pdfOnly: string;
+  metadataOnly: string;
 }
 export const DESIGN_SAMPLE_GAPS = [
   "无法获取是 PDF 获取耗尽筛选（unavailable_pdf），不是第七个 LiteratureStatus；按实际合同展示。",
@@ -72,6 +77,47 @@ const text = (n: number) =>
   `# ${plainTitle(n)}\n\n${dropped(n)}# Abstract\n\nSynthetic spectroscopy in the imaginary Northlight laboratory. All values are fictional design samples.\n\n# Introduction\n\nWe compare imaginary materials and retain evidence for every observation.\n\n# Methods\n\nThe measured energy was 4.2 eV. The reagent $\\mathrm{SnBu}_4$ is a fictional example.\n\n# Results\n\n![Synthetic diagram](diagram.png)\n\n| Sample | Energy |\n| --- | --- |\n| Northlight | 4.2 eV |\n\n# Conclusion\n\nSynthetic spectroscopy supports this design example only.\n\n# References\n\n[1] Imaginary Researcher. Synthetic reference. Northlight Sample Journal, 2025.\n`;
 // A public, synthetic PNG; contains no paper-derived bytes.
 const diagram = designSampleImage();
+// Reader samples reuse existing papers, so the library inventory is unchanged.
+const LONG_DOCUMENT = 27,
+  PDF_ONLY = 20,
+  METADATA_ONLY = 40;
+const LONG_TITLE = "A long synthetic survey of imaginary measurements";
+/**
+ * Markdown with 300 display formulas and a figure every chapter, loaded by the
+ * reader in batches. Plan 19 measured a 1 MB document; the sample has 540 KB:
+ * the parser fixture gives every PDF three pages and archiving takes at most
+ * 384 KB of serialized blocks per page. Every block is distinct.
+ */
+export function longReadingText(bytes = 540_000, formulas = 300) {
+  const parts = [
+    `# ${LONG_TITLE}\n\n# Abstract\n\nA long synthetic document for reader measurements. All values are fictional design samples.\n\n`,
+  ];
+  let size = 0,
+    formula = 0,
+    paragraph = 0,
+    chapter = 0;
+  const every = Math.max(1, Math.floor(bytes / 420 / formulas));
+  while (size < bytes) {
+    let chunk: string;
+    if (paragraph % 120 === 0) chunk = `# Chapter ${++chapter}\n\n`;
+    else if (paragraph % 30 === 0)
+      chunk = `## Section ${chapter}.${(paragraph % 120) / 30}\n\n`;
+    else if (paragraph % 120 === 7)
+      chunk = `![Synthetic diagram ${chapter}](diagram.png)\n\n`;
+    else if (formula < formulas && paragraph % every === 0)
+      chunk = `$$\nE_{${++formula}} = \\sum_{i=1}^{n} \\frac{a_i}{1 + b_i} + \\int_0^{1} f(t) \\, \\mathrm{d}t \\tag{${formula}}\n$$\n\n`;
+    else
+      chunk = `Paragraph ${paragraph}. The synthetic survey records each imaginary observation with its conditions, its instrument settings and the spread $\\sigma_{${paragraph % 97}}$ of the reading, so that a later reader could repeat the procedure. The values are invented for layout and timing only, and the sentence continues long enough to wrap across several lines of the reading column.\n\n`;
+    parts.push(chunk);
+    size += Buffer.byteLength(chunk);
+    paragraph++;
+  }
+  // A reference list keeps the archive free of a "references missing" issue.
+  parts.push(
+    "# References\n\n[1] Imaginary Researcher. Synthetic reference. Northlight Sample Journal, 2025.\n",
+  );
+  return parts.join("");
+}
 
 /** Seed through the same Application services/repositories as existing integration fixtures; no SQL. */
 export async function seedDesignSamples(options: { homeParent?: string } = {}) {
@@ -86,6 +132,13 @@ export async function seedDesignSamples(options: { homeParent?: string } = {}) {
       reference_query_ports: [],
     },
     configurationText: '\n[sources.acquisition]\nmode="custom"\nproviders=[]\n',
+    // The long document spreads its chapters over the three pages; others repeat per page.
+    pageText: (page, text) => {
+      if (!text.startsWith(`# ${LONG_TITLE}`)) return text;
+      const chapters = text.split(/(?=^# Chapter )/m),
+        size = Math.ceil(chapters.length / 3);
+      return chapters.slice(page * size, (page + 1) * size).join("");
+    },
   });
   const app = e.app;
   const papers = [
@@ -191,7 +244,9 @@ export async function seedDesignSamples(options: { homeParent?: string } = {}) {
         await app.maintenance!.ingestPdf({
           literature_id: papers[n]!,
           bytes: Buffer.concat([
-            syntheticReadingPdf(3),
+            // The PDF without text is the 100-page text PDF of spec 8.2 "performance";
+            // parsed papers keep the parser fixture's three pages.
+            syntheticReadingPdf(n === PDF_ONLY ? 100 : 3),
             Buffer.from(`\n% sample-${n}\n`),
           ]),
         });
@@ -205,22 +260,25 @@ export async function seedDesignSamples(options: { homeParent?: string } = {}) {
       }
       if (n >= 29 && n <= 31)
         await app.database.setAutomaticPdfExhaustion(papers[n]!);
-      if (n <= 16) {
-        e.setText(text(n >= 15 ? 15 : n));
+      if (n <= 16 || n === LONG_DOCUMENT) {
+        e.setText(
+          n === LONG_DOCUMENT ? longReadingText() : text(n >= 15 ? 15 : n),
+        );
         await app.documentProcessing.parseDocuments({
           ...requests.get(papers[n]!)!,
           profiles: ["vlm-engine"],
           force: false,
         });
       }
-      if (n <= 10) {
+      // Full text is readable once archived; the long document is archived too.
+      if (n <= 10 || n === LONG_DOCUMENT) {
         const job = await archive(papers[n]!, `design-archive-${n}`);
         if (n === 0) archiveTask = job.job_id;
         if ((await app.archive.status(papers[n]!)).status !== "READY")
           throw new Error(
             `Sample ${n} did not become ready: ${JSON.stringify(await app.archive.status(papers[n]!))}`,
           );
-        if (n >= 8) {
+        if (n >= 8 && n <= 10) {
           const state = await app.metadataFields.read(papers[n]!);
           await app.metadataFields.edit({
             literature_id: papers[n],
@@ -613,6 +671,9 @@ export async function seedDesignSamples(options: { homeParent?: string } = {}) {
         result: String(record.result_id),
         resultHash: String(record.content_sha256),
         agent: agent.session_id,
+        longDocument: papers[LONG_DOCUMENT]!,
+        pdfOnly: papers[PDF_ONLY]!,
+        metadataOnly: papers[METADATA_ONLY]!,
       } satisfies DesignSampleIds,
       inventory: {
         count: papers.length,

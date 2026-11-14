@@ -13,16 +13,25 @@ import type { WorkbenchStaticAsset } from "../../server/src/workbench/http.js";
 import { nextAssets } from "./next-workspace-fixture.js";
 import { readingAssets } from "./reading-assets-fixture.js";
 
-/** An explicit built asset directory supports auditing a frozen checkout with this same page matrix. */
-export async function designSamplesAssets() {
-  const built = process.env.SCIRETRIEVER_DESIGN_ASSETS_DIRECTORY;
+/**
+ * An explicit built asset directory supports auditing a frozen checkout with this same page matrix.
+ * `readerProbe` serves the test build whose reader carries measurement counters.
+ */
+export async function designSamplesAssets(
+  options: { readerProbe?: boolean } = {},
+) {
+  const built = options.readerProbe
+    ? undefined
+    : process.env.SCIRETRIEVER_DESIGN_ASSETS_DIRECTORY;
   const base = built ? pathToFileURL(resolve(built) + "/") : null;
   const assets = new Map<string, WorkbenchStaticAsset>(
     base ? await loadReadingAssets(base) : await readingAssets(),
   );
   for (const [path, asset] of base
     ? await loadReactAssets(new URL("react/", base))
-    : await nextAssets())
+    : options.readerProbe
+      ? await probeReactAssets()
+      : await nextAssets())
     assets.set(path, asset);
   const temporary = built
     ? null
@@ -43,5 +52,25 @@ export async function designSamplesAssets() {
     return assets;
   } finally {
     if (temporary) await rm(temporary, { recursive: true, force: true });
+  }
+}
+
+async function probeReactAssets() {
+  const directory = await mkdtemp(join(tmpdir(), "sciretriever-reader-probe-"));
+  try {
+    await promisify(execFile)(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        "import { buildReactAssets } from './scripts/build-react-assets.mjs'; await buildReactAssets(process.argv[1], { readerProbe: true });",
+        directory,
+      ],
+      { maxBuffer: 4 * 1024 * 1024 },
+    );
+    // Loaded into memory, so the build directory can go at once.
+    return await loadReactAssets(pathToFileURL(`${directory}/`));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 }

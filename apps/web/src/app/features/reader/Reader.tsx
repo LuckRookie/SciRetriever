@@ -23,6 +23,11 @@ import type {
 import { readFixedSource } from "../../../reading/source.js";
 import { readingPosition } from "../../../reading/state.js";
 import {
+  READER_PROBE,
+  probeCount,
+  probeCountKey,
+} from "../../../reading/probe.js";
+import {
   readDocument,
   readPdfBytes,
   resolveReadingSources,
@@ -296,6 +301,7 @@ export default function Reader() {
         refresh: () => retry((value) => value + 1),
       };
     const host = body.current;
+    if (READER_PROBE) probeCountKey("engines", mode);
     host.replaceChildren();
     host.dataset.literatureId = id;
     status.current.textContent = "正在读取并核验固定材料…";
@@ -445,6 +451,7 @@ export default function Reader() {
         url = URL.createObjectURL(
           new Blob([bytes], { type: "application/pdf" }),
         );
+        if (READER_PROBE) probeCount("objectUrlsCreated");
         setPdfUrl(url);
         const engine = await import("../../../reading/pdf.js");
         controller.signal.throwIfAborted();
@@ -480,7 +487,10 @@ export default function Reader() {
       marksSurface?.destroy();
       twins?.destroy();
       if (fullTextLayer.current === twins) fullTextLayer.current = null;
-      if (url) URL.revokeObjectURL(url);
+      if (url) {
+        URL.revokeObjectURL(url);
+        if (READER_PROBE) probeCount("objectUrlsRevoked");
+      }
       host.replaceChildren();
       delete host.dataset.literatureId;
       if (frame.current === current) frame.current = null;

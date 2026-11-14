@@ -121,6 +121,16 @@ function sampleSessions(literature: string) {
     ),
   ];
 }
+/** Leaves one API response pending until the page closes: a loading state that stays put. */
+async function holdResponse(p: Page, path: string) {
+  await p.route(
+    (url) => url.pathname === path,
+    async (request) => {
+      await new Promise((resolve) => p.once("close", resolve));
+      await request.abort().catch(() => undefined);
+    },
+  );
+}
 async function openSettings(p: Page, name: string) {
   // Desktop lists sections down the side; narrow screens use a menu.
   const tab = p.getByRole("tab", { name, exact: true });
@@ -326,6 +336,43 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     },
     ready: '.react-reader[data-reading-ready="true"]',
   },
+  {
+    id: "reader-long",
+    name: "阅读 · 长文档（分批载入）",
+    route: (ids) => `/?literature=${ids.longDocument}&reader=doc`,
+    ready:
+      '.react-reader[data-reading-ready="true"] .reading-continuation:not([hidden])',
+  },
+  {
+    id: "reader-pdf-only",
+    name: "阅读 · 只有 PDF 没有文本",
+    route: (ids) => `/?literature=${ids.pdfOnly}&reader=doc`,
+    ready: ".reader-surface .ui-empty",
+  },
+  {
+    id: "reader-metadata-only",
+    name: "阅读 · 只有书目",
+    route: (ids) => `/?literature=${ids.metadataOnly}&reader=pdf`,
+    ready: '.reading-status:has-text("尚无 PDF")',
+  },
+  ...(
+    [
+      ["pdf", "PDF", "material-bytes", "正在读取并核验固定材料"],
+      ["doc", "全文", "document-slice", "正在读取并核验固定材料"],
+    ] as const
+  ).map(
+    ([mode, label, operation, status]): DesignSamplePage => ({
+      id: `reader-loading-${mode}`,
+      name: `阅读 · ${label}加载中`,
+      route: reader(mode),
+      interaction: `${operation} 的响应一直不返回，停在加载中`,
+      prepare: async (p) => {
+        await holdResponse(p, `/api/v1/query/${operation}`);
+        await p.reload({ waitUntil: "domcontentloaded" });
+      },
+      ready: `.reading-status:has-text("${status}")`,
+    }),
+  ),
   ...stepNames.map(
     (name, index): DesignSamplePage => ({
       id: `operator-step-${index + 1}`,

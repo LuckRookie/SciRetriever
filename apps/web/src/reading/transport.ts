@@ -12,6 +12,7 @@ import {
 } from "@sciretriever/contracts";
 import type { ReadingContext } from "./contract.js";
 import type { FixedSource } from "./source.js";
+import { READER_PROBE, probeCountKey } from "./probe.js";
 
 const operations: Record<DocumentReadOperation, string> = {
   default: "document-default",
@@ -117,6 +118,7 @@ export async function readPdfBytes(
     material.byte_size > 256 * 1024 * 1024
   )
     throw new Error("PDF 超过受控读取上限或材料类型不符");
+  if (READER_PROBE) probeCountKey("pdfRequests", material.asset_sha256);
   const response = await ctx.api.fetch("/api/v1/query/material-bytes", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -158,6 +160,8 @@ export async function readPdfBytes(
     await reader.cancel();
     reader.releaseLock();
   }
+  if (READER_PROBE && offset === bytes.length)
+    probeCountKey("pdfHashes", material.asset_sha256);
   if (
     offset !== bytes.length ||
     (await sha256(bytes)) !== material.asset_sha256

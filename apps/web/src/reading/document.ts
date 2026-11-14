@@ -10,6 +10,7 @@ import { button, readerErrorMessage } from "./dom.js";
 import type { ReaderFrame } from "./contract.js";
 import type { ReadingPosition } from "./state.js";
 import { readDocument, readResourceBytes } from "./transport.js";
+import { READER_PROBE, probeCount } from "./probe.js";
 import { appendTitle, titleParts } from "./title.js";
 import { documentMarkdown as markdown, markdownBlocks } from "./markdown.js";
 
@@ -114,6 +115,7 @@ export async function renderDocument(
       const url = URL.createObjectURL(
         new Blob([bytes], { type: resource.artifact.media_type }),
       );
+      if (READER_PROBE) probeCount("objectUrlsCreated");
       urls.set(resource.resource_id, url);
       return url;
     };
@@ -322,7 +324,10 @@ export async function renderDocument(
       observer.disconnect();
       continuationObserver.disconnect();
       frame.body.removeEventListener("scroll", onScroll);
-      for (const url of urls.values()) URL.revokeObjectURL(url);
+      for (const url of urls.values()) {
+        URL.revokeObjectURL(url);
+        if (READER_PROBE) probeCount("objectUrlsRevoked");
+      }
       urls.clear();
       inFlight.clear();
       text = "";

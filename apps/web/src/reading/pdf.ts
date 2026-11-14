@@ -11,6 +11,7 @@ import type { ReadingContext } from "./contract.js";
 import type { ReadingPosition } from "./state.js";
 import { readerProblem } from "./dom.js";
 import type { ReaderFrame } from "./contract.js";
+import { READER_PROBE, probeCount } from "./probe.js";
 
 type RenderedPage = {
   canvas: HTMLCanvasElement;
@@ -47,6 +48,7 @@ export async function renderPdf(
   pages.className = "reading-pdf-pages library-pdf-reading";
   frame.body.append(pages);
   const workerPort = new Worker("/reader/pdf.worker.mjs", { type: "module" });
+  if (READER_PROBE) probeCount("workersStarted");
   const worker = PDFWorker.create({ port: workerPort });
   const loading = getDocument({
     data: bytes.slice(),
@@ -83,6 +85,7 @@ export async function renderPdf(
     r.layer?.cancel();
     r.render?.cancel();
     r.canvas.width = r.canvas.height = 0;
+    if (READER_PROBE) probeCount("canvasesReleased");
     r.text.replaceChildren();
     r.canvas.remove();
     r.text.remove();
@@ -127,6 +130,7 @@ export async function renderPdf(
     pdf = null;
     worker.destroy();
     workerPort.terminate();
+    if (READER_PROBE) probeCount("workersTerminated");
     void loading.destroy().catch((error) => {
       console.warn("PDF cleanup failed", error);
     });
@@ -240,6 +244,7 @@ export async function renderPdf(
       generation,
     };
     entry.text.className = "textLayer";
+    if (READER_PROBE) probeCount("canvasesCreated");
     rendered.set(n, entry);
     try {
       const p = await pdf.getPage(n);

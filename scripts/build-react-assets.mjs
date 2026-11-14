@@ -139,7 +139,14 @@ async function notices() {
 }
 
 /** Build in isolation, then publish complete files; requests never resolve paths on disk. */
-export async function buildReactAssets(outdir, { readerNotices } = {}) {
+/**
+ * `readerProbe` makes the test build that carries the reader's measurement
+ * counters; distributable builds leave it false so the counters fold away.
+ */
+export async function buildReactAssets(
+  outdir,
+  { readerNotices, readerProbe = false } = {},
+) {
   // Only this build's flat Vite assets directory is eligible for pruning.
   // Refuse links before publishing so cleanup cannot escape into other data.
   const assetsDirectory = resolve(outdir, "assets");
@@ -173,6 +180,7 @@ export async function buildReactAssets(outdir, { readerNotices } = {}) {
         mode: "production",
         configFile: resolve(repository, "apps/web/vite.config.mjs"),
         build: { outDir: staging, emptyOutDir: true },
+        define: { __SCIRETRIEVER_READER_PROBE__: JSON.stringify(readerProbe) },
       });
     } finally {
       if (callerNodeEnv === undefined) delete process.env.NODE_ENV;

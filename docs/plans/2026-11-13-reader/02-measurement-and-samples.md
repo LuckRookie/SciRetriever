@@ -2,7 +2,7 @@
 
 类型：计划（结果块）
 负责：设计样例库的截图脚本、阅读页的样例页面与尺寸、规格第 8.2 节的测量工具与基线
-状态：Pending
+状态：Completed（2026-11-15）
 
 ## Outcome
 
@@ -26,25 +26,25 @@
 
 ## Tasks
 
-- [ ] **2.1 修复截图脚本**
+- [x] **2.1 修复截图脚本**
   - 现状：`scripts/design-samples.mjs` 用 esbuild 打包 `apps/web/test/design-samples-fixture.ts`；它导入 `apps/server/test/archive-fixture.ts`，后者从 `vitest` 导入（`afterAll` 等），打包后的模块在 Node 里无法加载。
   - 做法：把样例库用到的部分（`archiveModel` 等）移到一个不导入 `vitest` 的模块，`archive-fixture.ts` 从那里重新导出，原有测试不受影响；或者在脚本里把 `vitest` 标为外部并确保运行路径不调用它。选择其一并在进度里写明理由。
   - 验收：`node scripts/design-samples.mjs serve` 在 127.0.0.1:4175 就绪；另开终端 `node scripts/design-samples.mjs capture --label baseline --themes light,dark` 截出全部现有页面；`apps/web/test/design-samples.test.ts` 与原有用到 `archive-fixture.ts` 的测试照常通过。
-- [ ] **2.2 增加 1024×768 尺寸**
+- [x] **2.2 增加 1024×768 尺寸**
   - `capture` 现在只截 1440 与 390 宽。增加 1024×768，作为规格第 8.2 节“截图”一行要求的第三个尺寸；默认仍截三种，可用参数只截一种。
-- [ ] **2.3 阅读页的样例页面**
+- [x] **2.3 阅读页的样例页面**
   - 在 `design-samples-pages.ts` 中补齐第一次交付要看的阅读页状态：PDF、全文、长文档（分批载入）、只有 PDF 没有文本、只有书目、加载中（用延迟响应造出来）。
   - 样例的合成材料放在现有的合成库里；长文档样例的页数与篇幅足以出现分批载入（与计划 19 测量用的长文档同一量级）。
-- [ ] **2.4 测试计数器**
+- [x] **2.4 测试计数器**
   - 按规格第 8.2 节“测量口径”的“计数”：阅读器只在测试构建中提供计数器，记录引擎构建、PDF 字节请求、sha256 计算、worker 启动与终止、画布数、对象 URL 的创建与释放。位置：`app/features/reader/Reader.tsx`（引擎构建）、`reading/transport.ts`（请求与 sha256）、`reading/pdf.ts`（worker、画布）。
   - 生产构建里没有计数器：用构建期常量去掉，并加一项测试确认生产包里不含它们。
   - 只计数，不改行为，不显示任何界面。
-- [ ] **2.5 测量工具**
+- [x] **2.5 测量工具**
   - 新增 `apps/web/test/reader-smoothness.test.ts`（Vitest + Playwright，沿用 `design-samples-browser.ts` 启动样例库的方式），按[规格第 8.2 节的测量口径](../../architecture/web/reading-experience.md#82-浏览器检查)（静止、锚点移动、有画面、视图切换的耗时、计数）逐项实现检查。第一次交付期间，阅读线按[规格第 10 节](../../architecture/web/reading-experience.md#10-新版面之前的规则)。检查项：锚点保持、视图之间的位置、不出现空白画面（逐帧采样）、后台刷新、不重复下载、PDF 缩放、过渡、性能。
   - 书脊、排版、截图三行在第二次交付才有对象，先留出结构，标为“未实现”而不是跳过后算通过。
   - 每项输出数字，写入 JSON 报告；环境变量给出报告目录时写到那里（`sandbox/reports/2026-11-13-reader/<块号>/`），否则写到系统临时目录。
   - 时限遵守 HARNESS：Playwright 操作与等待不低于 20 秒。
-- [ ] **2.6 现有代码上的基线**
+- [x] **2.6 现有代码上的基线**
   - 在未改动的阅读页上运行 2.5，记下每项数字（预期多项不通过，例如视图切换会重建引擎）。
   - 基线截图用 2.1 的 `capture --label baseline`，三种尺寸、两种主题都截。其中规格第 10 节列出的四张（1440×900 下的文献库、PDF 视图、全文视图、打开信息栏的阅读页）是第一次交付“样子不变”的对照；如果样例库的页面清单里没有“打开信息栏的阅读页”，在 2.3 中加上。
 
@@ -63,6 +63,12 @@
 ## 证据
 
 修复方式与理由；三种尺寸的基线截图位置；基线报告的位置与各项数字；提交号。
+
+- 2026-11-15，前端实施者完成，总设计师审查后提交。证据：`sandbox/reports/2026-11-13-reader/02/`（`EVIDENCE.md` 含基线各项数字，`SCREENSHOTS.md`，`reader-smoothness-baseline.json`）。
+- 2.1：样例库用到的 `archiveModel` 移到不导入 `vitest` 的 `apps/server/test/archive-model-fixture.ts`，`archive-fixture.ts` 重新导出。
+- 2.3：长文档样例 540 KB（解析夹具固定三页、建档每页上限 384 KB，700 KB 起建档失败），已出现分批载入；“打开信息栏的阅读页”即 `reader-text`，信息栏默认打开。
+- 2.6 基线的主要数字：字号 20→24 锚点移动 47.8 px；窗口 1440→1200→1440 移动 1803 px；原文→PDF 切换 531 ms，57 帧中 25 帧无画面；后台刷新 1 分钟内引擎重建 13 次；同一 PDF 请求 6–11 次。100 页 PDF 冷开 1486 ms，性能各项达标。
+- 总设计师复跑：`design-samples.test.ts` 与 `reader-smoothness.test.ts` 79 项中 78 通过。失败的 `intake` 页是 2026-11-10 起的遗留问题（样例库没有接导入的路由），修法记入计划 20 的 18.1。
 
 ## 退出条件
 

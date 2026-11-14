@@ -22,7 +22,7 @@ Web 的定位（为人设计）与设计依据的决定见 [ADR 0038](../decisio
 
 1. **规则**：设计内核与页面规格，只写规则和意图。
 2. **组件**：应用内的组件画廊（`gallery` 入口）展示每个共享组件的全部变体与状态。新增或修改组件先在画廊里出现。
-3. **页面**：设计样例库。用真实服务端加合成样例文献库启动正式应用，样例覆盖每一种状态；截图脚本按固定页面清单在 1440×900 与 390 宽度下截图。这组截图就是每一轮设计的“原型”，交 Owner 审阅，也作为视觉回归的对照。启动样例库：`node scripts/design-samples.mjs serve`（只监听 127.0.0.1:4175）；另开终端截图：`node scripts/design-samples.mjs capture --label <名称>`，可加 `--themes light,dark`。页面清单在 `apps/web/test/design-samples-pages.ts`，`design-samples.test.ts` 保证每页都能打开，`design-rules.test.ts` 在每页上检查设计内核的规则。样例库由[计划 14](../../archive/2026-10-23-web-design-overhaul/02-design-samples.md)建立。
+3. **页面**：设计样例库。用真实服务端加合成样例文献库启动正式应用，样例覆盖每一种状态；截图脚本按固定页面清单在 1440×900、1024×768 与 390 宽度下截图。这组截图就是每一轮设计的“原型”，交 Owner 审阅，也作为视觉回归的对照。启动样例库：`node scripts/design-samples.mjs serve`（只监听 127.0.0.1:4175）；另开终端截图：`node scripts/design-samples.mjs capture --label <名称>`，可加 `--themes light,dark`。页面清单在 `apps/web/test/design-samples-pages.ts`，`design-samples.test.ts` 保证每页都能打开，`design-rules.test.ts` 在每页上检查设计内核的规则。样例库由[计划 14](../../archive/2026-10-23-web-design-overhaul/02-design-samples.md)建立。
 
 尚不存在的新页面、或需要比较几个方向时，可在 `sandbox/` 下做临时静态样稿，只用于当次决定，定下后删除或归档。
 

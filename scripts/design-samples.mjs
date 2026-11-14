@@ -32,6 +32,7 @@ for (let i = 0; i < args.length; i += 2) {
       "--repository",
       "--session",
       "--pages",
+      "--sizes",
     ].includes(args[i]) ||
     !args[i + 1] ||
     flags.has(args[i])
@@ -39,6 +40,12 @@ for (let i = 0; i < args.length; i += 2) {
     throw new Error("Invalid design sample arguments");
   flags.set(args[i], args[i + 1]);
 }
+// Spec 8.2: desktop, small laptop and phone; `--sizes 1024` captures one.
+const viewports = new Map([
+  [1440, 900],
+  [1024, 768],
+  [390, 844],
+]);
 const sessionFile = resolve(flags.get("--session") ?? current);
 if (relative(runs, sessionFile).startsWith(".."))
   throw new Error(
@@ -194,6 +201,14 @@ async function capture() {
     new Set(themes).size !== themes.length
   )
     throw new Error("Use --themes light,dark");
+  const widths = (flags.get("--sizes") ?? [...viewports.keys()].join(","))
+    .split(",")
+    .map(Number);
+  if (
+    widths.some((w) => !viewports.has(w)) ||
+    new Set(widths).size !== widths.length
+  )
+    throw new Error("Use --sizes with any of 1440,1024,390");
   const state = JSON.parse(await readFile(sessionFile, "utf8"));
   if (
     new URL(state.origin).hostname !== "127.0.0.1" ||
@@ -263,9 +278,9 @@ async function capture() {
     loggedIn = new Set();
   try {
     for (const theme of themes)
-      for (const width of [1440, 390])
+      for (const width of widths)
         for (const [i, entry] of designSamplePages.entries()) {
-          const height = width === 390 ? 844 : 900;
+          const height = viewports.get(width);
           const contextKey = `${theme}-${width}-${!!entry.anonymous}`;
           const context =
             contexts.get(contextKey) ??
@@ -288,7 +303,7 @@ async function capture() {
             blocked.push(new URL(route.request().url()).origin);
             await route.abort("blockedbyclient");
           });
-          page.setDefaultTimeout(15000);
+          page.setDefaultTimeout(20_000);
           page.on("pageerror", (e) => errors.push(e.message));
           page.on("console", (message) => {
             if (message.type() === "error") errors.push(message.text());
@@ -410,7 +425,7 @@ async function capture() {
       .replaceAll('"', "&quot;");
   await writeFile(
     join(directory, "index.html"),
-    `<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>设计样例 ${escape(label)}</title><style>body{font:16px/1.6 system-ui;background:#f7f6f2;color:#24252b;margin:32px}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:24px}figure{margin:0;padding:16px;background:white}img{width:100%;height:340px;object-fit:contain;object-position:top}small{color:#666}</style><h1>设计样例 · ${escape(label)}</h1><p>全部为合成数据。提交 ${escape(state.commit)}；${designSamplePages.length} 页 × 2 宽度 × ${themes.length} 主题；成功 ${manifest.screenshots.length}，失败 ${manifest.failures.length}。</p><main>${designSamplePages
+    `<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>设计样例 ${escape(label)}</title><style>body{font:16px/1.6 system-ui;background:#f7f6f2;color:#24252b;margin:32px}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:24px}figure{margin:0;padding:16px;background:white}img{width:100%;height:340px;object-fit:contain;object-position:top}small{color:#666}</style><h1>设计样例 · ${escape(label)}</h1><p>全部为合成数据。提交 ${escape(state.commit)}；${designSamplePages.length} 页 × ${widths.length} 宽度 × ${themes.length} 主题；成功 ${manifest.screenshots.length}，失败 ${manifest.failures.length}。</p><main>${designSamplePages
       .flatMap((entry) =>
         manifest.screenshots.filter((s) => s.page === entry.id),
       )
@@ -423,7 +438,7 @@ async function capture() {
       )}</main><p>详细就绪条件、缺口和失败见 <a href="manifest.json">manifest.json</a>。</p></html>`,
   );
   process.stdout.write(
-    `${directory}\n${manifest.screenshots.length}/${designSamplePages.length * 2 * themes.length} 截图通过；失败 ${manifest.failures.length}\n`,
+    `${directory}\n${manifest.screenshots.length}/${designSamplePages.length * widths.length * themes.length} 截图通过；失败 ${manifest.failures.length}\n`,
   );
   if (manifest.failures.length) process.exitCode = 1;
 }
@@ -431,5 +446,5 @@ if (command === "serve") await serve();
 else if (command === "capture") await capture();
 else
   throw new Error(
-    "Use: node scripts/design-samples.mjs serve [--port 4175] [--repository path]; or capture --label before [--themes light,dark]",
+    "Use: node scripts/design-samples.mjs serve [--port 4175] [--repository path]; or capture --label before [--themes light,dark] [--sizes 1440,1024,390] [--pages id,id]",
   );
