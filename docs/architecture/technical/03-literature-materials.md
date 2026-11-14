@@ -48,7 +48,7 @@ MetaLiterature 通过代表 Literature 和成员关系聚合同一文献的明�
 
 ### 2.4 身份收敛
 
-稳定标识符以 namespace/value 精确匹配。标识冲突或多个候选返回 identity-conflict，不做模糊合并。双方没有稳定标识符时才使用规范题名、完整作者顺序、年份、publication_form 的严格后备键；缺任一字段不参加后备匹配。一次性旧库转换重算后备索引，不能沿用 document_type 的旧哈希。
+稳定标识符以 namespace/value 精确匹配。标识冲突或多个候选返回 identity-conflict，不做模糊合并。双方没有稳定标识符时才使用规范题名、完整作者顺序、年份、publication_form 的严格后备键；缺任一字段不参加后备匹配。一次性旧库转换重算后备索引，不能沿用 document_type 的旧哈希。没有标识、又没有命中严格后备键的条目，入库时另按 [6.4.8](#648-可能重复) 判断是否可能重复（目标，尚未实现）。
 
 ### 2.5 元数据、来源与字段裁决
 
@@ -66,7 +66,7 @@ Reference 只连接已接纳的两个 Literature，反向被引和 MetaLiteratur
 
 ### 2.7 文献状态
 
-六种状态为 UNREVIEWED、ASSET_READY、ARCHIVING、ARCHIVE_FAILED、READY、EXCLUDED，详见 §8.3。它们由当前事实推导，不是可任意写入的一列。READY 要求正文校订 complete、默认文档及结构、必填元数据、有效标签；存疑和补充材料失败不阻断。获取、解析、建档分别显式启动；总结不参与建档或就绪条件。
+六种状态为 UNREVIEWED、ASSET_READY、ARCHIVING、ARCHIVE_FAILED、READY、EXCLUDED，详见 §8.3。它们由当前事实推导，不是可任意写入的一列。READY 要求正文校订 complete、默认文档及结构、必填元数据、有效标签；存疑和补充材料失败不阻断。获取、解析、建档分别显式启动；总结不参与建档或就绪条件。“书目待补”是文献上的标记，不是状态，见 [8.4](#84-书目待补目标尚未实现)（目标，尚未实现）。
 
 ### 2.8 独立读取、新知识关联与事实边界
 
@@ -945,6 +945,8 @@ persistent context 中的文章隔离/临时资源清理和本地 Chromium found
        └─ 失败：系统错误；用户原文件保持不变
 ```
 
+目标，尚未实现（计划 20 的 14 块）：Web、CLI 与 MCP 的手动接纳改走入库的文件通道（[产品接口 2.4.2](01-product-interface.md#242-入库-http目标尚未实现)中的补 PDF），没有大小上限；它是逐条确认的，归入发起入口当天的“补充文件”批次（[6.4.2](#642-过程与状态)）。上面的流程、唯一主 PDF 与不替换的规则不变。
+
 用户文件从始至终不属于 Storage staging 或 ArtifactStore，不参加对账与回收。旧兼容清理只可能作用于内部副本；新分析不授权删除，内部副本的处置也须经过独立材料决定与依赖检查。
 
 ## 5. 资产验收、发布与有效性
@@ -1110,39 +1112,48 @@ MaterialRef 的目标设计将已接纳 Asset/关系和 hash 作为最小材料�
 
 ### 6.1 书目交换规则
 
-导入会话由 Entry 编排，Literature 拥有身份和书目接纳。中性 `ImportRecord` 组合外部编号、现有 `LiteratureMetadata`、原始 source_type、组引用、用户标签、文件与批注；`ImportGroup` 表达来源分组树，`ImportFile` 表达附件编号、文件名、媒体类型、首选状态及可选大小/SHA-256。外部编号和本系统的稳定文献标识分开。精确类型在 `packages/contracts/src/import-sessions.ts`，HTTP、上限及错误见[导入会话 HTTP](01-product-interface.md#242-导入会话-http)。
+入库批次的过程（实现中为 `ImportSessionService`）由 Entry 编排，Literature 拥有身份和书目接纳。中性 `ImportRecord` 组合外部编号、现有 `LiteratureMetadata`、原始 source_type、组引用、用户标签、文件与批注；`ImportGroup` 表达来源分组树，`ImportFile` 表达附件编号、文件名、媒体类型、首选状态及可选大小/SHA-256。外部编号和本系统的稳定文献标识分开。精确类型在 `packages/contracts/src/import-sessions.ts`，HTTP、上限及错误见[入库 HTTP](01-product-interface.md#242-入库-http目标尚未实现)。
 
-`literature/import-adapters.ts` 统一登记 `records`、BibTeX/BibLaTeX、RIS、CSL JSON；适配器为纯函数，原始数据进，中性记录与不导入的内容计数出，不联网、不读文件、不写库。书目格式沿用原 decoder；单条解析/最小身份不合格计 rejected，其它记录继续。外部工具原始对象、同步状态、插件字段和笔记不扩展 LiteratureMetadata；批注当前只分类计数，supported 进入 deferred，未写入阅读批注。
+`literature/import-adapters.ts` 统一登记 `records`、BibTeX/BibLaTeX、RIS、CSL JSON；适配器为纯函数，原始数据进，中性记录与不导入的内容计数出，不联网、不读文件、不写库。书目格式沿用原 decoder；单条解析/最小身份不合格计 rejected，其它记录继续。外部工具原始对象、同步状态、插件字段和笔记不扩展 LiteratureMetadata；批注当前只分类计数，supported 进入 deferred，未写入阅读批注。网页、文件与 Zotero 的适配器，以及条目的最低条件，见 [6.4.1](#641-条目与格式)（目标，尚未实现）。
 
 书目会话从 BibTeX/BibLaTeX 的 `file` 和 RIS 的各条 `L1` 读取附件。`file` 按未转义的分号分附件，支持 `说明:路径:媒体类型`、`:路径:PDF` 与单独路径；冒号、分号、反斜杠的转义在拆分后还原，Windows 盘符属于路径。`L1` 每条为完整路径，不按冒号或分号拆分；CSL JSON 没有标准附件字段，不推断 files。媒体类型为 application/pdf、类型名为 PDF，或文件名扩展名为 .pdf（均忽略大小写）时视作 PDF；每条记录只保留第一个有效 PDF，输出 `preferred:true`、media_type=application/pdf，大小和哈希为空。其余 PDF 仅计 `additional-file`，非 PDF 仅计 `non-pdf-file`。
 
 附件 `file_name` 取路径末段，相对引用的 `external_id` 使用还原转义后的相对路径，反斜杠归一为斜杠。绝对路径、Windows 盘符/UNC、本机 home 简写及 `internal-pdf://`、`file://` 只生成 `local-file:<分段序号>:<记录序号>:<附件序号>:<文件名>`，不返回本机目录；两种文件 URI 只解码一次百分号转义。引用继续受中性合同的 1,024 字符、控制字符、文件名及 `.`/`..` 路径组件校验；其他 URI、带 query/fragment 的文件 URI或不合法路径以 `invalid-file-reference` 计数，不使整条书目失败。适配器只产出引用，不尝试读取文件、下载或按文件名查找字节。
 
-来源库优先使用其全局唯一编号；只有本地编号时，由设备连接号限定范围。来源键为 SHA-256(canonical JSON `["sciretriever.import-source.v1", system, scope, library_id]`)，scope 为 global 或 device:<connection_id>，设备编号只由认证推导。Web/CLI/stdio 没有设备身份时仅交 local 拒绝 `import-local-identity-required`；不共享默认命名空间，不凭文件名或主机名伪造全局号。先以本地号、后以全局号导入会形成独立来源，不自动合并。
+来源库优先使用其全局唯一编号；只有本地编号时，由设备连接号限定范围。来源键为 SHA-256(canonical JSON `["sciretriever.import-source.v1", system, scope, library_id]`)，scope 为 global 或 device:<connection_id>，设备编号只由认证推导。Web/CLI/stdio 没有设备身份时只交 local，返回 `intake-local-identity-required`；不共享默认命名空间，不凭文件名或主机名伪造全局号。先以本地号、后以全局号导入会形成独立来源，不自动合并。
 
 外部编号对应先定位记录，再由同一保守身份规则核对稳定标识冲突与歧义；无 DOI 的记录也可以按对应继续导入。目标已删除时报告 external-target-missing，不猜测重绑。规范化记录哈希相同则不重复 observation，仅记录批次命中和补文件夹成员；变化形成新的不可变 user/import observation，source_record_id 为 `[library_key,external_id]` 的 JSON，input_sha256 为记录哈希。导入非空值按现有用户来源优先级处理，不能覆盖人工锁、READY 元数据或已有内容；当前统一值变化分 enriched，不变为 matched，首次无匹配为 created。
 
 分组按外部编号导成来源库根文件夹下的层级，空组和多处归属保留；用户标签可关闭，否则变成根下“标签”中的子文件夹，不进入受控词表。只建一次、只补成员，不跟随来源改名、移动或删除。重名加序号，名称截到现有 Folder 合同的 128 个 UTF-16 单位且不拆 surrogate。用户删除已对应文件夹后不恢复它，报告缺失对应。
 
-会话依次为 collecting、awaiting-confirmation、importing、completed/cancelled。同一来源最多一个活动会话。分次数据按序号替换；预览只读身份投影，不写文献、来源或预览缓存。确认重新判定，形成[入库批次](06-retrieval-context.md#216-入库批次范围词频与-pdf-获取范围)，逐条接纳并检查点保存；部分成功不回滚，重启或重复确认从检查点续跑。取消停止余下工作、结算本进程在途发布，已提交事实保留。未确认 7 天取消，导入中 7 天无新结算文件则结束；原始分段在结束时回收，结果/对应长期保存。持久化及重放边界见[导入存储](07-versioned-storage.md#9-导入会话与外部编号对应)。
+批次的状态、两种确认方式、后台入库、开放批次与过期规则见 [6.4.2](#642-过程与状态)（目标，尚未实现）。同一来源最多一个活动批次。分次数据按序号替换；预览只读身份投影，不写文献、来源或文件夹。确认重新判定，形成[入库批次](06-retrieval-context.md#216-入库批次范围词频与-pdf-获取范围)，逐条接纳并检查点保存；部分成功不回滚，重启从检查点续跑。取消停止余下工作、结算本进程在途发布，已提交事实保留。原始分段在结束时回收，结果与对应长期保存。持久化及重放边界见[导入存储](07-versioned-storage.md#9-导入会话与外部编号对应)。
 
-文件清单区分 upload（缺主 PDF）和 hash（只需 SHA-256）。已有主 PDF 不替换；同哈希记 existing，不同记 conflict。上传从磁盘 descriptor 验证可读/非加密 PDF，按 ADR 0029 标为文章身份 unverified；接纳保留上传开始时的 metadata CAS，不调用模型或 Parser。重复上传只核对哈希，不重复发布；中断从零重发。文件到齐自动结束，显式 finish 可保留逐个缺失项。
+文件清单区分 upload（缺主 PDF）和 hash（只需 SHA-256）。已有主 PDF 不替换；同哈希记 existing，不同记 conflict。上传从磁盘 descriptor 验证可读/非加密 PDF，按 ADR 0029 标为文章身份 unverified；接纳保留上传开始时的 metadata CAS，不调用模型或 Parser。重复上传只核对哈希，不重复发布；中断从零重发。文件到齐自动结束，显式 finish 可保留逐个缺失项。预览之前交来的文件与配对见 [6.4.3](#643-只有文件的条目与配对)，按 sha256 对应见 [6.4.7](#647-文件按-sha256-对应)（目标，尚未实现）。
 
-无来源库号的导出文件以 `library:null` 创建一次性会话，Web、导入用途设备和本机入口均可使用；服务端每次生成独立的 `adhoc:<UUID>` scope。读取投影为 `{system:"file",library_id:"",identity:"adhoc",name:file_name??""}`，不把文件名、内容哈希或本地库号伪装成全局身份。同名文件可同时导入；同一会话仍可按 session ID 续传，但另一个会话不能续用此来源对应，调用方也不能显式指定 adhoc 或其 scope。批次名称优先使用 file_name，未给时用格式名，沿用既有 120 字符上限。
+来源没有库编号时，以 `source:null` 建一次性来源的批次，Web、`intake` 用途的设备和本机入口均可使用；服务端每次生成独立的 `adhoc:<UUID>` scope。读取投影为 `{system:"file",library_id:"",identity:"adhoc",name:file_name??""}`，不把文件名、内容哈希或本地库号伪装成全局身份。同名文件可同时导入；同一批次按批次编号续传，另一个批次不能续用此来源对应，调用方也不能显式指定 adhoc 或其 scope。批次名称优先使用 file_name，未给时用格式名，沿用既有 120 字符上限。
 
-一次性会话的书目 observation 仍为 `user/bibliographic-import`，source_record_id/input/parameters hash 均为空；重复的规范化用户 observation 复用原事实，字段优先级与旧入口一致。分组与用户标签按旧文件导入行为忽略并报告计数，import_user_tags 归一为 false；不保存可续导的记录、组或文件对应，也不覆盖用户整理。中性记录中存在首选 PDF 引用时，预览、文件清单、上传/哈希、结束与报告仍走同一文件通道；不凭上传文件名推断论文归属。
+一次性来源的书目 observation 仍为 `user/bibliographic-import`，source_record_id/input/parameters hash 均为空；重复的规范化用户 observation 复用原事实，字段优先级与旧入口一致。分组与用户标签按旧文件导入行为忽略并报告计数，import_user_tags 归一为 false；不保存可续导的记录、组或文件对应，也不覆盖用户整理。中性记录中存在首选 PDF 引用时，预览、文件清单、上传/哈希、结束与报告仍走同一文件通道；不凭上传文件名推断论文归属。没有标识的条目另按 [6.4.8](#648-可能重复) 判断是否可能重复（目标，尚未实现）。
 
-旧 Web `/api/import`、CLI/stdio 书目入口内部用同一 null-library 创建路径，原请求、结果、编码处理和逐条拒绝语义不变；这些一步完成的入口忽略附件，不生成待交文件。失败时结算临时会话，不遗留活动会话，也不撤销已经接纳的文献。
+CLI 与 stdio MCP 的书目导入，以及旧 Web `/api/import`，内部都用同一 `source:null` 创建路径，在本进程里同步跑完；原请求、结果、编码处理和逐条拒绝语义不变。这些一步完成的入口忽略附件，不生成待交文件。失败时结算临时批次，不遗留活动批次，也不撤销已经接纳的文献。
 
 只要 `Literature` 已形成可转换的当前 `LiteratureMetadata` 即可导出，不要求 PDF、解析或内容总结完成。始终导出当前接纳的 metadata，不按分析或建档状态切换另一套数据。默认每个 `MetaLiterature` 选择一个最佳可导出 Literature；用户明确要求时可以导出全部 Literature。目标格式无法表达的字段必须形成明确损失说明。
 
 #### 网页收藏
 
-Entry 的 CaptureService 接纳页面字段为 `user/web-capture` observation。输入是部分中性 LiteratureMetadata，补齐空默认值并使用同一元数据合同；至少有合法 DOI 或 arXiv 标识，不能只有标题。web-capture 只有 arXiv、尚无标题时也可接纳，普通书目与 Provider 的原最小输入规则保持。客户端把 `citation_*`、Dublin Core、`prism.*` 及页面网址中读到的标识转换为中性字段，服务端不下载页面或 PDF，不接收页面 Cookie、凭据、URL、自选来源和 provenance。source_record_id 为按 namespace 排序的 DOI/arXiv 标识 JSON，input_sha256 为规范化页面元数据 hash，parameters_sha256 为空；原 observation 不被后续补全改写。
+目标，尚未实现（计划 20 的 14、15 块）：网页收藏是只有一条清单、逐条确认的入库（[6.4.2](#642-过程与状态)），页面的原始数据由服务端的 `web-page` 适配器解读（[6.4.5](#645-网页原始数据)）。下面是它的接纳规则。
 
-保存后同步调用既有 acquire-metadata/lookup 持久任务，冻结当前来源选择、每来源 scan_limit=1，使用收藏 ID 派生的任务幂等键。结果分别返回 completed、partial、failed 或 unavailable；失败保留已接纳页面书目。Provider observation 仍由原身份和元数据字段 owner 接纳，不覆盖人工锁或页面已有用户字段。所选文件夹只补成员；不存在的文件夹在 missing_folder_ids 中报告，其它存储失败不伪装为缺失。
-
-每设备内的 request_id 是 UUID；相同 ID、相同规范化请求重放原接纳，输入改变拒绝冲突。同进程合并在途保存，跨进程由 catalog 的唯一键、稳定 observation ID 和任务幂等键保留事实。收藏上传与导入共用 ImportFileChannel，沿用磁盘保护、逐字节哈希、PDF 验收、唯一主 PDF、metadata CAS、取消与不可变发布；已有 PDF 只交哈希，相同记 existing、不同记 conflict，均不替换。PDF 不调用模型或 MinerU。接口见[收藏 HTTP](01-product-interface.md#243-网页收藏-http)，按日批次见[批次规则](06-retrieval-context.md#216-入库批次范围词频与-pdf-获取范围)。
+- 页面字段接纳为 `user/web-capture` observation。输入补齐空默认值，使用同一元数据合同。
+- 条目至少要有标识、标题、文件三者之一（[6.4.1](#641-条目与格式)）：没有 DOI 或 arXiv 号、有标题的页面也可以收藏。
+- 服务端不下载页面或 PDF，不接收页面 Cookie、凭据、自选来源和 provenance。
+- `source_record_id` 为按 namespace 排序的 DOI/arXiv 标识 JSON，没有标识时为 null。`input_sha256` 为规范化页面元数据的 hash，`parameters_sha256` 为空。原 observation 不被后续补全改写。
+- 有标识时，保存后照现在的做法同步调用既有的 acquire-metadata/lookup 持久任务：冻结当前来源选择，每个来源 `scan_limit=1`，使用收藏 ID 派生的任务幂等键。结果为 completed、partial、failed 或 unavailable；失败时保留已接纳的页面书目。
+- 没有标识时，保存后由后台执行认篇的第 3、4 步（[6.4.6](#646-认出是哪一篇)），保存的结果先为 pending。
+- 没有标识、可能与已在库的文献重复的页面，按 [6.4.8](#648-可能重复) 在弹窗里当场决定并入或新增，决定之后才入库。
+- Provider observation 仍由原身份和元数据字段的 owner 接纳，不覆盖人工锁或页面已有的用户字段。
+- 所选文件夹只补成员。不存在的文件夹在 `missing_folder_ids` 中报告，其它存储失败不伪装为缺失。
+- 每个连接内的 `request_id` 是 UUID：相同 ID、相同规范化请求重放原接纳，输入改变时拒绝为冲突。同进程合并在途保存；跨进程由 catalog 的唯一键、稳定 observation ID 和任务幂等键保留事实。
+- 收藏的 PDF 与其他入库共用同一条文件通道：沿用磁盘保护、逐字节哈希、PDF 验收、唯一主 PDF、metadata CAS、取消与不可变发布。已有 PDF 只交哈希，相同记 existing，不同记 conflict，都不替换。PDF 的来源地址取扩展报告的实际下载地址（6.4.5）。PDF 不调用模型或 MinerU。
+- 接口见[入库 HTTP](01-product-interface.md#242-入库-http目标尚未实现)，每台设备每天的开放批次见 [6.4.2](#642-过程与状态)。
 
 ### 6.2 Ports 与事务
 
@@ -1162,6 +1173,473 @@ Literature 拥有：
 ### 6.3 元数据与材料接纳
 
 Application 的 writes 为 FileStore 与 SQLite 提供同一短写入准入。网络、模型和文件准备在锁外；不可变发布、输入复检与 SQL CAS 在准入内完成。元数据、原始解析、校订文档和算子结果分别由各自业务 owner 接纳，不再以两阶段总结绑定统一元数据。已发布事实不因后续索引失败或取消而撤销。
+
+### 6.4 入库（目标，尚未实现）
+
+目标，尚未实现（计划 20 的 14–16 块）。本节按 [ADR 0063](../decisions/0063-unified-intake.md) 规定一种条目、一个过程，以及从各种线索认出是哪一篇。实现之前，6.1 中标为现行的规则不变。
+
+- 接口的路径、封套与错误码见[产品接口 2.4.2](01-product-interface.md#242-入库-http目标尚未实现)。
+- 批次的字段见[查询 2.1.6](06-retrieval-context.md#216-入库批次范围词频与-pdf-获取范围)。
+- 存储见[存储第 9 节](07-versioned-storage.md#9-导入会话与外部编号对应)。
+- 撤回见 [6.4.11](#6411-撤回)。
+
+#### 6.4.1 条目与格式
+
+**条目。** 条目沿用 6.1 的中性记录（`ImportRecord`，合同改名为 `IntakeItem`），可以带：
+
+- 书目，可以不完整；
+- 标识；
+- 文件；
+- 有层级的分组；
+- 标签；
+- 批注；
+- 来源里的编号。
+
+**最低条件。** 条目至少要有标识、标题、文件三者之一。三者都没有的，在数据分段里按条计为 rejected，原因 `missing-identifier-title-file`；在单篇收藏里整个请求返回 `intake-item-empty`。没有标识、只有标题的条目可以入库。
+
+常见的三种形状：
+
+- 只有书目；
+- 书目加文件；
+- 只有文件（[6.4.3](#643-只有文件的条目与配对)）。
+
+**格式与适配器。** 每种原始格式一个适配器，都是纯函数：原始数据进，条目与“不导入的内容”计数出。适配器不联网、不写库；书目格式的适配器也不读文件，文件适配器只读交来的那个文件（[6.4.4](#644-文件适配器的线索)）。
+
+| 格式名                                  | 来源                                                         | 怎样交来                              |
+| --------------------------------------- | ------------------------------------------------------------ | ------------------------------------- |
+| `records`                               | 已经整理成中性条目的数据                                     | 数据分段                              |
+| `bibtex`、`biblatex`、`ris`、`csl-json` | 导出文件                                                     | 数据分段，`data` 为整份文本或其中一段 |
+| `web-page`                              | 网页的书目标签（[6.4.5](#645-网页原始数据)）                 | 单篇收藏，不经数据分段                |
+| `file`                                  | 文件本身                                                     | 只有文件的条目                        |
+| Zotero 接口数据（格式名待定）           | 扩展读到的本地接口响应（[6.4.9](#649-经扩展从-zotero-导入)） | 数据分段                              |
+
+**`records` 格式。** 它是正式的公开格式，Agent 与脚本可以交已经整理成条目的数据。但来源有专用适配器时（书目文件、Zotero），应当交原始数据，不要自己改写成条目：解读格式是适配器的职责，自己改写会绕过适配器的规则（标签分类、首选附件、Extra 字段中的标识等）。接口说明（`/api/v1/intake/instructions`）写明这一点。
+
+#### 6.4.2 过程与状态
+
+**五步。** 所有入库都形成一个入库批次，依次为：
+
+1. 交清单：数据分段、文件即条目，或单篇收藏的页面数据。
+2. 预览。
+3. 确认。
+4. 补全文。
+5. 报告。
+
+批次编号在建批次时产生，是对外唯一的编号。
+
+**状态与结果。**
+
+| 状态   | 值                      | 含义                                          |
+| ------ | ----------------------- | --------------------------------------------- |
+| 收集中 | `collecting`            | 已建批次，还没有交来条目                      |
+| 待确认 | `awaiting-confirmation` | 已有条目，可以预览与决定                      |
+| 入库中 | `running`               | 已确认，后台逐条入库，或者等待文件            |
+| 已结束 | `finished`              | 带结果                                        |
+| 已取消 | `cancelled`             | —                                             |
+| 已撤回 | `withdrawn`             | 已撤回，见 [6.4.11](#6411-撤回)，可以整批恢复 |
+
+- 已结束的批次有结果，沿用 ADR 0052 的四个值：
+  - `completed`：全部条目已接纳，没有未交的文件，没有待决定的条目；
+  - `partial`：有接纳的条目，也有冲突、拒绝、未交的文件或待决定的条目；
+  - `failed`：没有接纳任何条目，或者存储错误连续三次（见下文）；
+  - `interrupted`：书目阶段没有跑完就因过期结束。
+- 其余状态下，结果为 null。
+- 主题发现与引用扩展的批次只用 `running`、`finished`（带结果）与 `withdrawn`。
+
+**状态的转换。**
+
+| 从                                               | 到                      | 条件                                                 |
+| ------------------------------------------------ | ----------------------- | ---------------------------------------------------- |
+| 建批次                                           | `collecting`            | —                                                    |
+| `collecting`                                     | `awaiting-confirmation` | 第一段数据或第一个文件交来                           |
+| `awaiting-confirmation`                          | `running`               | 确认                                                 |
+| `running`                                        | `finished`              | 书目阶段完成且没有待交的文件，或者显式结束，或者过期 |
+| `collecting`、`awaiting-confirmation`、`running` | `cancelled`             | 取消；已经入库的内容保留                             |
+| `finished`、`cancelled`                          | `withdrawn`             | 网页登录的使用者撤回（6.4.11）                       |
+| `withdrawn`                                      | 撤回之前的状态          | 网页登录的使用者整批恢复（6.4.11）                   |
+
+- 同一个有库编号的来源，同时只能有一个处于前三种状态的批次（`intake-source-busy`）。
+- 同一序号的数据分段，在确认之前可以重交，重交即替换。
+
+**预览。**
+
+- 预览给出以下估计：
+  - 新增、已在库、恢复（[6.4.11](#6411-撤回)）、冲突、可能重复（[6.4.8](#648-可能重复)）、不接纳的条数；
+  - 要补的文件数，分要上传的与只需核对的；
+  - 未配对的文件（[6.4.3](#643-只有文件的条目与配对)）；
+  - 能导入与不能导入的批注数及原因；
+  - 不导入的内容及数量。
+- 只有文件的条目在预览阶段认篇（[6.4.6](#646-认出是哪一篇)），返回 `recognition`。
+- 预览不写文献、来源记录、状态投影与文件夹。认篇结果与可能重复的候选记在批次的条目上，以便确认时不再查询；这属于批次的工作状态，不是文献库的事实。
+
+**确认。**
+
+- 确认时重新判定；结果以报告为准，预览只是估计。
+- 认篇尚未结束时，确认返回 `intake-recognition-pending`。
+- 需要决定但还没有决定的条目（可能重复、可能是这一篇、未配对的文件），按 6.4.8、6.4.6、6.4.3 各自的默认处理，不入库的条目记为 `pending-decision`。
+- 确认立即返回：状态为 `running`，`progress.total_items` 为总条数，`progress.processed_items` 为 0。
+
+**后台入库。**
+
+- 入库在服务进程的后台进行，分三个阶段：
+  - `metadata`：逐条书目入库；
+  - `files`：等待文件；
+  - `closing`：收尾。
+- 进度字段见查询 2.1.6 的 `IntakeBatch.progress`。
+- 单条失败（身份冲突、拒绝等）记入报告，继续下一条。
+- 存储级的错误（写入准入、SQLite、文件系统）使入库暂停，每分钟重试一次；连续三次仍失败时，批次转为 `finished`、结果为 `failed`，报告写明已入库的与没有处理的。
+- 服务进程启动时，继续没有跑完的批次。
+- 谁发起的批次，由谁的进程跑完。CLI 与 stdio MCP 的书目导入在本进程里同步完成，行为不变。恢复别的进程留下的批次与过期处理，只在服务进程里做；CLI 与 stdio MCP 进程不做这两件事。
+
+**过期。**
+
+- 没确认的批次，自建立起 7 天后转为 `cancelled`。
+- `running` 的批次 7 天没有新结算的文件，就转为 `finished`，还没交来的文件记为未交。
+- 原始数据分段与暂存文件，在批次结束或取消时删除；待决定条目的保留规则见 6.4.8。
+
+**两种确认方式。**
+
+- 整批确认（`confirmation = "batch"`）：默认方式。人在网页上确认；Agent 在用户说过可以直接导入时自己确认。
+- 逐条确认（`confirmation = "per-item"`）：条目交来就入库，只用于以下两种情形。
+
+| 情形                     | 开放批次                                     | 默认名称              |
+| ------------------------ | -------------------------------------------- | --------------------- |
+| 扩展的单篇收藏           | 每个设备连接每天一个                         | “网页收藏 YYYY-MM-DD” |
+| 补 PDF（产品接口 2.4.2） | 每个发起入口（网页、CLI、stdio MCP）每天一个 | “补充文件 YYYY-MM-DD” |
+
+- “一天”按服务端的系统时区划分。
+- 当天的开放批次处于 `running`。日期变更后，服务进程的维护把它转为 `finished`，还没交来的文件记为未交。
+- 开放批次随时可以改名；改名后，当天后续的条目照常归入。
+- 报告随时可读，给出到当时为止的累计；全文取得情况现算。
+- 单篇收藏的重放幂等，照 `request_id`（产品接口 2.4.2）。
+
+**再次入库。** 来源有库编号时，按条目在来源里的编号对应，规则见 6.1；再导一次就是同步。
+
+#### 6.4.3 只有文件的条目与配对
+
+**文件即条目。**
+
+- 批次在 `collecting` 或 `awaiting-confirmation` 时，向 `/file-items` 交文件字节，即建一条只有文件的条目。
+- 文件进入暂存区，服务端返回条目编号。
+- 文件按 ADR 0029 做基本检查。不通过的，条目计为 rejected（`pdf-invalid`、`encrypted-pdf` 或 `non-pdf-file`），暂存文件立即删除。
+
+**计数与暂存。**
+
+- 暂存文件不计入批次 256 MiB 的数据上限，只受磁盘空间检查的约束；条目数计入 50,000 条。
+- 批次取消或过期时，暂存文件立即删除。
+- 确认之后，暂存文件直接接纳为主 PDF，不再上传；接纳的规则与文件通道相同（6.1“文件清单”一段）。
+
+**配对。** 导出文件与文件在同一个批次里交来时，先把每条导出记录的文件引用与交来的文件配对：
+
+1. 按导出记录里的相对路径：从路径末尾逐段比较（不分大小写，反斜杠视同斜杠），取匹配段数最长并且唯一的那个文件。
+2. 第 1 步没有唯一结果时，按文件名配对：文件名唯一，并且导出给了大小时大小一致，才配对。
+3. 仍没有唯一结果的引用，计为待交的文件，留待交文件时处理；不猜。
+
+- 配上的文件成为那条记录的首选文件，不再单独成为条目。
+- 没有被任何记录引用的 PDF，在预览里单列为“未配对的文件”，默认不入库。使用者可以逐个决定 `include`（作为只有文件的条目入库）或 `exclude`。没有决定的，按 `exclude` 处理，批次结束时删除。
+
+#### 6.4.4 文件适配器的线索
+
+文件适配器从一个 PDF 中读出以下线索，供 6.4.6 认篇。规格只规定能力，不指定所用的库。
+
+| 线索       | 内容                                                                                                      |
+| ---------- | --------------------------------------------------------------------------------------------------------- |
+| 文档信息   | Title、Subject、Keywords                                                                                  |
+| XMP        | `dc:title`、`dc:identifier`，以及 DOI 字段（`prism:doi`、`pdfx:doi`）                                     |
+| 文件名     | 去掉扩展名                                                                                                |
+| 首页文字   | 第 1 页的文字；第 1 页少于 200 个字符时，同时读第 2 页。每页最多读 20,000 个字符                          |
+| 最醒目的行 | 首页上半部分字号最大的文字块；相邻、同字号的行合并为一块；长度 10–300 个字符；按字号从大到小取前 3 个候选 |
+
+- 读取一个文件的总超时为 10 秒，超时按没有线索处理，并在条目上注明 `clues-timeout`。
+- 没有文字层的扫描件，没有首页文字与最醒目的行。如果其他线索也认不出，以文件名作为暂时的标题，标为书目待补（[8.4](#84-书目待补目标尚未实现)）。
+- 加密 PDF 按 ADR 0029 不接纳，计为 `encrypted-pdf`。
+- 非 PDF 首版不接纳，计为 `non-pdf-file`。
+- 文字在使用前按 6.4.6 的规范化处理。
+
+#### 6.4.5 网页原始数据
+
+扩展只采集、不解读，原样交来 `WebPageData`（字段见产品接口 2.4.2）：
+
+- 网址；
+- 页面标题；
+- 全部带 `name` 或 `property` 的 `meta`，最多 500 条；
+- schema.org 的 JSON-LD 原文，最多 5 块，每块最多 64 KiB；
+- 当前页是否就是 PDF。
+
+规范 JSON 共不超过 512 KiB。服务端的 `web-page` 适配器负责解读，规则如下：
+
+- **标识**：
+  - DOI 依次取 `citation_doi`、`prism.doi`、`dc.identifier`、`dc.identifier.doi`、`bepress_citation_doi`、JSON-LD 的 `identifier`/`sameAs` 中的 DOI，最后取网址；
+  - arXiv 号取网址、`citation_arxiv_id`，以及 DataCite 的 arXiv DOI（`10.48550/arxiv.*`）。
+  - 取法与原扩展的 `page.ts` 相同：DOI 去掉结尾的标点和 `/full`、`/abstract`、`/pdf`、`/epdf`、`/html`、`.pdf`，转为小写。
+- **书目**：
+  - 标题依次取 `citation_title`、`dc.title`、JSON-LD 的 `headline` 或 `name`；`og:title` 只作后备。
+  - 作者取 `citation_author`、`dc.creator`、JSON-LD 的 `author`。
+  - 日期取 `citation_publication_date`、`citation_date`、`citation_online_date`、`prism.publicationdate`、`dc.date`、JSON-LD 的 `datePublished`。
+  - 期刊、出版者、卷、期、起止页、摘要、语言、关键词，取原扩展读取的同名标签，以及 JSON-LD 的对应字段。
+- **JSON-LD**：只解读 `@type` 为 `ScholarlyArticle`、`Article`、`Report`、`Thesis`、`Chapter` 的对象，包括其子类型名，以及 `@graph` 中的这些对象。其他对象忽略；不合法的 JSON 整块忽略，并计入 `excluded`。
+- **PDF 地址**：
+  - 当前页就是 PDF 时，取网址；
+  - 否则取 `citation_pdf_url`；
+  - 都没有，而页面在 arxiv.org 上时，取 `https://arxiv.org/pdf/<arXiv 号>`。
+  - 服务端在 `IntakePagePreview.pdf_url` 中给出，扩展照它下载。
+- **来源记录**：读到的字段照 ADR 0057 第 5 节保存为一条 `user/web-capture` 来源记录，文献信息来源只补它没有的字段。
+- **PDF 的来源地址**：扩展在 `IntakePageFile.source_url` 中报告实际下载的地址，记为这个文件的 `LiteratureAsset.source_url`。不再编造地址。
+- **当前页就是 PDF**：扩展把文件交来，条目按只有文件的条目认篇，网址作为额外线索。
+
+#### 6.4.6 认出是哪一篇
+
+条目带来的书目不完整时，先认出是哪一篇，再向文献信息来源取完整书目。只用程序与文献信息来源，不调用模型。认出的结果只决定书目；文件仍按 ADR 0029 标为“文章身份未验证”。
+
+**规范化与相似度。**
+
+- 比较标题之前，先作规范化：
+  1. Unicode NFKC；
+  2. 去掉 HTML 标记与 LaTeX 命令，保留命令的花括号参数；
+  3. 转为小写；
+  4. 标点与符号换成空格；
+  5. 连续空白合成一个空格，并去掉首尾空白。
+- 相似度为规范化串之间的归一化编辑距离相似度：`1 − d(a,b) / max(|a|,|b|)`。其中 `d` 是按 Unicode 码点计的 Levenshtein 距离，`|a|` 是码点数；两串都为空时为 0。
+- “一致”指规范化后相等，或者相似度不低于 0.95；“相近”指相似度不低于 0.85。
+
+**四步。** 按下面的顺序认，前一步成功就不做后一步。
+
+1. **找标识。**
+   - 文件依次看 XMP 与文档信息里的 DOI、文件名、首页文字。
+   - DOI 按 `10.<4–9 位数字>/<非空白字符>` 匹配，去掉结尾的标点；arXiv 号按新式 `\d{4}\.\d{4,5}(v\d+)?`（前面要有 `arXiv:` 或 arxiv.org 的地址）与旧式 `<学科>/<7 位数字>` 匹配。
+   - 首页上有几个不同的标识时，不取首页的标识。
+   - 网页的标识按 6.4.5 取。
+2. **用标识取书目，并核对。**
+   - 取书目用现有元数据补全的同一组来源与次序。
+   - 取回的标题要能在线索里找到：文件，规范化后的首页文字包含这个标题，或者某个最醒目的行与它一致；网页，页面标题或标题标签与它一致。
+   - 对不上的，当作没有标识，进入第 3 步。
+3. **用标题找。**
+   - 标题线索：网页取标题标签，后备为 `og:title` 与页面标题；文件依次取 XMP 标题、文档信息标题与最醒目行的前 3 个候选。
+   - 向 Crossref 与 OpenAlex 按标题查询，各取前 5 条。
+   - 采纳的条件：结果的标题与某个标题线索一致，并且作者或年份能在线索里找到：
+     - 文件：任一作者的姓出现在首页文字里，或者出版年份出现在首页文字或文档信息里；
+     - 网页：出现在作者、日期标签或 JSON-LD 里。
+   - 两个来源各自采纳的结果指向不同的作品（标识不同）时，不采纳，改列为候选。
+   - 只是标题相近的结果，作为“可能是这一篇”列在预览里，最多 3 项，按相似度从高到低，相同时按来源次序（Crossref 在前）。使用者用 `candidate` 决定采用其中一项，或用 `unrecognized` 决定都不是。没有决定的，按第 4 步处理。
+4. **没有认出。**
+   - 以线索里的标题入库：网页取标题标签，后备为页面标题；文件依次取 XMP 标题、文档信息标题、第一个最醒目的行，都没有时取文件名。
+   - 标为书目待补（[8.4](#84-书目待补目标尚未实现)）。
+
+**什么时候认。**
+
+- **只有文件的条目**：在预览阶段认。
+  - 预览请求启动或继续认篇，并返回 `recognition: {state: "idle" | "running" | "done" | "cancelled", recognized: int, total: int}`。
+  - 查询按 ADR 0056 的来源设置出网。
+  - 认篇可以取消（`/preview/cancel`）；取消后，没认完的条目按没有认出处理。再次预览时，从没认完的条目继续。
+- **网页**：带书目标签的页面本身就有书目，收藏时不必等查询；补全照 6.1 的网页收藏，在保存之后进行。没有任何标识的页面，保存时以页面书目入库，之后由后台代替补全执行第 3、4 步。
+- **认出的结果**：记在批次的条目上，确认时不再查询。
+
+#### 6.4.7 文件按 sha256 对应
+
+来源没有库编号时，文件按内容的 sha256 对应，同一个文件不重复入库：
+
+- **命中已有的主 PDF**：这条记为已在库（matched），对应到那篇文献，不建新文献。条目自己带的标识与那篇文献的稳定标识不同时，记为冲突（`file-identity-conflict`），不入库。
+- **命中某篇文献的补充材料**：记为已在库，对应到它所属的文献；报告里注明 `matched-by-supplementary`。
+- **已撤回的内容**：仍然参与对应。命中被撤回的文献时，按 [6.4.11](#6411-撤回) 恢复它，分类为 `restored`。
+
+#### 6.4.8 可能重复
+
+**判断的范围。** 只对没有标识、来源也没有库编号的条目判断，也就是导出文件、网页和只有文件的条目。认篇之后有了标识的条目不判断。比较的范围是全库（不含被撤回的文献），以及本批中排在它之前的条目。
+
+**与严格后备键的关系。** [2.4](#24-身份收敛) 的严格后备键（规范题名、完整作者顺序、年份与出版形式都相同）命中时，仍按同一篇处理，记为已在库，不列为可能重复。可能重复只指达不到严格后备键、但达到下面判定的情形。
+
+**判定。** 以下三条同时成立时，判为可能重复：
+
+- 标题相似度不低于 0.90，规范化与算法同 6.4.6；
+- 第一作者的姓相同（NFKC、小写后比较），或者一方没有作者；
+- 年份相差不超过 1 年，或者一方没有年份。
+
+**处理。**
+
+- 预览单列“可能重复”。每条给出库里的候选，最多 3 个，按相似度从高到低，相同时按 `literature_id` 排序。
+- 决定有两种，经接口逐条提交：
+  - `merge`：并入列出的某一篇，作为它的一条来源记录；
+  - `new`：新增。
+- 系统记下决定者（`web`、`cli`、`mcp` 或 `device:<connection_id>`）与决定时间。
+- 逐条确认的网页收藏不推到批次页：单篇预览（`/pages/preview`）返回可能重复的候选，最多 3 个；扩展当场请使用者选择并入某一篇，或者作为新文献收藏。`/pages/save` 必须带 `duplicate_decision`，否则返回 `intake-decision-required`，使用者选了才入库。
+- 没有人决定的条目，批次结束后处于 `pending-decision`，不入库。条目的数据与暂存文件自批次结束起保留 30 天；过期后丢弃，并在报告里注明 `decision-expired`。
+- 以后在批次页上处理时，不另建批次，结果并入原批次的报告与成员。
+
+#### 6.4.9 经扩展从 Zotero 导入
+
+依据 [ADR 0063](../decisions/0063-unified-intake.md) 第 6 节。下面标“待探测”的各项，以计划 20 的 Zotero 探测结果为准，规格暂不规定。
+
+**扩展交来什么。**
+
+- 扩展读 Zotero 的本地接口，把条目与分组的响应原样分段交来。每段不超过数据分段的上限（产品接口 2.4.2），段内保留响应的原始 JSON。
+- 批次的 `source.system` 为 `zotero`。
+- 待探测：来源库编号的取法（个人库与群组库）及其 `identity` 是 `global` 还是 `local`；本地接口是否给出 CSL JSON。
+
+**条目的映射。**
+
+- 照 ADR 0057 第 3 节：
+  - 书目优先用 CSL JSON，没有时按 Zotero 字段映射；
+  - 解析 Extra 字段里的 DOI、arXiv 号与 PMID；
+  - 自动标签作为作者关键词，手动标签作为用户标签；
+  - 分类作为分组。
+- 没有父条目的独立 PDF，按 ADR 0063 第 2 节成为只有文件的条目。
+- 笔记、非 PDF 附件、回收站里的条目只计数。
+- 批注按 ADR 0057 第 3 节，在主 PDF 与附件逐字节相同时导入。
+
+**首选附件。**
+
+- 父条目带 `links.attachment` 时，用它指向的附件。
+- 没有时，在该条目的 PDF 附件（`contentType = application/pdf`）中，优先取 `linkMode` 为 `imported_file` 或 `imported_url` 的，再按 `dateAdded` 最早、附件编号升序取第一个。
+- 文件的引用名是附件编号；文件名与 Zotero 给出的 md5 随附。
+
+**文件。**
+
+- 待探测：扩展能否经本地接口直接读到文件。
+- 读不到时，扩展请使用者选一次 Zotero 的数据文件夹，按 `storage/<附件编号>/` 找文件：
+  - 该目录下只有一个 PDF 时取它；
+  - 有多个时，取文件名与附件 `filename` 相同的那个；
+  - 都不符合时，计为未交，不猜。
+- 链接附件（`linked_file`）不在 `storage` 里，列入报告。
+
+**续传。**
+
+- 上传以服务端的缺失清单为准。
+- 扩展在本地只存批次编号与数据文件夹的授权，不存文件清单或进度；中断后重新读取缺失清单，再继续。
+
+#### 6.4.10 条目、决定、文件与报告的字段
+
+下面的类型都由 `import-sessions.ts` 中的同名类型改名而来，未列出的字段不变。
+
+```text
+IntakeBatchItem                       # /items 与 /items/:item_id/status 的一项
+  item_id: str
+  origin: "data" | "file" | "page"
+  sequence: int | None                # 数据分段中的位置；文件即条目与单篇收藏为 null
+  record_index: int | None
+  external_id: str | None
+  title: str | None                   # 读出或认出的标题
+  file_name: str | None
+  recognition: IntakeRecognition | None
+  possible_duplicates: tuple[{literature_id, title, first_author, publication_year, similarity}, ...]   # 最多 3 个
+  unpaired: bool                      # 未配对的文件
+  needs_decision: bool
+  decision: IntakeDecision | None
+  disposition: IntakeDisposition | None   # 确认后才有
+
+IntakeRecognition
+  state: "pending" | "recognized" | "candidates" | "unrecognized" | "cancelled"
+  step: 1 | 2 | 3 | 4 | None          # 在哪一步认出或停下
+  literature_id: LiteratureId | None  # 第 1–3 步命中已在库的文献时
+  candidates: tuple[{candidate_id, title, authors, publication_year, identifiers, source_name, similarity}, ...]   # 最多 3 项
+
+IntakeDecision
+    {kind: "merge", literature_id}    # 可能重复：并入列出的某一篇
+  | {kind: "new"}                     # 可能重复：新增
+  | {kind: "candidate", candidate_id} # 可能是这一篇：采用某个候选
+  | {kind: "unrecognized"}            # 可能是这一篇：都不是
+  | {kind: "include"}                 # 未配对的文件：作为只有文件的条目入库
+  | {kind: "exclude"}                 # 未配对的文件：不入库
+  # 返回时另带 decided_by: str 与 decided_at: str
+
+IntakeDisposition = "created" | "enriched" | "matched" | "restored" | "conflict" | "rejected" | "pending-decision" | "excluded"
+```
+
+- 决定只接受该条目当时列出的候选或种类，否则返回 `intake-decision-invalid`。
+- 确认之前可以改变决定；批次结束后，只能对 `pending-decision` 的条目作出决定。
+- `IntakeFileStatus`、`IntakeItemResult` 沿用 `ImportFileStatus`、`ImportRecordResult` 的字段，`disposition` 改用 `IntakeDisposition`。
+- `IntakeSummary` 在 `ImportSummary` 上增加以下字段：
+  - `records.restored`（恢复被撤回的文献，[6.4.11](#6411-撤回)）、`records.possible_duplicates`、`records.pending_decision`、`records.needs_metadata`（书目待补）；
+  - `files.unpaired`；
+  - `full_text`，即这一批的全文取得情况，定义同[查询 2.1.8](06-retrieval-context.md#218-文献库计数与全文取得情况)，范围是批次成员。
+
+#### 6.4.11 撤回
+
+依据 [ADR 0063](../decisions/0063-unified-intake.md) 第 9 节。撤回是标记，不是物理删除：被撤回的内容留在存储里，可以恢复。彻底删除已撤回的内容不在首版。路由见[产品接口 2.4.2](01-product-interface.md#242-入库-http目标尚未实现)，存储见[存储 9.1](07-versioned-storage.md#91-schema-16-的目标变化目标尚未实现)。
+
+**谁能撤回、撤回哪个批次。**
+
+- 撤回与恢复只接受网页登录的使用者。任何设备用途、CLI 与 MCP 都不能撤回或恢复。
+- 可以撤回 `finished` 或 `cancelled` 的批次，包括主题发现与引用扩展的批次。
+- `running` 的批次不能撤回，返回 `intake-batch-state`。当天的开放批次在日期变更、转为 `finished` 之后才能撤回。
+- 有运行中或排队中的任务以这一批的文献为目标时，撤回返回 409 `intake-batch-busy`，要先等任务结束或取消。
+
+**撤回什么。** 只撤回这一批新增、之后没有被动过的内容：
+
+- 文献：本批分类为 created 的文献。
+- 文件：这些文献的资产关系（`literature_assets`）。资产与文件本身保留，只标记关系；同一个文件可能还被别的文献引用。
+- 分组：本批新建的文件夹，包括来源根文件夹与“标签”文件夹。只有当它的成员全部被撤回，并且文件夹本身没有被改名、移动或加入别的成员时，才一起标记。
+- 批注：本批导入的批注。
+- 本批加入的文件夹成员。
+
+本批新建的对象由 `intake_batch_objects` 记录。
+
+**不撤回的内容。** 以下文献连同它在本批的文件关系、文件夹成员与批注都不撤回，在预估与报告里按原因列出。一篇文献可以有几个原因，全部列出。
+
+| 原因                 | 判定                                                                                               |
+| -------------------- | -------------------------------------------------------------------------------------------------- |
+| `pre-existing`       | 入库之前已经在库：本批分类为 enriched、matched 或 restored。本批给它加的来源记录与文件夹成员也保留 |
+| `hit-by-later-batch` | 是晚于本批建立的批次的成员                                                                         |
+| `folder-changed`     | 有本批以外加入的文件夹成员                                                                         |
+| `annotated`          | 有本批以外创建的批注或笔记                                                                         |
+| `opened`             | 有阅读记录（`reading_history`）                                                                    |
+| `processed`          | 有原始解析、建档、校订稿、标签指派或算子结果                                                       |
+| `metadata-edited`    | 有人工编辑或锁定的字段                                                                             |
+| `identity-merged`    | 之后与别的文献成为同一 MetaLiterature 的版本，或者有别的条目以 `merge` 决定并入了它                |
+
+**预估与执行。**
+
+- `/withdrawal/preview` 给出 `IntakeWithdrawalPreview`，不写库：
+
+```text
+IntakeWithdrawalPreview
+  remove: {literatures: int, file_relations: int, folders: int, folder_members: int, marks: int}
+  keep: {literatures: int, by_reason: {reason: int}}
+  kept_items: tuple[{literature_id, title, reasons: tuple[reason, ...]}, ...]   # 最多 200 项，按 literature_id 排序
+
+IntakeWithdrawalReport             # 撤回或整批恢复之后
+  remove 或 restore 的实际计数（字段同 remove）
+  keep、kept_items（字段同上）
+  at: str
+  by: str                          # 固定为 "web"
+```
+
+- `/withdraw` 执行时重新判定，以报告为准。
+- 标记在一个写入事务中完成：
+  - 写入 `intake_withdrawn_objects`；
+  - 删除被撤回文献的全文检索行，并推进检索 source revision；
+  - 批次状态改为 `withdrawn`，原状态与报告记在 `intake_withdrawals`。
+
+**撤回之后。**
+
+- 被撤回的文献从下列范围里排除：
+  - 文献库列表与详情，详情按不存在处理；
+  - `LibraryQuery` 的一切结果、计数与词频；
+  - 全文检索与材料 Context；
+  - 引用关系的两端：一端被撤回的引用，不出现在关系页与引用数中；
+  - 发现原因；
+  - 获取 PDF、解析等任务的范围展开；
+  - CLI 与 MCP 的读取。
+- 排除的读取规则见[查询 2.1.1](06-retrieval-context.md#211-libraryquery)。
+- MetaLiterature 的代表在读取时从未被撤回的版本中选；全部版本都被撤回时，这篇论文整体排除。
+- 被撤回的文献**仍然参与身份匹配、sha256 对应与外部编号对应**（6.1、6.4.7），但不进入可能重复的比较范围（6.4.8）。
+- 被撤回的文件夹不出现在文件夹树与文件夹查询中。被撤回的批注不出现在批注列表与阅读页中。
+
+**再次入库时恢复。**
+
+- 新的入库按标识、严格后备键、sha256 或外部编号命中一篇被撤回的文献时，恢复这篇文献，不新建文献：
+  - 取消它的标记，以及它在原撤回中一并标记的文件关系、文件夹成员与批注的标记；
+  - 原批次建立、被标记的文件夹，在有成员恢复时一起恢复。
+- 它成为新批次的成员，分类为 `restored`；预览与报告单列“恢复”。
+- 来源记录与外部编号对应沿用原来的。内容有变化时，照 6.1 形成新的来源记录。
+- 原批次保持 `withdrawn`，它的报告不变。
+
+**整批恢复。**
+
+- 已撤回的批次页上可以整批恢复（`/restore`），只接受网页登录。
+- 恢复的是这一批里仍处于撤回状态的内容；已经被后来的批次恢复的内容保持原样。
+- 恢复之后，批次回到撤回之前的状态（`finished` 带原结果，或 `cancelled`），并附恢复报告。
+
+**首版不做。** 彻底删除已撤回的内容；撤回单个条目。
 
 ## 7. 材料与文献验证
 
@@ -1352,6 +1830,35 @@ HTTP 和 Browser 测试使用本地受控站点，不连接真实供应商。
 - 补充材料部分不参与推导；
 - 获取 PDF、解析、建档各自手动发起。
 
+### 8.4 书目待补（目标，尚未实现）
+
+目标，尚未实现（计划 20 的 15 块）。依据 [ADR 0063](../decisions/0063-unified-intake.md) 第 2、11 节。
+
+**是什么。**
+
+- “书目待补”是文献（`Literature`）上的一个标记，表示入库时没有认出它是哪一篇（[6.4.6](#646-认出是哪一篇) 第 4 步）。
+- 它不是建档状态机里的状态，不改变 8.3 的六种状态及其推导。
+
+**在哪里出现。**
+
+- 查询合同的文献摘要（`LiteratureSearchItem`）与文献详情带 `needs_metadata: bool`。
+- `LibraryQuery.needs_metadata` 可以按它筛选（[查询 2.1.1](06-retrieval-context.md#211-libraryquery)）。
+- 文献库有“书目待补”筛选，行上有标注（[页面规格“文献库”](../web/page-specs.md#文献库)）。
+- 批次报告的 `records.needs_metadata` 计数（[6.4.10](#6410-条目决定文件与报告的字段)）。
+
+**什么时候清除。**
+
+- 被认出时清除：解析之后再认一次时认出，或者之后的入库按标识认出了它。
+- 使用者人工保存了标题时清除，即元数据编辑中设置了 `title` 字段。
+
+**解析之后再认一次。**
+
+- 只对带这个标记的文献进行，时机是原始解析（RawParse）发布之后。
+- 线索用解析出的标题、作者与首页文字，按 6.4.6 走前三步。
+- 认出时：取回的书目照常作为文献信息来源的来源记录接纳；另记一条 `source_kind = "user"`、`source_name = "post-parse-recognition"` 的来源记录，内容为认出所依据的标识与标题；然后清除标记。
+- 仍认不出时：用解析出的标题，以同一种来源记录替换暂时的标题（不覆盖人工锁定的字段），标记保留。
+- 不调用模型，不另外花费；查询照 ADR 0056 的来源设置出网。
+
 ## 9. 目标接口（尚未实现）
 
 本节集中保留尚未整套实现的目标合同；当前实现以源码为准，设计记法不等同于已发布 API。
@@ -1397,6 +1904,6 @@ AcceptedManualPdf
 
 `relation.role` 必须为 `primary-pdf`，`relation.source_url` 为空，provenance 使用 `source_kind = "user"` 和稳定 `source_name = "manual-pdf"`，并以内部复制字节的 SHA-256 作为输入 hash。只有内部不可变 Asset 和唯一关系都已经提交后才能返回成功。
 
-以下情况直接形成稳定输入验证错误，不返回 `NoPrimaryPdf`：用户文件不存在或不可读、基本 PDF 检查失败、目标 Literature 不存在，或者该 Literature 已有当前主 PDF。文件发布、事务或 stale 复检失败仍是系统错误。手动接纳不进入自动 Source 顺序或自动 tried set，也不增加第四个 `AcquisitionPath`。当前 TypeScript `Application.maintenance.ingestPdf` 使用 transfer/acceptance/identity-validation 与不可变 publication；CLI 本地文件、公开 TS 字节和 Web 受控上传调用同一用例，不启动自动 Source、Parsing 或 Analysis。独立维护页不要求 Browser runtime，上传协议不接受本机路径。
+以下情况直接形成稳定输入验证错误，不返回 `NoPrimaryPdf`：用户文件不存在或不可读、基本 PDF 检查失败、目标 Literature 不存在，或者该 Literature 已有当前主 PDF。文件发布、事务或 stale 复检失败仍是系统错误。手动接纳不进入自动 Source 顺序或自动 tried set，也不增加第四个 `AcquisitionPath`。当前 TypeScript `Application.maintenance.ingestPdf` 使用 transfer/acceptance/identity-validation 与不可变 publication；CLI 本地文件、公开 TS 字节和 Web 受控上传调用同一用例，不启动自动 Source、Parsing 或 Analysis；目标是三者都经入库的文件通道（[4.5.1](#451-手动接纳流程)）。独立维护页不要求 Browser runtime，上传协议不接受本机路径。
 
 Acquisition 只复制用户字节，不移动、改名、截断、覆盖或删除用户原文件。成功只形成 `ASSET_READY` 并清除已有自动获取耗尽事实；Parsing 与 Analysis 由后续独立数据库补全操作发起。

@@ -124,11 +124,53 @@ QueryApplication 的状态为 ready、not-initialized、unavailable。缺库不�
 
 #### 2.4.1 设备连接与按用途准入
 
-`workbench/device-connections.ts` 拥有一次性配对与设备认证，生产和合成 Web 组装到同一 HTTP 地址。连接码为 `sr-connect1:<encodeURIComponent(address)>:<pairing_code>`；地址只接受带明确端口的 localhost/IPv4 HTTP origin，生成时必须与已登录请求的 origin 相同。`pairing_code` 为 `srp1_` 加 32 随机字节 base64url，10 分钟后失效。`POST /api/v1/device-connections/exchange` 接受 `{pairing_code}`，一次成功后返回 `{protocol_version:1,result:{connection,token,token_type:"Bearer"}}`；token 为 `srd1_` 加独立 32 随机字节 base64url，仅该响应交付一次。敏感交付响应禁止进入普通审计、日志或前端持久状态。
+目标，尚未实现（计划 20 的 14 块）：用途合并为 `intake`、换令牌的限流按来源地址、最近使用时间合并写入，以及三种下载改走入库路径。本节其余规则已实现。决定见 [ADR 0058](../decisions/0058-import-system-and-agent-access.md) 第 2 节与 [ADR 0063](../decisions/0063-unified-intake.md) 第 7 节。
 
-令牌仅通过 `Authorization: Bearer ...` 使用；URL/path/query 中的认证材料在路由前拒绝。令牌请求忽略 Origin/跨站提示但保留 Host 地址检查，不信任转发头，也不宽开 CORS；未携带令牌的 Web/SDK 接口继续原认证。携带 Authorization 时绝不回退到同一请求的 Web Cookie。令牌不能登录、取得 Web client/CSRF、访问配置/凭据、管理设备或观看 Browser WebSocket。
+`workbench/device-connections.ts` 拥有一次性配对与设备认证，生产和合成 Web 组装到同一 HTTP 地址。
 
-用途为 `capture/import/read/operate`，非空且彼此不隐含；当前导入会话登记为 `import`，见[导入会话 HTTP](#242-导入会话-http)。唯一登记点 `bootstrap/device-routes.ts::deviceBusinessRoutes(application)` 返回用途—接口表，`DeviceRouteRegistry` 只允许新 import/capture 命名空间和 `/mcp`，每个精确方法/路径（允许受限 `:id`）列出可接受的用途。MCP 同时在列出和调用工具处检查用途，见[HTTP 版 MCP](#http-版-mcp)。未登记的所有既有 query/maintenance/管理路径均拒绝令牌。每次认证从 catalog 核对撤销并更新 last_used_at，无跨请求授权缓存；撤销不回滚先前已接纳的操作。
+**配对与令牌**
+
+- 连接码为 `sr-connect1:<encodeURIComponent(address)>:<pairing_code>`。地址只接受带明确端口的 localhost/IPv4 HTTP origin，生成时必须与已登录请求的 origin 相同。
+- `pairing_code` 为 `srp1_` 加 32 个随机字节的 base64url（256 位），10 分钟后失效。
+- `POST /api/v1/device-connections/exchange` 接受 `{pairing_code}`，一次成功后返回 `{protocol_version:1,result:{connection,token,token_type:"Bearer"}}`。token 为 `srd1_` 加另外 32 个随机字节的 base64url（256 位），只在这一次响应中交付。敏感交付响应禁止进入普通审计、日志或前端持久状态。
+
+**换令牌的限流**
+
+- 按直接 socket peer 的地址计数，每个地址每 60 秒最多 30 次，失败和畸形的尝试都计入。
+- 不设全局桶。
+- 计数跨进程与重启共享，只保存地址的 SHA-256。限流桶最多 256 个，满了时淘汰窗口开始最早的一个，不因桶满而拒绝请求。
+- 被限流时返回 429 `device-exchange-rate-limited`，带 `Retry-After: 60`。
+- Content-Type 不符时返回 415，不消耗配对次数（[2.4.3](#243-传输请求时长与-content-type)）。
+
+**令牌的使用**
+
+- 令牌仅通过 `Authorization: Bearer ...` 使用；URL/path/query 中的认证材料在路由前拒绝。
+- 令牌请求忽略 Origin/跨站提示，但保留 Host 地址检查，不信任转发头，也不宽开 CORS。未携带令牌的 Web/SDK 接口继续原认证。
+- 携带 Authorization 时，绝不回退到同一请求的 Web Cookie。
+- 令牌不能登录、取得 Web client/CSRF、访问配置/凭据、管理设备、观看 Browser WebSocket，也不能撤回入库批次。
+
+**用途**
+
+用途为 `intake`、`read`、`operate`，非空，彼此不隐含。旧值 `capture`、`import` 不再接受；已经是 schema 16 的开发库与测试库不提供转换，重新建库。
+
+| 用途      | 能调用                                                                                                                                              |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `intake`  | [入库 HTTP](#242-入库-http目标尚未实现)中除撤回、恢复与补 PDF 以外的全部路由，以及 `/instructions`、`/agent-guide`、`/skill`、`/extension` 四个下载 |
+| `read`    | [HTTP 版 MCP](#http-版-mcp) 的读取工具                                                                                                              |
+| `operate` | HTTP 版 MCP 的操作工具                                                                                                                              |
+
+- 唯一登记点 `bootstrap/device-routes.ts::deviceBusinessRoutes(application)` 返回用途与路由的对应表。`DeviceRouteRegistry` 只允许 `/api/v1/intake/` 命名空间与 `/mcp`；每个精确方法/路径（允许受限 `:id`）列出可接受的用途。
+- MCP 同时在列出和调用工具处检查用途，见 [HTTP 版 MCP](#http-版-mcp)。
+- 未登记的所有既有 query/maintenance/管理路径均拒绝令牌。
+- 凭 `intake` 令牌只能看到和操作本连接发起的批次，规则见 [2.4.2](#242-入库-http目标尚未实现)。
+
+**认证与最近使用时间**
+
+- 每次认证都从 catalog 核对令牌是否撤销，没有跨请求的授权缓存。
+- `last_used_at` 合并写入：同一个连接距上次写入不足 5 分钟时，不再写，只读核对撤销。
+- 撤销不回滚先前已接纳的操作。正在进行的上传在撤销时中断，见 [2.4.2](#242-入库-http目标尚未实现)。
+
+**Web 管理**
 
 Web 管理均为 POST，要求登录 Cookie、工作台 Cookie、client_id、同源、`X-Workbench-Csrf` 和 `X-Sciretriever-Protocol-Version:1`。封套为 `{protocol_version:1,request}` / `{protocol_version:1,result}`：
 
@@ -139,77 +181,228 @@ Web 管理均为 POST，要求登录 Cookie、工作台 Cookie、client_id、同
 | `/api/v1/device-connections/rename`   | `{connection_id,name}`         | `{connection}`                              |
 | `/api/v1/device-connections/revoke`   | `{connection_id}`              | `{connection}`，幂等                        |
 
-`DeviceConnection` 只含 UUID connection_id、1–120 字符 name、purposes、created_at、nullable paired_at/last_used_at/revoked_at；列表不返回 token、配对码或其派生值，包含未配对与已撤销项。用途变更需重新连接。管理不走记录请求/响应的通用 operation wrapper。换令牌由 catalog 事务消费配对码，次数限制跨进程/重启共享：直接 socket peer 每 60 秒 10 次、全局 60 次；包括失败和畸形尝试。短期桶有界，不保存 peer 原值。
+- `DeviceConnection` 只含 UUID connection_id、1–120 字符的 name、purposes、created_at，以及 nullable 的 paired_at/last_used_at/revoked_at。
+- 列表不返回 token、配对码或其派生值，包含未配对与已撤销项。
+- 用途变更需要重新连接。
+- 管理不走记录请求/响应的通用 operation wrapper。
+- 换令牌由 catalog 事务消费配对码。
 
-任一有效令牌可 GET `/api/v1/device-connections/instructions` 与 `/api/v1/device-connections/skill`；未带 Authorization 的登录 Web 用户也可通过原 Cookie、工作台 Cookie、client_id 和同源准入下载（GET 不要求 CSRF）。有 Authorization 时只走设备认证，不回退 Cookie。两种入口读取同一固定构建产物 `apps/server/dist/agent-access/instructions.md`（1 MiB 上限）和 `skill.zip`（8 MiB 上限）。内容和打包由独立构建工作提供；产物不存在、不是普通单硬链接文件或超限时返回 `device-artifact-unavailable`（503），不读取个人文件。成功响应 no-store/nosniff，分别为 Markdown、ZIP 附件。
+**下载**
 
-设备错误统一为 `{protocol_version:1,code}`：`device-input-invalid`/`device-pairing-invalid`/`device-token-in-url`（400），`device-address-mismatch`/`device-purpose-forbidden`（403），`device-pairing-expired`/`device-pairing-used`（409），`device-exchange-rate-limited`（429，Retry-After 60），`device-token-invalid`/`device-revoked`（401），`device-connection-missing`（404），`device-artifact-unavailable`/`device-unavailable`（503）。实际 SQLite 损坏保留 `catalog-corrupt`（503）和 `maintenance_hint:"verify-catalog"`；未知内部异常不透传。Web 原有认证错误保持。持久化与迁移见[设备认证存储](07-versioned-storage.md#8-设备认证存储)。
+接口说明、Agent 指南、skill 与扩展安装包都在入库路径下（[2.4.2](#242-入库-http目标尚未实现)）。
 
-#### 2.4.2 导入会话 HTTP
+| 路径                              | 内容                                                             |
+| --------------------------------- | ---------------------------------------------------------------- |
+| GET `/api/v1/intake/instructions` | 入库接口的 JSON 说明，由服务的路由表与限制生成                   |
+| GET `/api/v1/intake/agent-guide`  | skill 合并成的一份 Markdown，文件 `agent-guide.md`（1 MiB 上限） |
+| GET `/api/v1/intake/skill`        | skill 包 `skill.zip`（8 MiB 上限）                               |
+| GET `/api/v1/intake/extension`    | 浏览器扩展安装包 `browser-extension.zip`（16 MiB 上限）          |
 
-`workbench/import-http.ts` 在设备用途表登记 `/api/v1/import/` 路由。设备以 Bearer 令牌及 `import` 用途调用；登录 Web 用户经既有 Cookie、client_id、Origin 和 POST CSRF 规则调用同一处理函数。不带设备 Authorization 的请求不获得设备身份，带 Authorization 的请求不回退 Cookie。
+- 持 `intake` 令牌可以下载；未带 Authorization 的登录 Web 用户，也可通过原 Cookie、工作台 Cookie、client_id 和同源准入下载（GET 不要求 CSRF）。
+- 有 Authorization 时只走设备认证，不回退 Cookie。
+- 后三项读取固定的构建产物 `apps/server/dist/agent-access/<文件名>`。产物不存在、空文件、符号链接、不是普通单硬链接文件、超限或读取中变化时，返回 `device-artifact-unavailable`（503），不读取个人文件。
+- 成功响应带 no-store/nosniff；Markdown 与 ZIP 都以附件交付，附件名加 `sciretriever-` 前缀。
 
-JSON POST 要求 `X-Sciretriever-Protocol-Version: 1`、`Content-Type: application/json`，输入 `{protocol_version:1,request}`，成功 `{protocol_version:1,result}`；未知字段拒绝。下面路径都以 `/api/v1/import` 为前缀，`:session_id`、`:file_id` 为服务返回的 UUID：
+**设备错误**
 
-| 方法与路径                                        | request                                                                                                                              | result                                                |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------- |
-| GET `/instructions`                               | 无正文、无需协议头                                                                                                                   | 支持格式、中性模型、端点、限制、错误码与认证说明      |
-| POST `/sessions`                                  | `{format,library:null\|{system,library_id,identity:"global"\|"local",name},scope,import_user_tags?:boolean,file_name?:string\|null}` | `{session}`                                           |
-| POST `/sessions/list`                             | `{cursor?:session_id\|null,limit?:number}`                                                                                           | `{items,next_cursor}`                                 |
-| POST `/sessions/:session_id/status`               | `{}`                                                                                                                                 | `{session}`                                           |
-| POST `/sessions/:session_id/data`                 | `{sequence,data}`                                                                                                                    | `{session}`                                           |
-| POST `/sessions/:session_id/preview`              | `{}`                                                                                                                                 | `{session,estimated:true,summary}`                    |
-| POST `/sessions/:session_id/confirm`              | `{}`                                                                                                                                 | `{session}`                                           |
-| POST `/sessions/:session_id/files`                | `{cursor?:file_id\|null,limit?:number,pending?:boolean}`                                                                             | `{items,next_cursor}`                                 |
-| POST `/sessions/:session_id/files/:file_id/hash`  | `{sha256}`                                                                                                                           | `{file}`                                              |
-| POST `/sessions/:session_id/files/:file_id/bytes` | 原始 PDF 字节流，无 JSON 封套                                                                                                        | `{file}`                                              |
-| POST `/sessions/:session_id/finish`               | `{}`                                                                                                                                 | `{session}`                                           |
-| POST `/sessions/:session_id/cancel`               | `{}`                                                                                                                                 | `{session}`                                           |
-| POST `/sessions/:session_id/report`               | `{cursor?:"sequence:record_index"\|null,limit?:number}`                                                                              | `{session,estimated:false,summary,items,next_cursor}` |
+设备错误统一为 `{protocol_version:1,code}`：
 
-`library` 必填但可为 null，表示无来源库号的导出文件；返回的 session.library 始终为对象。精确的一次性来源身份、去重、分组及批次命名见[书目交换规则](03-literature-materials.md#61-书目交换规则)。传了 global/local 对象时沿用原验证，不能自行指定 adhoc 身份或命名空间。
+| HTTP | code                                                                    |
+| ---- | ----------------------------------------------------------------------- |
+| 400  | `device-input-invalid`、`device-pairing-invalid`、`device-token-in-url` |
+| 401  | `device-token-invalid`、`device-revoked`                                |
+| 403  | `device-address-mismatch`、`device-purpose-forbidden`                   |
+| 404  | `device-connection-missing`                                             |
+| 409  | `device-pairing-expired`、`device-pairing-used`                         |
+| 429  | `device-exchange-rate-limited`（带 Retry-After 60）                     |
+| 503  | `device-artifact-unavailable`、`device-unavailable`                     |
 
-`files.pending` 默认为 true；终态报告用 false 读取全部文件及冲突/缺失项。分页默认 50、最多 200。会话列表按创建时间/ID 倒序，报告按输入序号/条号，文件按 ID。书目阶段 `metadata_complete=false` 时文件清单仍会增长，完成后从空 cursor 重读最终清单。
+- Content-Type 不符为 415 `content-type-unsupported`（[2.4.3](#243-传输请求时长与-content-type)）。
+- 实际的 SQLite 损坏保留 `catalog-corrupt`（503）和 `maintenance_hint:"verify-catalog"`；未知内部异常不透传。Web 原有的认证错误保持。
+- 持久化与迁移见[设备认证存储](07-versioned-storage.md#8-设备认证存储)。
 
-JSON（含封套）最多 8 MiB，会话暂存数据共 256 MiB、50,000 条记录（含拒绝项）、1,024 段（序号 0–1,023）、10,000 个组、层级深度 128。每记录最多 1,000 组、1,000 用户标签、100 文件、10,000 批注，每批注最多 128 个矩形；精确字符串限制在 `IMPORT_LIMITS` 和合同 parser。PDF bytes 仅接受 application/pdf 或 application/octet-stream，不接受压缩正文，无文件大小上限；边写边算 SHA-256，至少保留 256 MiB 磁盘空间。现有手动 PDF 上传的 16 MiB 限制独立保留。
+#### 2.4.2 入库 HTTP（目标，尚未实现）
 
-会话、记录、分组、文件、批注与报告的字段在 `packages/contracts/src/import-sessions.ts`；业务含义见[导入模型与会话规则](03-literature-materials.md#61-书目交换规则)。接口说明直接从同一服务的路由表与限制生成，供外部 Agent 查询，不依赖 skill 包，也不提供新的服务器文件读取能力。
+目标，尚未实现（计划 20 的 14–17 块）。本节按 [ADR 0063](../decisions/0063-unified-intake.md) 规定唯一的一组入库接口：扩展、网页与 Agent 都用它，CLI 与 MCP 的书目导入和补 PDF 是它的包装。单独的收藏接口（原 `/api/v1/capture/`）与原 `/api/v1/import/` 不再存在；对外只有入库批次，没有会话编号。各对象的业务含义见[文献与材料 6.4](03-literature-materials.md#64-入库目标尚未实现)，批次的读模型见[查询 2.1.6](06-retrieval-context.md#216-入库批次范围词频与-pdf-获取范围)。
 
-失败响应为 `{protocol_version:1,code}`。设备与 Web 认证码沿用上一节；导入错误如下：
+**准入**
 
-| HTTP | code                                                                                                                                                                                                                                                                                                   |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 400  | `import-input-invalid`、`import-format-unsupported`、`import-local-identity-required`、`import-data-conflict`、`import-group-missing`、`import-group-cycle`、`import-group-depth`、`import-folder-target-missing`、`import-file-hash-mismatch`、`import-file-size-mismatch`、`import-upload-cancelled` |
-| 404  | `import-session-missing`、`import-file-missing`、`import-literature-missing`                                                                                                                                                                                                                           |
-| 409  | `import-library-busy`、`import-session-state`、`import-data-changed`、`import-metadata-pending`、`import-file-hash-required`、`import-file-upload-required`、`import-file-conflict`、`import-source-stale`                                                                                             |
-| 413  | `import-request-too-large`、`import-session-limit`                                                                                                                                                                                                                                                     |
-| 422  | `import-pdf-invalid`                                                                                                                                                                                                                                                                                   |
-| 507  | `import-disk-space`                                                                                                                                                                                                                                                                                    |
-| 503  | `import-disk-unavailable`、`import-unavailable`、`import-closed`                                                                                                                                                                                                                                       |
+- 设备以 Bearer 令牌及 `intake` 用途调用；登录 Web 用户经既有 Cookie、client_id、Origin 和 POST CSRF 规则调用同一处理函数。
+- 不带 Authorization 的请求不获得设备身份；带 Authorization 的请求不回退 Cookie。
 
-真实 SQLite 损坏仍返回 `catalog-corrupt` 和 `maintenance_hint:"verify-catalog"`，内部异常不透传。首轮文件哈希与已有 PDF 冲突是 HTTP 200 的 file.status=conflict；已结算文件的不同字节重放才是 `import-file-conflict` 错误。逐条身份/分组原因在报告中，不把部分成功伪装成整场失败。
+**归属**
+
+- 凭 `intake` 令牌，只能看到和操作本连接发起的批次（`initiated_by = "device:<connection_id>"`）。
+- 访问别的连接或 Web 发起的批次，一律返回 404 `intake-batch-missing`，不区分“不存在”与“无权限”。
+- 批次列表只列本连接的批次。
+- 撤销后重新连接是一个新的连接，看不到原连接的批次。
+- 网页登录的使用者能看到和操作全部批次。
+- HTTP 版 MCP 的读取工具可以只读地读到全部批次（[HTTP 版 MCP](#http-版-mcp)）。
+
+**封套**
+
+- JSON POST 要求 `X-Sciretriever-Protocol-Version: 1` 与 `Content-Type: application/json`（参数规则见 [2.4.3](#243-传输请求时长与-content-type)）。
+- 输入为 `{protocol_version:1,request}`，成功为 `{protocol_version:1,result}`；未知字段拒绝。
+- 请求含封套的上限：`/data` 为 8 MiB；`/pages/preview` 与 `/pages/save` 为 640 KiB；其余为 64 KiB。
+- 字节路由不带 JSON 封套，只接受 `application/pdf` 或 `application/octet-stream`，不接受压缩正文。
+- 文件名放在请求头 `X-Sciretriever-File-Name`，值为百分号编码的 UTF-8，解码后为 1–255 字节，不得含路径分隔符。设备请求不允许带查询串（[2.4.1](#241-设备连接与按用途准入)），所以文件名不放在地址里。
+
+**路由**
+
+下面的路径都以 `/api/v1/intake` 为前缀；`:batch_id`、`:item_id`、`:file_id`、`:literature_id` 为服务返回的 UUID。
+
+| 方法与路径                                      | request                                                                                                                                      | result                                                 |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| GET `/instructions`                             | 无正文、无需协议头                                                                                                                           | 支持的格式、中性条目模型、端点、限制、错误码与认证说明 |
+| POST `/batches`                                 | `{format,source:null\|{system,library_id,identity:"global"\|"local",name},scope,import_user_tags?:boolean,file_name?:string\|null}`          | `{batch}`                                              |
+| POST `/batches/list`                            | `{cursor?:batch_id\|null,limit?:number}`                                                                                                     | `{items,next_cursor}`                                  |
+| POST `/batches/:batch_id/status`                | `{}`                                                                                                                                         | `{batch}`                                              |
+| POST `/batches/:batch_id/data`                  | `{sequence,data}`                                                                                                                            | `{batch}`                                              |
+| POST `/batches/:batch_id/file-items`            | 原始 PDF 字节，交文件即建一条只有文件的条目                                                                                                  | `{item}`                                               |
+| POST `/batches/:batch_id/preview`               | `{}`                                                                                                                                         | `{batch,estimated:true,summary,recognition}`           |
+| POST `/batches/:batch_id/preview/cancel`        | `{}`                                                                                                                                         | `{batch,recognition}`                                  |
+| POST `/batches/:batch_id/items`                 | `{cursor?:item_id\|null,limit?:number,needs?:"decision"\|"unpaired"\|null}`                                                                  | `{items,next_cursor}`                                  |
+| POST `/batches/:batch_id/items/:item_id/status` | `{}`                                                                                                                                         | `{item}`                                               |
+| POST `/batches/:batch_id/items/:item_id/decide` | `{decision}`                                                                                                                                 | `{item}`                                               |
+| POST `/batches/:batch_id/confirm`               | `{}`                                                                                                                                         | `{batch}`，立即返回                                    |
+| POST `/batches/:batch_id/files`                 | `{cursor?:file_id\|null,limit?:number,pending?:boolean}`                                                                                     | `{items,next_cursor}`                                  |
+| POST `/batches/:batch_id/files/:file_id/hash`   | `{sha256}`                                                                                                                                   | `{file}`                                               |
+| POST `/batches/:batch_id/files/:file_id/bytes`  | 原始 PDF 字节                                                                                                                                | `{file}`                                               |
+| POST `/batches/:batch_id/finish`                | `{}`                                                                                                                                         | `{batch}`                                              |
+| POST `/batches/:batch_id/cancel`                | `{}`                                                                                                                                         | `{batch}`                                              |
+| POST `/batches/:batch_id/report`                | `{cursor?:"sequence:record_index"\|null,limit?:number}`                                                                                      | `{batch,estimated:false,summary,items,next_cursor}`    |
+| POST `/pages/preview`                           | `{page:WebPageData}`                                                                                                                         | `IntakePagePreview`                                    |
+| POST `/pages/save`                              | `{request_id,page:WebPageData,folder_ids?:UUID[],file?:IntakePageFile\|null,duplicate_decision?:{kind:"merge",literature_id}\|{kind:"new"}}` | `IntakePageResult`                                     |
+| POST `/literatures/:literature_id/pdf`          | 原始 PDF 字节；只接受网页登录与本机包装，不登记设备用途                                                                                      | `{batch_id,file}`                                      |
+| POST `/batches/:batch_id/withdrawal/preview`    | `{}`；只接受网页登录                                                                                                                         | `{batch,withdrawal:IntakeWithdrawalPreview}`           |
+| POST `/batches/:batch_id/withdraw`              | `{}`；只接受网页登录                                                                                                                         | `{batch,withdrawal:IntakeWithdrawalReport}`            |
+| POST `/batches/:batch_id/restore`               | `{}`；只接受网页登录，恢复已撤回的整批                                                                                                       | `{batch,restoration:IntakeWithdrawalReport}`           |
+
+- 撤回的预估、撤回与整批恢复只接受网页登录，不登记任何设备用途，HTTP 版 MCP 也不提供；规则与 `IntakeWithdrawalPreview`、`IntakeWithdrawalReport` 的字段见[文献与材料 6.4.11](03-literature-materials.md#6411-撤回)。
+- `source` 必填但可为 null，表示来源没有库编号（导出文件、网页、单独的文件）；返回的 `batch.source` 始终为对象。传了 global/local 对象时沿用原验证，调用方不能自行指定 adhoc 身份或命名空间。
+- `format` 取接口说明里列出的格式名。现有格式为 `records`（中性条目）、`bibtex`、`biblatex`、`ris`、`csl-json`；Zotero 接口数据的格式名在 Zotero 适配器定下后加入（[文献与材料 6.4.9](03-literature-materials.md#649-经扩展从-zotero-导入)）。`records` 是正式的公开格式，规则见[文献与材料 6.4.1](03-literature-materials.md#641-条目与格式)。
+- 分页默认 50，最多 200。批次列表按 `created_at`、`batch_id` 倒序；条目按 `item_id` 排序；报告按输入序号与条号排序，只有文件的条目排在最后；文件按 `file_id` 排序。
+- `files.pending` 默认为 true；结束后的报告用 false 读取全部文件，包括冲突与未交项。
+- `IntakeBatch` 的字段见[查询 2.1.6](06-retrieval-context.md#216-入库批次范围词频与-pdf-获取范围)。条目、决定、文件状态、预览与报告的字段见[文献与材料 6.4](03-literature-materials.md#64-入库目标尚未实现)。精确类型由 `packages/contracts/src/import-sessions.ts` 改名迁入 `packages/contracts/src/intake.ts`。
+
+**单篇收藏**
+
+扩展收藏当前网页只用三个请求：
+
+1. `/pages/preview`：返回已在库或不在库、读出的书目、是否已有 PDF、页面上的 PDF 地址，以及可能重复的候选。它不建批次，不写库。
+2. `/pages/save`：追加一条并立即确认。服务端自动归入本连接当天的开放批次，客户端不必先建批次。预览给出了可能重复的候选时，请求必须带 `duplicate_decision`，否则返回 409 `intake-decision-required`。
+3. 交文件：用返回的 `file.file_id` 调 `/batches/:batch_id/files/:file_id/bytes` 或 `/hash`。
+
+```text
+WebPageData                         # 规则见文献与材料 6.4.5
+  url: str
+  title: str | None
+  meta: tuple[{attribute: "name" | "property", key: str, content: str}, ...]   # 最多 500 条
+  json_ld: tuple[str, ...]          # schema.org JSON-LD 原文，最多 5 块，每块最多 64 KiB
+  is_pdf: bool                      # 当前页就是 PDF
+
+IntakePagePreview
+  found: bool
+  literature_id: LiteratureId | None
+  library_title: str | None         # 已在库时为库里的当前标题
+  metadata: LiteratureMetadata      # 服务端从页面读出的书目
+  has_pdf: bool
+  pdf_url: str | None               # 服务端给出的下载地址；扩展照它下载
+  possible_duplicates: tuple[{literature_id, title, first_author, publication_year, similarity}, ...]   # 最多 3 个；规则见文献与材料 6.4.8
+
+IntakePageFile
+  file_name: str
+  size_bytes: int | None
+  sha256: str | None
+  source_url: str                   # 扩展实际下载的地址（跟随跳转之后）
+
+IntakePageResult
+  batch_id: IntakeBatchId
+  item_id: str
+  literature_id: LiteratureId | None   # 当前页就是 PDF 时，文件交齐、认出之后才有
+  disposition: "created" | "enriched" | "matched" | None
+  metadata: {status: "completed" | "partial" | "failed" | "unavailable" | "pending", job_id: str | None, code: str | None}
+  missing_folder_ids: tuple[FolderId, ...]
+  file: IntakeFileStatus | None
+```
+
+- `request_id` 是 UUID。同一连接内，相同 ID、相同规范化请求重放原结果；输入改变返回 409 `intake-request-conflict`。
+- 预览不再返回主 PDF 的 sha256。
+- `folder_ids` 最多 100 个。不存在的文件夹在 `missing_folder_ids` 中报告。
+
+**补 PDF**
+
+`/literatures/:literature_id/pdf` 为一篇已在库的文献补主 PDF，走同一条文件通道，没有大小上限。它是逐条确认的，归入发起入口当天的开放批次，规则见[文献与材料 6.4.2](03-literature-materials.md#642-过程与状态)。已有主 PDF 时不替换：sha256 相同记 existing，不同记 conflict。
+
+**撤销时中断上传**
+
+- 字节路由在接收期间订阅连接的撤销。
+- 撤销时立即中断接收、关闭连接；能回应时返回 401 `device-revoked`。
+- 字节已收完、还没接纳的文件丢弃，文件保持待交。已经接纳的内容不回滚。
+
+**限制**
+
+| 项目               | 上限                                                                                    |
+| ------------------ | --------------------------------------------------------------------------------------- |
+| JSON 请求          | 见上文“封套”                                                                            |
+| 一个批次的暂存数据 | 共 256 MiB；只有文件的条目的暂存文件不计入，只受磁盘空间检查约束                        |
+| 一个批次的条目     | 50,000 条，含拒绝项与只有文件的条目                                                     |
+| 分段               | 1,024 段（序号 0–1,023）                                                                |
+| 分组               | 10,000 个，层级深度 128                                                                 |
+| 每条记录           | 最多 1,000 个分组、1,000 个用户标签、100 个文件、10,000 条批注；每条批注最多 128 个矩形 |
+| 网页原始数据       | 规范 JSON 共 512 KiB                                                                    |
+| PDF 字节           | 无文件大小上限；边写边算 SHA-256；至少保留 256 MiB 磁盘空间                             |
+
+精确的字符串限制在 `INTAKE_LIMITS`（由 `IMPORT_LIMITS` 改名）和合同 parser 中。
+
+**错误**
+
+失败响应为 `{protocol_version:1,code}`。设备与 Web 的认证码沿用 [2.4.1](#241-设备连接与按用途准入)；传输码见 [2.4.3](#243-传输请求时长与-content-type)。入库错误合并为 `intake-*` 一套：
+
+| HTTP | code                                                                                                                                                                                                                                                                                                                                                   |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 400  | `intake-input-invalid`、`intake-item-empty`、`intake-format-unsupported`、`intake-local-identity-required`、`intake-data-conflict`、`intake-group-missing`、`intake-group-cycle`、`intake-group-depth`、`intake-folder-target-missing`、`intake-file-hash-mismatch`、`intake-file-size-mismatch`、`intake-upload-cancelled`、`intake-decision-invalid` |
+| 404  | `intake-batch-missing`、`intake-item-missing`、`intake-file-missing`、`intake-literature-missing`                                                                                                                                                                                                                                                      |
+| 409  | `intake-source-busy`、`intake-batch-state`、`intake-data-changed`、`intake-recognition-pending`、`intake-metadata-pending`、`intake-file-hash-required`、`intake-file-upload-required`、`intake-file-conflict`、`intake-source-stale`、`intake-request-conflict`、`intake-identity-conflict`、`intake-decision-required`、`intake-batch-busy`          |
+| 413  | `intake-request-too-large`、`intake-batch-limit`                                                                                                                                                                                                                                                                                                       |
+| 422  | `intake-pdf-invalid`                                                                                                                                                                                                                                                                                                                                   |
+| 507  | `intake-disk-space`                                                                                                                                                                                                                                                                                                                                    |
+| 503  | `intake-disk-unavailable`、`intake-unavailable`、`intake-closed`                                                                                                                                                                                                                                                                                       |
+
+- 与原码的对应：
+  - `import-library-busy` → `intake-source-busy`；
+  - `import-session-missing` → `intake-batch-missing`；
+  - `import-session-state` → `intake-batch-state`；
+  - `import-session-limit` → `intake-batch-limit`；
+  - `capture-*` 并入同名的 `intake-*`；
+  - 其余 `import-*` 只换前缀。
+- `capture-identifier-required` 取消：没有标识、有标题的网页可以收藏。标识、标题、文件三者都没有时，返回 `intake-item-empty`。
+- 真实的 SQLite 损坏仍返回 `catalog-corrupt` 和 `maintenance_hint:"verify-catalog"`；内部异常不透传。
+- 首轮文件哈希与已有 PDF 冲突，是 HTTP 200 的 `file.status=conflict`；已结算文件的不同字节重放，才是 `intake-file-conflict` 错误。逐条原因在报告中，不把部分成功伪装成整场失败。
 
 工作台界面地址的 `setting` 白名单包含 `devices`，`/?view=set&setting=devices` 按原 Web 登录规则进入设备设置分区；未知分区仍为 `invalid-ui-location`。这不改变 API 或设备令牌的权限。
 
-### 2.4.3 网页收藏 HTTP
+#### 2.4.3 传输：请求时长与 Content-Type
 
-`bootstrap/device-routes.ts` 将以下精确路径登记为 capture 用途。业务接口只接受设备 Bearer 令牌，无 Web Cookie 准入，不授予 import、MCP 或管理权限；认证、URL 令牌拒绝和撤销规则沿用[设备连接](#241-设备连接与按用途准入)。JSON POST 的协议头、严格封套及成功封套沿用导入 HTTP，但请求含封套最多 64 KiB；未知字段拒绝。`:capture_id` 为返回的 UUID，结果和文件始终绑定最初的设备连接。
+目标，尚未实现（计划 20 的 13 块）。本节对正式 Web 的全部 HTTP 路由生效。
 
-| 方法与路径（前缀 `/api/v1/capture`） | request                                                                                                                                           | result                                                                      |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| POST `/lookup`                       | `{identifiers:{namespace:"doi"\|"arxiv",value:string}[]}`，1–16 项                                                                                | `{found,literature_id,title,has_pdf,sha256}`；未找到时 nullable 字段为 null |
-| POST `/folders`                      | `{cursor?:folder_id\|null,limit?:number}`                                                                                                         | `{items:FolderNode[],next_cursor}`；默认 50、最多 200，按 folder_id 排序    |
-| POST `/save`                         | `{request_id:UUID,metadata:Partial<LiteratureMetadata>,folder_ids?:UUID[],file?:{file_name,size_bytes?:number\|null,sha256?:string\|null}\|null}` | `CaptureResult`                                                             |
-| POST `/items/:capture_id/status`     | `{}`                                                                                                                                              | `CaptureResult`；尚未结算为 capture-pending                                 |
-| POST `/items/:capture_id/file/hash`  | `{sha256}`                                                                                                                                        | `{file:ImportFileStatus}`                                                   |
-| POST `/items/:capture_id/file/bytes` | 原始 PDF 字节，协议头及 Content-Type 同导入文件通道                                                                                               | `{file:ImportFileStatus}`                                                   |
-| GET `/extension`                     | capture 令牌；或原登录 Web Cookie、client_id 与同源准入                                                                                           | ZIP 附件，无 JSON 封套                                                      |
+**请求时长**
 
-`CaptureResult` 含 capture_id、batch_id、literature_id、disposition（created/enriched/matched）、metadata（`{status:"completed"|"partial"|"failed"|"unavailable",job_id:string|null,code:string|null}`）、missing_folder_ids、nullable file。file 沿用 ImportFileStatus，文件原因沿用共享通道的 `import-*` 值；HTTP 文件失败码转换为 `capture-*`。file 声明可省略，省略时不产生待交文件；有声明时每篇一份 PDF，外部引用固定为 pdf。folder_ids 最多 100；文件名、大小和哈希按原中性合同校验。页面字段、来源与补全语义见[网页收藏](03-literature-materials.md#网页收藏)。
+- 头部超时 5 秒，对全部路由不变。
+- 整体请求时长 5 秒，只对三类路由取消：
+  - 文件字节：`/batches/:batch_id/files/:file_id/bytes`、`/batches/:batch_id/file-items`、`/literatures/:literature_id/pdf`；
+  - 数据分段：`/batches/:batch_id/data`；
+  - MCP 的请求正文：`/mcp`。
+- 其余路由不变。
+- 上面三类路由改用空闲超时：两次收到数据之间最长 60 秒。超过时中断接收；能回应时返回 408 `request-idle-timeout`。
+- 被中断的文件保持待交，可以重传。这种中断不算文件失败，不进报告；已写入的暂存字节随之删除。
 
-收藏错误为 `{protocol_version:1,code}`：输入、缺标识及声明不符为 400（capture-input-invalid、capture-identifier-required、capture-file-hash-mismatch、capture-file-size-mismatch、capture-upload-cancelled）；请求超限 capture-request-too-large 为 413；capture-missing/file-missing/literature-missing 为 404；capture-identity-conflict/request-conflict/pending/file-conflict/file-hash-required/file-upload-required/source-stale 为 409；capture-pdf-invalid 为 422；capture-disk-space 为 507；capture-disk-unavailable/unavailable/closed 为 503。SQLite 损坏仍是 catalog-corrupt（503，verify-catalog 提示），不透传异常、SQL 或路径。metadata.code 的 metadata-unavailable、metadata-source-failed、metadata-task-failed 是 HTTP 200 接纳结果中的补全结论，不撤销书目。
+**Content-Type**
 
-安装包为 `apps/server/dist/agent-access/browser-extension.zip`，最多 16 MiB，由扩展构建工作提供；不存在、空文件、符号链接、非普通单硬链接文件、超限或读取中变化均为 device-artifact-unavailable（503）。复用说明/skill 的 no-store、nosniff、有界读取及固定附件规则。Web GET 不需要 POST CSRF，有 Authorization 时不回退 Cookie；安装包以外的收藏接口未开放 Web 分支。
+- JSON 路由接受 `application/json`，可以带 `charset=utf-8`（参数名与值都不分大小写）。其他字符集或任何其他参数一律拒绝，返回 415 `content-type-unsupported`。
+- 字节路由接受 `application/pdf` 或 `application/octet-stream`，不带参数；其他值同样返回 415 `content-type-unsupported`。
+- 这条规则同样适用于设备管理与换令牌。换令牌时 Content-Type 不对，返回 415，不消耗配对次数。
+- `Content-Encoding` 一律拒绝，规则不变。
 
 ### 2.5 新请求与结果语义
 
@@ -355,8 +548,8 @@ sciretriever config test --all
 - `discover topic` 和 `discover citations` 分别形成领域或引用 DiscoveryRun；
 - `complete` 接收一个类型化范围和 `pdf`/`content` 目标，分别映射到 `ASSET_READY`/`CONTENT_READY`，不再按 Acquisition、Parsing 和 Analysis 拆成用户命令；
 - `literature search/show/references/cited-by` 只读取本地文献数据库，整个 `literature` 组保持只读；
-- `import metadata` 读取 BibTeX/BibLaTeX、RIS 或 CSL JSON，允许创建或命中 Literature；
-- `import pdf` 必须指定一个已经存在的具体 Literature，复制、检查并接纳用户 PDF，不隐式继续 Parsing/Analysis；
+- `import metadata` 读取 BibTeX/BibLaTeX、RIS 或 CSL JSON，经入库过程一次完成建批次、交数据与确认，允许创建或命中 Literature。它在 CLI 进程里同步跑完，命令名与结果格式不变（[文献与材料 6.4.2](03-literature-materials.md#642-过程与状态)）；
+- `import pdf` 必须指定一个已经存在的具体 Literature，复制、检查并接纳用户 PDF，不隐式继续 Parsing/Analysis。目标，尚未实现（计划 20 的 14 块）：它改为[补 PDF](#242-入库-http目标尚未实现)的包装，没有大小上限，归入 CLI 当天的“补充文件”开放批次；命令名与结果格式不变。MCP 的 `begin_pdf_upload`、`append_pdf_upload`、`commit_pdf_upload`、`discard_pdf_upload` 同样改为它的包装，结果格式不变。这些命令与工具的说明文字称“入库”，不称“导入会话”；
 - `export metadata` 按已接受的导出范围与格式原子发布书目文件；
 - `export pdf` 和 `export content` 从一个具体 LiteratureDetail 取得当前主 PDF 或规范轻结构化 Markdown 引用，再按 artifact 导出规则写入用户目标。
 - 所有正常命令都经 Configuration 读取固定的 `~/.sciretriever/config.toml`；Entry 不读取配置路径
@@ -1255,16 +1448,16 @@ SDK 初始化生成 `Mcp-Session-Id`，后续请求带同一 ID 和令牌；会�
 
 工具声明与处理只维护在 `mcp/tools.ts` 和 `mcp/server.ts`。HTTP 规则由 `httpMcpPurpose/httpMcpAllowed` 定义，并在 tools/list 和 tools/call 两处执行：
 
-| 设备用途         | 工具                                                                   |
-| ---------------- | ---------------------------------------------------------------------- |
-| read             | stdio 的 `QUERY_TOOLS`，去除 `configuration_*`；包括只读导入状态与报告 |
-| operate          | stdio `MAINTENANCE_TOOLS` 中的业务工具，去除配置和输入传输工具         |
-| read + operate   | 上述并集；两种用途互不隐含                                             |
-| capture / import | 不授予 MCP 权限；导入会话继续走[导入 HTTP](#242-导入会话-http)         |
+| 设备用途       | 工具                                                                         |
+| -------------- | ---------------------------------------------------------------------------- |
+| read           | stdio 的 `QUERY_TOOLS`，去除 `configuration_*`；包括入库批次的只读状态与报告 |
+| operate        | stdio `MAINTENANCE_TOOLS` 中的业务工具，去除配置和输入传输工具               |
+| read + operate | 上述并集；两种用途互不隐含                                                   |
+| intake         | 不授予 MCP 权限；入库继续走[入库 HTTP](#242-入库-http目标尚未实现)           |
 
-HTTP 不提供 `configuration_*`、`device_*`、`browser_*`、`runtime_*`，也不提供 `import_bibliography`、`begin_pdf_upload`、`append_pdf_upload`、`commit_pdf_upload`、`discard_pdf_upload`。导入数据与文件不经 MCP；stdio 的这些既有能力及 `--workbench-url` 保持。未知或用途不足的工具既不列出，调用也以 `device-purpose-forbidden` 拒绝。
+HTTP 不提供 `configuration_*`、`device_*`、`browser_*`、`runtime_*`，也不提供 `import_bibliography`、`begin_pdf_upload`、`append_pdf_upload`、`commit_pdf_upload`、`discard_pdf_upload`。入库的数据与文件不经 HTTP 版 MCP；stdio 的这些既有能力及 `--workbench-url` 保持，其中书目导入与 PDF 上传是入库接口的包装（[3.1.2](#312-文献操作-cli-与-operator-入口)）。未知或用途不足的工具既不列出，调用也以 `device-purpose-forbidden` 拒绝。
 
-两种传输新增 `import_session_status({session_id}) → {session}` 和 `import_session_report({session_id,cursor?,limit?}) → {session,estimated:false,summary,items,next_cursor}`。报告分页沿用 03 的 sequence:record_index 游标、默认 50/最多 200。QueryApplication 只组装既有 ImportSessionReadService，不创建写入 Application、恢复会话或推进导入。模型与分类见[书目交换规则](03-literature-materials.md#61-书目交换规则)。工具成功仍采用既有 MCP `{content,structuredContent:{protocol_version:1,result}}`；业务失败为 isError=true 与 result.failure.code，不回显内部异常。
+目标，尚未实现（计划 20 的 14 块）。两种传输都提供 `intake_batch_status({batch_id}) → {batch}` 与 `intake_batch_report({batch_id,cursor?,limit?}) → {batch,estimated:false,summary,items,next_cursor}`；原名 `import_session_status`、`import_session_report` 直接删除，不保留别名。报告分页沿用 sequence:record_index 游标，默认 50，最多 200。`read` 用途可以读到全部批次，不受 [2.4.2](#242-入库-http目标尚未实现) 中 `intake` 用途的归属限制，但只读。QueryApplication 只组装批次的只读服务，不创建写入 Application、不恢复批次、不推进入库。批次的字段见[查询 2.1.6](06-retrieval-context.md#216-入库批次范围词频与-pdf-获取范围)，条目与报告见[文献与材料 6.4](03-literature-materials.md#64-入库目标尚未实现)。工具成功仍采用既有 MCP `{content,structuredContent:{protocol_version:1,result}}`；业务失败为 isError=true 与 result.failure.code，不回显内部异常。
 
 MCP HTTP 总 JSON 上限 10 MiB，以容纳原有 `proofread_save`；各工具参数继续受原来 1 MiB+4 KiB 或该工具 9 MiB 限额，回执保持 4 MiB。协议会话最多 64、每设备 8；没有在途 HTTP/SSE 的会话空闲 30 分钟后清理（每分钟及新请求时检查）。服务关闭、显式 DELETE 或 Web 设备撤销会关闭连接；撤销取消在途调用，已经接纳的 durable 任务继续由业务 owner 管理。MCP 连接只借用 Web 的 Application/QueryApplication，不关闭共享 owner。审计身份固定为 `mcp:device:<connection_id>`，不采用客户端自报名称；认证与 Cookie 不传给 SDK 请求上下文。
 

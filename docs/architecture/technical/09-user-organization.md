@@ -51,7 +51,7 @@
 
 - 从 ③ 取得文献是否存在、有哪些 PDF；从 ④ 取得文档版本和它的字节长度，用来校验批注锚点。
 - 向 ⑥ 提供两个筛选条件：按文件夹（`LibraryQuery.folder`）和最近阅读（`LibraryQuery.recently_opened`）；向文献行和详情提供 `folder_ids` 与 `last_opened_at`。
-- 导入会话（Entry 的 `ImportSessionService`）通过 `FolderService` 建文件夹、加成员，不直接写表，见 [2.5](#25-导入建立的文件夹)。
+- 入库批次的过程（实现为 Entry 的 `ImportSessionService`）通过 `FolderService` 建文件夹、加成员，不直接写表，见 [2.5](#25-导入建立的文件夹)。
 - 写入经 ① 的维护入口，都记进操作记录，见 [6.4](#64-操作人与操作记录)。
 
 ## 2. 文件夹
@@ -65,7 +65,7 @@
 | `folders`        | `folder_id` 主键（新建时为随机 UUID）；`parent_id` 可空，外键指向 `folders`，级联删除，不能指向自己；`name`；`position` 非负整数；`created_at`、`updated_at`。同一上级下名称唯一 |
 | `folder_members` | 主键 `(folder_id, literature_id)`；`added_at`；`actor`。删除文件夹或删除文献时，成员行级联删除                                                                                   |
 
-文件夹不保存外部编号。导入来源与文件夹的对应在通用的 `external_object_mappings` 里（对象种类 `group`），见[导入存储](07-versioned-storage.md#9-导入会话与外部编号对应)。
+文件夹不保存外部编号。导入来源与文件夹的对应在通用的 `external_object_mappings` 里（对象种类 `group`），见[入库存储](07-versioned-storage.md#9-导入会话与外部编号对应)。
 
 ### 2.2 层级、多归属与命名
 
@@ -104,7 +104,7 @@
 
 ### 2.5 导入建立的文件夹
 
-外部工具的分组按导入会话的规则落成文件夹，对应规则、重名加序号、128 字符截断和报告分类由[书目交换规则](03-literature-materials.md#61-书目交换规则)负责。从本模块看，结果是：
+外部工具的分组按入库的规则落成文件夹，对应规则、重名加序号、128 字符截断和报告分类由[书目交换规则](03-literature-materials.md#61-书目交换规则)负责。从本模块看，结果是：
 
 - 导入经 `FolderService.manage` 建文件夹、加成员，和使用者手动操作走同一套校验与事务。
 - 建好之后，它们就是普通的文件夹：使用者可以改名、移动、删除、增减成员。再次导入只补成员，不跟着来源改名或移动，也不恢复使用者删掉的文件夹（报告为 `import-folder-target-missing`）。
@@ -218,16 +218,15 @@
 
 Agent 与人使用同一套合同和同一份数据，没有专供 Agent 的副本。能做什么由入口和授权决定：
 
-| 入口与授权                   | 文件夹                          | 阅读记录             | 批注与笔记                    |
-| ---------------------------- | ------------------------------- | -------------------- | ----------------------------- |
-| Web 登录                     | 读、写                          | 写（打开阅读页时）   | 读、写、导出 Markdown         |
-| 本机 CLI                     | 读、写                          | 写                   | 读、写、导出                  |
-| stdio MCP 只读模式           | 读（`folders_query`）           | —                    | 读、导出（`marks_query`）     |
-| stdio MCP `--maintenance`    | 读、写（另加 `folders_manage`） | 写（`reading_open`） | 读、写（另加 `marks_manage`） |
-| HTTP MCP，设备用途 `read`    | 读                              | —                    | 读、导出                      |
-| HTTP MCP，设备用途 `operate` | 写                              | 写                   | 写                            |
-| 设备用途 `import`            | 经导入会话新建文件夹、加入成员  | —                    | —（导入的批注当前只计数）     |
-| 设备用途 `capture`           | —（收藏接口尚未登记）           | —                    | —                             |
+| 入口与授权                   | 文件夹                                           | 阅读记录             | 批注与笔记                    |
+| ---------------------------- | ------------------------------------------------ | -------------------- | ----------------------------- |
+| Web 登录                     | 读、写                                           | 写（打开阅读页时）   | 读、写、导出 Markdown         |
+| 本机 CLI                     | 读、写                                           | 写                   | 读、写、导出                  |
+| stdio MCP 只读模式           | 读（`folders_query`）                            | —                    | 读、导出（`marks_query`）     |
+| stdio MCP `--maintenance`    | 读、写（另加 `folders_manage`）                  | 写（`reading_open`） | 读、写（另加 `marks_manage`） |
+| HTTP MCP，设备用途 `read`    | 读                                               | —                    | 读、导出                      |
+| HTTP MCP，设备用途 `operate` | 写                                               | 写                   | 写                            |
+| 设备用途 `intake`            | 经入库新建文件夹、加入成员；收藏时加入所选文件夹 | —                    | —（导入的批注当前只计数）     |
 
 - 设备用途彼此不隐含：只有 `operate` 的令牌不能读，要读需同时勾选 `read`。用途的登记与校验见[设备连接](01-product-interface.md#241-设备连接与按用途准入)和 [HTTP 版 MCP](01-product-interface.md#http-版-mcp)。
 - 设备令牌不能调用 `/api/v1/query/*` 与 `/api/v1/maintenance/*`；这些 HTTP 路径只对 Web 登录开放。

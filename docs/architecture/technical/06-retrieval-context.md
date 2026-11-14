@@ -65,6 +65,9 @@ LibraryQuery
   # 目标（尚未实现），见 2.1.8
   has_primary_pdf: bool | None
 
+  # 目标（尚未实现），见文献与材料 8.4
+  needs_metadata: bool | None
+
 LiteratureMissingStep =
     "primary-pdf"
   | "parser-result"
@@ -124,6 +127,10 @@ CONTENT_READY
 
 按文本等级和选择校订范围的事实筛选，是目标合同，见 [2.1.7](#217-目标接口尚未实现文本等级与选择校订范围的事实)。
 
+**被撤回的文献**（目标，尚未实现，计划 20 的 17 块）：任何 `LibraryQuery` 的结果、`total_count`、计数（2.1.8）、词频、引用关系的两端、发现原因与 `QuerySelector` 的展开都排除被撤回的文献，详情按不存在处理；字段不变，调用方不能选择包含它们。撤回的规则见[文献与材料 6.4.11](03-literature-materials.md#6411-撤回)。
+
+`needs_metadata`（目标，尚未实现，计划 20 的 15 块）为 true 时，只匹配带“书目待补”标记的版本；为 false 时只匹配不带的；null 或省略时不筛选。省略时不进入规范化的查询，已有请求与 cursor 的字节不变。标记的含义见[文献与材料 8.4](03-literature-materials.md#84-书目待补目标尚未实现)。
+
 #### 2.1.2 搜索请求与页面
 
 ```text
@@ -161,7 +168,7 @@ LibrarySearchPage
 
 列表不嵌入 MetadataObservations、资产、ParserResult、LiteratureContent、Reference/Support、Discovery cause 或 artifact 字节。`LibrarySearchPage` 是一次读取结果，不另套 Entry Report。
 
-条目的 `text_level`、`draft_facts` 与按它们排序的键是目标合同，见 [2.1.7](#217-目标接口尚未实现文本等级与选择校订范围的事实)。
+条目的 `text_level`、`draft_facts` 与按它们排序的键是目标合同，见 [2.1.7](#217-目标接口尚未实现文本等级与选择校订范围的事实)。条目与 `LiteratureDetail` 另增加 `needs_metadata: bool`（目标，尚未实现，见[文献与材料 8.4](03-literature-materials.md#84-书目待补目标尚未实现)）。
 
 #### 2.1.3 LiteratureDetail
 
@@ -300,21 +307,55 @@ Catalog、Report 或 `LiteratureDetail`。因此 Detail 本身不增加 `open()`
 
 #### 2.1.6 入库批次、范围词频与 PDF 获取范围
 
-网页收藏按服务端 UTC 日期归并：每个设备连接每天一个批次，默认名为“网页收藏 YYYY-MM-DD”。沿用 `kind=import`、`origin=web`，request.format 为 web-capture；专用关系把设备/日期唯一绑定到批次，不增加另一套批次合同。批次始终为 completed，每次成功收藏只补成员并更新完成时间；普通已结算批次不能因此被重新写入。重命名沿用原批次改名入口，后续收藏保留用户名称；成员按文献去重，分类保留 created > enriched > matched，PDF 计数继续从当前库读取。
+目标，尚未实现（计划 20 的 14 块）：下面 `IntakeBatch` 中标为“目标”的字段，批次的状态与结果分开，以及逐条确认的开放批次。决定见 [ADR 0052](../decisions/0052-intake-batches-and-explicit-scope.md) 与 [ADR 0063](../decisions/0063-unified-intake.md) 第 1、3 节。
 
-精确类型与解析在 `packages/contracts/src/intake.ts`；决策见 [ADR 0052](../decisions/0052-intake-batches-and-explicit-scope.md)。
+**读模型。** 一切入库都形成入库批次：主题发现、引用扩展，以及经[入库过程](03-literature-materials.md#642-过程与状态)的各种载体。`IntakeBatch` 是入库批次唯一的读模型：入库记录的列表、批次页，以及 HTTP 版 MCP 的 `intake_batch_status`，读的都是它。对外只有批次编号，没有另一套会话编号。
+
+**开放批次。** 网页收藏与补 PDF 是逐条确认的，每台设备、每个发起入口每天各一个开放批次。“一天”按服务端的系统时区划分，规则见[文献与材料 6.4.2](03-literature-materials.md#642-过程与状态)。
+
+- 成员按文献去重，分类保留 created > enriched > matched。
+- 改名沿用原批次的改名入口；改名后，当天后续的条目仍归入，保留用户名称。
+
+精确类型与解析在 `packages/contracts/src/intake.ts`。
 
 ```text
 IntakeBatch
   batch_id, kind: topic | citation | import | legacy
+  confirmation: batch | per-item | None        # 目标；topic、citation、legacy 为 None
   origin: web | cli | mcp | migration
-  status, created_at, finished_at
+  initiated_by: str                            # 目标；"local:web" | "local:cli" | "local:mcp" | "device:<connection_id>"
+  state                                        # 目标：collecting | awaiting-confirmation | running | finished | cancelled | withdrawn
+  result                                       # 目标：completed | partial | failed | interrupted | None，只在 finished（及其后撤回）时非空
+  created_at, confirmed_at, finished_at
   label, default_label, renamed
   request            # 用户输入的简要形式；多种子、双方向的完整参数留在 DiscoveryRun
+  source: {system, library_id, identity: global | local | adhoc, name} | None   # 目标；只有 import 有
   counts: hits, created, enriched, matched, rejected
-  pdf: has_pdf, unavailable, pending   # 读取时按当前库现算
+          restored, conflicts, possible_duplicates, pending_decision, needs_metadata     # 目标
+  pdf: has_pdf, unavailable, pending   # 读取时按当前库现算，按版本
+  full_text: FullTextCounts            # 目标；定义同 2.1.8，按论文，范围是批次成员，读取时现算
+  progress: IntakeProgress | None      # 目标；只有 running 的 import 批次有
+  estimates: {acquire_pdf: int, parse: int}   # 目标；批次页“接着做什么”的两个预估数
   source_failures
 
+IntakeProgress                         # 目标
+  phase: metadata | files | closing    # 书目入库、等待文件、收尾
+  processed_items: int
+  total_items: int
+  files: {uploaded: int, existing: int, conflicts: int, pending: int}
+```
+
+- **状态与结果**：
+  - 主题发现与引用扩展的批次只用 `running`、`finished`（带结果）与 `withdrawn`。
+  - 现有的 `status` 列拆为 `state` 与 `result`：原 `running` 对应 `state=running`，原 `completed`、`partial`、`failed`、`interrupted` 对应 `state=finished` 加同名的 `result`。
+  - 界面的状态徽标对已结束的批次显示结果。
+- **计数**：`counts` 中新增的四项来自批次条目的结算（[文献与材料 6.4.10](03-literature-materials.md#6410-条目决定文件与报告的字段)）；`needs_metadata` 是成员中带“书目待补”标记的篇数，读取时现算。
+- **接着做什么**：两个预估数都只读、现算。
+  - `estimates.acquire_pdf` 是用 `AcquirePdfSelector` 的 `query` 范围 `{intake_batch_ids:[batch_id]}` 时的 `process` 数。
+  - `estimates.parse` 是同一范围内有主 PDF、还没有当前原始解析的版本数。
+  - 对应的操作是现有的获取 PDF 任务与解析任务，范围都是入库批次筛选。它们是任务，不形成新的入库批次；任务的 `scope` 记下所用的 selector，从中能看出是哪个入库批次。
+
+```text
 LibraryFacets
   total
   coverage: {tags, keywords, subject_terms}   # 当前结果里有这一层词的篇数
@@ -330,7 +371,7 @@ AcquirePdfCounts
   matched, process, skipped_has_pdf, skipped_unavailable, over_limit
 ```
 
-- **批次**：每次主题发现、引用扩展和导入会话确认各形成一个批次，旧三端书目入口也经会话确认。设备 HTTP 的 origin 为 web，会话的 initiated_by 区分设备与 local:web/cli/mcp；接口见[导入会话 HTTP](01-product-interface.md#242-导入会话-http)，导入规则见[书目交换](03-literature-materials.md#61-书目交换规则)。成员与身份发布在同一事务提交；同一篇按 created > enriched > matched 计一次。`counts.hits` 是成员数；`legacy` 批次的 hits 不满足 created + enriched + matched 等式。异常或进程退出的批次保留已接纳的成员，状态读作 `interrupted`。列表按 `created_at` 倒序翻页，人工改名为单行 1–120 字。
+- **批次**：每次主题发现、引用扩展各形成一个批次；入库过程的批次在建立时就存在，确认后才接纳成员。CLI 与 stdio 的书目入口同样经入库过程。设备 HTTP 的 origin 为 web，`initiated_by` 区分设备与 local:web/cli/mcp。接口见[入库 HTTP](01-product-interface.md#242-入库-http目标尚未实现)，导入规则见[书目交换](03-literature-materials.md#61-书目交换规则)与[入库](03-literature-materials.md#64-入库目标尚未实现)。成员与身份发布在同一事务提交；同一篇按 created > enriched > matched 计一次。`counts.hits` 是成员数；`legacy` 批次的 hits 不满足 created + enriched + matched 等式。异常或进程退出的发现批次保留已接纳的成员，结果读作 `interrupted`。列表按 `created_at` 倒序翻页，人工改名为单行 1–120 字。
 - **词频**（层次与排列见 [ADR 0053](../decisions/0053-scope-terms-led-by-tags.md)）：对一个 `LibraryQuery` 的全部命中统计标签、作者关键词和主题词，同篇同词计一次，按篇数降序、词升序，每层最多 30 个。
   - 标签只计 `active` 的标签直接标注的篇数，主次都算；`tag_id` 即标签筛选用的 ID。标签筛选包含子标签，所以父标签筛出的篇数可能多于词频。
   - 作者关键词规范化后等于某个 `active` 标签的名称或别名时，`tag` 给出该标签，否则为 `None`。
