@@ -10,7 +10,7 @@ import {
   loadReadingAssets,
 } from "../../server/src/workbench/assets.js";
 import type { WorkbenchStaticAsset } from "../../server/src/workbench/http.js";
-import { nextAssets } from "./next-workspace-fixture.js";
+import { nextAssets, readerProbeAssets } from "./next-workspace-fixture.js";
 import { readingAssets } from "./reading-assets-fixture.js";
 
 /**
@@ -30,7 +30,7 @@ export async function designSamplesAssets(
   for (const [path, asset] of base
     ? await loadReactAssets(new URL("react/", base))
     : options.readerProbe
-      ? await probeReactAssets()
+      ? await readerProbeAssets()
       : await nextAssets())
     assets.set(path, asset);
   const temporary = built
@@ -52,25 +52,5 @@ export async function designSamplesAssets(
     return assets;
   } finally {
     if (temporary) await rm(temporary, { recursive: true, force: true });
-  }
-}
-
-async function probeReactAssets() {
-  const directory = await mkdtemp(join(tmpdir(), "sciretriever-reader-probe-"));
-  try {
-    await promisify(execFile)(
-      process.execPath,
-      [
-        "--input-type=module",
-        "-e",
-        "import { buildReactAssets } from './scripts/build-react-assets.mjs'; await buildReactAssets(process.argv[1], { readerProbe: true });",
-        directory,
-      ],
-      { maxBuffer: 4 * 1024 * 1024 },
-    );
-    // Loaded into memory, so the build directory can go at once.
-    return await loadReactAssets(pathToFileURL(`${directory}/`));
-  } finally {
-    await rm(directory, { recursive: true, force: true });
   }
 }

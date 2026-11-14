@@ -22,6 +22,22 @@ export async function renderDocument(
   source: FixedSource | null,
 ): Promise<void> {
   const docId = ref.document_version_id;
+  const layer = frame.layer ?? frame.body;
+  // Off screen: no scroll handling and no scrolling; `show` returns to the place.
+  let hidden = false,
+    // Replaced once the text is laid out; until then only the flag changes.
+    onHide = () => {},
+    onShow = () => {};
+  frame.hide = () => {
+    if (hidden) return;
+    onHide();
+    hidden = true;
+  };
+  frame.show = () => {
+    if (!hidden) return;
+    hidden = false;
+    onShow();
+  };
   const bound = (value: { document: DocumentReadingRef }) => {
     if (JSON.stringify(value.document) !== JSON.stringify(ref))
       throw new Error("文档版本校验失败，未替换为当前默认文档。");
@@ -97,7 +113,7 @@ export async function renderDocument(
     note.textContent = `长文档（${described.long_document.pages} 页）：按简化流程建档，未逐页校订，文字可能含解析错误；以 PDF 为准。`;
     article.append(note);
   }
-  frame.body.append(article);
+  layer.append(article);
   const urls = new Map<string, string>(),
     inFlight = new Map<string, Promise<string>>();
   const imageUrl = async (resource: DocumentResource): Promise<string> => {
@@ -261,6 +277,7 @@ export async function renderDocument(
   const capture = (closing = false) => {
     if (
       restoring ||
+      hidden ||
       (!closing && ctx.signal.aborted) ||
       !frame.body.isConnected ||
       frame.body.clientHeight === 0
@@ -284,6 +301,11 @@ export async function renderDocument(
     if (block) frame.onPosition?.(state.textOffset);
   };
   const go = (offset: number, ratio = 0, animate = false) => {
+    if (hidden) {
+      state.textOffset = offset;
+      state.blockOffset = ratio;
+      return;
+    }
     const block =
       rendered[search((b) => Number(b.dataset.byteEnd) > offset)]?.element ??
       blocks().at(-1);
@@ -313,6 +335,7 @@ export async function renderDocument(
     return () => go(offset, ratio);
   };
   const onScroll = () => {
+    if (hidden) return;
     capture();
     void prefetch();
   };
@@ -345,7 +368,7 @@ export async function renderDocument(
   });
   more.id = "reader-load-more";
   more.hidden = true;
-  frame.body.append(tail, more);
+  layer.append(tail, more);
   const wireDocumentLinks = () => {
     // Only an explicit fragment link resolving to a rendered Markdown heading
     // is navigable. Bare reference numbers and unverified PDF page maps stay text.
@@ -619,6 +642,7 @@ export async function renderDocument(
   const prefetch = async () => {
     if (
       prefetching ||
+      hidden ||
       restoring ||
       autoFailed ||
       finished ||
@@ -641,6 +665,12 @@ export async function renderDocument(
     } finally {
       prefetching = false;
     }
+  };
+  onHide = () => capture();
+  onShow = () => {
+    if (restoring) return;
+    go(state.textOffset, state.blockOffset);
+    void prefetch();
   };
   const continuationObserver = new IntersectionObserver(
     (entries) => {

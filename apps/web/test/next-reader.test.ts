@@ -121,6 +121,54 @@ it.each(["no-preference", "reduce"] as const)(
   90000,
 );
 
+it("switches between PDF and full text on one engine: one build, one PDF read and one check", async () => {
+  const w = await nextWorkspace({ ready: "body", readerProbe: true });
+  try {
+    const id = w.env.parseRequest.literature_id;
+    const pdf = w.page.locator(
+      '.reader-view[data-view="pdf"]:not([hidden]) .reading-pdf-page[data-rendered="true"]',
+    );
+    const text = w.page.locator(
+      '.reader-view[data-view="doc"]:not([hidden]) .reading-article section[data-byte-start]',
+    );
+    await w.page.goto(`${w.origin}/?literature=${id}&reader=pdf`);
+    await pdf.first().waitFor();
+    for (let n = 0; n < 3; n++) {
+      await w.page.getByRole("tab", { name: "全文", exact: true }).click();
+      await text.first().waitFor();
+      await w.page.getByRole("tab", { name: "PDF", exact: true }).click();
+      await pdf.first().waitFor();
+    }
+    const counts = await w.page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __sciretrieverReaderProbe?: {
+              engines: Record<string, number>;
+              pdfRequests: Record<string, number>;
+              pdfHashes: Record<string, number>;
+              workersStarted: number;
+              workersTerminated: number;
+            };
+          }
+        ).__sciretrieverReaderProbe,
+    );
+    expect(counts, "the reader test build exposes its counters").toBeTruthy();
+    expect(Object.values(counts!.engines)).toEqual([1]);
+    expect(Object.values(counts!.pdfRequests)).toEqual([1]);
+    expect(Object.values(counts!.pdfHashes)).toEqual([1]);
+    expect(counts!.workersStarted - counts!.workersTerminated).toBe(1);
+    expect(counts!.workersStarted).toBe(1);
+    // The hidden PDF view holds no canvas while the full text shows.
+    await w.page.getByRole("tab", { name: "全文", exact: true }).click();
+    await text.first().waitFor();
+    expect(await w.page.locator(".reading-pdf-page canvas").count()).toBe(0);
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);
+
 it("groups existing statements, hides technical IDs, verifies nearby evidence and returns to the saved summary", async () => {
   const w = await nextWorkspace({ ready: "body" });
   try {

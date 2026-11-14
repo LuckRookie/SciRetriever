@@ -115,6 +115,15 @@ export default function Reader() {
   const id = route.literature ?? "",
     mode = route.reader,
     sourceKey = route.parameters.toString();
+  // The material a reader engine is built for: the paper and its fixed source,
+  // everything in the address except the view (`reader`) it is shown in.
+  const materialKey = useMemo(() => {
+    const parameters = new URLSearchParams(sourceKey);
+    parameters.delete("reader");
+    // Switching views may rewrite the address in another order.
+    parameters.sort();
+    return parameters.toString();
+  }, [sourceKey]);
   const root = useRef<HTMLElement>(null),
     body = useRef<HTMLDivElement>(null),
     status = useRef<HTMLDivElement>(null),
@@ -172,20 +181,22 @@ export default function Reader() {
   const source = useMemo(() => {
     try {
       return {
-        value: readFixedSource(new URLSearchParams(sourceKey)),
+        value: readFixedSource(new URLSearchParams(materialKey)),
         error: null,
       };
     } catch (error) {
       return { value: null, error: errorMessage(error) };
     }
-  }, [sourceKey]);
+  }, [materialKey]);
   const detail = useQuery({
     queryKey: ["literature", id],
     queryFn: ({ signal }) => readLiterature(api, id, signal),
     enabled: !!id,
   });
   const sources = useQuery({
-    queryKey: ["document", "reader-sources", id, mode, sourceKey],
+    // Both views of one material share the resolution: the fixed PDF and, when
+    // there is one, the full-text version it was published from.
+    queryKey: ["document", "reader-sources", id, materialKey],
     // Source mismatches are final integrity failures, never automatic retries.
     // A visible retry remains available for transient read failures.
     retry: false,
@@ -205,7 +216,7 @@ export default function Reader() {
         },
         detail.data!,
         source.value,
-        mode === "pdf" || mode === "edit" ? "pdf" : "doc",
+        "doc",
       ),
   });
   const position = useMemo(
@@ -216,15 +227,14 @@ export default function Reader() {
           api.workspace.catalog,
           id,
           mode,
+          // The summary's place; PDF and full text keep theirs in the engine.
           mode === "know"
             ? new URLSearchParams(sourceKey).get("result")
-            : mode === "pdf" || mode === "edit"
-              ? sources.data?.material
-              : sources.data?.document,
+            : materialKey,
         ],
         id,
       ),
-    [shell.reading, api.workspace.catalog, id, mode, sources.data, sourceKey],
+    [shell.reading, api.workspace.catalog, id, mode, sourceKey, materialKey],
   );
   const layoutPosition = useMemo(() => {
     const key = [api.workspace.catalog, id, "reader-layout"];
@@ -258,255 +268,372 @@ export default function Reader() {
     fullTextMode = useRef(fullText.mode),
     marksOpen = useRef(marks.open);
   marksOpen.current = marks.open;
+  // Bumped whenever another view becomes active, so its twin layer catches up.
+  const [viewToken, setViewToken] = useState(0);
+  const appliedMode = useRef(new WeakMap<FullTextLayer, string>());
   useEffect(() => {
     fullTextLayer.current?.setPages(fullText.pages);
-  }, [fullText.pages, ready]);
+  }, [fullText.pages, ready, viewToken]);
   useEffect(() => {
     fullTextLayer.current?.setMarks(marks.list);
-  }, [marks.list, ready]);
+  }, [marks.list, ready, viewToken]);
   useEffect(() => {
     fullTextMode.current = fullText.mode;
     const current = frame.current,
       layer = fullTextLayer.current;
-    if (!current || !layer) return;
+    if (!current || !layer || appliedMode.current.get(layer) === fullText.mode)
+      return;
+    appliedMode.current.set(layer, fullText.mode);
     // Two columns share the width at 适宽; the engine redraws once, keeping the place.
     const restore = current.beforeLayout();
     current.pdfColumns = fullText.mode === "pair" ? 2 : 1;
     layer.setMode(fullText.mode);
     requestAnimationFrame(restore);
-  }, [fullText.mode, ready]);
-  // The engine mounts once per material; marks attach to that mount without remounting it.
+  }, [fullText.mode, ready, viewToken]);
+  // One engine per material (spec 5.1): the PDF document with its worker, the
+  // full text and their marks stay while the reader switches views; switching
+  // hides one view's layer and shows the other's. Details of the paper reach
+  // the information panel through its query, never through the engine.
   const marksAttach = useRef(marks.attach);
   marksAttach.current = marks.attach;
   const marksActive = useRef(marks.active);
   marksActive.current = marks.active;
+  const detailRef = useRef(detail.data);
+  detailRef.current = detail.data;
+  const hasDetail = !!detail.data,
+    reading = shell.reading,
+    catalog = api.workspace.catalog;
+  const [engine, setEngine] = useState<ReaderEngine | null>(null);
   useLayoutEffect(() => {
+    const material = sources.data;
     if (
-      !detail.data ||
+      !hasDetail ||
       !root.current ||
       !body.current ||
       !status.current ||
       !findStatus.current ||
-      mode === "know" ||
-      mode === "results" ||
-      !sources.data ||
+      !material ||
       source.error
     )
       return;
     const controller = new AbortController(),
-      ctx: ReadingContext = {
-        api,
-        signal: controller.signal,
-        root: root.current,
-        refresh: () => retry((value) => value + 1),
-      };
-    const host = body.current;
-    if (READER_PROBE) probeCountKey("engines", mode);
+      host = body.current,
+      readerRoot = root.current,
+      statusHost = status.current,
+      findHost = findStatus.current,
+      fixed = new URLSearchParams(materialKey);
+    if (READER_PROBE) probeCountKey("engines", "material");
     host.replaceChildren();
     host.dataset.literatureId = id;
-    status.current.textContent = "正在读取并核验固定材料…";
-    findStatus.current.replaceChildren();
-    setPdf(null);
-    setPdfUrl("");
-    setOutline([]);
-    setOutlineNote("");
-    setReadingOffset(null);
-    setIssue(null);
-    setReady(false);
-    setNextMatch(null);
-    setDocumentLink(null);
-    delete root.current.dataset.readingReady;
-    const current: ReaderFrame = {
-      onSegment: (segment) => {
-        const material = sources.data?.material;
-        if (!material) return;
-        void leafPage(api, material.asset_id, segment, controller.signal)
-          .then((page) => {
-            readerActions.current.openPaper(id, "edit", {
-              asset: material.asset_id,
-              assetHash: material.asset_sha256,
-              page: String(page),
-            });
-          })
-          .catch((error) => {
-            if (!controller.signal.aborted)
-              readerActions.current.notify(errorMessage(error));
-          });
-      },
-      ...(new URLSearchParams(sourceKey).has("page")
-        ? {
-            pdfLocation: {
-              page: Math.max(
-                1,
-                Math.min(
-                  10000,
-                  Number(new URLSearchParams(sourceKey).get("page")) || 1,
-                ),
-              ),
-              region: new URLSearchParams(sourceKey).get("region")
-                ? parsePageRegion(
-                    JSON.parse(new URLSearchParams(sourceKey).get("region")!),
-                  )
-                : null,
-            },
-          }
-        : {}),
-      documentTitle: detail.data.literature.metadata.title || "未命名文献",
-      animateNavigation: () =>
-        document.documentElement.dataset.reducedMotion !== "true",
-      onResources: (resources) => {
-        if (!controller.signal.aborted) setResources(resources);
-      },
-      onImage: (src, alt) => setZoomImage({ src, alt }),
-      onDocumentLink: (preview) => {
-        if (controller.signal.aborted) return;
-        linkAnchor.current = preview.anchor;
-        setDocumentLink(preview);
-      },
-      body: host,
-      controls: document.createElement("div"),
-      outline: document.createElement("nav"),
-      status: status.current,
-      findStatus: findStatus.current,
-      onFind: () => {},
-      beforeLayout: () => () => {},
-      onPdfControls: (value) => {
-        if (!controller.signal.aborted)
-          setPdf((previous) =>
-            previous?.page === value.page &&
-            previous.total === value.total &&
-            previous.zoom === value.zoom
-              ? previous
-              : value,
-          );
-      },
-      onOutline: (entry) => {
-        if (!controller.signal.aborted)
-          setOutline((values) => [...values, entry]);
-      },
-      onOutlineEmpty: setOutlineNote,
-      onPosition: (offset) => {
-        // Scroll reports arrive per frame; the outline needs at most one update each.
-        if (controller.signal.aborted || positionFrame.current) return;
-        positionFrame.current = requestAnimationFrame(() => {
-          positionFrame.current = 0;
-          if (!controller.signal.aborted) setReadingOffset(offset);
-        });
-      },
-      onFindNext: (value) => {
-        if (!controller.signal.aborted) setNextMatch(() => value);
-      },
-      onIssue: (message, again) => {
-        if (!controller.signal.aborted)
-          setIssue(
-            message ? { message, ...(again ? { retry: again } : {}) } : null,
-          );
-      },
+    const set: UiSetters = {
+      pdf: setPdf,
+      pdfUrl: setPdfUrl,
+      outline: setOutline,
+      outlineNote: setOutlineNote,
+      readingOffset: setReadingOffset,
+      nextMatch: (value) => setNextMatch(() => value),
+      issue: setIssue,
+      ready: setReady,
+      resources: setResources,
     };
-    let marksSurface: MarkSurface | null = null;
-    // The translated twin pages live as long as this PDF mount (ADR 0051).
-    const twins =
-      mode === "pdf"
-        ? createFullTextLayer(
-            () => host.querySelector<HTMLElement>(".reading-pdf-pages"),
-            (markId) => marksOpen.current(markId),
-          )
-        : null;
-    fullTextLayer.current = twins;
-    if (twins) {
-      current.pdfColumns = fullTextMode.current === "pair" ? 2 : 1;
-      current.onPdfPage = (view) => twins.page(view);
-    }
-    if (marksActive.current && mode === "pdf" && sources.data.material) {
-      marksSurface = marksAttach.current(host, {
-        kind: "pdf",
-        sha256: sources.data.material.asset_sha256,
-      });
-      current.onPdfPage = (view) => {
-        marksSurface?.pdfPage(view);
-        twins?.page(view);
+    const urls = new Set<string>(),
+      views = new Map<ViewKind, ReaderView>();
+    const update = (view: ReaderView, patch: Partial<ViewUi>) => {
+      Object.assign(view.ui, patch);
+      if (created.active === view) applyUi(set, patch);
+    };
+    const syncReady = (view: ReaderView | null) => {
+      if (view?.marker.dataset.readingReady === "true")
+        readerRoot.dataset.readingReady = "true";
+      else delete readerRoot.dataset.readingReady;
+    };
+    const build = (kind: ViewKind): ReaderView => {
+      const layer = document.createElement("div");
+      layer.className = "reader-view";
+      layer.dataset.view = kind;
+      layer.hidden = true;
+      host.append(layer);
+      const statusText = document.createElement("span");
+      statusText.textContent = "正在读取并核验固定材料…";
+      const view: ReaderView = {
+        kind,
+        layer,
+        status: statusText,
+        findStatus: document.createElement("span"),
+        // Engines mark readiness here; it reaches the reader while the view shows.
+        marker: document.createElement("div"),
+        ui: emptyUi(),
+        twins: null,
+        surface: null,
+        frame: null as unknown as ReaderFrame,
       };
-    } else if (marksActive.current && mode === "doc" && sources.data.document) {
-      marksSurface = marksAttach.current(host, {
-        kind: "doc",
-        version: sources.data.document.document_version_id,
+      const observer = new MutationObserver(() => {
+        if (created.active === view) syncReady(view);
       });
-      current.onDocumentPaint = () => marksSurface?.documentPainted();
-    }
-    frame.current = current;
-    let url = "";
-    const run = async () => {
-      if (mode === "pdf" || mode === "edit") {
-        if (!sources.data.material) {
-          current.status.textContent = "尚无 PDF。可从信息栏上传或显式获取。";
-          return;
-        }
-        const started = performance.now(),
-          bytes = await readPdfBytes(ctx, sources.data.material);
-        performance.measure("sciretriever-pdf-read-verify", {
-          start: started,
-          end: performance.now(),
-        });
-        controller.signal.throwIfAborted();
-        url = URL.createObjectURL(
-          new Blob([bytes], { type: "application/pdf" }),
+      observer.observe(view.marker, { attributes: true });
+      controller.signal.addEventListener("abort", () => observer.disconnect(), {
+        once: true,
+      });
+      const ctx: ReadingContext = {
+        api,
+        signal: controller.signal,
+        root: view.marker,
+        refresh: () => retry((value) => value + 1),
+      };
+      const position = readingPosition(
+        reading,
+        [
+          catalog,
+          id,
+          kind,
+          kind === "pdf" ? material.material : material.document,
+        ],
+        id,
+      );
+      const current: ReaderFrame = {
+        onSegment: (segment) => {
+          const pdfMaterial = material.material;
+          if (!pdfMaterial) return;
+          void leafPage(api, pdfMaterial.asset_id, segment, controller.signal)
+            .then((page) => {
+              readerActions.current.openPaper(id, "edit", {
+                asset: pdfMaterial.asset_id,
+                assetHash: pdfMaterial.asset_sha256,
+                page: String(page),
+              });
+            })
+            .catch((error) => {
+              if (!controller.signal.aborted)
+                readerActions.current.notify(errorMessage(error));
+            });
+        },
+        ...(fixed.has("page")
+          ? {
+              pdfLocation: {
+                page: Math.max(
+                  1,
+                  Math.min(10000, Number(fixed.get("page")) || 1),
+                ),
+                region: fixed.get("region")
+                  ? parsePageRegion(JSON.parse(fixed.get("region")!))
+                  : null,
+              },
+            }
+          : {}),
+        documentTitle:
+          detailRef.current?.literature.metadata.title || "未命名文献",
+        animateNavigation: () =>
+          document.documentElement.dataset.reducedMotion !== "true",
+        onResources: (resources) => {
+          if (!controller.signal.aborted) update(view, { resources });
+        },
+        onImage: (src, alt) => {
+          if (created.active === view) setZoomImage({ src, alt });
+        },
+        onDocumentLink: (preview) => {
+          if (controller.signal.aborted || created.active !== view) return;
+          linkAnchor.current = preview.anchor;
+          setDocumentLink(preview);
+        },
+        body: host,
+        layer,
+        controls: document.createElement("div"),
+        outline: document.createElement("nav"),
+        status: statusText,
+        findStatus: view.findStatus,
+        onFind: () => {},
+        beforeLayout: () => () => {},
+        hide: () => {},
+        show: () => {},
+        onPdfControls: (value) => {
+          const previous = view.ui.pdf;
+          if (
+            controller.signal.aborted ||
+            (previous?.page === value.page &&
+              previous.total === value.total &&
+              previous.zoom === value.zoom)
+          )
+            return;
+          update(view, { pdf: value });
+        },
+        onOutline: (entry) => {
+          if (!controller.signal.aborted)
+            update(view, { outline: [...view.ui.outline, entry] });
+        },
+        onOutlineEmpty: (note) => update(view, { outlineNote: note }),
+        onPosition: (offset) => {
+          view.ui.readingOffset = offset;
+          // Scroll reports arrive per frame; the outline needs at most one update each.
+          if (
+            controller.signal.aborted ||
+            created.active !== view ||
+            positionFrame.current
+          )
+            return;
+          positionFrame.current = requestAnimationFrame(() => {
+            positionFrame.current = 0;
+            if (!controller.signal.aborted && created.active === view)
+              setReadingOffset(view.ui.readingOffset);
+          });
+        },
+        onFindNext: (value) => {
+          if (!controller.signal.aborted) update(view, { nextMatch: value });
+        },
+        onIssue: (message, again) => {
+          if (!controller.signal.aborted)
+            update(view, {
+              issue: message
+                ? { message, ...(again ? { retry: again } : {}) }
+                : null,
+            });
+        },
+      };
+      view.frame = current;
+      if (kind === "pdf") {
+        // The translated twin pages live as long as this PDF document (ADR 0051).
+        const twins = createFullTextLayer(
+          () => layer.querySelector<HTMLElement>(".reading-pdf-pages"),
+          (markId) => marksOpen.current(markId),
         );
-        if (READER_PROBE) probeCount("objectUrlsCreated");
-        setPdfUrl(url);
-        const engine = await import("../../../reading/pdf.js");
-        controller.signal.throwIfAborted();
-        await engine.renderPdf(ctx, current, position, bytes);
-      } else {
-        if (!sources.data.document) {
-          current.status.textContent = "尚无已发布全文；阅读不会启动解析。";
-          return;
+        view.twins = twins;
+        current.pdfColumns = fullTextMode.current === "pair" ? 2 : 1;
+        twins.setMode(fullTextMode.current);
+        appliedMode.current.set(twins, fullTextMode.current);
+        current.onPdfPage = (page) => {
+          view.surface?.pdfPage(page);
+          twins.page(page);
+        };
+      } else current.onDocumentPaint = () => view.surface?.documentPainted();
+      const run = async () => {
+        if (kind === "pdf") {
+          if (!material.material) {
+            statusText.textContent = "尚无 PDF。可从信息栏上传或显式获取。";
+            return;
+          }
+          const started = performance.now(),
+            bytes = await readPdfBytes(ctx, material.material);
+          performance.measure("sciretriever-pdf-read-verify", {
+            start: started,
+            end: performance.now(),
+          });
+          controller.signal.throwIfAborted();
+          const url = URL.createObjectURL(
+            new Blob([bytes], { type: "application/pdf" }),
+          );
+          urls.add(url);
+          if (READER_PROBE) probeCount("objectUrlsCreated");
+          update(view, { pdfUrl: url });
+          const pdfEngine = await import("../../../reading/pdf.js");
+          controller.signal.throwIfAborted();
+          await pdfEngine.renderPdf(ctx, current, position, bytes);
+        } else {
+          if (!material.document) {
+            statusText.textContent = "尚无已发布全文；阅读不会启动解析。";
+            return;
+          }
+          const documentEngine = await import("../../../reading/document.js");
+          controller.signal.throwIfAborted();
+          await documentEngine.renderDocument(
+            ctx,
+            current,
+            position,
+            material.document,
+            source.value,
+          );
         }
-        const engine = await import("../../../reading/document.js");
-        controller.signal.throwIfAborted();
-        await engine.renderDocument(
-          ctx,
-          current,
-          position,
-          sources.data.document,
-          source.value,
-        );
-      }
-      if (!controller.signal.aborted) setReady(true);
+        if (!controller.signal.aborted) update(view, { ready: true });
+      };
+      void run().catch((error) => {
+        if (!controller.signal.aborted) {
+          statusText.textContent = errorMessage(error);
+          update(view, {
+            issue: {
+              message: errorMessage(error),
+              retry: () => retry((value) => value + 1),
+            },
+          });
+        }
+      });
+      views.set(kind, view);
+      return view;
     };
-    void run().catch((error) => {
-      if (!controller.signal.aborted) {
-        current.status.textContent = errorMessage(error);
-        setIssue({
-          message: errorMessage(error),
-          retry: () => retry((value) => value + 1),
-        });
-      }
-    });
+    const created: ReaderEngine = {
+      active: null,
+      activate(kind) {
+        const next = kind ? (views.get(kind) ?? build(kind)) : null,
+          previous = created.active;
+        if (previous === next) return false;
+        if (previous) {
+          previous.frame.hide();
+          previous.layer.hidden = true;
+          previous.surface?.destroy();
+          previous.surface = null;
+        }
+        created.active = next;
+        frame.current = next?.frame ?? null;
+        fullTextLayer.current = next?.twins ?? null;
+        statusHost.replaceChildren(...(next ? [next.status] : []));
+        findHost.replaceChildren(...(next ? [next.findStatus] : []));
+        applyUi(set, next?.ui ?? emptyUi());
+        syncReady(next);
+        if (!next) return true;
+        next.layer.hidden = false;
+        if (marksActive.current) {
+          if (next.kind === "pdf" && material.material)
+            next.surface = marksAttach.current(host, {
+              kind: "pdf",
+              sha256: material.material.asset_sha256,
+            });
+          else if (next.kind === "doc" && material.document) {
+            next.surface = marksAttach.current(host, {
+              kind: "doc",
+              version: material.document.document_version_id,
+            });
+            if (next.marker.dataset.readingReady === "true")
+              next.surface.documentPainted();
+          }
+        }
+        next.frame.show();
+        return true;
+      },
+    };
+    setEngine(created);
     return () => {
       controller.abort();
-      marksSurface?.destroy();
-      twins?.destroy();
-      if (fullTextLayer.current === twins) fullTextLayer.current = null;
-      if (url) {
+      for (const view of views.values()) {
+        view.surface?.destroy();
+        view.twins?.destroy();
+        if (fullTextLayer.current === view.twins) fullTextLayer.current = null;
+        if (frame.current === view.frame) frame.current = null;
+      }
+      for (const url of urls) {
         URL.revokeObjectURL(url);
         if (READER_PROBE) probeCount("objectUrlsRevoked");
       }
       host.replaceChildren();
       delete host.dataset.literatureId;
-      if (frame.current === current) frame.current = null;
+      statusHost.replaceChildren();
+      findHost.replaceChildren();
+      delete readerRoot.dataset.readingReady;
+      applyUi(set, emptyUi());
+      setEngine(null);
     };
   }, [
     api,
-    detail.data,
     id,
-    mode,
+    materialKey,
     sources.data,
-    sourceKey,
     revision,
-    position,
+    hasDetail,
+    reading,
+    catalog,
     source.error,
     source.value,
   ]);
+  // A view switch shows the other layer of the same engine.
+  useLayoutEffect(() => {
+    if (engine?.activate(viewOf(mode))) setViewToken((value) => value + 1);
+  }, [engine, mode]);
   const changeLayout = (action: () => void) => {
     const restore = mode === "doc" ? frame.current?.beforeLayout() : undefined;
     action();
@@ -1321,4 +1448,53 @@ async function leafPage(
   return block && typeof block === "object" && "page" in block
     ? Number(block.page) + 1
     : 1;
+}
+
+type ViewKind = "pdf" | "doc";
+const viewOf = (mode: ReaderMode): ViewKind | null =>
+  mode === "pdf" || mode === "edit" ? "pdf" : mode === "doc" ? "doc" : null;
+/** What a view shows in the reader's own controls; kept while the view is hidden. */
+interface ViewUi {
+  pdf: PdfControls | null;
+  pdfUrl: string;
+  outline: ReaderOutlineEntry[];
+  outlineNote: string;
+  readingOffset: number | null;
+  nextMatch: (() => void) | null;
+  issue: { message: string; retry?: () => void | Promise<void> } | null;
+  ready: boolean;
+  resources: readonly ReaderResourceEntry[];
+}
+const emptyUi = (): ViewUi => ({
+  pdf: null,
+  pdfUrl: "",
+  outline: [],
+  outlineNote: "",
+  readingOffset: null,
+  nextMatch: null,
+  issue: null,
+  ready: false,
+  resources: [],
+});
+type UiSetters = { [K in keyof ViewUi]: (value: ViewUi[K]) => void };
+function applyUi(set: UiSetters, patch: Partial<ViewUi>) {
+  for (const key of Object.keys(patch) as (keyof ViewUi)[])
+    (set[key] as (value: unknown) => void)(patch[key]);
+}
+/** One display layer of an engine: the PDF pages or the full text. */
+interface ReaderView {
+  kind: ViewKind;
+  layer: HTMLDivElement;
+  status: HTMLElement;
+  findStatus: HTMLElement;
+  marker: HTMLElement;
+  ui: ViewUi;
+  frame: ReaderFrame;
+  twins: FullTextLayer | null;
+  surface: MarkSurface | null;
+}
+interface ReaderEngine {
+  active: ReaderView | null;
+  /** Shows the view (building it the first time); false when it already shows. */
+  activate(kind: ViewKind | null): boolean;
 }

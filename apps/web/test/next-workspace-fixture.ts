@@ -38,9 +38,35 @@ export function nextAssets() {
   })();
   return assets;
 }
+let probeAssets: ReturnType<typeof loadReactAssets> | undefined;
+/** The test build whose reader carries measurement counters (`src/reading/probe.ts`). */
+export function readerProbeAssets() {
+  probeAssets ??= (async () => {
+    const output = await mkdtemp(join(tmpdir(), "sciretriever-reader-probe-"));
+    try {
+      await promisify(execFile)(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          "import { buildReactAssets } from './scripts/build-react-assets.mjs'; await buildReactAssets(process.argv[1], { readerProbe: true });",
+          output,
+        ],
+        { maxBuffer: 4 * 1024 * 1024 },
+      );
+      // Loaded into memory, so the build directory can go at once.
+      return await loadReactAssets(pathToFileURL(`${output}/`));
+    } finally {
+      await rm(output, { recursive: true, force: true });
+    }
+  })();
+  return probeAssets;
+}
 export async function nextWorkspace(
   options: {
     analysisModel?: boolean;
+    /** Serve the reader's test build with its counters. */
+    readerProbe?: boolean;
     setup?: Parameters<typeof workspace>[1];
     path?: string;
     ready?: string;
@@ -50,7 +76,7 @@ export async function nextWorkspace(
   } = {},
 ) {
   return workspace(options.analysisModel ?? true, options.setup, {
-    assets: await nextAssets(),
+    assets: await (options.readerProbe ? readerProbeAssets() : nextAssets()),
     path: options.path ?? "/",
     ready: options.ready ?? '[aria-label="文献列表"] .paper-row:first-child',
     ...(options.configuration ? { configuration: options.configuration } : {}),

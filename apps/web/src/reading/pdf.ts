@@ -46,7 +46,7 @@ export async function renderPdf(
   zoom.value = String(state.zoom);
   const pages = document.createElement("div");
   pages.className = "reading-pdf-pages library-pdf-reading";
-  frame.body.append(pages);
+  (frame.layer ?? frame.body).append(pages);
   const workerPort = new Worker("/reader/pdf.worker.mjs", { type: "module" });
   if (READER_PROBE) probeCount("workersStarted");
   const worker = PDFWorker.create({ port: workerPort });
@@ -63,6 +63,8 @@ export async function renderPdf(
     scale = 1,
     generation = 0,
     closed = false,
+    // Off screen: no scroll handling, no drawing, no canvases; position kept.
+    hidden = false,
     raf = 0,
     resizeTimer: ReturnType<typeof setTimeout> | undefined;
   let baseWidth = 612,
@@ -95,6 +97,7 @@ export async function renderPdf(
   const capture = () => {
     if (
       closed ||
+      hidden ||
       !placeholders.length ||
       !frame.body.isConnected ||
       frame.body.clientHeight === 0
@@ -236,7 +239,7 @@ export async function renderPdf(
     return count;
   };
   const draw = async (n: number) => {
-    if (!pdf || closed || rendered.has(n)) return;
+    if (!pdf || closed || hidden || rendered.has(n)) return;
     const placeholder = placeholders[n - 1]!;
     const entry: RenderedPage = {
       canvas: document.createElement("canvas"),
@@ -338,7 +341,7 @@ export async function renderPdf(
     }
   };
   const visible = () => {
-    if (!pdf || closed) return;
+    if (!pdf || closed || hidden) return;
     const rect = frame.body.getBoundingClientRect();
     const first = Math.max(
       0,
@@ -366,6 +369,8 @@ export async function renderPdf(
     if (!pdf || closed) return;
     state.page = Math.max(1, Math.min(pdf.numPages, Math.trunc(page) || 1));
     state.pageOffset = offset;
+    // Hidden: remember the place; `show` scrolls there.
+    if (hidden) return;
     const target = placeholders[state.page - 1]!;
     frame.body.scrollTop +=
       target.getBoundingClientRect().top -
@@ -376,6 +381,7 @@ export async function renderPdf(
     visible();
   };
   function onScroll() {
+    if (hidden) return;
     cancelAnimationFrame(raf);
     raf = requestAnimationFrame(() => {
       capture();
@@ -410,6 +416,7 @@ export async function renderPdf(
     go(page, offset);
   };
   const resize = new ResizeObserver(() => {
+    if (hidden) return;
     const width = frame.body.clientWidth;
     if (Math.abs(lastWidth - width) < 1) return;
     lastWidth = width;
@@ -418,6 +425,25 @@ export async function renderPdf(
       if (state.zoom === "fit") reflow();
     }, 80);
   });
+  frame.hide = () => {
+    if (closed || hidden) return;
+    capture();
+    hidden = true;
+    cancelAnimationFrame(raf);
+    clearTimeout(resizeTimer);
+    for (const n of rendered.keys()) clearPage(n);
+  };
+  frame.show = () => {
+    if (closed || !hidden) return;
+    hidden = false;
+    if (!pdf) return;
+    const width = frame.body.clientWidth;
+    // The window or the side panel changed while hidden: fit again.
+    if (state.zoom === "fit" && Math.abs(lastWidth - width) >= 1) {
+      lastWidth = width;
+      reflow();
+    } else go(state.page, state.pageOffset);
+  };
   try {
     pdf = await loading.promise;
     paintStarted = performance.now();

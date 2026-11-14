@@ -56,13 +56,23 @@ export interface ReaderFrame {
   };
   /** Metadata heading for presentation only, may carry publisher inline tags (see `title.ts`); source bytes and evidence offsets stay fixed. */
   documentTitle?: string;
+  /** The scroll container, shared by the views of one engine. */
   body: HTMLElement;
+  /** This view's own container inside `body`; the engine appends its content here. */
+  layer?: HTMLElement;
   controls: HTMLElement;
   outline: HTMLElement;
   status: HTMLElement;
   findStatus: HTMLElement;
   onFind: (query: string) => void | Promise<void>;
   beforeLayout: () => () => void;
+  /**
+   * Set by the engine. The view leaves the screen (`hide`, after which its
+   * layer is hidden) or returns to it (`show`, once its layer is shown again):
+   * the material, the PDF document and its worker stay; the position is kept.
+   */
+  hide: () => void;
+  show: () => void;
   animateNavigation?: () => boolean;
   onResources?: (resources: readonly ReaderResourceEntry[]) => void;
   onDocumentLink?: (preview: DocumentLinkPreview) => void;
