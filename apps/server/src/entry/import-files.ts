@@ -22,7 +22,7 @@ export class ImportSessionError extends Error {
     readonly code: string,
     options?: ErrorOptions,
   ) {
-    super("Import session request rejected", options);
+    super("Intake request rejected", options);
   }
 }
 /** Abort a waiting source without retaining a whole upload or waiting on an uncooperative iterator. */
@@ -34,11 +34,11 @@ async function* uploadChunks(
   try {
     for (;;) {
       if (signal.aborted)
-        throw new ImportSessionError("import-upload-cancelled");
+        throw new ImportSessionError("intake-upload-cancelled");
       const next = await new Promise<IteratorResult<Uint8Array>>(
         (resolve, reject) => {
           const abort = () =>
-            reject(new ImportSessionError("import-upload-cancelled"));
+            reject(new ImportSessionError("intake-upload-cancelled"));
           signal.addEventListener("abort", abort, { once: true });
           Promise.resolve(iterator.next()).then(
             (value) => {
@@ -71,7 +71,7 @@ export function settleFileState(
 ): ImportFileStatus {
   if (file.status !== "pending") {
     if (file.sha256 !== sha256)
-      throw new ImportSessionError("import-file-conflict");
+      throw new ImportSessionError("intake-file-conflict");
     return file;
   }
   const mismatch =
@@ -81,7 +81,7 @@ export function settleFileState(
     ...file,
     status: mismatch ? "conflict" : uploaded ? "uploaded" : "existing",
     sha256,
-    reason: mismatch ? "import-file-conflict" : null,
+    reason: mismatch ? "intake-file-conflict" : null,
   };
 }
 export type FileSettlement = (
@@ -108,7 +108,7 @@ export class ImportFileChannel {
     importHash(sha256);
     const facts = await this.database.currentFacts(file.literature_id);
     if (!facts?.primary_asset)
-      throw new ImportSessionError("import-file-upload-required");
+      throw new ImportSessionError("intake-file-upload-required");
     return settle(file, sha256, facts.primary_asset, false);
   }
   async upload(
@@ -141,22 +141,22 @@ export class ImportFileChannel {
       const digest = createHash("sha256");
       for await (const chunk of uploadChunks(chunks, active)) {
         if (active.aborted)
-          throw new ImportSessionError("import-upload-cancelled");
+          throw new ImportSessionError("intake-upload-cancelled");
         digest.update(chunk);
       }
       const sha = digest.digest("hex");
       if (sha !== file.sha256)
-        throw new ImportSessionError("import-file-conflict");
+        throw new ImportSessionError("intake-file-conflict");
       return file;
     }
     await assertActive();
     if (file.action === "hash")
-      throw new ImportSessionError("import-file-hash-required");
+      throw new ImportSessionError("intake-file-hash-required");
     const transferId = `${source}-${randomUUID()}`;
     const baseline = await this.database.currentFacts(file.literature_id);
-    if (!baseline) throw new ImportSessionError("import-literature-missing");
+    if (!baseline) throw new ImportSessionError("intake-literature-missing");
     if (baseline.primary_asset)
-      throw new ImportSessionError("import-file-hash-required");
+      throw new ImportSessionError("intake-file-hash-required");
     const streamHash = createHash("sha256");
     let completed: string | null = null,
       published = false;
@@ -178,7 +178,7 @@ export class ImportFileChannel {
       );
       for await (const chunk of uploadChunks(chunks, active)) {
         if (active.aborted)
-          throw new ImportSessionError("import-upload-cancelled");
+          throw new ImportSessionError("intake-upload-cancelled");
         if (chunk.byteLength) {
           streamHash.update(chunk);
           await transfers.append(transferId, chunk);
@@ -187,19 +187,19 @@ export class ImportFileChannel {
       const candidate = await transfers.complete(transferId);
       completed = candidate.sha256;
       if (streamHash.digest("hex") !== candidate.sha256)
-        throw new ImportSessionError("import-file-hash-mismatch");
+        throw new ImportSessionError("intake-file-hash-mismatch");
       if (
         file.expected_sha256 !== null &&
         file.expected_sha256 !== candidate.sha256
       )
-        throw new ImportSessionError("import-file-hash-mismatch");
+        throw new ImportSessionError("intake-file-hash-mismatch");
       if (file.size_bytes !== null && file.size_bytes !== candidate.size_bytes)
-        throw new ImportSessionError("import-file-size-mismatch");
+        throw new ImportSessionError("intake-file-size-mismatch");
       await assertActive();
       if (active.aborted)
-        throw new ImportSessionError("import-upload-cancelled");
+        throw new ImportSessionError("intake-upload-cancelled");
       const facts = await this.database.currentFacts(file.literature_id);
-      if (!facts) throw new ImportSessionError("import-literature-missing");
+      if (!facts) throw new ImportSessionError("intake-literature-missing");
       if (facts.primary_asset)
         return await settle(file, candidate.sha256, facts.primary_asset, false);
       const receipt = await acceptance.accept(
@@ -224,28 +224,28 @@ export class ImportFileChannel {
       if (error instanceof CandidatePublicationError && error.bytes_published)
         published = true;
       if (active.aborted && !published)
-        throw new ImportSessionError("import-upload-cancelled", {
+        throw new ImportSessionError("intake-upload-cancelled", {
           cause: error,
         });
       if (error instanceof PdfAcceptanceError)
-        throw new ImportSessionError("import-pdf-invalid", { cause: error });
+        throw new ImportSessionError("intake-pdf-invalid", { cause: error });
       if (error instanceof LiteraturePublicationError)
         throw new ImportSessionError(
           error.code === "primary-asset-conflict"
-            ? "import-file-conflict"
-            : "import-source-stale",
+            ? "intake-file-conflict"
+            : "intake-source-stale",
           { cause: error },
         );
 
       let current: unknown = error;
       for (let i = 0; i < 8 && current && typeof current === "object"; i++) {
         if ("code" in current && current.code === "ENOSPC")
-          throw new ImportSessionError("import-disk-space", { cause: error });
+          throw new ImportSessionError("intake-disk-space", { cause: error });
         if (current instanceof BrowserDownloadResourceError)
           throw new ImportSessionError(
             current.code === "browser-download-disk-reserve"
-              ? "import-disk-space"
-              : "import-disk-unavailable",
+              ? "intake-disk-space"
+              : "intake-disk-unavailable",
             { cause: error },
           );
         current = "cause" in current ? current.cause : null;

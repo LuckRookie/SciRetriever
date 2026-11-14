@@ -1,7 +1,6 @@
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import { IMPORT_LIMITS } from "@sciretriever/contracts";
 import type {
-  ImportSession,
   ImportLibrary,
   ImportSummary,
   ImportRecordResult,
@@ -10,10 +9,37 @@ import type {
   IntakeBatch,
 } from "@sciretriever/contracts";
 import type { IntakeWrite } from "./intake-engine.js";
+const { readIntakeBatch }: typeof import("./intake-engine.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./intake-engine.ts"
+      : "./intake-engine.js",
+    import.meta.url,
+  ).href
+);
 import type { RetiredArtifact } from "../files/reclamation.js";
 
 type Row = Record<string, SQLOutputValue>;
-export interface StoredImportSession extends ImportSession {
+export interface StoredImportSession {
+  readonly batch_id: string;
+  readonly library_key: string;
+  readonly source: ImportLibrary;
+  readonly format: string;
+  readonly scope: string;
+  readonly file_name: string | null;
+  readonly import_user_tags: boolean;
+  readonly state: IntakeBatch["state"];
+  readonly confirmation: IntakeBatch["confirmation"];
+  readonly created_at: string;
+  readonly updated_at: string;
+  readonly confirmed_at: string | null;
+  readonly finished_at: string | null;
+  readonly last_file_at: string | null;
+  readonly initiated_by: string;
+  readonly metadata_complete: boolean;
+  readonly record_count: number;
+  readonly processed_records: number;
+  readonly pending_files: number;
   readonly origin: "web" | "cli" | "mcp";
   readonly summary: ImportSummary | null;
 }
@@ -23,40 +49,52 @@ export interface ImportPart extends RetiredArtifact {
   readonly record_count: number;
 }
 export type ImportRead =
-  | { op: "session"; session_id: string }
-  | { op: "sessions"; cursor: string | null; limit: number }
+  | { op: "workflow"; batch_id: string }
+  | { op: "batch"; batch_id: string }
+  | { op: "owner"; batch_id: string }
+  | {
+      op: "sessions";
+      cursor: string | null;
+      limit: number;
+      initiated_by: string | null;
+    }
   | { op: "active" }
   | { op: "cleanup" }
-  | { op: "aggregate"; session_id: string }
-  | { op: "parts"; session_id: string }
+  | { op: "aggregate"; batch_id: string }
+  | { op: "parts"; batch_id: string }
   | {
       op: "mapping";
       library_key: string;
       object_kind: ExternalObjectMapping["object_kind"];
       external_id: string;
     }
-  | { op: "results"; session_id: string; cursor: string | null; limit: number }
-  | { op: "result"; session_id: string; sequence: number; record_index: number }
+  | { op: "results"; batch_id: string; cursor: string | null; limit: number }
+  | { op: "result"; batch_id: string; sequence: number; record_index: number }
   | {
       op: "files";
-      session_id: string;
+      batch_id: string;
       cursor: string | null;
       limit: number;
       pending: boolean;
     }
-  | { op: "file"; session_id: string; file_id: string }
+  | { op: "file"; batch_id: string; file_id: string }
   | { op: "folder"; folder_id: string | null; parent_id: string | null }
   | { op: "intake-member"; batch_id: string; literature_id: string };
 export type ImportWrite =
   | {
       op: "create";
-      session: ImportSession;
+      batch: IntakeBatch;
+      library_key: string;
+      source: ImportLibrary;
+      format: string;
+      scope: string;
+      file_name: string | null;
+      import_user_tags: boolean;
       identity_scope: string;
-      origin: "web" | "cli" | "mcp";
     }
   | {
       op: "part";
-      session_id: string;
+      batch_id: string;
       sequence: number;
       part: RetiredArtifact;
       artifact_id: string;
@@ -66,29 +104,30 @@ export type ImportWrite =
     }
   | {
       op: "begin";
-      session_id: string;
-      batch: IntakeBatch;
+      batch_id: string;
       summary: ImportSummary;
       now: string;
     }
   | { op: "mapping"; mapping: ExternalObjectMapping }
   | {
       op: "result";
-      session_id: string;
+      batch_id: string;
       item: ImportRecordResult;
+      item_id: string;
+      title: string | null;
       mapping: ExternalObjectMapping | null;
       files: readonly ImportFileStatus[];
       now: string;
     }
   | {
       op: "metadata-done";
-      session_id: string;
+      batch_id: string;
       summary: ImportSummary;
       now: string;
     }
   | {
       op: "file-result";
-      session_id: string;
+      batch_id: string;
       file_id: string;
       status: "uploaded" | "existing" | "conflict";
       sha256: string;
@@ -98,12 +137,12 @@ export type ImportWrite =
     }
   | {
       op: "finish";
-      session_id: string;
-      state: "completed" | "cancelled";
+      batch_id: string;
+      state: "finished" | "cancelled";
       summary: ImportSummary | null;
       now: string;
     }
-  | { op: "retire-parts"; session_id: string };
+  | { op: "retire-parts"; batch_id: string };
 function fail(code: string): never {
   throw Object.assign(new Error("Import storage rejected"), { code });
 }
@@ -115,47 +154,49 @@ function nullable(v: SQLOutputValue | undefined): string | null {
 }
 function row(db: DatabaseSync, id: string): Row {
   const r = db
-    .prepare("SELECT * FROM import_sessions WHERE session_id=?")
+    .prepare(
+      "SELECT s.*,b.state,b.result,b.confirmation,b.confirmed_at,b.finished_at,b.initiated_by,b.origin FROM import_sessions s JOIN intake_batches b USING(batch_id) WHERE batch_id=?",
+    )
     .get(id);
-  if (!r) fail("import-session-missing");
+  if (!r) fail("intake-batch-state");
   return r;
 }
 function live(db: DatabaseSync, id: string, states: readonly string[]): Row {
   const r = row(db, id);
-  if (!states.includes(str(r.state))) fail("import-session-state");
+  if (!states.includes(str(r.state))) fail("intake-batch-state");
   return r;
 }
 function session(db: DatabaseSync, r: Row): StoredImportSession {
-  const id = str(r.session_id);
+  const id = str(r.batch_id);
   return {
-    session_id: id,
+    batch_id: id,
     library_key: str(r.library_key),
-    library: JSON.parse(str(r.library_json)) as ImportLibrary,
+    source: JSON.parse(str(r.library_json)) as ImportLibrary,
     format: str(r.format),
     scope: str(r.scope),
     file_name: nullable(r.file_name),
     import_user_tags: r.import_user_tags === 1,
-    state: r.state as ImportSession["state"],
+    state: r.state as IntakeBatch["state"],
+    confirmation: r.confirmation as IntakeBatch["confirmation"],
     created_at: str(r.created_at),
     updated_at: str(r.updated_at),
     confirmed_at: nullable(r.confirmed_at),
     finished_at: nullable(r.finished_at),
     last_file_at: nullable(r.last_file_at),
     initiated_by: str(r.initiated_by),
-    intake_batch_id: nullable(r.batch_id),
     metadata_complete: r.metadata_complete === 1,
     record_count: Number(r.record_count),
     processed_records: Number(
       db
         .prepare(
-          "SELECT count(*) n FROM import_record_results WHERE session_id=?",
+          "SELECT count(*) n FROM import_record_results WHERE batch_id=?",
         )
         .get(id)!.n,
     ),
     pending_files: Number(
       db
         .prepare(
-          "SELECT count(*) n FROM import_files WHERE session_id=? AND status='pending'",
+          "SELECT count(*) n FROM import_files WHERE batch_id=? AND status='pending'",
         )
         .get(id)!.n,
     ),
@@ -169,7 +210,7 @@ function session(db: DatabaseSync, r: Row): StoredImportSession {
 function parts(db: DatabaseSync, id: string): ImportPart[] {
   return db
     .prepare(
-      "SELECT p.*,a.relative_path,a.sha256,a.byte_size,a.media_type FROM import_parts p JOIN artifact_objects a USING(artifact_id) WHERE session_id=? ORDER BY sequence",
+      "SELECT p.*,a.relative_path,a.sha256,a.byte_size,a.media_type FROM import_parts p JOIN artifact_objects a USING(artifact_id) WHERE batch_id=? ORDER BY sequence",
     )
     .all(id)
     .map((r) => ({
@@ -212,7 +253,7 @@ function result(r: Row): ImportRecordResult {
 }
 function map(db: DatabaseSync, m: ExternalObjectMapping) {
   db.prepare(
-    "INSERT INTO external_object_mappings VALUES(?,?,?,?,?,?) ON CONFLICT(library_key,object_kind,external_id) DO UPDATE SET internal_id=excluded.internal_id,content_sha256=excluded.content_sha256,observation_id=excluded.observation_id",
+    "INSERT INTO external_object_mappings(library_key,object_kind,external_id,internal_id,content_sha256,observation_id,state) VALUES(?,?,?,?,?,?,?) ON CONFLICT(library_key,object_kind,external_id) DO UPDATE SET internal_id=excluded.internal_id,content_sha256=excluded.content_sha256,observation_id=excluded.observation_id,state=excluded.state",
   ).run(
     m.library_key,
     m.object_kind,
@@ -220,43 +261,73 @@ function map(db: DatabaseSync, m: ExternalObjectMapping) {
     m.internal_id,
     m.content_sha256,
     m.observation_id,
+    m.state,
   );
 }
 export function readImportStorage(db: DatabaseSync, r: ImportRead): unknown {
-  if (r.op === "session") return session(db, row(db, r.session_id));
+  if (r.op === "workflow") return session(db, row(db, r.batch_id));
+  if (r.op === "batch") return readIntakeBatch(db, r.batch_id);
+  if (r.op === "owner") {
+    const value = db
+      .prepare("SELECT initiated_by FROM intake_batches WHERE batch_id=?")
+      .get(r.batch_id);
+    if (!value) fail("intake-batch-missing");
+    return value;
+  }
   if (r.op === "active")
     return db
       .prepare(
-        "SELECT * FROM import_sessions WHERE state IN ('collecting','awaiting-confirmation','importing') ORDER BY created_at,session_id",
+        "SELECT s.*,b.state,b.result,b.confirmation,b.confirmed_at,b.finished_at,b.initiated_by,b.origin FROM import_sessions s JOIN intake_batches b USING(batch_id) WHERE s.active=1 ORDER BY s.created_at,s.batch_id",
       )
       .all()
       .map((r) => session(db, r));
   if (r.op === "cleanup")
     return db
       .prepare(
-        "WITH owners AS MATERIALIZED (SELECT DISTINCT session_id FROM import_parts) SELECT s.session_id FROM owners JOIN import_sessions s USING(session_id) WHERE s.state IN ('completed','cancelled')",
+        "WITH owners AS MATERIALIZED (SELECT DISTINCT batch_id FROM import_parts) SELECT s.batch_id FROM owners JOIN intake_batches s USING(batch_id) WHERE s.state IN ('finished','cancelled','withdrawn')",
       )
       .all()
-      .map((r) => str(r.session_id));
+      .map((r) => str(r.batch_id));
   if (r.op === "sessions") {
-    const after = r.cursor === null ? null : row(db, r.cursor);
+    const after =
+      r.cursor === null
+        ? null
+        : db
+            .prepare(
+              "SELECT batch_id,created_at,initiated_by FROM intake_batches WHERE batch_id=?",
+            )
+            .get(r.cursor);
+    if (r.cursor !== null && !after) fail("intake-batch-missing");
+    if (
+      after &&
+      r.initiated_by !== null &&
+      after.initiated_by !== r.initiated_by
+    )
+      fail("intake-batch-missing");
+    const conditions = [
+      ...(r.initiated_by === null ? [] : ["initiated_by=?"]),
+      ...(after ? ["(created_at,batch_id)<(?,?)"] : []),
+    ];
     const rows = db
       .prepare(
-        `SELECT * FROM import_sessions ${after ? "WHERE (created_at,session_id)<(?,?)" : ""} ORDER BY created_at DESC,session_id DESC LIMIT ?`,
+        `SELECT batch_id FROM intake_batches ${conditions.length ? "WHERE " + conditions.join(" AND ") : ""} ORDER BY created_at DESC,batch_id DESC LIMIT ?`,
       )
       .all(
-        ...(after ? [after.created_at!, after.session_id!] : []),
+        ...(r.initiated_by === null ? [] : [r.initiated_by]),
+        ...(after ? [after.created_at!, after.batch_id!] : []),
         r.limit + 1,
       );
     return {
-      items: rows.slice(0, r.limit).map((r) => session(db, r)),
+      items: rows
+        .slice(0, r.limit)
+        .map((v) => readIntakeBatch(db, str(v.batch_id))),
       next_cursor:
-        rows.length > r.limit ? str(rows[r.limit - 1]!.session_id) : null,
+        rows.length > r.limit ? str(rows[r.limit - 1]!.batch_id) : null,
     };
   }
   if (r.op === "parts") {
-    row(db, r.session_id);
-    return parts(db, r.session_id);
+    row(db, r.batch_id);
+    return parts(db, r.batch_id);
   }
   if (r.op === "mapping")
     return (
@@ -289,43 +360,43 @@ export function readImportStorage(db: DatabaseSync, r: ImportRead): unknown {
         )
         .get(r.batch_id, r.literature_id) ?? null
     );
-  row(db, r.session_id);
+  row(db, r.batch_id);
   if (r.op === "aggregate") {
     const records = db
       .prepare(
-        "SELECT count(CASE WHEN disposition='created' THEN 1 END) created,count(CASE WHEN disposition='enriched' THEN 1 END) enriched,count(CASE WHEN disposition='matched' THEN 1 END) matched,count(CASE WHEN disposition='conflict' THEN 1 END) conflicts,count(CASE WHEN disposition='rejected' THEN 1 END) rejected FROM import_record_results WHERE session_id=?",
+        "SELECT count(CASE WHEN disposition='created' THEN 1 END) created,count(CASE WHEN disposition='enriched' THEN 1 END) enriched,count(CASE WHEN disposition='matched' THEN 1 END) matched,count(CASE WHEN disposition='conflict' THEN 1 END) conflicts,count(CASE WHEN disposition='rejected' THEN 1 END) rejected,count(CASE WHEN disposition='restored' THEN 1 END) restored,count(CASE WHEN disposition='pending-decision' THEN 1 END) pending_decision,0 possible_duplicates,0 needs_metadata FROM import_record_results WHERE batch_id=?",
       )
-      .get(r.session_id);
+      .get(r.batch_id);
     const files = db
       .prepare(
-        "SELECT count(CASE WHEN status='pending' AND NOT EXISTS(SELECT 1 FROM literature_assets a WHERE a.literature_id=f.literature_id AND a.role='primary-pdf') THEN 1 END) upload,count(CASE WHEN status='pending' AND EXISTS(SELECT 1 FROM literature_assets a WHERE a.literature_id=f.literature_id AND a.role='primary-pdf') THEN 1 END) hash,count(CASE WHEN status='uploaded' THEN 1 END) uploaded,count(CASE WHEN status='existing' THEN 1 END) existing,count(CASE WHEN status='conflict' THEN 1 END) conflicts,count(CASE WHEN status='pending' THEN 1 END) missing FROM import_files f WHERE session_id=?",
+        "SELECT count(CASE WHEN status='pending' AND NOT EXISTS(SELECT 1 FROM literature_assets a WHERE a.literature_id=f.literature_id AND a.role='primary-pdf') THEN 1 END) upload,count(CASE WHEN status='pending' AND EXISTS(SELECT 1 FROM literature_assets a WHERE a.literature_id=f.literature_id AND a.role='primary-pdf') THEN 1 END) hash,count(CASE WHEN status='uploaded' THEN 1 END) uploaded,count(CASE WHEN status='existing' THEN 1 END) existing,count(CASE WHEN status='conflict' THEN 1 END) conflicts,count(CASE WHEN status='pending' THEN 1 END) missing,0 unpaired FROM import_files f WHERE batch_id=?",
       )
-      .get(r.session_id);
+      .get(r.batch_id);
     return { records, files };
   }
   if (r.op === "result") {
     const v = db
       .prepare(
-        "SELECT * FROM import_record_results WHERE session_id=? AND sequence=? AND record_index=?",
+        "SELECT * FROM import_record_results WHERE batch_id=? AND sequence=? AND record_index=?",
       )
-      .get(r.session_id, r.sequence, r.record_index);
+      .get(r.batch_id, r.sequence, r.record_index);
     return v ? result(v) : null;
   }
   if (r.op === "file") {
     const v = db
       .prepare(
-        "SELECT f.*,CASE WHEN f.status='pending' AND EXISTS(SELECT 1 FROM literature_assets a WHERE a.literature_id=f.literature_id AND a.role='primary-pdf') THEN 'hash' ELSE f.action END AS action FROM import_files f WHERE session_id=? AND file_id=?",
+        "SELECT f.*,CASE WHEN f.status='pending' AND EXISTS(SELECT 1 FROM literature_assets a WHERE a.literature_id=f.literature_id AND a.role='primary-pdf') THEN 'hash' ELSE f.action END AS action FROM import_files f WHERE batch_id=? AND file_id=?",
       )
-      .get(r.session_id, r.file_id);
-    if (!v) fail("import-file-missing");
+      .get(r.batch_id, r.file_id);
+    if (!v) fail("intake-file-missing");
     return file(v);
   }
   if (r.op === "files") {
     const rows = db
       .prepare(
-        `SELECT f.*,CASE WHEN f.status='pending' AND EXISTS(SELECT 1 FROM literature_assets a WHERE a.literature_id=f.literature_id AND a.role='primary-pdf') THEN 'hash' ELSE f.action END AS action FROM import_files f WHERE session_id=? AND file_id>? ${r.pending ? "AND status='pending'" : ""} ORDER BY file_id LIMIT ?`,
+        `SELECT f.*,CASE WHEN f.status='pending' AND EXISTS(SELECT 1 FROM literature_assets a WHERE a.literature_id=f.literature_id AND a.role='primary-pdf') THEN 'hash' ELSE f.action END AS action FROM import_files f WHERE batch_id=? AND file_id>? ${r.pending ? "AND status='pending'" : ""} ORDER BY file_id LIMIT ?`,
       )
-      .all(r.session_id, r.cursor ?? "", r.limit + 1);
+      .all(r.batch_id, r.cursor ?? "", r.limit + 1);
     return {
       items: rows.slice(0, r.limit).map(file),
       next_cursor:
@@ -335,9 +406,9 @@ export function readImportStorage(db: DatabaseSync, r: ImportRead): unknown {
   const after = r.cursor === null ? [-1, -1] : r.cursor.split(":").map(Number);
   const rows = db
     .prepare(
-      "SELECT * FROM import_record_results WHERE session_id=? AND (sequence,record_index)>(?,?) ORDER BY sequence,record_index LIMIT ?",
+      "SELECT * FROM import_record_results WHERE batch_id=? AND (sequence,record_index)>(?,?) ORDER BY sequence,record_index LIMIT ?",
     )
-    .all(r.session_id, after[0]!, after[1]!, r.limit + 1);
+    .all(r.batch_id, after[0]!, after[1]!, r.limit + 1);
   const last = rows[r.limit - 1];
   return {
     items: rows.slice(0, r.limit).map(result),
@@ -346,6 +417,76 @@ export function readImportStorage(db: DatabaseSync, r: ImportRead): unknown {
         ? `${last.sequence}:${last.record_index}`
         : null,
   };
+}
+
+export function insertImportBatch(
+  db: DatabaseSync,
+  r: Extract<ImportWrite, { op: "create" }>,
+  intakeWrite: (db: DatabaseSync, r: IntakeWrite) => unknown,
+) {
+  if (
+    db
+      .prepare("SELECT 1 FROM import_sessions WHERE library_key=? AND active=1")
+      .get(r.library_key)
+  )
+    fail("intake-source-busy");
+  const l = r.source,
+    b = r.batch;
+  db.prepare(
+    "INSERT INTO import_libraries VALUES(?,?,?,?,?,?) ON CONFLICT(library_key) DO NOTHING",
+  ).run(
+    r.library_key,
+    l.system,
+    l.library_id,
+    r.identity_scope,
+    l.name,
+    b.created_at,
+  );
+  intakeWrite(db, {
+    operation: "create",
+    batch: b,
+    owner_pid: b.confirmation === "per-item" ? null : process.pid,
+  });
+  db.prepare(
+    "INSERT INTO import_sessions(batch_id,library_key,library_json,format,scope,file_name,import_user_tags,active,created_at,updated_at,metadata_complete,record_count,phase) VALUES(?,?,?,?,?,?,?,1,?,?,?,0,?)",
+  ).run(
+    b.batch_id,
+    r.library_key,
+    JSON.stringify(l),
+    r.format,
+    r.scope,
+    r.file_name,
+    Number(r.import_user_tags),
+    b.created_at,
+    b.created_at,
+    Number(b.confirmation === "per-item"),
+    b.confirmation === "per-item" ? "files" : "metadata",
+  );
+}
+export function insertImportFiles(
+  db: DatabaseSync,
+  batchId: string,
+  itemId: string,
+  files: readonly ImportFileStatus[],
+) {
+  for (const f of files)
+    db.prepare(
+      "INSERT INTO import_files(file_id,batch_id,item_id,external_id,record_external_id,literature_id,file_name,size_bytes,expected_sha256,action,status,sha256,reason,source_url) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,NULL) ON CONFLICT(batch_id,external_id) DO NOTHING",
+    ).run(
+      f.file_id,
+      batchId,
+      itemId,
+      f.external_id,
+      f.record_external_id,
+      f.literature_id,
+      f.file_name,
+      f.size_bytes,
+      f.expected_sha256,
+      f.action,
+      f.status,
+      f.sha256,
+      f.reason,
+    );
 }
 export function writeImportStorage(
   db: DatabaseSync,
@@ -356,50 +497,14 @@ export function writeImportStorage(
   try {
     let value: unknown = true;
     if (r.op === "create") {
-      const s = r.session,
-        l = s.library;
-      if (
-        db
-          .prepare(
-            "SELECT 1 FROM import_sessions WHERE library_key=? AND state IN ('collecting','awaiting-confirmation','importing')",
-          )
-          .get(s.library_key)
-      )
-        fail("import-library-busy");
-      db.prepare(
-        "INSERT INTO import_libraries VALUES(?,?,?,?,?,?) ON CONFLICT(library_key) DO NOTHING",
-      ).run(
-        s.library_key,
-        l.system,
-        l.library_id,
-        r.identity_scope,
-        l.name,
-        s.created_at,
-      );
-      db.prepare(
-        "INSERT INTO import_sessions(session_id,library_key,library_json,format,scope,file_name,import_user_tags,state,created_at,updated_at,initiated_by,origin) VALUES(?,?,?,?,?,?,?,'collecting',?,?,?,?)",
-      ).run(
-        s.session_id,
-        s.library_key,
-        JSON.stringify(l),
-        s.format,
-        s.scope,
-        s.file_name,
-        Number(s.import_user_tags),
-        s.created_at,
-        s.updated_at,
-        s.initiated_by,
-        r.origin,
-      );
+      insertImportBatch(db, r, intakeWrite);
     } else if (r.op === "mapping") map(db, r.mapping);
     else if (r.op === "part") {
-      live(db, r.session_id, ["collecting", "awaiting-confirmation"]);
-      const old = parts(db, r.session_id).find(
-        (p) => p.sequence === r.sequence,
-      );
+      live(db, r.batch_id, ["collecting", "awaiting-confirmation"]);
+      const old = parts(db, r.batch_id).find((p) => p.sequence === r.sequence);
       db.prepare(
-        "DELETE FROM import_parts WHERE session_id=? AND sequence=?",
-      ).run(r.session_id, r.sequence);
+        "DELETE FROM import_parts WHERE batch_id=? AND sequence=?",
+      ).run(r.batch_id, r.sequence);
       db.prepare(
         "INSERT INTO artifact_objects VALUES(?,?,?,?,?) ON CONFLICT(artifact_id) DO NOTHING",
       ).run(
@@ -410,7 +515,7 @@ export function writeImportStorage(
         r.part.reference,
       );
       db.prepare("INSERT INTO import_parts VALUES(?,?,?,?)").run(
-        r.session_id,
+        r.batch_id,
         r.sequence,
         r.artifact_id,
         r.records,
@@ -420,82 +525,87 @@ export function writeImportStorage(
         if (
           db
             .prepare(
-              "SELECT 1 FROM import_staged_keys WHERE session_id=? AND object_kind=? AND external_id=?",
+              "SELECT 1 FROM import_staged_keys WHERE batch_id=? AND object_kind=? AND external_id=?",
             )
-            .get(r.session_id, key.kind, key.id)
+            .get(r.batch_id, key.kind, key.id)
         )
-          fail("import-data-conflict");
-        put.run(r.session_id, key.kind, key.id, r.sequence);
+          fail("intake-data-conflict");
+        put.run(r.batch_id, key.kind, key.id, r.sequence);
       }
       const count = Number(
         db
           .prepare(
-            "SELECT coalesce(sum(record_count),0) n FROM import_parts WHERE session_id=?",
+            "SELECT coalesce(sum(record_count),0) n FROM import_parts WHERE batch_id=?",
           )
-          .get(r.session_id)!.n,
+          .get(r.batch_id)!.n,
       );
       const bytes = Number(
         db
           .prepare(
-            "SELECT coalesce(sum(a.byte_size),0) n FROM import_parts p JOIN artifact_objects a USING(artifact_id) WHERE session_id=?",
+            "SELECT coalesce(sum(a.byte_size),0) n FROM import_parts p JOIN artifact_objects a USING(artifact_id) WHERE batch_id=?",
           )
-          .get(r.session_id)!.n,
+          .get(r.batch_id)!.n,
       );
       const groups = Number(
         db
           .prepare(
-            "SELECT count(*) n FROM import_staged_keys WHERE session_id=? AND object_kind='group'",
+            "SELECT count(*) n FROM import_staged_keys WHERE batch_id=? AND object_kind='group'",
           )
-          .get(r.session_id)!.n,
+          .get(r.batch_id)!.n,
       );
       if (
         count > IMPORT_LIMITS.records ||
-        bytes > IMPORT_LIMITS.session_bytes ||
+        bytes > IMPORT_LIMITS.batch_bytes ||
         groups > IMPORT_LIMITS.groups
       )
-        fail("import-session-limit");
+        fail("intake-batch-limit");
       db.prepare(
-        "UPDATE import_sessions SET record_count=?,state='awaiting-confirmation',updated_at=? WHERE session_id=?",
-      ).run(count, r.now, r.session_id);
+        "UPDATE import_sessions SET record_count=?,updated_at=? WHERE batch_id=?",
+      ).run(count, r.now, r.batch_id);
+      db.prepare(
+        "UPDATE intake_batches SET state='awaiting-confirmation' WHERE batch_id=?",
+      ).run(r.batch_id);
       if (old)
         db.prepare(
           "DELETE FROM artifact_objects WHERE artifact_id=? AND NOT EXISTS(SELECT 1 FROM import_parts WHERE artifact_id=?)",
         ).run(old.artifact_id, old.artifact_id);
     } else if (r.op === "begin") {
-      const s = live(db, r.session_id, [
+      const s = live(db, r.batch_id, [
         "awaiting-confirmation",
-        "importing",
-        "completed",
+        "running",
+        "finished",
       ]);
       if (s.state === "awaiting-confirmation") {
-        intakeWrite(db, {
-          operation: "create",
-          batch: r.batch,
-          owner_pid: process.pid,
-        });
         db.prepare(
-          "UPDATE import_sessions SET state='importing',confirmed_at=?,last_file_at=?,updated_at=?,batch_id=?,summary_json=? WHERE session_id=?",
-        ).run(
-          r.now,
-          r.now,
-          r.now,
-          r.batch.batch_id,
-          JSON.stringify(r.summary),
-          r.session_id,
-        );
-      } else if (s.state === "importing")
+          "UPDATE intake_batches SET state='running',confirmed_at=?,owner_pid=? WHERE batch_id=?",
+        ).run(r.now, process.pid, r.batch_id);
         db.prepare(
-          "UPDATE intake_batches SET owner_pid=? WHERE batch_id=? AND status='running'",
-        ).run(process.pid, s.batch_id!);
+          "UPDATE import_sessions SET phase='metadata',last_file_at=?,updated_at=?,summary_json=? WHERE batch_id=?",
+        ).run(r.now, r.now, JSON.stringify(r.summary), r.batch_id);
+      }
     } else if (r.op === "result") {
-      live(db, r.session_id, ["importing"]);
+      live(db, r.batch_id, ["running"]);
       const i = r.item;
       db.prepare(
-        "INSERT INTO import_record_results VALUES(?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+        "INSERT INTO intake_items(item_id,batch_id,origin,sequence,record_index,external_id,title,disposition,literature_id,created_at) VALUES(?,?,'data',?,?,?,?,?,?,?) ON CONFLICT(item_id) DO NOTHING",
       ).run(
-        r.session_id,
+        r.item_id,
+        r.batch_id,
         i.sequence,
         i.record_index,
+        i.external_id,
+        r.title,
+        i.disposition,
+        i.literature_id,
+        r.now,
+      );
+      db.prepare(
+        "INSERT INTO import_record_results(batch_id,sequence,record_index,item_id,external_id,disposition,literature_id,meta_literature_id,reason) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+      ).run(
+        r.batch_id,
+        i.sequence,
+        i.record_index,
+        r.item_id,
         i.external_id,
         i.disposition,
         i.literature_id,
@@ -503,59 +613,32 @@ export function writeImportStorage(
         i.reason,
       );
       if (r.mapping) map(db, r.mapping);
-      for (const f of r.files)
-        db.prepare(
-          "INSERT INTO import_files VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id,external_id) DO NOTHING",
-        ).run(
-          f.file_id,
-          r.session_id,
-          f.external_id,
-          f.record_external_id,
-          f.literature_id,
-          f.file_name,
-          f.size_bytes,
-          f.expected_sha256,
-          f.action,
-          f.status,
-          f.sha256,
-          f.reason,
-        );
+      insertImportFiles(db, r.batch_id, r.item_id, r.files);
       db.prepare(
-        "UPDATE import_sessions SET updated_at=? WHERE session_id=?",
-      ).run(r.now, r.session_id);
+        "UPDATE import_sessions SET updated_at=? WHERE batch_id=?",
+      ).run(r.now, r.batch_id);
     } else if (r.op === "metadata-done") {
-      const s = live(db, r.session_id, ["importing"]);
-      if (s.metadata_complete !== 1) {
-        const bad = r.summary.records.conflicts + r.summary.records.rejected,
-          good =
-            r.summary.records.created +
-            r.summary.records.enriched +
-            r.summary.records.matched;
-        intakeWrite(db, {
-          operation: "finish",
-          batch_id: s.batch_id as IntakeBatch["batch_id"],
-          status: bad ? (good ? "partial" : "failed") : "completed",
-          discovery_run_id: null,
-          source_failures: 0,
-          rejected: bad,
-        });
-        db.prepare(
-          "UPDATE import_sessions SET metadata_complete=1,summary_json=?,updated_at=? WHERE session_id=?",
-        ).run(JSON.stringify(r.summary), r.now, r.session_id);
-      }
+      live(db, r.batch_id, ["running"]);
+      db.prepare(
+        "UPDATE import_sessions SET metadata_complete=1,phase='files',summary_json=?,updated_at=? WHERE batch_id=?",
+      ).run(JSON.stringify(r.summary), r.now, r.batch_id);
+      db.prepare("UPDATE intake_batches SET rejected=? WHERE batch_id=?").run(
+        r.summary.records.rejected,
+        r.batch_id,
+      );
     } else if (r.op === "file-result") {
-      const s = live(db, r.session_id, ["importing"]);
+      const s = live(db, r.batch_id, ["running"]);
       const old = db
-        .prepare("SELECT * FROM import_files WHERE session_id=? AND file_id=?")
-        .get(r.session_id, r.file_id);
-      if (!old) fail("import-file-missing");
+        .prepare("SELECT * FROM import_files WHERE batch_id=? AND file_id=?")
+        .get(r.batch_id, r.file_id);
+      if (!old) fail("intake-file-missing");
       if (old.status === "pending") {
         db.prepare(
           "UPDATE import_files SET status=?,sha256=?,reason=? WHERE file_id=?",
         ).run(r.status, r.sha256, r.reason, r.file_id);
         db.prepare(
-          "UPDATE import_sessions SET updated_at=?,last_file_at=? WHERE session_id=?",
-        ).run(r.now, r.now, r.session_id);
+          "UPDATE import_sessions SET updated_at=?,last_file_at=? WHERE batch_id=?",
+        ).run(r.now, r.now, r.batch_id);
         if (
           r.internal_id &&
           (JSON.parse(str(s.library_json)) as ImportLibrary).identity !==
@@ -568,50 +651,48 @@ export function writeImportStorage(
             internal_id: r.internal_id,
             content_sha256: r.sha256,
             observation_id: null,
+            state: "settled",
           });
       }
     } else if (r.op === "finish") {
-      const s = row(db, r.session_id);
-      if (s.state !== "completed" && s.state !== "cancelled") {
-        if (
-          s.batch_id !== null &&
-          db
-            .prepare("SELECT status FROM intake_batches WHERE batch_id=?")
-            .get(s.batch_id!)?.status === "running"
-        ) {
-          const bad = Number(
-            db
-              .prepare(
-                "SELECT count(*) n FROM import_record_results WHERE session_id=? AND disposition IN ('conflict','rejected')",
-              )
-              .get(r.session_id)!.n,
-          );
-          intakeWrite(db, {
-            operation: "finish",
-            batch_id: s.batch_id as IntakeBatch["batch_id"],
-            status: "interrupted",
-            discovery_run_id: null,
-            source_failures: 0,
-            rejected: bad,
-          });
-        }
+      const s = row(db, r.batch_id);
+      if (!["finished", "cancelled", "withdrawn"].includes(str(s.state))) {
+        const counts = db
+          .prepare(
+            "SELECT count(*) n,coalesce(sum(disposition IN ('created','enriched','matched','restored')),0) good,coalesce(sum(disposition IN ('conflict','rejected','pending-decision')),0) bad,coalesce(sum(disposition='rejected'),0) rejected FROM import_record_results WHERE batch_id=?",
+          )
+          .get(r.batch_id)!;
+        const files = db
+          .prepare(
+            "SELECT count(*) n FROM import_files WHERE batch_id=? AND status IN ('pending','conflict')",
+          )
+          .get(r.batch_id)!.n;
+        const result =
+          r.state === "cancelled"
+            ? null
+            : s.metadata_complete !== 1
+              ? "interrupted"
+              : !Number(counts.good)
+                ? "failed"
+                : Number(counts.bad) + Number(files)
+                  ? "partial"
+                  : "completed";
         db.prepare(
-          "UPDATE import_sessions SET state=?,finished_at=?,updated_at=?,summary_json=coalesce(?,summary_json) WHERE session_id=?",
+          "UPDATE intake_batches SET state=?,result=?,finished_at=?,owner_pid=NULL,rejected=? WHERE batch_id=?",
+        ).run(r.state, result, r.now, Number(counts.rejected), r.batch_id);
+        db.prepare(
+          "UPDATE import_sessions SET active=0,phase='closing',updated_at=?,summary_json=coalesce(?,summary_json) WHERE batch_id=?",
         ).run(
-          r.state,
-          r.now,
           r.now,
           r.summary === null ? null : JSON.stringify(r.summary),
-          r.session_id,
+          r.batch_id,
         );
       }
     } else {
-      const s = live(db, r.session_id, ["completed", "cancelled"]);
+      const s = live(db, r.batch_id, ["finished", "cancelled", "withdrawn"]);
       void s;
-      const retired = parts(db, r.session_id);
-      db.prepare("DELETE FROM import_parts WHERE session_id=?").run(
-        r.session_id,
-      );
+      const retired = parts(db, r.batch_id);
+      db.prepare("DELETE FROM import_parts WHERE batch_id=?").run(r.batch_id);
       for (const p of retired)
         db.prepare(
           "DELETE FROM artifact_objects WHERE artifact_id=? AND NOT EXISTS(SELECT 1 FROM import_parts WHERE artifact_id=?)",

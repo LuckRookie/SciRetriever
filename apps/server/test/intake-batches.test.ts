@@ -97,6 +97,11 @@ it("counts distinct created, enriched and matched members, supports rename/reset
       enriched: 1,
       matched: 1,
       rejected: 0,
+      restored: 0,
+      conflicts: 0,
+      possible_duplicates: 0,
+      pending_decision: 0,
+      needs_metadata: 0,
     });
     await app.database.writeIntake({
       operation: "rename",
@@ -192,7 +197,8 @@ it("persists accepted members when discovery stops before publication and identi
     );
     expect(page.items[0]).toMatchObject({
       label: "interrupted\nAND scope",
-      status: "interrupted",
+      state: "finished",
+      result: "interrupted",
       counts: { hits: 1, created: 1 },
     });
     const dead = await startIntake(app.database, "import", "dead", {
@@ -206,7 +212,7 @@ it("persists accepted members when discovery stops before publication and identi
       batch: { ...b, batch_id: deadId },
       owner_pid: 2147483647,
     });
-    expect((await get(app, deadId)).status).toBe("interrupted");
+    expect((await get(app, deadId)).result).toBe("interrupted");
   }));
 it("filters batches with OR and both keyword layers with case-insensitive AND; facets cover the whole result and count papers once", () =>
   fixture(async (app, home) => {

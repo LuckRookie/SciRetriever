@@ -4673,9 +4673,9 @@ port.on("message", (message: WorkerMessage) => {
             typeof error === "object" &&
             "code" in error &&
             typeof error.code === "string" &&
-            error.code.startsWith("capture-")
+            error.code.startsWith("intake-")
               ? error.code
-              : "capture-unavailable";
+              : "intake-unavailable";
           value = { ok: false, code };
         }
         break;
@@ -4687,9 +4687,14 @@ port.on("message", (message: WorkerMessage) => {
             ok: true,
             value:
               command.kind === "import_read"
-                ? readTransaction(() =>
-                    importModule.readImportStorage(db, command.action),
-                  )
+                ? readTransaction(() => {
+                    if (
+                      command.action.op === "batch" ||
+                      command.action.op === "sessions"
+                    )
+                      registerLibraryStates();
+                    return importModule.readImportStorage(db, command.action);
+                  })
                 : importModule.writeImportStorage(
                     db,
                     command.action,
@@ -4703,9 +4708,9 @@ port.on("message", (message: WorkerMessage) => {
             typeof error === "object" &&
             "code" in error &&
             typeof error.code === "string" &&
-            error.code.startsWith("import-")
+            error.code.startsWith("intake-")
               ? error.code
-              : "import-unavailable";
+              : "intake-unavailable";
           value = { ok: false, code };
         }
         break;

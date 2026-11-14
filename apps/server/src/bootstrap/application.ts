@@ -1901,8 +1901,6 @@ async function createApplicationOwned(
           database,
           identity,
           folders,
-          importSessions.fileChannel,
-          writes,
           async (literatureId, captureId, signal) => {
             if (!metadata.lookup_selection.length || !processingTasks)
               return {
@@ -1944,7 +1942,7 @@ async function createApplicationOwned(
           },
           options.capture,
         )),
-        ["save", "upload", "reportHash"],
+        ["save"],
         admission,
       ),
       restartAdmission: admission,

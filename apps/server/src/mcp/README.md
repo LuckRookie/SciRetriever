@@ -12,7 +12,7 @@
 
 查询、任务投影、书目导入、提取交付与配置操作复用 `entry/*-operations.ts`。普通配置状态/预览可只读调用；配置发布、凭据变更、probe 与维护工具要求 `--maintenance`。PDF 输入采用限额分块缓冲，文件读取使用固定 hash 与有界块；`--workbench-url` 显式连接活 Web owner，提供 Browser 协作与服务任务调用。
 
-HTTP `/mcp` 每次请求重新验证设备连接，协议 session ID 绑定 connection_id。read 与 operate 不互相隐含；配置、凭据、设备管理、Browser/runtime 控制以及书目/PDF 输入不经此传输。导入输入走相邻的 `workbench/import-http.ts`，`import_session_status` 和 `import_session_report` 两端共用只读导入服务。HTTP 请求上下文在交 SDK 前移除认证与非协议头；操作身份为 `mcp:device:<connection_id>`。
+HTTP `/mcp` 每次请求重新验证设备连接，协议 session ID 绑定 connection_id。read 与 operate 不互相隐含；配置、凭据、设备管理、Browser/runtime 控制以及书目/PDF 输入不经此传输。入库输入走相邻的 `workbench/import-http.ts`，`intake_batch_status` 和 `intake_batch_report` 两端共用只读批次服务。HTTP 请求上下文在交 SDK 前移除认证与非协议头；操作身份为 `mcp:device:<connection_id>`。
 
 会话有数量/空闲上限，Web 撤销立即中断连接并取消在途调用，已提交任务仍由原 owner 管理。工作台关闭先排空 MCP，再关闭共享查询和业务服务。
 

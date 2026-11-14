@@ -29,10 +29,17 @@ it("keeps connection codes versioned and accepts only explicit IPv4/localhost HT
     parseDevicePairingRequest({
       address: "http://localhost:4174",
       name: " desktop ",
-      purposes: ["read", "import"],
+      purposes: ["read", "intake"],
     }),
-  ).toMatchObject({ name: "desktop", purposes: ["import", "read"] });
-  for (const purposes of [[], ["admin"], ["read", "read"], "read"])
+  ).toMatchObject({ name: "desktop", purposes: ["intake", "read"] });
+  for (const purposes of [
+    [],
+    ["admin"],
+    ["capture"],
+    ["import"],
+    ["read", "read"],
+    "read",
+  ])
     expect(() =>
       parseDevicePairingRequest({
         address: "http://localhost:4174",

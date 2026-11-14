@@ -222,7 +222,7 @@ it("keeps import status/report read-only and shared with stdio, including report
     const s = await f.app.importSessions.create(
       {
         format: "csl-json",
-        library: {
+        source: {
           system: "synthetic",
           library_id: "global",
           identity: "global",
@@ -233,11 +233,11 @@ it("keeps import status/report read-only and shared with stdio, including report
       { kind: "local", origin: "cli" },
     );
     await f.app.importSessions.putData(
-      s.session_id,
+      s.batch_id,
       0,
       '[{"id":"one","title":"Paper one"},{"id":"two","title":"Paper two"}]',
     );
-    await f.app.importSessions.confirm(s.session_id);
+    await f.app.importSessions.confirm(s.batch_id);
     const db = new DatabaseSync(join(f.home, "catalog.sqlite"), {
       readOnly: true,
     });
@@ -246,9 +246,35 @@ it("keeps import status/report read-only and shared with stdio, including report
     await local.connect(transport);
     const paired = await f.token(["read"]),
       remote = await f.connect(paired.token);
-    for (const name of ["import_session_status", "import_session_report"]) {
+    for (const old of ["import_session_status", "import_session_report"]) {
+      expect(
+        (
+          await local.callTool({
+            name: old,
+            arguments: { session_id: s.batch_id },
+          })
+        ).isError,
+      ).toBe(true);
+      expect(
+        (
+          await remote.client.callTool({
+            name: old,
+            arguments: { session_id: s.batch_id },
+          })
+        ).isError,
+      ).toBe(true);
+    }
+    expect(
+      (
+        await local.callTool({
+          name: "intake_batch_status",
+          arguments: { session_id: s.batch_id },
+        })
+      ).isError,
+    ).toBe(true);
+    for (const name of ["intake_batch_status", "intake_batch_report"]) {
       const args = {
-        session_id: s.session_id,
+        batch_id: s.batch_id,
         ...(name.endsWith("report") ? { limit: 1 } : {}),
       };
       const actual = await remote.client.callTool({ name, arguments: args });
@@ -300,7 +326,7 @@ it("refuses missing/invalid/purpose-only credentials and every forbidden tool on
     };
     for (const secret of [null, "invalid"])
       expect((await f.rpc(secret, init)).status).toBe(401);
-    for (const purpose of ["capture", "import"] as const) {
+    for (const purpose of ["intake"] as const) {
       const paired = await f.token([purpose]);
       expect((await f.rpc(paired.token, init)).status).toBe(403);
     }
@@ -625,7 +651,13 @@ it("runs an operate discovery through the existing task owner with MCP/device at
         operation: "get",
         request: { batch_id: result.intake_batch_id },
       }),
-    ).toMatchObject({ origin: "mcp", kind: "topic", status: "completed" });
+    ).toMatchObject({
+      origin: "mcp",
+      kind: "topic",
+      state: "finished",
+      result: "completed",
+      initiated_by: `device:${paired.connection.connection_id}`,
+    });
   } finally {
     await f.close();
   }

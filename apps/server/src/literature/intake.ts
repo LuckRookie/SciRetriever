@@ -27,19 +27,41 @@ export async function startIntake(
   request: IntakeBatch["request"],
   origin?: IntakeOrigin,
 ) {
-  const id = parseIntakeBatchId(randomUUID());
+  const id = parseIntakeBatchId(randomUUID()),
+    entryOrigin = intakeOrigin(origin);
+  const device =
+    /(?:^|:)device:([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/u.exec(
+      activityContext().actor,
+    );
   const batch = parseIntakeBatch({
     batch_id: id,
     kind,
     label,
     default_label: label,
     renamed: false,
-    origin: intakeOrigin(origin),
+    origin: entryOrigin,
     created_at: new Date().toISOString(),
     finished_at: null,
-    status: "running",
+    state: "running",
+    result: null,
+    confirmation: null,
+    confirmed_at: null,
+    initiated_by: device ? `device:${device[1]}` : `local:${entryOrigin}`,
+    source: null,
+    progress: null,
     request,
-    counts: { hits: 0, created: 0, enriched: 0, matched: 0, rejected: 0 },
+    counts: {
+      hits: 0,
+      created: 0,
+      enriched: 0,
+      matched: 0,
+      rejected: 0,
+      restored: 0,
+      conflicts: 0,
+      possible_duplicates: 0,
+      pending_decision: 0,
+      needs_metadata: 0,
+    },
     pdf: { has_pdf: 0, unavailable: 0, pending: 0 },
     discovery_run_id: null,
     source_failures: 0,
@@ -54,7 +76,7 @@ export async function startIntake(
 export function finishIntake(
   database: SqliteWorker,
   batch_id: IntakeBatchId,
-  status: IntakeBatch["status"],
+  result: NonNullable<IntakeBatch["result"]>,
   discovery_run_id: string | null = null,
   source_failures = 0,
   rejected = 0,
@@ -62,7 +84,7 @@ export function finishIntake(
   return database.writeIntake({
     operation: "finish",
     batch_id,
-    status,
+    result,
     discovery_run_id,
     source_failures,
     rejected,

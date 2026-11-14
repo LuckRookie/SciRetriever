@@ -23,8 +23,12 @@ import {
 import { createApplication } from "../src/bootstrap/application.js";
 import { initializeCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
 import { DeviceConnectionService } from "../src/workbench/device-connections.js";
+import { runDeviceStorage } from "../src/storage/sqlite/device-connection-engine.js";
+import { DEVICE_CONNECTION_SCHEMA } from "../src/storage/sqlite/schema.js";
 import {
   DeviceRouteRegistry,
+  type DeviceRoute,
+  intakeArtifactRoutes,
   deviceMaterialInUrl,
 } from "../src/workbench/device-http.js";
 import { startWorkbenchHttp } from "../src/workbench/http.js";
@@ -33,6 +37,104 @@ import {
   workbenchLogin,
   workbenchTestAccess,
 } from "./workbench-auth-fixture.js";
+
+it("allows thirty exchanges per peer without a global bucket and evicts the oldest of 256 buckets", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    for (const sql of DEVICE_CONNECTION_SCHEMA) db.exec(sql);
+    const base = Date.parse("2026-11-15T00:00:00Z");
+    const exchange = (peer: string, ms: number) =>
+      runDeviceStorage(db, {
+        kind: "exchange",
+        code_sha256: "a".repeat(64),
+        token_sha256: "b".repeat(64),
+        peer_sha256: peer,
+        now: new Date(ms).toISOString(),
+      });
+    for (let n = 0; n < 30; n++)
+      expect(exchange("first", base)).toEqual({
+        code: "device-pairing-invalid",
+      });
+    expect(exchange("first", base + 1)).toEqual({
+      code: "device-exchange-rate-limited",
+    });
+    for (let n = 1; n < 256; n++)
+      expect(exchange(`peer-${n}`, base + n)).toEqual({
+        code: "device-pairing-invalid",
+      });
+    expect(
+      db.prepare("SELECT count(*) n FROM device_exchange_limits").get()!.n,
+    ).toBe(256);
+    expect(exchange("next", base + 256)).toEqual({
+      code: "device-pairing-invalid",
+    });
+    expect(
+      db
+        .prepare("SELECT 1 FROM device_exchange_limits WHERE bucket='first'")
+        .get(),
+    ).toBeUndefined();
+    expect(
+      db.prepare("SELECT count(*) n FROM device_exchange_limits").get()!.n,
+    ).toBe(256);
+    expect(exchange("peer-1", base + 60001)).toEqual({
+      code: "device-pairing-invalid",
+    });
+    expect(
+      db
+        .prepare(
+          "SELECT attempts FROM device_exchange_limits WHERE bucket='peer-1'",
+        )
+        .get()!.attempts,
+    ).toBe(1);
+  } finally {
+    db.close();
+  }
+});
+
+it("coalesces last_used_at writes for five minutes while checking revocation on every authentication", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    for (const sql of DEVICE_CONNECTION_SCHEMA) db.exec(sql);
+    const base = Date.parse("2026-11-15T00:00:00Z"),
+      token = "a".repeat(64);
+    db.prepare(
+      "INSERT INTO device_connections VALUES(?,?,?,?,?,?,NULL,NULL)",
+    ).run(
+      "synthetic",
+      "Synthetic",
+      '["read"]',
+      token,
+      new Date(base).toISOString(),
+      new Date(base).toISOString(),
+    );
+    const authenticate = (ms: number) =>
+      runDeviceStorage(db, {
+        kind: "authenticate",
+        token_sha256: token,
+        now: new Date(ms).toISOString(),
+      });
+    expect(authenticate(base)).toHaveProperty(
+      "connection.last_used_at",
+      new Date(base).toISOString(),
+    );
+    const writes = db.prepare("SELECT total_changes() n").get()!.n;
+    expect(authenticate(base + 299999)).toHaveProperty(
+      "connection.last_used_at",
+      new Date(base).toISOString(),
+    );
+    expect(db.prepare("SELECT total_changes() n").get()!.n).toBe(writes);
+    expect(authenticate(base + 300000)).toHaveProperty(
+      "connection.last_used_at",
+      new Date(base + 300000).toISOString(),
+    );
+    db.prepare("UPDATE device_connections SET revoked_at=?").run(
+      new Date(base + 300001).toISOString(),
+    );
+    expect(authenticate(base + 300002)).toEqual({ code: "device-revoked" });
+  } finally {
+    db.close();
+  }
+});
 
 async function fixture() {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-devices-"));
@@ -44,10 +146,10 @@ async function fixture() {
   let service = new DeviceConnectionService(app.database, () => now);
   const session = new ProductionWorkbenchSession(null, undefined);
   const routeHits: string[] = [];
-  const routes = new DeviceRouteRegistry(
-    (["capture", "import", "read", "operate"] as const).map((p) => ({
+  const routes = new DeviceRouteRegistry([
+    ...(["intake", "read", "operate"] as const).map<DeviceRoute>((p) => ({
       method: "POST" as const,
-      path: `/api/v1/import/test-${p}/:id`,
+      path: `/api/v1/intake/test-${p}/:id`,
       purposes: [p],
       async handle(_req, res, connection, parameters) {
         routeHits.push(p);
@@ -60,7 +162,8 @@ async function fixture() {
         );
       },
     })),
-  );
+    ...intakeArtifactRoutes(pathToFileURL(join(home, "download") + "/")),
+  ]);
   const artifact = join(home, "download");
   await mkdir(artifact);
   const server = await startWorkbenchHttp({
@@ -73,7 +176,6 @@ async function fixture() {
     devices: {
       service,
       routes,
-      artifactDirectory: pathToFileURL(artifact + "/"),
     },
   });
   const send = (
@@ -121,7 +223,7 @@ async function fixture() {
         ...extra,
       },
     );
-  const create = async (purposes: readonly DevicePurpose[] = ["import"]) => {
+  const create = async (purposes: readonly DevicePurpose[] = ["intake"]) => {
     const response = await web("/api/v1/device-connections/pairings", {
       address: server.origin,
       name: "Fixture desktop",
@@ -134,7 +236,7 @@ async function fixture() {
       expires_at: string;
     };
   };
-  const pair = async (purposes: readonly DevicePurpose[] = ["import"]) => {
+  const pair = async (purposes: readonly DevicePurpose[] = ["intake"]) => {
     const pairing = await create(purposes);
     const parsed = parseDeviceConnectionCode(pairing.connection_code);
     const response = await send(
@@ -285,7 +387,7 @@ it("pairs once, counts malformed/used/expired attempts, and stores only derived 
     });
     expect(expiry.status).toBe(409);
     expect((await expiry.json()).code).toBe("device-pairing-expired");
-    for (let n = 0; n < 9; n++)
+    for (let n = 0; n < 29; n++)
       expect(
         (
           await f.send("/api/v1/device-connections/exchange", {
@@ -342,11 +444,11 @@ it("pairs once, counts malformed/used/expired attempts, and stores only derived 
 it("isolates every purpose, accepts non-Web Origin only for registered device routes, and revokes across owners immediately", async () => {
   const f = await fixture();
   try {
-    for (const purpose of ["capture", "import", "read", "operate"] as const) {
+    for (const purpose of ["intake", "read", "operate"] as const) {
       const paired = await f.pair([purpose]);
-      for (const target of ["capture", "import", "read", "operate"] as const) {
+      for (const target of ["intake", "read", "operate"] as const) {
         const response = await f.send(
-          `/api/v1/import/test-${target}/fixed`,
+          `/api/v1/intake/test-${target}/fixed`,
           {},
           {
             Authorization: `Bearer ${paired.token}`,
@@ -360,7 +462,7 @@ it("isolates every purpose, accepts non-Web Origin only for registered device ro
     const paired = await f.pair(["read", "operate"]);
     f.setNow(Date.parse("2026-11-10T12:02:00Z"));
     const used = await f.send(
-      "/api/v1/import/test-read/a",
+      "/api/v1/intake/test-read/a",
       {},
       { Authorization: `Bearer ${paired.token}` },
     );
@@ -382,7 +484,7 @@ it("isolates every purpose, accepts non-Web Origin only for registered device ro
       connection_id: paired.connection.connection_id,
     });
     const revoked = await f.send(
-      "/api/v1/import/test-read/a",
+      "/api/v1/intake/test-read/a",
       {},
       { Authorization: `Bearer ${paired.token}` },
     );
@@ -396,7 +498,7 @@ it("isolates every purpose, accepts non-Web Origin only for registered device ro
 it("never grants Web, configuration, credentials or management powers even with a valid Web cookie; refuses URL tokens", async () => {
   const f = await fixture();
   try {
-    const paired = await f.pair(["capture", "import", "read", "operate"]);
+    const paired = await f.pair(["intake", "read", "operate"]);
     const headers = {
       Authorization: `Bearer ${paired.token}`,
       Cookie: f.cookie,
@@ -428,8 +530,8 @@ it("never grants Web, configuration, credentials or management powers even with 
     expect(login.status).toBe(403);
     expect(login.headers.has("set-cookie")).toBe(false);
     for (const path of [
-      `/api/v1/import/test-read/id?token=${paired.token}`,
-      `/api/v1/import/${encodeURIComponent(paired.token)}`,
+      `/api/v1/intake/test-read/id?token=${paired.token}`,
+      `/api/v1/intake/${encodeURIComponent(paired.token)}`,
       `/?x=${encodeURIComponent(encodeURIComponent(paired.token))}`,
       `/?connection_code=${encodeURIComponent(paired.pairing.connection_code)}`,
     ]) {
@@ -437,7 +539,7 @@ it("never grants Web, configuration, credentials or management powers even with 
       expect(response.status).toBe(400);
       expect((await response.json()).code).toBe("device-token-in-url");
     }
-    const noHeader = await f.send("/api/v1/device-connections/skill");
+    const noHeader = await f.send("/api/v1/intake/skill");
     expect(noHeader.status).toBe(401);
     for (const alternative of [
       { body: { token: paired.token }, headers: {} },
@@ -445,7 +547,7 @@ it("never grants Web, configuration, credentials or management powers even with 
     ]) {
       const before = f.routeHits.length;
       const response = await f.send(
-        "/api/v1/import/test-read/id",
+        "/api/v1/intake/test-read/id",
         alternative.body,
         alternative.headers,
       );
@@ -476,7 +578,7 @@ it("never grants Web, configuration, credentials or management powers even with 
     });
     expect(unsafeName.status).toBe(400);
     const unknown = await f.send(
-      "/api/v1/import/test-read/a",
+      "/api/v1/intake/test-read/a",
       {},
       { Authorization: "Bearer srd1_" + "A".repeat(43) },
     );
@@ -522,23 +624,66 @@ it("keeps Browser WebSocket admission separate even when a device also has a val
   }
 }, 30000);
 
+it("builds the downloadable agent guide and skill for the registered intake routes", async () => {
+  const f = await fixture();
+  try {
+    const source = join(f.home, "synthetic-skill");
+    await mkdir(source);
+    await writeFile(
+      join(source, "SKILL.md"),
+      "---\nname: synthetic\n---\n\n# Synthetic guide\n",
+    );
+    await writeFile(join(source, "import.md"), "Synthetic intake instructions");
+    const { buildAgentAccess } = (await import(
+      new URL("../../../scripts/build-agent-access.mjs", import.meta.url).href
+    )) as {
+      buildAgentAccess(source: string, target: string): Promise<string>;
+    };
+    await buildAgentAccess(source, f.artifact);
+    const paired = await f.pair(["intake"]);
+    const headers = { Authorization: `Bearer ${paired.token}` };
+    const guide = await f.send(
+      "/api/v1/intake/agent-guide",
+      undefined,
+      headers,
+    );
+    expect(guide.status).toBe(200);
+    const text = await guide.text();
+    expect(text).toContain("# Synthetic guide");
+    expect(text).toContain("Synthetic intake instructions");
+    expect(text).toContain("/api/v1/intake/skill");
+    expect(text).not.toContain("/api/v1/device-connections/");
+    expect(text).not.toContain("name: synthetic");
+    const skill = await f.send("/api/v1/intake/skill", undefined, headers);
+    expect(skill.status).toBe(200);
+    expect(Buffer.from(await skill.arrayBuffer()).subarray(0, 4)).toEqual(
+      Buffer.from([80, 75, 3, 4]),
+    );
+    await expect(
+      readFile(join(f.artifact, "instructions.md")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    await f.close();
+  }
+}, 30000);
+
 it("serves only authenticated bounded build artifacts, reports their absence, and protects registry boundaries", async () => {
   const f = await fixture();
   try {
-    const paired = await f.pair(["capture"]),
+    const paired = await f.pair(["intake"]),
       headers = {
         Authorization: `Bearer ${paired.token}`,
         Origin: "chrome-extension://fixture",
       };
     const missing = await f.send(
-      "/api/v1/device-connections/instructions",
+      "/api/v1/intake/agent-guide",
       undefined,
       headers,
     );
     expect(missing.status).toBe(503);
     expect((await missing.json()).code).toBe("device-artifact-unavailable");
     await writeFile(
-      join(f.artifact, "instructions.md"),
+      join(f.artifact, "agent-guide.md"),
       "Synthetic instructions only",
     );
     await writeFile(
@@ -546,29 +691,21 @@ it("serves only authenticated bounded build artifacts, reports their absence, an
       Buffer.from("PK synthetic package fixture"),
     );
     const instructions = await f.send(
-      "/api/v1/device-connections/instructions",
+      "/api/v1/intake/agent-guide",
       undefined,
       headers,
     );
     expect(instructions.status).toBe(200);
     expect(await instructions.text()).toBe("Synthetic instructions only");
-    const archive = await f.send(
-      "/api/v1/device-connections/skill",
-      undefined,
-      headers,
-    );
+    const archive = await f.send("/api/v1/intake/skill", undefined, headers);
     expect(archive.status).toBe(200);
     expect(archive.headers.get("content-type")).toBe("application/zip");
     await rm(join(f.artifact, "skill.zip"));
     await symlink(
-      join(f.artifact, "instructions.md"),
+      join(f.artifact, "agent-guide.md"),
       join(f.artifact, "skill.zip"),
     );
-    const unsafe = await f.send(
-      "/api/v1/device-connections/skill",
-      undefined,
-      headers,
-    );
+    const unsafe = await f.send("/api/v1/intake/skill", undefined, headers);
     expect(unsafe.status).toBe(503);
     await rm(join(f.artifact, "skill.zip"));
     await writeFile(
@@ -576,16 +713,14 @@ it("serves only authenticated bounded build artifacts, reports their absence, an
       Buffer.alloc(8 * 1024 * 1024 + 1),
     );
     expect(
-      (await f.send("/api/v1/device-connections/skill", undefined, headers))
-        .status,
+      (await f.send("/api/v1/intake/skill", undefined, headers)).status,
     ).toBe(503);
     const revoked = await f.web("/api/v1/device-connections/revoke", {
       connection_id: paired.connection.connection_id,
     });
     expect(revoked.status).toBe(200);
     expect(
-      (await f.send("/api/v1/device-connections/skill", undefined, headers))
-        .status,
+      (await f.send("/api/v1/intake/skill", undefined, headers)).status,
     ).toBe(401);
     for (const path of [
       "/auth/login",
@@ -627,7 +762,7 @@ it("serves only authenticated bounded build artifacts, reports their absence, an
   }
 }, 30000);
 
-it("shares global exchange limits, resets windows, and revokes unconsumed pairings", async () => {
+it("keeps peer exchange budgets independent, resets windows, and revokes unconsumed pairings", async () => {
   const f = await fixture();
   try {
     const pending = await f.create(["read"]);
@@ -641,7 +776,7 @@ it("shares global exchange limits, resets windows, and revokes unconsumed pairin
         "peer-0",
       ),
     ).rejects.toMatchObject({ code: "device-revoked" });
-    // Distributed invalid peers cannot evade the single global budget.
+    // An unrelated peer cannot exhaust the allowance of a new connection.
     for (let n = 1; n < 60; n++)
       await expect(f.service.exchange({}, `peer-${n}`)).rejects.toMatchObject({
         code: "device-pairing-invalid",
@@ -650,7 +785,7 @@ it("shares global exchange limits, resets windows, and revokes unconsumed pairin
       new DeviceConnectionService(f.app.database, () =>
         Date.parse("2026-11-10T12:00:00Z"),
       ).exchange({}, "new-peer"),
-    ).rejects.toMatchObject({ code: "device-exchange-rate-limited" });
+    ).rejects.toMatchObject({ code: "device-pairing-invalid" });
     f.setNow(Date.parse("2026-11-10T12:01:00Z"));
     await expect(f.service.exchange({}, "new-peer")).rejects.toMatchObject({
       code: "device-pairing-invalid",
@@ -659,7 +794,7 @@ it("shares global exchange limits, resets windows, and revokes unconsumed pairin
     try {
       expect(
         db.prepare("SELECT count(*) n FROM device_exchange_limits").get()?.n,
-      ).toBe(2);
+      ).toBe(1);
     } finally {
       db.close();
     }
@@ -672,17 +807,17 @@ it("lets authenticated Web clients download instructions and skill with the same
   const f = await fixture();
   try {
     const url = (kind: string) =>
-      `/api/v1/device-connections/${kind}?client_id=${f.clientId}`;
+      `/api/v1/intake/${kind}?client_id=${f.clientId}`;
     const headers = { Cookie: f.cookie, Origin: f.server.origin };
-    expect((await f.send(url("instructions"), undefined, headers)).status).toBe(
+    expect((await f.send(url("agent-guide"), undefined, headers)).status).toBe(
       503,
     );
     await writeFile(
-      join(f.artifact, "instructions.md"),
+      join(f.artifact, "agent-guide.md"),
       "Synthetic Web instructions",
     );
     await writeFile(join(f.artifact, "skill.zip"), Buffer.from([80, 75, 3, 4]));
-    const instructions = await f.send(url("instructions"), undefined, headers);
+    const instructions = await f.send(url("agent-guide"), undefined, headers);
     expect(instructions.status).toBe(200);
     expect(await instructions.text()).toBe("Synthetic Web instructions");
     const skill = await f.send(url("skill"), undefined, headers);
@@ -690,8 +825,7 @@ it("lets authenticated Web clients download instructions and skill with the same
     expect(skill.headers.get("content-type")).toBe("application/zip");
     expect((await f.send(url("skill"), undefined)).status).toBe(401);
     expect(
-      (await f.send("/api/v1/device-connections/skill", undefined, headers))
-        .status,
+      (await f.send("/api/v1/intake/skill", undefined, headers)).status,
     ).toBe(401);
     expect(
       (
@@ -701,16 +835,15 @@ it("lets authenticated Web clients download instructions and skill with the same
         })
       ).status,
     ).toBe(403);
-    const invalid = await f.send(
-      "/api/v1/device-connections/skill",
-      undefined,
-      { ...headers, Authorization: "Bearer invalid" },
-    );
+    const invalid = await f.send("/api/v1/intake/skill", undefined, {
+      ...headers,
+      Authorization: "Bearer invalid",
+    });
     expect(invalid.status).toBe(401);
     expect((await invalid.json()).code).toBe("device-token-invalid");
     await rm(join(f.artifact, "skill.zip"));
     await symlink(
-      join(f.artifact, "instructions.md"),
+      join(f.artifact, "agent-guide.md"),
       join(f.artifact, "skill.zip"),
     );
     expect((await f.send(url("skill"), undefined, headers)).status).toBe(503);

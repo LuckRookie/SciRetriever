@@ -25,14 +25,31 @@ const batch = {
   origin: "web",
   created_at: "2026-11-01T00:00:00.000Z",
   finished_at: null,
-  status: "running",
+  state: "running",
+  result: null,
+  confirmation: null,
+  confirmed_at: null,
+  initiated_by: "local:web",
+  source: null,
+  progress: null,
   request: {
     query: "search",
     year_from: null,
     year_to: null,
     providers: ["crossref"],
   },
-  counts: { hits: 3, created: 1, enriched: 1, matched: 1, rejected: 0 },
+  counts: {
+    hits: 3,
+    created: 1,
+    enriched: 1,
+    matched: 1,
+    rejected: 0,
+    restored: 0,
+    conflicts: 0,
+    possible_duplicates: 0,
+    pending_decision: 0,
+    needs_metadata: 0,
+  },
   pdf: { has_pdf: 1, unavailable: 1, pending: 1 },
   discovery_run_id: null,
   source_failures: 0,
@@ -181,4 +198,39 @@ it("decodes historic metadata and queries with empty new fields and preserves ne
     { kind: "literatures", literature_ids: [] },
   ])
     expect(() => parseAcquirePdfSelector(v)).toThrow();
+});
+
+it("binds the six batch states to nullable results and rejects the retired status field", () => {
+  for (const state of [
+    "collecting",
+    "awaiting-confirmation",
+    "running",
+    "cancelled",
+  ])
+    expect(
+      parseIntakeBatch({
+        ...batch,
+        kind: "import",
+        request: { format: "records", file_name: null },
+        state,
+        result: null,
+        confirmation: "batch",
+      }).state,
+    ).toBe(state);
+  for (const result of ["completed", "partial", "failed", "interrupted"])
+    expect(
+      parseIntakeBatch({ ...batch, state: "finished", result }).result,
+    ).toBe(result);
+  expect(
+    parseIntakeBatch({ ...batch, state: "withdrawn", result: null }).state,
+  ).toBe("withdrawn");
+  for (const patch of [
+    { state: "importing" },
+    { state: "completed" },
+    { state: "finished", result: null },
+    { state: "running", result: "completed" },
+    { status: "running" },
+    { initiated_by: "invented" },
+  ])
+    expect(() => parseIntakeBatch({ ...batch, ...patch })).toThrow();
 });

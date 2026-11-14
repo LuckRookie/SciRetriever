@@ -91,12 +91,12 @@ async function fixture() {
     return body.result;
   };
   const pendingPdf = async (token: string) => {
-    const { session: s } = await post("/api/v1/import/sessions", token, {
+    const { batch: s } = await post("/api/v1/intake/batches", token, {
       format: "records",
-      library: null,
+      source: null,
       scope: "transport",
     });
-    const base = `/api/v1/import/sessions/${s.session_id}`;
+    const base = `/api/v1/intake/batches/${s.batch_id}`;
     await post(base + "/data", token, {
       sequence: 0,
       data: {
@@ -290,10 +290,76 @@ it("delivers an early 403 before the request body finishes, drains it and reuses
   }
 }, 30000);
 
+it("delivers an early 403 and closes a continuously draining idle-route upload after five seconds", async () => {
+  const f = await fixture();
+  const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+  const req = request(f.server.origin + "/mcp", {
+    method: "POST",
+    agent,
+    headers: {
+      Host: "attacker.test",
+      "Content-Type": "application/json",
+      "Content-Length": 1024 * 1024,
+      Connection: "keep-alive",
+    },
+  });
+  let closedAt: number | undefined;
+  let respondedAt: number | undefined;
+  let sentBytes = 1;
+  req.on("error", () => undefined);
+  req.once("socket", (socket) => {
+    socket.once("close", () => {
+      closedAt = performance.now();
+    });
+  });
+  const denied = new Promise<number>((resolve, reject) => {
+    req.once("response", (res) => {
+      res.resume();
+      res.once("error", reject);
+      res.once("end", () => {
+        respondedAt = performance.now();
+        resolve(res.statusCode!);
+      });
+    });
+  });
+  // Keep making progress within the 60 s idle window without finishing the body.
+  const send = setInterval(() => {
+    if (!req.destroyed) {
+      req.write("x");
+      sentBytes++;
+    }
+  }, 200);
+  try {
+    req.write("x");
+    expect(await denied).toBe(403);
+    expect(closedAt).toBeUndefined();
+    await delay(6500);
+    expect(closedAt).toBeDefined();
+    const drainMs = closedAt! - respondedAt!;
+    expect(drainMs).toBeGreaterThan(4500);
+    expect(drainMs).toBeLessThan(6500);
+    expect(sentBytes).toBeGreaterThanOrEqual(20);
+    console.log(
+      "rejected-upload-drain",
+      JSON.stringify({
+        status: 403,
+        drain_ms: drainMs,
+        sent_bytes: sentBytes,
+        bytes_per_second: (sentBytes * 1000) / drainMs,
+      }),
+    );
+  } finally {
+    clearInterval(send);
+    req.destroy();
+    agent.destroy();
+    await f.close();
+  }
+}, 30000);
+
 it("receives a real device HTTP PDF larger than 16 MiB at a controlled rate beyond the old request timeout", async () => {
   const f = await fixture();
   try {
-    const token = await f.token(["import"]),
+    const token = await f.token(["intake"]),
       pending = await f.pendingPdf(token);
     const pdf = Buffer.from(workbenchPdf());
     const xref = /startxref\s+(\d+)/u.exec(pdf.toString())![1]!;
@@ -325,15 +391,15 @@ it("receives a real device HTTP PDF larger than 16 MiB at a controlled rate beyo
 it("receives slow import data, captured PDF bytes and MCP request bodies through the same production server", async () => {
   const f = await fixture();
   try {
-    const token = await f.token(["import", "capture", "read"]);
-    const { session: s } = await f.post("/api/v1/import/sessions", token, {
+    const token = await f.token(["intake", "read"]);
+    const { batch: s } = await f.post("/api/v1/intake/batches", token, {
       format: "bibtex",
-      library: null,
+      source: null,
       scope: "slow data",
     });
     const data = await slow(
       f.server.origin,
-      `/api/v1/import/sessions/${s.session_id}/data`,
+      `/api/v1/intake/batches/${s.batch_id}/data`,
       token,
       "application/json",
       Buffer.from(
@@ -344,7 +410,7 @@ it("receives slow import data, captured PDF bytes and MCP request bodies through
       ),
     );
     expect(data.status, data.text).toBe(200);
-    const capture = await f.post("/api/v1/capture/save", token, {
+    const capture = await f.post("/api/v1/intake/pages/save", token, {
       request_id: randomUUID(),
       metadata: {
         identifiers: [{ namespace: "doi", value: "10.5555/slow-capture" }],
@@ -353,7 +419,7 @@ it("receives slow import data, captured PDF bytes and MCP request bodies through
     });
     const pdf = await slow(
       f.server.origin,
-      `/api/v1/capture/items/${capture.capture_id}/file/bytes`,
+      `/api/v1/intake/batches/${capture.batch_id}/files/${capture.file.file_id}/bytes`,
       token,
       "application/pdf",
       Buffer.from(workbenchPdf()),
@@ -419,7 +485,7 @@ it("receives slow import data, captured PDF bytes and MCP request bodies through
       client_id: string;
       csrf: string;
     };
-    const manual = await f.post("/api/v1/capture/save", token, {
+    const manual = await f.post("/api/v1/intake/pages/save", token, {
       request_id: randomUUID(),
       metadata: {
         identifiers: [{ namespace: "doi", value: "10.5555/slow-manual" }],
@@ -450,7 +516,7 @@ it("interrupts a PDF after 60 real seconds without data, removes staging and kee
   const f = await fixture();
   let connection: ReturnType<typeof receive> | undefined;
   try {
-    const token = await f.token(["import"]),
+    const token = await f.token(["intake"]),
       pending = await f.pendingPdf(token);
     connection = receive(
       f.server.origin,
@@ -491,10 +557,10 @@ it("interrupts a PDF after 60 real seconds without data, removes staging and kee
 it("retains a 5 second total body deadline for ordinary routes", async () => {
   const f = await fixture();
   try {
-    const token = await f.token(["import"]);
+    const token = await f.token(["intake"]);
     const result = await slow(
       f.server.origin,
-      "/api/v1/import/sessions/list",
+      "/api/v1/intake/batches/list",
       token,
       "application/json",
       Buffer.from(

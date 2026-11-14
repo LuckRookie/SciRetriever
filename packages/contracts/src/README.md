@@ -5,9 +5,9 @@
 ## 内容入口
 
 - [index.ts](index.ts)：包公开导出与基础合同。
-- [import-sessions.ts](import-sessions.ts)：与来源无关的导入模型、纯适配器接口、会话/报告/文件状态及严格输入上限；建会话的 library 可为 null，由服务端形成一次性文件来源。
-- [capture.ts](capture.ts)：网页收藏的中性页面元数据、DOI/arXiv 准入、请求 UUID 与文件声明、补全/接纳结果；web-capture 的用户 provenance 继续由 index 中的封闭 observation 合同校验。
-- [intake.ts](intake.ts)：入库批次、范围内词频与 PDF 获取范围/预览的中性合同；新筛选及主题词在基础合同中解码，旧字段缺省为空。
+- [import-sessions.ts](import-sessions.ts)：供现有纯适配器使用的内部类型别名；实际模型与 parser 归 intake.ts，不提供旧 wire 字段。
+- [capture.ts](capture.ts)：单篇网页入库的过渡书目输入、预览、请求 UUID 与文件声明、补全/接纳结果；有标题即可保存，空条目拒绝。web-capture 的用户 provenance 仍由 index 中的封闭 observation 合同校验。
+- [intake.ts](intake.ts)：统一批次、条目、来源、分段、纯适配器、报告、文件状态、状态/结果、进度、端点与错误码；source 可为 null，由服务形成一次性来源。也拥有范围词频与 PDF 获取范围/预览合同。
 - [acquisition.ts](acquisition.ts)：当前/待生效来源与有界安全获取轨迹，供配置、任务和浏览器读取。
 - [document.ts](document.ts)：文档合同。
 - [raw-parsing.ts](raw-parsing.ts)：双 profile 原始解析与中性区块合同，校验坐标、页码、资源引用和不可变清单身份。

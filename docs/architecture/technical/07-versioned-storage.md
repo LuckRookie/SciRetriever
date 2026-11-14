@@ -566,7 +566,7 @@ Entry 的 ImportSessionService 提交通用工作流状态，Literature、Folder
 
 **冻结之前要核对。**
 
-- 撤回的三张表与 `restored` 分类已并入；所有文献读取路径（列表、详情、计数、词频、全文检索、引用两端、发现原因、任务范围展开、文件夹与批注读取）都按 `intake_withdrawn_objects` 排除，且身份匹配、sha256 对应与外部编号对应不排除。
+- 撤回的三张表与 `restored` 分类已并入。读取路径的排除（列表、详情、计数、词频、全文检索、引用两端、发现原因、任务范围展开、文件夹与批注读取）属于撤回的行为，在计划 20 的 17 块实现；冻结之前由 17 的第一步在合成库上演练撤回与恢复，确认这些表足以支撑排除且身份匹配、sha256 对应与外部编号对应不排除，不需要再改表。
 - `intake_items`、`literature_needs_metadata` 等新表不进入 `LIBRARY_STATE_INPUT_TABLES`，也不推进检索 source revision。查询读取时按需联接它们；`needs_metadata` 筛选不改变文献状态投影。
 - 15 的旧行全部回填，所有旧表行数不变：`intake_batches` 的状态拆分与 `initiated_by`，以及 `import_*` 的外键改名。15 里没有会话与收藏表，这几张表的回填为空。
 - 外键的级联与置空，和本节及第 9 节一致；`PRAGMA foreign_key_check` 为空。

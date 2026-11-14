@@ -101,7 +101,7 @@ it("shares the exact import handlers between authenticated Web and import-purpos
       },
       web = (path: string, request: unknown) =>
         send(path + "?client_id=" + grant.client_id, request, webHeaders);
-    const importToken = await token("import"),
+    const importToken = await token("intake"),
       deviceHeaders = {
         Authorization: `Bearer ${importToken}`,
         Origin: "chrome-extension://synthetic",
@@ -112,7 +112,7 @@ it("shares the exact import handlers between authenticated Web and import-purpos
       'application/json; charset="UTF-8"',
     ]) {
       const response = await send(
-        "/api/v1/import/sessions/list",
+        "/api/v1/intake/batches/list",
         {},
         { ...deviceHeaders, "Content-Type": contentType },
       );
@@ -121,7 +121,7 @@ it("shares the exact import handlers between authenticated Web and import-purpos
       expect(
         (
           await send(
-            `/api/v1/import/sessions/list?client_id=${grant.client_id}`,
+            `/api/v1/intake/batches/list?client_id=${grant.client_id}`,
             {},
             { ...webHeaders, "Content-Type": contentType },
           )
@@ -135,35 +135,35 @@ it("shares the exact import handlers between authenticated Web and import-purpos
       "application/json; charset=utf-8; charset=utf-8",
     ]) {
       const response = await send(
-        "/api/v1/import/sessions/list",
+        "/api/v1/intake/batches/list",
         {},
         { ...deviceHeaders, "Content-Type": contentType },
       );
       expect(response.status).toBe(415);
       expect((await response.json()).code).toBe("content-type-unsupported");
       const webResponse = await send(
-        `/api/v1/import/sessions/list?client_id=${grant.client_id}`,
+        `/api/v1/intake/batches/list?client_id=${grant.client_id}`,
         {},
         { ...webHeaders, "Content-Type": contentType },
       );
       expect(webResponse.status).toBe(415);
       expect((await webResponse.json()).code).toBe("content-type-unsupported");
     }
-    for (const p of ["read", "operate", "capture"] as const)
+    for (const p of ["read", "operate"] as const)
       expect(
         (
           await send(
-            "/api/v1/import/sessions/list",
+            "/api/v1/intake/batches/list",
             {},
             { Authorization: `Bearer ${await token(p)}` },
           )
         ).status,
       ).toBe(403);
-    expect((await send("/api/v1/import/sessions", {}, {})).status).toBe(401);
+    expect((await send("/api/v1/intake/batches", {}, {})).status).toBe(401);
     expect(
       (
         await send(
-          "/api/v1/import/sessions/list?client_id=" + grant.client_id,
+          "/api/v1/intake/batches/list?client_id=" + grant.client_id,
           {},
           { ...webHeaders, Origin: "https://outside.invalid" },
         )
@@ -172,15 +172,15 @@ it("shares the exact import handlers between authenticated Web and import-purpos
     expect(
       (
         await send(
-          "/api/v1/import/sessions/list?client_id=" + grant.client_id,
+          "/api/v1/intake/batches/list?client_id=" + grant.client_id,
           {},
           { ...webHeaders, "X-Workbench-Csrf": "wrong" },
         )
       ).status,
     ).toBe(403);
-    const local = await web("/api/v1/import/sessions", {
+    const local = await web("/api/v1/intake/batches", {
       format: "records",
-      library: {
+      source: {
         system: "synthetic",
         library_id: "1",
         identity: "local",
@@ -189,15 +189,15 @@ it("shares the exact import handlers between authenticated Web and import-purpos
       scope: "local",
     });
     expect(local.status).toBe(400);
-    expect((await local.json()).code).toBe("import-local-identity-required");
+    expect((await local.json()).code).toBe("intake-local-identity-required");
     for (const mode of ["web", "device"] as const) {
       const call = (path: string, request: unknown) =>
         mode === "web"
           ? web(path, request)
           : send(path, request, deviceHeaders);
-      const created = await call("/api/v1/import/sessions", {
+      const created = await call("/api/v1/intake/batches", {
         format: "records",
-        library: {
+        source: {
           system: "synthetic",
           library_id: randomUUID(),
           identity: "global",
@@ -206,8 +206,8 @@ it("shares the exact import handlers between authenticated Web and import-purpos
         scope: "single item",
       });
       expect(created.status).toBe(200);
-      const sid = (await created.json()).result.session.session_id as string,
-        base = `/api/v1/import/sessions/${sid}`;
+      const sid = (await created.json()).result.batch.batch_id as string,
+        base = `/api/v1/intake/batches/${sid}`;
       const response = await call(base + "/data", {
         sequence: 0,
         data: {
@@ -260,7 +260,7 @@ it("shares the exact import handlers between authenticated Web and import-purpos
       const report = await call(base + "/report", {});
       expect(report.status).toBe(200);
       const result = (await report.json()).result;
-      expect(result.session.state).toBe("completed");
+      expect(result.batch.state).toBe("finished");
       expect(result.summary.records.created).toBe(1);
       expect(result.summary.files.uploaded).toBe(1);
       expect((await call(base + "/finish", {})).status).toBe(200);
@@ -271,22 +271,22 @@ it("shares the exact import handlers between authenticated Web and import-purpos
         mode === "web"
           ? web(path, request)
           : send(path, request, deviceHeaders);
-      const response = await call("/api/v1/import/sessions", {
+      const response = await call("/api/v1/intake/batches", {
         format: "bibtex",
-        library: null,
+        source: null,
         file_name: "batch-fixture.bib",
         scope: "uploaded file",
       });
       expect(response.status).toBe(200);
-      const s = (await response.json()).result.session;
-      expect(s.library).toEqual({
+      const s = (await response.json()).result.batch;
+      expect(s.source).toEqual({
         system: "file",
         library_id: "",
         identity: "adhoc",
         name: "batch-fixture.bib",
       });
-      fileKeys.add(s.library_key);
-      const base = `/api/v1/import/sessions/${s.session_id}`;
+      fileKeys.add(s.batch_id);
+      const base = `/api/v1/intake/batches/${s.batch_id}`;
       expect(
         (
           await call(base + "/data", {
@@ -303,8 +303,8 @@ it("shares the exact import handlers between authenticated Web and import-purpos
       );
       expect((await call(base + "/confirm", {})).status).toBe(200);
       expect(
-        (await (await call(base + "/report", {})).json()).result.session.state,
-      ).toBe("completed");
+        (await (await call(base + "/report", {})).json()).result.batch.state,
+      ).toBe("finished");
     }
     expect(fileKeys.size).toBe(2);
     const legacy = await fetch(
@@ -337,25 +337,28 @@ it("shares the exact import handlers between authenticated Web and import-purpos
       },
     });
     const legacySession = (await app.importSessions.list()).items.find(
-      (s) => s.file_name === "legacy-attachments.bib",
+      (s) => s.request.file_name === "legacy-attachments.bib",
     )!;
     expect(legacySession).toMatchObject({
-      state: "completed",
-      pending_files: 0,
+      state: "finished",
+      progress: null,
     });
     expect(
-      (await app.importSessions.missingFiles(legacySession.session_id)).items,
+      (await app.importSessions.missingFiles(legacySession.batch_id)).items,
     ).toEqual([]);
-    const docs = await fetch(server.origin + "/api/v1/import/instructions", {
+    const docs = await fetch(server.origin + "/api/v1/intake/instructions", {
       headers: deviceHeaders,
     });
     expect(docs.status).toBe(200);
     const reference = (await docs.json()).result;
-    expect(reference.endpoints).toHaveLength(13);
+    expect(reference.endpoints).toHaveLength(18);
     expect(reference.formats).toContain("records");
-    expect((await web("/api/v1/import/sessions/list", {})).status).toBe(200);
+    expect(JSON.stringify(reference)).not.toMatch(
+      /\bsessions?\b|\/api\/v1\/(?:import|capture)/u,
+    );
+    expect((await web("/api/v1/intake/batches/list", {})).status).toBe(200);
     const oversized = await fetch(
-      server.origin + "/api/v1/import/sessions/list",
+      server.origin + "/api/v1/intake/batches/list",
       {
         method: "POST",
         headers: {
@@ -367,7 +370,98 @@ it("shares the exact import handlers between authenticated Web and import-purpos
       },
     );
     expect(oversized.status).toBe(413);
-    expect((await oversized.json()).code).toBe("import-request-too-large");
+    expect((await oversized.json()).code).toBe("intake-request-too-large");
+    // Ownership is independent of the source namespace, and includes file
+    // routes before receiving any bytes. A fresh connection is a new owner.
+    const make = async (call: typeof web, scope: string) => {
+      const response = await call("/api/v1/intake/batches", {
+        format: "records",
+        source: null,
+        scope,
+      });
+      expect(response.status).toBe(200);
+      return (await response.json()).result.batch.batch_id as string;
+    };
+    const ownerId = await make(
+      (path, input) => send(path, input, deviceHeaders),
+      "device A",
+    );
+    const webId = await make(web, "Web owner");
+    const otherHeaders = { Authorization: `Bearer ${await token("intake")}` };
+    const otherId = await make(
+      (path, input) => send(path, input, otherHeaders),
+      "device B",
+    );
+    for (const id of [ownerId, webId, randomUUID()]) {
+      const base = `/api/v1/intake/batches/${id}`;
+      for (const [suffix, input] of [
+        ["status", {}],
+        ["preview", {}],
+        ["confirm", {}],
+        ["files", {}],
+        ["data", { sequence: 0, data: { records: [] } }],
+        ["report", {}],
+        ["finish", {}],
+        ["cancel", {}],
+        [`files/${randomUUID()}/hash`, { sha256: "a".repeat(64) }],
+      ] as const) {
+        const denied = await send(`${base}/${suffix}`, input, otherHeaders);
+        expect(denied.status, suffix).toBe(404);
+        expect((await denied.json()).code).toBe("intake-batch-missing");
+      }
+      const bytes = await fetch(
+        server.origin + base + `/files/${randomUUID()}/bytes`,
+        {
+          method: "POST",
+          headers: {
+            ...otherHeaders,
+            "Content-Type": "application/pdf",
+            "X-Sciretriever-Protocol-Version": "1",
+          },
+          body: new Uint8Array(workbenchPdf()),
+        },
+      );
+      expect(bytes.status).toBe(404);
+      expect((await bytes.json()).code).toBe("intake-batch-missing");
+    }
+    const ownPage = (
+      await (
+        await send("/api/v1/intake/batches/list", { limit: 1 }, otherHeaders)
+      ).json()
+    ).result;
+    expect(ownPage.items.map((s: { batch_id: string }) => s.batch_id)).toEqual([
+      otherId,
+    ]);
+    expect(ownPage.next_cursor).toBeNull();
+    const badCursor = await send(
+      "/api/v1/intake/batches/list",
+      { cursor: ownerId },
+      otherHeaders,
+    );
+    expect(badCursor.status).toBe(404);
+    expect((await badCursor.json()).code).toBe("intake-batch-missing");
+    const all = (await (await web("/api/v1/intake/batches/list", {})).json())
+      .result;
+    expect(all.items.map((s: { batch_id: string }) => s.batch_id)).toEqual(
+      expect.arrayContaining([ownerId, webId, otherId]),
+    );
+    expect(
+      (await web(`/api/v1/intake/batches/${ownerId}/status`, {})).status,
+    ).toBe(200);
+    expect(
+      (
+        await send(
+          `/api/v1/intake/batches/${ownerId}/status`,
+          {},
+          deviceHeaders,
+        )
+      ).status,
+    ).toBe(200);
+    const reconnected = { Authorization: `Bearer ${await token("intake")}` };
+    expect(
+      (await send(`/api/v1/intake/batches/${ownerId}/status`, {}, reconnected))
+        .status,
+    ).toBe(404);
   } finally {
     await server.close();
     await session.close();

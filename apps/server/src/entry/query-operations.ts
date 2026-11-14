@@ -65,8 +65,8 @@ function unavailable(): never {
   throw new ProductOperationError("query-unavailable");
 }
 export const QUERY_OPERATIONS = [
-  "import-session-status",
-  "import-session-report",
+  "intake-batch-status",
+  "intake-batch-report",
   "operation-history",
   "agent-sessions",
   "task-run",
@@ -131,18 +131,18 @@ async function readQuery(
 ): Promise<unknown> {
   if (signal?.aborted) throw new ProductOperationError("operation-cancelled");
   if (
-    operation === "import-session-status" ||
-    operation === "import-session-report"
+    operation === "intake-batch-status" ||
+    operation === "intake-batch-report"
   ) {
     const r = operationRecord(
       value,
-      ["session_id"],
-      operation === "import-session-report" ? ["cursor", "limit"] : [],
+      ["batch_id"],
+      operation === "intake-batch-report" ? ["cursor", "limit"] : [],
     );
     if (!q.importSessions) unavailable();
-    const sessionId = parseAssetId(r.session_id);
-    if (operation === "import-session-status")
-      return { session: await q.importSessions.status(sessionId) };
+    const sessionId = parseAssetId(r.batch_id);
+    if (operation === "intake-batch-status")
+      return { batch: await q.importSessions.status(sessionId) };
     const cursor =
       r.cursor === undefined || r.cursor === null ? null : r.cursor;
     if (

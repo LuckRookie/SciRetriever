@@ -234,20 +234,20 @@ export const BROWSER_MAINTENANCE_TOOLS: readonly Tool[] = [
 ];
 export const QUERY_TOOLS: readonly Tool[] = [
   tool(
-    "import_session_status",
-    "Read a persisted import session without initializing the library or resuming import work.",
-    object({ session_id: id }),
+    "intake_batch_status",
+    "Read a persisted intake batch without initializing the library or resuming import work.",
+    object({ batch_id: id }),
   ),
   tool(
-    "import_session_report",
-    "Read the actual import report with bounded record pagination. Files and import data use the import HTTP API, not MCP.",
+    "intake_batch_report",
+    "Read the actual intake report with bounded record pagination. Files and import data use the intake HTTP API, not MCP.",
     object(
       {
-        session_id: id,
+        batch_id: id,
         cursor: nullable({ type: "string", pattern: "^\\d{1,4}:\\d{1,6}$" }),
         limit: { type: "integer", minimum: 1, maximum: 200 },
       },
-      ["session_id"],
+      ["batch_id"],
     ),
   ),
   tool(

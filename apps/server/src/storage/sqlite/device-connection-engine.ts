@@ -34,6 +34,19 @@ function safe(row: Row): DeviceConnection {
 }
 /** Only derived authentication material crosses the storage boundary. */
 export function runDeviceStorage(db: DatabaseSync, r: DeviceStorageCommand) {
+  if (r.kind === "authenticate") {
+    const d = db
+      .prepare("SELECT * FROM device_connections WHERE token_sha256=?")
+      .get(r.token_sha256);
+    if (!d) return { code: "device-token-invalid" };
+    if (d.revoked_at !== null) return { code: "device-revoked" };
+    if (
+      d.last_used_at !== null &&
+      Date.parse(r.now) - Date.parse(String(d.last_used_at)) < 300_000
+    )
+      return { connection: safe(d) };
+    // Recheck inside the write transaction when the coalesced timestamp is due.
+  }
   if (r.kind === "check") {
     const d = db
       .prepare("SELECT * FROM device_connections WHERE connection_id=?")
@@ -64,29 +77,25 @@ export function runDeviceStorage(db: DatabaseSync, r: DeviceStorageCommand) {
       db.prepare(
         "DELETE FROM device_exchange_limits WHERE window_start<=?",
       ).run(now - windowMs);
-      const buckets = ["global", r.peer_sha256];
-      const limited = buckets.some(
-        (bucket) =>
-          Number(
-            db
-              .prepare(
-                "SELECT attempts FROM device_exchange_limits WHERE bucket=?",
-              )
-              .get(bucket)?.attempts ?? 0,
-          ) >= (bucket === "global" ? 60 : 10),
-      );
-      if (
-        limited ||
-        Number(
-          db.prepare("SELECT count(*) n FROM device_exchange_limits").get()!.n,
-        ) >= 257
-      )
+      const bucket = db
+        .prepare("SELECT attempts FROM device_exchange_limits WHERE bucket=?")
+        .get(r.peer_sha256);
+      if (Number(bucket?.attempts ?? 0) >= 30)
         result = { code: "device-exchange-rate-limited" };
       else {
-        for (const bucket of buckets)
-          db.prepare(
-            "INSERT INTO device_exchange_limits VALUES(?,?,1) ON CONFLICT(bucket) DO UPDATE SET attempts=attempts+1",
-          ).run(bucket, now);
+        if (
+          !bucket &&
+          Number(
+            db.prepare("SELECT count(*) n FROM device_exchange_limits").get()!
+              .n,
+          ) >= 256
+        )
+          db.exec(
+            "DELETE FROM device_exchange_limits WHERE bucket=(SELECT bucket FROM device_exchange_limits ORDER BY window_start,bucket LIMIT 1)",
+          );
+        db.prepare(
+          "INSERT INTO device_exchange_limits VALUES(?,?,1) ON CONFLICT(bucket) DO UPDATE SET attempts=attempts+1",
+        ).run(r.peer_sha256, now);
         const p = db
           .prepare("SELECT * FROM device_pairings WHERE code_sha256=?")
           .get(r.code_sha256);
@@ -116,12 +125,15 @@ export function runDeviceStorage(db: DatabaseSync, r: DeviceStorageCommand) {
         .get(r.token_sha256);
       if (!d) result = { code: "device-token-invalid" };
       else if (d.revoked_at !== null) result = { code: "device-revoked" };
-      else {
+      else if (
+        d.last_used_at === null ||
+        Date.parse(r.now) - Date.parse(String(d.last_used_at)) >= 300_000
+      ) {
         db.prepare(
           "UPDATE device_connections SET last_used_at=? WHERE connection_id=?",
         ).run(r.now, d.connection_id!);
         result = { connection: safe({ ...d, last_used_at: r.now }) };
-      }
+      } else result = { connection: safe(d) };
     } else if (r.kind === "list") {
       const rows = db
         .prepare(

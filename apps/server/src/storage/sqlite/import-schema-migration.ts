@@ -52,7 +52,15 @@ export async function migrateImportSchema(path: string) {
       )
         refuse();
       const before = offlineTableCounts(db, refuse);
+      // Back up both sides before rebuilding the parent: DROP with foreign_keys
+      // enabled must not cascade away the schema-15 membership facts.
+      db.exec(
+        "CREATE TEMP TABLE import_old_batches AS SELECT * FROM intake_batches;CREATE TEMP TABLE import_old_members AS SELECT * FROM intake_batch_members;DROP TABLE intake_batch_members;DROP TABLE intake_batches",
+      );
       for (const sql of IMPORT_SCHEMA_V16) db.exec(sql);
+      db.exec(
+        "INSERT INTO intake_batches(batch_id,kind,default_label,label,origin,created_at,finished_at,state,result,confirmation,confirmed_at,initiated_by,request_json,discovery_run_id,rejected,source_failures,owner_pid) SELECT batch_id,kind,default_label,label,origin,created_at,finished_at,CASE WHEN status='running' THEN 'running' ELSE 'finished' END,CASE WHEN status='running' THEN NULL ELSE status END,NULL,NULL,CASE WHEN origin='migration' THEN 'migration' ELSE 'local:'||origin END,request_json,discovery_run_id,rejected,source_failures,owner_pid FROM import_old_batches;INSERT INTO intake_batch_members SELECT * FROM import_old_members;DROP TABLE import_old_members;DROP TABLE import_old_batches",
+      );
       // Additional M1 backfills belong here, in the same atomic migration.
       db.exec(
         "CREATE TEMP TABLE import_identity AS SELECT * FROM schema_identity;DROP TABLE schema_identity",

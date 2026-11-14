@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -79,6 +79,31 @@ it("migrates exact schema 15 to 16 atomically, preserves all facts and enables d
     db.exec(
       "BEGIN;INSERT INTO meta_literatures VALUES('meta','paper');INSERT INTO literatures VALUES('paper','meta','published');INSERT INTO literature_metadata(literature_id,metadata_revision,metadata_sha256,title) VALUES('paper',1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','Synthetic preserved paper');COMMIT",
     );
+    const oldStatuses = [
+      "running",
+      "completed",
+      "partial",
+      "failed",
+      "interrupted",
+    ] as const;
+    const oldIds = oldStatuses.map((status, index) => {
+      const id = randomUUID(),
+        origin = index % 2 ? "web" : "cli";
+      db.prepare(
+        "INSERT INTO intake_batches(batch_id,kind,default_label,origin,created_at,status,request_json) VALUES(?,'import','Old import',?,'2026-11-10T00:00:00Z',?,'{\"format\":\"bibtex\",\"file_name\":null}')",
+      ).run(id, origin, status);
+      db.prepare(
+        "INSERT INTO intake_batch_members VALUES(?,'paper','matched')",
+      ).run(id);
+      return { id, status, origin };
+    });
+    const legacyId = randomUUID();
+    db.prepare(
+      "INSERT INTO intake_batches(batch_id,kind,default_label,origin,created_at,status,request_json) VALUES(?,'legacy','Legacy','migration','2026-11-10T00:00:00Z','completed','{}')",
+    ).run(legacyId);
+    db.prepare(
+      "INSERT INTO intake_batch_members VALUES(?,'paper','legacy')",
+    ).run(legacyId);
     db.close();
     const old = await createQueryApplication(home);
     try {
@@ -101,6 +126,66 @@ it("migrates exact schema 15 to 16 atomically, preserves all facts and enables d
     });
     for (const [table, n] of Object.entries(result.before))
       expect(result.after[table], table).toBe(n);
+    const migrated = new DatabaseSync(path);
+    try {
+      expect(migrated.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(
+        migrated
+          .prepare("PRAGMA table_info(intake_batches)")
+          .all()
+          .map((r) => r.name),
+      ).not.toContain("status");
+      expect(
+        migrated
+          .prepare("PRAGMA table_info(import_sessions)")
+          .all()
+          .map((r) => r.name),
+      ).not.toContain("state");
+      for (const old of oldIds)
+        expect(
+          migrated
+            .prepare(
+              "SELECT state,result,initiated_by FROM intake_batches WHERE batch_id=?",
+            )
+            .get(old.id),
+        ).toEqual({
+          state: old.status === "running" ? "running" : "finished",
+          result: old.status === "running" ? null : old.status,
+          initiated_by: `local:${old.origin}`,
+        });
+      expect(
+        migrated
+          .prepare("SELECT initiated_by FROM intake_batches WHERE batch_id=?")
+          .get(legacyId)?.initiated_by,
+      ).toBe("migration");
+      expect(
+        migrated
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE name IN ('capture_items','capture_daily_batches')",
+          )
+          .all(),
+      ).toEqual([]);
+      expect(() =>
+        migrated
+          .prepare(
+            "UPDATE intake_batches SET result='completed' WHERE batch_id=?",
+          )
+          .run(oldIds[0]!.id),
+      ).toThrow();
+      expect(() =>
+        migrated
+          .prepare(
+            "UPDATE intake_batches SET state='collecting' WHERE batch_id=?",
+          )
+          .run(oldIds[1]!.id),
+      ).toThrow();
+      expect(
+        migrated.prepare("SELECT count(*) n FROM intake_batch_members").get()!
+          .n,
+      ).toBe(6);
+    } finally {
+      migrated.close();
+    }
     expect(result.after.device_connections).toBe(0);
     expect(result.after.device_pairings).toBe(0);
     for (const table of [
@@ -111,8 +196,13 @@ it("migrates exact schema 15 to 16 atomically, preserves all facts and enables d
       "import_staged_keys",
       "import_record_results",
       "import_files",
-      "capture_daily_batches",
-      "capture_items",
+      "intake_items",
+      "intake_page_requests",
+      "intake_open_batches",
+      "literature_needs_metadata",
+      "intake_batch_objects",
+      "intake_withdrawals",
+      "intake_withdrawn_objects",
     ])
       expect(result.after[table], table).toBe(0);
     expect((await inspectCatalogSchema(path)).schema_version).toBe(
@@ -161,6 +251,93 @@ it("refuses queued work, unknown layouts and FK corruption without changing the 
         code: "import-schema-migration-refused",
       });
       expect(await digest()).toBe(before);
+    }
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+}, 30000);
+
+it("installs all future intake DDL without revision triggers and enforces mapping states and FK cascade/set-null", async () => {
+  const home = await mkdtemp(join(tmpdir(), "sciretriever-intake-ddl-")),
+    path = join(home, "catalog.sqlite");
+  try {
+    const before = oldCatalog(path);
+    before.exec(
+      "BEGIN;INSERT INTO meta_literatures VALUES('meta','representative');INSERT INTO literatures VALUES('representative','meta','published');INSERT INTO literatures VALUES('paper','meta','preprint');INSERT INTO literature_metadata(literature_id,metadata_revision,metadata_sha256,title) VALUES('paper',1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','Synthetic');COMMIT",
+    );
+    before.close();
+    await migrateImportSchema(path);
+    const db = new DatabaseSync(path);
+    db.exec("PRAGMA foreign_keys=ON");
+    try {
+      const batch = randomUUID(),
+        item = randomUUID();
+      db.prepare(
+        "INSERT INTO intake_batches(batch_id,kind,default_label,origin,created_at,state,initiated_by,request_json) VALUES(?,'import','DDL','cli','2026-11-15T00:00:00Z','collecting','local:cli','{}')",
+      ).run(batch);
+      db.exec(
+        "INSERT INTO import_libraries VALUES('source','synthetic','library','global','Library','2026-11-15T00:00:00Z')",
+      );
+      db.exec(
+        "INSERT INTO external_object_mappings(library_key,object_kind,external_id,internal_id) VALUES('source','group','group','folder')",
+      );
+      expect(
+        db.prepare("SELECT state FROM external_object_mappings").get()!.state,
+      ).toBe("settled");
+      expect(() =>
+        db.exec("UPDATE external_object_mappings SET state='invalid'"),
+      ).toThrow();
+      const revision = db.prepare("SELECT * FROM library_state_revision").all(),
+        retrieval = db.prepare("SELECT * FROM retrieval_source_revision").all();
+      db.prepare(
+        "INSERT INTO intake_items(item_id,batch_id,origin,literature_id,created_at) VALUES(?,?,'file','paper','2026-11-15T00:00:00Z')",
+      ).run(item, batch);
+      db.prepare(
+        "INSERT INTO literature_needs_metadata VALUES('paper','2026-11-15T00:00:00Z',?)",
+      ).run(batch);
+      db.prepare(
+        "INSERT INTO intake_batch_objects VALUES('folder','folder',?)",
+      ).run(batch);
+      db.prepare(
+        "INSERT INTO intake_withdrawals VALUES(?,'cancelled','2026-11-15T00:00:00Z','web',NULL,'{}',NULL)",
+      ).run(batch);
+      db.prepare(
+        "INSERT INTO intake_withdrawn_objects VALUES('literature','paper',?,'2026-11-15T00:00:00Z')",
+      ).run(batch);
+      expect(db.prepare("SELECT * FROM library_state_revision").all()).toEqual(
+        revision,
+      );
+      expect(
+        db.prepare("SELECT * FROM retrieval_source_revision").all(),
+      ).toEqual(retrieval);
+      expect(() =>
+        db
+          .prepare(
+            "INSERT INTO intake_items(item_id,batch_id,origin,created_at) VALUES('invalid','absent','file','2026-11-15T00:00:00Z')",
+          )
+          .run(),
+      ).toThrow();
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      db.exec("DELETE FROM literatures WHERE literature_id='paper'");
+      expect(
+        db
+          .prepare("SELECT literature_id FROM intake_items WHERE item_id=?")
+          .get(item)!.literature_id,
+      ).toBeNull();
+      expect(
+        db.prepare("SELECT count(*) n FROM literature_needs_metadata").get()!.n,
+      ).toBe(0);
+      db.prepare("DELETE FROM intake_batches WHERE batch_id=?").run(batch);
+      for (const table of [
+        "intake_items",
+        "intake_batch_objects",
+        "intake_withdrawals",
+        "intake_withdrawn_objects",
+      ])
+        expect(db.prepare(`SELECT count(*) n FROM ${table}`).get()!.n).toBe(0);
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      db.close();
     }
   } finally {
     await rm(home, { recursive: true, force: true });

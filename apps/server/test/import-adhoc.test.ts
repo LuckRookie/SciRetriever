@@ -25,7 +25,7 @@ async function fixture() {
     format = "bibtex",
   ) =>
     app.importSessions.create(
-      { format, library: null, file_name, scope: "one uploaded file" },
+      { format, source: null, file_name, scope: "one uploaded file" },
       { kind: "local", origin: "web" },
     );
   const count = (table: string) => {
@@ -66,8 +66,8 @@ it.each(["bibtex", "biblatex", "ris"] as const)(
         `attachments.${format === "ris" ? "ris" : "bib"}`,
         format,
       );
-      await f.app.importSessions.putData(s.session_id, 0, source);
-      const preview = await f.app.importSessions.preview(s.session_id);
+      await f.app.importSessions.putData(s.batch_id, 0, source);
+      const preview = await f.app.importSessions.preview(s.batch_id);
       expect(preview.summary.records.created).toBe(1);
       expect(preview.summary.files).toMatchObject({
         upload: 1,
@@ -79,9 +79,12 @@ it.each(["bibtex", "biblatex", "ris"] as const)(
         { kind: "non-pdf-file", count: 1 },
       ]);
       expect(f.count("literatures")).toBe(0);
-      const confirmed = await f.app.importSessions.confirm(s.session_id);
-      expect(confirmed).toMatchObject({ state: "importing", pending_files: 1 });
-      const file = (await f.app.importSessions.missingFiles(s.session_id))
+      const confirmed = await f.app.importSessions.confirm(s.batch_id);
+      expect(confirmed).toMatchObject({
+        state: "running",
+        progress: { files: { pending: 1 } },
+      });
+      const file = (await f.app.importSessions.missingFiles(s.batch_id))
         .items[0]!;
       expect(file).toMatchObject({
         external_id: "files/123/Attached.pdf",
@@ -89,12 +92,12 @@ it.each(["bibtex", "biblatex", "ris"] as const)(
         action: "upload",
       });
       await f.app.importSessions.upload(
-        s.session_id,
+        s.batch_id,
         file.file_id,
         chunks(workbenchPdf()),
       );
-      const report = await f.app.importSessions.report(s.session_id);
-      expect(report.session.state).toBe("completed");
+      const report = await f.app.importSessions.report(s.batch_id);
+      expect(report.batch.state).toBe("finished");
       expect(report.summary.files).toMatchObject({ uploaded: 1, missing: 0 });
       expect(report.summary.excluded).toEqual(preview.summary.excluded);
       expect(
@@ -113,35 +116,34 @@ it("isolates simultaneous file sessions while deduplicating repeated bibliograph
   try {
     const first = await f.create(),
       second = await f.create();
-    expect(first.library).toEqual({
+    expect(first.source).toEqual({
       system: "file",
       library_id: "",
       identity: "adhoc",
       name: "batch-fixture.bib",
     });
-    expect(first.library_key).not.toBe(second.library_key);
-    await f.app.importSessions.putData(first.session_id, 0, bibliography);
+    expect(first.batch_id).not.toBe(second.batch_id);
+    await f.app.importSessions.putData(first.batch_id, 0, bibliography);
     expect(
-      (await f.app.importSessions.preview(first.session_id)).summary.records,
+      (await f.app.importSessions.preview(first.batch_id)).summary.records,
     ).toMatchObject({ created: 1, matched: 0 });
     expect(f.count("literatures")).toBe(0);
-    await f.app.importSessions.confirm(first.session_id);
-    const result = (await f.app.importSessions.report(first.session_id))
+    await f.app.importSessions.confirm(first.batch_id);
+    const result = (await f.app.importSessions.report(first.batch_id))
       .items[0]!;
-    await f.app.importSessions.putData(second.session_id, 0, bibliography);
+    await f.app.importSessions.putData(second.batch_id, 0, bibliography);
     expect(
-      (await f.app.importSessions.preview(second.session_id)).summary.records,
+      (await f.app.importSessions.preview(second.batch_id)).summary.records,
     ).toMatchObject({ created: 0, matched: 1 });
-    await f.app.importSessions.confirm(second.session_id);
+    await f.app.importSessions.confirm(second.batch_id);
     expect(
-      (await f.app.importSessions.report(second.session_id)).items[0]!
+      (await f.app.importSessions.report(second.batch_id)).items[0]!
         .disposition,
     ).toBe("matched");
     expect(f.count("literatures")).toBe(1);
     expect(f.count("metadata_observations")).toBe(1);
     expect(f.count("external_object_mappings")).toBe(0);
-    const batch = (await f.app.importSessions.status(first.session_id))
-      .intake_batch_id;
+    const batch = (await f.app.importSessions.status(first.batch_id)).batch_id;
     expect(
       await f.app.library.intakeBatches({
         operation: "get",
@@ -156,8 +158,8 @@ it("isolates simultaneous file sessions while deduplicating repeated bibliograph
       unlock: [],
     });
     const third = await f.create();
-    await f.app.importSessions.putData(third.session_id, 0, bibliography);
-    await f.app.importSessions.confirm(third.session_id);
+    await f.app.importSessions.putData(third.batch_id, 0, bibliography);
+    await f.app.importSessions.confirm(third.batch_id);
     const facts = (await f.app.database.currentFacts(result.literature_id!))!;
     expect(facts.literature.metadata.title).toBe("Manual title");
     const detail = await f.app.library.detail(result.literature_id!);
@@ -177,19 +179,19 @@ it("isolates simultaneous file sessions while deduplicating repeated bibliograph
       });
     await expect(
       f.app.importSessions.create(
-        { format: "bibtex", library: first.library, scope: "reuse source" },
+        { format: "bibtex", source: first.source, scope: "reuse source" },
         { kind: "local", origin: "web" },
       ),
     ).rejects.toThrow();
     await expect(
-      f.app.importSessions.putData(first.session_id, 1, bibliography),
-    ).rejects.toMatchObject({ code: "import-session-state" });
+      f.app.importSessions.putData(first.batch_id, 1, bibliography),
+    ).rejects.toMatchObject({ code: "intake-batch-state" });
     const malformed = await f.create();
     await expect(
-      f.app.importSessions.putData(malformed.session_id, 0, {
+      f.app.importSessions.putData(malformed.batch_id, 0, {
         legacy_decoded: [],
       }),
-    ).rejects.toMatchObject({ code: "import-input-invalid" });
+    ).rejects.toMatchObject({ code: "intake-input-invalid" });
   } finally {
     await f.close();
   }
@@ -225,49 +227,44 @@ it("keeps file channels session-bound without importing groups or reusable exter
         },
       ],
     });
+    await f.app.importSessions.putData(one.batch_id, 0, payload("First paper"));
+    await f.app.importSessions.confirm(one.batch_id);
     await f.app.importSessions.putData(
-      one.session_id,
-      0,
-      payload("First paper"),
-    );
-    await f.app.importSessions.confirm(one.session_id);
-    await f.app.importSessions.putData(
-      two.session_id,
+      two.batch_id,
       0,
       payload("Different paper"),
     );
-    await f.app.importSessions.confirm(two.session_id);
+    await f.app.importSessions.confirm(two.batch_id);
     expect(f.count("literatures")).toBe(2);
-    const a = (await f.app.importSessions.missingFiles(one.session_id))
-        .items[0]!,
-      b = (await f.app.importSessions.missingFiles(two.session_id)).items[0]!;
+    const a = (await f.app.importSessions.missingFiles(one.batch_id)).items[0]!,
+      b = (await f.app.importSessions.missingFiles(two.batch_id)).items[0]!;
     expect(a.file_id).not.toBe(b.file_id);
     await expect(
       f.app.importSessions.upload(
-        two.session_id,
+        two.batch_id,
         a.file_id,
         chunks(workbenchPdf()),
       ),
-    ).rejects.toMatchObject({ code: "import-file-missing" });
+    ).rejects.toMatchObject({ code: "intake-file-missing" });
     await f.app.importSessions.upload(
-      one.session_id,
+      one.batch_id,
       a.file_id,
       chunks(workbenchPdf()),
     );
     await f.app.importSessions.upload(
-      two.session_id,
+      two.batch_id,
       b.file_id,
       chunks(workbenchPdf()),
     );
-    expect((await f.app.importSessions.status(one.session_id)).state).toBe(
-      "completed",
+    expect((await f.app.importSessions.status(one.batch_id)).state).toBe(
+      "finished",
     );
-    expect((await f.app.importSessions.status(two.session_id)).state).toBe(
-      "completed",
+    expect((await f.app.importSessions.status(two.batch_id)).state).toBe(
+      "finished",
     );
     expect(f.count("folders")).toBe(0);
     expect(f.count("external_object_mappings")).toBe(0);
-    const report = await f.app.importSessions.report(one.session_id);
+    const report = await f.app.importSessions.report(one.batch_id);
     expect(report.summary.files.uploaded).toBe(1);
     expect(report.summary.excluded).toContainEqual({
       kind: "groups",
@@ -299,23 +296,23 @@ it("allows file sessions for all local actors and preserves real CLI/stdio bibli
   try {
     for (const origin of ["web", "cli", "mcp"] as const) {
       const s = await f.app.importSessions.create(
-        { format: "ris", library: null, file_name: null, scope: "local file" },
+        { format: "ris", source: null, file_name: null, scope: "local file" },
         { kind: "local", origin },
       );
-      expect(s.library).toEqual({
+      expect(s.source).toEqual({
         system: "file",
         library_id: "",
         identity: "adhoc",
         name: "",
       });
       expect(s.initiated_by).toBe(`local:${origin}`);
-      await f.app.importSessions.cancel(s.session_id);
+      await f.app.importSessions.cancel(s.batch_id);
     }
     const device = await f.app.importSessions.create(
-      { format: "ris", library: null, scope: "device file" },
+      { format: "ris", source: null, scope: "device file" },
       { kind: "device", connection_id: randomUUID() },
     );
-    expect(device.library.identity).toBe("adhoc");
+    expect(device.source?.identity).toBe("adhoc");
     const path = join(f.home, "batch-fixture.bib"),
       withAttachment = bibliography.replace(
         "year={2026}",
@@ -349,20 +346,20 @@ it("allows file sessions for all local actors and preserves real CLI/stdio bibli
     expect(f.count("literatures")).toBe(1);
     expect(f.count("metadata_observations")).toBe(1);
     const sessions = (await f.app.importSessions.list()).items;
-    expect(sessions.filter((s) => s.library.identity === "adhoc")).toHaveLength(
+    expect(sessions.filter((s) => s.source?.identity === "adhoc")).toHaveLength(
       sessions.length,
     );
     expect(
       sessions
-        .filter((s) => s.file_name === "batch-fixture.bib")
-        .map((s) => s.library.name),
+        .filter((s) => s.request.file_name === "batch-fixture.bib")
+        .map((s) => s.source?.name),
     ).toEqual(["batch-fixture.bib", "batch-fixture.bib"]);
     for (const s of sessions.filter(
-      (s) => s.file_name === "batch-fixture.bib",
+      (s) => s.request.file_name === "batch-fixture.bib",
     )) {
-      expect(s).toMatchObject({ state: "completed", pending_files: 0 });
+      expect(s).toMatchObject({ state: "finished", progress: null });
       expect(
-        (await f.app.importSessions.missingFiles(s.session_id)).items,
+        (await f.app.importSessions.missingFiles(s.batch_id)).items,
       ).toEqual([]);
     }
   } finally {

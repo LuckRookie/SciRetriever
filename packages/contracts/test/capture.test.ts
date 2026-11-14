@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import {
-  parseCaptureSave,
-  parseCaptureIdentifiers,
+  parseIntakePageSave,
+  parseIntakePagePreview,
   parseMetadataObservation,
 } from "../src/index.js";
 const request = {
@@ -24,7 +24,7 @@ it("admits only the declared web-capture user provenance with a record reference
       input_sha256: "a".repeat(64),
       parameters_sha256: null,
     },
-    metadata: parseCaptureSave(request).metadata,
+    metadata: parseIntakePageSave(request).metadata,
     source_type: null,
     source_type_mapping_version: null,
     version_role: null,
@@ -52,7 +52,7 @@ it("admits only the declared web-capture user provenance with a record reference
     ).toThrow();
 });
 it("normalizes page identifiers and fills only neutral metadata defaults", () => {
-  const r = parseCaptureSave(request);
+  const r = parseIntakePageSave(request);
   expect(r.metadata.identifiers).toEqual([
     { namespace: "doi", value: "10.5555/page" },
   ]);
@@ -60,36 +60,42 @@ it("normalizes page identifiers and fills only neutral metadata defaults", () =>
   expect(r.file).toBeNull();
   expect(r.folder_ids).toEqual([]);
   expect(
-    parseCaptureIdentifiers([
-      { namespace: "arxiv", value: "https://arxiv.org/pdf/2601.12345v3.pdf" },
-    ]),
+    parseIntakePagePreview({
+      metadata: {
+        identifiers: [
+          {
+            namespace: "arxiv",
+            value: "https://arxiv.org/pdf/2601.12345v3.pdf",
+          },
+        ],
+      },
+    }).metadata.identifiers,
   ).toEqual([{ namespace: "arxiv", value: "2601.12345" }]);
 });
-it("requires DOI/arXiv and rejects unknown credentials, arbitrary provenance and unsafe file references", () => {
-  expect(() =>
-    parseCaptureSave({ ...request, metadata: { title: "No ID" } }),
-  ).toThrowError(
-    expect.objectContaining({ code: "capture-identifier-required" }),
+it("accepts title-only pages, rejects empty items, unknown credentials, unknown credentials, arbitrary provenance and unsafe file references", () => {
+  expect(
+    parseIntakePageSave({ ...request, metadata: { title: "No ID" } }).metadata
+      .title,
+  ).toBe("No ID");
+  expect(() => parseIntakePageSave({ ...request, metadata: {} })).toThrowError(
+    expect.objectContaining({ code: "intake-item-empty" }),
   );
   for (const extra of [
     { token: "synthetic" },
     { provenance: {} },
     { page_url: "https://example.invalid" },
   ])
-    expect(() => parseCaptureSave({ ...request, ...extra })).toThrow();
+    expect(() => parseIntakePageSave({ ...request, ...extra })).toThrow();
   expect(() =>
-    parseCaptureSave({
+    parseIntakePageSave({
       ...request,
       metadata: { ...request.metadata, cookie: "synthetic" },
     }),
   ).toThrow();
   expect(() =>
-    parseCaptureSave({ ...request, file: { file_name: "../paper.pdf" } }),
+    parseIntakePageSave({ ...request, file: { file_name: "../paper.pdf" } }),
   ).toThrow();
   expect(() =>
-    parseCaptureSave({ ...request, request_id: "arbitrary" }),
-  ).toThrow();
-  expect(() =>
-    parseCaptureIdentifiers([{ namespace: "pmid", value: "123" }]),
+    parseIntakePageSave({ ...request, request_id: "arbitrary" }),
   ).toThrow();
 });

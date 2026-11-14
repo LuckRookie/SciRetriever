@@ -3,7 +3,7 @@ import {
   canonicalJsonBytes,
   parseMetadataObservation,
   parseIntakeBatchId,
-  parseImportCreate,
+  parseIntakeCreate,
   parseFolderOperation,
   importInteger,
   IMPORT_LIMITS,
@@ -11,7 +11,6 @@ import {
   type ImportAdapterResult,
   type ImportRecord,
   type ImportGroup,
-  type ImportSession,
   type ImportSummary,
   type ImportFileStatus,
   type ImportRecordResult,
@@ -72,7 +71,17 @@ function stableId(v: unknown) {
 }
 function blank(): ImportSummary {
   return {
-    records: { created: 0, enriched: 0, matched: 0, conflicts: 0, rejected: 0 },
+    records: {
+      created: 0,
+      enriched: 0,
+      matched: 0,
+      conflicts: 0,
+      rejected: 0,
+      restored: 0,
+      possible_duplicates: 0,
+      pending_decision: 0,
+      needs_metadata: 0,
+    },
     files: {
       upload: 0,
       hash: 0,
@@ -80,16 +89,11 @@ function blank(): ImportSummary {
       existing: 0,
       conflicts: 0,
       missing: 0,
+      unpaired: 0,
     },
     annotations: { supported: 0, unsupported: 0, imported: 0, deferred: 0 },
     excluded: [],
   };
-}
-function publicSession(value: StoredImportSession): ImportSession {
-  const { origin, summary, ...s } = value;
-  void origin;
-  void summary;
-  return s;
 }
 function selected(record: ImportRecord) {
   return (
@@ -112,7 +116,7 @@ export class ImportSessionReadService {
   constructor(protected readonly database: SqliteWorker) {}
   protected tracked<T>(work: () => Promise<T>): Promise<T> {
     if (this.stop.signal.aborted)
-      return Promise.reject(new ImportSessionError("import-closed"));
+      return Promise.reject(new ImportSessionError("intake-closed"));
     const pending = work();
     this.pending.add(pending);
     void pending.then(
@@ -125,28 +129,53 @@ export class ImportSessionReadService {
     const r = await this.database.run<{ ok: boolean; value: T; code?: string }>(
       { kind: "import_read", action },
     );
-    if (!r.ok) throw new ImportSessionError(r.code ?? "import-unavailable");
+    if (!r.ok) throw new ImportSessionError(r.code ?? "intake-unavailable");
     return r.value;
   }
+  protected project(value: StoredImportSession) {
+    return this.read<IntakeBatch>({ op: "batch", batch_id: value.batch_id });
+  }
   protected stored(id: string) {
-    return this.read<StoredImportSession>({ op: "session", session_id: id });
+    return this.read<StoredImportSession>({ op: "workflow", batch_id: id });
   }
   status(id: string) {
-    return this.tracked(async () => publicSession(await this.stored(id)));
+    return this.tracked(() =>
+      this.read<IntakeBatch>({ op: "batch", batch_id: id }),
+    );
   }
-  list(cursor: string | null = null, limit = 50) {
+  /** HTTP device admission only; local Web and read-purpose MCP remain unrestricted. */
+  requireOwner(id: string, actor: ImportActor) {
+    return this.tracked(async () => {
+      const s = await this.read<{ initiated_by: string }>({
+        op: "owner",
+        batch_id: id,
+      });
+      if (
+        actor.kind === "device" &&
+        s.initiated_by !== `device:${actor.connection_id}`
+      )
+        throw new ImportSessionError("intake-batch-missing");
+    });
+  }
+  list(cursor: string | null = null, limit = 50, actor?: ImportActor) {
     return this.tracked(async () => {
       const r = await this.read<{
-        items: StoredImportSession[];
+        items: IntakeBatch[];
         next_cursor: string | null;
-      }>({ op: "sessions", cursor, limit });
-      return { ...r, items: r.items.map(publicSession) };
+      }>({
+        op: "sessions",
+        cursor,
+        limit,
+        initiated_by:
+          actor?.kind === "device" ? `device:${actor.connection_id}` : null,
+      });
+      return r;
     });
   }
   protected async summary(s: StoredImportSession) {
     const counts = await this.read<Pick<ImportSummary, "records" | "files">>({
       op: "aggregate",
-      session_id: s.session_id,
+      batch_id: s.batch_id,
     });
     return { ...(s.summary ?? blank()), ...counts };
   }
@@ -156,13 +185,31 @@ export class ImportSessionReadService {
     limit: number = IMPORT_LIMITS.page_items,
   ) {
     return this.tracked(async () => {
+      const batch = await this.read<IntakeBatch>({ op: "batch", batch_id: id });
+      if (batch.kind !== "import" || batch.source === null) {
+        const summary = blank();
+        Object.assign(summary.records, {
+          created: batch.counts.created,
+          enriched: batch.counts.enriched,
+          matched: batch.counts.matched,
+          restored: batch.counts.restored,
+          rejected: batch.counts.rejected,
+        });
+        return {
+          batch,
+          estimated: false as const,
+          summary,
+          items: [],
+          next_cursor: null,
+        };
+      }
       const s = await this.stored(id),
         page = await this.read<{
           items: ImportRecordResult[];
           next_cursor: string | null;
-        }>({ op: "results", session_id: id, cursor, limit });
+        }>({ op: "results", batch_id: id, cursor, limit });
       return {
-        session: publicSession(s),
+        batch: await this.project(s),
         estimated: false as const,
         summary: await this.summary(s),
         ...page,
@@ -180,7 +227,7 @@ export class ImportSessionReadService {
 export class ImportSessionService extends ImportSessionReadService {
   private readonly adapters: ReadonlyMap<string, ImportAdapter>;
   private readonly now: () => number;
-  private readonly confirmations = new Map<string, Promise<ImportSession>>();
+  private readonly confirmations = new Map<string, Promise<IntakeBatch>>();
   private readonly stopping = new Set<string>();
   private readonly uploads = new Map<string, Set<Promise<unknown>>>();
   private readonly uploadStops = new Map<string, Set<AbortController>>();
@@ -228,7 +275,7 @@ export class ImportSessionService extends ImportSessionReadService {
     const r = await this.database.run<{ ok: boolean; value: T; code?: string }>(
       { kind: "import_write", action },
     );
-    if (!r.ok) throw new ImportSessionError(r.code ?? "import-unavailable");
+    if (!r.ok) throw new ImportSessionError(r.code ?? "intake-unavailable");
     return r.value;
   }
   formats(): readonly string[] {
@@ -236,21 +283,21 @@ export class ImportSessionService extends ImportSessionReadService {
   }
   create(value: unknown, actor: ImportActor) {
     return this.tracked(() =>
-      this.createOwned(parseImportCreate(value), actor),
+      this.createOwned(parseIntakeCreate(value), actor),
     );
   }
   private async createOwned(
-    r: ReturnType<typeof parseImportCreate>,
+    r: ReturnType<typeof parseIntakeCreate>,
     actor: ImportActor,
   ) {
-    if (r.library?.system === "bibliography-file")
-      throw new ImportSessionError("import-input-invalid");
+    if (r.source?.system === "bibliography-file")
+      throw new ImportSessionError("intake-input-invalid");
     if (!this.adapters.has(r.format))
-      throw new ImportSessionError("import-format-unsupported");
-    if (r.library?.identity === "local" && actor.kind !== "device")
-      throw new ImportSessionError("import-local-identity-required");
-    const adhoc = r.library === null;
-    const library = r.library ?? {
+      throw new ImportSessionError("intake-format-unsupported");
+    if (r.source?.identity === "local" && actor.kind !== "device")
+      throw new ImportSessionError("intake-local-identity-required");
+    const adhoc = r.source === null;
+    const source = r.source ?? {
       system: "file",
       library_id: "",
       identity: "adhoc" as const,
@@ -258,47 +305,71 @@ export class ImportSessionService extends ImportSessionReadService {
     };
     const identity_scope = adhoc
       ? `adhoc:${randomUUID()}`
-      : library.identity === "global"
+      : source.identity === "global"
         ? "global"
         : actor.kind === "device"
           ? `device:${actor.connection_id}`
           : "local";
     const now = new Date(this.now()).toISOString(),
-      session_id = randomUUID();
-    const s: ImportSession = {
-      ...r,
-      library,
-      import_user_tags: adhoc ? false : r.import_user_tags,
-      session_id,
-      library_key: hash([
-        "sciretriever.import-source.v1",
-        library.system,
-        identity_scope,
-        library.library_id,
-      ]),
-      state: "collecting",
+      batchId = parseIntakeBatchId(randomUUID());
+    const origin = actor.kind === "device" ? "web" : actor.origin;
+    const label = (adhoc ? (r.file_name ?? r.format) : source.name).slice(
+      0,
+      120,
+    );
+    const batch: IntakeBatch = {
+      batch_id: batchId,
+      kind: "import",
+      label,
+      default_label: label,
+      renamed: false,
+      origin,
       created_at: now,
-      updated_at: now,
-      confirmed_at: null,
       finished_at: null,
-      last_file_at: null,
+      state: "collecting",
+      result: null,
+      confirmation: "batch",
+      confirmed_at: null,
       initiated_by:
         actor.kind === "device"
           ? `device:${actor.connection_id}`
           : `local:${actor.origin}`,
-      intake_batch_id: null,
-      metadata_complete: false,
-      record_count: 0,
-      processed_records: 0,
-      pending_files: 0,
+      source,
+      progress: null,
+      request: { format: r.format, file_name: r.file_name },
+      counts: {
+        hits: 0,
+        created: 0,
+        enriched: 0,
+        matched: 0,
+        rejected: 0,
+        restored: 0,
+        conflicts: 0,
+        possible_duplicates: 0,
+        pending_decision: 0,
+        needs_metadata: 0,
+      },
+      pdf: { has_pdf: 0, unavailable: 0, pending: 0 },
+      discovery_run_id: null,
+      source_failures: 0,
     };
     await this.write({
       op: "create",
-      session: s,
+      batch,
+      library_key: hash([
+        "sciretriever.import-source.v1",
+        source.system,
+        identity_scope,
+        source.library_id,
+      ]),
+      source,
+      format: r.format,
+      scope: r.scope,
+      file_name: r.file_name,
+      import_user_tags: adhoc ? false : r.import_user_tags,
       identity_scope,
-      origin: actor.kind === "device" ? "web" : actor.origin,
     });
-    return publicSession(await this.stored(session_id));
+    return this.project(await this.stored(batchId));
   }
   private decode(
     format: string,
@@ -306,10 +377,10 @@ export class ImportSessionService extends ImportSessionReadService {
     sequence: number,
   ): ImportAdapterResult {
     const adapter = this.adapters.get(format);
-    if (!adapter) throw new ImportSessionError("import-format-unsupported");
+    if (!adapter) throw new ImportSessionError("intake-format-unsupported");
     const result = adapter.decode(data, sequence);
     if (result.items.length > IMPORT_LIMITS.records)
-      throw new ImportSessionError("import-session-limit");
+      throw new ImportSessionError("intake-batch-limit");
     return result;
   }
   putData(id: string, sequence: number, data: unknown) {
@@ -328,11 +399,11 @@ export class ImportSessionService extends ImportSessionReadService {
       typeof data !== "string" &&
       !decodedBibliography
     )
-      throw new ImportSessionError("import-input-invalid");
+      throw new ImportSessionError("intake-input-invalid");
     const decoded = this.decode(s.format, data, sequence);
     const bytes = canonicalJsonBytes({ import_data: data });
     if (bytes.byteLength > IMPORT_LIMITS.request_bytes)
-      throw new ImportSessionError("import-request-too-large");
+      throw new ImportSessionError("intake-request-too-large");
     const stage = await this.files.stage({
       maxBytes: IMPORT_LIMITS.request_bytes,
       signal: this.stop.signal,
@@ -361,7 +432,7 @@ export class ImportSessionService extends ImportSessionReadService {
         }
       await this.writes.run(async () => {
         const old = (
-          await this.read<ImportPart[]>({ op: "parts", session_id: id })
+          await this.read<ImportPart[]>({ op: "parts", batch_id: id })
         ).find((v) => v.sequence === sequence);
         const ticket = await this.recovery.prepare([
           descriptor,
@@ -373,7 +444,7 @@ export class ImportSessionService extends ImportSessionReadService {
           await this.files.publish(stage, descriptor.reference);
           await this.write({
             op: "part",
-            session_id: id,
+            batch_id: id,
             sequence,
             part: descriptor,
             artifact_id: `import-source:${description.sha256}`,
@@ -385,7 +456,7 @@ export class ImportSessionService extends ImportSessionReadService {
           await this.recovery.complete(ticket);
         }
       });
-      return publicSession(await this.stored(id));
+      return this.project(await this.stored(id));
     } finally {
       await stage.discard();
     }
@@ -408,14 +479,14 @@ export class ImportSessionService extends ImportSessionReadService {
   private async prepare(s: StoredImportSession) {
     const parts = await this.read<ImportPart[]>({
         op: "parts",
-        session_id: s.session_id,
+        batch_id: s.batch_id,
       }),
       groups = new Map<string, ImportGroup>(),
       references = new Set<string>(),
       summary = blank();
     for (const part of parts) {
       const data = await this.decodePart(s.format, part);
-      if (s.library.identity === "adhoc") {
+      if (s.source.identity === "adhoc") {
         if (data.groups.length)
           addExcluded(summary, "groups", data.groups.length);
       } else
@@ -425,7 +496,7 @@ export class ImportSessionService extends ImportSessionReadService {
         if (item.record) {
           const record = item.record,
             primary = selected(record);
-          if (s.library.identity !== "adhoc")
+          if (s.source.identity !== "adhoc")
             for (const id of record.groups) references.add(id);
           for (const f of record.files)
             if (f !== primary)
@@ -461,10 +532,10 @@ export class ImportSessionService extends ImportSessionReadService {
         }
     }
     const visit = (id: string, chain = new Set<string>()) => {
-      if (chain.has(id)) throw new ImportSessionError("import-group-cycle");
+      if (chain.has(id)) throw new ImportSessionError("intake-group-cycle");
       const group = groups.get(id);
-      if (!group) throw new ImportSessionError("import-group-missing");
-      if (chain.size >= 128) throw new ImportSessionError("import-group-depth");
+      if (!group) throw new ImportSessionError("intake-group-missing");
+      if (chain.size >= 128) throw new ImportSessionError("intake-group-depth");
       if (group.parent_external_id !== null)
         visit(group.parent_external_id, new Set([...chain, id]));
     };
@@ -488,7 +559,7 @@ export class ImportSessionService extends ImportSessionReadService {
     record: ImportRecord,
   ): MetadataObservation {
     const content = hash(record),
-      legacy = s.library.identity === "adhoc";
+      legacy = s.source.identity === "adhoc";
     return parseMetadataObservation({
       observation_id: stableId([
         s.library_key,
@@ -569,7 +640,7 @@ export class ImportSessionService extends ImportSessionReadService {
       await this.database.writeIntake({
         operation: "member",
         member: {
-          batch_id: parseIntakeBatchId(s.intake_batch_id!),
+          batch_id: parseIntakeBatchId(s.batch_id!),
           literature_id: mapping!.internal_id,
           disposition: "matched",
         },
@@ -584,11 +655,11 @@ export class ImportSessionService extends ImportSessionReadService {
     }
     try {
       return await this.identity.observe(observation, {
-        intake_batch_id: parseIntakeBatchId(s.intake_batch_id!),
+        intake_batch_id: parseIntakeBatchId(s.batch_id!),
         ...(mapping ? { target_literature_id: mapping.internal_id } : {}),
       });
     } catch (error) {
-      if (s.library.identity !== "adhoc") throw error;
+      if (s.source.identity !== "adhoc") throw error;
       return { disposition: "rejected", reason: "identity-failed" };
     }
   }
@@ -596,7 +667,7 @@ export class ImportSessionService extends ImportSessionReadService {
     return this.tracked(async () => {
       const s = await this.stored(id);
       if (!["collecting", "awaiting-confirmation"].includes(s.state))
-        throw new ImportSessionError("import-session-state");
+        throw new ImportSessionError("intake-batch-state");
       const prepared = await this.prepare(s),
         summary = prepared.summary;
       for (const part of prepared.parts)
@@ -629,12 +700,16 @@ export class ImportSessionService extends ImportSessionReadService {
             (summary.files as { missing: number }).missing++;
           }
         }
-      return { session: publicSession(s), estimated: true as const, summary };
+      return {
+        batch: await this.project(s),
+        estimated: true as const,
+        summary,
+      };
     });
   }
-  confirm(id: string): Promise<ImportSession> {
+  confirm(id: string): Promise<IntakeBatch> {
     if (this.stopping.has(id))
-      return Promise.reject(new ImportSessionError("import-session-state"));
+      return Promise.reject(new ImportSessionError("intake-batch-state"));
     const current = this.confirmations.get(id);
     if (current) return current;
     const pending = this.tracked(() => this.confirmOwned(id));
@@ -645,53 +720,26 @@ export class ImportSessionService extends ImportSessionReadService {
     );
     return pending;
   }
-  private async confirmOwned(id: string): Promise<ImportSession> {
+  private async confirmOwned(id: string): Promise<IntakeBatch> {
     let s = await this.stored(id);
     if (
-      s.state === "completed" ||
-      (s.state === "importing" && s.metadata_complete)
+      s.state === "finished" ||
+      (s.state === "running" && s.metadata_complete)
     )
-      return publicSession(s);
+      return this.project(s);
     const prepared = await this.prepare(s);
     await this.writes.run(async () => {
       const current = await this.read<ImportPart[]>({
         op: "parts",
-        session_id: id,
+        batch_id: id,
       });
       if (hash(current) !== hash(prepared.parts))
-        throw new ImportSessionError("import-data-changed");
-      const now = new Date(this.now()).toISOString(),
-        batchId = parseIntakeBatchId(randomUUID());
-      const label = (
-        s.library.identity === "adhoc"
-          ? (s.file_name ?? s.format)
-          : s.library.name
-      ).slice(0, 120);
-      const batch: IntakeBatch = {
-        batch_id: batchId,
-        kind: "import",
-        label,
-        default_label: label,
-        renamed: false,
-        origin: s.origin,
-        created_at: now,
-        finished_at: null,
-        status: "running",
-        request: {
-          format: s.format,
-          file_name: s.file_name,
-        },
-        counts: { hits: 0, created: 0, enriched: 0, matched: 0, rejected: 0 },
-        pdf: { has_pdf: 0, unavailable: 0, pending: 0 },
-        discovery_run_id: null,
-        source_failures: 0,
-      };
+        throw new ImportSessionError("intake-data-changed");
       await this.write({
         op: "begin",
-        session_id: id,
-        batch,
+        batch_id: id,
         summary: prepared.summary,
-        now,
+        now: new Date(this.now()).toISOString(),
       });
       s = await this.stored(id);
     });
@@ -700,7 +748,7 @@ export class ImportSessionService extends ImportSessionReadService {
       await this.writes.run(async () => {
         if (
           this.stopping.has(id) ||
-          (await this.stored(id)).state !== "importing"
+          (await this.stored(id)).state !== "running"
         )
           return;
         try {
@@ -713,13 +761,13 @@ export class ImportSessionService extends ImportSessionReadService {
     for (const part of prepared.parts)
       for (const item of (await this.decodePart(s.format, part)).items) {
         if (this.stop.signal.aborted || this.stopping.has(id))
-          return publicSession(await this.stored(id));
+          return this.project(await this.stored(id));
         await this.writes.run(async () => {
           const current = await this.stored(id);
-          if (this.stopping.has(id) || current.state !== "importing") return;
+          if (this.stopping.has(id) || current.state !== "running") return;
           const old = await this.read<ImportRecordResult | null>({
             op: "result",
-            session_id: id,
+            batch_id: id,
             sequence: part.sequence,
             record_index: item.record_index,
           });
@@ -748,7 +796,7 @@ export class ImportSessionService extends ImportSessionReadService {
               content = hash(record),
               observation = this.observation(s, record);
             const assessment =
-              s.library.identity === "adhoc"
+              s.source.identity === "adhoc"
                 ? {
                     disposition: "created" as const,
                     literature_id: null,
@@ -776,7 +824,10 @@ export class ImportSessionService extends ImportSessionReadService {
               if (decision.disposition !== "accepted")
                 result = {
                   ...result,
-                  disposition: "conflict",
+                  disposition:
+                    decision.disposition === "rejected"
+                      ? "rejected"
+                      : "conflict",
                   reason: decision.reason,
                 };
               else {
@@ -785,7 +836,7 @@ export class ImportSessionService extends ImportSessionReadService {
                   disposition: "created" | "enriched" | "matched";
                 } | null>({
                   op: "intake-member",
-                  batch_id: s.intake_batch_id!,
+                  batch_id: s.batch_id!,
                   literature_id: decision.literature_id,
                 });
                 result = {
@@ -799,7 +850,7 @@ export class ImportSessionService extends ImportSessionReadService {
                   reason: null,
                 };
                 mapping =
-                  s.library.identity === "adhoc"
+                  s.source.identity === "adhoc"
                     ? null
                     : {
                         library_key: s.library_key,
@@ -808,6 +859,7 @@ export class ImportSessionService extends ImportSessionReadService {
                         internal_id: decision.literature_id,
                         content_sha256: content,
                         observation_id: observation.observation_id,
+                        state: "settled",
                       };
                 try {
                   await this.addFolders(
@@ -825,7 +877,7 @@ export class ImportSessionService extends ImportSessionReadService {
                   addExcluded(
                     prepared.summary,
                     error instanceof FolderError
-                      ? "import-folder-target-missing"
+                      ? "intake-folder-target-missing"
                       : error.code,
                   );
                 }
@@ -853,8 +905,15 @@ export class ImportSessionService extends ImportSessionReadService {
           }
           await this.write({
             op: "result",
-            session_id: id,
+            batch_id: id,
             item: result,
+            item_id: stableId([
+              "intake-item",
+              id,
+              part.sequence,
+              item.record_index,
+            ]),
+            title: record?.metadata.title ?? null,
             mapping,
             files,
             now: new Date(this.now()).toISOString(),
@@ -862,19 +921,19 @@ export class ImportSessionService extends ImportSessionReadService {
         });
       }
     const current = await this.stored(id);
-    if (current.state !== "importing" || this.stopping.has(id))
-      return publicSession(current);
+    if (current.state !== "running" || this.stopping.has(id))
+      return this.project(current);
     const aggregate = await this.read<Pick<ImportSummary, "records" | "files">>(
-      { op: "aggregate", session_id: id },
+      { op: "aggregate", batch_id: id },
     );
     await this.write({
       op: "metadata-done",
-      session_id: id,
+      batch_id: id,
       summary: { ...prepared.summary, ...aggregate },
       now: new Date(this.now()).toISOString(),
     });
     await this.finishIfComplete(id);
-    return publicSession(await this.stored(id));
+    return this.project(await this.stored(id));
   }
   private async ensureFolder(
     s: StoredImportSession,
@@ -893,7 +952,7 @@ export class ImportSessionService extends ImportSessionReadService {
     });
     const folderId =
       mapped?.internal_id ?? stableId(["import-folder", s.library_key, key]);
-    const mapping = (content_sha256: string | null) =>
+    const mapping = (state: "pending" | "settled") =>
       this.write({
         op: "mapping",
         mapping: {
@@ -901,20 +960,18 @@ export class ImportSessionService extends ImportSessionReadService {
           object_kind: "group",
           external_id: key,
           internal_id: folderId,
-          content_sha256,
+          content_sha256: null,
           observation_id: null,
+          state,
         },
       });
     if (mapped && context.folder) {
-      if (mapped.content_sha256 !== null) await mapping(null);
+      if (mapped.state === "pending") await mapping("settled");
       return mapped.internal_id;
     }
-    // A null hash is a settled mapping: a later user deletion must not be undone.
-    // A pending mapping reserves this ID before creating any folder, so recovery
-    // can recreate it without claiming a user's same-name folder.
-    if (mapped && mapped.content_sha256 === null)
-      throw new ImportSessionError("import-folder-target-missing");
-    if (!mapped) await mapping(hash({ name, parent }));
+    if (mapped?.state === "settled")
+      throw new ImportSessionError("intake-folder-target-missing");
+    if (!mapped) await mapping("pending");
     const truncate = (value: string, max: number) => {
       let result = "";
       for (const character of value) {
@@ -940,7 +997,7 @@ export class ImportSessionService extends ImportSessionReadService {
       actor: activityContext().actor,
       now: new Date(this.now()).toISOString(),
     });
-    await mapping(null);
+    await mapping("settled");
     return folderId;
   }
   private async sourceGroup(
@@ -954,7 +1011,7 @@ export class ImportSessionService extends ImportSessionReadService {
     const group = groups.get(id)!;
     const parent =
       group.parent_external_id === null
-        ? await this.ensureFolder(s, "root", s.library.name, null)
+        ? await this.ensureFolder(s, "root", s.source.name, null)
         : await this.sourceGroup(s, groups, group.parent_external_id, cache);
     const folder = await this.ensureFolder(
       s,
@@ -976,8 +1033,8 @@ export class ImportSessionService extends ImportSessionReadService {
       (!s.import_user_tags || !record.user_tags.length)
     )
       return;
-    if (s.library.identity === "adhoc") return;
-    const root = await this.ensureFolder(s, "root", s.library.name, null),
+    if (s.source.identity === "adhoc") return;
+    const root = await this.ensureFolder(s, "root", s.source.name, null),
       cache = new Map<string, string>();
     for (const id of record.groups)
       await this.folders.manage({
@@ -1013,7 +1070,7 @@ export class ImportSessionService extends ImportSessionReadService {
     return this.tracked(() =>
       this.read<{ items: ImportFileStatus[]; next_cursor: string | null }>({
         op: "files",
-        session_id: id,
+        batch_id: id,
         cursor,
         limit,
         pending,
@@ -1024,36 +1081,41 @@ export class ImportSessionService extends ImportSessionReadService {
     await this.writes.run(async () => {
       const parts = await this.read<ImportPart[]>({
         op: "parts",
-        session_id: id,
+        batch_id: id,
       });
       if (!parts.length) return;
       const ticket = await this.recovery.prepare(
         parts.map((p) => ({ reference: p.reference, artifact: p.artifact })),
       );
-      await this.write({ op: "retire-parts", session_id: id });
+      await this.write({ op: "retire-parts", batch_id: id });
       await this.recovery.complete(ticket);
     });
   }
   private async finishIfComplete(id: string) {
     const s = await this.stored(id);
-    if (s.state === "importing" && s.metadata_complete && s.pending_files === 0)
-      await this.finishOwned(id, "completed");
+    if (
+      s.state === "running" &&
+      s.confirmation === "batch" &&
+      s.metadata_complete &&
+      s.pending_files === 0
+    )
+      await this.finishOwned(id, "finished");
   }
-  private async finishOwned(id: string, state: "completed" | "cancelled") {
+  private async finishOwned(id: string, state: "finished" | "cancelled") {
     await this.writes.run(async () => {
       const s = await this.stored(id);
       await this.write({
         op: "finish",
-        session_id: id,
+        batch_id: id,
         state,
         summary: await this.summary(s),
         now: new Date(this.now()).toISOString(),
       });
     });
     await this.cleanParts(id);
-    return publicSession(await this.stored(id));
+    return this.project(await this.stored(id));
   }
-  private async terminate(id: string, state: "completed" | "cancelled") {
+  private async terminate(id: string, state: "finished" | "cancelled") {
     this.stopping.add(id);
     for (const stop of this.uploadStops.get(id) ?? []) stop.abort();
     try {
@@ -1070,11 +1132,11 @@ export class ImportSessionService extends ImportSessionReadService {
   finish(id: string) {
     return this.tracked(async () => {
       const s = await this.stored(id);
-      if (s.state !== "importing" && s.state !== "completed")
-        throw new ImportSessionError("import-session-state");
+      if (s.state !== "running" && s.state !== "finished")
+        throw new ImportSessionError("intake-batch-state");
       if (!s.metadata_complete)
-        throw new ImportSessionError("import-metadata-pending");
-      return this.terminate(id, "completed");
+        throw new ImportSessionError("intake-metadata-pending");
+      return this.terminate(id, "finished");
     });
   }
   cancel(id: string) {
@@ -1091,18 +1153,18 @@ export class ImportSessionService extends ImportSessionReadService {
       // Another upload/hash request may have settled this file while we waited.
       const current = await this.read<ImportFileStatus>({
         op: "file",
-        session_id: id,
+        batch_id: id,
         file_id: file.file_id,
       });
       if (current.status !== "pending") {
         return settleFileState(current, sha256, asset, uploaded);
       }
-      if ((await this.stored(id)).state !== "importing")
-        throw new ImportSessionError("import-session-state");
+      if ((await this.stored(id)).state !== "running")
+        throw new ImportSessionError("intake-batch-state");
       const settled = settleFileState(current, sha256, asset, uploaded);
       await this.write({
         op: "file-result",
-        session_id: id,
+        batch_id: id,
         file_id: current.file_id,
         status: settled.status as "conflict" | "uploaded" | "existing",
         sha256,
@@ -1112,7 +1174,7 @@ export class ImportSessionService extends ImportSessionReadService {
       });
       return this.read<ImportFileStatus>({
         op: "file",
-        session_id: id,
+        batch_id: id,
         file_id: current.file_id,
       });
     });
@@ -1123,7 +1185,7 @@ export class ImportSessionService extends ImportSessionReadService {
     return this.tracked(async () => {
       const file = await this.read<ImportFileStatus>({
         op: "file",
-        session_id: id,
+        batch_id: id,
         file_id: fileId,
       });
       return this.fileChannel.reportHash(
@@ -1154,10 +1216,10 @@ export class ImportSessionService extends ImportSessionReadService {
     this.uploadStops.set(id, stops);
     const operation = this.tracked(async () => {
       if (this.stopping.has(id))
-        throw new ImportSessionError("import-session-state");
+        throw new ImportSessionError("intake-batch-state");
       const file = await this.read<ImportFileStatus>({
         op: "file",
-        session_id: id,
+        batch_id: id,
         file_id: fileId,
       });
       return this.fileChannel.upload(
@@ -1168,12 +1230,15 @@ export class ImportSessionService extends ImportSessionReadService {
         async () => {
           if (
             this.stopping.has(id) ||
-            (await this.stored(id)).state !== "importing"
+            (await this.stored(id)).state !== "running"
           )
-            throw new ImportSessionError("import-session-state");
+            throw new ImportSessionError("intake-batch-state");
         },
         (file, sha, asset, uploaded) =>
           this.settleFile(id, file, sha, asset, uploaded),
+        (await this.stored(id)).format === "web-page"
+          ? "web-capture"
+          : "import",
       );
     });
     const uploads = this.uploads.get(id) ?? new Set<Promise<unknown>>();
@@ -1194,21 +1259,29 @@ export class ImportSessionService extends ImportSessionReadService {
     if (this.maintenance) return this.maintenance;
     const pending = this.tracked(async () => {
       const sessions = await this.read<StoredImportSession[]>({ op: "active" });
+      const date = new Date(this.now()),
+        day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
       for (const s of sessions) {
+        if (s.confirmation === "per-item") {
+          const opened = new Date(s.created_at),
+            openedDay = `${opened.getFullYear()}-${String(opened.getMonth() + 1).padStart(2, "0")}-${String(opened.getDate()).padStart(2, "0")}`;
+          if (openedDay < day) await this.terminate(s.batch_id, "finished");
+          continue;
+        }
         if (this.stop.signal.aborted) return;
         const deadline =
           Date.parse(
-            s.state === "importing"
+            s.state === "running"
               ? (s.last_file_at ?? s.confirmed_at ?? s.created_at)
               : s.created_at,
           ) + IMPORT_LIMITS.expiry_ms;
         if (this.now() >= deadline)
           await this.terminate(
-            s.session_id,
-            s.state === "importing" ? "completed" : "cancelled",
+            s.batch_id,
+            s.state === "running" ? "finished" : "cancelled",
           );
-        else if (s.state === "importing" && !s.metadata_complete)
-          await this.confirm(s.session_id);
+        else if (s.state === "running" && !s.metadata_complete)
+          await this.confirm(s.batch_id);
       }
       for (const id of await this.read<string[]>({ op: "cleanup" })) {
         if (this.stop.signal.aborted) return;
@@ -1237,7 +1310,7 @@ export class ImportSessionService extends ImportSessionReadService {
       const s = await this.createOwned(
         {
           format,
-          library: null,
+          source: null,
           scope: "single bibliography file",
           file_name: fileName,
           import_user_tags: false,
@@ -1287,36 +1360,37 @@ export class ImportSessionService extends ImportSessionReadService {
         }
         for (const [sequence, items] of batches.entries())
           await this.putDataOwned(
-            s.session_id,
+            s.batch_id,
             sequence,
             { legacy_decoded: items },
             true,
           );
-        const done = await this.confirm(s.session_id),
+        const done = await this.confirm(s.batch_id),
           items: ImportRecordResult[] = [];
         let cursor: string | null = null;
         do {
-          const page = await this.report(s.session_id, cursor);
+          const page = await this.report(s.batch_id, cursor);
           items.push(...page.items);
           cursor = page.next_cursor;
         } while (cursor !== null);
         return {
           format,
-          intake_batch_id: parseIntakeBatchId(done.intake_batch_id!),
+          intake_batch_id: parseIntakeBatchId(done.batch_id),
           items: items.map(({ sequence, external_id, ...item }) => {
             void sequence;
             void external_id;
             return {
               ...item,
-              disposition:
-                item.disposition === "conflict"
-                  ? ("rejected" as const)
-                  : item.disposition,
+              disposition: ["created", "enriched", "matched"].includes(
+                item.disposition,
+              )
+                ? (item.disposition as "created" | "enriched" | "matched")
+                : ("rejected" as const),
             };
           }),
         };
       } catch (error) {
-        await this.finishOwned(s.session_id, "cancelled");
+        await this.finishOwned(s.batch_id, "cancelled");
         throw error;
       }
     });

@@ -73,7 +73,7 @@ async function fixture(availableBytes?: () => Promise<number>) {
     app.importSessions.create(
       {
         format: "records",
-        library: {
+        source: {
           system: "synthetic",
           library_id: libraryId,
           identity: "global",
@@ -133,7 +133,7 @@ it("validates an imported group name exactly like FolderService before dispatchi
     ).toThrow(ContractValidationError);
     const s = await f.create();
     await f.app.importSessions.putData(
-      s.session_id,
+      s.batch_id,
       0,
       data(
         [{ ...record("invalid-group"), groups: ["group"] }],
@@ -142,7 +142,7 @@ it("validates an imported group name exactly like FolderService before dispatchi
     );
     const writes = vi.spyOn(f.app.database, "folders");
     await expect(
-      f.app.importSessions.confirm(s.session_id),
+      f.app.importSessions.confirm(s.batch_id),
     ).rejects.toBeInstanceOf(ContractValidationError);
     expect(
       writes.mock.calls.filter(
@@ -174,7 +174,7 @@ it.each([
         import_user_tags: true,
       });
       await f.app.importSessions.putData(
-        s.session_id,
+        s.batch_id,
         0,
         data(
           [
@@ -197,22 +197,34 @@ it.each([
             command.kind === "import_write" &&
             command.action.op === "mapping" &&
             command.action.mapping.external_id === key &&
-            command.action.mapping.content_sha256 === null
+            command.action.mapping.state === "settled"
           ) {
             interrupted = true;
             throw new Error("Synthetic interruption before group mapping");
           }
           return original(command, signal);
         });
-      await expect(f.app.importSessions.confirm(s.session_id)).rejects.toThrow(
+      await expect(f.app.importSessions.confirm(s.batch_id)).rejects.toThrow(
         "Synthetic interruption",
       );
       expect(interrupted).toBe(true);
+      expect(
+        f.sql<{ state: string; content_sha256: string | null }[]>(
+          `SELECT state,content_sha256 FROM external_object_mappings WHERE external_id='${key}'`,
+        ),
+      ).toEqual([{ state: "pending", content_sha256: null }]);
       spy.mockRestore();
       await f.reopen();
       await f.app.importSessions.sweep();
-      const final = await f.app.importSessions.status(s.session_id);
-      expect(final.state).toBe("completed");
+      const final = await f.app.importSessions.status(s.batch_id);
+      expect(final.state).toBe("finished");
+      expect(
+        f
+          .sql<
+            { state: string }[]
+          >("SELECT state FROM external_object_mappings WHERE object_kind='group'")
+          .every((v) => v.state === "settled"),
+      ).toBe(true);
       const folders = f.sql<{ folder_id: string; name: string }[]>(
         "SELECT folder_id,name FROM folders",
       );
@@ -234,7 +246,7 @@ it("resumes a reserved folder ID before creation and preserves an unrelated user
   try {
     const s = await f.create("reserved-folder", "Library");
     await f.app.importSessions.putData(
-      s.session_id,
+      s.batch_id,
       0,
       data(
         [
@@ -257,7 +269,7 @@ it("resumes a reserved folder ID before creation and preserves an unrelated user
           throw new Error("Synthetic interruption after reservation");
         return original(command, signal);
       });
-    await expect(f.app.importSessions.confirm(s.session_id)).rejects.toThrow(
+    await expect(f.app.importSessions.confirm(s.batch_id)).rejects.toThrow(
       "Synthetic interruption",
     );
     spy.mockRestore();
@@ -274,8 +286,8 @@ it("resumes a reserved folder ID before creation and preserves an unrelated user
     })) as { folder_id: string };
     await f.reopen();
     await f.app.importSessions.sweep();
-    expect((await f.app.importSessions.status(s.session_id)).state).toBe(
-      "completed",
+    expect((await f.app.importSessions.status(s.batch_id)).state).toBe(
+      "finished",
     );
     expect(
       f.sql<{ internal_id: string }[]>(
@@ -307,20 +319,12 @@ it("replaces numbered parts, keeps preview read-only and rechecks the library on
   const f = await fixture();
   try {
     const s = await f.create();
-    await f.app.importSessions.putData(s.session_id, 0, data([record("old")]));
-    await f.app.importSessions.putData(
-      s.session_id,
-      1,
-      data([record("second")]),
-    );
-    await f.app.importSessions.putData(
-      s.session_id,
-      0,
-      data([record("first")]),
-    );
+    await f.app.importSessions.putData(s.batch_id, 0, data([record("old")]));
+    await f.app.importSessions.putData(s.batch_id, 1, data([record("second")]));
+    await f.app.importSessions.putData(s.batch_id, 0, data([record("first")]));
     const before = f.sql("SELECT * FROM literature_metadata");
     const revisions = f.sql("SELECT * FROM library_state_revision");
-    const preview = await f.app.importSessions.preview(s.session_id);
+    const preview = await f.app.importSessions.preview(s.batch_id);
     expect(preview.summary.records).toMatchObject({ created: 2, matched: 0 });
     expect(f.sql("SELECT * FROM literature_metadata")).toEqual(before);
     expect(f.sql("SELECT * FROM library_state_revision")).toEqual(revisions);
@@ -330,9 +334,9 @@ it("replaces numbered parts, keeps preview read-only and rechecks the library on
       "csl-json",
     ).items[0]!.observation!;
     await f.app.identity.observe(observation);
-    const confirmed = await f.app.importSessions.confirm(s.session_id);
-    expect(confirmed.state).toBe("completed");
-    const report = await f.app.importSessions.report(s.session_id);
+    const confirmed = await f.app.importSessions.confirm(s.batch_id);
+    expect(confirmed.state).toBe("finished");
+    const report = await f.app.importSessions.report(s.batch_id);
     expect(report.items.map((i) => i.disposition)).toEqual([
       "enriched",
       "created",
@@ -342,9 +346,9 @@ it("replaces numbered parts, keeps preview read-only and rechecks the library on
     ).toBe(2);
     expect(f.sql("SELECT * FROM import_parts")).toEqual([]);
     expect(f.sql("SELECT * FROM import_staged_keys")).toEqual([]);
-    expect(
-      (await f.app.importSessions.confirm(s.session_id)).intake_batch_id,
-    ).toBe(confirmed.intake_batch_id);
+    expect((await f.app.importSessions.confirm(s.batch_id)).batch_id).toBe(
+      confirmed.batch_id,
+    );
   } finally {
     await f.close();
   }
@@ -355,7 +359,7 @@ it("resumes persisted sessions and obeys seven-day cancellation/finish rules wit
   try {
     const cancelled = await f.create("cancelled");
     await f.app.importSessions.putData(
-      cancelled.session_id,
+      cancelled.batch_id,
       0,
       data([record("cancelled")]),
     );
@@ -363,13 +367,13 @@ it("resumes persisted sessions and obeys seven-day cancellation/finish rules wit
       "SELECT a.relative_path FROM import_parts p JOIN artifact_objects a USING(artifact_id)",
     );
     await f.reopen();
-    expect(
-      (await f.app.importSessions.status(cancelled.session_id)).state,
-    ).toBe("awaiting-confirmation");
-    await f.app.importSessions.cancel(cancelled.session_id);
-    expect(
-      (await f.app.importSessions.status(cancelled.session_id)).state,
-    ).toBe("cancelled");
+    expect((await f.app.importSessions.status(cancelled.batch_id)).state).toBe(
+      "awaiting-confirmation",
+    );
+    await f.app.importSessions.cancel(cancelled.batch_id);
+    expect((await f.app.importSessions.status(cancelled.batch_id)).state).toBe(
+      "cancelled",
+    );
     for (const ref of refs)
       await expect(
         readFile(join(f.app.files.root, ref.relative_path)),
@@ -377,26 +381,26 @@ it("resumes persisted sessions and obeys seven-day cancellation/finish rules wit
     const waiting = await f.create("waiting"),
       uploading = await f.create("uploading");
     await f.app.importSessions.putData(
-      waiting.session_id,
+      waiting.batch_id,
       0,
       data([record("waiting")]),
     );
     await f.app.importSessions.putData(
-      uploading.session_id,
+      uploading.batch_id,
       0,
       data([pdfRecord("uploading")]),
     );
-    await f.app.importSessions.confirm(uploading.session_id);
+    await f.app.importSessions.confirm(uploading.batch_id);
     f.setNow(Date.parse(waiting.created_at) + IMPORT_LIMITS.expiry_ms);
     await f.app.importSessions.sweep();
-    expect((await f.app.importSessions.status(waiting.session_id)).state).toBe(
+    expect((await f.app.importSessions.status(waiting.batch_id)).state).toBe(
       "cancelled",
     );
-    const ended = await f.app.importSessions.report(uploading.session_id);
-    expect(ended.session.state).toBe("completed");
+    const ended = await f.app.importSessions.report(uploading.batch_id);
+    expect(ended.batch.state).toBe("finished");
     expect(ended.summary.files.missing).toBe(1);
     expect(
-      (await f.app.importSessions.missingFiles(uploading.session_id)).items,
+      (await f.app.importSessions.missingFiles(uploading.batch_id)).items,
     ).toHaveLength(1);
     expect(f.sql("SELECT * FROM import_parts")).toEqual([]);
   } finally {
@@ -409,7 +413,7 @@ it("checkpoints replay after an identity commit and deduplicates unchanged exter
   try {
     const s = await f.create("no-identifiers");
     await f.app.importSessions.putData(
-      s.session_id,
+      s.batch_id,
       0,
       data([record("external", null)]),
     );
@@ -421,13 +425,13 @@ it("checkpoints replay after an identity commit and deduplicates unchanged exter
           throw new Error("Synthetic interruption after identity commit");
         return original(command, signal);
       });
-    await expect(f.app.importSessions.confirm(s.session_id)).rejects.toThrow(
+    await expect(f.app.importSessions.confirm(s.batch_id)).rejects.toThrow(
       "Synthetic interruption",
     );
     spy.mockRestore();
     await f.reopen();
     await f.app.importSessions.sweep();
-    const first = await f.app.importSessions.report(s.session_id),
+    const first = await f.app.importSessions.report(s.batch_id),
       literature = first.items[0]!.literature_id;
     expect(first.summary.records.created).toBe(1);
     const count = () =>
@@ -436,19 +440,18 @@ it("checkpoints replay after an identity commit and deduplicates unchanged exter
     expect(count()).toBe(1);
     const again = await f.create("no-identifiers");
     await f.app.importSessions.putData(
-      again.session_id,
+      again.batch_id,
       0,
       data([record("external", null)]),
     );
-    await f.app.importSessions.confirm(again.session_id);
+    await f.app.importSessions.confirm(again.batch_id);
     expect(
-      (await f.app.importSessions.report(again.session_id)).items[0]!
-        .disposition,
+      (await f.app.importSessions.report(again.batch_id)).items[0]!.disposition,
     ).toBe("matched");
     expect(count()).toBe(1);
     const changed = await f.create("no-identifiers");
     await f.app.importSessions.putData(
-      changed.session_id,
+      changed.batch_id,
       0,
       data([
         {
@@ -460,9 +463,9 @@ it("checkpoints replay after an identity commit and deduplicates unchanged exter
         },
       ]),
     );
-    await f.app.importSessions.confirm(changed.session_id);
+    await f.app.importSessions.confirm(changed.batch_id);
     expect(
-      (await f.app.importSessions.report(changed.session_id)).items[0]!
+      (await f.app.importSessions.report(changed.batch_id)).items[0]!
         .literature_id,
     ).toBe(literature);
     expect(count()).toBe(2);
@@ -490,12 +493,8 @@ it("keeps imported folder hierarchy and multiple memberships without renaming or
       user_tags: ["my tag"],
     };
     const s = await f.create("folders", "Library old");
-    await f.app.importSessions.putData(
-      s.session_id,
-      0,
-      data([incoming], groups),
-    );
-    await f.app.importSessions.confirm(s.session_id);
+    await f.app.importSessions.putData(s.batch_id, 0, data([incoming], groups));
+    await f.app.importSessions.confirm(s.batch_id);
     const folders = f.sql<
       { folder_id: string; name: string; parent_id: string | null }[]
     >("SELECT * FROM folders");
@@ -525,21 +524,21 @@ it("keeps imported folder hierarchy and multiple memberships without renaming or
     );
     const again = await f.create("folders", "Library renamed");
     await f.app.importSessions.putData(
-      again.session_id,
+      again.batch_id,
       0,
       data(
         [incoming],
         groups.map((g) => ({ ...g, name: "source renamed" })),
       ),
     );
-    await f.app.importSessions.confirm(again.session_id);
+    await f.app.importSessions.confirm(again.batch_id);
     expect(
       f.sql("SELECT folder_id,parent_id,name FROM folders ORDER BY folder_id"),
     ).toEqual(before);
     expect(f.sql("SELECT * FROM folder_members")).toHaveLength(4);
     const cycle = await f.create("cycle");
     await f.app.importSessions.putData(
-      cycle.session_id,
+      cycle.batch_id,
       0,
       data(
         [record("cycle")],
@@ -547,8 +546,8 @@ it("keeps imported folder hierarchy and multiple memberships without renaming or
       ),
     );
     await expect(
-      f.app.importSessions.preview(cycle.session_id),
-    ).rejects.toMatchObject({ code: "import-group-cycle" });
+      f.app.importSessions.preview(cycle.batch_id),
+    ).rejects.toMatchObject({ code: "intake-group-cycle" });
   } finally {
     await f.close();
   }
@@ -561,16 +560,16 @@ it("uploads a valid unverified PDF once, requests hashes for existing PDFs and r
       sha = createHash("sha256").update(bytes).digest("hex");
     const first = await f.create("pdf");
     await f.app.importSessions.putData(
-      first.session_id,
+      first.batch_id,
       0,
       data([pdfRecord("pdf")]),
     );
-    await f.app.importSessions.confirm(first.session_id);
-    const file = (await f.app.importSessions.missingFiles(first.session_id))
+    await f.app.importSessions.confirm(first.batch_id);
+    const file = (await f.app.importSessions.missingFiles(first.batch_id))
       .items[0]!;
     expect(file.action).toBe("upload");
     const uploaded = await f.app.importSessions.upload(
-      first.session_id,
+      first.batch_id,
       file.file_id,
       chunks(bytes),
     );
@@ -582,7 +581,7 @@ it("uploads a valid unverified PDF once, requests hashes for existing PDFs and r
     expect(
       (
         await f.app.importSessions.upload(
-          first.session_id,
+          first.batch_id,
           file.file_id,
           chunks(bytes),
         )
@@ -590,26 +589,26 @@ it("uploads a valid unverified PDF once, requests hashes for existing PDFs and r
     ).toBe("uploaded");
     const existing = await f.create("pdf");
     await f.app.importSessions.putData(
-      existing.session_id,
+      existing.batch_id,
       0,
       data([pdfRecord("pdf")]),
     );
-    await f.app.importSessions.confirm(existing.session_id);
+    await f.app.importSessions.confirm(existing.batch_id);
     const hashFile = (
-      await f.app.importSessions.missingFiles(existing.session_id)
+      await f.app.importSessions.missingFiles(existing.batch_id)
     ).items[0]!;
     expect(hashFile.action).toBe("hash");
     await expect(
       f.app.importSessions.upload(
-        existing.session_id,
+        existing.batch_id,
         hashFile.file_id,
         chunks(bytes),
       ),
-    ).rejects.toMatchObject({ code: "import-file-hash-required" });
+    ).rejects.toMatchObject({ code: "intake-file-hash-required" });
     expect(
       (
         await f.app.importSessions.reportHash(
-          existing.session_id,
+          existing.batch_id,
           hashFile.file_id,
           sha,
         )
@@ -617,18 +616,18 @@ it("uploads a valid unverified PDF once, requests hashes for existing PDFs and r
     ).toBe("existing");
     const conflict = await f.create("pdf");
     await f.app.importSessions.putData(
-      conflict.session_id,
+      conflict.batch_id,
       0,
       data([pdfRecord("pdf")]),
     );
-    await f.app.importSessions.confirm(conflict.session_id);
+    await f.app.importSessions.confirm(conflict.batch_id);
     const conflictFile = (
-      await f.app.importSessions.missingFiles(conflict.session_id)
+      await f.app.importSessions.missingFiles(conflict.batch_id)
     ).items[0]!;
     expect(
       (
         await f.app.importSessions.reportHash(
-          conflict.session_id,
+          conflict.batch_id,
           conflictFile.file_id,
           "b".repeat(64),
         )
@@ -639,14 +638,14 @@ it("uploads a valid unverified PDF once, requests hashes for existing PDFs and r
     );
     const missing = await f.create("missing");
     await f.app.importSessions.putData(
-      missing.session_id,
+      missing.batch_id,
       0,
       data([pdfRecord("missing")]),
     );
-    await f.app.importSessions.confirm(missing.session_id);
-    await f.app.importSessions.finish(missing.session_id);
+    await f.app.importSessions.confirm(missing.batch_id);
+    await f.app.importSessions.finish(missing.batch_id);
     expect(
-      (await f.app.importSessions.report(missing.session_id)).summary.files
+      (await f.app.importSessions.report(missing.batch_id)).summary.files
         .missing,
     ).toBe(1);
   } finally {
@@ -659,12 +658,12 @@ it("streams beyond the manual 16 MiB limit without full-file reads and refuses i
   try {
     const s = await f.create("large");
     await f.app.importSessions.putData(
-      s.session_id,
+      s.batch_id,
       0,
       data([pdfRecord("large")]),
     );
-    await f.app.importSessions.confirm(s.session_id);
-    const file = (await f.app.importSessions.missingFiles(s.session_id))
+    await f.app.importSessions.confirm(s.batch_id);
+    const file = (await f.app.importSessions.missingFiles(s.batch_id))
         .items[0]!,
       pdf = workbenchPdf();
     const xref = /startxref\s+(\d+)/u.exec(Buffer.from(pdf).toString())![1]!;
@@ -678,7 +677,7 @@ it("streams beyond the manual 16 MiB limit without full-file reads and refuses i
       .spyOn(StagingFile.prototype, "read")
       .mockRejectedValue(new Error("Whole-file read forbidden"));
     const uploaded = await f.app.importSessions.upload(
-      s.session_id,
+      s.batch_id,
       file.file_id,
       large(),
     );
@@ -697,22 +696,22 @@ it("streams beyond the manual 16 MiB limit without full-file reads and refuses i
   try {
     const s = await disk.create("disk");
     await disk.app.importSessions.putData(
-      s.session_id,
+      s.batch_id,
       0,
       data([pdfRecord("disk")]),
     );
-    await disk.app.importSessions.confirm(s.session_id);
-    const file = (await disk.app.importSessions.missingFiles(s.session_id))
+    await disk.app.importSessions.confirm(s.batch_id);
+    const file = (await disk.app.importSessions.missingFiles(s.batch_id))
       .items[0]!;
     await expect(
       disk.app.importSessions.upload(
-        s.session_id,
+        s.batch_id,
         file.file_id,
         chunks(workbenchPdf()),
       ),
-    ).rejects.toMatchObject({ code: "import-disk-space" });
+    ).rejects.toMatchObject({ code: "intake-disk-space" });
     expect(
-      (await disk.app.importSessions.missingFiles(s.session_id)).items,
+      (await disk.app.importSessions.missingFiles(s.batch_id)).items,
     ).toHaveLength(1);
     expect(disk.sql("SELECT * FROM assets")).toEqual([]);
   } finally {
@@ -729,12 +728,12 @@ it("cancels a stalled upload before publishing and waits for its cleanup", async
   try {
     const s = await f.create("cancel-upload");
     await f.app.importSessions.putData(
-      s.session_id,
+      s.batch_id,
       0,
       data([pdfRecord("cancel-upload")]),
     );
-    await f.app.importSessions.confirm(s.session_id);
-    const file = (await f.app.importSessions.missingFiles(s.session_id))
+    await f.app.importSessions.confirm(s.batch_id);
+    const file = (await f.app.importSessions.missingFiles(s.batch_id))
       .items[0]!;
     let started!: () => void;
     const waiting = new Promise<void>((resolve) => {
@@ -747,17 +746,17 @@ it("cancels a stalled upload before publishing and waits for its cleanup", async
     }
     const cancelSource = vi.fn();
     const uploading = f.app.importSessions.upload(
-      s.session_id,
+      s.batch_id,
       file.file_id,
       slow(),
       undefined,
       cancelSource,
     );
     const rejected = expect(uploading).rejects.toMatchObject({
-      code: "import-upload-cancelled",
+      code: "intake-upload-cancelled",
     });
     await waiting;
-    expect((await f.app.importSessions.cancel(s.session_id)).state).toBe(
+    expect((await f.app.importSessions.cancel(s.batch_id)).state).toBe(
       "cancelled",
     );
     await rejected;
@@ -765,15 +764,15 @@ it("cancels a stalled upload before publishing and waits for its cleanup", async
     expect(f.sql("SELECT * FROM assets")).toEqual([]);
     expect(f.sql("SELECT * FROM import_parts")).toEqual([]);
     expect(
-      (await f.app.importSessions.report(s.session_id)).summary.files.missing,
+      (await f.app.importSessions.report(s.batch_id)).summary.files.missing,
     ).toBe(1);
     await expect(
       f.app.importSessions.upload(
-        s.session_id,
+        s.batch_id,
         file.file_id,
         chunks(workbenchPdf()),
       ),
-    ).rejects.toMatchObject({ code: "import-session-state" });
+    ).rejects.toMatchObject({ code: "intake-batch-state" });
   } finally {
     release();
     await f.close();
@@ -785,12 +784,12 @@ it("binds PDF publication to the metadata at upload start and serializes conflic
   try {
     const s = await f.create("upload-cas");
     await f.app.importSessions.putData(
-      s.session_id,
+      s.batch_id,
       0,
       data([pdfRecord("upload-cas")]),
     );
-    await f.app.importSessions.confirm(s.session_id);
-    const file = (await f.app.importSessions.missingFiles(s.session_id))
+    await f.app.importSessions.confirm(s.batch_id);
+    const file = (await f.app.importSessions.missingFiles(s.batch_id))
       .items[0]!;
     async function* changed() {
       yield workbenchPdf();
@@ -803,36 +802,32 @@ it("binds PDF publication to the metadata at upload start and serializes conflic
       });
     }
     await expect(
-      f.app.importSessions.upload(s.session_id, file.file_id, changed()),
-    ).rejects.toMatchObject({ code: "import-source-stale" });
+      f.app.importSessions.upload(s.batch_id, file.file_id, changed()),
+    ).rejects.toMatchObject({ code: "intake-source-stale" });
     expect(f.sql("SELECT * FROM assets")).toEqual([]);
     const bytes = workbenchPdf();
-    await f.app.importSessions.upload(
-      s.session_id,
-      file.file_id,
-      chunks(bytes),
-    );
+    await f.app.importSessions.upload(s.batch_id, file.file_id, chunks(bytes));
     expect(
       (await f.app.database.currentFacts(file.literature_id))!.literature
         .metadata.title,
     ).toBe("Manual title during upload");
     const again = await f.create("upload-cas");
     await f.app.importSessions.putData(
-      again.session_id,
+      again.batch_id,
       0,
       data([pdfRecord("upload-cas")]),
     );
-    await f.app.importSessions.confirm(again.session_id);
-    const existing = (await f.app.importSessions.missingFiles(again.session_id))
+    await f.app.importSessions.confirm(again.batch_id);
+    const existing = (await f.app.importSessions.missingFiles(again.batch_id))
       .items[0]!;
     const hashes = await Promise.allSettled([
       f.app.importSessions.reportHash(
-        again.session_id,
+        again.batch_id,
         existing.file_id,
         createHash("sha256").update(bytes).digest("hex"),
       ),
       f.app.importSessions.reportHash(
-        again.session_id,
+        again.batch_id,
         existing.file_id,
         "c".repeat(64),
       ),
@@ -841,7 +836,7 @@ it("binds PDF publication to the metadata at upload start and serializes conflic
     expect(hashes.filter((h) => h.status === "rejected")).toEqual([
       {
         status: "rejected",
-        reason: expect.objectContaining({ code: "import-file-conflict" }),
+        reason: expect.objectContaining({ code: "intake-file-conflict" }),
       },
     ]);
     expect(f.sql<{ n: number }[]>("SELECT count(*) n FROM assets")[0]!.n).toBe(
@@ -857,7 +852,7 @@ it("isolates local libraries by device, rejects concurrent libraries and reports
   try {
     const local = {
       format: "records",
-      library: {
+      source: {
         system: "synthetic",
         library_id: "1",
         identity: "local",
@@ -873,10 +868,10 @@ it("isolates local libraries by device, rejects concurrent libraries and reports
         kind: "device",
         connection_id: randomUUID(),
       });
-    expect(a.library_key).not.toBe(b.library_key);
+    expect(a.batch_id).not.toBe(b.batch_id);
     const s = await f.create("busy", "Busy", { import_user_tags: false });
     await expect(f.create("busy")).rejects.toMatchObject({
-      code: "import-library-busy",
+      code: "intake-source-busy",
     });
     const valid = {
       ...record("content"),
@@ -906,7 +901,7 @@ it("isolates local libraries by device, rejects concurrent libraries and reports
         },
       ],
     };
-    await f.app.importSessions.putData(s.session_id, 0, {
+    await f.app.importSessions.putData(s.batch_id, 0, {
       records: [
         valid,
         {
@@ -917,9 +912,9 @@ it("isolates local libraries by device, rejects concurrent libraries and reports
       groups: [],
       excluded: [{ kind: "notes", count: 2 }],
     });
-    await f.app.importSessions.confirm(s.session_id);
-    const report = await f.app.importSessions.report(s.session_id);
-    expect(report.session.state).toBe("completed");
+    await f.app.importSessions.confirm(s.batch_id);
+    const report = await f.app.importSessions.report(s.batch_id);
+    expect(report.batch.state).toBe("finished");
     expect(report.summary.records).toMatchObject({ created: 1, rejected: 1 });
     expect(report.items[1]).toMatchObject({
       external_id: "invalid",
@@ -941,25 +936,121 @@ it("isolates local libraries by device, rejects concurrent libraries and reports
     expect(f.sql("SELECT * FROM reading_marks")).toEqual([]);
     const invalidPdf = await f.create("invalid-pdf");
     await f.app.importSessions.putData(
-      invalidPdf.session_id,
+      invalidPdf.batch_id,
       0,
       data([pdfRecord("invalid-pdf")]),
     );
-    await f.app.importSessions.confirm(invalidPdf.session_id);
-    const file = (
-      await f.app.importSessions.missingFiles(invalidPdf.session_id)
-    ).items[0]!;
+    await f.app.importSessions.confirm(invalidPdf.batch_id);
+    const file = (await f.app.importSessions.missingFiles(invalidPdf.batch_id))
+      .items[0]!;
     await expect(
       f.app.importSessions.upload(
-        invalidPdf.session_id,
+        invalidPdf.batch_id,
         file.file_id,
         chunks(Buffer.from("not a PDF")),
       ),
-    ).rejects.toMatchObject({ code: "import-pdf-invalid" });
+    ).rejects.toMatchObject({ code: "intake-pdf-invalid" });
     expect(
-      (await f.app.importSessions.missingFiles(invalidPdf.session_id)).items,
+      (await f.app.importSessions.missingFiles(invalidPdf.batch_id)).items,
     ).toHaveLength(1);
     expect(f.sql("SELECT * FROM assets")).toEqual([]);
+  } finally {
+    await f.close();
+  }
+}, 30000);
+
+it("uses one batch ID from collection through publication and keeps active in the state transaction", async () => {
+  const f = await fixture();
+  try {
+    const batch = await f.create();
+    expect(batch).toMatchObject({
+      state: "collecting",
+      result: null,
+      confirmation: "batch",
+      initiated_by: "local:cli",
+      source: { system: "synthetic" },
+      progress: null,
+    });
+    expect(batch).not.toHaveProperty("session_id");
+    expect(batch).not.toHaveProperty("intake_batch_id");
+    expect(batch).not.toHaveProperty("status");
+    const rows = () =>
+      f.sql<{ state: string; result: string | null; active: number }[]>(
+        "SELECT b.state,b.result,s.active FROM intake_batches b JOIN import_sessions s USING(batch_id)",
+      );
+    expect(rows()).toEqual([{ state: "collecting", result: null, active: 1 }]);
+    await f.app.importSessions.putData(
+      batch.batch_id,
+      0,
+      data([pdfRecord("one-id")]),
+    );
+    expect(rows()).toEqual([
+      { state: "awaiting-confirmation", result: null, active: 1 },
+    ]);
+    const running = await f.app.importSessions.confirm(batch.batch_id);
+    expect(running).toMatchObject({
+      batch_id: batch.batch_id,
+      state: "running",
+      result: null,
+      progress: {
+        phase: "files",
+        processed_items: 1,
+        total_items: 1,
+        files: { pending: 1 },
+      },
+    });
+    expect(
+      await f.app.library.intakeBatches({
+        operation: "get",
+        request: { batch_id: batch.batch_id },
+      }),
+    ).toEqual(running);
+    const ended = await f.app.importSessions.finish(batch.batch_id);
+    expect(ended).toMatchObject({
+      batch_id: batch.batch_id,
+      state: "finished",
+      result: "partial",
+      progress: null,
+    });
+    expect(rows()).toEqual([
+      { state: "finished", result: "partial", active: 0 },
+    ]);
+    const cancelled = await f.create();
+    await f.app.importSessions.cancel(cancelled.batch_id);
+    expect(await f.app.importSessions.status(cancelled.batch_id)).toMatchObject(
+      { state: "cancelled", result: null },
+    );
+    expect(f.sql("PRAGMA foreign_key_check")).toEqual([]);
+  } finally {
+    await f.close();
+  }
+}, 30000);
+
+it("keeps conflicting items distinct from rejected items in the unified batch counters", async () => {
+  const f = await fixture();
+  try {
+    const first = await f.create("conflict-counters");
+    await f.app.importSessions.putData(
+      first.batch_id,
+      0,
+      data([record("external", "first"), record("other", "second")]),
+    );
+    await f.app.importSessions.confirm(first.batch_id);
+    const next = await f.create("conflict-counters");
+    await f.app.importSessions.putData(
+      next.batch_id,
+      0,
+      data([record("external", "second")]),
+    );
+    const result = await f.app.importSessions.confirm(next.batch_id);
+    expect(result).toMatchObject({
+      state: "finished",
+      result: "failed",
+      counts: { hits: 0, conflicts: 1, rejected: 0 },
+    });
+    expect(
+      (await f.app.importSessions.report(next.batch_id)).items[0],
+    ).toMatchObject({ disposition: "conflict" });
   } finally {
     await f.close();
   }

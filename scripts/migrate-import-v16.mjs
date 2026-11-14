@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-// Devices, import sessions and capture share the final M1 15 -> 16 layout.
+// Devices and unified intake share the single M1 15 -> 16 layout.
 import { migrateImportSchema } from "../apps/server/dist/storage/sqlite/import-schema-migration.js";
 if (process.argv.length !== 3 || !process.argv[2]?.startsWith("/")) {
   throw new Error(

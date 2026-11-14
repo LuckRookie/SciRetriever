@@ -4,6 +4,8 @@ import {
   parseLibrarySearchRequest,
   parseLiteratureId,
   parseUtcTimestamp,
+  parseLiteratureMetadata,
+  type LiteratureMetadata,
   type LibraryQuery,
   type LibrarySort,
   type LiteratureId,
@@ -27,6 +29,37 @@ function tagRecord(
 export type IntakeBatchId = string & { readonly __brand: "IntakeBatchId" };
 export const parseIntakeBatchId = (value: unknown): IntakeBatchId =>
   parseAssetId(value) as string as IntakeBatchId;
+export const INTAKE_BATCH_STATES = [
+  "collecting",
+  "awaiting-confirmation",
+  "running",
+  "finished",
+  "cancelled",
+  "withdrawn",
+] as const;
+export type IntakeBatchState = (typeof INTAKE_BATCH_STATES)[number];
+export type IntakeBatchResult =
+  | "completed"
+  | "partial"
+  | "failed"
+  | "interrupted";
+export interface IntakeSource {
+  readonly system: string;
+  readonly library_id: string;
+  readonly identity: "global" | "local" | "adhoc";
+  readonly name: string;
+}
+export interface IntakeProgress {
+  readonly phase: "metadata" | "files" | "closing";
+  readonly processed_items: number;
+  readonly total_items: number;
+  readonly files: {
+    readonly uploaded: number;
+    readonly existing: number;
+    readonly conflicts: number;
+    readonly pending: number;
+  };
+}
 export interface IntakeBatch {
   readonly batch_id: IntakeBatchId;
   readonly kind: "topic" | "citation" | "import" | "legacy";
@@ -36,12 +69,13 @@ export interface IntakeBatch {
   readonly origin: "web" | "cli" | "mcp" | "migration";
   readonly created_at: string;
   readonly finished_at: string | null;
-  readonly status:
-    | "running"
-    | "completed"
-    | "partial"
-    | "failed"
-    | "interrupted";
+  readonly state: IntakeBatchState;
+  readonly result: IntakeBatchResult | null;
+  readonly confirmation: "batch" | "per-item" | null;
+  readonly confirmed_at: string | null;
+  readonly initiated_by: string;
+  readonly source: IntakeSource | null;
+  readonly progress: IntakeProgress | null;
   readonly request: {
     readonly query?: string;
     readonly year_from?: number | null;
@@ -58,6 +92,11 @@ export interface IntakeBatch {
     readonly enriched: number;
     readonly matched: number;
     readonly rejected: number;
+    readonly restored: number;
+    readonly conflicts: number;
+    readonly possible_duplicates: number;
+    readonly pending_decision: number;
+    readonly needs_metadata: number;
   };
   readonly pdf: {
     readonly has_pdf: number;
@@ -256,7 +295,13 @@ export function parseIntakeBatch(value: unknown): IntakeBatch {
     "origin",
     "created_at",
     "finished_at",
-    "status",
+    "state",
+    "result",
+    "confirmation",
+    "confirmed_at",
+    "initiated_by",
+    "source",
+    "progress",
     "request",
     "counts",
     "pdf",
@@ -269,12 +314,87 @@ export function parseIntakeBatch(value: unknown): IntakeBatch {
     "import",
     "legacy",
   ] as const);
+  const state = member(r.state, INTAKE_BATCH_STATES);
+  const result =
+    r.result === null
+      ? null
+      : member(r.result, [
+          "completed",
+          "partial",
+          "failed",
+          "interrupted",
+        ] as const);
+  if (
+    (state === "finished" && result === null) ||
+    (state !== "finished" && state !== "withdrawn" && result !== null)
+  )
+    fail();
+  const confirmation =
+    r.confirmation === null
+      ? null
+      : member(r.confirmation, ["batch", "per-item"] as const);
+  if (kind !== "import" && confirmation !== null) fail();
+  let source: IntakeSource | null = null;
+  if (r.source !== null) {
+    const s = tagRecord(r.source, ["system", "library_id", "identity", "name"]);
+    const identity = member(s.identity, ["global", "local", "adhoc"] as const);
+    source = {
+      system: text(s.system, 64),
+      library_id:
+        identity === "adhoc" && s.library_id === ""
+          ? ""
+          : text(s.library_id, 1024),
+      identity,
+      name: identity === "adhoc" && s.name === "" ? "" : text(s.name, 1024),
+    };
+  }
+  if (kind !== "import" && source !== null) fail();
+  let progress: IntakeProgress | null = null;
+  if (r.progress !== null) {
+    if (kind !== "import" || state !== "running") fail();
+    const p = tagRecord(r.progress, [
+      "phase",
+      "processed_items",
+      "total_items",
+      "files",
+    ]);
+    const f = tagRecord(p.files, [
+      "uploaded",
+      "existing",
+      "conflicts",
+      "pending",
+    ]);
+    progress = {
+      phase: member(p.phase, ["metadata", "files", "closing"] as const),
+      processed_items: tagInteger(p.processed_items),
+      total_items: tagInteger(p.total_items),
+      files: {
+        uploaded: tagInteger(f.uploaded),
+        existing: tagInteger(f.existing),
+        conflicts: tagInteger(f.conflicts),
+        pending: tagInteger(f.pending),
+      },
+    };
+    if (progress.processed_items > progress.total_items) fail();
+  }
+  const initiated_by = text(r.initiated_by, 128);
+  if (
+    !/^(?:local:(?:web|cli|mcp)|migration|device:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/u.test(
+      initiated_by,
+    )
+  )
+    fail();
   const c = tagRecord(r.counts, [
     "hits",
     "created",
     "enriched",
     "matched",
     "rejected",
+    "restored",
+    "conflicts",
+    "possible_duplicates",
+    "pending_decision",
+    "needs_metadata",
   ]);
   const counts = {
     hits: tagInteger(c.hits),
@@ -282,12 +402,18 @@ export function parseIntakeBatch(value: unknown): IntakeBatch {
     enriched: tagInteger(c.enriched),
     matched: tagInteger(c.matched),
     rejected: tagInteger(c.rejected),
+    restored: tagInteger(c.restored),
+    conflicts: tagInteger(c.conflicts),
+    possible_duplicates: tagInteger(c.possible_duplicates),
+    pending_decision: tagInteger(c.pending_decision),
+    needs_metadata: tagInteger(c.needs_metadata),
   };
   if (
     kind === "legacy"
       ? counts.created + counts.enriched + counts.matched + counts.rejected !==
         0
-      : counts.hits !== counts.created + counts.enriched + counts.matched
+      : counts.hits !==
+        counts.created + counts.enriched + counts.matched + counts.restored
   )
     fail();
   if (kind !== "import" && counts.rejected !== 0) fail();
@@ -368,13 +494,14 @@ export function parseIntakeBatch(value: unknown): IntakeBatch {
     created_at: parseUtcTimestamp(r.created_at),
     finished_at:
       r.finished_at === null ? null : parseUtcTimestamp(r.finished_at),
-    status: member(r.status, [
-      "running",
-      "completed",
-      "partial",
-      "failed",
-      "interrupted",
-    ] as const),
+    state,
+    result,
+    confirmation,
+    source,
+    progress,
+    initiated_by,
+    confirmed_at:
+      r.confirmed_at === null ? null : parseUtcTimestamp(r.confirmed_at),
     request,
     counts,
     pdf,
@@ -444,4 +571,584 @@ export function parseLibraryFacets(value: unknown): LibraryFacets {
       ({ value, count }) => ({ value, count }),
     ),
   };
+}
+
+export const INTAKE_LIMITS = {
+  request_bytes: 8 * 1024 * 1024,
+  json_request_bytes: 64 * 1024,
+  page_request_bytes: 640 * 1024,
+  batch_bytes: 256 * 1024 * 1024,
+  records: 50_000,
+  parts: 1024,
+  groups: 10_000,
+  page_items: 200,
+  disk_reserve_bytes: 256 * 1024 * 1024,
+  expiry_ms: 7 * 24 * 60 * 60 * 1000,
+} as const;
+export interface IntakeGroup {
+  readonly external_id: string;
+  readonly parent_external_id: string | null;
+  readonly name: string;
+}
+export interface IntakeFile {
+  readonly external_id: string;
+  readonly file_name: string;
+  readonly media_type: string;
+  readonly preferred: boolean;
+  readonly size_bytes: number | null;
+  readonly sha256: string | null;
+}
+export interface IntakeAnnotation {
+  readonly external_id: string;
+  readonly file_external_id: string;
+  readonly kind: "highlight" | "underline" | "region" | "note" | "text" | "ink";
+  readonly quote: string;
+  readonly note: string;
+  readonly color: string | null;
+  readonly page_index: number | null;
+  readonly coordinate_space: "pdf-bottom-left" | "normalized-top-left";
+  readonly rects: readonly (readonly [number, number, number, number])[];
+}
+export interface IntakeItem {
+  readonly external_id: string;
+  readonly metadata: LiteratureMetadata;
+  readonly source_type: string | null;
+  readonly groups: readonly string[];
+  readonly user_tags: readonly string[];
+  readonly files: readonly IntakeFile[];
+  readonly annotations: readonly IntakeAnnotation[];
+}
+export interface IntakeExcluded {
+  readonly kind: string;
+  readonly count: number;
+}
+export interface IntakeData {
+  readonly records: readonly IntakeItem[];
+  readonly groups: readonly IntakeGroup[];
+  readonly excluded: readonly IntakeExcluded[];
+}
+export interface IntakeAdapterItem {
+  readonly external_id?: string;
+  readonly record_index: number;
+  readonly record: IntakeItem | null;
+  readonly reason: string | null;
+}
+export interface IntakeAdapterResult {
+  readonly items: readonly IntakeAdapterItem[];
+  readonly groups: readonly IntakeGroup[];
+  readonly excluded: readonly IntakeExcluded[];
+}
+/** Pure conversion only. No I/O, randomness, clock, database or network. */
+export interface IntakeAdapter {
+  readonly format: string;
+  decode(data: unknown, sequence: number): IntakeAdapterResult;
+}
+export interface IntakeItemResult {
+  readonly sequence: number;
+  readonly record_index: number;
+  readonly external_id: string;
+  readonly disposition:
+    | "created"
+    | "enriched"
+    | "matched"
+    | "conflict"
+    | "rejected"
+    | "restored"
+    | "pending-decision"
+    | "excluded";
+  readonly literature_id: string | null;
+  readonly meta_literature_id: string | null;
+  readonly reason: string | null;
+}
+export interface IntakeFileStatus {
+  readonly file_id: string;
+  readonly external_id: string;
+  readonly record_external_id: string;
+  readonly literature_id: string;
+  readonly file_name: string;
+  readonly size_bytes: number | null;
+  readonly expected_sha256: string | null;
+  readonly action: "upload" | "hash";
+  readonly status: "pending" | "uploaded" | "existing" | "conflict";
+  readonly sha256: string | null;
+  readonly reason: string | null;
+}
+export interface IntakeSummary {
+  readonly records: {
+    readonly created: number;
+    readonly enriched: number;
+    readonly matched: number;
+    readonly conflicts: number;
+    readonly rejected: number;
+    readonly restored: number;
+    readonly possible_duplicates: number;
+    readonly pending_decision: number;
+    readonly needs_metadata: number;
+  };
+  readonly files: {
+    readonly upload: number;
+    readonly hash: number;
+    readonly uploaded: number;
+    readonly existing: number;
+    readonly conflicts: number;
+    readonly missing: number;
+    readonly unpaired: number;
+  };
+  readonly annotations: {
+    readonly supported: number;
+    readonly unsupported: number;
+    readonly imported: 0;
+    readonly deferred: number;
+  };
+  readonly excluded: readonly IntakeExcluded[];
+}
+export interface IntakePreview {
+  readonly batch: IntakeBatch;
+  readonly estimated: true;
+  readonly summary: IntakeSummary;
+}
+export interface IntakeReport {
+  readonly batch: IntakeBatch;
+  readonly estimated: false;
+  readonly summary: IntakeSummary;
+  readonly items: readonly IntakeItemResult[];
+  readonly next_cursor: string | null;
+}
+export interface ExternalObjectMapping {
+  readonly library_key: string;
+  readonly object_kind: "record" | "group" | "file" | "annotation";
+  readonly external_id: string;
+  readonly internal_id: string;
+  readonly state: "pending" | "settled";
+  readonly content_sha256: string | null;
+  readonly observation_id: string | null;
+}
+export function importObject(
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[] = [],
+) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new ContractValidationError();
+  const r = value as Record<string, unknown>;
+  if (
+    required.some((k) => !Object.hasOwn(r, k)) ||
+    Object.keys(r).some((k) => !required.includes(k) && !optional.includes(k))
+  )
+    throw new ContractValidationError();
+  return r;
+}
+export function importString(value: unknown, max = 1024): string {
+  if (
+    typeof value !== "string" ||
+    !value.trim() ||
+    value.length > max ||
+    /\p{Cc}/u.test(value)
+  )
+    throw new ContractValidationError();
+  return value.trim();
+}
+export function importHash(value: unknown): string {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value))
+    throw new ContractValidationError();
+  return value;
+}
+export function importInteger(
+  value: unknown,
+  max = Number.MAX_SAFE_INTEGER,
+): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < 0 ||
+    value > max
+  )
+    throw new ContractValidationError();
+  return value;
+}
+function array(value: unknown, max: number): unknown[] {
+  if (!Array.isArray(value) || value.length > max)
+    throw new ContractValidationError();
+  return value;
+}
+function fileReference(value: unknown) {
+  const reference = importString(value);
+  if (
+    /^(?:[/\\]|[a-zA-Z]:[/\\])/u.test(reference) ||
+    reference.split(/[/\\]/u).some((v) => v === "." || v === "..")
+  )
+    throw new ContractValidationError();
+  return reference;
+}
+export function parseIntakeCreate(value: unknown) {
+  const r = importObject(
+    value,
+    ["format", "source", "scope"],
+    ["import_user_tags", "file_name"],
+  );
+  if (
+    r.import_user_tags !== undefined &&
+    typeof r.import_user_tags !== "boolean"
+  )
+    throw new ContractValidationError();
+  let source: {
+    system: string;
+    library_id: string;
+    identity: "global" | "local";
+    name: string;
+  } | null = null;
+  if (r.source !== null) {
+    const l = importObject(r.source, [
+      "system",
+      "library_id",
+      "identity",
+      "name",
+    ]);
+    if (!["global", "local"].includes(String(l.identity)))
+      throw new ContractValidationError();
+    const system = importString(l.system, 64);
+    if (!/^[a-z0-9][a-z0-9-]*$/u.test(system))
+      throw new ContractValidationError();
+    source = {
+      system,
+      library_id: importString(l.library_id),
+      identity: l.identity as "global" | "local",
+      name: importString(l.name, 1024),
+    };
+  }
+  return {
+    format: importString(r.format, 64),
+    source,
+    scope: importString(r.scope, 8192),
+    file_name:
+      r.file_name === undefined || r.file_name === null
+        ? null
+        : importString(r.file_name, 1024),
+    import_user_tags: r.import_user_tags !== false,
+  };
+}
+export function parseIntakeData(value: unknown): IntakeData {
+  const r = importObject(value, ["records"], ["groups", "excluded"]);
+  const groups = array(r.groups ?? [], INTAKE_LIMITS.groups).map((value) => {
+    const g = importObject(value, [
+      "external_id",
+      "parent_external_id",
+      "name",
+    ]);
+    return {
+      external_id: importString(g.external_id),
+      parent_external_id:
+        g.parent_external_id === null
+          ? null
+          : importString(g.parent_external_id),
+      name: importString(g.name, 4096),
+    };
+  });
+  const excluded = array(r.excluded ?? [], 128).map((value) => {
+    const e = importObject(value, ["kind", "count"]);
+    const kind = importString(e.kind, 64);
+    if (!/^[a-z][a-z0-9-]*$/u.test(kind)) throw new ContractValidationError();
+    return { kind, count: importInteger(e.count) };
+  });
+  const records = array(r.records, INTAKE_LIMITS.records).map((value) => {
+    const v = importObject(
+      value,
+      ["external_id", "metadata"],
+      ["source_type", "groups", "user_tags", "files", "annotations"],
+    );
+    const files = array(v.files ?? [], 100).map((value) => {
+      const f = importObject(
+        value,
+        ["external_id", "file_name", "media_type", "preferred"],
+        ["size_bytes", "sha256"],
+      );
+      if (typeof f.preferred !== "boolean") throw new ContractValidationError();
+      const file_name = importString(f.file_name);
+      if (/[/\\]/u.test(file_name) || file_name === "." || file_name === "..")
+        throw new ContractValidationError();
+      return {
+        external_id: fileReference(f.external_id),
+        file_name,
+        media_type: importString(f.media_type, 128),
+        preferred: f.preferred,
+        size_bytes:
+          f.size_bytes === null || f.size_bytes === undefined
+            ? null
+            : importInteger(f.size_bytes),
+        sha256:
+          f.sha256 === null || f.sha256 === undefined
+            ? null
+            : importHash(f.sha256),
+      };
+    });
+    if (files.filter((f) => f.preferred).length > 1)
+      throw new ContractValidationError();
+    const annotations = array(v.annotations ?? [], 10000).map((value) => {
+      const a = importObject(
+        value,
+        ["external_id", "file_external_id", "kind"],
+        ["quote", "note", "color", "page_index", "coordinate_space", "rects"],
+      );
+      if (
+        !["highlight", "underline", "region", "note", "text", "ink"].includes(
+          String(a.kind),
+        ) ||
+        (a.quote !== undefined && typeof a.quote !== "string") ||
+        (a.note !== undefined && typeof a.note !== "string") ||
+        (a.coordinate_space !== undefined &&
+          !["pdf-bottom-left", "normalized-top-left"].includes(
+            String(a.coordinate_space),
+          ))
+      )
+        throw new ContractValidationError();
+      const rects = array(a.rects ?? [], 128).map((rect) => {
+        const v = array(rect, 4);
+        if (
+          v.length !== 4 ||
+          v.some((n) => typeof n !== "number" || !Number.isFinite(n))
+        )
+          throw new ContractValidationError();
+        return v as [number, number, number, number];
+      });
+      return {
+        external_id: importString(a.external_id),
+        file_external_id: importString(a.file_external_id),
+        kind: a.kind as IntakeAnnotation["kind"],
+        quote: (a.quote ?? "") as string,
+        note: (a.note ?? "") as string,
+        color:
+          a.color === null || a.color === undefined
+            ? null
+            : importString(a.color, 64),
+        page_index:
+          a.page_index === null || a.page_index === undefined
+            ? null
+            : importInteger(a.page_index),
+        coordinate_space: (a.coordinate_space ??
+          "pdf-bottom-left") as IntakeAnnotation["coordinate_space"],
+        rects,
+      };
+    });
+    return {
+      external_id: importString(v.external_id),
+      metadata: parseLiteratureMetadata(v.metadata),
+      source_type:
+        v.source_type === null || v.source_type === undefined
+          ? null
+          : importString(v.source_type, 128),
+      groups: array(v.groups ?? [], 1000).map((v) => importString(v)),
+      user_tags: array(v.user_tags ?? [], 1000).map((v) =>
+        importString(v, 4096),
+      ),
+      files,
+      annotations,
+    };
+  });
+  return { records, groups, excluded };
+}
+
+/** Implemented intake routes. Later recognition/decision/withdrawal routes register when connected. */
+export const INTAKE_HTTP_ENDPOINTS = [
+  [
+    "GET",
+    "/api/v1/intake/instructions",
+    "instructions",
+    "",
+    "Interface reference",
+  ],
+  [
+    "GET",
+    "/api/v1/intake/agent-guide",
+    "agent-guide",
+    "",
+    "Markdown attachment",
+  ],
+  ["GET", "/api/v1/intake/skill", "skill", "", "ZIP attachment"],
+  ["GET", "/api/v1/intake/extension", "extension", "", "ZIP attachment"],
+  [
+    "POST",
+    "/api/v1/intake/batches",
+    "create",
+    "{format,source:null|{system,library_id,identity:global|local,name},scope,import_user_tags?:boolean,file_name?:string|null}",
+    "{batch:IntakeBatch}",
+  ],
+  [
+    "POST",
+    "/api/v1/intake/batches/list",
+    "list",
+    "{cursor?:batch_id|null,limit?:1..200}",
+    "{items:IntakeBatch[],next_cursor:string|null}",
+  ],
+  [
+    "POST",
+    "/api/v1/intake/batches/:batch_id/status",
+    "status",
+    "{}",
+    "{batch:IntakeBatch}",
+  ],
+  [
+    "POST",
+    "/api/v1/intake/batches/:batch_id/data",
+    "data",
+    "{sequence:0..1023,data:IntakeData|string}",
+    "{batch:IntakeBatch}",
+  ],
+  [
+    "POST",
+    "/api/v1/intake/batches/:batch_id/preview",
+    "preview",
+    "{}",
+    "{batch:IntakeBatch,estimated:true,summary:IntakeSummary}",
+  ],
+  [
+    "POST",
+    "/api/v1/intake/batches/:batch_id/confirm",
+    "confirm",
+    "{}",
+    "{batch:IntakeBatch}",
+  ],
+  [
+    "POST",
+    "/api/v1/intake/batches/:batch_id/files",
+    "files",
+    "{cursor?:file_id|null,limit?:1..200,pending?:boolean}",
+    "{items:IntakeFileStatus[],next_cursor:string|null}",
+  ],
+  [
+    "POST",
+    "/api/v1/intake/batches/:batch_id/files/:file_id/hash",
+    "hash",
+    "{sha256}",
+    "{file:IntakeFileStatus}",
+  ],
+  [
+    "POST",
+    "/api/v1/intake/batches/:batch_id/files/:file_id/bytes",
+    "bytes",
+    "raw application/pdf or application/octet-stream",
+    "{file:IntakeFileStatus}",
+  ],
+  [
+    "POST",
+    "/api/v1/intake/batches/:batch_id/finish",
+    "finish",
+    "{}",
+    "{batch:IntakeBatch}",
+  ],
+  [
+    "POST",
+    "/api/v1/intake/batches/:batch_id/cancel",
+    "cancel",
+    "{}",
+    "{batch:IntakeBatch}",
+  ],
+  [
+    "POST",
+    "/api/v1/intake/batches/:batch_id/report",
+    "report",
+    "{cursor?:sequence:record_index|null,limit?:1..200}",
+    "{batch:IntakeBatch,estimated:false,summary:IntakeSummary,items:IntakeItemResult[],next_cursor:string|null}",
+  ],
+  [
+    "POST",
+    "/api/v1/intake/pages/preview",
+    "page-preview",
+    "{metadata:Partial<LiteratureMetadata>}",
+    "IntakePagePreview",
+  ],
+  [
+    "POST",
+    "/api/v1/intake/pages/save",
+    "page-save",
+    "{request_id,metadata:Partial<LiteratureMetadata>,folder_ids?:UUID[],file?:{file_name,size_bytes?,sha256?}|null}",
+    "IntakePageResult",
+  ],
+] as const;
+export const INTAKE_ERROR_STATUSES = {
+  "intake-input-invalid": 400,
+  "intake-item-empty": 400,
+  "intake-format-unsupported": 400,
+  "intake-local-identity-required": 400,
+  "intake-data-conflict": 400,
+  "intake-group-missing": 400,
+  "intake-group-cycle": 400,
+  "intake-group-depth": 400,
+  "intake-folder-target-missing": 400,
+  "intake-file-hash-mismatch": 400,
+  "intake-file-size-mismatch": 400,
+  "intake-upload-cancelled": 400,
+  "intake-decision-invalid": 400,
+  "intake-batch-missing": 404,
+  "intake-item-missing": 404,
+  "intake-file-missing": 404,
+  "intake-literature-missing": 404,
+  "intake-source-busy": 409,
+  "intake-batch-state": 409,
+  "intake-data-changed": 409,
+  "intake-recognition-pending": 409,
+  "intake-metadata-pending": 409,
+  "intake-file-hash-required": 409,
+  "intake-file-upload-required": 409,
+  "intake-file-conflict": 409,
+  "intake-source-stale": 409,
+  "intake-request-conflict": 409,
+  "intake-identity-conflict": 409,
+  "intake-decision-required": 409,
+  "intake-batch-busy": 409,
+  "intake-request-too-large": 413,
+  "intake-batch-limit": 413,
+  "intake-pdf-invalid": 422,
+  "intake-disk-space": 507,
+  "intake-disk-unavailable": 503,
+  "intake-unavailable": 503,
+  "intake-closed": 503,
+} as const;
+export type IntakeErrorCode = keyof typeof INTAKE_ERROR_STATUSES;
+export type IntakeDisposition = IntakeItemResult["disposition"];
+export type IntakeDecision =
+  | { readonly kind: "merge"; readonly literature_id: LiteratureId }
+  | { readonly kind: "new" }
+  | { readonly kind: "candidate"; readonly candidate_id: string }
+  | { readonly kind: "unrecognized" | "include" | "exclude" };
+export interface IntakeRecognition {
+  readonly state:
+    | "pending"
+    | "recognized"
+    | "candidates"
+    | "unrecognized"
+    | "cancelled";
+  readonly step: 1 | 2 | 3 | 4 | null;
+  readonly literature_id: LiteratureId | null;
+  readonly candidates: readonly {
+    readonly candidate_id: string;
+    readonly title: string | null;
+    readonly authors: LiteratureMetadata["authors"];
+    readonly publication_year: number | null;
+    readonly identifiers: LiteratureMetadata["identifiers"];
+    readonly source_name: string;
+    readonly similarity: number;
+  }[];
+}
+export interface IntakeBatchItem {
+  readonly item_id: string;
+  readonly origin: "data" | "file" | "page";
+  readonly sequence: number | null;
+  readonly record_index: number | null;
+  readonly external_id: string | null;
+  readonly title: string | null;
+  readonly file_name: string | null;
+  readonly recognition: IntakeRecognition | null;
+  readonly possible_duplicates: readonly {
+    readonly literature_id: LiteratureId;
+    readonly title: string | null;
+    readonly first_author: string | null;
+    readonly publication_year: number | null;
+    readonly similarity: number;
+  }[];
+  readonly unpaired: boolean;
+  readonly needs_decision: boolean;
+  readonly decision: IntakeDecision | null;
+  readonly disposition: IntakeDisposition | null;
+  readonly decided_by: string | null;
+  readonly decided_at: string | null;
 }

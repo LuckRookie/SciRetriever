@@ -3,6 +3,8 @@ import { open } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   ContractValidationError,
+  DEVICE_PURPOSES,
+  INTAKE_HTTP_ENDPOINTS,
   parseStrictJsonObject,
   deviceRecord,
   parseDevicePairingRequest,
@@ -67,27 +69,12 @@ export async function handleWebDeviceRoute(
   url: URL,
   options: DeviceHttpOptions | undefined,
 ): Promise<boolean> {
-  const artifact =
-    /^\/api\/v1\/device-connections\/(instructions|skill)$/u.exec(url.pathname);
-  if (request.method === "GET" && artifact) {
-    try {
-      if (!options) throw new DeviceConnectionError("device-unavailable");
-      await downloadDeviceArtifact(
-        response,
-        artifact[1] as keyof typeof artifactNames,
-        options.artifactDirectory ?? DEVICE_ARTIFACT_DIRECTORY,
-      );
-    } catch (error) {
-      deviceFailure(response, error);
-    }
-    return true;
-  }
   const registered = options?.routes?.find(request.method, url.pathname);
   if (!registered?.route.handleWeb) return false;
   await registered.route.handleWeb(request, response, registered.parameters);
   return true;
 }
-/** Only future import/capture/MCP business surfaces can be registered. */
+/** Only intake/MCP business surfaces can be registered. */
 export class DeviceRouteRegistry {
   private readonly routes: {
     route: DeviceRoute;
@@ -102,11 +89,9 @@ export class DeviceRouteRegistry {
       if (
         !route.purposes.length ||
         route.purposes.some(
-          (p) => !["capture", "import", "read", "operate"].includes(p),
+          (p) => !(DEVICE_PURPOSES as readonly string[]).includes(p),
         ) ||
-        !/^(?:\/api\/v1\/(?:import|capture)\/[a-zA-Z0-9:/_-]+|\/mcp)$/u.test(
-          route.path,
-        ) ||
+        !/^(?:\/api\/v1\/intake\/[a-zA-Z0-9:/_-]+|\/mcp)$/u.test(route.path) ||
         this.routes.some(
           (v) => v.route.method === route.method && v.route.path === route.path,
         )
@@ -150,7 +135,7 @@ export class DeviceRouteRegistry {
   }
 }
 const artifactNames = {
-  instructions: "instructions.md",
+  "agent-guide": "agent-guide.md",
   skill: "skill.zip",
   extension: "browser-extension.zip",
 } as const;
@@ -161,8 +146,6 @@ export const DEVICE_ARTIFACT_DIRECTORY = new URL(
 export interface DeviceHttpOptions {
   readonly service: DeviceConnectionService;
   readonly routes?: DeviceRouteRegistry;
-  /** Offline artifact seam; production always resolves the installed build directory. */
-  readonly artifactDirectory?: URL;
 }
 function reply(response: ServerResponse, status: number, value: unknown) {
   response.writeHead(status, {
@@ -291,11 +274,12 @@ export async function downloadDeviceArtifact(
     const bytes = buffer.subarray(0, size);
     response.writeHead(200, {
       "Content-Type":
-        kind === "instructions"
+        kind === "agent-guide"
           ? "text/markdown; charset=utf-8"
           : "application/zip",
       "Content-Disposition": `attachment; filename="sciretriever-${artifactNames[kind]}"`,
       "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
     });
     response.end(bytes);
   } catch {
@@ -303,6 +287,27 @@ export async function downloadDeviceArtifact(
   } finally {
     await file?.close();
   }
+}
+/** Explicit artifact entries share the ordinary intake purpose and Web admission. */
+export function intakeArtifactRoutes(
+  directory = DEVICE_ARTIFACT_DIRECTORY,
+): DeviceRoute[] {
+  return INTAKE_HTTP_ENDPOINTS.filter((e) =>
+    ["agent-guide", "skill", "extension"].includes(e[2]),
+  ).map(([method, path, operation]) => {
+    const handle = async (_req: IncomingMessage, res: ServerResponse) => {
+      try {
+        await downloadDeviceArtifact(
+          res,
+          operation as keyof typeof artifactNames,
+          directory,
+        );
+      } catch (error) {
+        deviceFailure(res, error);
+      }
+    };
+    return { method, path, purposes: ["intake"], handle, handleWeb: handle };
+  });
 }
 /** Runs before Web authentication. A token never becomes a Web session/client grant. */
 export async function handleDeviceRequest(
@@ -312,16 +317,8 @@ export async function handleDeviceRequest(
   options: DeviceHttpOptions | undefined,
 ): Promise<boolean> {
   const exchange = url.pathname === "/api/v1/device-connections/exchange";
-  const downloadRoute =
-    /^\/api\/v1\/device-connections\/(instructions|skill)$/u.test(url.pathname);
   const authorization = request.headers.authorization;
-  if (downloadRoute && authorization === undefined) return false;
-  if (
-    !exchange &&
-    !downloadRoute &&
-    url.pathname !== "/mcp" &&
-    authorization === undefined
-  )
+  if (!exchange && url.pathname !== "/mcp" && authorization === undefined)
     return false;
   try {
     if (!options) throw new DeviceConnectionError("device-unavailable");
@@ -352,18 +349,6 @@ export async function handleDeviceRequest(
     );
     if (!match) throw new DeviceConnectionError("device-token-invalid");
     const { connection } = await options.service.authenticate(match[1]!);
-    const artifact =
-      /^\/api\/v1\/device-connections\/(instructions|skill)$/u.exec(
-        url.pathname,
-      );
-    if (artifact && request.method === "GET") {
-      await downloadDeviceArtifact(
-        response,
-        artifact[1] as keyof typeof artifactNames,
-        options.artifactDirectory ?? DEVICE_ARTIFACT_DIRECTORY,
-      );
-      return true;
-    }
     const registered = options.routes?.find(request.method, url.pathname);
     if (!registered)
       throw new DeviceConnectionError("device-purpose-forbidden");

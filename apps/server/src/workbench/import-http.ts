@@ -2,6 +2,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   ContractValidationError,
   IMPORT_LIMITS,
+  INTAKE_HTTP_ENDPOINTS,
+  INTAKE_ERROR_STATUSES,
   importObject,
   importInteger,
   importHash,
@@ -20,114 +22,28 @@ import {
   RequestContentTypeError,
   type DeviceRoute,
 } from "./device-http.js";
-const endpoints = [
-  ["GET", "/api/v1/import/instructions", "instructions", ""],
-  [
-    "POST",
-    "/api/v1/import/sessions",
-    "create",
-    "{format,library:null|{system,library_id,identity:global|local,name},scope,import_user_tags?:boolean,file_name?:string|null}",
-  ],
-  [
-    "POST",
-    "/api/v1/import/sessions/list",
-    "list",
-    "{cursor?:session_id|null,limit?:1..200}",
-  ],
-  ["POST", "/api/v1/import/sessions/:session_id/status", "status", "{}"],
-  [
-    "POST",
-    "/api/v1/import/sessions/:session_id/data",
-    "data",
-    "{sequence:0..1023,data:ImportData|string}",
-  ],
-  ["POST", "/api/v1/import/sessions/:session_id/preview", "preview", "{}"],
-  ["POST", "/api/v1/import/sessions/:session_id/confirm", "confirm", "{}"],
-  [
-    "POST",
-    "/api/v1/import/sessions/:session_id/files",
-    "files",
-    "{cursor?:file_id|null,limit?:1..200,pending?:boolean}",
-  ],
-  [
-    "POST",
-    "/api/v1/import/sessions/:session_id/files/:file_id/hash",
-    "hash",
-    "{sha256}",
-  ],
-  [
-    "POST",
-    "/api/v1/import/sessions/:session_id/files/:file_id/bytes",
-    "bytes",
-    "raw application/pdf or application/octet-stream, no JSON envelope",
-  ],
-  ["POST", "/api/v1/import/sessions/:session_id/finish", "finish", "{}"],
-  ["POST", "/api/v1/import/sessions/:session_id/cancel", "cancel", "{}"],
-  [
-    "POST",
-    "/api/v1/import/sessions/:session_id/report",
-    "report",
-    "{cursor?:sequence:record_index|null,limit?:1..200}",
-  ],
-] as const;
-const model = `ImportData = { records: ImportRecord[], groups?: ImportGroup[], excluded?: {kind:string,count:number}[] }
-ImportGroup = {external_id:string,parent_external_id:string|null,name:string}
-ImportRecord = {external_id:string,metadata:LiteratureMetadata,source_type?:string|null,groups?:string[],user_tags?:string[],files?:ImportFile[],annotations?:ImportAnnotation[]}
+const endpoints = INTAKE_HTTP_ENDPOINTS.filter(
+  (e) =>
+    ![
+      "agent-guide",
+      "skill",
+      "extension",
+      "page-preview",
+      "page-save",
+    ].includes(e[2]),
+);
+const model = `IntakeData = { records: IntakeItem[], groups?: IntakeGroup[], excluded?: {kind:string,count:number}[] }
+IntakeGroup = {external_id:string,parent_external_id:string|null,name:string}
+IntakeItem = {external_id:string,metadata:LiteratureMetadata,source_type?:string|null,groups?:string[],user_tags?:string[],files?:IntakeFile[],annotations?:IntakeAnnotation[]}
 LiteratureMetadata = {title:string|null,authors:Author[],abstract:string|null,publication_date:string|null,publication_year:number|null,publication_form:journal-article|conference-paper|book-or-chapter|thesis|patent|report-or-standard|null,article_kind:research-article|review|letter-or-communication|perspective-or-commentary|correction-or-editorial|null,language:string|null,venue:string|null,publisher:string|null,volume:string|null,issue:string|null,pages:string|null,identifiers:{namespace:string,value:string}[],keywords:string[],subject_terms:string[]}
 Author = {kind:person|organization|unknown,display_name:string,given_name:string|null,family_name:string|null,orcid:string|null,affiliations:{name:string,ror:string|null}[]}
-ImportFile = {external_id:string,file_name:string,media_type:string,preferred:boolean,size_bytes?:number|null,sha256?:string|null}
-ImportAnnotation = {external_id:string,file_external_id:string,kind:highlight|underline|region|note|text|ink,quote?:string,note?:string,color?:string|null,page_index?:number|null,coordinate_space?:pdf-bottom-left|normalized-top-left,rects?:[number,number,number,number][]}
-ImportSession = {session_id:string,library_key:string,library:{system:string,library_id:string,identity:global|local|adhoc,name:string},format:string,scope:string,file_name:string|null,import_user_tags:boolean,state:collecting|awaiting-confirmation|importing|completed|cancelled,created_at:string,updated_at:string,confirmed_at:string|null,finished_at:string|null,last_file_at:string|null,initiated_by:string,intake_batch_id:string|null,metadata_complete:boolean,record_count:number,processed_records:number,pending_files:number}
-ImportFileStatus = {file_id:string,external_id:string,record_external_id:string,literature_id:string,file_name:string,size_bytes:number|null,expected_sha256:string|null,action:upload|hash,status:pending|uploaded|existing|conflict,sha256:string|null,reason:string|null}
-ImportRecordResult = {sequence:number,record_index:number,external_id:string,disposition:created|enriched|matched|conflict|rejected,literature_id:string|null,meta_literature_id:string|null,reason:string|null}
-ImportSummary = {records:{created:number,enriched:number,matched:number,conflicts:number,rejected:number},files:{upload:number,hash:number,uploaded:number,existing:number,conflicts:number,missing:number},annotations:{supported:number,unsupported:number,imported:0,deferred:number},excluded:{kind:string,count:number}[]}`;
-const errorStatuses: Readonly<Record<string, number>> = {
-  "import-input-invalid": 400,
-  "import-format-unsupported": 400,
-  "import-local-identity-required": 400,
-  "import-session-missing": 404,
-  "import-file-missing": 404,
-  "import-literature-missing": 404,
-  "import-library-busy": 409,
-  "import-session-state": 409,
-  "import-data-changed": 409,
-  "import-data-conflict": 400,
-  "import-group-missing": 400,
-  "import-group-cycle": 400,
-  "import-group-depth": 400,
-  "import-folder-target-missing": 400,
-  "import-request-too-large": 413,
-  "import-session-limit": 413,
-  "import-metadata-pending": 409,
-  "import-file-hash-required": 409,
-  "import-file-upload-required": 409,
-  "import-file-hash-mismatch": 400,
-  "import-file-size-mismatch": 400,
-  "import-file-conflict": 409,
-  "import-pdf-invalid": 422,
-  "import-source-stale": 409,
-  "import-upload-cancelled": 400,
-  "import-disk-space": 507,
-  "import-disk-unavailable": 503,
-  "import-unavailable": 503,
-  "import-closed": 503,
-};
-const resultShapes: Readonly<Record<string, string>> = {
-  instructions: "Interface reference",
-  create: "{session:ImportSession}",
-  list: "{items:ImportSession[],next_cursor:string|null}",
-  status: "{session:ImportSession}",
-  data: "{session:ImportSession}",
-  preview: "{session:ImportSession,estimated:true,summary:ImportSummary}",
-  confirm: "{session:ImportSession}",
-  files: "{items:ImportFileStatus[],next_cursor:string|null}",
-  hash: "{file:ImportFileStatus}",
-  bytes: "{file:ImportFileStatus}",
-  finish: "{session:ImportSession}",
-  cancel: "{session:ImportSession}",
-  report:
-    "{session:ImportSession,estimated:false,summary:ImportSummary,items:ImportRecordResult[],next_cursor:string|null}",
-};
+IntakeFile = {external_id:string,file_name:string,media_type:string,preferred:boolean,size_bytes?:number|null,sha256?:string|null}
+IntakeAnnotation = {external_id:string,file_external_id:string,kind:highlight|underline|region|note|text|ink,quote?:string,note?:string,color?:string|null,page_index?:number|null,coordinate_space?:pdf-bottom-left|normalized-top-left,rects?:[number,number,number,number][]}
+IntakeBatch = {batch_id:string,kind:topic|citation|import|legacy,source:{system:string,library_id:string,identity:global|local|adhoc,name:string}|null,confirmation:batch|per-item|null,state:collecting|awaiting-confirmation|running|finished|cancelled|withdrawn,result:completed|partial|failed|interrupted|null,initiated_by:string,created_at:string,confirmed_at:string|null,finished_at:string|null,label:string,default_label:string,renamed:boolean,request:object,counts:{hits:number,created:number,enriched:number,matched:number,rejected:number,restored:number,conflicts:number,possible_duplicates:number,pending_decision:number,needs_metadata:number},pdf:{has_pdf:number,unavailable:number,pending:number},progress:{phase:metadata|files|closing,processed_items:number,total_items:number,files:object}|null}
+IntakeFileStatus = {file_id:string,external_id:string,record_external_id:string,literature_id:string,file_name:string,size_bytes:number|null,expected_sha256:string|null,action:upload|hash,status:pending|uploaded|existing|conflict,sha256:string|null,reason:string|null}
+IntakeItemResult = {sequence:number,record_index:number,external_id:string,disposition:created|enriched|matched|restored|conflict|rejected|pending-decision|excluded,literature_id:string|null,meta_literature_id:string|null,reason:string|null}
+IntakeSummary = {records:{created:number,enriched:number,matched:number,conflicts:number,rejected:number,restored:number,possible_duplicates:number,pending_decision:number,needs_metadata:number},files:{upload:number,hash:number,uploaded:number,existing:number,conflicts:number,missing:number,unpaired:number},annotations:{supported:number,unsupported:number,imported:0,deferred:number},excluded:{kind:string,count:number}[]}`;
+const errorStatuses: Readonly<Record<string, number>> = INTAKE_ERROR_STATUSES;
 export function importInterface(formats: readonly string[]) {
   return {
     protocol_version: 1,
@@ -136,28 +52,31 @@ export function importInterface(formats: readonly string[]) {
     limits: IMPORT_LIMITS,
     authentication: {
       device:
-        "Authorization: Bearer <device token>; import purpose required; no URL credentials",
+        "Authorization: Bearer <device token>; intake purpose required; no URL credentials",
       web: "Existing login, workbench cookie, client_id, same Origin and X-Workbench-Csrf on POST; never send a device Authorization header with Web credentials",
     },
     json: "X-Sciretriever-Protocol-Version: 1; Content-Type: application/json; {protocol_version:1,request:...}. Response: {protocol_version:1,result:...}; failures: {protocol_version:1,code}.",
     model,
     errors: errorStatuses,
     catalog_corrupt: { status: 503, maintenance_hint: "verify-catalog" },
-    endpoints: endpoints.map(([method, path, operation, request]) => ({
-      method,
-      path,
-      operation,
-      request,
-      result: resultShapes[operation],
-    })),
+    endpoints: INTAKE_HTTP_ENDPOINTS.map(
+      ([method, path, operation, request, result]) => ({
+        method,
+        path,
+        operation,
+        request,
+        result,
+      }),
+    ),
     semantics: [
+      "records is a public format for neutral items. When a source has a dedicated adapter, send its original data instead of rewriting it into records.",
       "Preview is read-only and estimated; confirm decides again and checkpoints each record.",
-      "One active session per source library. A repeated sequence replaces that part until confirmation.",
-      "Global library IDs are independent of device; local IDs are scoped to device connection. library=null creates an isolated one-off file source; it cannot resume a source namespace and uses bibliographic-import semantics.",
+      "One active batch per source library. A repeated sequence replaces that part until confirmation.",
+      "Global source library IDs are independent of device; local library IDs are scoped to device connection. source=null creates an isolated one-off file source; it cannot resume a source namespace and uses bibliographic-import semantics.",
       "Import adds observations, folders/members and missing primary PDFs; never deletes or replaces accepted materials.",
       "Upload the preferred PDF only when action=upload; action=hash needs only sha256. Missing files are paginated; repeat uploads are idempotent.",
-      "No file-size ceiling; data requests and session records have the limits above. Interrupted files restart from byte zero; accepted files remain durable.",
-      "Unconfirmed sessions cancel after seven days; importing sessions finish after seven days without a newly settled file. Raw staged data is deleted at the end.",
+      "No file-size ceiling; data requests and batch items have the limits above. Interrupted files restart from byte zero; accepted files remain durable.",
+      "Unconfirmed batches cancel after seven days; running batches finish after seven days without a newly settled file. Raw staged data is deleted at the end.",
       "Supported annotations are counted and deferred until the annotation import release; no reading marks are written.",
       "Reports retain actual record outcomes and per-file status. Use files with pending=false for the final file report, including missing files.",
     ],
@@ -193,11 +112,11 @@ export function importHttpFailure(res: ServerResponse, error: unknown) {
     error instanceof ImportSessionError
       ? error.code
       : error instanceof ContractValidationError
-        ? "import-input-invalid"
-        : "import-unavailable";
+        ? "intake-input-invalid"
+        : "intake-unavailable";
   const code = Object.hasOwn(errorStatuses, candidate)
     ? candidate
-    : "import-unavailable";
+    : "intake-unavailable";
   const status = errorStatuses[code]!;
   if (status === 413) res.setHeader("Connection", "close");
   json(res, status, { protocol_version: 1, code });
@@ -216,13 +135,13 @@ export async function importHttpBody(
   let total = 0;
   if (Number(req.headers["content-length"] ?? 0) > maxBytes) {
     req.resume();
-    throw new ImportSessionError("import-request-too-large");
+    throw new ImportSessionError("intake-request-too-large");
   }
   for await (const chunk of req.iterator({ destroyOnReturn: false })) {
     total += Buffer.byteLength(chunk);
     if (total > maxBytes) {
       req.resume();
-      throw new ImportSessionError("import-request-too-large");
+      throw new ImportSessionError("intake-request-too-large");
     }
     chunks.push(Buffer.from(chunk));
   }
@@ -235,7 +154,7 @@ export async function importHttpBody(
 }
 function page(
   value: unknown,
-  kind: "file" | "report" | "session",
+  kind: "file" | "report" | "batch",
   pending = false,
 ) {
   const r = importObject(
@@ -309,9 +228,10 @@ export function importHttpRoutes(service: ImportSessionService): DeviceRoute[] {
           return;
         }
         const id =
-          parameters.session_id === undefined
+          parameters.batch_id === undefined
             ? null
-            : parseAssetId(parameters.session_id);
+            : parseAssetId(parameters.batch_id);
+        if (id !== null) await service.requireOwner(id, actor);
         let result: unknown;
         if (operation === "bytes") {
           result = {
@@ -326,16 +246,21 @@ export function importHttpRoutes(service: ImportSessionService): DeviceRoute[] {
             ),
           };
         } else {
-          const request = await importHttpBody(req);
+          const request = await importHttpBody(
+            req,
+            operation === "data"
+              ? IMPORT_LIMITS.request_bytes
+              : IMPORT_LIMITS.json_request_bytes,
+          );
           if (operation === "create")
-            result = { session: await service.create(request, actor) };
+            result = { batch: await service.create(request, actor) };
           else if (operation === "list") {
-            const p = page(request, "session");
-            result = await service.list(p.cursor, p.limit);
+            const p = page(request, "batch");
+            result = await service.list(p.cursor, p.limit, actor);
           } else if (operation === "data") {
             const r = importObject(request, ["sequence", "data"]);
             result = {
-              session: await service.putData(
+              batch: await service.putData(
                 id!,
                 importInteger(r.sequence, IMPORT_LIMITS.parts - 1),
                 r.data,
@@ -364,14 +289,14 @@ export function importHttpRoutes(service: ImportSessionService): DeviceRoute[] {
           } else {
             importObject(request, []);
             if (operation === "status")
-              result = { session: await service.status(id!) };
+              result = { batch: await service.status(id!) };
             else if (operation === "preview")
               result = await service.preview(id!);
             else if (operation === "confirm")
-              result = { session: await service.confirm(id!) };
+              result = { batch: await service.confirm(id!) };
             else if (operation === "finish")
-              result = { session: await service.finish(id!) };
-            else result = { session: await service.cancel(id!) };
+              result = { batch: await service.finish(id!) };
+            else result = { batch: await service.cancel(id!) };
           }
         }
         json(res, 200, { protocol_version: 1, result });
@@ -382,7 +307,7 @@ export function importHttpRoutes(service: ImportSessionService): DeviceRoute[] {
     return {
       method,
       path,
-      purposes: ["import"],
+      purposes: ["intake"],
       handle: (req, res, connection: DeviceConnection, p) =>
         execute(req, res, p, {
           kind: "device",

@@ -22,11 +22,11 @@ import {
 } from "./workbench-auth-fixture.js";
 async function fixture(failing = false) {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-capture-"));
-  let now = Date.parse("2026-11-10T23:59:00Z"),
+  let now = new Date(2026, 10, 10, 23, 59).getTime(),
     calls = 0;
   const app = await createApplication(home, {
     indexRefreshIntervalMs: null,
-    importSessions: { maintain: false },
+    importSessions: { maintain: false, now: () => now },
     capture: { now: () => now },
     metadata: {
       lookup_ports: [
@@ -93,7 +93,7 @@ async function fixture(failing = false) {
       routes: deviceBusinessRoutes(app, undefined, pathToFileURL(home + "/")),
     },
   });
-  const pair = async (purposes: DevicePurpose[] = ["capture"]) => {
+  const pair = async (purposes: DevicePurpose[] = ["intake"]) => {
     const pairing = await app.deviceConnections.create({
       address: server.origin,
       name: "Synthetic capture",
@@ -114,7 +114,7 @@ async function fixture(failing = false) {
     request: unknown = {},
     contentType = "application/json",
   ) =>
-    fetch(server.origin + "/api/v1/capture/" + path, {
+    fetch(server.origin + "/api/v1/intake/" + path, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -190,7 +190,7 @@ async function* chunks(bytes: Uint8Array) {
   for (let i = 0; i < bytes.length; i += 1024)
     yield bytes.subarray(i, i + 1024);
 }
-it("admits only capture purposes, binds captures to the originating device and never persists or logs tokens", async () => {
+it("admits only intake purposes, binds captures to the originating device and never persists or logs tokens", async () => {
   const f = await fixture();
   const logs: string[] = [];
   const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
@@ -200,20 +200,19 @@ it("admits only capture purposes, binds captures to the originating device and n
   try {
     const owner = await f.pair(),
       other = await f.pair();
-    for (const purpose of ["import", "read", "operate"] as const) {
+    for (const purpose of ["read", "operate"] as const) {
       const wrong = await f.pair([purpose]);
       for (const path of [
-        "lookup",
-        "folders",
-        "save",
-        "items/00000000-0000-4000-8000-000000000001/status",
-        "items/00000000-0000-4000-8000-000000000001/file/hash",
-        "items/00000000-0000-4000-8000-000000000001/file/bytes",
+        "pages/preview",
+        "pages/save",
+        "batches/00000000-0000-4000-8000-000000000001/status",
+        "batches/00000000-0000-4000-8000-000000000001/files/00000000-0000-4000-8000-000000000002/hash",
+        "batches/00000000-0000-4000-8000-000000000001/files/00000000-0000-4000-8000-000000000002/bytes",
       ])
         expect((await f.send(wrong.token, path, {})).status).toBe(403);
       expect(
         (
-          await fetch(f.server.origin + "/api/v1/capture/extension", {
+          await fetch(f.server.origin + "/api/v1/intake/extension", {
             headers: { Authorization: `Bearer ${wrong.token}` },
           })
         ).status,
@@ -221,40 +220,46 @@ it("admits only capture purposes, binds captures to the originating device and n
     }
     expect(
       (
-        await fetch(f.server.origin + "/api/v1/capture/save", {
+        await fetch(f.server.origin + "/api/v1/intake/pages/save", {
           method: "POST",
         })
       ).status,
     ).toBe(401);
     expect(
       (
-        await f.send(owner.token, "save", {
+        await f.send(owner.token, "pages/save", {
           request_id: randomUUID(),
-          metadata: { title: "Missing ID" },
+          metadata: {},
         })
       ).status,
     ).toBe(400);
-    expect(f.sql("SELECT * FROM capture_items")).toEqual([]);
-    const arxiv = await f.call(owner.token, "save", {
+    expect(f.sql("SELECT * FROM intake_page_requests")).toEqual([]);
+    const arxiv = await f.call(owner.token, "pages/save", {
       request_id: randomUUID(),
       metadata: {
         identifiers: [{ namespace: "arxiv", value: "2601.12345v2" }],
       },
     });
     expect(
-      await f.call(owner.token, "lookup", {
-        identifiers: [{ namespace: "arxiv", value: "2601.12345" }],
+      await f.call(owner.token, "pages/preview", {
+        metadata: {
+          identifiers: [{ namespace: "arxiv", value: "2601.12345" }],
+        },
       }),
     ).toMatchObject({ found: true, literature_id: arxiv.literature_id });
-    const saved = await f.call(owner.token, "save", request());
+    const saved = await f.call(owner.token, "pages/save", request());
     expect(
-      (await f.send(other.token, `items/${saved.capture_id}/status`)).status,
+      (await f.send(other.token, `batches/${saved.batch_id}/status`)).status,
     ).toBe(404);
     expect(
       (
-        await f.send(other.token, `items/${saved.capture_id}/file/hash`, {
-          sha256: "a".repeat(64),
-        })
+        await f.send(
+          other.token,
+          `batches/${saved.batch_id}/files/${saved.file.file_id}/hash`,
+          {
+            sha256: "a".repeat(64),
+          },
+        )
       ).status,
     ).toBe(404);
     for (const path of [
@@ -275,14 +280,14 @@ it("admits only capture purposes, binds captures to the originating device and n
       (
         await fetch(
           f.server.origin +
-            "/api/v1/capture/lookup?token=" +
+            "/api/v1/intake/lookup?token=" +
             encodeURIComponent(owner.token),
           { headers: { Authorization: `Bearer ${owner.token}` } },
         )
       ).status,
     ).toBe(400);
     const persisted =
-      JSON.stringify(f.sql("SELECT * FROM capture_items")) +
+      JSON.stringify(f.sql("SELECT * FROM intake_page_requests")) +
       JSON.stringify(f.sql("SELECT * FROM device_connections")) +
       JSON.stringify(f.sql("SELECT * FROM metadata_observations"));
     expect(persisted).not.toContain(owner.token);
@@ -292,14 +297,14 @@ it("admits only capture purposes, binds captures to the originating device and n
       connection_id: owner.connection_id,
     });
     expect(
-      (await f.send(owner.token, `items/${saved.capture_id}/status`)).status,
+      (await f.send(owner.token, `batches/${saved.batch_id}/status`)).status,
     ).toBe(401);
   } finally {
     spy.mockRestore();
     await f.close();
   }
 }, 30000);
-it("saves page provenance, uses the existing metadata task, merges concurrent retries and groups UTC days per device", async () => {
+it("saves page provenance, uses the existing metadata task, merges concurrent retries and groups server-local days per device", async () => {
   const f = await fixture();
   try {
     const actor = await f.pair(),
@@ -312,16 +317,14 @@ it("saves page provenance, uses the existing metadata task, merges concurrent re
       ...request(undefined, false),
       folder_ids: [folder.folder_id, "00000000-0000-4000-8000-000000000007"],
     };
-    const before = await f.call(actor.token, "lookup", {
-      identifiers: r.metadata.identifiers,
+    const before = await f.call(actor.token, "pages/preview", {
+      metadata: r.metadata,
     });
     expect(before.found).toBe(false);
-    expect(
-      (await f.call(actor.token, "folders", { limit: 1 })).items[0].folder_id,
-    ).toBe(folder.folder_id);
+
     const [a, b] = await Promise.all([
-      f.call(actor.token, "save", r),
-      f.call(actor.token, "save", r),
+      f.call(actor.token, "pages/save", r),
+      f.call(actor.token, "pages/save", r),
     ]);
     expect(a).toEqual(b);
     expect(a.missing_folder_ids).toEqual([
@@ -349,8 +352,8 @@ it("saves page provenance, uses the existing metadata task, merges concurrent re
     ).toBeNull();
     expect(f.sql("SELECT * FROM folder_members")).toHaveLength(1);
     expect(
-      await f.call(actor.token, "lookup", {
-        identifiers: r.metadata.identifiers,
+      await f.call(actor.token, "pages/preview", {
+        metadata: r.metadata,
       }),
     ).toMatchObject({
       found: true,
@@ -359,7 +362,7 @@ it("saves page provenance, uses the existing metadata task, merges concurrent re
     });
     expect(
       (
-        await f.send(actor.token, "save", {
+        await f.send(actor.token, "pages/save", {
           ...r,
           metadata: { ...r.metadata, title: "Changed" },
         })
@@ -371,7 +374,7 @@ it("saves page provenance, uses the existing metadata task, merges concurrent re
     });
     const sameDay = await f.call(
       actor.token,
-      "save",
+      "pages/save",
       request("10.5555/second", false),
     );
     expect(sameDay.batch_id).toBe(a.batch_id);
@@ -381,23 +384,36 @@ it("saves page provenance, uses the existing metadata task, merges concurrent re
     });
     expect(batch).toMatchObject({
       label: "Renamed day",
-      status: "completed",
+      state: "running",
+      result: null,
+      confirmation: "per-item",
       counts: { hits: 2, created: 2 },
     });
     expect(
-      (await f.call(other.token, "save", request("10.5555/third", false)))
+      (await f.call(other.token, "pages/save", request("10.5555/third", false)))
         .batch_id,
     ).not.toBe(a.batch_id);
-    f.setNow(Date.parse("2026-11-11T00:01:00Z"));
-    expect((await f.call(actor.token, "save", r)).batch_id).toBe(a.batch_id);
+    f.setNow(new Date(2026, 10, 11, 0, 1).getTime());
+    expect((await f.call(actor.token, "pages/save", r)).batch_id).toBe(
+      a.batch_id,
+    );
     expect(f.calls()).toBe(3);
     const next = await f.call(
       actor.token,
-      "save",
+      "pages/save",
       request("10.5555/fourth", false),
     );
     expect(next.batch_id).not.toBe(a.batch_id);
-    expect(f.sql("SELECT * FROM capture_daily_batches")).toHaveLength(3);
+    expect(f.sql("SELECT * FROM intake_open_batches")).toHaveLength(3);
+    await f.app.importSessions.sweep();
+    expect(await f.app.importSessions.status(a.batch_id)).toMatchObject({
+      state: "finished",
+      result: "completed",
+    });
+    expect(await f.app.importSessions.status(next.batch_id)).toMatchObject({
+      state: "running",
+      result: null,
+    });
   } finally {
     await f.close();
   }
@@ -429,7 +445,7 @@ it("recovers a committed identity and its original batch classification after th
     expect(f.sql("SELECT disposition FROM intake_batch_members")).toEqual([
       { disposition: "created" },
     ]);
-    const result = await f.call(actor.token, "save", value);
+    const result = await f.call(actor.token, "pages/save", value);
     expect(result.disposition).toBe("created");
     expect(f.calls()).toBe(1);
     expect(f.sql("SELECT * FROM literatures")).toHaveLength(1);
@@ -450,7 +466,7 @@ it("streams valid unverified PDFs through the shared import channel and never re
     const actor = await f.pair(),
       first = await f.call(
         actor.token,
-        "save",
+        "pages/save",
         request(),
         "Application/JSON; CHARSET=UTF-8",
       );
@@ -463,8 +479,8 @@ it("streams valid unverified PDFs through the shared import channel and never re
     ]) {
       const response = await f.send(
         actor.token,
-        "lookup",
-        { identifiers: request().metadata.identifiers },
+        "pages/preview",
+        { metadata: request().metadata },
         contentType,
       );
       expect(response.status).toBe(415);
@@ -476,7 +492,7 @@ it("streams valid unverified PDFs through the shared import channel and never re
       "application/octet-stream; foo=bar",
     ]) {
       const response = await fetch(
-        `${f.server.origin}/api/v1/capture/items/${first.capture_id}/file/bytes`,
+        `${f.server.origin}/api/v1/intake/batches/${first.batch_id}/files/${first.file.file_id}/bytes`,
         {
           method: "POST",
           headers: {
@@ -491,7 +507,7 @@ it("streams valid unverified PDFs through the shared import channel and never re
       expect((await response.json()).code).toBe("content-type-unsupported");
     }
     const invalid = await fetch(
-      `${f.server.origin}/api/v1/capture/items/${first.capture_id}/file/bytes`,
+      `${f.server.origin}/api/v1/intake/batches/${first.batch_id}/files/${first.file.file_id}/bytes`,
       {
         method: "POST",
         headers: {
@@ -504,7 +520,7 @@ it("streams valid unverified PDFs through the shared import channel and never re
     );
     expect(invalid.status).toBe(422);
     const delivery = await fetch(
-      `${f.server.origin}/api/v1/capture/items/${first.capture_id}/file/bytes`,
+      `${f.server.origin}/api/v1/intake/batches/${first.batch_id}/files/${first.file.file_id}/bytes`,
       {
         method: "POST",
         headers: {
@@ -520,9 +536,9 @@ it("streams valid unverified PDFs through the shared import channel and never re
     expect(uploaded.status).toBe("uploaded");
     expect(
       (
-        await f.app.capture.upload(
-          actor.connection_id,
-          first.capture_id,
+        await f.app.importSessions.upload(
+          first.batch_id,
+          first.file.file_id,
           chunks(bytes),
         )
       ).sha256,
@@ -545,7 +561,7 @@ it("streams valid unverified PDFs through the shared import channel and never re
     );
     expect(receipt).toHaveLength(1);
     expect(JSON.parse(String(receipt[0]!.intent_json)).source_url).toBeNull();
-    const repeat = await f.call(actor.token, "save", request());
+    const repeat = await f.call(actor.token, "pages/save", request());
     expect(
       (
         await f.app.library.detail(first.literature_id)
@@ -556,26 +572,34 @@ it("streams valid unverified PDFs through the shared import channel and never re
     expect(repeat.file.action).toBe("hash");
     expect(
       (
-        await f.call(actor.token, `items/${repeat.capture_id}/file/hash`, {
-          sha256: "b".repeat(64),
-        })
+        await f.call(
+          actor.token,
+          `batches/${repeat.batch_id}/files/${repeat.file.file_id}/hash`,
+          {
+            sha256: "b".repeat(64),
+          },
+        )
       ).file.status,
     ).toBe("conflict");
     expect(
       (await f.app.library.detail(first.literature_id)).primary_pdf!.asset
         .asset_id,
     ).toBe(asset);
-    const again = await f.call(actor.token, "save", request());
+    const again = await f.call(actor.token, "pages/save", request());
     expect(
       (
-        await f.call(actor.token, `items/${again.capture_id}/file/hash`, {
-          sha256: sha,
-        })
+        await f.call(
+          actor.token,
+          `batches/${again.batch_id}/files/${again.file.file_id}/hash`,
+          {
+            sha256: sha,
+          },
+        )
       ).file.status,
     ).toBe("existing");
     const fresh = await f.call(
       actor.token,
-      "save",
+      "pages/save",
       request("10.5555/cancelled"),
     );
     const controller = new AbortController();
@@ -590,16 +614,16 @@ it("streams valid unverified PDFs through the shared import channel and never re
         yield bytes;
       },
     };
-    const pending = f.app.capture.upload(
-      actor.connection_id,
-      fresh.capture_id,
+    const pending = f.app.importSessions.upload(
+      fresh.batch_id,
+      fresh.file.file_id,
       stream,
       controller.signal,
     );
     await started;
     controller.abort();
     await expect(pending).rejects.toMatchObject({
-      code: "import-upload-cancelled",
+      code: "intake-upload-cancelled",
     });
     expect(
       (await f.app.library.detail(fresh.literature_id)).primary_pdf,
@@ -612,12 +636,12 @@ it("keeps captured facts when metadata fails and serves the fixed extension arti
   const f = await fixture(true);
   try {
     const actor = await f.pair(),
-      r = await f.call(actor.token, "save", request(undefined, false));
+      r = await f.call(actor.token, "pages/save", request(undefined, false));
     expect(r.metadata.status).toBe("failed");
     expect(
       (await f.app.library.detail(r.literature_id)).literature.metadata.title,
     ).toBe("Captured page title");
-    const url = f.server.origin + "/api/v1/capture/extension",
+    const url = f.server.origin + "/api/v1/intake/extension",
       device = { Authorization: `Bearer ${actor.token}` };
     expect((await fetch(url, { headers: device })).status).toBe(503);
     await writeFile(
@@ -686,6 +710,72 @@ it("keeps captured facts when metadata fails and serves the fixed extension arti
       Buffer.alloc(16 * 1024 * 1024 + 1),
     );
     expect((await fetch(url, { headers: device })).status).toBe(503);
+  } finally {
+    await f.close();
+  }
+}, 30000);
+
+it("saves a title-only page into the shared open batch and rejects an empty item", async () => {
+  const f = await fixture();
+  try {
+    const actor = await f.pair();
+    const empty = await f.send(actor.token, "pages/save", {
+      request_id: randomUUID(),
+      metadata: {},
+    });
+    expect(empty.status).toBe(400);
+    expect((await empty.json()).code).toBe("intake-item-empty");
+    const preview = await f.call(actor.token, "pages/preview", {
+      metadata: { title: "A title without identifiers" },
+    });
+    expect(preview).toMatchObject({
+      found: false,
+      metadata: { title: "A title without identifiers", identifiers: [] },
+      has_pdf: false,
+      pdf_url: null,
+      possible_duplicates: [],
+    });
+    expect(preview).not.toHaveProperty("sha256");
+    expect(f.sql("SELECT * FROM intake_batches")).toEqual([]);
+    const input = {
+      request_id: randomUUID(),
+      metadata: { title: "A title without identifiers" },
+    };
+    const saved = await f.call(actor.token, "pages/save", input);
+    expect(saved).toMatchObject({
+      item_id: expect.any(String),
+      batch_id: expect.any(String),
+      literature_id: expect.any(String),
+      disposition: "created",
+    });
+    expect(
+      (await f.app.library.detail(saved.literature_id)).literature.metadata,
+    ).toMatchObject({ title: "A title without identifiers", identifiers: [] });
+    expect(await f.call(actor.token, "pages/save", input)).toEqual(saved);
+    expect(f.sql("SELECT * FROM literatures")).toHaveLength(1);
+    expect(
+      f.sql("SELECT result_json FROM intake_page_requests")[0]!.result_json,
+    ).not.toBeNull();
+    expect(
+      f.sql(
+        "SELECT name FROM sqlite_master WHERE name IN ('capture_items','capture_daily_batches')",
+      ),
+    ).toEqual([]);
+    for (const path of [
+      "/api/v1/capture/save",
+      "/api/v1/import/sessions",
+      "/api/v1/device-connections/instructions",
+      "/api/v1/device-connections/skill",
+    ]) {
+      const response = await fetch(f.server.origin + path, {
+        method:
+          path.endsWith("instructions") || path.endsWith("skill")
+            ? "GET"
+            : "POST",
+        headers: { Authorization: `Bearer ${actor.token}` },
+      });
+      expect(response.status).toBe(403);
+    }
   } finally {
     await f.close();
   }

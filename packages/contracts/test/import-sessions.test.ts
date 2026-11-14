@@ -1,14 +1,14 @@
 import { expect, it } from "vitest";
 import {
-  parseImportCreate,
-  parseImportData,
+  parseIntakeCreate,
+  parseIntakeData,
   parseMetadataObservation,
   EMPTY_METADATA,
 } from "../src/index.js";
 it("keeps the import model neutral, rejects unknown properties and leaves adhoc identities internal", () => {
   const base = {
     format: "records",
-    library: {
+    source: {
       system: "synthetic",
       library_id: "1",
       identity: "local",
@@ -16,21 +16,24 @@ it("keeps the import model neutral, rejects unknown properties and leaves adhoc 
     },
     scope: "selected group",
   };
-  expect(parseImportCreate(base).import_user_tags).toBe(true);
+  expect(parseIntakeCreate(base).import_user_tags).toBe(true);
+  expect(() => parseIntakeCreate({ ...base, library: base.source })).toThrow();
+  const { source, ...old } = base;
+  expect(() => parseIntakeCreate({ ...old, library: source })).toThrow();
   expect(() =>
-    parseImportCreate({
+    parseIntakeCreate({
       ...base,
-      library: { ...base.library, identity: "adhoc" },
+      source: { ...base.source, identity: "adhoc" },
     }),
   ).toThrow();
   expect(() =>
-    parseImportCreate({ ...base, token: "not-a-request-field" }),
+    parseIntakeCreate({ ...base, token: "not-a-request-field" }),
   ).toThrow();
   expect(() =>
-    parseImportData({ records: [], arbitrary_source_payload: {} }),
+    parseIntakeData({ records: [], arbitrary_source_payload: {} }),
   ).toThrow();
   expect(
-    parseImportData({
+    parseIntakeData({
       records: [],
       groups: [
         { external_id: "group", parent_external_id: null, name: "Group" },
@@ -116,42 +119,42 @@ it("refuses file paths, multiple preferred files and oversized record lists at t
     "C:\\private.pdf",
   ])
     expect(() =>
-      parseImportData({
+      parseIntakeData({
         records: [{ ...record, files: [{ ...file, external_id }] }],
       }),
     ).toThrow();
   expect(() =>
-    parseImportData({
+    parseIntakeData({
       records: [{ ...record, files: [{ ...file, file_name: "dir/file.pdf" }] }],
     }),
   ).toThrow();
   expect(() =>
-    parseImportData({
+    parseIntakeData({
       records: [
         { ...record, files: [file, { ...file, external_id: "second" }] },
       ],
     }),
   ).toThrow();
   expect(() =>
-    parseImportData({ records: Array.from({ length: 50_001 }, () => record) }),
+    parseIntakeData({ records: Array.from({ length: 50_001 }, () => record) }),
   ).toThrow();
 });
 
 it("accepts an explicit null library without allowing callers to select an adhoc identity or namespace", () => {
   const request = {
     format: "bibtex",
-    library: null,
+    source: null,
     file_name: "batch-fixture.bib",
     scope: "one file",
   };
-  expect(parseImportCreate(request).library).toBeNull();
+  expect(parseIntakeCreate(request).source).toBeNull();
   expect(() =>
-    parseImportCreate({ ...request, identity_scope: "adhoc:chosen" }),
+    parseIntakeCreate({ ...request, identity_scope: "adhoc:chosen" }),
   ).toThrow();
   expect(() =>
-    parseImportCreate({
+    parseIntakeCreate({
       ...request,
-      library: {
+      source: {
         system: "file",
         library_id: "chosen",
         identity: "adhoc",
@@ -160,6 +163,6 @@ it("accepts an explicit null library without allowing callers to select an adhoc
     }),
   ).toThrow();
   expect(() =>
-    parseImportCreate({ format: "bibtex", scope: "missing library" }),
+    parseIntakeCreate({ format: "bibtex", scope: "missing library" }),
   ).toThrow();
 });

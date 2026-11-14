@@ -11,7 +11,7 @@
 - [library-state-cache.ts](library-state-cache.ts)：基于事务内输入版本的建档状态缓存。
 - [library-state-schema-migration.ts](library-state-schema-migration.ts)：显式离线安装当前按篇失效结构；[library-state-previous-layout.ts](library-state-previous-layout.ts) 只描述工具的精确旧输入，不由 catalog opener 接受。
 - [intake-engine.ts](intake-engine.ts)：入库批次及按文献去重的成员写入、改名与当前 PDF 状态读取；成员与 identity 发布共用事务。
-- [capture-engine.ts](capture-engine.ts)：设备/UTC 日期唯一的批次关系、请求 UUID 与输入 hash、已接纳结果与单 PDF 结算。身份发布原子接纳日批次成员；重放从已提交成员恢复分类。Intake 依据按日关系允许已完成的收藏批次补成员，普通批次仍要求 running。
+- [capture-engine.ts](capture-engine.ts)：单篇网页的请求 UUID/规范输入 hash 与持久回执、设备按系统时区日期唯一的开放批次。条目存在 intake_items，文件存在 import_files，身份发布与批次成员复用相同事务边界；重放从已提交成员恢复分类，不再有独立收藏表。
 - [intake-schema-migration.ts](intake-schema-migration.ts)：显式离线 14 → 15，旧运行回填、早期批次、主题词映射及确定性元数据/索引投影；[intake-metadata-migration.ts](intake-metadata-migration.ts) 复用元数据裁决与读取。
 - [openalex-top-concepts-cleanup.ts](openalex-top-concepts-cleanup.ts)：显式离线删除旧 OpenAlex 观测中 19 个顶层大类，并复用关键词层重投影，仅更新受影响文献与 Library FTS；不改 schema，不由启动或查询调用。检索 source revision 正常推进，后续刷新追赶。
 - [library-page.ts](library-page.ts)：LibraryQuery 的只读 SQL 筛选、计数和游标分页，完整文献只装载当前页；不修改业务事实或 catalog schema。
@@ -62,3 +62,5 @@ schema 15 增加入库批次、成员与主题词；13 的按篇状态失效提�
 `schema.ts` 中冻结的 13、14、15 manifest 仅供相应离线迁移证明输入/输出，普通 opener 只接纳当前 16。14 → 15 修正规范化的来源关键词子表，保留 Provider 原始响应的 provenance hash；全部文献更新关键词投影、metadata revision/hash 和 Library FTS，再生成新的 active 检索代，复用未改变的文档证据。若输入索引原本落后，保留落后水位，由既有后台刷新追赶；已知损坏或文档存在而索引缺失时先拒绝，须在旧版本完成显式重建后重试。
 
 `device-connection-engine.ts` 保存设备认证派生值、配对消费、撤销和有界限流计数；check 只按已认证的连接 ID 重读有效性，不能代替令牌认证；不记录认证原值，不改变文献/索引水位。[import-engine.ts](import-engine.ts) 保存通用导入库、外部编号对应、会话、原始分段引用、去重键、逐条结果与文件状态；书目事实仍由身份 owner 提交，文件夹和 PDF 不另建写入 owner。当前 schema 16 由 `import-schema-migration.ts` 显式离线从精确 15 转换，设备与导入表共用 `IMPORT_SCHEMA_V16`，不回填历史虚构来源；后续 M1 表继续并入同一布局。旧 14→15 迁移固定旧输出，打开路径仍只接纳当前布局。
+
+统一入库从建批次时就有唯一 batch_id。intake_batches 是状态与结果的所有者，import_sessions 仅保存来源、分段与检查点，其 active 与批次状态在同一写事务中变化。导入根目录的外部对应先 pending 预留编号，再创建目录，最后 settled；content_sha256 只保存内容 hash。schema.ts 的 IMPORT_SCHEMA_V16 汇集全部入库与未来认篇/决定/撤回 DDL，import-schema-migration.ts 在单一 15→16 事务中回填旧批次并保留全部旧表行数。未来功能的表先保留结构，不由启动流程产生决定、撤回或书目待补事实；这些表不参与建档状态输入或检索修订。

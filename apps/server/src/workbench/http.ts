@@ -879,19 +879,21 @@ function guardRequestBody(request: IncomingMessage, response: ServerResponse) {
     (path === "/mcp" ||
       path === "/api/v1/maintenance/ingest-pdf" ||
       path === "/api/maintenance/ingest-pdf" ||
-      /^\/api\/v1\/import\/sessions\/[^/]+\/(?:data|files\/[^/]+\/bytes)$/u.test(
+      /^\/api\/v1\/intake\/batches\/[^/]+\/(?:data|files\/[^/]+\/bytes)$/u.test(
         path!,
-      ) ||
-      /^\/api\/v1\/capture\/items\/[^/]+\/file\/bytes$/u.test(path!));
+      ));
   let timer: ReturnType<typeof setTimeout>;
+  let draining = false;
   const finished = () => {
     if (request.complete) {
       cleanup();
       return;
     }
     // A response finishing is not permission to destroy the shared socket.
-    // Drain an early rejection under the existing receiving deadline, without
-    // the readable observer keeping Node's automatic discard path paused.
+    // Give an early response time to reach the peer, but bound the remaining
+    // discard by total time even when the upload keeps making progress.
+    draining = true;
+    arm();
     request.off("readable", received);
     request.on("data", received);
     request.resume();
@@ -936,12 +938,12 @@ function guardRequestBody(request: IncomingMessage, response: ServerResponse) {
   };
   const arm = () => {
     clearTimeout(timer);
-    timer = setTimeout(expire, idle ? 60000 : 5000);
+    timer = setTimeout(expire, idle && !draining ? 60000 : 5000);
     timer.unref();
   };
   const received = () => {
     if (request.complete) cleanup();
-    else if (idle) arm();
+    else if (idle && !draining) arm();
   };
   // Observe availability without putting the request in flowing mode before auth.
   request.on("readable", received);

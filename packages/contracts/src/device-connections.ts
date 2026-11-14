@@ -1,11 +1,6 @@
 import { ContractValidationError } from "./index.js";
 
-export const DEVICE_PURPOSES = [
-  "capture",
-  "import",
-  "read",
-  "operate",
-] as const;
+export const DEVICE_PURPOSES = ["intake", "read", "operate"] as const;
 export type DevicePurpose = (typeof DEVICE_PURPOSES)[number];
 export interface DeviceConnection {
   readonly connection_id: string;
@@ -72,7 +67,7 @@ export function devicePurposes(value: unknown): readonly DevicePurpose[] {
   if (
     !Array.isArray(value) ||
     !value.length ||
-    value.length > 4 ||
+    value.length > DEVICE_PURPOSES.length ||
     value.some((p) => !DEVICE_PURPOSES.includes(p)) ||
     new Set(value).size !== value.length
   )
