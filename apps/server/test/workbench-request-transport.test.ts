@@ -117,6 +117,11 @@ async function fixture() {
       },
     });
     await post(base + "/confirm", token, {});
+    await vi.waitFor(
+      async () =>
+        expect((await post(base + "/files", token, {})).items).toHaveLength(1),
+      { timeout: 20_000 },
+    );
     const file = (await post(base + "/files", token, {})).items[0];
     return { base, file, path: `${base}/files/${file.file_id}/bytes` };
   };

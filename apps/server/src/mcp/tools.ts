@@ -1079,11 +1079,15 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
   ),
   tool(
     "begin_pdf_upload",
-    "Reserve a connection-local PDF upload, at most 16 MiB. Expires after 10 minutes or disconnect; no file paths. Supply full byte size/hash before sending bounded chunks. Does not publish literature.",
+    "Reserve a connection-local disk-spooled PDF upload without a file-size ceiling. Expires after 10 minutes or disconnect; no file paths. Supply full byte size/hash before bounded chunks. Does not publish literature.",
     object({
       literature_id: id,
       sha256: hash,
-      byte_size: { type: "integer", minimum: 1, maximum: 16777216 },
+      byte_size: {
+        type: "integer",
+        minimum: 1,
+        maximum: Number.MAX_SAFE_INTEGER,
+      },
     }),
     false,
   ),

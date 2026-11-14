@@ -303,7 +303,9 @@ export async function startMaintenanceWorkbench(options: {
   readonly application: Application;
   close(): Promise<void>;
 }> {
-  const application = await createApplication(options.home, {});
+  const application = await createApplication(options.home, {
+    importSessions: { maintain: true },
+  });
   let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
   let http: Awaited<ReturnType<typeof startQueryOnlyHttp>> | undefined;
   let closing: Promise<void> | undefined;
@@ -469,6 +471,7 @@ async function startProductionWorkbenchOwned(
     void _permit;
     application = await createApplication(options.home, {
       ...applicationOptions,
+      importSessions: { maintain: true, ...applicationOptions.importSessions },
       configurationOwner,
 
       browserCollaboration: session,
@@ -597,6 +600,10 @@ export async function startSyntheticWorkbench(options: {
     await initializeCatalogSchema(catalog);
   const application = await createApplication(options.home, {
     ...options.applicationOptions,
+    importSessions: {
+      maintain: true,
+      ...options.applicationOptions?.importSessions,
+    },
 
     configurationOwner,
   });

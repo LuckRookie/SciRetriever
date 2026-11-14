@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   parseDeviceConnectionCode,
   type DevicePurpose,
@@ -238,6 +238,13 @@ it("shares the exact import handlers between authenticated Web and import-purpos
       expect(preview.status).toBe(200);
       expect((await preview.json()).result.summary.files.upload).toBe(1);
       expect((await call(base + "/confirm", {})).status).toBe(200);
+      await vi.waitFor(
+        async () =>
+          expect(
+            (await (await call(base + "/files", {})).json()).result.items,
+          ).toHaveLength(1),
+        { timeout: 20_000 },
+      );
       const missing = await call(base + "/files", {}),
         file = (await missing.json()).result.items[0] as { file_id: string };
       const uploaded = await fetch(
@@ -302,6 +309,14 @@ it("shares the exact import handlers between authenticated Web and import-purpos
           : { created: 0, matched: 1 },
       );
       expect((await call(base + "/confirm", {})).status).toBe(200);
+      await vi.waitFor(
+        async () =>
+          expect(
+            (await (await call(base + "/status", {})).json()).result.batch
+              .state,
+          ).toBe("finished"),
+        { timeout: 20_000 },
+      );
       expect(
         (await (await call(base + "/report", {})).json()).result.batch.state,
       ).toBe("finished");
@@ -351,7 +366,15 @@ it("shares the exact import handlers between authenticated Web and import-purpos
     });
     expect(docs.status).toBe(200);
     const reference = (await docs.json()).result;
-    expect(reference.endpoints).toHaveLength(18);
+    expect(reference.endpoints).toHaveLength(19);
+    expect(reference.endpoints).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          method: "POST",
+          path: "/api/v1/intake/literatures/:literature_id/pdf",
+        }),
+      ]),
+    );
     expect(reference.formats).toContain("records");
     expect(JSON.stringify(reference)).not.toMatch(
       /\bsessions?\b|\/api\/v1\/(?:import|capture)/u,

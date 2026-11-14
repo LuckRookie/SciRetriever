@@ -18,7 +18,11 @@ import {
   type IntakeBatch,
   type MetadataObservation,
 } from "@sciretriever/contracts";
-import type { SqliteWorker } from "../storage/sqlite/worker.js";
+import {
+  SqliteWorkerError,
+  type SqliteWorker,
+} from "../storage/sqlite/worker.js";
+import { WriteAdmissionError } from "../storage/write-admission.js";
 import type {
   ImportRead,
   ImportWrite,
@@ -61,10 +65,39 @@ export interface ImportSessionOptions {
   readonly adapters?: readonly ImportAdapter[];
   readonly now?: () => number;
   readonly availableBytes?: BrowserDownloadResourceOptions["available_bytes"];
+  /** Only long-lived service entry points enable recovery and expiry. */
   readonly maintain?: boolean;
 }
 const hash = (v: unknown) =>
   createHash("sha256").update(canonicalJsonBytes(v)).digest("hex");
+function storageFailure(error: unknown): boolean {
+  let current = error;
+  for (let i = 0; i < 8 && current && typeof current === "object"; i++) {
+    if (
+      current instanceof SqliteWorkerError ||
+      current instanceof WriteAdmissionError
+    )
+      return true;
+    const r = current as { code?: string; cause?: unknown };
+    if (
+      /^(?:SQLITE_|E(?:IO|NOENT|NOSPC|ACCES|PERM|ROFS|MFILE|NFILE|DQUOT|STALE)$)/u.test(
+        r.code ?? "",
+      ) ||
+      [
+        "intake-unavailable",
+        "intake-disk-space",
+        "intake-disk-unavailable",
+        "file-store",
+        "file-staging",
+        "file-publication",
+        "file-read",
+      ].includes(r.code ?? "")
+    )
+      return true;
+    current = r.cause;
+  }
+  return false;
+}
 function stableId(v: unknown) {
   const h = hash(v);
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
@@ -228,6 +261,13 @@ export class ImportSessionService extends ImportSessionReadService {
   private readonly adapters: ReadonlyMap<string, ImportAdapter>;
   private readonly now: () => number;
   private readonly confirmations = new Map<string, Promise<IntakeBatch>>();
+  private readonly admissions = new Map<string, Promise<IntakeBatch>>();
+  private readonly background = new Map<string, Promise<void>>();
+  private readonly retries = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly failures = new Map<
+    string,
+    { count: number; at: number; storage: boolean }
+  >();
   private readonly stopping = new Set<string>();
   private readonly uploads = new Map<string, Set<Promise<unknown>>>();
   private readonly uploadStops = new Map<string, Set<AbortController>>();
@@ -262,7 +302,7 @@ export class ImportSessionService extends ImportSessionReadService {
       resources,
       this.now,
     );
-    if (options.maintain !== false) {
+    if (options.maintain === true) {
       this.timer = setInterval(() => {
         void this.sweep().catch(() =>
           this.logger.warn("Import maintenance failed"),
@@ -659,7 +699,7 @@ export class ImportSessionService extends ImportSessionReadService {
         ...(mapping ? { target_literature_id: mapping.internal_id } : {}),
       });
     } catch (error) {
-      if (s.source.identity !== "adhoc") throw error;
+      if (s.source.identity !== "adhoc" || storageFailure(error)) throw error;
       return { disposition: "rejected", reason: "identity-failed" };
     }
   }
@@ -707,6 +747,146 @@ export class ImportSessionService extends ImportSessionReadService {
       };
     });
   }
+  /** HTTP admission only. Local bibliography wrappers keep the synchronous confirm(). */
+  confirmInBackground(id: string): Promise<IntakeBatch> {
+    const current = this.admissions.get(id);
+    if (current) return current;
+    const admitted = this.tracked(async () => {
+      const s = await this.stored(id);
+      if (this.stopping.has(id))
+        throw new ImportSessionError("intake-batch-state");
+      if (s.state === "awaiting-confirmation") {
+        const prepared = await this.prepare(s);
+        await this.writes.run(async () => {
+          const parts = await this.read<ImportPart[]>({
+            op: "parts",
+            batch_id: id,
+          });
+          if (hash(parts) !== hash(prepared.parts))
+            throw new ImportSessionError("intake-data-changed");
+          await this.write({
+            op: "begin",
+            batch_id: id,
+            summary: prepared.summary,
+            now: new Date(this.now()).toISOString(),
+          });
+        });
+      } else if (!["running", "finished"].includes(s.state))
+        throw new ImportSessionError("intake-batch-state");
+      const batch = await this.status(id);
+      setImmediate(() => {
+        if (!this.stop.signal.aborted) void this.runInBackground(id);
+      });
+      return batch;
+    });
+    this.admissions.set(id, admitted);
+    const done = () => this.admissions.delete(id);
+    void admitted.then(done, done);
+    return admitted;
+  }
+  private scheduleRetry(id: string, due: number) {
+    if (
+      this.stop.signal.aborted ||
+      this.stopping.has(id) ||
+      this.retries.has(id)
+    )
+      return;
+    const timer = setTimeout(
+      () => {
+        this.retries.delete(id);
+        if (!this.stop.signal.aborted) void this.runInBackground(id);
+      },
+      Math.max(0, due - this.now()),
+    );
+    timer.unref();
+    this.retries.set(id, timer);
+  }
+  private async checkpointFailure(
+    id: string,
+    failure: { count: number; at: number; storage: boolean },
+  ) {
+    try {
+      await this.writes.run(() =>
+        this.write({
+          op: "processing-failure",
+          batch_id: id,
+          failures: failure.count,
+          storage: failure.storage,
+          now: new Date(failure.at).toISOString(),
+        }),
+      );
+      const state = await this.stored(id);
+      if (state.state !== "running" || state.metadata_complete) {
+        this.failures.delete(id);
+        if (state.state === "finished") await this.cleanParts(id);
+      } else this.scheduleRetry(id, failure.at + 60_000);
+    } catch {
+      // Storage may also reject the failure checkpoint. Keep the processing
+      // budget in memory; after three failures only this checkpoint is retried.
+      this.logger.warn("Intake failure checkpoint unavailable");
+      failure.at = this.now();
+      this.scheduleRetry(id, failure.at + 60_000);
+    }
+  }
+  private runInBackground(id: string): Promise<void> {
+    const current = this.background.get(id);
+    if (current) return current;
+    if (
+      this.confirmations.has(id) ||
+      this.stop.signal.aborted ||
+      this.stopping.has(id)
+    )
+      return Promise.resolve();
+    const pending = this.tracked(async () => {
+      try {
+        const s = await this.stored(id);
+        if (s.state !== "running" || s.metadata_complete) {
+          this.failures.delete(id);
+          return;
+        }
+        let failure = this.failures.get(id);
+        if (s.storage_failures > (failure?.count ?? 0)) {
+          failure = {
+            count: s.storage_failures,
+            at: Date.parse(s.updated_at),
+            storage: true,
+          };
+          this.failures.set(id, failure);
+        }
+        if (failure && this.now() - failure.at < 60_000) {
+          this.scheduleRetry(id, failure.at + 60_000);
+          return;
+        }
+        const retry = this.retries.get(id);
+        if (retry) {
+          clearTimeout(retry);
+          this.retries.delete(id);
+        }
+        if (failure && (!failure.storage || failure.count >= 3)) {
+          await this.checkpointFailure(id, failure);
+          return;
+        }
+        await this.confirm(id);
+      } catch (error) {
+        if (this.stop.signal.aborted || this.stopping.has(id)) return;
+        const previous = this.failures.get(id);
+        const failure =
+          previous && (!previous.storage || previous.count >= 3)
+            ? previous
+            : {
+                count: Math.min(3, (previous?.count ?? 0) + 1),
+                at: this.now(),
+                storage: storageFailure(error),
+              };
+        this.failures.set(id, failure);
+        await this.checkpointFailure(id, failure);
+      }
+    });
+    this.background.set(id, pending);
+    const done = () => this.background.delete(id);
+    void pending.then(done, done);
+    return pending;
+  }
   confirm(id: string): Promise<IntakeBatch> {
     if (this.stopping.has(id))
       return Promise.reject(new ImportSessionError("intake-batch-state"));
@@ -747,6 +927,7 @@ export class ImportSessionService extends ImportSessionReadService {
     for (const group of prepared.groups.keys())
       await this.writes.run(async () => {
         if (
+          this.stop.signal.aborted ||
           this.stopping.has(id) ||
           (await this.stored(id)).state !== "running"
         )
@@ -754,7 +935,8 @@ export class ImportSessionService extends ImportSessionReadService {
         try {
           await this.sourceGroup(s, prepared.groups, group, groupCache);
         } catch (error) {
-          if (!(error instanceof ImportSessionError)) throw error;
+          if (!(error instanceof ImportSessionError) || storageFailure(error))
+            throw error;
           addExcluded(prepared.summary, error.code);
         }
       });
@@ -870,8 +1052,9 @@ export class ImportSessionService extends ImportSessionReadService {
                   );
                 } catch (error) {
                   if (
-                    !(error instanceof ImportSessionError) &&
-                    !(error instanceof FolderError)
+                    (!(error instanceof ImportSessionError) &&
+                      !(error instanceof FolderError)) ||
+                    storageFailure(error)
                   )
                     throw error;
                   addExcluded(
@@ -918,10 +1101,15 @@ export class ImportSessionService extends ImportSessionReadService {
             files,
             now: new Date(this.now()).toISOString(),
           });
+          this.failures.delete(id);
         });
       }
     const current = await this.stored(id);
-    if (current.state !== "running" || this.stopping.has(id))
+    if (
+      this.stop.signal.aborted ||
+      current.state !== "running" ||
+      this.stopping.has(id)
+    )
       return this.project(current);
     const aggregate = await this.read<Pick<ImportSummary, "records" | "files">>(
       { op: "aggregate", batch_id: id },
@@ -932,6 +1120,7 @@ export class ImportSessionService extends ImportSessionReadService {
       summary: { ...prepared.summary, ...aggregate },
       now: new Date(this.now()).toISOString(),
     });
+    this.failures.delete(id);
     await this.finishIfComplete(id);
     return this.project(await this.stored(id));
   }
@@ -1112,11 +1301,17 @@ export class ImportSessionService extends ImportSessionReadService {
         now: new Date(this.now()).toISOString(),
       });
     });
+    this.failures.delete(id);
     await this.cleanParts(id);
     return this.project(await this.stored(id));
   }
   private async terminate(id: string, state: "finished" | "cancelled") {
     this.stopping.add(id);
+    const retry = this.retries.get(id);
+    if (retry) {
+      clearTimeout(retry);
+      this.retries.delete(id);
+    }
     for (const stop of this.uploadStops.get(id) ?? []) stop.abort();
     try {
       const confirmation = this.confirmations.get(id);
@@ -1202,6 +1397,9 @@ export class ImportSessionService extends ImportSessionReadService {
     chunks: AsyncIterable<Uint8Array>,
     signal?: AbortSignal,
     cancelSource?: () => void,
+    onAccepted?: (
+      receipt: import("@sciretriever/contracts").CandidatePublicationReceipt,
+    ) => void,
   ) {
     const control = new AbortController();
     const active = AbortSignal.any([
@@ -1238,7 +1436,10 @@ export class ImportSessionService extends ImportSessionReadService {
           this.settleFile(id, file, sha, asset, uploaded),
         (await this.stored(id)).format === "web-page"
           ? "web-capture"
-          : "import",
+          : (await this.stored(id)).format === "pdf"
+            ? "manual-pdf"
+            : "import",
+        onAccepted,
       );
     });
     const uploads = this.uploads.get(id) ?? new Set<Promise<unknown>>();
@@ -1253,6 +1454,109 @@ export class ImportSessionService extends ImportSessionReadService {
     };
     void operation.then(done, done);
     return operation;
+  }
+  supplementPdf(
+    literatureId: string,
+    chunks: AsyncIterable<Uint8Array>,
+    origin: "web" | "cli" | "mcp",
+    signal?: AbortSignal,
+    cancelSource?: () => void,
+    onAccepted?: (
+      receipt: import("@sciretriever/contracts").CandidatePublicationReceipt,
+    ) => void,
+    descriptor: {
+      file_name?: string;
+      size_bytes?: number;
+      sha256?: string;
+    } = {},
+  ) {
+    return this.tracked(async () => {
+      const facts = await this.database.currentFacts(literatureId);
+      if (!facts) throw new ImportSessionError("intake-literature-missing");
+      const at = new Date(this.now()),
+        day = `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
+      const fileId = randomUUID(),
+        itemId = randomUUID();
+      const base = this.createBatchProjection(origin, at.toISOString(), day);
+      const file: ImportFileStatus = {
+        file_id: fileId,
+        external_id: fileId,
+        record_external_id: itemId,
+        literature_id: literatureId,
+        file_name: descriptor.file_name ?? "document.pdf",
+        size_bytes: descriptor.size_bytes ?? null,
+        expected_sha256: descriptor.sha256 ?? null,
+        action: "upload",
+        status: "pending",
+        sha256: null,
+        reason: null,
+      };
+      const id = await this.writes.run(() =>
+        this.write<string>({
+          op: "supplement",
+          batch: base,
+          day,
+          item_id: itemId,
+          file,
+          title: facts.literature.metadata.title,
+        }),
+      );
+      return {
+        batch_id: id,
+        file: await this.upload(
+          id,
+          fileId,
+          chunks,
+          signal,
+          cancelSource,
+          onAccepted,
+        ),
+      };
+    });
+  }
+  private createBatchProjection(
+    origin: "web" | "cli" | "mcp",
+    at: string,
+    day: string,
+  ): IntakeBatch {
+    return {
+      batch_id: parseIntakeBatchId(randomUUID()),
+      kind: "import",
+      label: `补充文件 ${day}`,
+      default_label: `补充文件 ${day}`,
+      renamed: false,
+      origin,
+      created_at: at,
+      finished_at: null,
+      state: "running",
+      result: null,
+      confirmation: "per-item",
+      confirmed_at: at,
+      initiated_by: `local:${origin}`,
+      source: {
+        system: "file",
+        library_id: "",
+        identity: "adhoc",
+        name: "补充文件",
+      },
+      progress: null,
+      request: { format: "pdf", file_name: null },
+      counts: {
+        hits: 0,
+        created: 0,
+        enriched: 0,
+        matched: 0,
+        rejected: 0,
+        restored: 0,
+        conflicts: 0,
+        possible_duplicates: 0,
+        pending_decision: 0,
+        needs_metadata: 0,
+      },
+      pdf: { has_pdf: 0, unavailable: 0, pending: 0 },
+      discovery_run_id: null,
+      source_failures: 0,
+    };
   }
   /** Startup/periodic recovery; progress is checkpointed per record, never resets valid facts. */
   sweep(): Promise<void> {
@@ -1269,6 +1573,14 @@ export class ImportSessionService extends ImportSessionReadService {
           continue;
         }
         if (this.stop.signal.aborted) return;
+        if (s.owner_pid !== null && s.owner_pid !== process.pid) {
+          try {
+            process.kill(s.owner_pid, 0);
+            continue;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+          }
+        }
         const deadline =
           Date.parse(
             s.state === "running"
@@ -1280,8 +1592,9 @@ export class ImportSessionService extends ImportSessionReadService {
             s.batch_id,
             s.state === "running" ? "finished" : "cancelled",
           );
-        else if (s.state === "running" && !s.metadata_complete)
-          await this.confirm(s.batch_id);
+        else if (s.state === "running" && !s.metadata_complete) {
+          void this.runInBackground(s.batch_id);
+        }
       }
       for (const id of await this.read<string[]>({ op: "cleanup" })) {
         if (this.stop.signal.aborted) return;
@@ -1397,6 +1710,9 @@ export class ImportSessionService extends ImportSessionReadService {
   }
   override async close() {
     if (this.timer) clearInterval(this.timer);
+    for (const retry of this.retries.values()) clearTimeout(retry);
+    this.retries.clear();
     await super.close();
+    this.failures.clear();
   }
 }

@@ -208,6 +208,7 @@ export interface WorkbenchHttpOptions {
   };
   readonly maintenance?: {
     readonly ingestPdf: ManualPdfIngestionService["ingestPdf"];
+    readonly ingestPdfStream?: ManualPdfIngestionService["ingestPdfStream"];
     readonly parseDocuments: DocumentProcessingService["parseDocuments"];
     readonly documentDefault?: (
       literatureId: string,
@@ -800,6 +801,7 @@ async function receiveManualPdf(
   literatureId: string,
   ingestPdf: ManualPdfIngestionService["ingestPdf"],
   serverSignal: AbortSignal,
+  stream?: ManualPdfIngestionService["ingestPdfStream"],
 ): Promise<unknown> {
   const controller = new AbortController();
   const abort = () => controller.abort();
@@ -811,6 +813,11 @@ async function receiveManualPdf(
   serverSignal.addEventListener("abort", abort, { once: true });
   try {
     if (serverSignal.aborted || request.aborted) abort();
+    if (stream)
+      return await stream(
+        { literature_id: literatureId, chunks: request },
+        controller.signal,
+      );
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const value of request) {
@@ -879,6 +886,7 @@ function guardRequestBody(request: IncomingMessage, response: ServerResponse) {
     (path === "/mcp" ||
       path === "/api/v1/maintenance/ingest-pdf" ||
       path === "/api/maintenance/ingest-pdf" ||
+      /^\/api\/v1\/intake\/literatures\/[^/]+\/pdf$/u.test(path!) ||
       /^\/api\/v1\/intake\/batches\/[^/]+\/(?:data|files\/[^/]+\/bytes)$/u.test(
         path!,
       ));
@@ -1785,6 +1793,7 @@ export async function startWorkbenchHttp(
           literatureId,
           (input, signal) => options.maintenance!.ingestPdf(input, signal),
           stopUploads.signal,
+          options.maintenance.ingestPdfStream?.bind(options.maintenance),
         );
         json(response, 200, { protocol_version: 1, receipt });
         return;
@@ -2589,6 +2598,7 @@ export interface QueryOnlyHttpOptions {
   /** Optional explicit maintenance surface; the query-only composition never supplies it. */
   readonly maintenance?: {
     readonly ingestPdf: ManualPdfIngestionService["ingestPdf"];
+    readonly ingestPdfStream?: ManualPdfIngestionService["ingestPdfStream"];
     readonly parseDocuments: DocumentProcessingService["parseDocuments"];
     readonly documentDefault?: (
       literatureId: string,
@@ -2742,6 +2752,7 @@ function createQueryHttpHandler(
         request.headers["x-literature-id"],
         (input, signal) => options.maintenance!.ingestPdf(input, signal),
         stopUploads.signal,
+        options.maintenance.ingestPdfStream?.bind(options.maintenance),
       );
       json(response, 200, { protocol_version: 1, receipt });
       return;

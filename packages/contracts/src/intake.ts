@@ -950,6 +950,13 @@ export function parseIntakeData(value: unknown): IntakeData {
 /** Implemented intake routes. Later recognition/decision/withdrawal routes register when connected. */
 export const INTAKE_HTTP_ENDPOINTS = [
   [
+    "POST",
+    "/api/v1/intake/literatures/:literature_id/pdf",
+    "supplement",
+    "raw PDF; X-Sciretriever-File-Name: percent-encoded UTF-8",
+    "{batch_id,file:IntakeFileStatus}",
+  ],
+  [
     "GET",
     "/api/v1/intake/instructions",
     "instructions",

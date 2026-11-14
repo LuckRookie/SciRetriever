@@ -1663,12 +1663,26 @@ async function execute(
     const literatureId = args[2];
     const path = args[3] ?? argument(args, "--path");
     if (!literatureId || !path) invalidInput();
-    const bytes = await inputBytes(path, options, 16 * 1024 * 1024);
     const value = await withApplication(options, async (app) => {
       if (!app.maintenance)
         throw new Error("maintenance runtime is unavailable");
-      return app.maintenance.ingestPdf(
-        { literature_id: literatureId, bytes },
+      const source =
+        path === "-"
+          ? (options.stdin ?? process.stdin)
+          : (async function* () {
+              const file = createReadStream(path);
+              try {
+                for await (const chunk of file) yield chunk as Uint8Array;
+              } finally {
+                file.destroy();
+              }
+            })();
+      return app.maintenance.ingestPdfStream(
+        {
+          literature_id: literatureId,
+          chunks: source,
+          file_name: path === "-" ? "document.pdf" : path.split("/").at(-1)!,
+        },
         options.signal,
       );
     });

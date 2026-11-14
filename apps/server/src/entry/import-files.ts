@@ -1,5 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
-import { importHash, type ImportFileStatus } from "@sciretriever/contracts";
+import {
+  importHash,
+  type ImportFileStatus,
+  type CandidatePublicationReceipt,
+} from "@sciretriever/contracts";
 import type { SqliteWorker } from "../storage/sqlite/worker.js";
 import type { FileStore } from "../storage/files/store.js";
 import type { CatalogWriteAdmission } from "../storage/write-admission.js";
@@ -118,7 +122,8 @@ export class ImportFileChannel {
     active: AbortSignal,
     assertActive: () => Promise<void>,
     settle: FileSettlement,
-    source: "import" | "web-capture" = "import",
+    source: "import" | "web-capture" | "manual-pdf" = "import",
+    onAccepted?: (receipt: CandidatePublicationReceipt) => void,
   ): Promise<ImportFileStatus> {
     const transfers = new BrowserTransferCollector(
       this.files,
@@ -150,16 +155,37 @@ export class ImportFileChannel {
       return file;
     }
     await assertActive();
-    if (file.action === "hash")
+    if (file.action === "hash" && source !== "manual-pdf")
       throw new ImportSessionError("intake-file-hash-required");
     const transferId = `${source}-${randomUUID()}`;
     const baseline = await this.database.currentFacts(file.literature_id);
     if (!baseline) throw new ImportSessionError("intake-literature-missing");
-    if (baseline.primary_asset)
+    if (baseline.primary_asset && source !== "manual-pdf")
       throw new ImportSessionError("intake-file-hash-required");
     const streamHash = createHash("sha256");
     let completed: string | null = null,
       published = false;
+    let failure: unknown;
+    let failed = false;
+    const cleanup = async () => {
+      try {
+        if (completed === null) await transfers.discard(transferId);
+        else if (!published)
+          await abandonment.abandon({
+            article_id: file.literature_id,
+            transfer_id: transferId,
+            sha256: completed,
+          });
+      } catch (error) {
+        if (failed)
+          throw new AggregateError(
+            [failure, error],
+            "Intake and candidate cleanup failed",
+            { cause: failure },
+          );
+        throw error;
+      }
+    };
     try {
       await transfers.begin(
         transferId,
@@ -173,7 +199,7 @@ export class ImportFileChannel {
           captured_at: new Date(this.now()).toISOString(),
         },
         source,
-        source === "web-capture" ? null : file.external_id,
+        source === "import" ? file.external_id : null,
         active,
       );
       for await (const chunk of uploadChunks(chunks, active)) {
@@ -211,8 +237,8 @@ export class ImportFileChannel {
         },
         active,
       );
-      void receipt;
       published = true;
+      onAccepted?.(receipt);
       const accepted = await this.database.currentFacts(file.literature_id);
       return await settle(
         file,
@@ -221,6 +247,8 @@ export class ImportFileChannel {
         true,
       );
     } catch (error) {
+      failure = error;
+      failed = true;
       if (error instanceof CandidatePublicationError && error.bytes_published)
         published = true;
       if (active.aborted && !published)
@@ -252,13 +280,7 @@ export class ImportFileChannel {
       }
       throw error;
     } finally {
-      if (completed === null) await transfers.discard(transferId);
-      else if (!published)
-        await abandonment.abandon({
-          article_id: file.literature_id,
-          transfer_id: transferId,
-          sha256: completed,
-        });
+      await cleanup();
     }
   }
 }

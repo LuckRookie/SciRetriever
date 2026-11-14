@@ -64,3 +64,5 @@ schema 15 增加入库批次、成员与主题词；13 的按篇状态失效提�
 `device-connection-engine.ts` 保存设备认证派生值、配对消费、撤销和有界限流计数；check 只按已认证的连接 ID 重读有效性，不能代替令牌认证；不记录认证原值，不改变文献/索引水位。[import-engine.ts](import-engine.ts) 保存通用导入库、外部编号对应、会话、原始分段引用、去重键、逐条结果与文件状态；书目事实仍由身份 owner 提交，文件夹和 PDF 不另建写入 owner。当前 schema 16 由 `import-schema-migration.ts` 显式离线从精确 15 转换，设备与导入表共用 `IMPORT_SCHEMA_V16`，不回填历史虚构来源；后续 M1 表继续并入同一布局。旧 14→15 迁移固定旧输出，打开路径仍只接纳当前布局。
 
 统一入库从建批次时就有唯一 batch_id。intake_batches 是状态与结果的所有者，import_sessions 仅保存来源、分段与检查点，其 active 与批次状态在同一写事务中变化。导入根目录的外部对应先 pending 预留编号，再创建目录，最后 settled；content_sha256 只保存内容 hash。schema.ts 的 IMPORT_SCHEMA_V16 汇集全部入库与未来认篇/决定/撤回 DDL，import-schema-migration.ts 在单一 15→16 事务中回填旧批次并保留全部旧表行数。未来功能的表先保留结构，不由启动流程产生决定、撤回或书目待补事实；这些表不参与建档状态输入或检索修订。
+
+后台入库复用 phase、storage_failures 与 updated_at 保存检查点和一分钟重试间隔；成功的逐条结算重置连续失败数，第三次存储失败同事务结束为 failed，summary.excluded 写明 storage-failure 与 unprocessed-records。失败计数按显式累计值幂等写入；若连失败检查点也暂时无法落盘，进程保留累计值，达到三次后只重试写入失败终态，不再接纳记录。进程退出前始终无法写入的计数不能跨重启保存，恢复以最后落盘的检查点为准。补 PDF 的开放批次使用 supplement:web/cli/mcp 与本地日期，条目、matched 成员及待交文件同事务登记；不增加第二套文件状态表。

@@ -216,6 +216,13 @@ it.each([
       spy.mockRestore();
       await f.reopen();
       await f.app.importSessions.sweep();
+      await vi.waitFor(
+        async () =>
+          expect((await f.app.importSessions.status(s.batch_id)).state).toBe(
+            "finished",
+          ),
+        { timeout: 20_000 },
+      );
       const final = await f.app.importSessions.status(s.batch_id);
       expect(final.state).toBe("finished");
       expect(
@@ -286,6 +293,13 @@ it("resumes a reserved folder ID before creation and preserves an unrelated user
     })) as { folder_id: string };
     await f.reopen();
     await f.app.importSessions.sweep();
+    await vi.waitFor(
+      async () =>
+        expect((await f.app.importSessions.status(s.batch_id)).state).toBe(
+          "finished",
+        ),
+      { timeout: 20_000 },
+    );
     expect((await f.app.importSessions.status(s.batch_id)).state).toBe(
       "finished",
     );
@@ -431,6 +445,13 @@ it("checkpoints replay after an identity commit and deduplicates unchanged exter
     spy.mockRestore();
     await f.reopen();
     await f.app.importSessions.sweep();
+    await vi.waitFor(
+      async () =>
+        expect((await f.app.importSessions.status(s.batch_id)).state).toBe(
+          "finished",
+        ),
+      { timeout: 20_000 },
+    );
     const first = await f.app.importSessions.report(s.batch_id),
       literature = first.items[0]!.literature_id;
     expect(first.summary.records.created).toBe(1);

@@ -87,7 +87,7 @@ export class DeviceRouteRegistry {
   ) {
     for (const route of routes) {
       if (
-        !route.purposes.length ||
+        (!route.purposes.length && !route.handleWeb) ||
         route.purposes.some(
           (p) => !(DEVICE_PURPOSES as readonly string[]).includes(p),
         ) ||

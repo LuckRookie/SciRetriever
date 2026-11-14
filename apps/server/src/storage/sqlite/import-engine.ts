@@ -32,6 +32,8 @@ export interface StoredImportSession {
   readonly confirmation: IntakeBatch["confirmation"];
   readonly created_at: string;
   readonly updated_at: string;
+  readonly storage_failures: number;
+  readonly owner_pid: number | null;
   readonly confirmed_at: string | null;
   readonly finished_at: string | null;
   readonly last_file_at: string | null;
@@ -110,6 +112,21 @@ export type ImportWrite =
     }
   | { op: "mapping"; mapping: ExternalObjectMapping }
   | {
+      op: "processing-failure";
+      batch_id: string;
+      failures: number;
+      storage: boolean;
+      now: string;
+    }
+  | {
+      op: "supplement";
+      batch: IntakeBatch;
+      day: string;
+      item_id: string;
+      file: ImportFileStatus;
+      title: string | null;
+    }
+  | {
       op: "result";
       batch_id: string;
       item: ImportRecordResult;
@@ -155,7 +172,7 @@ function nullable(v: SQLOutputValue | undefined): string | null {
 function row(db: DatabaseSync, id: string): Row {
   const r = db
     .prepare(
-      "SELECT s.*,b.state,b.result,b.confirmation,b.confirmed_at,b.finished_at,b.initiated_by,b.origin FROM import_sessions s JOIN intake_batches b USING(batch_id) WHERE batch_id=?",
+      "SELECT s.*,b.state,b.result,b.confirmation,b.confirmed_at,b.finished_at,b.initiated_by,b.origin,b.owner_pid FROM import_sessions s JOIN intake_batches b USING(batch_id) WHERE batch_id=?",
     )
     .get(id);
   if (!r) fail("intake-batch-state");
@@ -180,6 +197,8 @@ function session(db: DatabaseSync, r: Row): StoredImportSession {
     confirmation: r.confirmation as IntakeBatch["confirmation"],
     created_at: str(r.created_at),
     updated_at: str(r.updated_at),
+    storage_failures: Number(r.storage_failures),
+    owner_pid: r.owner_pid === null ? null : Number(r.owner_pid),
     confirmed_at: nullable(r.confirmed_at),
     finished_at: nullable(r.finished_at),
     last_file_at: nullable(r.last_file_at),
@@ -277,7 +296,7 @@ export function readImportStorage(db: DatabaseSync, r: ImportRead): unknown {
   if (r.op === "active")
     return db
       .prepare(
-        "SELECT s.*,b.state,b.result,b.confirmation,b.confirmed_at,b.finished_at,b.initiated_by,b.origin FROM import_sessions s JOIN intake_batches b USING(batch_id) WHERE s.active=1 ORDER BY s.created_at,s.batch_id",
+        "SELECT s.*,b.state,b.result,b.confirmation,b.confirmed_at,b.finished_at,b.initiated_by,b.origin,b.owner_pid FROM import_sessions s JOIN intake_batches b USING(batch_id) WHERE s.active=1 ORDER BY s.created_at,s.batch_id",
       )
       .all()
       .map((r) => session(db, r));
@@ -583,6 +602,122 @@ export function writeImportStorage(
           "UPDATE import_sessions SET phase='metadata',last_file_at=?,updated_at=?,summary_json=? WHERE batch_id=?",
         ).run(r.now, r.now, JSON.stringify(r.summary), r.batch_id);
       }
+    } else if (r.op === "supplement") {
+      const opener = `supplement:${r.batch.origin}`;
+      const open = db
+        .prepare(
+          "SELECT batch_id FROM intake_open_batches WHERE opener=? AND day=?",
+        )
+        .get(opener, r.day);
+      const batchId = open ? str(open.batch_id) : r.batch.batch_id;
+      if (!open) {
+        insertImportBatch(
+          db,
+          {
+            op: "create",
+            batch: r.batch,
+            library_key: r.batch.batch_id,
+            source: r.batch.source!,
+            format: "pdf",
+            scope: "supplement PDF",
+            file_name: null,
+            import_user_tags: false,
+            identity_scope: `adhoc:${r.batch.batch_id}`,
+          },
+          intakeWrite,
+        );
+        db.prepare("INSERT INTO intake_open_batches VALUES(?,?,?)").run(
+          opener,
+          r.day,
+          batchId,
+        );
+      }
+      live(db, batchId, ["running"]);
+      const position = Number(
+        db
+          .prepare(
+            "SELECT count(*) n FROM import_record_results WHERE batch_id=?",
+          )
+          .get(batchId)!.n,
+      );
+      db.prepare(
+        "INSERT INTO intake_items(item_id,batch_id,origin,external_id,title,file_name,disposition,literature_id,created_at) VALUES(?,?,'file',?,?,?,'matched',?,?)",
+      ).run(
+        r.item_id,
+        batchId,
+        r.file.external_id,
+        r.title,
+        r.file.file_name,
+        r.file.literature_id,
+        r.batch.created_at,
+      );
+      const meta = db
+        .prepare(
+          "SELECT meta_literature_id FROM literatures WHERE literature_id=?",
+        )
+        .get(r.file.literature_id);
+      if (!meta) fail("intake-literature-missing");
+      db.prepare(
+        "INSERT INTO import_record_results(batch_id,sequence,record_index,item_id,external_id,disposition,literature_id,meta_literature_id) VALUES(?,0,?,?,?,'matched',?,?)",
+      ).run(
+        batchId,
+        position,
+        r.item_id,
+        r.file.external_id,
+        r.file.literature_id,
+        meta.meta_literature_id!,
+      );
+      insertImportFiles(db, batchId, r.item_id, [r.file]);
+      intakeWrite(db, {
+        operation: "member",
+        member: {
+          batch_id: batchId as IntakeBatch["batch_id"],
+          literature_id: r.file.literature_id,
+          disposition: "matched",
+        },
+      });
+      db.prepare(
+        "UPDATE import_sessions SET record_count=record_count+1,updated_at=? WHERE batch_id=?",
+      ).run(r.batch.created_at, batchId);
+      value = batchId;
+    } else if (r.op === "processing-failure") {
+      const s = row(db, r.batch_id);
+      if (s.state === "running") {
+        const failures = Math.max(Number(s.storage_failures), r.failures);
+        db.prepare(
+          "UPDATE import_sessions SET storage_failures=?,updated_at=? WHERE batch_id=?",
+        ).run(failures, r.now, r.batch_id);
+        if (!r.storage || failures >= 3) {
+          const summary =
+            s.summary_json === null
+              ? { excluded: [] }
+              : JSON.parse(str(s.summary_json));
+          const count = Number(
+            db
+              .prepare(
+                "SELECT count(*) n FROM import_record_results WHERE batch_id=?",
+              )
+              .get(r.batch_id)!.n,
+          );
+          summary.excluded = [
+            ...summary.excluded,
+            {
+              kind: r.storage ? "storage-failure" : "processing-failure",
+              count: 1,
+            },
+            {
+              kind: "unprocessed-records",
+              count: Math.max(0, Number(s.record_count) - count),
+            },
+          ];
+          db.prepare(
+            "UPDATE intake_batches SET state='finished',result='failed',finished_at=?,owner_pid=NULL WHERE batch_id=?",
+          ).run(r.now, r.batch_id);
+          db.prepare(
+            "UPDATE import_sessions SET active=0,phase='closing',summary_json=? WHERE batch_id=?",
+          ).run(JSON.stringify(summary), r.batch_id);
+        }
+      }
     } else if (r.op === "result") {
       live(db, r.batch_id, ["running"]);
       const i = r.item;
@@ -615,12 +750,12 @@ export function writeImportStorage(
       if (r.mapping) map(db, r.mapping);
       insertImportFiles(db, r.batch_id, r.item_id, r.files);
       db.prepare(
-        "UPDATE import_sessions SET updated_at=? WHERE batch_id=?",
+        "UPDATE import_sessions SET storage_failures=0,updated_at=? WHERE batch_id=?",
       ).run(r.now, r.batch_id);
     } else if (r.op === "metadata-done") {
       live(db, r.batch_id, ["running"]);
       db.prepare(
-        "UPDATE import_sessions SET metadata_complete=1,phase='files',summary_json=?,updated_at=? WHERE batch_id=?",
+        "UPDATE import_sessions SET metadata_complete=1,storage_failures=0,phase='files',summary_json=?,updated_at=? WHERE batch_id=?",
       ).run(JSON.stringify(r.summary), r.now, r.batch_id);
       db.prepare("UPDATE intake_batches SET rejected=? WHERE batch_id=?").run(
         r.summary.records.rejected,

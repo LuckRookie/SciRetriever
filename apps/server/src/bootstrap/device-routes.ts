@@ -18,7 +18,10 @@ export function deviceBusinessRoutes(
 ): DeviceRouteRegistry {
   const mcp = new McpHttpService(application, query);
   const routes: DeviceRoute[] = [
-    ...importHttpRoutes(application.importSessions),
+    ...importHttpRoutes(
+      application.importSessions,
+      application.deviceConnections,
+    ),
     ...captureHttpRoutes(application.capture),
     ...intakeArtifactRoutes(artifactDirectory),
     ...mcp.routes(),

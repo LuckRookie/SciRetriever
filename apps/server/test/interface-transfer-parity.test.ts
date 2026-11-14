@@ -294,15 +294,17 @@ describe("bounded machine material transfer", () => {
       await env.close();
     }
   });
-  it("bounds allocations, expires buffers and refuses a wrong digest before opening the writer", async () => {
+  it("bounds spool handles without a file-size ceiling, expires them and refuses a wrong digest before opening the writer", async () => {
     const uploads = new PdfUploads();
     const factory = vi.fn();
     try {
       const large = {
         literature_id: FIXTURE_LITERATURE.literature_id,
         sha256: "a".repeat(64),
-        byte_size: 16 * 1024 * 1024,
+        byte_size: 64 * 1024 * 1024,
       };
+      uploads.begin(large);
+      uploads.begin(large);
       uploads.begin(large);
       uploads.begin(large);
       expect(() => uploads.begin(large)).toThrowError(

@@ -270,6 +270,7 @@ export interface Application {
   readonly completion: LiteratureCompletionService | null;
   readonly maintenance: {
     readonly ingestPdf: ManualPdfIngestionService["ingestPdf"];
+    readonly ingestPdfStream: ManualPdfIngestionService["ingestPdfStream"];
     readonly parseDocuments: DocumentProcessingService["parseDocuments"];
     readonly documentDefault: SqliteWorker["documentDefault"];
     readonly rebuildIndex: IndexRefreshService["rebuild"];
@@ -1644,12 +1645,7 @@ async function createApplicationOwned(
       });
     }
     if (execution)
-      manualPdf = new ManualPdfIngestionService(
-        library,
-        execution.transfers,
-        execution.acceptance,
-        execution.abandonment,
-      );
+      manualPdf = new ManualPdfIngestionService(library, () => importSessions!);
     if (execution && rawParseStorage)
       completion = new LiteratureCompletionService(
         library,
@@ -1819,7 +1815,7 @@ async function createApplicationOwned(
       artifactRecovery,
       options.importSessions,
     );
-    if (options.importSessions?.maintain !== false)
+    if (options.importSessions?.maintain === true)
       void importSessions
         .sweep()
         .catch(() => logger.warn("Import recovery failed"));
@@ -1954,6 +1950,8 @@ async function createApplicationOwned(
           "create",
           "putData",
           "confirm",
+          "confirmInBackground",
+          "supplementPdf",
           "reportHash",
           "upload",
           "finish",
@@ -2030,6 +2028,7 @@ async function createApplicationOwned(
         ? guardRuntimeMethods<NonNullable<Application["maintenance"]>>(
             {
               ingestPdf: manualPdf.ingestPdf.bind(manualPdf),
+              ingestPdfStream: manualPdf.ingestPdfStream.bind(manualPdf),
               parseDocuments:
                 documentProcessing.parseDocuments.bind(documentProcessing),
               documentDefault: database.documentDefault.bind(database),
@@ -2048,6 +2047,7 @@ async function createApplicationOwned(
             },
             [
               "ingestPdf",
+              "ingestPdfStream",
               "parseDocuments",
               "rebuildIndex",
               "refreshIndex",

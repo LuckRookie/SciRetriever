@@ -13,6 +13,8 @@ import {
 } from "../src/bootstrap/application.js";
 import { runCli } from "../src/cli/main.js";
 import { CandidatePublicationError } from "../src/acquisition/candidate-publication.js";
+import { CandidatePublisher } from "../src/acquisition/candidate-publication.js";
+import { BrowserTransferCollector } from "../src/browser/transfer.js";
 import { startMaintenanceWorkbench } from "../src/bootstrap/workbench.js";
 import { startWorkbenchHttp } from "../src/workbench/http.js";
 import { WorkbenchSession } from "../src/workbench/session.js";
@@ -165,7 +167,7 @@ describe("shared manual PDF maintenance", () => {
       ).rejects.toMatchObject({ code: "manual-pdf-cancelled" });
       expect((await env.app.library.detail(id)).primary_pdf).toBeNull();
       const publish = vi
-        .spyOn(env.app.execution!.publisher, "publish")
+        .spyOn(CandidatePublisher.prototype, "publish")
         .mockRejectedValueOnce(new CandidatePublicationError(false));
       await expect(
         env.app.maintenance!.ingestPdf({ literature_id: id, bytes }),
@@ -177,6 +179,36 @@ describe("shared manual PDF maintenance", () => {
         literature_assets: 0,
       });
     } finally {
+      await env.close();
+    }
+  });
+
+  it("preserves a publication failure after accepted bytes even when cancellation arrives", async () => {
+    const env = await setup();
+    const stop = new AbortController();
+    const original = CandidatePublisher.prototype.publish;
+    const publish = vi
+      .spyOn(CandidatePublisher.prototype, "publish")
+      .mockImplementationOnce(async function (
+        this: CandidatePublisher,
+        ...args
+      ) {
+        await original.apply(this, args);
+        stop.abort();
+        throw new CandidatePublicationError(true);
+      });
+    try {
+      await expect(
+        env.app.maintenance!.ingestPdf(
+          { literature_id: id, bytes: workbenchPdf() },
+          stop.signal,
+        ),
+      ).rejects.toMatchObject({ bytes_published: true });
+      expect((await env.app.library.detail(id)).primary_pdf!.asset.sha256).toBe(
+        await sha256(workbenchPdf()),
+      );
+    } finally {
+      publish.mockRestore();
       await env.close();
     }
   });
@@ -216,12 +248,14 @@ describe("shared manual PDF maintenance", () => {
     try {
       const intakeError = new Error("synthetic append failure");
       const cleanupError = new Error("synthetic discard failure");
-      vi.spyOn(env.app.execution!.transfers, "append").mockRejectedValueOnce(
-        intakeError,
-      );
-      vi.spyOn(env.app.execution!.transfers, "discard").mockRejectedValueOnce(
-        cleanupError,
-      );
+      vi.spyOn(
+        BrowserTransferCollector.prototype,
+        "append",
+      ).mockRejectedValueOnce(intakeError);
+      vi.spyOn(
+        BrowserTransferCollector.prototype,
+        "discard",
+      ).mockRejectedValueOnce(cleanupError);
       await expect(
         env.app.maintenance!.ingestPdf({
           literature_id: id,

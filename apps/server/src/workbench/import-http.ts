@@ -8,6 +8,7 @@ import {
   importInteger,
   importHash,
   parseAssetId,
+  parseLiteratureId,
   parseStrictJsonObject,
   type DeviceConnection,
 } from "@sciretriever/contracts";
@@ -20,8 +21,13 @@ import { catalogCorruption } from "../storage/sqlite/errors.js";
 import {
   assertRequestContentType,
   RequestContentTypeError,
+  deviceFailure,
   type DeviceRoute,
 } from "./device-http.js";
+import {
+  DeviceConnectionError,
+  type DeviceConnectionService,
+} from "./device-connections.js";
 const endpoints = INTAKE_HTTP_ENDPOINTS.filter(
   (e) =>
     ![
@@ -71,6 +77,8 @@ export function importInterface(formats: readonly string[]) {
     semantics: [
       "records is a public format for neutral items. When a source has a dedicated adapter, send its original data instead of rewriting it into records.",
       "Preview is read-only and estimated; confirm decides again and checkpoints each record.",
+      "Batch confirmation returns running with progress immediately; the service resumes checkpoints and expires batches. Local CLI/stdio bibliography imports finish synchronously without recovering unrelated batches.",
+      "The literature PDF supplement endpoint is Web-only, requires the percent-encoded UTF-8 X-Sciretriever-File-Name header and returns {batch_id,file}; devices are not granted this route. It shares the streaming file channel and a per-entry daily open batch.",
       "One active batch per source library. A repeated sequence replaces that part until confirmation.",
       "Global source library IDs are independent of device; local library IDs are scoped to device connection. source=null creates an isolated one-off file source; it cannot resume a source namespace and uses bibliographic-import semantics.",
       "Import adds observations, folders/members and missing primary PDFs; never deletes or replaces accepted materials.",
@@ -189,6 +197,7 @@ export async function importHttpBytes<T>(
     signal: AbortSignal,
     cancel: () => void,
   ) => Promise<T>,
+  externalSignal?: AbortSignal,
 ): Promise<T> {
   assertRequestContentType(req, "bytes");
   if (
@@ -201,9 +210,17 @@ export async function importHttpBytes<T>(
   req.once("aborted", abort);
   res.once("close", abort);
   try {
-    return await upload(req, stop.signal, () => {
-      if (!req.destroyed) req.destroy();
-    });
+    return await upload(
+      req,
+      externalSignal
+        ? AbortSignal.any([stop.signal, externalSignal])
+        : stop.signal,
+      () => {
+        // Revocation already sent a Connection: close response; let Node flush it.
+        if (externalSignal?.aborted) return;
+        if (!req.destroyed) req.destroy();
+      },
+    );
   } finally {
     req.off("aborted", abort);
     res.off("close", abort);
@@ -211,7 +228,10 @@ export async function importHttpBytes<T>(
 }
 
 /** Both authentication modes dispatch this exact handler after their own admission. */
-export function importHttpRoutes(service: ImportSessionService): DeviceRoute[] {
+export function importHttpRoutes(
+  service: ImportSessionService,
+  devices?: DeviceConnectionService,
+): DeviceRoute[] {
   return endpoints.map(([method, path, operation]) => {
     const execute = async (
       req: IncomingMessage,
@@ -219,6 +239,8 @@ export function importHttpRoutes(service: ImportSessionService): DeviceRoute[] {
       parameters: Readonly<Record<string, string>>,
       actor: ImportActor,
     ) => {
+      let revoked = false;
+      let unsubscribe: (() => void) | undefined;
       try {
         if (operation === "instructions") {
           json(res, 200, {
@@ -233,18 +255,79 @@ export function importHttpRoutes(service: ImportSessionService): DeviceRoute[] {
             : parseAssetId(parameters.batch_id);
         if (id !== null) await service.requireOwner(id, actor);
         let result: unknown;
-        if (operation === "bytes") {
-          result = {
-            file: await importHttpBytes(req, res, (chunks, signal, cancel) =>
-              service.upload(
-                id!,
-                parseAssetId(parameters.file_id),
+        if (operation === "bytes" || operation === "supplement") {
+          const stop = new AbortController();
+          if (actor.kind === "device") {
+            if (!devices) throw new DeviceConnectionError("device-unavailable");
+            const revoke = () => {
+              revoked = true;
+              if (!res.headersSent && !res.destroyed) {
+                res.setHeader("Connection", "close");
+                deviceFailure(res, new DeviceConnectionError("device-revoked"));
+              }
+              stop.abort();
+            };
+            unsubscribe = devices.onRevoked((connectionId) => {
+              if (connectionId === actor.connection_id) revoke();
+            });
+            try {
+              await devices.requireActive(actor.connection_id);
+            } catch (error) {
+              if (
+                error instanceof DeviceConnectionError &&
+                error.code === "device-revoked"
+              ) {
+                revoke();
+                return;
+              }
+              throw error;
+            }
+          }
+          if (operation === "supplement") {
+            const header = req.headers["x-sciretriever-file-name"];
+            let name: string;
+            try {
+              name = decodeURIComponent(
+                typeof header === "string" ? header : "",
+              );
+            } catch {
+              throw new ContractValidationError();
+            }
+            if (
+              !name.trim() ||
+              Buffer.byteLength(name) > 255 ||
+              /[/\\\p{Cc}\p{Cf}]/u.test(name) ||
+              name === "." ||
+              name === ".."
+            )
+              throw new ContractValidationError();
+            result = await importHttpBytes(req, res, (chunks, signal, cancel) =>
+              service.supplementPdf(
+                parseLiteratureId(parameters.literature_id),
                 chunks,
+                "web",
                 signal,
                 cancel,
+                undefined,
+                { file_name: name },
               ),
-            ),
-          };
+            );
+          } else
+            result = {
+              file: await importHttpBytes(
+                req,
+                res,
+                (chunks, signal, cancel) =>
+                  service.upload(
+                    id!,
+                    parseAssetId(parameters.file_id),
+                    chunks,
+                    signal,
+                    cancel,
+                  ),
+                stop.signal,
+              ),
+            };
         } else {
           const request = await importHttpBody(
             req,
@@ -293,7 +376,7 @@ export function importHttpRoutes(service: ImportSessionService): DeviceRoute[] {
             else if (operation === "preview")
               result = await service.preview(id!);
             else if (operation === "confirm")
-              result = { batch: await service.confirm(id!) };
+              result = { batch: await service.confirmInBackground(id!) };
             else if (operation === "finish")
               result = { batch: await service.finish(id!) };
             else result = { batch: await service.cancel(id!) };
@@ -301,13 +384,18 @@ export function importHttpRoutes(service: ImportSessionService): DeviceRoute[] {
         }
         json(res, 200, { protocol_version: 1, result });
       } catch (error) {
-        importHttpFailure(res, error);
+        if (!revoked) {
+          if (error instanceof DeviceConnectionError) deviceFailure(res, error);
+          else importHttpFailure(res, error);
+        }
+      } finally {
+        unsubscribe?.();
       }
     };
     return {
       method,
       path,
-      purposes: ["intake"],
+      purposes: operation === "supplement" ? [] : ["intake"],
       handle: (req, res, connection: DeviceConnection, p) =>
         execute(req, res, p, {
           kind: "device",

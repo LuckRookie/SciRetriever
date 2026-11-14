@@ -18,6 +18,8 @@
 
 业务流程复用 Application/Entry，配置规则归 configuration；不要在命令分支中复制下载或解析实现。
 
+`import metadata` 在本进程同步完成自己的书目入库，不恢复或过期其它批次。`import pdf` 直接流式读取显式路径或 stdin，委托公共入库文件通道，归入 CLI 当天的“补充文件”开放批次；保留 receipt 结果，没有 16 MiB 上限。
+
 [上级目录](../README.md)
 
 `processors` 命令族提供 list/submit/run、结果与集合查询、字段证据、导出、rebuild 和 retain。

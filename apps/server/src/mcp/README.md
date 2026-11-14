@@ -8,9 +8,9 @@
 - [http.ts](http.ts)：设备认证后的 HTTP 协议会话、资源上限、撤销通知与关闭；不保存认证原值。
 - [transport.ts](transport.ts)：SDK 1.27.1 的 exact-optional 类型适配，透传会话 ID、消息和生命周期，不实现第二套协议。
 - [tools.ts](tools.ts)：唯一工具声明、封闭请求 schema 与 HTTP 用途映射；列出和调用共用同一规则。
-- [pdf-upload.ts](pdf-upload.ts)：当前连接的有界 PDF 上传缓冲，校验完整字节后交给既有接纳服务。
+- [pdf-upload.ts](pdf-upload.ts)：当前连接的 PDF 磁盘暂存，按块增量 hash，无整文件内存分配或 16 MiB 上限；最多四个在途句柄、每块 192 KiB、十分钟过期，关闭/丢弃/提交后回收自身暂存。
 
-查询、任务投影、书目导入、提取交付与配置操作复用 `entry/*-operations.ts`。普通配置状态/预览可只读调用；配置发布、凭据变更、probe 与维护工具要求 `--maintenance`。PDF 输入采用限额分块缓冲，文件读取使用固定 hash 与有界块；`--workbench-url` 显式连接活 Web owner，提供 Browser 协作与服务任务调用。
+查询、任务投影、书目导入、提取交付与配置操作复用 `entry/*-operations.ts`。普通配置状态/预览可只读调用；配置发布、凭据变更、probe 与维护工具要求 `--maintenance`。PDF 提交以受控流交给入库公共文件通道，结果保留 receipt 格式；它归入 MCP 当天的补充文件批次。文件读取使用固定 hash 与有界块；`--workbench-url` 显式连接活 Web owner，提供 Browser 协作与服务任务调用。stdio 的书目导入同步完成，不启动其它批次的恢复/过期维护。
 
 HTTP `/mcp` 每次请求重新验证设备连接，协议 session ID 绑定 connection_id。read 与 operate 不互相隐含；配置、凭据、设备管理、Browser/runtime 控制以及书目/PDF 输入不经此传输。入库输入走相邻的 `workbench/import-http.ts`，`intake_batch_status` 和 `intake_batch_report` 两端共用只读批次服务。HTTP 请求上下文在交 SDK 前移除认证与非协议头；操作身份为 `mcp:device:<connection_id>`。
 
