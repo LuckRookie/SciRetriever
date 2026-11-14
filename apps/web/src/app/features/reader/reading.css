@@ -539,6 +539,18 @@
     flex-shrink: 0;
     overflow-wrap: anywhere;
   }
+  .react-reader .reading-status-note:not(:first-child) {
+    margin-inline-start: var(--space-3);
+  }
+  .react-reader .reading-status-action {
+    margin-inline-start: var(--space-2);
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--blue);
+    font: inherit;
+    cursor: pointer;
+  }
   .react-reader .reading-continuation {
     padding: var(--space-4);
     text-align: center;

@@ -358,7 +358,9 @@ export const designSamplePages: readonly DesignSamplePage[] = [
   ...(
     [
       ["pdf", "PDF", "material-bytes", "正在读取并核验固定材料"],
-      ["doc", "全文", "document-slice", "正在读取并核验固定材料"],
+      // The first full-text read: nothing of the text shows yet, so the
+      // picture does not depend on how far loading got before the shot.
+      ["doc", "全文", "document-segments", "正在读取并核验固定材料"],
     ] as const
   ).map(
     ([mode, label, operation, status]): DesignSamplePage => ({

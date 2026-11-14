@@ -159,10 +159,19 @@ it("switches between PDF and full text on one engine: one build, one PDF read an
     expect(Object.values(counts!.pdfHashes)).toEqual([1]);
     expect(counts!.workersStarted - counts!.workersTerminated).toBe(1);
     expect(counts!.workersStarted).toBe(1);
-    // The hidden PDF view holds no canvas while the full text shows.
+    // The hidden PDF view keeps at most the three canvases it showed (spec 5.3),
+    // so coming back draws at once.
     await w.page.getByRole("tab", { name: "全文", exact: true }).click();
     await text.first().waitFor();
-    expect(await w.page.locator(".reading-pdf-page canvas").count()).toBe(0);
+    const kept = await w.page.locator(".reading-pdf-page canvas").count();
+    expect(kept).toBeGreaterThan(0);
+    expect(kept).toBeLessThanOrEqual(3);
+    await w.page.getByRole("tab", { name: "PDF", exact: true }).click();
+    expect(
+      await w.page
+        .locator('.reader-view[data-view="pdf"]:not([hidden]) canvas')
+        .count(),
+    ).toBeGreaterThan(0);
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();
@@ -375,7 +384,8 @@ it("keeps a 100-page PDF bounded over ten React reader switches and releases its
       ).toContain("125%");
       timings.warm.push(Date.now() - start);
       const counts = await readingResourceCounts(w.page);
-      expect(counts.workers).toBe(1);
+      // The current and the previous tab keep their engines (spec 5.1, 5.3).
+      expect(counts.workers).toBeLessThanOrEqual(2);
       expect(counts.canvases).toBeLessThanOrEqual(4);
     }
     while (await w.page.getByRole("button", { name: /^关闭文献 / }).count())

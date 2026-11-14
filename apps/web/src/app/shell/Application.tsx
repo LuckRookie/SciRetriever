@@ -617,8 +617,10 @@ function Workspace({ api }: { api: ApiClient }) {
               <PageBoundary
                 resetKey={`${route.section}:${route.literature ?? ""}`}
               >
+                {/* The reader stays mounted across papers: it keeps the old
+                    picture until the new paper can show (spec 5.1). */}
                 <Suspense
-                  key={`${route.section}:${route.literature ?? ""}`}
+                  key={route.literature ? "reader" : route.section}
                   fallback={
                     <div className="page-recovery" role="status">
                       正在打开…

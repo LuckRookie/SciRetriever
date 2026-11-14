@@ -63,8 +63,10 @@ export async function renderPdf(
     scale = 1,
     generation = 0,
     closed = false,
-    // Off screen: no scroll handling, no drawing, no canvases; position kept.
-    hidden = false,
+    // Off screen: no scroll handling and no drawing; position kept.
+    hidden = !!frame.startHidden,
+    // Started off screen: draws its first screen there so it can show at once.
+    preparing = hidden,
     raf = 0,
     resizeTimer: ReturnType<typeof setTimeout> | undefined;
   let baseWidth = 612,
@@ -238,8 +240,8 @@ export async function renderPdf(
       count++;
     return count;
   };
-  const draw = async (n: number) => {
-    if (!pdf || closed || hidden || rendered.has(n)) return;
+  const draw = async (n: number, offScreen = false) => {
+    if (!pdf || closed || (hidden && !offScreen) || rendered.has(n)) return;
     const placeholder = placeholders[n - 1]!;
     const entry: RenderedPage = {
       canvas: document.createElement("canvas"),
@@ -425,17 +427,20 @@ export async function renderPdf(
       if (state.zoom === "fit") reflow();
     }, 80);
   });
-  frame.hide = () => {
-    if (closed || hidden) return;
-    capture();
-    hidden = true;
-    cancelAnimationFrame(raf);
-    clearTimeout(resizeTimer);
-    for (const n of rendered.keys()) clearPage(n);
+  frame.hide = (release = false) => {
+    if (closed) return;
+    if (!hidden) {
+      capture();
+      hidden = true;
+      cancelAnimationFrame(raf);
+      clearTimeout(resizeTimer);
+    }
+    if (release) for (const n of rendered.keys()) clearPage(n);
   };
   frame.show = () => {
     if (closed || !hidden) return;
     hidden = false;
+    preparing = false;
     if (!pdf) return;
     const width = frame.body.clientWidth;
     // The window or the side panel changed while hidden: fit again.
@@ -492,7 +497,14 @@ export async function renderPdf(
     lastWidth = frame.body.clientWidth;
     resize.observe(frame.body);
     reflow();
-    await draw(state.page);
+    if (preparing)
+      // Off screen there is no layout: draw the page and its neighbours.
+      await Promise.all(
+        [state.page, state.page - 1, state.page + 1]
+          .filter((n) => n >= 1 && n <= pdf!.numPages)
+          .map((n) => draw(n, true)),
+      );
+    else await draw(state.page);
     const outline = await pdf.getOutline();
     if (closed) return;
     frame.outline.replaceChildren();

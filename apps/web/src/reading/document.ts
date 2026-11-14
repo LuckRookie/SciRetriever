@@ -2,6 +2,7 @@ import {
   type DocumentLayout,
   type DocumentReadingRef,
   type DocumentResource,
+  type DocumentReadRequestMap,
   type DocumentReadResultMap,
 } from "@sciretriever/contracts";
 import type { ReadingContext } from "./contract.js";
@@ -9,7 +10,11 @@ import type { FixedSource } from "./source.js";
 import { button, readerErrorMessage } from "./dom.js";
 import type { ReaderFrame } from "./contract.js";
 import type { ReadingPosition } from "./state.js";
-import { readDocument, readResourceBytes } from "./transport.js";
+import {
+  forgetDocumentRead,
+  readDocument,
+  readResourceBytes,
+} from "./transport.js";
 import { READER_PROBE, probeCount } from "./probe.js";
 import { appendTitle, titleParts } from "./title.js";
 import { documentMarkdown as markdown, markdownBlocks } from "./markdown.js";
@@ -24,7 +29,7 @@ export async function renderDocument(
   const docId = ref.document_version_id;
   const layer = frame.layer ?? frame.body;
   // Off screen: no scroll handling and no scrolling; `show` returns to the place.
-  let hidden = false,
+  let hidden = !!frame.startHidden,
     // Replaced once the text is laid out; until then only the flag changes.
     onHide = () => {},
     onShow = () => {};
@@ -568,17 +573,19 @@ export async function renderDocument(
   const loadChunk = async () => {
     more.disabled = true;
     tail.textContent = "正在加载后续正文…";
+    let request: DocumentReadRequestMap["slice"] | null = null;
     try {
       if (!continuation && segmentCursor && end === total) {
         rangeStart = end;
         await extendSegments();
       }
-      const result = await readDocument(ctx, "slice", {
+      request = {
         document_version_id: docId,
         selector: { kind: "range", start_utf8: rangeStart, end_utf8: total },
         max_bytes: 65536,
         continuation,
-      });
+      };
+      const result = await readDocument(ctx, "slice", request);
       bound(result);
       if (
         !result.actual_range ||
@@ -607,6 +614,8 @@ export async function renderDocument(
       if (!restoring && offset >= changed) go(offset, ratio);
       state.loadedEnd = end;
     } catch (error) {
+      // A rejected read must not be served again from the session cache.
+      if (request) forgetDocumentRead("slice", request);
       if (!ctx.signal.aborted) {
         frame.status.textContent = readerErrorMessage(
           error,

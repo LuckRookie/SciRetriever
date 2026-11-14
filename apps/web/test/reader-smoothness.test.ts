@@ -54,7 +54,7 @@ interface Check {
   items: Item[];
 }
 /** Checks every later block must keep passing; 03–06 add theirs as they land. */
-const ENFORCED: readonly CheckId[] = [];
+const ENFORCED: readonly CheckId[] = ["background", "downloads"];
 const enforce = new Set<string>([
   ...ENFORCED,
   ...(process.env.SCIRETRIEVER_READER_ENFORCE ?? "").split(",").filter(Boolean),
@@ -71,6 +71,7 @@ const report = {
   synthetic: true,
   spec: "docs/architecture/web/reading-experience.md#82-浏览器检查",
   reading_line: "spec section 10: 28% of the reader scroll area, from its top",
+  settled: "spec 8.2: no layout change for 200 ms, at most 2 s",
   viewport: { width: 1440, height: 900 },
   checks: {} as Partial<Record<CheckId, Check>>,
 };
@@ -262,22 +263,26 @@ function installHelpers() {
         rs.topOf(rs.marked),
       ]);
     },
-    /** Spec 8.2 "still": two consecutive frames without a layout change, at most 1 s. */
-    async still(limit = 1000) {
+    /**
+     * Spec 8.2 "still": no layout change for 200 ms, at most 2 s. Longer than
+     * the reader's 80 ms relayout debounce, so a debounced relayout counts.
+     * `ms` is when the layout last changed.
+     */
+    async still(limit = 2000) {
       const start = performance.now();
       let last = rs.signature(),
-        same = 0,
+        changed = start,
         frames = 0;
       while (performance.now() - start < limit) {
-        await rs.frame();
+        const t = await rs.frame();
         frames++;
         const now = rs.signature();
-        same = now === last ? same + 1 : 0;
+        if (now !== last) changed = t;
         last = now;
-        if (same >= 2)
-          return { still: true, ms: performance.now() - start, frames };
+        if (t - changed >= 200)
+          return { still: true, ms: changed - start, frames };
       }
-      return { still: false, ms: performance.now() - start, frames };
+      return { still: false, ms: changed - start, frames };
     },
     /** Spec 8.2 "has a picture": laid-out text, a drawn canvas or a skeleton in the content area. */
     content() {

@@ -70,9 +70,13 @@ export interface ReaderFrame {
    * Set by the engine. The view leaves the screen (`hide`, after which its
    * layer is hidden) or returns to it (`show`, once its layer is shown again):
    * the material, the PDF document and its worker stay; the position is kept.
+   * A PDF view keeps the canvases it showed (at most three) unless `release`
+   * is true, as for an engine that is no longer the current tab (spec 5.3).
    */
-  hide: () => void;
+  hide: (release?: boolean) => void;
   show: () => void;
+  /** The view starts off screen and prepares its first screen there (spec 5.1). */
+  startHidden?: boolean;
   animateNavigation?: () => boolean;
   onResources?: (resources: readonly ReaderResourceEntry[]) => void;
   onDocumentLink?: (preview: DocumentLinkPreview) => void;

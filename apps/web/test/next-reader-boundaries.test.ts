@@ -2,7 +2,12 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { writeDesignAudit } from "./design-audit-fixture.js";
 import { expect, it } from "vitest";
-import { parseArtifactRef, sha256 } from "@sciretriever/contracts";
+import {
+  parseArtifactRef,
+  parseLiterature,
+  sha256,
+} from "@sciretriever/contracts";
+import { FIXTURE_LITERATURE } from "../../server/src/workbench/synthetic-fixture.js";
 import { nextWorkspace } from "./next-workspace-fixture.js";
 import { missingId } from "./processor-workspace-fixture.js";
 import { syntheticReadingPdf } from "./reading-pdf-fixture.js";
@@ -689,3 +694,113 @@ it.each(["no-preference", "reduce"] as const)(
   },
   60000,
 );
+
+it("keeps two reader engines over ten paper switches, releases the oldest for a third and all with their tabs", async () => {
+  const third = "00000000-0000-0000-0000-000000005103";
+  const w = await nextWorkspace({
+    ready: "body",
+    readerProbe: true,
+    setup: async (env) => {
+      await env.app.maintenance!.ingestPdf({
+        literature_id: missingId,
+        bytes: syntheticReadingPdf(3),
+      });
+      await env.app.database.putLiterature(
+        parseLiterature({
+          ...FIXTURE_LITERATURE,
+          literature_id: third,
+          meta_literature_id: "00000000-0000-0000-0000-000000005104",
+          metadata: {
+            ...FIXTURE_LITERATURE.metadata,
+            title: "Third source",
+            identifiers: [],
+          },
+        }),
+      );
+      await env.app.maintenance!.ingestPdf({
+        literature_id: third,
+        bytes: Buffer.concat([
+          syntheticReadingPdf(3),
+          Buffer.from("\n% third\n"),
+        ]),
+      });
+    },
+  });
+  type Counts = {
+    engines: Record<string, number>;
+    pdfRequests: Record<string, number>;
+    pdfHashes: Record<string, number>;
+    workersStarted: number;
+    workersTerminated: number;
+    workersPeak: number;
+    objectUrlsCreated: number;
+    objectUrlsRevoked: number;
+  };
+  const counts = () =>
+    w.page.evaluate(
+      () =>
+        (window as unknown as { __sciretrieverReaderProbe: Counts })
+          .__sciretrieverReaderProbe,
+    );
+  const shown = (id: string) =>
+    w.page
+      .locator(
+        `.reader-engine-body[data-literature-id="${id}"] .reader-engine[data-literature-id="${id}"]:not([hidden]) .reading-pdf-page[data-rendered="true"]`,
+      )
+      .first()
+      .waitFor();
+  const visit = (id: string) =>
+    w.page.evaluate((url) => {
+      history.pushState(null, "", url);
+      dispatchEvent(new PopStateEvent("popstate"));
+    }, `/?literature=${id}&reader=pdf`);
+  const hiddenCanvases = () =>
+    w.page.locator(".reader-engine[hidden] canvas").count();
+  try {
+    const papers = [w.env.parseRequest.literature_id, missingId];
+    await open(w, "pdf", papers[0]);
+    await shown(papers[0]!);
+    await visit(papers[1]!);
+    await shown(papers[1]!);
+    for (let n = 0; n < 10; n++) {
+      await w.page
+        .locator(".paper-tab")
+        .nth(n % 2)
+        .click();
+      await shown(papers[n % 2]!);
+      expect(await hiddenCanvases()).toBe(0);
+      expect(await w.page.locator(".reader-engine").count()).toBe(2);
+    }
+    const two = await counts();
+    expect(Object.values(two.engines)).toEqual([2]);
+    expect(Object.values(two.pdfRequests)).toEqual([1, 1]);
+    expect(Object.values(two.pdfHashes)).toEqual([1, 1]);
+    expect(two.workersPeak).toBeLessThanOrEqual(2);
+    // A third paper releases the least recently used engine first.
+    await visit(third);
+    await shown(third);
+    const three = await counts();
+    expect(three.workersPeak).toBeLessThanOrEqual(2);
+    expect(three.workersStarted - three.workersTerminated).toBe(2);
+    expect(await w.page.locator(".reader-engine").count()).toBe(2);
+    expect(await hiddenCanvases()).toBe(0);
+    while (await w.page.getByRole("button", { name: /^关闭文献 / }).count())
+      await w.page
+        .getByRole("button", { name: /^关闭文献 / })
+        .first()
+        .click();
+    await expect
+      .poll(async () => {
+        const c = await counts();
+        return {
+          workers: c.workersStarted - c.workersTerminated,
+          urls: c.objectUrlsCreated - c.objectUrlsRevoked,
+        };
+      })
+      .toEqual({ workers: 0, urls: 0 });
+    expect(await w.page.locator(".reading-pdf-page canvas").count()).toBe(0);
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 120000);

@@ -39,6 +39,8 @@ GB 确认后，20 个旧 UI 测试文件已随旧渲染器删除；业务断言�
 
 `reading-markdown.test.ts` 独立保留 Markdown 的 CRLF/非 BMP UTF-8 原始边界与不安全 URL/HTML 隔离断言，不依赖页面框架。
 
+`next-reader-refresh.test.ts` 验证后台刷新：任务每 5 秒变化、持续 60 秒，阅读引擎只构建一次、滚动与焦点不变；新的默认文本版本只在状态栏提示，点“切换”才替换。
+
 `reader-smoothness.test.ts` 是阅读体验的测量工具：在设计样例库与阅读器测试构建（`buildReactAssets(dir, { readerProbe: true })`，计数器见 `src/reading/probe.ts`，生产构建不含）上逐项测量阅读位置、空白帧、后台刷新、重复下载、PDF 缩放、过渡与性能，数字写入 JSON 报告。`SCIRETRIEVER_READER_REPORT_DIR` 指定报告目录（默认系统临时目录），`SCIRETRIEVER_READER_REPORT_LABEL` 指定文件名标签，已有报告不覆盖；文件内 `ENFORCED` 列出必须通过的检查，`SCIRETRIEVER_READER_ENFORCE=id,id|all` 可临时要求更多。
 
 `design-samples-browser.ts` 为样例测试和截图脚本提供同一页面清理流程：收到真实 `pagehide` 处理器的断开回执后才销毁 renderer，匿名页直接关闭。`design-samples-browser.test.ts` 用真实 `ApiClient` 验证连续 20 页、延迟断开回执与拒绝断开的场景；不依赖 `page.close()` 一定送达 keepalive 请求。

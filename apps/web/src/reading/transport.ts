@@ -25,14 +25,91 @@ const operations: Record<DocumentReadOperation, string> = {
   material: "material-evidence",
   evidence: "evidence-resolve",
 };
+/**
+ * Session memory (spec 5.1), cleared when the page closes. A document version
+ * never changes, so its reads are kept by version; verified PDF bytes are kept
+ * by asset SHA-256. Both evict the least recently used entry first.
+ */
+const versionReads = new Map<string, { value: unknown; size: number }>();
+let versionReadSize = 0;
+const VERSION_READ_LIMIT = 64 * 1024 * 1024;
+const versionBound = new Set<DocumentReadOperation>([
+  "describe",
+  "outline",
+  "segments",
+  "resources",
+  "slice",
+]);
+function remember<V>(
+  cache: Map<string, { value: V; size: number }>,
+  key: string,
+  value: V,
+  size: number,
+  limit: number,
+  used: number,
+): number {
+  if (size > limit) return used;
+  const previous = cache.get(key);
+  if (previous) {
+    cache.delete(key);
+    used -= previous.size;
+  }
+  cache.set(key, { value, size });
+  used += size;
+  for (const [old, entry] of cache) {
+    if (used <= limit) break;
+    cache.delete(old);
+    used -= entry.size;
+  }
+  return used;
+}
 export async function readDocument<K extends DocumentReadOperation>(
   ctx: ReadingContext,
   kind: K,
   request: DocumentReadRequestMap[K],
 ): Promise<DocumentReadResultMap[K]> {
+  const key =
+    versionBound.has(kind) &&
+    typeof (request as { document_version_id?: unknown })
+      .document_version_id === "string"
+      ? JSON.stringify([kind, request])
+      : null;
+  const cached = key ? versionReads.get(key) : undefined;
+  if (key && cached) {
+    versionReads.delete(key);
+    versionReads.set(key, cached);
+    return cached.value as DocumentReadResultMap[K];
+  }
   const reply = await ctx.api.query(operations[kind], request, ctx.signal);
-  return parseDocumentReadResult(kind, reply.result, request);
+  const value = parseDocumentReadResult(kind, reply.result, request);
+  if (key)
+    versionReadSize = remember(
+      versionReads,
+      key,
+      value as unknown,
+      JSON.stringify(reply.result).length * 2,
+      VERSION_READ_LIMIT,
+      versionReadSize,
+    );
+  return value;
 }
+/** Drops a read its caller rejected, so a retry asks the server again. */
+export function forgetDocumentRead<K extends DocumentReadOperation>(
+  kind: K,
+  request: DocumentReadRequestMap[K],
+) {
+  const key = JSON.stringify([kind, request]),
+    entry = versionReads.get(key);
+  if (!entry) return;
+  versionReads.delete(key);
+  versionReadSize -= entry.size;
+}
+const pdfBytes = new Map<
+  string,
+  { value: Uint8Array<ArrayBuffer>; size: number }
+>();
+let pdfBytesSize = 0;
+const PDF_BYTES_LIMIT = 256 * 1024 * 1024;
 export async function resolveReadingSources(
   ctx: ReadingContext,
   detail: LiteratureDetail,
@@ -118,6 +195,13 @@ export async function readPdfBytes(
     material.byte_size > 256 * 1024 * 1024
   )
     throw new Error("PDF 超过受控读取上限或材料类型不符");
+  // Callers may hand their copy to PDF.js, which detaches it; the cache keeps its own.
+  const cached = pdfBytes.get(material.asset_sha256);
+  if (cached && cached.value.byteLength === material.byte_size) {
+    pdfBytes.delete(material.asset_sha256);
+    pdfBytes.set(material.asset_sha256, cached);
+    return cached.value.slice();
+  }
   if (READER_PROBE) probeCountKey("pdfRequests", material.asset_sha256);
   const response = await ctx.api.fetch("/api/v1/query/material-bytes", {
     method: "POST",
@@ -168,7 +252,15 @@ export async function readPdfBytes(
   )
     throw new Error("PDF 完整性校验失败");
   ctx.signal.throwIfAborted();
-  return bytes;
+  pdfBytesSize = remember(
+    pdfBytes,
+    material.asset_sha256,
+    bytes,
+    bytes.byteLength,
+    PDF_BYTES_LIMIT,
+    pdfBytesSize,
+  );
+  return bytes.slice();
 }
 
 /** One whole picture of a fixed document version, checked against its header and hash. */

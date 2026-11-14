@@ -17,9 +17,11 @@ export interface ReadingPosition {
 }
 export interface ReadingState {
   entries: Map<string, ReadingPosition>;
+  /** Told when a paper's tab closes, so its reader engine is released. */
+  closed: Set<(literatureId: string) => void>;
 }
 export function createReadingState(): ReadingState {
-  return { entries: new Map() };
+  return { entries: new Map(), closed: new Set() };
 }
 export function readingPosition(
   state: ReadingState,
@@ -54,4 +56,5 @@ export function closeReadingState(
 ): void {
   for (const [key, entry] of state.entries)
     if (entry.literatureId === literatureId) state.entries.delete(key);
+  for (const listener of state.closed) listener(literatureId);
 }
