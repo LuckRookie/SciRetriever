@@ -106,6 +106,49 @@ it("shares the exact import handlers between authenticated Web and import-purpos
         Authorization: `Bearer ${importToken}`,
         Origin: "chrome-extension://synthetic",
       };
+    for (const contentType of [
+      "application/json; charset=utf-8",
+      "Application/JSON; CHARSET=UTF-8",
+      'application/json; charset="UTF-8"',
+    ]) {
+      const response = await send(
+        "/api/v1/import/sessions/list",
+        {},
+        { ...deviceHeaders, "Content-Type": contentType },
+      );
+      expect(response.status).toBe(200);
+      await response.json();
+      expect(
+        (
+          await send(
+            `/api/v1/import/sessions/list?client_id=${grant.client_id}`,
+            {},
+            { ...webHeaders, "Content-Type": contentType },
+          )
+        ).status,
+      ).toBe(200);
+    }
+    for (const contentType of [
+      "text/plain",
+      "application/json; charset=gbk",
+      "application/json; foo=bar",
+      "application/json; charset=utf-8; charset=utf-8",
+    ]) {
+      const response = await send(
+        "/api/v1/import/sessions/list",
+        {},
+        { ...deviceHeaders, "Content-Type": contentType },
+      );
+      expect(response.status).toBe(415);
+      expect((await response.json()).code).toBe("content-type-unsupported");
+      const webResponse = await send(
+        `/api/v1/import/sessions/list?client_id=${grant.client_id}`,
+        {},
+        { ...webHeaders, "Content-Type": contentType },
+      );
+      expect(webResponse.status).toBe(415);
+      expect((await webResponse.json()).code).toBe("content-type-unsupported");
+    }
     for (const p of ["read", "operate", "capture"] as const)
       expect(
         (

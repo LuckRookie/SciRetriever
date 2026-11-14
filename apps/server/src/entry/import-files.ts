@@ -173,7 +173,7 @@ export class ImportFileChannel {
           captured_at: new Date(this.now()).toISOString(),
         },
         source,
-        file.external_id,
+        source === "web-capture" ? null : file.external_id,
         active,
       );
       for await (const chunk of uploadChunks(chunks, active)) {

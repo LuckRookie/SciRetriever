@@ -108,19 +108,29 @@ async function fixture(failing = false) {
       connection_id: exchanged.connection.connection_id,
     };
   };
-  const send = (token: string, path: string, request: unknown = {}) =>
+  const send = (
+    token: string,
+    path: string,
+    request: unknown = {},
+    contentType = "application/json",
+  ) =>
     fetch(server.origin + "/api/v1/capture/" + path, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
         Origin: "chrome-extension://synthetic",
-        "Content-Type": "application/json",
+        "Content-Type": contentType,
         "X-Sciretriever-Protocol-Version": "1",
       },
       body: JSON.stringify({ protocol_version: 1, request }),
     });
-  const call = async (token: string, path: string, request: unknown = {}) => {
-    const response = await send(token, path, request);
+  const call = async (
+    token: string,
+    path: string,
+    request: unknown = {},
+    contentType = "application/json",
+  ) => {
+    const response = await send(token, path, request, contentType);
     const value = await response.json();
     expect(response.status, JSON.stringify(value)).toBe(200);
     return value.result;
@@ -438,10 +448,48 @@ it("streams valid unverified PDFs through the shared import channel and never re
   const f = await fixture();
   try {
     const actor = await f.pair(),
-      first = await f.call(actor.token, "save", request());
+      first = await f.call(
+        actor.token,
+        "save",
+        request(),
+        "Application/JSON; CHARSET=UTF-8",
+      );
     expect(first.file.action).toBe("upload");
     const bytes = workbenchPdf(),
       sha = createHash("sha256").update(bytes).digest("hex");
+    for (const contentType of [
+      "application/json; charset=gbk",
+      "application/json; foo=bar",
+    ]) {
+      const response = await f.send(
+        actor.token,
+        "lookup",
+        { identifiers: request().metadata.identifiers },
+        contentType,
+      );
+      expect(response.status).toBe(415);
+      expect((await response.json()).code).toBe("content-type-unsupported");
+    }
+    for (const contentType of [
+      "text/plain",
+      "application/pdf; charset=utf-8",
+      "application/octet-stream; foo=bar",
+    ]) {
+      const response = await fetch(
+        `${f.server.origin}/api/v1/capture/items/${first.capture_id}/file/bytes`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${actor.token}`,
+            "Content-Type": contentType,
+            "X-Sciretriever-Protocol-Version": "1",
+          },
+          body: Buffer.from(bytes),
+        },
+      );
+      expect(response.status).toBe(415);
+      expect((await response.json()).code).toBe("content-type-unsupported");
+    }
     const invalid = await fetch(
       `${f.server.origin}/api/v1/capture/items/${first.capture_id}/file/bytes`,
       {
@@ -461,7 +509,7 @@ it("streams valid unverified PDFs through the shared import channel and never re
         method: "POST",
         headers: {
           Authorization: `Bearer ${actor.token}`,
-          "Content-Type": "application/pdf",
+          "Content-Type": "Application/Octet-Stream",
           "X-Sciretriever-Protocol-Version": "1",
         },
         body: Buffer.from(bytes),
@@ -485,6 +533,18 @@ it("streams valid unverified PDFs through the shared import channel and never re
     expect(detail.primary_pdf!.literature_asset.provenance.source_name).toBe(
       "web-capture",
     );
+    expect(detail.primary_pdf!.literature_asset.provenance).toMatchObject({
+      source_kind: "user",
+      source_record_id: null,
+      input_sha256: sha,
+    });
+    const receipt = f.sql(
+      "SELECT intent_json FROM execution_receipts WHERE json_extract(intent_json,'$.literature_id')='" +
+        first.literature_id +
+        "'",
+    );
+    expect(receipt).toHaveLength(1);
+    expect(JSON.parse(String(receipt[0]!.intent_json)).source_url).toBeNull();
     const repeat = await f.call(actor.token, "save", request());
     expect(
       (

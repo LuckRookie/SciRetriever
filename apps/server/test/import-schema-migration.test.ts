@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   SCHEMA_MANIFEST_V15,
   SCHEMA_FINGERPRINT_V15,
@@ -37,6 +37,40 @@ function oldCatalog(path: string) {
   );
   return db;
 }
+it.each(["already rolled back", "rollback throws"])(
+  "preserves the original migration error when %s",
+  async (mode) => {
+    const home = await mkdtemp(join(tmpdir(), "sciretriever-import-rollback-"));
+    const path = join(home, "catalog.sqlite");
+    try {
+      oldCatalog(path).close();
+      const before = await readFile(path);
+      const original = DatabaseSync.prototype.exec;
+      const failure = new Error("Synthetic original migration failure");
+      let injected = false;
+      const spy = vi
+        .spyOn(DatabaseSync.prototype, "exec")
+        .mockImplementation(function (this: DatabaseSync, sql: string) {
+          if (sql.startsWith("CREATE TABLE device_pairings(")) {
+            injected = true;
+            if (mode === "already rolled back") original.call(this, "ROLLBACK");
+            throw failure;
+          }
+          original.call(this, sql);
+          if (mode === "rollback throws" && sql === "ROLLBACK")
+            throw new Error("Synthetic secondary rollback failure");
+        });
+      await expect(migrateImportSchema(path)).rejects.toBe(failure);
+      expect(injected).toBe(true);
+      spy.mockRestore();
+      expect(await readFile(path)).toEqual(before);
+    } finally {
+      vi.restoreAllMocks();
+      await rm(home, { recursive: true, force: true });
+    }
+  },
+  30000,
+);
 it("migrates exact schema 15 to 16 atomically, preserves all facts and enables device connections without implicit migration", async () => {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-import-migration-")),
     path = join(home, "catalog.sqlite");

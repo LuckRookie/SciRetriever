@@ -16,6 +16,31 @@ import {
 } from "./device-connections.js";
 import { catalogCorruption } from "../storage/sqlite/errors.js";
 
+export class RequestContentTypeError extends Error {
+  readonly code = "content-type-unsupported" as const;
+  constructor() {
+    super("Request Content-Type unsupported");
+  }
+}
+/** Shared transport policy; protocol and authentication parsing stay with their owners. */
+export function assertRequestContentType(
+  request: IncomingMessage,
+  kind: "json" | "bytes" = "json",
+) {
+  const value = request.headers["content-type"];
+  const valid =
+    typeof value === "string" &&
+    (kind === "json"
+      ? /^application\/json(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?\s*$/iu.test(
+          value,
+        )
+      : /^(?:application\/pdf|application\/octet-stream)\s*$/iu.test(value));
+  if (!valid) throw new RequestContentTypeError();
+  // Downstream adapters consume the validated media type, not its wire spelling.
+  request.headers["content-type"] =
+    kind === "json" ? "application/json" : value!.trim().toLowerCase();
+}
+
 export interface DeviceRoute {
   readonly method: "GET" | "POST" | "DELETE";
   /** Anchored literal path, with optional :id segments. No wildcard/implicit subtree grants. */
@@ -158,28 +183,32 @@ export function deviceFailure(response: ServerResponse, error: unknown) {
     return;
   }
   const code =
-    error instanceof DeviceConnectionError
+    error instanceof RequestContentTypeError
       ? error.code
-      : error instanceof ContractValidationError
-        ? "device-input-invalid"
-        : "device-unavailable";
+      : error instanceof DeviceConnectionError
+        ? error.code
+        : error instanceof ContractValidationError
+          ? "device-input-invalid"
+          : "device-unavailable";
   const status =
-    code === "device-exchange-rate-limited"
-      ? 429
-      : code === "device-purpose-forbidden" ||
-          code === "device-address-mismatch"
-        ? 403
-        : code === "device-connection-missing"
-          ? 404
-          : code === "device-artifact-unavailable" ||
-              code === "device-unavailable"
-            ? 503
-            : code === "device-token-invalid" || code === "device-revoked"
-              ? 401
-              : code === "device-pairing-used" ||
-                  code === "device-pairing-expired"
-                ? 409
-                : 400;
+    code === "content-type-unsupported"
+      ? 415
+      : code === "device-exchange-rate-limited"
+        ? 429
+        : code === "device-purpose-forbidden" ||
+            code === "device-address-mismatch"
+          ? 403
+          : code === "device-connection-missing"
+            ? 404
+            : code === "device-artifact-unavailable" ||
+                code === "device-unavailable"
+              ? 503
+              : code === "device-token-invalid" || code === "device-revoked"
+                ? 401
+                : code === "device-pairing-used" ||
+                    code === "device-pairing-expired"
+                  ? 409
+                  : 400;
   if (status === 429) response.setHeader("Retry-After", "60");
   if (response.headersSent || response.destroyed) {
     response.destroy();
@@ -204,7 +233,8 @@ export function deviceMaterialInUrl(raw: string): boolean {
   );
 }
 async function readBody(request: IncomingMessage): Promise<unknown> {
-  if (request.headers["content-type"] !== "application/json")
+  assertRequestContentType(request);
+  if (request.headers["content-encoding"] !== undefined)
     throw new ContractValidationError();
   const parts: Buffer[] = [];
   let size = 0;
@@ -304,7 +334,9 @@ export async function handleDeviceRequest(
       let value: unknown;
       try {
         value = await readBody(request);
-      } catch {
+      } catch (error) {
+        // Bad media types never reach the pairing attempt/rate-limit owner.
+        if (error instanceof RequestContentTypeError) throw error;
         value = null;
       }
       // Direct socket identity, never forwarding headers supplied by a client.
@@ -336,6 +368,11 @@ export async function handleDeviceRequest(
     if (!registered)
       throw new DeviceConnectionError("device-purpose-forbidden");
     requireDevicePurpose(connection, registered.route.purposes);
+    if (request.method === "POST")
+      assertRequestContentType(
+        request,
+        registered.route.path.endsWith("/bytes") ? "bytes" : "json",
+      );
     await registered.route.handle(
       request,
       response,

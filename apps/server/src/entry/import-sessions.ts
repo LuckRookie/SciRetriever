@@ -4,6 +4,7 @@ import {
   parseMetadataObservation,
   parseIntakeBatchId,
   parseImportCreate,
+  parseFolderOperation,
   importInteger,
   IMPORT_LIMITS,
   type ImportAdapter,
@@ -33,6 +34,7 @@ import type {
   LiteratureIdentityDecision,
 } from "../literature/identity.js";
 import { FolderError, type FolderService } from "../literature/folders.js";
+import { activityContext } from "../logging/activity.js";
 import { importAdapters } from "../literature/import-adapters.js";
 import { SOURCE_TYPE_MAPPING_VERSION } from "../literature/metadata-types.js";
 import {
@@ -889,11 +891,30 @@ export class ImportSessionService extends ImportSessionReadService {
       folder_id: mapped?.internal_id ?? null,
       parent_id: parent,
     });
-    if (mapped) {
-      if (!context.folder)
-        throw new ImportSessionError("import-folder-target-missing");
+    const folderId =
+      mapped?.internal_id ?? stableId(["import-folder", s.library_key, key]);
+    const mapping = (content_sha256: string | null) =>
+      this.write({
+        op: "mapping",
+        mapping: {
+          library_key: s.library_key,
+          object_kind: "group",
+          external_id: key,
+          internal_id: folderId,
+          content_sha256,
+          observation_id: null,
+        },
+      });
+    if (mapped && context.folder) {
+      if (mapped.content_sha256 !== null) await mapping(null);
       return mapped.internal_id;
     }
+    // A null hash is a settled mapping: a later user deletion must not be undone.
+    // A pending mapping reserves this ID before creating any folder, so recovery
+    // can recreate it without claiming a user's same-name folder.
+    if (mapped && mapped.content_sha256 === null)
+      throw new ImportSessionError("import-folder-target-missing");
+    if (!mapped) await mapping(hash({ name, parent }));
     const truncate = (value: string, max: number) => {
       let result = "";
       for (const character of value) {
@@ -909,22 +930,18 @@ export class ImportSessionService extends ImportSessionReadService {
       const suffix = ` (${index++})`;
       candidate = truncate(base, 128 - suffix.length) + suffix;
     }
-    const folder = (await this.folders.manage({
+    const command = parseFolderOperation({
       operation: "create",
       request: { parent_id: parent, name: candidate, position: null },
-    })) as { folder_id: string };
-    await this.write({
-      op: "mapping",
-      mapping: {
-        library_key: s.library_key,
-        object_kind: "group",
-        external_id: key,
-        internal_id: folder.folder_id,
-        content_sha256: null,
-        observation_id: null,
-      },
     });
-    return folder.folder_id;
+    await this.database.folders({
+      ...command,
+      folder_id: folderId,
+      actor: activityContext().actor,
+      now: new Date(this.now()).toISOString(),
+    });
+    await mapping(null);
+    return folderId;
   }
   private async sourceGroup(
     s: StoredImportSession,

@@ -113,7 +113,8 @@ export class CandidateAcceptanceService {
     requireCurrentCandidate(facts, input.metadata_snapshot, candidate);
     const userSupplied =
       candidate.source_name === "manual-pdf" ||
-      candidate.source_name === "import";
+      candidate.source_name === "import" ||
+      candidate.source_name === "web-capture";
     if (userSupplied && facts.primary_asset)
       throw new LiteraturePublicationError("primary-asset-conflict");
     check();

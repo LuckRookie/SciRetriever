@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import { createLogger } from "../../logging/index.js";
 import { acquireCatalogWriteLock } from "../write-admission.js";
 import { schemaTargetFile, schemaTargetPath } from "./schema-path.js";
 import {
@@ -100,7 +101,16 @@ export async function migrateLibraryStateSchema(path: string) {
         foreign_key_violations: 0,
       };
     } catch (error) {
-      db.exec("ROLLBACK");
+      if (db.isTransaction) {
+        try {
+          db.exec("ROLLBACK");
+        } catch {
+          // Record the cleanup failure without replacing the original error.
+          createLogger("schema-migration").warn(
+            "Migration rollback failed; preserving original error",
+          );
+        }
+      }
       throw error;
     }
   } finally {

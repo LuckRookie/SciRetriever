@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import {
   IMPORT_LIMITS,
+  ContractValidationError,
   type ImportRecord,
   type ImportData,
 } from "@sciretriever/contracts";
@@ -117,6 +118,190 @@ async function* chunks(bytes: Uint8Array) {
   for (let offset = 0; offset < bytes.length; offset += 1024)
     yield bytes.subarray(offset, offset + 1024);
 }
+
+it("validates an imported group name exactly like FolderService before dispatching its reserved folder write", async () => {
+  const f = await fixture();
+  try {
+    // Import strings allow format characters; folder names forbid them. This
+    // reaches folder creation rather than failing the earlier import parser.
+    const invalidName = "Group\u200b";
+    expect(() =>
+      f.app.folders.manage({
+        operation: "create",
+        request: { parent_id: null, name: invalidName, position: null },
+      }),
+    ).toThrow(ContractValidationError);
+    const s = await f.create();
+    await f.app.importSessions.putData(
+      s.session_id,
+      0,
+      data(
+        [{ ...record("invalid-group"), groups: ["group"] }],
+        [{ external_id: "group", name: invalidName, parent_external_id: null }],
+      ),
+    );
+    const writes = vi.spyOn(f.app.database, "folders");
+    await expect(
+      f.app.importSessions.confirm(s.session_id),
+    ).rejects.toBeInstanceOf(ContractValidationError);
+    expect(
+      writes.mock.calls.filter(
+        ([command]) =>
+          command.operation === "create" &&
+          (command.request as { name?: string }).name === invalidName,
+      ),
+    ).toHaveLength(0);
+    expect(f.sql("SELECT name FROM folders WHERE name LIKE 'Group%'")).toEqual(
+      [],
+    );
+  } finally {
+    vi.restoreAllMocks();
+    await f.close();
+  }
+}, 30000);
+
+it.each([
+  "root",
+  "source:group",
+  "user-tags",
+  `tag:${createHash("sha256").update(JSON.stringify("topic")).digest("hex")}`,
+])(
+  "recovers interrupted %s folder creation without duplicates or claiming user folders",
+  async (key) => {
+    const f = await fixture();
+    try {
+      const s = await f.create("crash-folders", "Library", {
+        import_user_tags: true,
+      });
+      await f.app.importSessions.putData(
+        s.session_id,
+        0,
+        data(
+          [
+            {
+              ...record("crash-folder"),
+              groups: ["group"],
+              user_tags: ["topic"],
+            },
+          ],
+          [{ external_id: "group", name: "Group", parent_external_id: null }],
+        ),
+      );
+      const original = f.app.database.run.bind(f.app.database);
+      let interrupted = false;
+      const spy = vi
+        .spyOn(f.app.database, "run")
+        .mockImplementation(async (command, signal) => {
+          if (
+            !interrupted &&
+            command.kind === "import_write" &&
+            command.action.op === "mapping" &&
+            command.action.mapping.external_id === key &&
+            command.action.mapping.content_sha256 === null
+          ) {
+            interrupted = true;
+            throw new Error("Synthetic interruption before group mapping");
+          }
+          return original(command, signal);
+        });
+      await expect(f.app.importSessions.confirm(s.session_id)).rejects.toThrow(
+        "Synthetic interruption",
+      );
+      expect(interrupted).toBe(true);
+      spy.mockRestore();
+      await f.reopen();
+      await f.app.importSessions.sweep();
+      const final = await f.app.importSessions.status(s.session_id);
+      expect(final.state).toBe("completed");
+      const folders = f.sql<{ folder_id: string; name: string }[]>(
+        "SELECT folder_id,name FROM folders",
+      );
+      expect(folders.map((v) => v.name).sort()).toEqual(
+        ["Group", "Library", "topic", "标签"].sort(),
+      );
+      expect(f.sql("SELECT * FROM folder_members")).toHaveLength(2);
+      expect(f.sql("SELECT * FROM intake_batch_members")).toHaveLength(1);
+    } finally {
+      vi.restoreAllMocks();
+      await f.close();
+    }
+  },
+  30000,
+);
+
+it("resumes a reserved folder ID before creation and preserves an unrelated user folder with the same name", async () => {
+  const f = await fixture();
+  try {
+    const s = await f.create("reserved-folder", "Library");
+    await f.app.importSessions.putData(
+      s.session_id,
+      0,
+      data(
+        [
+          {
+            ...record("reserved-folder"),
+            groups: ["group"],
+          },
+        ],
+        [{ external_id: "group", name: "Group", parent_external_id: null }],
+      ),
+    );
+    const original = f.app.database.folders.bind(f.app.database);
+    const spy = vi
+      .spyOn(f.app.database, "folders")
+      .mockImplementation(async (command, signal) => {
+        if (
+          command.operation === "create" &&
+          (command.request as { name?: string }).name === "Group"
+        )
+          throw new Error("Synthetic interruption after reservation");
+        return original(command, signal);
+      });
+    await expect(f.app.importSessions.confirm(s.session_id)).rejects.toThrow(
+      "Synthetic interruption",
+    );
+    spy.mockRestore();
+    const reserved = f.sql<{ internal_id: string }[]>(
+      "SELECT internal_id FROM external_object_mappings WHERE external_id='source:group'",
+    )[0]!;
+    expect(reserved).toBeDefined();
+    const root = f.sql<{ internal_id: string }[]>(
+      "SELECT internal_id FROM external_object_mappings WHERE external_id='root'",
+    )[0]!.internal_id;
+    const user = (await f.app.folders.manage({
+      operation: "create",
+      request: { parent_id: root, name: "Group", position: null },
+    })) as { folder_id: string };
+    await f.reopen();
+    await f.app.importSessions.sweep();
+    expect((await f.app.importSessions.status(s.session_id)).state).toBe(
+      "completed",
+    );
+    expect(
+      f.sql<{ internal_id: string }[]>(
+        "SELECT internal_id FROM external_object_mappings WHERE external_id='source:group'",
+      )[0]!.internal_id,
+    ).toBe(reserved.internal_id);
+    expect(reserved.internal_id).not.toBe(user.folder_id);
+    const groups = f.sql<{ folder_id: string; name: string }[]>(
+      "SELECT folder_id,name FROM folders WHERE name LIKE 'Group%'",
+    );
+    expect(groups).toEqual(
+      expect.arrayContaining([
+        { folder_id: user.folder_id, name: "Group" },
+        { folder_id: reserved.internal_id, name: "Group (2)" },
+      ]),
+    );
+    expect(
+      f
+        .sql<{ folder_id: string }[]>("SELECT folder_id FROM folder_members")
+        .some((v) => v.folder_id === user.folder_id),
+    ).toBe(false);
+  } finally {
+    vi.restoreAllMocks();
+    await f.close();
+  }
+}, 30000);
 
 it("replaces numbered parts, keeps preview read-only and rechecks the library on confirmation", async () => {
   const f = await fixture();

@@ -1,6 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { mkdir, open, lstat, unlink, type FileHandle } from "node:fs/promises";
+import {
+  mkdir,
+  open,
+  lstat,
+  unlink,
+  readdir,
+  type FileHandle,
+} from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 import {
@@ -44,6 +51,7 @@ export interface StagingOptions {
 }
 
 const STAGING_DIRECTORY = ".staging";
+const activeStages = new Set<string>();
 const MAX_BYTES = Number.MAX_SAFE_INTEGER;
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 const DIRECTORY_FLAGS =
@@ -90,6 +98,71 @@ function directoryIdentity(
   return { device: Number(value.dev), inode: Number(value.ino) };
 }
 
+/** Called by the HTTP service only. Durable import data and candidates live
+ * outside .staging; no supported catalog record registers these scratch names.
+ * A writer in another process is protected by its recent write time (HTTP idle
+ * limit: 60 s). Live stages in this process also retain explicit ownership.
+ */
+export async function cleanupStaging(rootValue: string, now = Date.now()) {
+  const root = checkRoot(rootValue),
+    directory = join(root, STAGING_DIRECTORY);
+  const result = { files: 0, bytes: 0 };
+  let handle: FileHandle;
+  try {
+    const metadata = await lstat(root);
+    if (!metadata.isDirectory()) invalid();
+    handle = await open(directory, DIRECTORY_FLAGS);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return result;
+    throw new FileStagingError(error);
+  }
+  try {
+    directoryIdentity(await handle.stat());
+    const scoped =
+      process.platform === "linux" ? `/proc/self/fd/${handle.fd}` : directory;
+    for (const entry of await readdir(scoped, { withFileTypes: true })) {
+      if (
+        !/^stage-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.tmp$/u.test(
+          entry.name,
+        ) ||
+        !entry.isFile() ||
+        activeStages.has(join(directory, entry.name))
+      )
+        continue;
+      const path = join(scoped, entry.name);
+      let file: FileHandle | undefined;
+      try {
+        file = await open(path, constants.O_RDONLY | NOFOLLOW);
+        const before = identity(await file.stat());
+        if (before.mtimeMs >= now - 3600000) continue;
+        const named = identity(await lstat(path));
+        if (
+          !sameIdentity(before, named) ||
+          activeStages.has(join(directory, entry.name))
+        )
+          continue;
+        await unlink(path);
+        result.files++;
+        result.bytes += before.size;
+      } catch (error) {
+        if (
+          ["ENOENT", "ELOOP"].includes(
+            (error as NodeJS.ErrnoException).code ?? "",
+          )
+        )
+          continue;
+        throw new FileStagingError(error);
+      } finally {
+        await file?.close();
+      }
+    }
+    if (result.files) await handle.sync();
+    return result;
+  } finally {
+    await handle.close();
+  }
+}
+
 export class StagingFile {
   private readonly directory: string;
   private readonly directoryHandle: FileHandle;
@@ -127,6 +200,7 @@ export class StagingFile {
     this.handle = handle;
     this.initial = initial;
     this.maxBytes = maxBytes;
+    activeStages.add(join(directory, name));
   }
 
   static async create(
@@ -406,6 +480,7 @@ export class StagingFile {
       failure ??= new FileStagingError();
     });
     this.closed = true;
+    activeStages.delete(join(this.directory, this.name));
     const cleanupPath = this.handedOff
       ? join(this.directory, this.name)
       : this.filePath;

@@ -15,7 +15,11 @@ import {
   type ImportSessionService,
 } from "../entry/import-sessions.js";
 import { catalogCorruption } from "../storage/sqlite/errors.js";
-import type { DeviceRoute } from "./device-http.js";
+import {
+  assertRequestContentType,
+  RequestContentTypeError,
+  type DeviceRoute,
+} from "./device-http.js";
 const endpoints = [
   ["GET", "/api/v1/import/instructions", "instructions", ""],
   [
@@ -173,6 +177,10 @@ export function importHttpFailure(res: ServerResponse, error: unknown) {
     res.destroy();
     return;
   }
+  if (error instanceof RequestContentTypeError) {
+    json(res, 415, { protocol_version: 1, code: error.code });
+    return;
+  }
   if (catalogCorruption(error)) {
     json(res, 503, {
       protocol_version: 1,
@@ -198,9 +206,9 @@ export async function importHttpBody(
   req: IncomingMessage,
   maxBytes: number = IMPORT_LIMITS.request_bytes,
 ) {
+  assertRequestContentType(req);
   if (
     req.headers["x-sciretriever-protocol-version"] !== "1" ||
-    req.headers["content-type"] !== "application/json" ||
     req.headers["content-encoding"] !== undefined
   )
     throw new ContractValidationError();
@@ -263,11 +271,9 @@ export async function importHttpBytes<T>(
     cancel: () => void,
   ) => Promise<T>,
 ): Promise<T> {
+  assertRequestContentType(req, "bytes");
   if (
     req.headers["x-sciretriever-protocol-version"] !== "1" ||
-    !["application/pdf", "application/octet-stream"].includes(
-      String(req.headers["content-type"]),
-    ) ||
     req.headers["content-encoding"] !== undefined
   )
     throw new ContractValidationError();

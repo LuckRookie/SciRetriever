@@ -182,6 +182,72 @@ async function fixture() {
   };
 }
 
+it("accepts only UTF-8 JSON Content-Type parameters without spending exchange attempts on unsupported types", async () => {
+  const f = await fixture();
+  try {
+    const pairing = await f.create();
+    const value = {
+      pairing_code: parseDeviceConnectionCode(pairing.connection_code)
+        .pairing_code,
+    };
+    const wrong = [
+      "text/plain",
+      "application/json; charset=gbk",
+      "application/json; foo=bar",
+      "application/json; charset=utf-8; charset=utf-8",
+    ];
+    for (let n = 0; n < 61; n++) {
+      const response = await f.send(
+        "/api/v1/device-connections/exchange",
+        value,
+        { "Content-Type": wrong[n % wrong.length]! },
+      );
+      expect(response.status).toBe(415);
+      expect((await response.json()).code).toBe("content-type-unsupported");
+    }
+    const db = new DatabaseSync(f.catalog, { readOnly: true });
+    try {
+      expect(
+        db.prepare("SELECT count(*) n FROM device_exchange_limits").get()!.n,
+      ).toBe(0);
+    } finally {
+      db.close();
+    }
+    const accepted = await f.send(
+      "/api/v1/device-connections/exchange",
+      value,
+      { "Content-Type": "Application/JSON; CHARSET=UTF-8" },
+    );
+    expect(accepted.status).toBe(200);
+    expect((await accepted.json()).result.connection.connection_id).toBe(
+      pairing.connection.connection_id,
+    );
+    for (const contentType of [
+      "application/json; charset=utf-8",
+      "Application/JSON; CHARSET=UTF-8",
+    ]) {
+      expect(
+        (
+          await f.web(
+            "/api/v1/device-connections",
+            { cursor: null },
+            { "Content-Type": contentType },
+          )
+        ).status,
+      ).toBe(200);
+    }
+    const rejected = await f.web(
+      "/api/v1/device-connections",
+      { cursor: null },
+      { "Content-Type": "application/json; foo=bar" },
+    );
+    expect(rejected.status).toBe(415);
+    expect((await rejected.json()).code).toBe("content-type-unsupported");
+  } finally {
+    await f.close();
+  }
+}, 30000);
+
 it("pairs once, counts malformed/used/expired attempts, and stores only derived material", async () => {
   const f = await fixture();
   try {

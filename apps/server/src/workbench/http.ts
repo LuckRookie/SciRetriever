@@ -4,6 +4,8 @@ import {
   handleWebDeviceRoute,
   manageDevices,
   deviceMaterialInUrl,
+  assertRequestContentType,
+  RequestContentTypeError,
   type DeviceHttpOptions,
 } from "./device-http.js";
 import { catalogCorruption } from "../storage/sqlite/errors.js";
@@ -18,6 +20,8 @@ import {
   type ConfigurationOperation,
 } from "../entry/configuration-operations.js";
 import { withActivity } from "../logging/activity.js";
+import { createLogger } from "../logging/index.js";
+import { cleanupStaging } from "../storage/files/staging.js";
 import {
   ContractValidationError,
   EXTRACTION_SUBMISSION_WIRE_MAX_BYTES,
@@ -589,7 +593,8 @@ function actorInput(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 async function body(request: IncomingMessage): Promise<unknown> {
-  if (request.headers["content-type"] !== "application/json") invalidInput();
+  assertRequestContentType(request);
+  if (request.headers["content-encoding"] !== undefined) invalidInput();
   let size = 0;
   const chunks: Buffer[] = [];
   for await (const value of request) {
@@ -608,7 +613,8 @@ async function extractionBody(
   request: IncomingMessage,
   limit = 256 * 1024,
 ): Promise<Record<string, unknown>> {
-  if (request.headers["content-type"] !== "application/json") invalidInput();
+  assertRequestContentType(request);
+  if (request.headers["content-encoding"] !== undefined) invalidInput();
   let size = 0;
   const chunks: Buffer[] = [];
   for await (const value of request) {
@@ -631,6 +637,8 @@ const PROCESSOR_QUERY_WIRE_BYTES = 310 * 1024;
 const PROCESSOR_RESPONSE_BYTES = 16 * 1024 * 1024;
 
 function processorFailure(error: unknown): { status: number; code: string } {
+  if (error instanceof RequestContentTypeError)
+    return { status: 415, code: error.code };
   if (
     error instanceof ContractValidationError ||
     error instanceof WorkbenchInputError
@@ -862,6 +870,88 @@ export interface WorkbenchHttpServer {
   close(): Promise<void>;
 }
 
+/** Deadlines cover receiving the body, never the duration of an admitted operation. */
+function guardRequestBody(request: IncomingMessage, response: ServerResponse) {
+  if (request.complete) return;
+  const path = (request.url ?? "").split("?")[0];
+  const idle =
+    request.method === "POST" &&
+    (path === "/mcp" ||
+      path === "/api/v1/maintenance/ingest-pdf" ||
+      path === "/api/maintenance/ingest-pdf" ||
+      /^\/api\/v1\/import\/sessions\/[^/]+\/(?:data|files\/[^/]+\/bytes)$/u.test(
+        path!,
+      ) ||
+      /^\/api\/v1\/capture\/items\/[^/]+\/file\/bytes$/u.test(path!));
+  let timer: ReturnType<typeof setTimeout>;
+  const finished = () => {
+    if (request.complete) {
+      cleanup();
+      return;
+    }
+    // A response finishing is not permission to destroy the shared socket.
+    // Drain an early rejection under the existing receiving deadline, without
+    // the readable observer keeping Node's automatic discard path paused.
+    request.off("readable", received);
+    request.on("data", received);
+    request.resume();
+  };
+  const closed = () => {
+    // A completed response can close while its request is still being drained.
+    if (!response.writableFinished) cleanup();
+  };
+  const cleanup = () => {
+    clearTimeout(timer);
+    request.off("readable", received);
+    request.off("data", received);
+    request.off("end", cleanup);
+    request.off("aborted", cleanup);
+    response.off("finish", finished);
+    response.off("close", closed);
+  };
+  const expire = () => {
+    cleanup();
+    if (request.complete) return;
+    if (response.writableEnded || response.destroyed) {
+      request.destroy();
+      return;
+    }
+    if (response.headersSent) {
+      response.destroy();
+      return;
+    }
+    response.shouldKeepAlive = false;
+    response.setHeader("Connection", "close");
+    response.once("finish", () => request.destroy());
+    if (idle)
+      json(response, 408, {
+        protocol_version: 1,
+        code: "request-idle-timeout",
+      });
+    else {
+      // Preserve the former Node requestTimeout response for ordinary routes.
+      response.writeHead(408);
+      response.end();
+    }
+  };
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(expire, idle ? 60000 : 5000);
+    timer.unref();
+  };
+  const received = () => {
+    if (request.complete) cleanup();
+    else if (idle) arm();
+  };
+  // Observe availability without putting the request in flowing mode before auth.
+  request.on("readable", received);
+  request.once("end", cleanup);
+  request.once("aborted", cleanup);
+  response.once("finish", finished);
+  response.once("close", closed);
+  arm();
+}
+
 /** Authenticated UI transport. Startup credentials stay with the process owner. */
 export async function startWorkbenchHttp(
   input: WorkbenchHttpOptions,
@@ -899,11 +989,17 @@ export async function startWorkbenchHttp(
       )
     : undefined;
   const server = createServer(
-    { requestTimeout: 5000, headersTimeout: 5000, maxHeaderSize: 8192 },
+    { requestTimeout: 0, headersTimeout: 5000, maxHeaderSize: 8192 },
     (request, response) => {
+      guardRequestBody(request, response);
       const operation = withoutRestartAdmission(() =>
         handle(request, response),
       ).catch((error: unknown) => {
+        if (error instanceof RequestContentTypeError) {
+          if (response.headersSent || response.destroyed) response.destroy();
+          else json(response, 415, { protocol_version: 1, code: error.code });
+          return;
+        }
         if (
           request.url?.startsWith("/api/maintenance/ingest-pdf") ||
           request.url?.startsWith("/api/maintenance/parse-document") ||
@@ -1673,8 +1769,9 @@ export async function startWorkbenchHttp(
           });
           return;
         }
+        assertRequestContentType(request, "bytes");
         if (
-          request.headers["content-type"] !== "application/pdf" ||
+          request.headers["content-encoding"] !== undefined ||
           request.headers["x-sciretriever-protocol-version"] !== "1"
         )
           invalidInput();
@@ -1695,8 +1792,9 @@ export async function startWorkbenchHttp(
           json(response, 503, { code: "maintenance-unavailable" });
           return;
         }
+        assertRequestContentType(request);
         if (
-          request.headers["content-type"] !== "application/json" ||
+          request.headers["content-encoding"] !== undefined ||
           request.headers["x-sciretriever-protocol-version"] !== "1"
         )
           invalidInput();
@@ -2349,6 +2447,37 @@ export async function startWorkbenchHttp(
   if (!address || typeof address === "string")
     throw new Error("workbench listen failed");
   access.listening(address.port);
+  // Only the serving process owns staging maintenance, never Application/CLI
+  // construction. The production workspace supplies the configured store root.
+  const stagingRoot = options.workspace?.artifact_root;
+  const stagingLog = createLogger("file-staging");
+  let stagingCleanup: Promise<void> | undefined;
+  const sweepStaging = () => {
+    if (closing || !stagingRoot) return Promise.resolve();
+    if (stagingCleanup) return stagingCleanup;
+    stagingCleanup = cleanupStaging(stagingRoot)
+      .then(
+        ({ files, bytes }) => {
+          stagingLog.info(
+            `Staging cleanup completed: removed ${files} files (${bytes} bytes)`,
+          );
+        },
+        () => {
+          stagingLog.warn("Staging cleanup failed");
+        },
+      )
+      .finally(() => {
+        stagingCleanup = undefined;
+      });
+    return stagingCleanup;
+  };
+  await sweepStaging();
+  const stagingTimer = stagingRoot
+    ? setInterval(() => {
+        void sweepStaging();
+      }, 3600000)
+    : undefined;
+  stagingTimer?.unref();
   const refreshTimer = setInterval(() => {
     access.sweep();
     for (const [id, grant] of clients)
@@ -2375,6 +2504,8 @@ export async function startWorkbenchHttp(
       stopUploads.abort();
       queryHandler?.close();
       clearInterval(refreshTimer);
+      clearInterval(stagingTimer);
+      await stagingCleanup;
       for (const response of streams) response.end();
       for (const id of clients.keys()) session.detach(id);
       clients.clear();
@@ -2596,8 +2727,9 @@ function createQueryHttpHandler(
         });
         return;
       }
+      assertRequestContentType(request, "bytes");
       if (
-        request.headers["content-type"] !== "application/pdf" ||
+        request.headers["content-encoding"] !== undefined ||
         request.headers["x-sciretriever-protocol-version"] !== "1" ||
         typeof request.headers["x-literature-id"] !== "string"
       )
@@ -2659,8 +2791,9 @@ function createQueryHttpHandler(
         });
         return;
       }
+      assertRequestContentType(request);
       if (
-        request.headers["content-type"] !== "application/json" ||
+        request.headers["content-encoding"] !== undefined ||
         request.headers["x-sciretriever-protocol-version"] !== "1"
       )
         invalidInput();
@@ -3346,6 +3479,11 @@ function createQueryHttpHandler(
       withActivity({ actor: authenticatedActor ?? maintenanceActor }, () =>
         handle(request, response, workbenchCsrf, authenticatedActor),
       ).catch((error: unknown) => {
+        if (error instanceof RequestContentTypeError) {
+          if (response.headersSent || response.destroyed) response.destroy();
+          else json(response, 415, { protocol_version: 1, code: error.code });
+          return;
+        }
         const corruption = catalogCorruption(error);
         if (corruption) {
           if (response.headersSent || response.destroyed) response.destroy();
@@ -3488,8 +3626,9 @@ export async function startQueryOnlyHttp(
   const pending = new Set<Promise<void>>();
   const handler = createQueryHttpHandler(options, () => ({ origin, host }));
   const server = createServer(
-    { requestTimeout: 5000, headersTimeout: 5000, maxHeaderSize: 8192 },
+    { requestTimeout: 0, headersTimeout: 5000, maxHeaderSize: 8192 },
     (request, response) => {
+      guardRequestBody(request, response);
       const operation = withoutRestartAdmission(() =>
         handler.handle(request, response),
       );

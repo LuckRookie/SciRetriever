@@ -283,7 +283,10 @@ describe("shared manual PDF maintenance", () => {
           body: JSON.stringify({ path: "/etc/passwd" }),
         },
       );
-      expect(invalidPath.status).toBe(400);
+      expect(invalidPath.status).toBe(415);
+      expect(await invalidPath.json()).toMatchObject({
+        code: "content-type-unsupported",
+      });
       const invalidPdf = await fetch(
         `${server.origin}/api/v1/maintenance/ingest-pdf`,
         {
