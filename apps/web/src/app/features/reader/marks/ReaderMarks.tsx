@@ -215,8 +215,11 @@ export function useReaderMarks({
       material:
         | { kind: "pdf"; sha256: string }
         | { kind: "doc"; version: string },
+      /** Records the reader's place before the marks list moves it (spec 4.4). */
+      onJump?: () => void,
     ) => {
       body.current = host;
+      jump.current = onJump ?? null;
       const created =
         material.kind === "pdf"
           ? createPdfMarkSurface(host, material.sha256, {
@@ -282,6 +285,7 @@ export function useReaderMarks({
     },
     [toast],
   );
+  const jump = useRef<(() => void) | null>(null);
   const open = useCallback(
     (markId: string) => {
       setCurrent(markId);
@@ -455,8 +459,13 @@ export function useReaderMarks({
         setHot(markId);
         surface.current?.setHot(markId);
       }}
-      onOpen={open}
+      // Opening a mark from the list is a jump: its place is recorded first.
+      onOpen={(markId) => {
+        jump.current?.();
+        open(markId);
+      }}
       onNote={(markId) => {
+        jump.current?.();
         open(markId);
         setNote(markId);
       }}

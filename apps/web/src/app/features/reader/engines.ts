@@ -9,6 +9,7 @@ import type {
   ReaderFrame,
   ReaderOutlineEntry,
   ReaderResourceEntry,
+  ReadingAnchor,
   ReadingContext,
 } from "../../../reading/contract.js";
 import type { MarkSurface } from "../../../reading/marks.js";
@@ -18,7 +19,12 @@ import {
   probeCountKey,
 } from "../../../reading/probe.js";
 import type { FixedSource } from "../../../reading/source.js";
-import { readingPosition, type ReadingState } from "../../../reading/state.js";
+import {
+  readingPosition,
+  recallReading,
+  rememberReading,
+  type ReadingState,
+} from "../../../reading/state.js";
 import { readPdfBytes } from "../../../reading/transport.js";
 import { archiveJsonStream, archiveQuery, rows } from "../../data/archive.js";
 import type { ApiClient } from "../../data/api.js";
@@ -88,6 +94,7 @@ export interface ReaderBindings {
     material:
       | { kind: "pdf"; sha256: string }
       | { kind: "doc"; version: string },
+    onJump: () => void,
   ): MarkSurface;
   openMark(id: string): void;
   image(src: string, alt: string): void;
@@ -99,7 +106,19 @@ export interface ReaderBindings {
   viewChanged(): void;
   /** The update offered for the shown material, if any. */
   offer(update: ReaderUpdate | null): void;
+  /** A one-line explanation for the status bar (spec 10), or null. */
+  note(text: string | null): void;
+  /** The way back after a jump (spec 4.4), when its place is off screen. */
+  history(back: { label: string } | null): void;
+  /** Shows another view of the current paper (a jump back into it). */
+  changeView(kind: ViewKind): void;
 }
+/** One step of the jump history: which view and where. */
+interface Visit {
+  readonly kind: ViewKind;
+  readonly anchor: ReadingAnchor;
+}
+const HISTORY_LIMIT = 20;
 /** One material as the reader page resolved it. */
 export interface EngineRequest {
   key: string;
@@ -124,6 +143,8 @@ interface ReaderView {
   twins: FullTextLayer | null;
   surface: MarkSurface | null;
   settled: boolean;
+  /** Followed another view and the reader has not moved in it since (wheel, keys, pointer). */
+  arrived: boolean;
 }
 interface ReaderEngine {
   request: EngineRequest;
@@ -137,6 +158,9 @@ interface ReaderEngine {
   activate(kind: ViewKind | null): void;
   settled(): boolean;
   onSettled: (() => void) | null;
+  /** Spec 4.4: back and forward through this paper's jumps; false when there is none. */
+  back(): boolean;
+  forward(): boolean;
   destroy(): void;
 }
 
@@ -262,6 +286,8 @@ export function createReaderEngines(b: ReaderBindings) {
       current?.activate(next);
       pending?.prepare(next);
     },
+    back: () => current?.back() ?? false,
+    forward: () => current?.forward() ?? false,
     /** A closed tab releases its engines. */
     close(literatureId: string) {
       for (const engine of [...engines.values()])
@@ -331,6 +357,7 @@ function build(
       surface: null,
       frame: null as unknown as ReaderFrame,
       settled: false,
+      arrived: false,
     };
     const observer = new MutationObserver(() => {
       if (view.marker.dataset.readingReady === "true") settle(view);
@@ -346,16 +373,61 @@ function build(
       root: view.marker,
       refresh: () => b.retry(),
     };
-    const position = readingPosition(
-      reading,
-      [
-        catalog,
-        id,
-        kind,
-        kind === "pdf" ? material.material : material.document,
-      ],
+    const key = [
+      catalog,
       id,
-    );
+      kind,
+      kind === "pdf" ? material.material : material.document,
+    ];
+    const fresh = !reading.entries.has(JSON.stringify(key));
+    const position = readingPosition(reading, key, id);
+    // A paper opened anew starts where it was left in this browser (spec 4.5).
+    let remembered: ReaderFrame["remembered"];
+    if (fresh) {
+      const memory = recallReading(catalog, id);
+      if (kind === "doc" && memory.doc && material.document) {
+        position.textOffset = memory.doc.start;
+        position.blockOffset = memory.doc.ratio;
+        remembered =
+          memory.doc.version === material.document.document_version_id
+            ? "same"
+            : "other-version";
+      }
+      if (
+        kind === "pdf" &&
+        memory.pdf &&
+        memory.pdf.sha256 === material.material?.asset_sha256
+      ) {
+        position.anchorPage = memory.pdf.page;
+        position.anchorRatio = memory.pdf.ratio;
+        position.zoom = memory.pdf.zoom;
+        remembered = "same";
+      }
+    }
+    let saving: ReturnType<typeof setTimeout> | undefined;
+    const save = () => {
+      clearTimeout(saving);
+      saving = setTimeout(() => {
+        if (controller.signal.aborted) return;
+        if (kind === "doc" && material.document)
+          rememberReading(catalog, id, {
+            doc: {
+              version: material.document.document_version_id,
+              start: position.textOffset,
+              ratio: position.blockOffset,
+            },
+          });
+        if (kind === "pdf" && material.material)
+          rememberReading(catalog, id, {
+            pdf: {
+              sha256: material.material.asset_sha256,
+              page: position.anchorPage,
+              ratio: position.anchorRatio,
+              zoom: position.zoom,
+            },
+          });
+      }, 400);
+    };
     const frame: ReaderFrame = {
       onSegment: (segment) => {
         const pdfMaterial = material.material;
@@ -407,7 +479,28 @@ function build(
       beforeLayout: () => () => {},
       hide: () => {},
       show: () => {},
+      // Until the engine is running, a place to follow waits for it.
+      follow: (anchor) =>
+        new Promise<void>((done) => {
+          frame.queuedFollow = { anchor, done };
+        }),
       startHidden: offScreen,
+      ...(remembered ? { remembered } : {}),
+      onAnchor: () => {
+        save();
+        if (shows(view)) publishHistory();
+      },
+      onNote: (text) => {
+        if (shows(view)) b.note(text);
+      },
+      beforeJump: () => {
+        const anchor = view.frame.anchor?.();
+        if (!anchor) return;
+        past.push({ kind, anchor });
+        if (past.length > HISTORY_LIMIT) past.shift();
+        future.length = 0;
+        publishHistory();
+      },
       onPdfControls: (value) => {
         const previous = view.ui.pdf;
         if (
@@ -523,6 +616,47 @@ function build(
     return view;
   };
   let positionFrame = 0;
+  // The reader moving in a view ends its "followed, not read on" state.
+  for (const type of ["wheel", "keydown", "pointerdown", "touchmove"])
+    host.addEventListener(
+      type,
+      () => {
+        if (visible && active) active.arrived = false;
+      },
+      { passive: true, signal: controller.signal },
+    );
+  // This paper's jumps (spec 4.4); not remembered past the session.
+  const past: Visit[] = [],
+    future: Visit[] = [];
+  let historyFrame = 0;
+  /** The way back shows only while its place is off screen. */
+  const publishHistory = () => {
+    if (historyFrame) return;
+    historyFrame = requestAnimationFrame(() => {
+      historyFrame = 0;
+      if (!visible || !active) return;
+      const last = past.at(-1);
+      const onScreen =
+        last?.kind === active.kind && !!active.frame.isVisible?.(last.anchor);
+      b.history(last && !onScreen ? { label: last.anchor.label } : null);
+    });
+  };
+  /** Pending place for a view about to show: a jump back into it. */
+  let returning: ReadingAnchor | null = null;
+  const travel = (from: Visit[], to: Visit[]) => {
+    const target = from.pop();
+    const here = active?.frame.anchor?.();
+    if (!target || !active || !here) return false;
+    to.push({ kind: active.kind, anchor: here });
+    if (target.kind === active.kind)
+      void active.frame.follow?.(target.anchor, true);
+    else {
+      returning = target.anchor;
+      b.changeView(target.kind);
+    }
+    publishHistory();
+    return true;
+  };
   /** Hides the active view; a hidden engine keeps no canvases (spec 5.3). */
   const leave = (view: ReaderView, release: boolean) => {
     view.frame.hide(release);
@@ -540,21 +674,25 @@ function build(
     syncReady(view);
     if (b.marksActive()) {
       if (view.kind === "pdf" && material.material)
-        view.surface = b.attachMarks(host, {
-          kind: "pdf",
-          sha256: material.material.asset_sha256,
-        });
+        view.surface = b.attachMarks(
+          host,
+          { kind: "pdf", sha256: material.material.asset_sha256 },
+          () => view.frame.beforeJump?.(),
+        );
       else if (view.kind === "doc" && material.document) {
-        view.surface = b.attachMarks(host, {
-          kind: "doc",
-          version: material.document.document_version_id,
-        });
+        view.surface = b.attachMarks(
+          host,
+          { kind: "doc", version: material.document.document_version_id },
+          () => view.frame.beforeJump?.(),
+        );
         if (view.marker.dataset.readingReady === "true")
           view.surface.documentPainted();
       }
     }
     view.frame.show();
     b.viewChanged();
+    b.note(null);
+    publishHistory();
   };
   const clearPage = () => {
     b.frame.current = null;
@@ -583,12 +721,26 @@ function build(
       if (!visible) return engine.prepare(kind);
       const next = kind ? (views.get(kind) ?? buildView(kind, false)) : null;
       if (next === active) return;
+      // Spec 4.3: the place carries over, unless the reader went straight back
+      // without reading on; then each view keeps its own.
+      const from = active,
+        anchor = from?.frame.anchor?.() ?? null,
+        unread = !!from?.arrived;
       // The current material's hidden PDF view keeps its canvases (spec 5.3).
-      if (active) leave(active, false);
+      if (from) leave(from, false);
       active = next;
-      if (next) enter(next);
-      else clearPage();
+      if (!next) return clearPage();
+      enter(next);
+      if (kind) rememberReading(catalog, id, { view: kind });
+      const back = returning;
+      returning = null;
+      const carried = back ?? (anchor && !unread ? anchor : null);
+      if (!carried) return;
+      next.arrived = !back;
+      void next.frame.follow?.(carried, !!back);
     },
+    back: () => travel(past, future),
+    forward: () => travel(future, past),
     show(kind) {
       visible = true;
       container.hidden = false;
@@ -607,6 +759,7 @@ function build(
       }
       active = null;
       container.hidden = true;
+      b.history(null);
     },
     destroy() {
       visible = false;

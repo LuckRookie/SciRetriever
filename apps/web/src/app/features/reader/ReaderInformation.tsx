@@ -189,10 +189,13 @@ export function ReaderInformation({
   detail,
   document,
   resources,
+  archivePrimaryElsewhere = false,
 }: {
   detail: LiteratureDetail;
   document: DocumentReadingRef | null;
   resources: readonly ReaderResourceEntry[];
+  /** The text area already shows “建立文献档案” as the screen's one primary button. */
+  archivePrimaryElsewhere?: boolean;
 }) {
   const api = useApi(),
     shell = useShell(),
@@ -692,7 +695,10 @@ export function ReaderInformation({
         {maintenance ? (
           <div className="reader-action-group">
             {next ? (
-              <Button variant="primary" onPress={() => setOperation(next)}>
+              <Button
+                variant={archivePrimaryElsewhere ? "text" : "primary"}
+                onPress={() => setOperation(next)}
+              >
                 建档
               </Button>
             ) : null}

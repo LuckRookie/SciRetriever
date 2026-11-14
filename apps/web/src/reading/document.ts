@@ -8,7 +8,7 @@ import {
 import type { ReadingContext } from "./contract.js";
 import type { FixedSource } from "./source.js";
 import { button, readerErrorMessage } from "./dom.js";
-import type { ReaderFrame } from "./contract.js";
+import type { ReaderFrame, ReadingAnchor } from "./contract.js";
 import type { ReadingPosition } from "./state.js";
 import {
   forgetDocumentRead,
@@ -16,6 +16,14 @@ import {
   readResourceBytes,
 } from "./transport.js";
 import { READER_PROBE, probeCount } from "./probe.js";
+import {
+  anchorRatio,
+  placeDelta,
+  pdfToText,
+  readingLine,
+  textToPdf,
+  type TextBlock,
+} from "./anchor.js";
 import { appendTitle, titleParts } from "./title.js";
 import { documentMarkdown as markdown, markdownBlocks } from "./markdown.js";
 
@@ -279,6 +287,17 @@ export async function renderDocument(
         el.classList.add("reading-figure-caption");
     }
   };
+  /** Spec 10: 28% down the scroll area, from its top. */
+  const line = () =>
+    readingLine({
+      top: frame.body.getBoundingClientRect().top,
+      height: frame.body.clientHeight,
+    });
+  const blockAt = (offset: number) =>
+    rendered[search((b) => Number(b.dataset.byteEnd) > offset)]?.element ??
+    blocks().at(-1);
+  /** The anchor block (spec 4.1) and its top on screen, as last measured. */
+  let kept: { el: HTMLElement; top: number; area: number } | null = null;
   const capture = (closing = false) => {
     if (
       restoring ||
@@ -288,32 +307,78 @@ export async function renderDocument(
       frame.body.clientHeight === 0
     )
       return;
-    const top = frame.body.getBoundingClientRect().top;
+    const y = line();
     // Folded article information has no height; take the next visible block.
-    let at = search((b) => b.getBoundingClientRect().bottom > top);
-    while (at < rendered.length && folded(rendered[at]!.element)) at++;
+    let at = Math.min(
+      rendered.length - 1,
+      search((b) => b.getBoundingClientRect().bottom > y),
+    );
+    while (at < rendered.length - 1 && folded(rendered[at]!.element)) at++;
     const block = rendered[at]?.element;
     if (block) {
+      const box = block.getBoundingClientRect();
       state.textOffset = Number(block.dataset.byteStart);
-      state.blockOffset = Math.max(
-        0,
-        (top - block.getBoundingClientRect().top) /
-          Math.max(1, block.clientHeight),
-      );
+      state.blockOffset = anchorRatio(box, y);
+      kept = {
+        el: block,
+        top: box.top,
+        area: frame.body.getBoundingClientRect().top,
+      };
     }
     state.loadedEnd = end;
     state.scroll = frame.body.scrollTop;
     if (block) frame.onPosition?.(state.textOffset);
+    frame.onAnchor?.();
   };
+  /**
+   * Spec 4.2: whatever changed a size (font, panel, window, find bar, a picture,
+   * more text), the anchor block goes back to where it was in the same frame,
+   * before paint. Not left to the browser's `overflow-anchor`.
+   */
+  const keep = () => {
+    if (!kept || hidden || restoring || !kept.el.isConnected) return;
+    const delta = kept.el.getBoundingClientRect().top - kept.top;
+    if (Math.abs(delta) >= 0.5) frame.body.scrollTop += delta;
+    // The block kept its top; where the reading line falls in it may have changed.
+    capture();
+  };
+  /**
+   * Puts the `ratio` point of the block holding `offset` on the reading line;
+   * a jump back glides within a screen, further lands and flashes (spec 4.4).
+   */
+  const place = (offset: number, ratio = 0, jumped = false) => {
+    if (hidden) {
+      state.textOffset = offset;
+      state.blockOffset = ratio;
+      return;
+    }
+    const block = blockAt(offset);
+    if (!block) return;
+    if (folded(block)) setInfoOpen(true);
+    const delta = placeDelta(block.getBoundingClientRect(), ratio, line());
+    if (
+      jumped &&
+      frame.animateNavigation?.() &&
+      Math.abs(delta) <= frame.body.clientHeight
+    ) {
+      frame.body.scrollTo({
+        top: frame.body.scrollTop + delta,
+        behavior: "smooth",
+      });
+      return;
+    }
+    frame.body.scrollTop += delta;
+    if (jumped) flash(block);
+    capture();
+  };
+  /** A jump (outline, link): near the top; within a screen it glides, further it lands and flashes. */
   const go = (offset: number, ratio = 0, animate = false) => {
     if (hidden) {
       state.textOffset = offset;
       state.blockOffset = ratio;
       return;
     }
-    const block =
-      rendered[search((b) => Number(b.dataset.byteEnd) > offset)]?.element ??
-      blocks().at(-1);
+    const block = blockAt(offset);
     if (block && folded(block)) setInfoOpen(true);
     if (block) {
       const delta =
@@ -324,20 +389,72 @@ export async function renderDocument(
       if (
         animate &&
         frame.animateNavigation?.() &&
-        Math.abs(delta) <= frame.body.clientHeight * 1.5
+        Math.abs(delta) <= frame.body.clientHeight
       )
         frame.body.scrollTo({
           top: frame.body.scrollTop + delta,
           behavior: "smooth",
         });
-      else frame.body.scrollTop += delta;
+      else {
+        frame.body.scrollTop += delta;
+        if (animate) flash(block);
+      }
     }
   };
-  frame.beforeLayout = () => {
-    capture();
-    const offset = state.textOffset,
-      ratio = state.blockOffset;
-    return () => go(offset, ratio);
+  /** The target block's `--sel` ground fades once (spec 4.4). */
+  const flash = (block: HTMLElement) => {
+    block.classList.remove("reading-jump-flash");
+    void block.offsetWidth;
+    block.classList.add("reading-jump-flash");
+    block.addEventListener(
+      "animationend",
+      () => block.classList.remove("reading-jump-flash"),
+      { once: true },
+    );
+  };
+  // The anchor keeper above restores the place; there is nothing to redo after a layout change.
+  frame.beforeLayout = () => () => {};
+  const regionOf = (el: HTMLElement | undefined) => {
+    const parts = el?.dataset.region?.split(",").map(Number);
+    return parts?.length === 4 && parts.every(Number.isFinite)
+      ? (parts as [number, number, number, number])
+      : null;
+  };
+  frame.anchor = () => {
+    const at = rendered.findIndex(
+      (r) => Number(r.element.dataset.byteStart) === state.textOffset,
+    );
+    const el = rendered[at]?.element;
+    return {
+      kind: "doc",
+      start: state.textOffset,
+      ratio: state.blockOffset,
+      label: at >= 0 ? `¶${at + 1}` : "",
+      page: el?.dataset.page ? Number(el.dataset.page) : null,
+      region: regionOf(el),
+      text: el?.textContent?.slice(0, 240) ?? "",
+      pdf:
+        at >= 0
+          ? textToPdf(
+              rendered.map(({ element }) => ({
+                start: Number(element.dataset.byteStart),
+                page: element.dataset.page
+                  ? Number(element.dataset.page)
+                  : null,
+                region: regionOf(element),
+              })),
+              at,
+            )
+          : null,
+    };
+  };
+  frame.isVisible = (anchor) => {
+    if (anchor.kind !== "doc" || hidden) return false;
+    const el = blockAt(anchor.start);
+    if (!el) return false;
+    const box = el.getBoundingClientRect(),
+      area = frame.body.getBoundingClientRect();
+    return box.bottom > area.top && box.top < area.bottom;
   };
   const onScroll = () => {
     if (hidden) return;
@@ -429,6 +546,7 @@ export async function renderDocument(
         text: snippets.join("\n").slice(0, 1200),
         activate: () => {
           ++jumpRevision;
+          frame.beforeJump?.();
           go(Number(section.dataset.byteStart), 0, true);
         },
       };
@@ -480,9 +598,12 @@ export async function renderDocument(
       const segment = segments.find(
         (s) => s.start_utf8 < block.end && s.end_utf8 > block.start,
       );
-      // A page hint for placing PDF marks; never shown as a location.
-      if (segment && typeof segment.page === "number")
-        el.dataset.page = String(segment.page + 1);
+      // The segment's one-based PDF page (the reader's public page, as read)
+      // and region: where marks and the reading position find it in the PDF.
+      if (segment && typeof segment.page === "number") {
+        el.dataset.page = String(segment.page);
+        if (segment.region) el.dataset.region = segment.region.join(",");
+      }
       if (segment && frame.onSegment) {
         const source = document.createElement("button");
         source.className = "reading-block-source";
@@ -611,7 +732,7 @@ export async function renderDocument(
       // Text above a replaced block keeps its place; only a reader inside the
       // replaced tail needs to be put back (measuring forces a full layout).
       const changed = paint();
-      if (!restoring && offset >= changed) go(offset, ratio);
+      if (!restoring && offset >= changed) place(offset, ratio);
       state.loadedEnd = end;
     } catch (error) {
       // A rejected read must not be served again from the session cache.
@@ -675,12 +796,84 @@ export async function renderDocument(
       prefetching = false;
     }
   };
-  onHide = () => capture();
+  // Leaving keeps the anchor block's distance from the top; coming back puts it there again.
+  let left: { el: HTMLElement; offset: number } | null = null;
+  // Measured when last read, not now: by the time a view is left, the scroll
+  // area may already carry the next view's padding.
+  onHide = () => {
+    left = kept ? { el: kept.el, offset: kept.top - kept.area } : null;
+  };
   onShow = () => {
     if (restoring) return;
-    go(state.textOffset, state.blockOffset);
+    if (left?.el.isConnected)
+      frame.body.scrollTop +=
+        left.el.getBoundingClientRect().top -
+        frame.body.getBoundingClientRect().top -
+        left.offset;
+    else place(state.textOffset, state.blockOffset);
+    left = null;
+    capture();
     void prefetch();
   };
+  /** Spec 4.3, PDF → full text: the block of that page and place, else the nearest one before it. */
+  const followPdf = async (pageNumber: number, ratio: number) => {
+    const blocksOf = (): TextBlock[] =>
+      segments.map((segment) => ({
+        start: segment.start_utf8,
+        page: typeof segment.page === "number" ? segment.page : null,
+        region: segment.region ?? null,
+      }));
+    while (
+      !finished &&
+      !segments.some((segment) => (segment.page ?? 0) > pageNumber) &&
+      !ctx.signal.aborted
+    )
+      await load();
+    const found = pdfToText(blocksOf(), pageNumber, ratio);
+    if (!found) {
+      frame.onNote?.(`全文中找不到第 ${pageNumber} 页的对应段落。`);
+      return;
+    }
+    const segment = segments[found.index]!;
+    while (!finished && end <= segment.start_utf8 && !ctx.signal.aborted)
+      await load();
+    const block = blockAt(segment.start_utf8);
+    // The segment's place, as a share of the rendered block that holds it.
+    const blockStart = Number(block?.dataset.byteStart ?? segment.start_utf8),
+      blockEnd = Number(block?.dataset.byteEnd ?? segment.end_utf8),
+      at =
+        segment.start_utf8 +
+        found.ratio * (segment.end_utf8 - segment.start_utf8);
+    place(
+      segment.start_utf8,
+      blockEnd > blockStart ? (at - blockStart) / (blockEnd - blockStart) : 0,
+    );
+    frame.onNote?.(
+      found.exact
+        ? null
+        : `全文中找不到第 ${pageNumber} 页的对应段落，已停在最接近处。`,
+    );
+  };
+  let pendingFollow: { anchor: ReadingAnchor; done: () => void } | null = null;
+  if (frame.queuedFollow) {
+    pendingFollow = frame.queuedFollow;
+    delete frame.queuedFollow;
+  }
+  frame.follow = async (anchor, jumped = false) => {
+    // While the text is first laid out the place waits; the promise settles once it is taken.
+    if (restoring)
+      return new Promise<void>((done) => {
+        pendingFollow = { anchor, done };
+      });
+    if (anchor.kind === "doc") place(anchor.start, anchor.ratio, jumped);
+    else await followPdf(anchor.page, anchor.ratio);
+  };
+  const sizes = new ResizeObserver(keep);
+  sizes.observe(frame.body);
+  sizes.observe(article);
+  ctx.signal.addEventListener("abort", () => sizes.disconnect(), {
+    once: true,
+  });
   const continuationObserver = new IntersectionObserver(
     (entries) => {
       if (entries.some((entry) => entry.isIntersecting)) void prefetch();
@@ -709,6 +902,7 @@ export async function renderDocument(
     bound(page);
     for (const section of page.sections) {
       const activate = async () => {
+        frame.beforeJump?.();
         const revision = ++jumpRevision;
         while (!finished && end < section.start_utf8 + 4096) {
           await load();
@@ -734,10 +928,35 @@ export async function renderDocument(
     frame.outline.textContent = "没有可靠章节目录；正文仍可连续阅读。";
   while (!finished && end < targetEnd && initialRevision === jumpRevision)
     await load();
-  if (initialRevision === jumpRevision)
+  if (initialRevision === jumpRevision) {
     // Restore before interaction without leaving an animated scroll in flight.
-    go(target, source?.kind === "document" ? 0 : state.blockOffset);
+    if (source?.kind === "document") go(target, 0);
+    // A remembered place from another text version: the block at or before
+    // its offset, unless the new text ends before it (spec 4.5).
+    else if (
+      frame.remembered === "other-version" &&
+      finished &&
+      end <= target
+    ) {
+      frame.onNote?.("上次的位置在旧版本文本中，已从开头打开。");
+      place(0, 0);
+    } else if (frame.remembered || state.textOffset > 0)
+      place(target, state.blockOffset);
+    // A first opening starts at the very top, the document's title in view.
+    else frame.body.scrollTop = 0;
+  }
   restoring = false;
+  capture();
+  // Assigned by `follow` meanwhile, which narrowing cannot see.
+  const waiting = pendingFollow as {
+    anchor: ReadingAnchor;
+    done: () => void;
+  } | null;
+  if (waiting) {
+    pendingFollow = null;
+    await frame.follow(waiting.anchor);
+    waiting.done();
+  }
   continuationObserver.observe(tail);
   void prefetch();
   frame.onFind = (query) => {

@@ -54,7 +54,12 @@ interface Check {
   items: Item[];
 }
 /** Checks every later block must keep passing; 03–06 add theirs as they land. */
-const ENFORCED: readonly CheckId[] = ["background", "downloads"];
+const ENFORCED: readonly CheckId[] = [
+  "background",
+  "downloads",
+  "anchor",
+  "views",
+];
 const enforce = new Set<string>([
   ...ENFORCED,
   ...(process.env.SCIRETRIEVER_READER_ENFORCE ?? "").split(",").filter(Boolean),
@@ -154,6 +159,7 @@ interface Anchor {
   ratio: number;
   line: number;
   page: string | null;
+  regionTop: number;
   scrollTop: number;
 }
 interface Frame {
@@ -234,7 +240,9 @@ function installHelpers() {
         top: r.top,
         ratio: (y - r.top) / Math.max(1, r.height),
         line: y,
+        // The block's one-based PDF page (data-page); a PDF page is itself.
         page: el.dataset.page ?? el.dataset.pdfPage ?? null,
+        regionTop: Number(el.dataset.region?.split(",")[1] ?? 0) / 1000,
         scrollTop: b.scrollTop,
       };
     },
@@ -741,6 +749,49 @@ it("anchor keeping (4.2)", async () => {
     release();
     await image.close();
   }
+  // Batches: the next part of the long text arrives below the reading line.
+  let more!: () => void;
+  const held = new Promise<void>((resolve) => (more = resolve));
+  const batch = await openReader(readerUrl(id, "doc"));
+  try {
+    await ready(batch.page, id, "doc");
+    await still(batch.page);
+    let holding = false;
+    await batch.page.route(
+      (url) => url.pathname === "/api/v1/query/document-slice",
+      async (route) => {
+        holding = true;
+        await held;
+        await route.continue().catch(() => undefined);
+      },
+    );
+    const count = () =>
+      batch.page
+        .locator(".reader-engine-body section[data-byte-start]")
+        .count();
+    // Near the end of what is loaded, so the reader asks for the next part.
+    await batch.page.evaluate(() => {
+      const b = rs().body()!;
+      b.scrollTop = b.scrollHeight - b.clientHeight * 2;
+    });
+    await expect.poll(() => holding, { timeout: TIMEOUT }).toBe(true);
+    await still(batch.page);
+    const before = await count();
+    const move = await anchorMove(batch.page, async () => {
+      more();
+      await expect.poll(count, { timeout: TIMEOUT }).toBeGreaterThan(before);
+    });
+    items.push({
+      id: "continuation",
+      label: "原文 · 长文档续载（下一批在阅读线下方载入）",
+      criterion: "≤ 2 px",
+      status: verdict(within(move.move, 2)),
+      numbers: { ...move, blocks_before: before, blocks_after: await count() },
+    });
+  } finally {
+    more();
+    await batch.close();
+  }
   const pdfId = samples.ids.pdfOnly;
   const pdf = await openReader(readerUrl(pdfId, "pdf"));
   try {
@@ -810,27 +861,49 @@ it("position shared between views (4.3)", async () => {
   const items: Item[] = [];
   try {
     await ready(r.page, id, "doc");
-    await scrollReader(r.page, 9000);
+    // Read on into the second PDF page's text, so the place in the PDF is reachable.
+    for (let n = 0; n < 120; n++) {
+      const page = await r.page.evaluate(() => rs().anchor()?.page ?? null);
+      if (page && Number(page) >= 2) break;
+      await r.page.evaluate(() => {
+        const b = rs().body()!;
+        b.scrollTop += b.clientHeight * 6;
+      });
+      await still(r.page);
+    }
+    await still(r.page);
     const start = await mark(r.page);
     const toPdf = await sampledSwitch(r.page, id, "pdf");
-    const landed = await r.page.evaluate((page) => {
-      const h = rs();
-      const a = h.anchor();
-      const b = h.body()!;
-      const line = b.getBoundingClientRect().top + b.clientHeight * 0.28;
-      const target = page
-        ? b.querySelector<HTMLElement>(
-            `.reading-pdf-page[data-pdf-page="${page}"]`,
-          )
-        : null;
-      return {
-        pdf_page_at_line: a?.key ?? null,
-        expected_page: page,
-        expected_top_minus_line: target
-          ? Math.round(target.getBoundingClientRect().top - line)
-          : null,
-      };
-    }, start?.page ?? null);
+    const landed = await r.page.evaluate(
+      ({ page, regionTop }) => {
+        const h = rs();
+        const a = h.anchor();
+        const b = h.body()!;
+        const line = b.getBoundingClientRect().top + b.clientHeight * 0.28;
+        const target = page
+          ? b.querySelector<HTMLElement>(
+              `.reading-pdf-page[data-pdf-page="${page}"]`,
+            )
+          : null;
+        const box = target?.getBoundingClientRect();
+        const offset = box ? box.top + regionTop * box.height - line : null;
+        return {
+          pdf_page_at_line: a?.key ?? null,
+          expected_page: page,
+          // The block cannot reach the line when the scroll is already at its end.
+          clamped:
+            offset !== null &&
+            ((offset < 0 && b.scrollTop <= 0) ||
+              (offset > 0 &&
+                b.scrollTop >= b.scrollHeight - b.clientHeight - 1)),
+          // The corresponding block's top: its page's top plus its region's top.
+          expected_top_minus_line: box
+            ? Math.round(box.top + regionTop * box.height - line)
+            : null,
+        };
+      },
+      { page: start?.page ?? null, regionTop: start?.regionTop ?? 0 },
+    );
     const toDoc = await sampledSwitch(r.page, id, "doc");
     const after = await topOf(r.page, start);
     const round = start && after !== null ? Math.abs(after - start.top) : null;
@@ -841,9 +914,11 @@ it("position shared between views (4.3)", async () => {
         id: "doc-to-pdf",
         label: "原文 → PDF",
         criterion: "对应块的顶边落在阅读线 ±24 px 内",
-        status: verdict(offset !== null && Math.abs(offset) <= 24),
+        status: verdict(
+          offset !== null && (Math.abs(offset) <= 24 || landed.clamped),
+        ),
         numbers: { from_block: start ? `${start.key}` : null, ...landed },
-        note: "合成样例的段落只有页级对应（data-page），以对应页的顶边计。",
+        note: "对应块的顶边 = 段落的页（data-page）的顶边 + 区域上沿（data-region）。02 基线时 data-page 比实际页大 1（04 块已修）。",
       },
       {
         id: "doc-pdf-doc",

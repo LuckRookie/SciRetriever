@@ -44,6 +44,33 @@ export interface DocumentLinkPreview {
   text: string;
   activate(): void;
 }
+/** A reading position (spec 4.1) as one view hands it to another or to the jump history. */
+export type ReadingAnchor =
+  | {
+      readonly kind: "doc";
+      /** UTF-8 start of the block at the reading line, and the line's place in it. */
+      readonly start: number;
+      readonly ratio: number;
+      readonly label: string;
+      /** The block's one-based PDF page and region, when the structure gave them. */
+      readonly page: number | null;
+      readonly region: readonly [number, number, number, number] | null;
+      readonly text: string;
+      /** Where this lands in the PDF (spec 4.3); `exact` false when an earlier block's page stood in. */
+      readonly pdf: {
+        readonly page: number;
+        readonly ratio: number;
+        readonly exact: boolean;
+      } | null;
+    }
+  | {
+      readonly kind: "pdf";
+      readonly page: number;
+      readonly ratio: number;
+      readonly label: string;
+      /** Text to confirm the place on the page (spec 4.3), when it came from the full text. */
+      readonly text?: string;
+    };
 export interface ReaderResourceEntry {
   reference: string;
   open(): Promise<void>;
@@ -77,6 +104,25 @@ export interface ReaderFrame {
   show: () => void;
   /** The view starts off screen and prepares its first screen there (spec 5.1). */
   startHidden?: boolean;
+  /** Set by the engine: the anchor at the reading line now. */
+  anchor?: () => ReadingAnchor | null;
+  /** Set by the engine: whether that anchor's block is on screen. */
+  isVisible?: (anchor: ReadingAnchor) => boolean;
+  /**
+   * Set by the engine: go to an anchor. Its own kind is restored exactly
+   * (`jumped`: as a jump back, spec 4.4); the other kind is followed (spec 4.3).
+   */
+  follow?: (anchor: ReadingAnchor, jumped?: boolean) => void | Promise<void>;
+  /** A follow asked before the engine set `follow`; the engine takes it over. */
+  queuedFollow?: { anchor: ReadingAnchor; done: () => void };
+  /** Called before the engine jumps (outline, link), to record where the reader was. */
+  beforeJump?: () => void;
+  /** The anchor moved (the reader scrolled or a change was absorbed). */
+  onAnchor?: () => void;
+  /** A one-line explanation for the status bar (spec 10), or null to clear it. */
+  onNote?: (text: string | null) => void;
+  /** The remembered full-text place belongs to another text version (spec 4.5). */
+  remembered?: "same" | "other-version";
   animateNavigation?: () => boolean;
   onResources?: (resources: readonly ReaderResourceEntry[]) => void;
   onDocumentLink?: (preview: DocumentLinkPreview) => void;

@@ -12,6 +12,9 @@ import type { ReadingPosition } from "./state.js";
 import { readerProblem } from "./dom.js";
 import type { ReaderFrame } from "./contract.js";
 import { READER_PROBE, probeCount } from "./probe.js";
+import { anchorIndex, anchorRatio, placeDelta, readingLine } from "./anchor.js";
+import { canon, indexText, locate, PLACE, rangeOf } from "./mark-locate.js";
+import type { ReadingAnchor } from "./contract.js";
 
 type RenderedPage = {
   canvas: HTMLCanvasElement;
@@ -63,6 +66,10 @@ export async function renderPdf(
     scale = 1,
     generation = 0,
     closed = false,
+    kept: { el: HTMLElement; top: number; area: number } | null = null,
+    // A place handed over from the full text, confirmed by its text once the page is drawn.
+    confirm: { page: number; text: string; scroll: number } | null = null,
+    pendingFollow: { anchor: ReadingAnchor; done: () => void } | null = null,
     // Off screen: no scroll handling and no drawing; position kept.
     hidden = !!frame.startHidden,
     // Started off screen: draws its first screen there so it can show at once.
@@ -117,7 +124,52 @@ export async function renderPdf(
       Math.min(1, (top - r.top) / Math.max(1, r.height)),
     );
     state.scroll = frame.body.scrollTop;
+    // The page at the reading line (spec 4.1) and its top on screen.
+    const y = line(),
+      boxes = placeholders.map((p) => p.getBoundingClientRect()),
+      at = anchorIndex(boxes, y);
+    if (at >= 0) {
+      state.anchorPage = at + 1;
+      state.anchorRatio = anchorRatio(boxes[at]!, y);
+      kept = {
+        el: placeholders[at]!,
+        top: boxes[at]!.top,
+        area: frame.body.getBoundingClientRect().top,
+      };
+    }
+    frame.onAnchor?.();
   };
+  /** Spec 10: 28% down the scroll area, from its top. */
+  function line() {
+    return readingLine({
+      top: frame.body.getBoundingClientRect().top,
+      height: frame.body.clientHeight,
+    });
+  }
+  /** Spec 4.2: after a change of size, the anchor page goes back to where it was, before paint. */
+  function keep() {
+    if (!kept || hidden || closed || !kept.el.isConnected) return;
+    const delta = kept.el.getBoundingClientRect().top - kept.top;
+    if (Math.abs(delta) >= 0.5) frame.body.scrollTop += delta;
+    // The block kept its top; where the reading line falls in it may have changed.
+    capture();
+  }
+  /** Puts the `ratio` point of a page on the reading line. */
+  function place(page: number, ratio: number) {
+    if (!pdf || closed) return;
+    const n = Math.max(1, Math.min(pdf.numPages, Math.trunc(page) || 1));
+    state.anchorPage = n;
+    state.anchorRatio = ratio;
+    if (hidden) return;
+    frame.body.scrollTop += placeDelta(
+      placeholders[n - 1]!.getBoundingClientRect(),
+      ratio,
+      line(),
+    );
+    capture();
+    updateStatus();
+    visible();
+  }
   const dispose = () => {
     if (closed) return;
     capture();
@@ -311,6 +363,7 @@ export async function renderPdf(
       if (closed || rendered.get(n) !== entry) return;
       highlight(entry.text, n);
       placeholder.dataset.rendered = "true";
+      if (confirm?.page === n) settle(entry.text);
       frame.onPdfPage?.({
         page: n,
         element: placeholder,
@@ -415,10 +468,17 @@ export async function renderPdf(
       placeholders[i]!.style.width = `${size.width * scale}px`;
       placeholders[i]!.style.height = `${size.height * scale}px`;
     }
-    go(page, offset);
+    // The anchor page keeps its place across the new size (spec 4.2).
+    if (kept?.el.isConnected && !hidden) {
+      keep();
+      updateStatus();
+      visible();
+    } else go(page, offset);
   };
   const resize = new ResizeObserver(() => {
     if (hidden) return;
+    // A bar above or a narrower panel moves the pages at once; a refit follows.
+    keep();
     const width = frame.body.clientWidth;
     if (Math.abs(lastWidth - width) < 1) return;
     lastWidth = width;
@@ -427,10 +487,12 @@ export async function renderPdf(
       if (state.zoom === "fit") reflow();
     }, 80);
   });
+  let left: { el: HTMLElement; offset: number } | null = null;
   frame.hide = (release = false) => {
     if (closed) return;
     if (!hidden) {
-      capture();
+      // Measured when last read: the scroll area may already carry the next view's padding.
+      left = kept ? { el: kept.el, offset: kept.top - kept.area } : null;
       hidden = true;
       cancelAnimationFrame(raf);
       clearTimeout(resizeTimer);
@@ -446,8 +508,87 @@ export async function renderPdf(
     // The window or the side panel changed while hidden: fit again.
     if (state.zoom === "fit" && Math.abs(lastWidth - width) >= 1) {
       lastWidth = width;
+      kept = null;
       reflow();
-    } else go(state.page, state.pageOffset);
+    }
+    // The anchor page returns to its distance from the top.
+    if (left?.el.isConnected)
+      frame.body.scrollTop +=
+        left.el.getBoundingClientRect().top -
+        frame.body.getBoundingClientRect().top -
+        left.offset;
+    else place(state.anchorPage, state.anchorRatio);
+    left = null;
+    capture();
+    updateStatus();
+    visible();
+  };
+  /** Spec 4.3: confirm a place from the full text by its words on the drawn page. */
+  function settle(layer: HTMLElement) {
+    const wanted = confirm;
+    confirm = null;
+    // The reader moved on meanwhile: leave the place alone.
+    if (!wanted || Math.abs(frame.body.scrollTop - wanted.scroll) > 1) return;
+    const index = indexText(layer),
+      pattern = canon(wanted.text).slice(0, 160),
+      found = pattern.length >= 12 ? locate(pattern, index.text) : null;
+    if (!found || found.sim < PLACE) return;
+    const box = rangeOf(index, found.start, found.end)?.getClientRects()[0];
+    if (!box) return;
+    frame.body.scrollTop += box.top - line();
+    capture();
+  }
+  frame.anchor = () => {
+    return {
+      kind: "pdf",
+      page: state.anchorPage,
+      ratio: state.anchorRatio,
+      label: `第 ${state.anchorPage} 页`,
+    };
+  };
+  frame.isVisible = (anchor) => {
+    if (anchor.kind !== "pdf" || hidden) return false;
+    const el = placeholders[anchor.page - 1];
+    if (!el) return false;
+    const box = el.getBoundingClientRect(),
+      area = frame.body.getBoundingClientRect();
+    return box.bottom > area.top && box.top < area.bottom;
+  };
+  if (frame.queuedFollow) {
+    pendingFollow = frame.queuedFollow;
+    delete frame.queuedFollow;
+  }
+  frame.follow = (anchor) => {
+    // Before the document is open the place waits; the promise settles once it is taken.
+    if (!pdf)
+      return new Promise<void>((done) => {
+        pendingFollow = { anchor, done };
+      });
+    if (anchor.kind === "pdf") {
+      place(anchor.page, anchor.ratio);
+      return;
+    }
+    // Full text → PDF: the block's page and region, else the nearest earlier block's.
+    if (!anchor.pdf) {
+      frame.onNote?.("PDF 中找不到这一段的对应位置。");
+      return;
+    }
+    place(anchor.pdf.page, anchor.pdf.ratio);
+    frame.onNote?.(
+      anchor.pdf.exact
+        ? null
+        : `PDF 中找不到这一段的对应位置，已停在最接近处（第 ${anchor.pdf.page} 页）。`,
+    );
+    if (anchor.pdf.exact && anchor.text) {
+      confirm = {
+        page: anchor.pdf.page,
+        text: anchor.text,
+        scroll: frame.body.scrollTop,
+      };
+      const drawn = rendered.get(anchor.pdf.page);
+      if (placeholders[anchor.pdf.page - 1]?.dataset.rendered && drawn)
+        settle(drawn.text);
+    }
   };
   try {
     pdf = await loading.promise;
@@ -497,6 +638,18 @@ export async function renderPdf(
     lastWidth = frame.body.clientWidth;
     resize.observe(frame.body);
     reflow();
+    // A place handed over or remembered goes on the reading line; else the page's top.
+    // Assigned by `follow` meanwhile, which narrowing cannot see.
+    const waiting = pendingFollow as {
+      anchor: ReadingAnchor;
+      done: () => void;
+    } | null;
+    if (waiting) {
+      pendingFollow = null;
+      void frame.follow(waiting.anchor);
+      waiting.done();
+    } else if (frame.remembered === "same")
+      place(state.anchorPage, state.anchorRatio);
     if (preparing)
       // Off screen there is no layout: draw the page and its neighbours.
       await Promise.all(
@@ -516,6 +669,7 @@ export async function renderPdf(
       for (const item of items) {
         const activate = async () => {
           if (!pdf || closed) return;
+          frame.beforeJump?.();
           const dest =
             typeof item.dest === "string"
               ? await pdf.getDestination(item.dest)

@@ -20,7 +20,11 @@ import type {
   ReadingContext,
 } from "../../../reading/contract.js";
 import { readFixedSource } from "../../../reading/source.js";
-import { readingPosition } from "../../../reading/state.js";
+import {
+  readingPosition,
+  recallReading,
+  rememberReading,
+} from "../../../reading/state.js";
 import {
   readDocument,
   resolveReadingSources,
@@ -236,6 +240,12 @@ export default function Reader() {
       if ([18, 20, 22, 24].includes(font)) value.fontSize = font;
       value.wide = width === "wide";
       value.fullWidth = width === "full";
+      // This paper's own font size and panel, as last left in this browser (spec 4.5).
+      const memory = recallReading(api.workspace.catalog, id);
+      if (memory.fontSize && [18, 20, 22, 24].includes(memory.fontSize))
+        value.fontSize = memory.fontSize;
+      if (typeof memory.information === "boolean")
+        value.information = memory.information;
     }
     return value;
   }, [shell.reading, api.workspace.catalog, id]);
@@ -290,7 +300,10 @@ export default function Reader() {
   marksActive.current = marks.active;
   const detailRef = useRef(detail.data);
   detailRef.current = detail.data;
-  const [update, setUpdate] = useState<ReaderUpdate | null>(null);
+  const [update, setUpdate] = useState<ReaderUpdate | null>(null),
+    [note, setNote] = useState<string | null>(null),
+    [historyBack, setHistoryBack] = useState<{ label: string } | null>(null);
+  const changeModeRef = useRef<(value: string) => void>(() => {});
   const [engines] = useState(() =>
     createReaderEngines({
       root: () => root.current,
@@ -312,7 +325,8 @@ export default function Reader() {
       appliedMode: appliedMode.current,
       fullTextMode: () => fullTextMode.current,
       marksActive: () => marksActive.current,
-      attachMarks: (host, material) => marksAttach.current(host, material),
+      attachMarks: (host, material, onJump) =>
+        marksAttach.current(host, material, onJump),
       openMark: (markId) => marksOpen.current(markId),
       image: (src, alt) => setZoomImage({ src, alt }),
       documentLink: (preview) => {
@@ -325,6 +339,9 @@ export default function Reader() {
       retry: () => retry((value) => value + 1),
       viewChanged: () => setViewToken((value) => value + 1),
       offer: setUpdate,
+      note: setNote,
+      history: setHistoryBack,
+      changeView: (kind) => changeModeRef.current(kind),
     }),
   );
   const detailReady = !!detail.data && !detail.isPlaceholderData,
@@ -372,11 +389,42 @@ export default function Reader() {
     };
   }, [engines, reading]);
   useEffect(() => () => engines.destroy(), [engines]);
+  // Spec 4.4: Alt+← back to where a jump left, Alt+→ forward again.
+  useEffect(() => {
+    const keys = (event: KeyboardEvent) => {
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey)
+        return;
+      const handled =
+        event.key === "ArrowLeft"
+          ? engines.back()
+          : event.key === "ArrowRight"
+            ? engines.forward()
+            : false;
+      if (handled) event.preventDefault();
+    };
+    window.addEventListener("keydown", keys);
+    return () => window.removeEventListener("keydown", keys);
+  }, [engines]);
+  // The side panel tab and the evidence switch are kept per paper (spec 4.5).
+  useLayoutEffect(() => {
+    const memory = recallReading(catalog, id);
+    if (
+      memory.sideTab === "info" ||
+      memory.sideTab === "marks" ||
+      memory.sideTab === "translation"
+    )
+      setSideTab(memory.sideTab);
+    setShowSources(memory.sources === true);
+  }, [catalog, id]);
   const changeLayout = (action: () => void) => {
     const restore = mode === "doc" ? frame.current?.beforeLayout() : undefined;
     action();
     setLayout((value) => value + 1);
     if (restore) requestAnimationFrame(restore);
+    rememberReading(api.workspace.catalog, id, {
+      fontSize: layoutPosition.fontSize,
+      information: layoutPosition.information,
+    });
   };
   const sourceParameters = () =>
     Object.fromEntries(
@@ -384,6 +432,7 @@ export default function Reader() {
         route.parameters.has(key) ? [[key, route.parameters.get(key)!]] : [],
       ),
     );
+  changeModeRef.current = (value: string) => changeMode(value);
   const changeMode = (value: string) => {
     const material = sources.data?.material;
     shell.openPaper(
@@ -520,12 +569,20 @@ export default function Reader() {
       </section>
     );
   if (!detail.data) return <Skeleton label="正在读取文献" rows={6} />;
+  // The empty full text offers “建立文献档案”: one primary button per screen.
+  const archiveInText =
+    mode === "doc" &&
+    sources.isSuccess &&
+    !sources.data.document &&
+    source.value?.kind !== "metadata" &&
+    !!api.workspace.capabilities.maintenance;
   const information = (
     <>
       <ReaderInformation
         detail={detail.data}
         resources={resources}
         document={sources.data?.document ?? null}
+        archivePrimaryElsewhere={archiveInText}
       />
       {sources.data?.document ? (
         <StructurePanel
@@ -706,7 +763,10 @@ export default function Reader() {
             <Button
               aria-pressed={showSources}
               variant="text"
-              onPress={() => setShowSources((v) => !v)}
+              onPress={() => {
+                setShowSources(!showSources);
+                rememberReading(catalog, id, { sources: !showSources });
+              }}
             >
               显示核对依据
             </Button>
@@ -899,7 +959,10 @@ export default function Reader() {
                 <Tabs
                   label="信息栏"
                   value={sideTab}
-                  onChange={(value) => setSideTab(value as typeof sideTab)}
+                  onChange={(value) => {
+                    setSideTab(value as typeof sideTab);
+                    rememberReading(catalog, id, { sideTab: value });
+                  }}
                   items={[
                     { id: "info", label: "信息" },
                     {
@@ -943,6 +1006,18 @@ export default function Reader() {
             />
           )}
           <div className="reader-surface">
+            {historyBack && (mode === "doc" || mode === "pdf") ? (
+              // Spec 10: a small button over the content's top right, not a row of its own.
+              <button
+                type="button"
+                className="reader-return-jump"
+                title="Alt+←"
+                onClick={() => engines.back()}
+              >
+                ↩ 回到{historyBack.label.startsWith("¶") ? " " : ""}
+                {historyBack.label}
+              </button>
+            ) : null}
             {sources.error && mode !== "know" && mode !== "results" ? (
               <ErrorNotice
                 message={errorMessage(sources.error)}
@@ -1070,6 +1145,9 @@ export default function Reader() {
                 <span className="reading-status-note">
                   正在核对固定材料与文档版本…
                 </span>
+              ) : null}
+              {note ? (
+                <span className="reading-status-note">{note}</span>
               ) : null}
               {update ? (
                 <span className="reading-status-note">

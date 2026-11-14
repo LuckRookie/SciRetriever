@@ -87,12 +87,43 @@
     }
   }
   .reader-surface {
+    position: relative;
     min-width: 0;
     min-height: 0;
     flex: 1;
     display: flex;
     flex-direction: column;
     overflow: hidden;
+  }
+  /* Spec 10: the way back floats over the content's top right; it takes no row. */
+  .react-reader .reader-return-jump {
+    position: absolute;
+    top: var(--space-3);
+    right: var(--space-5);
+    z-index: 2;
+    padding: var(--space-1) var(--space-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--fg2);
+    font: inherit;
+    font-size: var(--text-caption);
+    cursor: pointer;
+  }
+  .react-reader .reader-return-jump:hover {
+    color: var(--fg);
+  }
+  /* A far jump lands at once; its target block flashes the selection ground. */
+  .react-reader .reading-jump-flash {
+    animation: reading-jump-flash var(--dur-highlight) var(--ease-out);
+  }
+  @keyframes reading-jump-flash {
+    from {
+      background: var(--sel);
+    }
+    to {
+      background: transparent;
+    }
   }
   .reader-surface > .ui-error-notice {
     flex-shrink: 0;
