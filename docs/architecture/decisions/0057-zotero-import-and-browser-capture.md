@@ -2,7 +2,7 @@
 
 类型：决策（ADR）
 负责：从 Zotero 导入书目、分类、PDF、标签与批注；用户在自己的浏览器里浏览文献时一键收藏
-状态：Accepted（2026-11-09，Owner 确认：“接受”）。部分被取代：第 1、2、6、7 节，第 3 节的“Zotero 编号”，以及“后果”中的建议顺序，见 [ADR 0058](0058-import-system-and-agent-access.md)
+状态：Accepted（2026-11-09，Owner 确认：“接受”）。部分被取代：第 1、2、6、7 节，第 3 节的“Zotero 编号”，以及“后果”中的建议顺序，见 [ADR 0058](0058-import-system-and-agent-access.md)；第 3 节“独立 PDF 不导入”、第 5 节“读不到标识就不保存”与由扩展解读页面标签，见 [ADR 0063](0063-unified-intake.md)
 
 - Date: 2026-11-09
 - 依据：Owner 2026-11-06 至 11-09 的要求，原话如下：
