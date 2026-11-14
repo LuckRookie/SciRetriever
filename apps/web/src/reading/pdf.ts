@@ -11,7 +11,7 @@ import type { ReadingContext } from "./contract.js";
 import type { ReadingPosition } from "./state.js";
 import { readerProblem } from "./dom.js";
 import type { ReaderFrame } from "./contract.js";
-import { READER_PROBE, probeCount } from "./probe.js";
+import { READER_PROBE, probeBitmap, probeCount } from "./probe.js";
 import { anchorIndex, anchorRatio, placeDelta, readingLine } from "./anchor.js";
 import { canon, indexText, locate, PLACE, rangeOf } from "./mark-locate.js";
 import type { ReadingAnchor } from "./contract.js";
@@ -22,9 +22,23 @@ type RenderedPage = {
   page?: PDFPageProxy;
   render?: RenderTask;
   layer?: TextLayer;
-  generation: number;
+  /** The scale it was drawn at; shown at another scale it is stretched. */
+  scale: number;
+  /** Fully drawn and on its page. */
+  drawn?: boolean;
 };
-/** Only visible and adjacent pages own canvas/text layers. The PDF worker belongs to this mount. */
+type Bitmap = { img: HTMLImageElement; url: string; bytes: number };
+/** Spec 5.3: a page that leaves the drawn range keeps a picture at most this scale. */
+const BITMAP_SCALE = 0.5,
+  BITMAP_PAGES = 40,
+  BITMAP_BYTES = 48 * 1024 * 1024,
+  // After the last change of size, the visible pages are drawn sharp again.
+  SHARPEN_MS = 120;
+/**
+ * Only visible and adjacent pages own canvas/text layers; while one is redrawn
+ * sharp its stretched picture stays, so a page holds at most two canvases.
+ * Pages further away keep a low-resolution bitmap. The PDF worker belongs to this mount.
+ */
 export async function renderPdf(
   ctx: ReadingContext,
   frame: ReaderFrame,
@@ -64,7 +78,6 @@ export async function renderPdf(
   });
   let pdf: PDFDocumentProxy | null = null,
     scale = 1,
-    generation = 0,
     closed = false,
     kept: { el: HTMLElement; top: number; area: number } | null = null,
     // A place handed over from the full text, confirmed by its text once the page is drawn.
@@ -75,7 +88,8 @@ export async function renderPdf(
     // Started off screen: draws its first screen there so it can show at once.
     preparing = hidden,
     raf = 0,
-    resizeTimer: ReturnType<typeof setTimeout> | undefined;
+    sharpTimer: ReturnType<typeof setTimeout> | undefined,
+    bitmapBytes = 0;
   let baseWidth = 612,
     baseHeight = 792,
     lastWidth = 0,
@@ -88,11 +102,13 @@ export async function renderPdf(
     pageDraft = false;
   const placeholders: HTMLDivElement[] = [],
     sizes = new Map<number, { width: number; height: number }>(),
-    rendered = new Map<number, RenderedPage>();
-  const clearPage = (n: number) => {
-    const r = rendered.get(n);
-    if (!r) return;
-    rendered.delete(n);
+    // The picture on each page, and a sharper one being drawn to replace it.
+    rendered = new Map<number, RenderedPage>(),
+    drawing = new Map<number, RenderedPage>(),
+    bitmaps = new Map<number, Bitmap>();
+  const sizeOf = (n: number) =>
+    sizes.get(n) ?? { width: baseWidth, height: baseHeight };
+  const release = (r: RenderedPage) => {
     r.layer?.cancel();
     r.render?.cancel();
     r.canvas.width = r.canvas.height = 0;
@@ -100,8 +116,90 @@ export async function renderPdf(
     r.text.replaceChildren();
     r.canvas.remove();
     r.text.remove();
+  };
+  const dropBitmap = (n: number) => {
+    const b = bitmaps.get(n);
+    if (!b) return;
+    bitmaps.delete(n);
+    bitmapBytes -= b.bytes;
+    b.img.remove();
+    URL.revokeObjectURL(b.url);
+    if (READER_PROBE) {
+      probeCount("objectUrlsRevoked");
+      probeBitmap(-b.bytes, { count: bitmaps.size, bytes: bitmapBytes });
+    }
+    const p = placeholders[n - 1];
+    if (p && !rendered.get(n)?.drawn) delete p.dataset.picture;
+  };
+  /** Keeps a low-resolution copy of a drawn page that leaves the drawn range (spec 5.3). */
+  const stash = (n: number, r: RenderedPage) => {
+    if (!r.drawn || bitmaps.has(n)) return;
+    const size = sizeOf(n),
+      ratio = Math.min(BITMAP_SCALE, scale),
+      copy = document.createElement("canvas");
+    copy.width = Math.max(1, Math.round(size.width * ratio));
+    copy.height = Math.max(1, Math.round(size.height * ratio));
+    copy.getContext("2d")?.drawImage(r.canvas, 0, 0, copy.width, copy.height);
+    copy.toBlob((blob) => {
+      const pixels = copy.width * copy.height * 4;
+      copy.width = copy.height = 0;
+      if (!blob || closed || rendered.get(n)?.drawn || bitmaps.has(n)) return;
+      const url = URL.createObjectURL(blob),
+        img = document.createElement("img");
+      if (READER_PROBE) probeCount("objectUrlsCreated");
+      img.className = "reading-pdf-bitmap";
+      img.alt = "";
+      img.src = url;
+      const kept: Bitmap = { img, url, bytes: pixels + blob.size };
+      evict(kept.bytes);
+      bitmaps.set(n, kept);
+      bitmapBytes += kept.bytes;
+      if (READER_PROBE)
+        probeBitmap(kept.bytes, { count: bitmaps.size, bytes: bitmapBytes });
+      // Shown once decoded, so it never shows as an empty frame.
+      void img
+        .decode()
+        .catch(() => undefined)
+        .then(() => {
+          const p = placeholders[n - 1];
+          if (bitmaps.get(n) !== kept || !p || rendered.get(n)?.drawn) return;
+          p.prepend(img);
+          p.dataset.picture = "bitmap";
+        });
+    });
+  };
+  /** Spec 5.3: room for one more within 40 pages and 48 MB per paper; the farthest from the reader go first. */
+  const evict = (bytes: number) => {
+    while (
+      bitmaps.size &&
+      (bitmaps.size + 1 > BITMAP_PAGES || bitmapBytes + bytes > BITMAP_BYTES)
+    ) {
+      let far = 0,
+        distance = -1;
+      for (const n of bitmaps.keys()) {
+        const d = Math.abs(n - state.page);
+        if (d > distance) [far, distance] = [n, d];
+      }
+      dropBitmap(far);
+    }
+  };
+  /** The page leaves the drawn range: its canvases go, a bitmap of it stays when `keep`. */
+  const clearPage = (n: number, keepBitmap = true) => {
+    const pending = drawing.get(n);
+    if (pending) {
+      drawing.delete(n);
+      release(pending);
+      pending.page?.cleanup();
+    }
+    const r = rendered.get(n);
+    if (!r) return;
+    rendered.delete(n);
+    if (keepBitmap) stash(n, r);
+    release(r);
     r.page?.cleanup();
-    placeholders[n - 1]?.removeAttribute("data-rendered");
+    const p = placeholders[n - 1];
+    p?.removeAttribute("data-rendered");
+    if (p && !bitmaps.has(n)) delete p.dataset.picture;
   };
   const capture = () => {
     if (
@@ -174,13 +272,14 @@ export async function renderPdf(
     if (closed) return;
     capture();
     closed = true;
-    generation++;
     searchRevision++;
     cancelAnimationFrame(raf);
-    clearTimeout(resizeTimer);
+    clearTimeout(sharpTimer);
     resize.disconnect();
     frame.body.removeEventListener("scroll", onScroll);
-    for (const n of rendered.keys()) clearPage(n);
+    for (const n of new Set([...rendered.keys(), ...drawing.keys()]))
+      clearPage(n, false);
+    for (const n of [...bitmaps.keys()]) dropBitmap(n);
     pages.replaceChildren();
     placeholders.length = 0;
     sizes.clear();
@@ -292,42 +391,76 @@ export async function renderPdf(
       count++;
     return count;
   };
+  /**
+   * Draws page `n` at the current scale off the page, then puts it in place of
+   * its stretched picture, bitmap or placeholder in one step (spec 5.3).
+   */
   const draw = async (n: number, offScreen = false) => {
-    if (!pdf || closed || (hidden && !offScreen) || rendered.has(n)) return;
+    if (!pdf || closed || (hidden && !offScreen)) return;
+    if (rendered.get(n)?.scale === scale) return;
+    const pending = drawing.get(n);
+    if (pending?.scale === scale) return;
+    if (pending) {
+      drawing.delete(n);
+      release(pending);
+    }
     const placeholder = placeholders[n - 1]!;
     const entry: RenderedPage = {
       canvas: document.createElement("canvas"),
       text: document.createElement("div"),
-      generation,
+      scale,
     };
     entry.text.className = "textLayer";
     if (READER_PROBE) probeCount("canvasesCreated");
-    rendered.set(n, entry);
+    drawing.set(n, entry);
+    const stale = () => closed || drawing.get(n) !== entry;
     try {
       const p = await pdf.getPage(n);
       entry.page = p;
-      if (
-        closed ||
-        rendered.get(n) !== entry ||
-        entry.generation !== generation
-      ) {
-        p.cleanup();
-        return;
-      }
-      const base = p.getViewport({ scale: 1 });
+      if (stale()) return;
+      const base = p.getViewport({ scale: 1 }),
+        known = sizeOf(n);
       sizes.set(n, { width: base.width, height: base.height });
-      const viewport = p.getViewport({ scale });
-      placeholder.style.width = `${viewport.width}px`;
-      placeholder.style.height = `${viewport.height}px`;
-      placeholder.style.setProperty("--total-scale-factor", String(scale));
+      if (known.width !== base.width || known.height !== base.height) {
+        placeholder.style.width = `${base.width * scale}px`;
+        placeholder.style.height = `${base.height * scale}px`;
+        // A page of another size: the anchor stays where it was.
+        keep();
+      }
+      const viewport = p.getViewport({ scale: entry.scale });
       const ratio = Math.min(devicePixelRatio || 1, 2);
       entry.canvas.width = Math.ceil(viewport.width * ratio);
       entry.canvas.height = Math.ceil(viewport.height * ratio);
-      entry.canvas.style.width = `${viewport.width}px`;
-      entry.canvas.style.height = `${viewport.height}px`;
-      entry.text.style.width = `${viewport.width}px`;
-      entry.text.style.height = `${viewport.height}px`;
-      placeholder.append(entry.canvas, entry.text);
+      entry.render = p.render({
+        canvas: entry.canvas,
+        viewport,
+        ...(ratio === 1 ? {} : { transform: [ratio, 0, 0, ratio, 0, 0] }),
+      });
+      await entry.render.promise;
+      if (stale()) return;
+      entry.layer = new TextLayer({
+        textContentSource: p.streamTextContent(),
+        container: entry.text,
+        viewport,
+      });
+      await entry.layer.render();
+      if (stale()) return;
+      // Replace in one step: the picture never leaves the page.
+      drawing.delete(n);
+      const old = rendered.get(n);
+      rendered.set(n, entry);
+      entry.drawn = true;
+      entry.canvas.style.width = `${base.width * scale}px`;
+      entry.canvas.style.height = `${base.height * scale}px`;
+      placeholder.style.setProperty("--total-scale-factor", String(scale));
+      if (old?.canvas.isConnected) {
+        old.canvas.replaceWith(entry.canvas);
+        if (old.text.isConnected) old.text.replaceWith(entry.text);
+        else entry.canvas.after(entry.text);
+      } else placeholder.prepend(entry.canvas, entry.text);
+      if (old) release(old);
+      dropBitmap(n);
+      placeholder.dataset.picture = "canvas";
       placeholder.querySelector(".pdf-region-highlight")?.remove();
       if (frame.pdfLocation?.page === n && frame.pdfLocation.region) {
         const [x0, y0, x1, y1] = frame.pdfLocation.region,
@@ -342,25 +475,6 @@ export async function renderPdf(
         });
         placeholder.append(highlight);
       }
-      entry.render = p.render({
-        canvas: entry.canvas,
-        viewport,
-        ...(ratio === 1 ? {} : { transform: [ratio, 0, 0, ratio, 0, 0] }),
-      });
-      await entry.render.promise;
-      if (
-        closed ||
-        rendered.get(n) !== entry ||
-        entry.generation !== generation
-      )
-        return;
-      entry.layer = new TextLayer({
-        textContentSource: p.streamTextContent(),
-        container: entry.text,
-        viewport,
-      });
-      await entry.layer.render();
-      if (closed || rendered.get(n) !== entry) return;
       highlight(entry.text, n);
       placeholder.dataset.rendered = "true";
       if (confirm?.page === n) settle(entry.text);
@@ -381,13 +495,17 @@ export async function renderPdf(
       }
     } catch (error) {
       if (
-        !closed &&
-        rendered.get(n) === entry &&
+        !stale() &&
         !(
           error instanceof Error && error.name === "RenderingCancelledException"
         )
       ) {
         console.warn("PDF page rendering failed", n, error);
+        // Kept as the page's entry so the failed page is not drawn again and again.
+        drawing.delete(n);
+        const old = rendered.get(n);
+        if (old) release(old);
+        rendered.set(n, entry);
         placeholder.dataset.error = "true";
         const note = document.createElement("p");
         note.textContent = `第 ${n} 页暂时无法渲染`;
@@ -395,8 +513,8 @@ export async function renderPdf(
       }
     }
   };
-  const visible = () => {
-    if (!pdf || closed || hidden) return;
+  /** Visible pages and one either side (spec 5.3), nearest the reading line first. */
+  const range = () => {
     const rect = frame.body.getBoundingClientRect();
     const first = Math.max(
       0,
@@ -410,15 +528,31 @@ export async function renderPdf(
       placeholders[last + 1]!.getBoundingClientRect().top < rect.bottom
     )
       last++;
-    const wanted = new Set<number>();
+    const wanted: number[] = [];
     for (
       let i = Math.max(0, first - 1);
       i <= Math.min(placeholders.length - 1, last + 1);
       i++
     )
-      wanted.add(i + 1);
-    for (const n of rendered.keys()) if (!wanted.has(n)) clearPage(n);
-    for (const n of wanted) void draw(n);
+      wanted.push(i + 1);
+    return wanted.sort(
+      (a, b) => Math.abs(a - state.anchorPage) - Math.abs(b - state.anchorPage),
+    );
+  };
+  const visible = () => {
+    if (!pdf || closed || hidden) return;
+    const wanted = range(),
+      inRange = new Set(wanted);
+    for (const n of new Set([...rendered.keys(), ...drawing.keys()]))
+      if (!inRange.has(n)) clearPage(n);
+    // While the size is still changing, stretched pages wait for `sharpen`.
+    for (const n of wanted)
+      if (sharpTimer === undefined || !rendered.has(n)) void draw(n);
+  };
+  /** Spec 5.3: the size stopped changing; draw the stretched pages sharp, one by one. */
+  const sharpen = () => {
+    sharpTimer = undefined;
+    visible();
   };
   const go = (page: number, offset = 0) => {
     if (!pdf || closed) return;
@@ -444,12 +578,15 @@ export async function renderPdf(
       visible();
     });
   }
+  /**
+   * Spec 5.3: a new size stretches the drawn pictures at once, in the same
+   * frame as the anchor (4.2); 120 ms after the last change they are drawn sharp.
+   * Nothing is cleared first.
+   */
   const reflow = () => {
     if (!pdf || closed) return;
     const page = state.page,
       offset = state.pageOffset;
-    generation++;
-    for (const n of rendered.keys()) clearPage(n);
     const columns = Math.max(1, frame.pdfColumns ?? 1);
     scale =
       state.zoom === "fit"
@@ -464,9 +601,20 @@ export async function renderPdf(
           )
         : state.zoom;
     for (let i = 0; i < placeholders.length; i++) {
-      const size = sizes.get(i + 1) ?? { width: baseWidth, height: baseHeight };
-      placeholders[i]!.style.width = `${size.width * scale}px`;
-      placeholders[i]!.style.height = `${size.height * scale}px`;
+      const size = sizeOf(i + 1),
+        p = placeholders[i]!;
+      p.style.width = `${size.width * scale}px`;
+      p.style.height = `${size.height * scale}px`;
+      p.style.setProperty("--total-scale-factor", String(scale));
+    }
+    for (const [n, r] of rendered) {
+      const size = sizeOf(n);
+      r.canvas.style.width = `${size.width * scale}px`;
+      r.canvas.style.height = `${size.height * scale}px`;
+    }
+    if (rendered.size || drawing.size) {
+      clearTimeout(sharpTimer);
+      sharpTimer = setTimeout(sharpen, SHARPEN_MS);
     }
     // The anchor page keeps its place across the new size (spec 4.2).
     if (kept?.el.isConnected && !hidden) {
@@ -477,15 +625,12 @@ export async function renderPdf(
   };
   const resize = new ResizeObserver(() => {
     if (hidden) return;
-    // A bar above or a narrower panel moves the pages at once; a refit follows.
-    keep();
-    const width = frame.body.clientWidth;
-    if (Math.abs(lastWidth - width) < 1) return;
+    // A bar above or a narrower panel moves the pages; a new width refits them, in this frame.
+    const width = frame.body.clientWidth,
+      wider = Math.abs(lastWidth - width) >= 1;
     lastWidth = width;
-    clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => {
-      if (state.zoom === "fit") reflow();
-    }, 80);
+    if (wider && state.zoom === "fit") reflow();
+    else keep();
   });
   let left: { el: HTMLElement; offset: number } | null = null;
   frame.hide = (release = false) => {
@@ -495,9 +640,13 @@ export async function renderPdf(
       left = kept ? { el: kept.el, offset: kept.top - kept.area } : null;
       hidden = true;
       cancelAnimationFrame(raf);
-      clearTimeout(resizeTimer);
+      clearTimeout(sharpTimer);
+      sharpTimer = undefined;
     }
-    if (release) for (const n of rendered.keys()) clearPage(n);
+    // Released: no canvas stays; bitmaps of the pages shown do (spec 5.3).
+    if (release)
+      for (const n of new Set([...rendered.keys(), ...drawing.keys()]))
+        clearPage(n);
   };
   frame.show = () => {
     if (closed || !hidden) return;
@@ -741,7 +890,7 @@ export async function renderPdf(
           )
             found.push({ page: n, index: index++ });
         }
-        if (!rendered.has(n)) page.cleanup();
+        if (!rendered.has(n) && !drawing.has(n)) page.cleanup();
       }
       if (closed || revision !== searchRevision) return;
       hits = found;

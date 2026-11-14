@@ -141,6 +141,8 @@
     --status-raw-bg: var(--t-gray-bg);
     --status-excluded: var(--fg2);
     --status-excluded-bg: var(--hover);
+    /* Reading page (design core "阅读页"): skeleton bars and image or PDF page placeholders. */
+    --reader-skeleton: rgba(55, 53, 47, 0.07);
   }
   :root[data-theme="dark"] {
     color-scheme: dark;
@@ -189,6 +191,7 @@
     --shadow-modal: 0 16px 48px rgba(0, 0, 0, 0.3);
     --chart-ink: rgba(227, 229, 232, 0.5);
     --chart-muted: rgba(255, 255, 255, 0.14);
+    --reader-skeleton: rgba(255, 255, 255, 0.06);
   }
   :root[data-theme="green"] {
     --bg: #fbfcf8;

@@ -526,8 +526,27 @@
     isolation: isolate;
     flex-shrink: 0;
   }
-  .react-reader .reading-pdf-page canvas {
+  /* Spec 5.3: a page with neither its picture nor a bitmap shows a placeholder and its number. */
+  .react-reader .reading-pdf-page:not([data-picture], [data-error]) {
+    background: var(--reader-skeleton);
+  }
+  .react-reader .reading-pdf-page:not([data-picture], [data-error])::after {
+    content: attr(data-pdf-page);
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: var(--fg3);
+    font-size: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+  .react-reader .reading-pdf-page canvas,
+  .react-reader .reading-pdf-page .reading-pdf-bitmap {
     display: block;
+  }
+  .react-reader .reading-pdf-page .reading-pdf-bitmap {
+    width: 100%;
+    height: 100%;
   }
   .react-reader .reading-pdf-page .textLayer {
     position: absolute;

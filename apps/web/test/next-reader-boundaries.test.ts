@@ -433,7 +433,7 @@ it("keeps encrypted PDF rejection at ingestion and reports no accepted PDF", asy
           literature_id: missingId,
           bytes: syntheticReadingPdf(1, false, true),
         }),
-      ).rejects.toThrow("pdf acceptance failed");
+      ).rejects.toMatchObject({ code: "manual-pdf-invalid" });
       expect((await env.app.library.detail(missingId)).primary_pdf).toBeNull();
     },
   });
@@ -799,6 +799,189 @@ it("keeps two reader engines over ten paper switches, releases the oldest for a 
       })
       .toEqual({ workers: 0, urls: 0 });
     expect(await w.page.locator(".reading-pdf-page canvas").count()).toBe(0);
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 120000);
+
+it("bounds PDF canvases while zooming and bitmaps while scrolling, and releases both with the tab", async () => {
+  const w = await nextWorkspace({
+    ready: "body",
+    readerProbe: true,
+    setup: async (env) => {
+      await env.app.maintenance!.ingestPdf({
+        literature_id: missingId,
+        bytes: syntheticReadingPdf(100),
+      });
+    },
+  });
+  type Counts = {
+    canvasesCreated: number;
+    canvasesReleased: number;
+    objectUrlsCreated: number;
+    objectUrlsRevoked: number;
+    workersStarted: number;
+    workersTerminated: number;
+    bitmapsCreated: number;
+    bitmapsReleased: number;
+    bitmapsPerPaperPeak: number;
+    bitmapBytesPerPaperPeak: number;
+  };
+  const counts = () =>
+    w.page.evaluate(
+      () =>
+        (window as unknown as { __sciretrieverReaderProbe: Counts })
+          .__sciretrieverReaderProbe,
+    );
+  const zoomTo = async (option: string) => {
+    await w.page.getByRole("button", { name: "PDF 缩放" }).click();
+    await w.page.getByRole("option", { name: option, exact: true }).click();
+  };
+  try {
+    await open(w, "pdf", missingId);
+    await ready(w);
+    // Every frame: live canvases against the cap, two per page in the drawn range.
+    await w.page.evaluate(() => {
+      const probe = () =>
+        (
+          window as unknown as {
+            __sciretrieverReaderProbe: {
+              canvasesCreated: number;
+              canvasesReleased: number;
+            };
+          }
+        ).__sciretrieverReaderProbe;
+      const state = { over: [] as string[], frames: 0, peak: 0, run: true };
+      const loop = () => {
+        if (!state.run) return;
+        const body = document.querySelector<HTMLElement>(
+          ".reader-engine-body:not([hidden])",
+        );
+        if (body) {
+          const box = body.getBoundingClientRect();
+          const visible = [
+            ...body.querySelectorAll<HTMLElement>(".reading-pdf-page"),
+          ].filter((p) => {
+            const r = p.getBoundingClientRect();
+            return r.bottom > box.top && r.top < box.bottom;
+          }).length;
+          const live = probe().canvasesCreated - probe().canvasesReleased;
+          state.frames++;
+          state.peak = Math.max(state.peak, live);
+          if (live > 2 * (visible + 2)) state.over.push(`${live}/${visible}`);
+        }
+        requestAnimationFrame(loop);
+      };
+      requestAnimationFrame(loop);
+      Object.assign(window, { canvasCap: state });
+    });
+    await w.page.evaluate(() => {
+      document.querySelector<HTMLElement>(
+        ".reader-engine-body:not([hidden])",
+      )!.scrollTop = 6000;
+    });
+    await ready(w);
+    for (const option of ["150%", "75%", "200%", "适宽"]) await zoomTo(option);
+    // A window drag: many widths in a row, each stretched at once.
+    for (const width of [1400, 1320, 1240, 1180, 1260, 1440])
+      await w.page.setViewportSize({ width, height: 900 });
+    await w.page
+      .locator('.reading-pdf-page[data-picture="canvas"]')
+      .first()
+      .waitFor();
+    const cap = await w.page.evaluate(() => {
+      const state = (
+        window as unknown as {
+          canvasCap: {
+            over: string[];
+            frames: number;
+            peak: number;
+            run: boolean;
+          };
+        }
+      ).canvasCap;
+      state.run = false;
+      return state;
+    });
+    expect(cap.frames).toBeGreaterThan(10);
+    expect(cap.over).toEqual([]);
+    // Scroll through the whole paper: pages that leave the drawn range keep bitmaps.
+    for (let n = 0; n < 200; n++) {
+      const end = await w.page.evaluate(() => {
+        const body = document.querySelector<HTMLElement>(
+          ".reader-engine-body:not([hidden])",
+        )!;
+        body.scrollTop += body.clientHeight;
+        return body.scrollTop >= body.scrollHeight - body.clientHeight - 1;
+      });
+      // Each screen is drawn before the next, so every page leaves a bitmap.
+      await w.page.waitForFunction(() => {
+        const body = document.querySelector<HTMLElement>(
+          ".reader-engine-body:not([hidden])",
+        )!;
+        const box = body.getBoundingClientRect();
+        return [...body.querySelectorAll<HTMLElement>(".reading-pdf-page")]
+          .filter((p) => {
+            const r = p.getBoundingClientRect();
+            return r.bottom > box.top && r.top < box.bottom;
+          })
+          .every((p) => p.dataset.picture === "canvas");
+      });
+      if (end) break;
+    }
+    await expect
+      .poll(async () => (await counts()).bitmapsCreated, { timeout: 15000 })
+      .toBeGreaterThan(40);
+    const scrolled = await counts();
+    // Spec 5.3: at most 40 pages and 48 MB per paper, the farthest evicted.
+    expect(scrolled.bitmapsPerPaperPeak).toBeLessThanOrEqual(40);
+    expect(scrolled.bitmapBytesPerPaperPeak).toBeLessThanOrEqual(
+      48 * 1024 * 1024,
+    );
+    expect(
+      scrolled.bitmapsCreated - scrolled.bitmapsReleased,
+    ).toBeLessThanOrEqual(40);
+    const kept = await w.page
+      .locator(".reading-pdf-page > img.reading-pdf-bitmap")
+      .evaluateAll((images) =>
+        images.map((img) =>
+          Number(
+            img.closest<HTMLElement>(".reading-pdf-page")!.dataset.pdfPage,
+          ),
+        ),
+      );
+    expect(kept.length).toBeGreaterThan(0);
+    expect(kept.length).toBeLessThanOrEqual(40);
+    // At the end of the paper the nearest pages are kept: the first ones were evicted.
+    expect(
+      await w.page
+        .getByRole("textbox", { name: "PDF 页码", exact: true })
+        .inputValue(),
+    ).toBe("100");
+    expect(Math.min(...kept)).toBeGreaterThan(55);
+    // No page shows a placeholder where it holds a picture, nor the reverse.
+    expect(
+      await w.page
+        .locator(".reading-pdf-page:not([data-picture]):has(canvas, img)")
+        .count(),
+    ).toBe(0);
+    await w.page
+      .getByRole("button", { name: /^关闭文献 / })
+      .first()
+      .click();
+    await expect
+      .poll(async () => {
+        const c = await counts();
+        return {
+          workers: c.workersStarted - c.workersTerminated,
+          canvases: c.canvasesCreated - c.canvasesReleased,
+          bitmaps: c.bitmapsCreated - c.bitmapsReleased,
+          urls: c.objectUrlsCreated - c.objectUrlsRevoked,
+        };
+      })
+      .toEqual({ workers: 0, canvases: 0, bitmaps: 0, urls: 0 });
+    expect(await w.page.locator(".reading-pdf-page").count()).toBe(0);
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();

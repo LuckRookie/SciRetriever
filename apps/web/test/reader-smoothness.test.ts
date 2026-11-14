@@ -2,7 +2,8 @@
  * Browser measurements of the reading experience (spec "reading-experience"
  * 8.2), on the synthetic design sample library and the reader's test build.
  * Each check records numbers into a JSON report; a check fails the test only
- * when it is enforced (ENFORCED below, or SCIRETRIEVER_READER_ENFORCE=id,id|all).
+ * when it is enforced (ENFORCED below, or SCIRETRIEVER_READER_ENFORCE=id,id|all);
+ * `check.item` enforces one item of a check.
  * Until the new layout ships, the reading line follows spec section 10.
  */
 import { execFile } from "node:child_process";
@@ -50,15 +51,19 @@ interface Check {
   title: string;
   criterion: string;
   status: Status;
-  enforced: boolean;
+  enforced: boolean | string[];
   items: Item[];
 }
-/** Checks every later block must keep passing; 03–06 add theirs as they land. */
-const ENFORCED: readonly CheckId[] = [
+/** Checks (or `check.item`) every later block must keep passing; 03–06 add theirs as they land. */
+const ENFORCED: readonly (CheckId | `${CheckId}.${string}`)[] = [
   "background",
   "downloads",
   "anchor",
   "views",
+  "zoom",
+  // 05: zooming and scrolling the PDF; view and tab switches follow in 06.
+  "blank.zoom",
+  "blank.scroll",
 ];
 const enforce = new Set<string>([
   ...ENFORCED,
@@ -132,12 +137,16 @@ async function record(
       : statuses.includes("pass")
         ? "pass"
         : "no-object";
-  const enforced = enforce.has(id) || enforce.has("all");
+  const whole = enforce.has(id) || enforce.has("all"),
+    enforcedItems = items
+      .map((i) => i.id)
+      .filter((item) => whole || enforce.has(`${id}.${item}`));
+  const enforced = whole || (enforcedItems.length ? enforcedItems : false);
   report.checks[id] = { title, criterion, status, enforced, items };
   await writeFile(reportFile, JSON.stringify(report, null, 2) + "\n");
-  if (enforced && !unimplemented)
+  if (enforcedItems.length && !unimplemented)
     expect(
-      items.filter((i) => i.status === "fail"),
+      items.filter((i) => i.status === "fail" && enforcedItems.includes(i.id)),
       `${id} must pass`,
     ).toEqual([]);
 }
@@ -165,6 +174,8 @@ interface Anchor {
 interface Frame {
   t: number;
   content: boolean;
+  /** Every visible PDF page shows its drawn page or a bitmap of it (not a placeholder). */
+  picture: boolean;
   painted: boolean;
   sharp: boolean;
   animations: string[];
@@ -188,6 +199,7 @@ interface Helpers {
     limit?: number,
   ): Promise<{ still: boolean; ms: number; frames: number }>;
   content(): boolean;
+  picture(): boolean;
   painted(mode: string): boolean;
   sharp(width?: number): boolean;
   sample(mode?: string, width?: number): void;
@@ -313,6 +325,15 @@ function installHelpers() {
             const canvas = page.querySelector("canvas");
             if (canvas && canvas.width > 0 && page.dataset.rendered === "true")
               return true;
+            const bitmap = page.querySelector("img");
+            if (bitmap?.complete && bitmap.naturalWidth > 0) return true;
+            // The page placeholder (skeleton colour), not a white sheet.
+            const fill = getComputedStyle(page).backgroundColor;
+            if (
+              !canvas &&
+              !["rgb(255, 255, 255)", "rgba(0, 0, 0, 0)"].includes(fill)
+            )
+              return true;
             continue;
           }
           if (
@@ -324,6 +345,24 @@ function installHelpers() {
         }
       return false;
     },
+    picture() {
+      const b = rs.body();
+      if (!b) return false;
+      const box = b.getBoundingClientRect();
+      return [...b.querySelectorAll<HTMLElement>(".reading-pdf-page")]
+        .filter((p) => {
+          const r = p.getBoundingClientRect();
+          return r.bottom > box.top && r.top < box.bottom;
+        })
+        .every((p) => {
+          const canvas = p.querySelector("canvas"),
+            bitmap = p.querySelector("img");
+          return (
+            (!!canvas && canvas.width > 0) ||
+            (!!bitmap?.complete && bitmap.naturalWidth > 0)
+          );
+        });
+    },
     /** The block at the reading line of the given view has been drawn. */
     painted(mode: string) {
       const b = rs.body();
@@ -333,7 +372,10 @@ function installHelpers() {
       const el = rs.element(a.mode, a.key);
       return mode === "pdf" ? el?.dataset.rendered === "true" : !!el;
     },
-    /** Visible PDF pages all drawn at the current size (canvas box matches its page, optionally of a given width). */
+    /**
+     * Visible PDF pages all drawn at the current size: the canvas box matches
+     * its page and its pixels match that box (not stretched), optionally of a given width.
+     */
     sharp(width) {
       const b = rs.body();
       if (!b) return false;
@@ -353,7 +395,11 @@ function installHelpers() {
             (width === undefined || Math.abs(box.width - width) < 2) &&
             p.dataset.rendered === "true" &&
             !!canvas &&
-            Math.abs(canvas.getBoundingClientRect().width - box.width) < 1
+            Math.abs(canvas.getBoundingClientRect().width - box.width) < 1 &&
+            Math.abs(
+              canvas.width -
+                Math.ceil(box.width * Math.min(devicePixelRatio || 1, 2)),
+            ) <= 2
           );
         })
       );
@@ -368,6 +414,7 @@ function installHelpers() {
         rs.frames.push({
           t,
           content: rs.content(),
+          picture: mode === "pdf" ? rs.picture() : true,
           painted: mode ? rs.painted(mode) : false,
           sharp: mode === "pdf" ? rs.sharp(width) : false,
           animations: document.getAnimations().flatMap((a) => {
@@ -452,6 +499,10 @@ type Probe = {
   canvasesPeak: number;
   objectUrlsCreated: number;
   objectUrlsRevoked: number;
+  bitmapsCreated?: number;
+  bitmapsReleased?: number;
+  bitmapsPerPaperPeak?: number;
+  bitmapBytesPerPaperPeak?: number;
 };
 const probe = (page: Page) =>
   page.evaluate(
@@ -577,9 +628,11 @@ function frameSummary(frames: Frame[], input: number) {
   return {
     frames: after.length,
     blank_frames: after.filter((f) => !f.content).length,
+    frames_without_picture: after.filter((f) => !f.picture).length,
     longest_blank_ms: Math.round(longestBlank),
     longest_frame_gap_ms: Math.round(longestGap),
     first_frame_has_picture: after[0]?.content ?? null,
+    first_frame_pages_pictured: after[0]?.picture ?? null,
     input_to_paint_ms: painted ? Math.round(painted.t - input) : null,
     input_to_sharp_ms: sharp ? Math.round(sharp.t - input) : null,
   };
@@ -964,6 +1017,12 @@ it("PDF zoom (5.3)", async () => {
     );
     const summary = frameSummary(frames, input);
     shared.zoom = summary;
+    const counters = await probe(r.page);
+    const memory = {
+      canvases_peak_live: counters?.canvasesPeak ?? null,
+      bitmaps_peak: counters?.bitmapsPerPaperPeak ?? null,
+      bitmap_bytes_peak: counters?.bitmapBytesPerPaperPeak ?? null,
+    };
     await record(
       "zoom",
       "PDF 缩放",
@@ -974,7 +1033,8 @@ it("PDF zoom (5.3)", async () => {
           label: "缩放后的第一帧有画面",
           criterion: "第一帧可见页都有画面（拉伸的旧画面）",
           status: verdict(
-            summary.first_frame_has_picture === true &&
+            summary.first_frame_pages_pictured === true &&
+              summary.frames_without_picture === 0 &&
               summary.blank_frames === 0,
           ),
           numbers: summary,
@@ -988,6 +1048,17 @@ it("PDF zoom (5.3)", async () => {
               summary.input_to_sharp_ms <= 500,
           ),
           numbers: { input_to_sharp_ms: summary.input_to_sharp_ms },
+        },
+        {
+          id: "memory",
+          label: "画布与位图的峰值（参考）",
+          criterion:
+            "画布：可见页 ±1 各至多两张；位图：每份资料 ≤ 40 页、48 MB",
+          status: verdict(
+            (memory.bitmaps_peak ?? 0) <= 40 &&
+              (memory.bitmap_bytes_peak ?? 0) <= 48 * 1024 * 1024,
+          ),
+          numbers: memory,
         },
       ],
     );
@@ -1018,10 +1089,66 @@ it("no blank frames (6.2)", async () => {
   items.push({
     id: "zoom",
     label: "PDF 缩放 适宽 → 150%",
-    criterion: "0 个无画面帧",
-    status: verdict(zoom ? zoom.blank_frames === 0 : null),
+    criterion: "0 个无画面帧；可见页不退回占位（5.3：任何时候都不先清空画面）",
+    status: verdict(
+      zoom
+        ? zoom.blank_frames === 0 && zoom.frames_without_picture === 0
+        : null,
+    ),
     numbers: zoom ?? {},
   });
+  // Fast scrolling through the 100-page PDF and back over the same pages (5.3).
+  const pdfId = samples.ids.pdfOnly;
+  const scroller = await openReader(readerUrl(pdfId, "pdf"));
+  try {
+    await ready(scroller.page, pdfId, "pdf");
+    await still(scroller.page);
+    const pass = async (step: number, frames: number) => {
+      await scroller.page.evaluate(() => rs().sample("pdf"));
+      const input = await scroller.page.evaluate(
+        async ({ step, frames }) => {
+          const h = rs(),
+            b = h.body()!,
+            start = performance.now();
+          for (let n = 0; n < frames; n++) {
+            b.scrollTop += step * b.clientHeight;
+            await h.frame();
+          }
+          return start;
+        },
+        { step, frames },
+      );
+      await still(scroller.page);
+      const shown = await scroller.page.evaluate(() => {
+        const b = rs().body()!;
+        return {
+          bitmaps: b.querySelectorAll(".reading-pdf-page > img").length,
+          canvases: b.querySelectorAll(".reading-pdf-page canvas").length,
+        };
+      });
+      const sampled = await scroller.page.evaluate(() => rs().stop());
+      return { ...frameSummary(sampled, input), ...shown };
+    };
+    // Down 40 screens in 40 frames, then back up the same way.
+    const down = await pass(1, 40);
+    const up = await pass(-1, 40);
+    const counters = await probe(scroller.page);
+    items.push({
+      id: "scroll",
+      label: "快速滚动 PDF（向下 40 屏再回到原处）",
+      criterion: "0 个无画面帧（画面、位图或页面占位）",
+      status: verdict(down.blank_frames === 0 && up.blank_frames === 0),
+      numbers: {
+        down,
+        up,
+        bitmaps_peak: counters?.bitmapsPerPaperPeak ?? null,
+        bitmap_bytes_peak: counters?.bitmapBytesPerPaperPeak ?? null,
+      },
+      note: "向上一程经过的页刚离开渲染范围，应以低清晰度位图显示；frames_without_picture 记录仍显示占位的帧。",
+    });
+  } finally {
+    await scroller.close();
+  }
   // Tab switch between two open papers.
   const first = samples.ids.literature,
     second = samples.ids.longDocument;
@@ -1153,12 +1280,16 @@ it("no repeated downloads (5.1)", async () => {
           criterion: "worker 0，对象 URL 0",
           status: verdict(
             closed.workersStarted - closed.workersTerminated === 0 &&
-              closed.objectUrlsCreated - closed.objectUrlsRevoked === 0,
+              closed.objectUrlsCreated - closed.objectUrlsRevoked === 0 &&
+              (closed.bitmapsCreated ?? 0) - (closed.bitmapsReleased ?? 0) ===
+                0,
           ),
           numbers: {
             workers: closed.workersStarted - closed.workersTerminated,
             object_urls: closed.objectUrlsCreated - closed.objectUrlsRevoked,
             canvases: closed.canvasesCreated - closed.canvasesReleased,
+            bitmaps:
+              (closed.bitmapsCreated ?? 0) - (closed.bitmapsReleased ?? 0),
           },
         },
       ],

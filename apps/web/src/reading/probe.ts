@@ -22,6 +22,15 @@ export interface ReaderProbeCounts {
   canvasesPeak: number;
   objectUrlsCreated: number;
   objectUrlsRevoked: number;
+  /** Low-resolution PDF page bitmaps (spec 5.3): live now and the largest ever. */
+  bitmapsCreated: number;
+  bitmapsReleased: number;
+  bitmapsPeak: number;
+  bitmapBytes: number;
+  bitmapBytesPeak: number;
+  /** The most one paper held at once, in pages and in bytes. */
+  bitmapsPerPaperPeak: number;
+  bitmapBytesPerPaperPeak: number;
 }
 type Counter =
   | "workersStarted"
@@ -46,6 +55,13 @@ function counts(): ReaderProbeCounts {
     canvasesPeak: 0,
     objectUrlsCreated: 0,
     objectUrlsRevoked: 0,
+    bitmapsCreated: 0,
+    bitmapsReleased: 0,
+    bitmapsPeak: 0,
+    bitmapBytes: 0,
+    bitmapBytesPeak: 0,
+    bitmapsPerPaperPeak: 0,
+    bitmapBytesPerPaperPeak: 0,
   });
 }
 // Each entry point checks the flag itself: a production chunk may keep the
@@ -67,4 +83,19 @@ export function probeCountKey(name: Keyed, key: string) {
   if (!READER_PROBE) return;
   const map = counts()[name];
   map[key] = (map[key] ?? 0) + 1;
+}
+/** One bitmap kept (`bytes` > 0) or released (`bytes` < 0); `paper` is the owner's totals after it. */
+export function probeBitmap(
+  bytes: number,
+  paper: { count: number; bytes: number },
+) {
+  if (!READER_PROBE) return;
+  const c = counts();
+  if (bytes > 0) c.bitmapsCreated++;
+  else c.bitmapsReleased++;
+  c.bitmapBytes += bytes;
+  c.bitmapsPeak = Math.max(c.bitmapsPeak, c.bitmapsCreated - c.bitmapsReleased);
+  c.bitmapBytesPeak = Math.max(c.bitmapBytesPeak, c.bitmapBytes);
+  c.bitmapsPerPaperPeak = Math.max(c.bitmapsPerPaperPeak, paper.count);
+  c.bitmapBytesPerPaperPeak = Math.max(c.bitmapBytesPerPaperPeak, paper.bytes);
 }

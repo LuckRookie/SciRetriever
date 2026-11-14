@@ -284,6 +284,109 @@ it("groups existing statements, hides technical IDs, verifies nearby evidence an
   }
 }, 90000);
 
+it("stretches the drawn PDF pages in the first frame of a zoom, then replaces them sharp at the new scale", async () => {
+  const w = await nextWorkspace({
+    ready: "body",
+    setup: async (env) => {
+      await env.app.maintenance!.ingestPdf({
+        literature_id: missingId,
+        bytes: syntheticReadingPdf(20),
+      });
+    },
+  });
+  try {
+    await w.page.goto(`${w.origin}/?literature=${missingId}&reader=pdf`);
+    await w.page
+      .locator('.reading-pdf-page[data-rendered="true"]')
+      .first()
+      .waitFor();
+    // Every frame from the click on: does each visible page show a picture?
+    await w.page.evaluate(() => {
+      const frames: { t: number; pictured: boolean; pages: number }[] = [];
+      const loop = (t: number) => {
+        const body = document.querySelector<HTMLElement>(
+          ".reader-engine-body:not([hidden])",
+        )!;
+        const box = body.getBoundingClientRect();
+        const visible = [
+          ...body.querySelectorAll<HTMLElement>(".reading-pdf-page"),
+        ].filter((p) => {
+          const r = p.getBoundingClientRect();
+          return r.bottom > box.top && r.top < box.bottom;
+        });
+        frames.push({
+          t,
+          pages: visible.length,
+          pictured: visible.every((p) => {
+            const canvas = p.querySelector("canvas");
+            return !!canvas && canvas.width > 0;
+          }),
+        });
+        if (frames.length < 600) requestAnimationFrame(loop);
+      };
+      addEventListener("pointerdown", () => requestAnimationFrame(loop), {
+        capture: true,
+        once: true,
+      });
+      Object.assign(window, { zoomFrames: frames });
+    });
+    await w.page.getByRole("button", { name: "PDF 缩放" }).click();
+    await w.page.getByRole("option", { name: "150%", exact: true }).click();
+    const ratio = await w.page.evaluate(() =>
+      Math.min(devicePixelRatio || 1, 2),
+    );
+    // Sharp: every visible page drawn at 150% (612 pt → 918 CSS px), pixels to match.
+    await w.page.waitForFunction((ratio) => {
+      const body = document.querySelector<HTMLElement>(
+        ".reader-engine-body:not([hidden])",
+      )!;
+      const box = body.getBoundingClientRect();
+      const visible = [
+        ...body.querySelectorAll<HTMLElement>(".reading-pdf-page"),
+      ].filter((p) => {
+        const r = p.getBoundingClientRect();
+        return r.bottom > box.top && r.top < box.bottom;
+      });
+      return (
+        visible.length > 0 &&
+        visible.every((p) => {
+          const canvas = p.querySelector("canvas");
+          return (
+            !!canvas &&
+            Math.abs(p.getBoundingClientRect().width - 918) < 1 &&
+            Math.abs(canvas.getBoundingClientRect().width - 918) < 1 &&
+            canvas.width === Math.ceil(918 * ratio) &&
+            canvas.height === Math.ceil(792 * 1.5 * ratio)
+          );
+        })
+      );
+    }, ratio);
+    const frames = await w.page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            zoomFrames: { pictured: boolean; pages: number }[];
+          }
+        ).zoomFrames,
+    );
+    expect(frames.length).toBeGreaterThan(0);
+    expect(frames.every((f) => f.pages > 0 && f.pictured)).toBe(true);
+    // One canvas per page once replaced; only visible pages and one either side.
+    const drawn = await w.page.locator(".reading-pdf-page canvas").count();
+    expect(drawn).toBeGreaterThan(0);
+    expect(
+      await w.page
+        .locator(".reading-pdf-page")
+        .evaluateAll((pages) =>
+          Math.max(...pages.map((p) => p.querySelectorAll("canvas").length)),
+        ),
+    ).toBe(1);
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);
+
 it("keeps a 100-page PDF bounded over ten React reader switches and releases its resources", async () => {
   const w = await nextWorkspace({
     ready: "body",
