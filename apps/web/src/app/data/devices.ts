@@ -1,31 +1,26 @@
 import { record, type JsonRecord } from "./wire.js";
 
-export const DEVICE_PURPOSES = [
-  "capture",
-  "import",
-  "read",
-  "operate",
-] as const;
+export const DEVICE_PURPOSES = ["intake", "read", "operate"] as const;
 export type DevicePurpose = (typeof DEVICE_PURPOSES)[number];
 export const PURPOSE_LABELS: Record<DevicePurpose, string> = {
-  capture: "收藏",
-  import: "导入",
+  intake: "入库",
   read: "读取",
   operate: "操作",
 };
 export const PURPOSE_DESCRIPTIONS: Record<DevicePurpose, string> = {
-  capture: "查询文献状态、列出文件夹、保存书目、上传 PDF。",
-  import: "经导入会话把书目、分组与 PDF 导进来；只新增，不删除、不替换。",
-  read: "经 MCP 检索与阅读文献库。",
-  operate: "经 MCP 发起任务，包括会联网、会花费的获取、解析与模型调用。",
+  intake:
+    "收藏网页、从 Zotero 或文件入库；只新增，不删除、不替换；只能看到本设备发起的批次。",
+  read: "经 MCP 查询与阅读文献库。",
+  operate:
+    "经 MCP 发起获取、加工等任务，包括会联网、会花费的获取、解析与模型调用。",
 };
 export type DeviceKind = "extension" | "agent";
 export const DEVICE_DEFAULTS: Record<
   DeviceKind,
   { name: string; purposes: DevicePurpose[] }
 > = {
-  extension: { name: "浏览器扩展", purposes: ["capture"] },
-  agent: { name: "Agent", purposes: ["import", "read"] },
+  extension: { name: "浏览器扩展", purposes: ["intake"] },
+  agent: { name: "Agent", purposes: ["intake", "read"] },
 };
 
 export interface DeviceConnection {
@@ -110,7 +105,7 @@ export function agentBrief(code: string, address: string): string {
     "",
     `1. 换令牌：连接码的格式是 sr-connect1:<编码后的地址>:<配对码>，地址是 ${address}。10 分钟内、只能用一次，向 ${address}/api/v1/device-connections/exchange 发 POST，正文 {"pairing_code":"<配对码>"}。回复的 result.token 是令牌，只出现这一次。`,
     '2. 令牌不要打印、不要显示回复的任何部分，直接写进只有我能读的文件：在 ~/.config/sciretriever/（目录权限 700）写 address（文献库地址，不带换行）和 curl.conf（权限 600，三行：header = "Authorization: Bearer <令牌>"、header = "X-Sciretriever-Protocol-Version: 1"、noproxy = "*"；文献库必须经代理才能访问时去掉最后一行）。之后的请求都用 curl --config ~/.config/sciretriever/curl.conf 带上它们。',
-    `3. 下载文献库自带的 skill：GET ${address}/api/v1/device-connections/skill（zip，解压后是 sciretriever/ 目录，放到你存放 skill 的位置，例如 Claude Code 的 ~/.claude/skills/），读 SKILL.md 后再开始；装不了 skill 时读 ${address}/api/v1/device-connections/instructions。`,
+    `3. 下载文献库自带的 skill：GET ${address}/api/v1/intake/skill（zip，解压后是 sciretriever/ 目录，放到你存放 skill 的位置，例如 Claude Code 的 ~/.claude/skills/），读 SKILL.md 后再开始；装不了 skill 时读 ${address}/api/v1/intake/agent-guide。`,
     "4. 连不上时告诉我所连的地址，提醒我检查端口映射是否开着。",
   ].join("\n");
 }

@@ -13,6 +13,6 @@ Chrome、Edge 用的 Manifest V3 扩展，用法见[浏览器扩展指南](../..
 | `src/popup.ts`                                 | 弹窗界面：连接、读页、查询、收藏、PDF 下载与上传、设置         |
 | `src/manifest.json`、`popup.html`、`popup.css` | 扩展清单与弹窗页面                                             |
 
-构建：根目录 `pnpm build` 的最后一步运行 [`scripts/build-browser-extension.mjs`](../../scripts/build-browser-extension.mjs)，用 esbuild 打包到 `dist/extension/`，再打成 `apps/server/dist/agent-access/browser-extension.zip`，由文献库在 `GET /api/v1/capture/extension` 提供下载。测试在 `test/`：页面读取用 Chromium 加载合成页面，收藏流程对合成文献库走通配对、查询、保存与 PDF 上传。
+构建：根目录 `pnpm build` 的最后一步运行 [`scripts/build-browser-extension.mjs`](../../scripts/build-browser-extension.mjs)，用 esbuild 打包到 `dist/extension/`，再打成 `apps/server/dist/agent-access/browser-extension.zip`，由文献库在 `GET /api/v1/intake/extension` 提供下载。收藏走入库接口：`/api/v1/intake/pages/preview` 预览、`/pages/save` 保存，PDF 经保存回执里的批次与文件编号上传；发往文献库的请求一律 `credentials: "omit"`，只带设备令牌。测试在 `test/`：页面读取用 Chromium 加载合成页面，收藏流程对合成文献库走通配对、预览、保存（含只有标题的页面）与 PDF 上传。
 
 [应用实现](../README.md)

@@ -91,16 +91,20 @@ it("keeps discovery and import explicit and uploads a selected PDF without hidde
     });
     await imported.getByText("新增 1").waitFor();
     await imported.getByRole("button", { name: "返回入库" }).click();
-    await w.page.getByRole("tab", { name: "上传 PDF", exact: true }).click();
-    await w.page.getByRole("textbox", { name: "目标文献 ID" }).fill(missingId);
+    // The intake page has no upload tab; a PDF is added from the paper's reader.
+    expect(
+      await w.page.getByRole("tab", { name: "上传 PDF", exact: true }).count(),
+    ).toBe(0);
+    await w.page.goto(`${w.origin}/?literature=${missingId}&reader=pdf`);
+    await w.page.getByRole("button", { name: "更多", exact: true }).click();
+    await w.page
+      .getByRole("menuitem", { name: "上传 PDF", exact: true })
+      .click();
     await w.page.getByLabel("PDF 文件", { exact: true }).setInputFiles({
       name: "fixture.pdf",
       mimeType: "application/pdf",
       buffer: Buffer.from(workbenchPdf("10.1234/intake-test")),
     });
-    await w.page
-      .getByRole("button", { name: "选择并上传", exact: true })
-      .click();
     expect((await w.env.app.library.detail(missingId)).primary_pdf).toBeNull();
     await w.page.getByRole("button", { name: "确认上传", exact: true }).click();
     // Background work started here can outlast the 1 s poll default under Full load.

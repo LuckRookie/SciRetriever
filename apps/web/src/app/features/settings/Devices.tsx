@@ -37,14 +37,14 @@ const DOWNLOADS = {
   extension: {
     label: "下载扩展安装包",
     description: "Chrome、Edge 用，在扩展管理页以开发者模式加载。",
-    path: "/api/v1/capture/extension",
+    path: "/api/v1/intake/extension",
     file: "sciretriever-browser-extension.zip",
     missing: "扩展安装包尚未构建",
   },
   skill: {
     label: "下载 skill",
     description: "给 Agent 用的文献库使用说明。",
-    path: "/api/v1/device-connections/skill",
+    path: "/api/v1/intake/skill",
     file: "sciretriever-skill.zip",
     missing: "skill 包尚未构建",
   },

@@ -14,10 +14,10 @@ it("hands a connection code over once, shows the device once it pairs, and renam
     const purpose = (name: string) =>
       dialog.getByRole("checkbox", { name, exact: true });
     // Operate can start networked, paid tasks and is never preselected.
-    expect(await purpose("导入").isChecked()).toBe(true);
+    expect(await purpose("入库").isChecked()).toBe(true);
     expect(await purpose("读取").isChecked()).toBe(true);
-    expect(await purpose("收藏").isChecked()).toBe(false);
     expect(await purpose("操作").isChecked()).toBe(false);
+    expect(await dialog.getByRole("checkbox").count()).toBe(3);
     await dialog.getByRole("textbox", { name: "名称" }).fill("办公室笔记本");
     await dialog
       .getByRole("button", { name: "生成连接码", exact: true })
@@ -43,7 +43,7 @@ it("hands a connection code over once, shows the device once it pairs, and renam
     expect(await page.getByText(code).count()).toBe(0);
     const row = page.getByRole("row", { name: /办公室笔记本/u });
     await row.getByText("待配对").waitFor();
-    expect(await row.getByText("导入 · 读取").count()).toBe(1);
+    expect(await row.getByText("入库 · 读取").count()).toBe(1);
 
     // The Agent on the desktop exchanges the code for its token.
     const exchange = await fetch(
@@ -77,7 +77,7 @@ it("hands a connection code over once, shows the device once it pairs, and renam
   }
 }, 90000);
 
-it("preselects capture for the browser extension and requires at least one purpose", async () => {
+it("preselects intake for the browser extension and requires at least one purpose", async () => {
   const w = await nextWorkspace({
     path: "/?view=set&setting=devices",
     ready: ".settings-device-actions",
@@ -95,15 +95,15 @@ it("preselects capture for the browser extension and requires at least one purpo
       .getByRole("button", { name: "连接浏览器扩展", exact: true })
       .click();
     const dialog = page.getByRole("dialog", { name: "连接浏览器扩展" });
-    const capture = dialog.getByRole("checkbox", { name: "收藏", exact: true });
-    expect(await capture.isChecked()).toBe(true);
+    const intake = dialog.getByRole("checkbox", { name: "入库", exact: true });
+    expect(await intake.isChecked()).toBe(true);
     expect(
       await dialog
         .getByRole("checkbox", { name: "操作", exact: true })
         .isChecked(),
     ).toBe(false);
-    await dialog.getByText("收藏", { exact: true }).click();
-    expect(await capture.isChecked()).toBe(false);
+    await dialog.getByText("入库", { exact: true }).click();
+    expect(await intake.isChecked()).toBe(false);
     expect(
       await dialog
         .getByRole("button", { name: "生成连接码", exact: true })

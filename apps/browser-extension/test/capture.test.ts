@@ -90,7 +90,7 @@ it("parses connection codes, typed identifiers and page fields", () => {
   ]);
 });
 
-it("pairs, looks up, saves with the PDF, and is found with its PDF afterwards", async () => {
+it("pairs, previews, saves with the PDF through its batch, and is found with its PDF afterwards", async () => {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-extension-"));
   const app = await createApplication(home, {
     indexRefreshIntervalMs: null,
@@ -112,18 +112,26 @@ it("pairs, looks up, saves with the PDF, and is found with its PDF afterwards", 
     const { connection_code } = await app.deviceConnections.create({
       address: server.origin,
       name: "Chrome 扩展",
-      purposes: ["capture"],
+      purposes: ["intake"],
     });
     const { address, pairing_code } = parseConnectionCode(connection_code);
     expect(address).toBe(server.origin);
-    const token = await new LibraryClient(address, null).exchange(pairing_code);
-    const client = new LibraryClient(address, token);
+    // Every request to the library leaves the page's cookies behind.
+    const sent: RequestInit[] = [];
+    const fetcher: typeof fetch = (input, init) => {
+      sent.push(init ?? {});
+      return fetch(input, init);
+    };
+    const token = await new LibraryClient(address, null, fetcher).exchange(
+      pairing_code,
+    );
+    const client = new LibraryClient(address, token, fetcher);
     const ids = [{ namespace: "doi" as const, value: reading.doi! }];
-    expect(await client.lookup(ids)).toMatchObject({
+    const metadata = metadataOf(reading, ids);
+    expect(await client.lookup(metadata)).toMatchObject({
       found: false,
       has_pdf: false,
     });
-    expect(await client.folders()).toEqual([]);
 
     const pdf = workbenchPdf(reading.doi!);
     const bytes = pdf.buffer.slice(
@@ -132,7 +140,7 @@ it("pairs, looks up, saves with the PDF, and is found with its PDF afterwards", 
     ) as ArrayBuffer;
     const saved = await client.save({
       request_id: crypto.randomUUID(),
-      metadata: metadataOf(reading, ids),
+      metadata,
       folder_ids: [],
       file: {
         file_name: "abc.pdf",
@@ -145,19 +153,36 @@ it("pairs, looks up, saves with the PDF, and is found with its PDF afterwards", 
       disposition: "created",
       file: { action: "upload", status: "pending" },
     });
-    const file = await client.bytes(saved.capture_id, new Blob([bytes]));
+    const file = await client.bytes(saved, new Blob([bytes]));
     expect(file.status).toBe("uploaded");
-    expect(await client.lookup(ids)).toMatchObject({
+    expect(await client.lookup(metadata)).toMatchObject({
       found: true,
       has_pdf: true,
-      title: "Argyrodite electrolyte one",
+      library_title: "Argyrodite electrolyte one",
     });
 
-    // A token without the capture purpose is refused with a plain explanation.
+    // A page with a title and no identifier is collected too.
+    const titled = metadataOf(
+      { ...reading, doi: null, title: "A page with only a title" },
+      [],
+    );
+    expect(await client.lookup(titled)).toMatchObject({ found: false });
+    expect(
+      await client.save({
+        request_id: crypto.randomUUID(),
+        metadata: titled,
+        folder_ids: [],
+        file: null,
+      }),
+    ).toMatchObject({ disposition: "created", file: null });
+    expect(sent.length).toBeGreaterThanOrEqual(6);
+    expect(sent.every((init) => init.credentials === "omit")).toBe(true);
+
+    // A token without the intake purpose is refused with a plain explanation.
     const other = await app.deviceConnections.create({
       address: server.origin,
       name: "Agent",
-      purposes: ["import"],
+      purposes: ["read"],
     });
     const agent = new LibraryClient(
       address,
@@ -165,12 +190,12 @@ it("pairs, looks up, saves with the PDF, and is found with its PDF afterwards", 
         parseConnectionCode(other.connection_code).pairing_code,
       ),
     );
-    await expect(agent.lookup(ids)).rejects.toMatchObject({
+    await expect(agent.lookup(metadata)).rejects.toMatchObject({
       code: "device-purpose-forbidden",
     });
     // An address nobody listens on reads as unreachable, naming the address.
     await expect(
-      new LibraryClient("http://127.0.0.1:9", token).lookup(ids),
+      new LibraryClient("http://127.0.0.1:9", token).lookup(metadata),
     ).rejects.toMatchObject({
       code: "unreachable",
       message: "连不上 http://127.0.0.1:9",
@@ -182,7 +207,7 @@ it("pairs, looks up, saves with the PDF, and is found with its PDF afterwards", 
       await buildBrowserExtension(built),
       join(home, "browser-extension.zip"),
     );
-    const download = await fetch(`${address}/api/v1/capture/extension`, {
+    const download = await fetch(`${address}/api/v1/intake/extension`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     expect(download.status).toBe(200);

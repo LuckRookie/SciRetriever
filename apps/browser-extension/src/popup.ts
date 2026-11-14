@@ -1,7 +1,6 @@
 import { readPage, type PageReading } from "./page.js";
 import {
   CaptureError,
-  folderTree,
   identifiersOf,
   LibraryClient,
   manualIdentifier,
@@ -244,7 +243,9 @@ async function start() {
     return;
   }
   const identifiers = identifiersOf(reading);
-  if (!identifiers.length) return askIdentifier(connection, reading);
+  // A title is enough to collect; only a page with neither asks for an identifier.
+  if (!identifiers.length && !reading.title?.trim())
+    return askIdentifier(connection, reading);
   await lookup(connection, reading, identifiers);
 }
 
@@ -256,12 +257,8 @@ function askIdentifier(connection: Connection, reading: PageReading) {
   });
   const status = h("p", { class: "note", role: "status" });
   show(
-    h("h1", {}, reading.title ?? "这页没有读到标识"),
-    h(
-      "p",
-      { class: "note" },
-      "页面上没有读到 DOI 或 arXiv 号。填上才能收藏，不保存没有标识的文献。",
-    ),
+    h("h1", {}, "这一页没有读到书目，无法收藏"),
+    h("p", { class: "note" }, "填上 DOI 或 arXiv 号后再查一次。"),
     h("label", { for: "identifier" }, "DOI 或 arXiv 号"),
     input,
     h(
@@ -303,20 +300,22 @@ async function lookup(
   show(h("p", { class: "note", role: "status" }, "正在查询文献库…"));
   let found: Lookup;
   try {
-    found = await client.lookup(identifiers);
+    found = await client.lookup(metadataOf(reading, identifiers));
   } catch (error) {
     return unreachable(connection, error);
   }
-  const ids = identifiers.map((id) =>
-    h("li", {}, `${id.namespace === "doi" ? "DOI" : "arXiv"} ${id.value}`),
-  );
+  const ids = identifiers.length
+    ? identifiers.map((id) =>
+        h("li", {}, `${id.namespace === "doi" ? "DOI" : "arXiv"} ${id.value}`),
+      )
+    : [h("li", {}, "没有读到 DOI 或 arXiv 号")];
   if (found.found) {
     show(
       badge(
         found.has_pdf ? "已在库 · 已有 PDF" : "已在库 · 还没有 PDF",
         "done",
       ),
-      h("h1", {}, found.title ?? reading.title ?? "（无标题）"),
+      h("h1", {}, found.library_title ?? reading.title ?? "（无标题）"),
       h("ul", { class: "identifiers" }, ...ids),
       !found.has_pdf && reading.pdf_url
         ? h(
@@ -332,24 +331,6 @@ async function lookup(
     );
     return;
   }
-  const select = h(
-    "select",
-    { id: "folder" },
-    h("option", { value: "" }, "不放进文件夹"),
-  );
-  void client
-    .folders()
-    .then((folders) => {
-      for (const { folder, depth } of folderTree(folders))
-        select.append(
-          h(
-            "option",
-            { value: folder.folder_id },
-            `${"　".repeat(depth)}${folder.name}`,
-          ),
-        );
-    })
-    .catch(() => select.setAttribute("title", "文件夹列表没能读取"));
   const withPdf = h("input", {
     id: "with-pdf",
     type: "checkbox",
@@ -361,8 +342,7 @@ async function lookup(
       ? h("p", { class: "byline" }, authorsLine(reading))
       : null,
     h("ul", { class: "identifiers" }, ...ids),
-    h("label", { for: "folder" }, "文件夹"),
-    select,
+    // The intake interface has no folder listing yet; collected papers go unfiled.
     reading.pdf_url
       ? h("label", { class: "check" }, withPdf, "连同 PDF")
       : h("p", { class: "note" }, "页面上没有找到 PDF，只收藏书目。"),
@@ -376,7 +356,7 @@ async function lookup(
             client,
             reading,
             identifiers,
-            select.value ? [select.value] : [],
+            [],
             !!reading.pdf_url && withPdf.checked,
           ),
         "primary",
@@ -458,17 +438,17 @@ async function save(
       status.textContent = "正在上传 PDF…";
       file =
         file.action === "hash"
-          ? await client.hash(result.capture_id, pdf.sha256)
+          ? await client.hash(result, pdf.sha256)
           : await client.bytes(
-              result.capture_id,
+              result,
               new Blob([pdf.bytes], { type: "application/pdf" }),
             );
     } catch (error) {
       pdfFailure = message("PDF 上传失败。")(error);
     }
   }
-  // The library forms one batch per device and UTC day.
-  const day = new Date().toISOString().slice(0, 10);
+  // The library forms one batch per device and day.
+  const day = new Date().toLocaleDateString("en-CA");
   show(
     badge(
       result.disposition === "created" ? "已收藏" : "已在库，已补充",
@@ -487,9 +467,9 @@ async function save(
             ? ""
             : "只收藏了书目。",
     ),
-    result.metadata.status === "completed"
+    ["completed", "pending"].includes(result.metadata.status)
       ? null
-      : h("p", { class: "note" }, "元数据来源暂时没能补全，书目已保存。"),
+      : h("p", { class: "note" }, "文献信息来源暂时没能补全，书目已保存。"),
   );
 }
 

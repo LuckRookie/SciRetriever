@@ -30,7 +30,8 @@
 
 ## Tasks
 
-- [ ] **19.1 改用入库接口（计入 M1）**
+- [x] **19.1 改用入库接口（计入 M1）**
+  - 2026-11-15 完成：扩展改用入库接口，有标题即可收藏，每个请求 `credentials: "omit"` 有断言。弹窗的文件夹下拉暂时去掉：新合同漏了列文件夹的路由（规格缺口，已补进产品接口 §2.4.2），后端补上后恢复。
   - 动作：`apps/browser-extension/src/capture.ts` 的 `LibraryClient` 改用 14 的接口；按 14.4，没有标识时有标题也可以收藏，弹窗不再要求手动填写 DOI。
   - 验收：
     - `apps/browser-extension/test/capture.test.ts` 对合成文献库走通收藏与 PDF 上传；

@@ -12,7 +12,7 @@ export async function importExport(
     buffer: Buffer.from(file.content),
   });
   await page.getByRole("button", { name: "预览导入", exact: true }).click();
-  const view = page.getByRole("region", { name: "导入会话" });
+  const view = page.getByRole("region", { name: "入库批次" });
   await view.getByRole("button", { name: "确认导入", exact: true }).click();
   await page
     .getByRole("dialog", { name: "确认导入" })

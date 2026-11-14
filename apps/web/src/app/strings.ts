@@ -239,23 +239,29 @@ export function serviceMessage(code: string): string {
         "device-connection-missing": "这个设备连接已不存在，请刷新列表。",
         "device-artifact-unavailable": "skill 包尚未构建。",
         "device-unavailable": "设备连接暂不可用，请查看服务日志。",
-        "import-format-unsupported":
+        "intake-format-unsupported":
           "不支持这种导出格式，请选择 BibTeX、RIS 或 CSL JSON。",
-        "import-local-identity-required":
-          "这个来源只给出了本地库号，请让 Agent 经设备连接导入。",
-        "import-session-missing": "这个导入会话已不存在，请刷新后重试。",
-        "import-file-missing": "清单里已没有这个文件，请刷新会话。",
-        "import-library-busy":
-          "同一个来源库已有进行中的导入会话，请先结束或取消它。",
-        "import-session-state": "会话状态已变化，请刷新后再操作。",
-        "import-data-changed": "会话数据在确认前有变化，请重新预览后确认。",
-        "import-request-too-large":
+        "local-identity-required":
+          "这个来源只给出了本地库号，请让 Agent 经设备连接入库。",
+        "intake-batch-missing": "这个入库批次已不存在，请刷新后重试。",
+        "intake-file-missing": "清单里已没有这个文件，请刷新批次。",
+        "intake-source-busy":
+          "同一个来源库已有进行中的入库批次，请先结束或取消它。",
+        "intake-batch-state": "批次状态已变化，请刷新后再操作。",
+        "intake-data-changed": "批次数据在确认前有变化，请重新预览后确认。",
+        "intake-request-too-large":
           "导出文件太大，请拆成几个小于 7 MiB 的文件分别导入。",
-        "import-session-limit":
-          "超出一个会话的记录或数据上限，请拆分后分别导入。",
-        "import-metadata-pending": "书目还没导入完，稍后再结束。",
-        "import-file-hash-required":
+        "intake-batch-limit":
+          "超出一个批次的记录或数据上限，请拆分后分别导入。",
+        "intake-metadata-pending": "书目还没入库完，稍后再结束。",
+        "intake-file-hash-required":
           "这篇文献已有 PDF，只需核对文件，不需上传。",
+        "intake-input-invalid": "入库内容无效，请检查后重试。",
+        "intake-item-empty": "没有标识、标题或文件，无法收藏。",
+        "intake-pdf-invalid": "这个文件不是可接受的 PDF。",
+        "intake-disk-space": "存储空间不足，入库未完成。",
+        "intake-unavailable": "入库暂不可用，请查看服务日志。",
+        "device-purpose-forbidden": "这个连接没有所需的用途。",
         "invalid-request": "请求内容无效，请检查填写的内容。",
         "invalid-input": "输入内容无效，请检查后重试。",
         "not-found": "所需内容不存在或已被移除。",

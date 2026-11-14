@@ -12,55 +12,59 @@ import {
 import { useApi } from "../../data/query.js";
 import type { ApiClient } from "../../data/api.js";
 import { navigate } from "../../data/url.js";
+import type { IntakeBatch } from "@sciretriever/contracts";
 import {
+  batchSource,
+  batchStateText,
   detectFormat,
   DISPOSITIONS,
   excludedName,
   FILE_STATES,
   IMPORT_FILE_LIMIT,
   IMPORT_FORMATS,
-  IMPORT_STATES,
   initiator,
+  intakeRoute as route,
   isActive,
   isConfirmable,
   matchFile,
+  metadataDone,
+  pendingFiles,
+  readBatch,
   readFile,
   readResult,
-  readSession,
   readSummary,
-  sessionSource,
   sha256,
-  type ImportFileStatus,
-  type ImportSession,
-  type ImportState,
+  type BatchFile,
 } from "../../data/imports.js";
 import { readDevice } from "../../data/devices.js";
 import { devicesKey } from "../settings/Devices.js";
 import { openBatch } from "../library/Folders.js";
 import { errorMessage, localTime } from "../../strings.js";
 
-const sessionsKey = ["import-sessions"] as const;
-const route = (id: string, action: string) =>
-  `/api/v1/import/sessions/${encodeURIComponent(id)}/${action}`;
+const batchesKey = ["intake-workflow"] as const;
 /** PDF folders chosen on this page, kept until the page is reloaded. */
 const folders = new Map<string, File[]>();
 
-const BADGE: Record<
-  ImportState,
-  "running" | "completed" | "failed" | "partial"
-> = {
-  collecting: "partial",
-  "awaiting-confirmation": "partial",
-  importing: "running",
-  completed: "completed",
-  cancelled: "failed",
-};
-function StateBadge({ session }: { session: ImportSession }) {
+function badge(
+  batch: IntakeBatch,
+): "running" | "completed" | "failed" | "partial" {
+  if (batch.state === "running") return "running";
+  if (batch.state === "finished")
+    return batch.result === "completed"
+      ? "completed"
+      : batch.result === "failed"
+        ? "failed"
+        : "partial";
+  return batch.state === "cancelled" || batch.state === "withdrawn"
+    ? "failed"
+    : "partial";
+}
+function StateBadge({ batch }: { batch: IntakeBatch }) {
   return (
-    <Badge status={BADGE[session.state]}>
-      {session.state === "importing" && session.pending_files > 0
-        ? `导入中 · 还差 ${session.pending_files.toLocaleString()} 个文件`
-        : IMPORT_STATES[session.state]}
+    <Badge status={badge(batch)}>
+      {batch.state === "running" && pendingFiles(batch) > 0
+        ? `入库中 · 还差 ${pendingFiles(batch).toLocaleString()} 个文件`
+        : batchStateText(batch)}
     </Badge>
   );
 }
@@ -114,7 +118,7 @@ function FolderPicker({
   );
 }
 
-/** Choose an export (and optionally its PDFs), then open a previewed session. */
+/** Choose an export (and optionally its PDFs), then open a previewed batch. */
 export function ImportForm() {
   const api = useApi(),
     queries = useQueryClient();
@@ -127,19 +131,19 @@ export function ImportForm() {
       if (!file) throw new Error("请选择导出文件。");
       if (file.size > IMPORT_FILE_LIMIT)
         throw new Error("导出文件超过 7 MiB，请拆成几个文件分别导入。");
-      const { session } = await api.call("/api/v1/import/sessions", {
+      const { batch } = await api.call("/api/v1/intake/batches", {
         format,
-        library: null,
+        source: null,
         scope: `网页上传 ${file.name}`,
         file_name: file.name,
       });
-      const id = readSession(session).session_id;
+      const id = readBatch(batch).batch_id;
       await api.call(route(id, "data"), { sequence: 0, data: content });
       return id;
     },
     onSuccess: (id) => {
       if (folder) folders.set(id, folder);
-      void queries.invalidateQueries({ queryKey: sessionsKey });
+      void queries.invalidateQueries({ queryKey: batchesKey });
       navigate({ session: id });
     },
   });
@@ -222,78 +226,83 @@ export function ImportForm() {
   );
 }
 
-/** The most recent import sessions from every entry, polled while the page is open. */
-export function useImportSessions() {
+/** The most recent import batches from every entry, polled while the page is open. */
+export function useImportBatches() {
   const api = useApi();
   return useQuery({
-    queryKey: sessionsKey,
+    queryKey: batchesKey,
     queryFn: async ({ signal }) => {
       const page = await api.call(
-        "/api/v1/import/sessions/list",
+        "/api/v1/intake/batches/list",
         { cursor: null, limit: 50 },
         signal,
       );
-      return (Array.isArray(page.items) ? page.items : []).map(readSession);
+      return (
+        (Array.isArray(page.items) ? page.items : [])
+          .map(readBatch)
+          // Imports of submitted data; the daily supplement batches have no format.
+          .filter((batch) => batch.kind === "import" && !!batch.request.format)
+      );
     },
     refetchInterval: 3000,
   });
 }
 
-/** Active and recent sessions from every entry, Agents included. */
-export function ImportSessions() {
+/** Active and recent import batches from every entry, Agents included. */
+export function ImportBatches() {
   const devices = useDeviceNames(),
-    sessions = useImportSessions();
+    batches = useImportBatches();
   return (
-    <section className="intake-import-sessions" aria-label="导入会话">
-      <h2>导入会话</h2>
-      {sessions.isError ? (
+    <section className="intake-import-sessions" aria-label="入库批次">
+      <h2>入库批次</h2>
+      {batches.isError ? (
         <ErrorNotice
-          message={errorMessage(sessions.error)}
-          onRetry={() => void sessions.refetch()}
+          message={errorMessage(batches.error)}
+          onRetry={() => void batches.refetch()}
         />
       ) : (
         <DataTable
-          label="导入会话"
-          rows={sessions.data ?? []}
-          getRowId={(session) => session.session_id}
+          label="入库批次"
+          rows={batches.data ?? []}
+          getRowId={(batch) => batch.batch_id}
           empty={
-            sessions.isPending
-              ? "正在读取导入会话…"
-              : "还没有导入会话。上传导出文件，或让 Agent 经设备连接导入。"
+            batches.isPending
+              ? "正在读取入库批次…"
+              : "还没有入库批次。上传导出文件，或让 Agent 经设备连接入库。"
           }
           columns={[
             {
               id: "source",
               header: "来源",
-              value: sessionSource,
-              render: (session) => (
+              value: batchSource,
+              render: (batch) => (
                 <Button
                   size="inline"
                   variant="text"
-                  onPress={() => navigate({ session: session.session_id })}
+                  onPress={() => navigate({ session: batch.batch_id })}
                 >
-                  {sessionSource(session)}
+                  {batchSource(batch)}
                 </Button>
               ),
             },
             {
               id: "by",
               header: "发起",
-              value: (session) => initiator(session, devices),
+              value: (batch) => initiator(batch, devices),
               // Rendered each time: the table caches values per row.
-              render: (session) => initiator(session, devices),
+              render: (batch) => initiator(batch, devices),
             },
             {
               id: "state",
               header: "状态",
-              value: (session) => IMPORT_STATES[session.state],
-              render: (session) => <StateBadge session={session} />,
+              value: batchStateText,
+              render: (batch) => <StateBadge batch={batch} />,
             },
             {
               id: "created",
               header: "创建",
-              value: (session) => session.created_at,
-              render: (session) => localTime(session.created_at),
+              value: (batch) => batch.created_at,
+              render: (batch) => localTime(batch.created_at),
             },
           ]}
         />
@@ -338,7 +347,7 @@ const filesOf = (
 interface Upload {
   done: number;
   current: string | null;
-  unmatched: ImportFileStatus[];
+  unmatched: BatchFile[];
   error: string | null;
   running: boolean;
 }
@@ -354,7 +363,7 @@ function useUploader(api: ApiClient, id: string, onChange: () => void) {
     if (running.current) return;
     running.current = true;
     const tried = new Set<string>(),
-      unmatched = new Map<string, ImportFileStatus>();
+      unmatched = new Map<string, BatchFile>();
     let done = 0;
     const report = (patch: Partial<Upload>) =>
       setUpload((current) => ({
@@ -389,11 +398,11 @@ function useUploader(api: ApiClient, id: string, onChange: () => void) {
           report({ done, current: null });
           onChange();
         }
-        const session = readSession(
-          (await api.call(route(id, "status"), {})).session,
+        const batch = readBatch(
+          (await api.call(route(id, "status"), {})).batch,
         );
-        if (!isActive(session.state)) break;
-        if (session.metadata_complete && !progressed) break;
+        if (!isActive(batch)) break;
+        if (metadataDone(batch) && !progressed) break;
         if (!progressed) await new Promise((r) => setTimeout(r, 2000));
       }
       report({ running: false, current: null });
@@ -419,28 +428,29 @@ function Counts({ items }: { items: [string, number][] }) {
   );
 }
 
-/** One session: preview and confirm, then file progress, then the report. */
-export function ImportSessionPage({ id }: { id: string }) {
+/** One batch: preview and confirm, then file progress, then the report. */
+export function ImportBatchPage({ id }: { id: string }) {
   const api = useApi(),
     queries = useQueryClient(),
     devices = useDeviceNames();
   const status = useQuery({
-    queryKey: [...sessionsKey, id],
+    queryKey: [...batchesKey, id],
     queryFn: async ({ signal }) =>
-      readSession((await api.call(route(id, "status"), {}, signal)).session),
+      readBatch((await api.call(route(id, "status"), {}, signal)).batch),
     refetchInterval: (query) =>
-      query.state.data && !isActive(query.state.data.state) ? false : 3000,
+      query.state.data && !isActive(query.state.data) ? false : 3000,
   });
   const session = status.data;
-  const confirmable = !!session && isConfirmable(session.state);
+  const confirmable = !!session && isConfirmable(session);
   const preview = useQuery({
-    queryKey: [...sessionsKey, id, "preview"],
+    queryKey: [...batchesKey, id, "preview"],
     queryFn: async ({ signal }) =>
       readSummary((await api.call(route(id, "preview"), {}, signal)).summary),
     enabled: confirmable,
   });
   const report = useQuery({
-    queryKey: [...sessionsKey, id, "report"],
+    // Read again when the state moves on: a running report is not the final one.
+    queryKey: [...batchesKey, id, "report", session?.state],
     queryFn: async ({ signal }) => {
       const value = await api.call(route(id, "report"), { limit: 200 }, signal);
       return {
@@ -449,35 +459,35 @@ export function ImportSessionPage({ id }: { id: string }) {
       };
     },
     enabled: !!session && !confirmable,
-    refetchInterval: session && isActive(session.state) ? 3000 : false,
+    refetchInterval: session && isActive(session) ? 3000 : false,
   });
   const files = useQuery({
-    queryKey: [...sessionsKey, id, "files"],
+    queryKey: [...batchesKey, id, "files"],
     queryFn: ({ signal }) => filesOf(api, id, false, signal),
-    enabled: !!session && !isActive(session.state),
+    enabled: !!session && !isActive(session),
   });
   const refresh = () =>
-    void queries.invalidateQueries({ queryKey: [...sessionsKey, id] });
+    void queries.invalidateQueries({ queryKey: [...batchesKey, id] });
   const action = useMutation({
     mutationFn: (name: "confirm" | "cancel" | "finish") =>
       api.call(route(id, name), {}),
     onSettled: () => {
       refresh();
-      void queries.invalidateQueries({ queryKey: sessionsKey });
+      void queries.invalidateQueries({ queryKey: batchesKey });
     },
   });
   // Confirmed and finished imports change the library and its intake records.
   const state = session?.state,
-    processed = session?.processed_records;
+    processed = session?.progress?.processed_items;
   useEffect(() => {
-    if (state && !isConfirmable(state))
+    if (state && state !== "collecting" && state !== "awaiting-confirmation")
       void queries.invalidateQueries({ queryKey: ["library"] });
   }, [state, processed, queries]);
   const { upload, start } = useUploader(api, id, refresh);
   const folder = folders.get(id);
   // A folder chosen with the export starts uploading once the import is confirmed.
   useEffect(() => {
-    if (session?.state === "importing" && folder && !upload) void start(folder);
+    if (session?.state === "running" && folder && !upload) void start(folder);
   }, [session?.state, folder, upload, start]);
 
   const back = (
@@ -499,7 +509,7 @@ export function ImportSessionPage({ id }: { id: string }) {
     return (
       <section className="intake-import-session">
         {back}
-        <p role="status">正在读取导入会话…</p>
+        <p role="status">正在读取入库批次…</p>
       </section>
     );
   const summary = confirmable ? preview.data : report.data?.summary;
@@ -511,15 +521,15 @@ export function ImportSessionPage({ id }: { id: string }) {
     (file) => file.status === "conflict" || file.status === "pending",
   );
   return (
-    <section className="intake-import-session" aria-label="导入会话">
+    <section className="intake-import-session" aria-label="入库批次">
       {back}
       <header className="intake-import-header">
-        <h2>{sessionSource(session)}</h2>
-        <StateBadge session={session} />
+        <h2>{batchSource(session)}</h2>
+        <StateBadge batch={session} />
       </header>
       <p className="ui-description">
         {initiator(session, devices)}发起 · {localTime(session.created_at)}
-        {confirmable ? " · 你或持有“导入”用途的 Agent 都可以确认" : ""}
+        {confirmable ? " · 你或持有“入库”用途的 Agent 都可以确认" : ""}
       </p>
       {action.isError ? (
         <ErrorNotice message={errorMessage(action.error)} />
@@ -527,7 +537,7 @@ export function ImportSessionPage({ id }: { id: string }) {
       {confirmable ? (
         <h3>预览（估计，确认时按当时的文献库重新判定）</h3>
       ) : (
-        <h3>{isActive(session.state) ? "进度" : "报告"}</h3>
+        <h3>{isActive(session) ? "进度" : "报告"}</h3>
       )}
       {preview.isError && confirmable ? (
         <ErrorNotice
@@ -559,10 +569,11 @@ export function ImportSessionPage({ id }: { id: string }) {
                     ]
               }
             />
-            {session.state === "importing" && !session.metadata_complete ? (
+            {session.state === "running" &&
+            session.progress?.phase === "metadata" ? (
               <p className="ui-description">
-                已处理 {session.processed_records.toLocaleString()} /{" "}
-                {session.record_count.toLocaleString()}
+                已处理 {session.progress.processed_items.toLocaleString()} /{" "}
+                {session.progress.total_items.toLocaleString()}
               </p>
             ) : null}
           </Definition>
@@ -579,8 +590,8 @@ export function ImportSessionPage({ id }: { id: string }) {
                       ["已有", summary.files.existing],
                       ["冲突", summary.files.conflicts],
                       [
-                        isActive(session.state) ? "待交" : "未交",
-                        session.pending_files || summary.files.missing,
+                        isActive(session) ? "待交" : "未交",
+                        pendingFiles(session) || summary.files.missing,
                       ],
                     ]
               }
@@ -608,7 +619,7 @@ export function ImportSessionPage({ id }: { id: string }) {
       ) : (
         <p role="status">正在读取…</p>
       )}
-      {session.state === "importing" ? (
+      {session.state === "running" ? (
         <div className="intake-import-upload">
           {upload ? (
             <p role="status">
@@ -625,7 +636,7 @@ export function ImportSessionPage({ id }: { id: string }) {
               retained="已交的文件不会重复上传，重新选择文件夹即可继续。"
             />
           ) : null}
-          {session.pending_files > 0 && !upload?.running ? (
+          {pendingFiles(session) > 0 && !upload?.running ? (
             <FolderPicker
               label="选择 PDF 文件夹"
               onPick={(picked) => {
@@ -649,32 +660,32 @@ export function ImportSessionPage({ id }: { id: string }) {
         </div>
       ) : null}
       <div className="intake-import-actions">
-        {isActive(session.state) ? (
+        {isActive(session) ? (
           <Button
             variant="danger"
             isDisabled={action.isPending}
             confirm={{
-              title: "取消导入会话",
+              title: "取消入库批次",
               description: confirmable
                 ? "不会写入文献库。"
-                : "已导入的书目与 PDF 保留，余下的不再导入。",
-              scope: sessionSource(session),
-              confirmLabel: "取消会话",
+                : "已入库的书目与 PDF 保留，余下的不再入库。",
+              scope: batchSource(session),
+              confirmLabel: "取消批次",
             }}
             onPress={async () => {
               await action.mutateAsync("cancel");
             }}
           >
-            取消会话
+            取消批次
           </Button>
         ) : null}
-        {session.state === "importing" && session.metadata_complete ? (
+        {metadataDone(session) ? (
           <Button
             isDisabled={action.isPending || !!upload?.running}
             confirm={{
               title: "结束导入",
               description: "还没交来的文件记为未交，写进报告。",
-              scope: sessionSource(session),
+              scope: batchSource(session),
               confirmLabel: "结束导入",
             }}
             onPress={async () => {
@@ -691,7 +702,7 @@ export function ImportSessionPage({ id }: { id: string }) {
             confirm={{
               title: "确认导入",
               description: "只新增，不删除、不替换已有 PDF。",
-              scope: sessionSource(session),
+              scope: batchSource(session),
               confirmLabel: "确认导入",
             }}
             onPress={async () => {
@@ -701,8 +712,8 @@ export function ImportSessionPage({ id }: { id: string }) {
             确认导入
           </Button>
         ) : null}
-        {session.intake_batch_id && !confirmable ? (
-          <Button onPress={() => openBatch(session.intake_batch_id!)}>
+        {!confirmable ? (
+          <Button onPress={() => openBatch(session.batch_id)}>
             在文献库查看
           </Button>
         ) : null}
@@ -711,7 +722,7 @@ export function ImportSessionPage({ id }: { id: string }) {
         <DataTable
           label="冲突与未接纳"
           rows={problems}
-          getRowId={(item) => item.external_id}
+          getRowId={(item) => `${item.sequence}:${item.record_index}`}
           columns={[
             { id: "id", header: "来源编号", value: (item) => item.external_id },
             {

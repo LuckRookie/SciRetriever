@@ -130,11 +130,13 @@ export function metadataOf(
   };
 }
 
+/** The library's preview of a page (`/api/v1/intake/pages/preview`); nothing is written. */
 export interface Lookup {
   found: boolean;
   literature_id: string | null;
-  title: string | null;
+  library_title: string | null;
   has_pdf: boolean;
+  pdf_url: string | null;
 }
 export interface Folder {
   folder_id: string;
@@ -147,12 +149,14 @@ export interface FileStatus {
   status: "pending" | "uploaded" | "existing" | "conflict";
   reason: string | null;
 }
+/** The receipt of `/api/v1/intake/pages/save`; a PDF goes on through its batch. */
 export interface CaptureResult {
-  capture_id: string;
+  item_id: string;
   batch_id: string;
-  literature_id: string;
-  disposition: "created" | "enriched" | "matched";
-  metadata: { status: string; code: string | null };
+  literature_id: string | null;
+  disposition: "created" | "enriched" | "matched" | null;
+  metadata: { status: string; job_id: string | null; code: string | null };
+  missing_folder_ids: string[];
   file: FileStatus | null;
 }
 
@@ -164,15 +168,20 @@ const MESSAGES: Record<string, string> = {
   "device-token-invalid": "文献库不认这个扩展了，请重新连接。",
   "device-revoked": "这个设备已在设置页撤销，请重新连接。",
   "device-purpose-forbidden":
-    "这个连接没有“收藏”用途，请重新生成连接码并勾选收藏。",
-  "capture-identifier-required": "需要 DOI 或 arXiv 号。",
-  "capture-identity-conflict": "这个标识在库里对应多篇文献，请到文献库处理。",
-  "capture-pdf-invalid": "下载到的文件不是可读的 PDF。",
-  "capture-disk-space": "文献库所在磁盘空间不足。",
-  "capture-request-too-large": "页面上的书目信息太长，没能保存。",
+    "这个连接没有“入库”用途，请重新生成连接码并勾选入库。",
+  "intake-item-empty": "这一页没有读到书目，无法收藏。",
+  "intake-identity-conflict": "这个标识在库里对应多篇文献，请到文献库处理。",
+  "intake-request-conflict": "这次收藏与之前的请求不一致，请重新打开弹窗。",
+  "intake-pdf-invalid": "下载到的文件不是可读的 PDF。",
+  "intake-disk-space": "文献库所在磁盘空间不足。",
+  "intake-request-too-large": "页面上的书目信息太长，没能保存。",
 };
 
-/** The library's capture and pairing routes, over the browser's own fetch. */
+/**
+ * The library's intake and pairing routes, over the browser's own fetch. Every
+ * request leaves the page's cookies behind (`credentials: "omit"`): the device
+ * token is the only credential.
+ */
 export class LibraryClient {
   constructor(
     readonly address: string,
@@ -237,23 +246,11 @@ export class LibraryClient {
       throw new CaptureError("文献库没有给出令牌。", "invalid-reply");
     return result.token;
   }
-  async lookup(identifiers: Identifier[]): Promise<Lookup> {
-    return (await this.call("/api/v1/capture/lookup", {
-      identifiers,
+  /** The library's view of this page's bibliography: in the library or not, with or without a PDF. */
+  async lookup(metadata: Record<string, unknown>): Promise<Lookup> {
+    return (await this.call("/api/v1/intake/pages/preview", {
+      metadata,
     })) as unknown as Lookup;
-  }
-  async folders(): Promise<Folder[]> {
-    const folders: Folder[] = [];
-    let cursor: string | null = null;
-    do {
-      const page = await this.call("/api/v1/capture/folders", {
-        cursor,
-        limit: 200,
-      });
-      folders.push(...((page.items as Folder[] | undefined) ?? []));
-      cursor = typeof page.next_cursor === "string" ? page.next_cursor : null;
-    } while (cursor);
-    return folders;
   }
   async save(request: {
     request_id: string;
@@ -262,20 +259,18 @@ export class LibraryClient {
     file: { file_name: string; size_bytes: number; sha256: string } | null;
   }): Promise<CaptureResult> {
     return (await this.call(
-      "/api/v1/capture/save",
+      "/api/v1/intake/pages/save",
       request,
     )) as unknown as CaptureResult;
   }
-  async hash(capture_id: string, sha256: string): Promise<FileStatus> {
-    return (
-      await this.call(`/api/v1/capture/items/${capture_id}/file/hash`, {
-        sha256,
-      })
-    ).file as FileStatus;
+  /** The saved PDF goes through the batch the save formed: its hash, or its bytes. */
+  async hash(saved: CaptureResult, sha256: string): Promise<FileStatus> {
+    return (await this.call(`${fileRoute(saved)}/hash`, { sha256 }))
+      .file as FileStatus;
   }
-  async bytes(capture_id: string, file: Blob): Promise<FileStatus> {
+  async bytes(saved: CaptureResult, file: Blob): Promise<FileStatus> {
     return (
-      await this.send(`/api/v1/capture/items/${capture_id}/file/bytes`, {
+      await this.send(`${fileRoute(saved)}/bytes`, {
         method: "POST",
         headers: { "Content-Type": "application/pdf" },
         body: file,
@@ -283,6 +278,11 @@ export class LibraryClient {
     ).file as FileStatus;
   }
 }
+const fileRoute = (saved: CaptureResult) => {
+  if (!saved.file)
+    throw new CaptureError("这次收藏没有登记 PDF。", "invalid-reply");
+  return `/api/v1/intake/batches/${encodeURIComponent(saved.batch_id)}/files/${encodeURIComponent(saved.file.file_id)}`;
+};
 
 /** Folders in tree order, each with its depth for indentation. */
 export function folderTree(

@@ -24,7 +24,7 @@ const metadata = (title: string, doi: string) => ({
   subject_terms: [],
 });
 
-it("shows an Agent's import session, confirms it on the page, uploads matching PDFs from a folder and reports the rest", async () => {
+it("shows an Agent's intake batch, confirms it on the page, uploads matching PDFs from a folder and reports the rest", async () => {
   const w = await nextWorkspace({ path: "/?view=disc", ready: ".intake-form" });
   const folder = await mkdtemp(join(tmpdir(), "sciretriever-import-pdfs-"));
   try {
@@ -33,7 +33,7 @@ it("shows an Agent's import session, confirms it on the page, uploads matching P
     const { connection_code } = await w.env.app.deviceConnections.create({
       address: w.origin,
       name: "办公室笔记本",
-      purposes: ["import"],
+      purposes: ["intake"],
     });
     const exchange = await fetch(
       `${w.origin}/api/v1/device-connections/exchange`,
@@ -46,7 +46,7 @@ it("shows an Agent's import session, confirms it on the page, uploads matching P
     const { token } = ((await exchange.json()) as { result: { token: string } })
       .result;
     const call = async (path: string, request: unknown) => {
-      const response = await fetch(`${w.origin}/api/v1/import/${path}`, {
+      const response = await fetch(`${w.origin}/api/v1/intake/${path}`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -59,18 +59,18 @@ it("shows an Agent's import session, confirms it on the page, uploads matching P
       return ((await response.json()) as { result: Record<string, unknown> })
         .result;
     };
-    const { session } = (await call("sessions", {
+    const { batch } = (await call("batches", {
       format: "records",
-      library: {
+      source: {
         system: "zotero",
         library_id: "users/4242",
         identity: "global",
         name: "我的文库",
       },
       scope: "整库",
-    })) as { session: { session_id: string } };
-    const id = session.session_id;
-    await call(`sessions/${id}/data`, {
+    })) as { batch: { batch_id: string } };
+    const id = batch.batch_id;
+    await call(`batches/${id}/data`, {
       sequence: 0,
       data: {
         records: ["one", "two"].map((name) => ({
@@ -92,14 +92,14 @@ it("shows an Agent's import session, confirms it on the page, uploads matching P
     });
 
     await page.getByRole("tab", { name: "导入", exact: true }).click();
-    const sessions = page.getByRole("table", { name: "导入会话" });
-    const row = sessions.getByRole("row", { name: /我的文库（Zotero）/u });
+    const batches = page.getByRole("table", { name: "入库批次" });
+    const row = batches.getByRole("row", { name: /我的文库（Zotero）/u });
     await row.getByText("Agent · 办公室笔记本").waitFor();
     await row.getByText("待确认").waitFor();
     await row.getByRole("button", { name: "我的文库（Zotero）" }).click();
 
-    const view = page.getByRole("region", { name: "导入会话" });
-    await view.getByText("你或持有“导入”用途的 Agent 都可以确认").waitFor();
+    const view = page.getByRole("region", { name: "入库批次" });
+    await view.getByText("你或持有“入库”用途的 Agent 都可以确认").waitFor();
     await view
       .getByText("预览（估计，确认时按当时的文献库重新判定）")
       .waitFor();
@@ -107,9 +107,10 @@ it("shows an Agent's import session, confirms it on the page, uploads matching P
     await counts.first().getByText("新增 2").waitFor();
     await counts.nth(1).getByText("要上传 2").waitFor();
     // Preview writes nothing.
-    expect((await call(`sessions/${id}/status`, {})).session).toMatchObject({
+    expect((await call(`batches/${id}/status`, {})).batch).toMatchObject({
       state: "awaiting-confirmation",
-      intake_batch_id: null,
+      result: null,
+      confirmed_at: null,
     });
 
     await view.getByRole("button", { name: "确认导入", exact: true }).click();
@@ -119,7 +120,7 @@ it("shows an Agent's import session, confirms it on the page, uploads matching P
       .getByRole("button", { name: "确认导入", exact: true })
       .click();
     await view
-      .getByText(/导入中/u)
+      .getByText(/入库中/u)
       .first()
       .waitFor();
 
@@ -174,7 +175,7 @@ it("previews an uploaded BibTeX export without writing, then imports it with the
     );
     await page.getByLabel("PDF 文件夹").setInputFiles(folder);
     await page.getByRole("button", { name: "预览导入", exact: true }).click();
-    const view = page.getByRole("region", { name: "导入会话" });
+    const view = page.getByRole("region", { name: "入库批次" });
     await view.getByRole("heading", { name: "library.bib" }).waitFor();
     await view
       .locator(".intake-import-counts")
@@ -191,7 +192,7 @@ it("previews an uploaded BibTeX export without writing, then imports it with the
     await view.getByText("完成").first().waitFor();
     await view.getByRole("button", { name: "返回入库" }).click();
     await page
-      .getByRole("table", { name: "导入会话" })
+      .getByRole("table", { name: "入库批次" })
       .getByRole("row", { name: /library\.bib/u })
       .getByText("网页")
       .waitFor();

@@ -28,6 +28,8 @@ import {
   type WorkbenchStaticAsset,
 } from "../../server/src/workbench/http.js";
 import { ProductionWorkbenchSession } from "../../server/src/workbench/production-session.js";
+import { deviceBusinessRoutes } from "../../server/src/bootstrap/device-routes.js";
+import { pathToFileURL } from "node:url";
 
 export interface DesignSampleIds {
   literature: string;
@@ -779,6 +781,15 @@ export async function startDesignSamples(options: {
         ...processorHttpAdapters(app),
       },
       library: { queries: app.library, artifacts: app.literatureArtifacts },
+      // Device connections and the intake interface: the intake page lists batches.
+      devices: {
+        service: app.deviceConnections,
+        routes: deviceBusinessRoutes(
+          app,
+          query,
+          pathToFileURL(`${seed.env.home}/`),
+        ),
+      },
       assets: options.assets,
       configuration: {
         runtime_revision: (await owner.read()).revision,

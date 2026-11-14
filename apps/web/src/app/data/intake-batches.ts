@@ -91,7 +91,7 @@ export function useIntakeBatches(submitting = false) {
     refetchInterval: (query) =>
       submitting ||
       query.state.data?.pages.some((page) =>
-        page.items.some((batch) => batch.status === "running"),
+        page.items.some((batch) => batch.state === "running"),
       )
         ? 3000
         : false,

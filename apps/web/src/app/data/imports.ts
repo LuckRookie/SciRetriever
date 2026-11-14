@@ -1,68 +1,73 @@
+import {
+  parseIntakeBatch,
+  type IntakeBatch,
+  type IntakeBatchResult,
+  type IntakeBatchState,
+  type IntakeFileStatus,
+  type IntakeItemResult,
+  type IntakeSummary,
+} from "@sciretriever/contracts";
 import { record, type JsonRecord } from "./wire.js";
 import type { DeviceConnection } from "./devices.js";
 
-export type ImportState =
-  | "collecting"
-  | "awaiting-confirmation"
-  | "importing"
-  | "completed"
-  | "cancelled";
-export const IMPORT_STATES: Record<ImportState, string> = {
+/** The intake interface (ADR 0063): one batch from creation to report. */
+export const intakeRoute = (id: string, action: string) =>
+  `/api/v1/intake/batches/${encodeURIComponent(id)}/${action}`;
+export const readBatch = (value: unknown): IntakeBatch =>
+  parseIntakeBatch(value);
+
+export const BATCH_STATES: Record<IntakeBatchState, string> = {
   collecting: "收集中",
   "awaiting-confirmation": "待确认",
-  importing: "导入中",
-  completed: "完成",
+  running: "入库中",
+  finished: "完成",
   cancelled: "已取消",
+  withdrawn: "已撤回",
 };
-export const isActive = (state: ImportState) =>
-  state !== "completed" && state !== "cancelled";
-export const isConfirmable = (state: ImportState) =>
-  state === "collecting" || state === "awaiting-confirmation";
+export const BATCH_RESULTS: Record<IntakeBatchResult, string> = {
+  completed: "完成",
+  partial: "部分完成",
+  failed: "失败",
+  interrupted: "已中断",
+};
+/** A finished batch names its result; the others their state. */
+export const batchStateText = (batch: IntakeBatch) =>
+  batch.state === "finished" && batch.result
+    ? BATCH_RESULTS[batch.result]
+    : BATCH_STATES[batch.state];
+export const isActive = (batch: IntakeBatch) =>
+  batch.state === "collecting" ||
+  batch.state === "awaiting-confirmation" ||
+  batch.state === "running";
+export const isConfirmable = (batch: IntakeBatch) =>
+  batch.state === "collecting" || batch.state === "awaiting-confirmation";
+/** Bibliography is in; only the files the source referred to are still owed. */
+export const metadataDone = (batch: IntakeBatch) =>
+  batch.state === "running" && batch.progress?.phase !== "metadata";
+export const pendingFiles = (batch: IntakeBatch) =>
+  batch.progress?.files.pending ?? 0;
 
-export interface ImportSession {
-  session_id: string;
-  library: { system: string; name: string; identity: string };
-  format: string;
-  file_name: string | null;
-  state: ImportState;
-  created_at: string;
-  initiated_by: string;
-  intake_batch_id: string | null;
-  metadata_complete: boolean;
-  record_count: number;
-  processed_records: number;
-  pending_files: number;
-}
-export interface ImportSummary {
-  records: {
-    created: number;
-    enriched: number;
-    matched: number;
-    conflicts: number;
-    rejected: number;
-  };
-  files: {
-    upload: number;
-    hash: number;
-    uploaded: number;
-    existing: number;
-    conflicts: number;
-    missing: number;
-  };
+export type IntakeDisposition = IntakeItemResult["disposition"];
+export type IntakeFileState = IntakeFileStatus["status"];
+export interface BatchSummary {
+  records: IntakeSummary["records"];
+  files: IntakeSummary["files"];
   annotations: { supported: number; unsupported: number; deferred: number };
   excluded: { kind: string; count: number }[];
 }
-export interface ImportFileStatus {
+export interface BatchFile {
   file_id: string;
   file_name: string;
   size_bytes: number | null;
   action: "upload" | "hash";
-  status: "pending" | "uploaded" | "existing" | "conflict";
+  status: IntakeFileState;
   reason: string | null;
 }
-export interface ImportRecordResult {
+export interface BatchItemResult {
+  sequence: number;
+  record_index: number;
   external_id: string;
-  disposition: "created" | "enriched" | "matched" | "conflict" | "rejected";
+  disposition: IntakeDisposition;
   literature_id: string | null;
   reason: string | null;
 }
@@ -77,34 +82,8 @@ const counts = <K extends string>(value: unknown, keys: readonly K[]) => {
   };
 };
 
-export function readSession(value: unknown): ImportSession {
-  const item = record(value, "import session"),
-    library = record(item.library, "import library");
-  if (typeof item.session_id !== "string") throw new Error("invalid session");
-  return {
-    session_id: item.session_id,
-    library: {
-      system: text(library.system),
-      name: text(library.name),
-      identity: text(library.identity),
-    },
-    format: text(item.format),
-    file_name: typeof item.file_name === "string" ? item.file_name : null,
-    state: (Object.hasOwn(IMPORT_STATES, text(item.state))
-      ? item.state
-      : "cancelled") as ImportState,
-    created_at: text(item.created_at),
-    initiated_by: text(item.initiated_by),
-    intake_batch_id:
-      typeof item.intake_batch_id === "string" ? item.intake_batch_id : null,
-    metadata_complete: item.metadata_complete === true,
-    record_count: count(item.record_count),
-    processed_records: count(item.processed_records),
-    pending_files: count(item.pending_files),
-  };
-}
-export function readSummary(value: unknown): ImportSummary {
-  const item = record(value, "import summary");
+export function readSummary(value: unknown): BatchSummary {
+  const item = record(value, "intake summary");
   return {
     records: counts(item.records, [
       "created",
@@ -112,6 +91,10 @@ export function readSummary(value: unknown): ImportSummary {
       "matched",
       "conflicts",
       "rejected",
+      "restored",
+      "possible_duplicates",
+      "pending_decision",
+      "needs_metadata",
     ] as const),
     files: counts(item.files, [
       "upload",
@@ -120,6 +103,7 @@ export function readSummary(value: unknown): ImportSummary {
       "existing",
       "conflicts",
       "missing",
+      "unpaired",
     ] as const),
     annotations: counts(item.annotations, [
       "supported",
@@ -134,30 +118,29 @@ export function readSummary(value: unknown): ImportSummary {
     ),
   };
 }
-export function readFile(value: unknown): ImportFileStatus {
-  const item = record(value, "import file");
+const FILE_STATUS = ["pending", "uploaded", "existing", "conflict"] as const;
+export function readFile(value: unknown): BatchFile {
+  const item = record(value, "intake file");
   return {
     file_id: text(item.file_id),
     file_name: text(item.file_name),
     size_bytes: typeof item.size_bytes === "number" ? item.size_bytes : null,
     action: item.action === "hash" ? "hash" : "upload",
-    status: (["pending", "uploaded", "existing", "conflict"].includes(
-      text(item.status),
-    )
-      ? item.status
-      : "pending") as ImportFileStatus["status"],
+    status: (FILE_STATUS as readonly string[]).includes(text(item.status))
+      ? (item.status as IntakeFileState)
+      : "pending",
     reason: typeof item.reason === "string" ? item.reason : null,
   };
 }
-export function readResult(value: unknown): ImportRecordResult {
-  const item = record(value, "import result");
+export function readResult(value: unknown): BatchItemResult {
+  const item = record(value, "intake result");
   return {
+    sequence: count(item.sequence),
+    record_index: count(item.record_index),
     external_id: text(item.external_id),
-    disposition: (["created", "enriched", "matched", "conflict"].includes(
-      text(item.disposition),
-    )
-      ? item.disposition
-      : "rejected") as ImportRecordResult["disposition"],
+    disposition: Object.hasOwn(DISPOSITIONS, text(item.disposition))
+      ? (item.disposition as IntakeDisposition)
+      : "rejected",
     literature_id:
       typeof item.literature_id === "string" ? item.literature_id : null,
     reason: typeof item.reason === "string" ? item.reason : null,
@@ -165,12 +148,15 @@ export function readResult(value: unknown): ImportRecordResult {
 }
 
 /** The source as the user knows it: the library's name, else the uploaded file. */
-export function sessionSource(session: ImportSession): string {
-  const name = session.library.name || session.file_name || "未命名来源";
-  return session.library.system &&
-    session.library.identity !== "adhoc" &&
-    session.library.system !== "file"
-    ? `${name}（${systemName(session.library.system)}）`
+export function batchSource(batch: IntakeBatch): string {
+  const source = batch.source;
+  const name =
+    source?.name || batch.request.file_name || batch.label || "未命名来源";
+  return source &&
+    source.system &&
+    source.identity !== "adhoc" &&
+    source.system !== "file"
+    ? `${name}（${systemName(source.system)}）`
     : name;
 }
 const SYSTEMS: Record<string, string> = {
@@ -179,12 +165,12 @@ const SYSTEMS: Record<string, string> = {
 };
 const systemName = (system: string) => SYSTEMS[system] ?? system;
 
-/** Who started the session; a device shows by its connection name. */
+/** Who started the batch; a device shows by its connection name. */
 export function initiator(
-  session: ImportSession,
+  batch: IntakeBatch,
   devices: readonly DeviceConnection[] = [],
 ): string {
-  const by = session.initiated_by;
+  const by = batch.initiated_by;
   if (by.startsWith("device:")) {
     const device = devices.find(
       (item) => item.connection_id === by.slice("device:".length),
@@ -224,7 +210,7 @@ export function detectFormat(name: string, content: string): string | null {
 /** Files in a chosen folder by name; a size the source gave breaks ties. */
 export function matchFile(
   folder: readonly File[],
-  wanted: ImportFileStatus,
+  wanted: BatchFile,
 ): File | null {
   const candidates = folder.filter(
     (file) => file.name.toLowerCase() === wanted.file_name.toLowerCase(),
@@ -247,14 +233,17 @@ export async function sha256(file: Blob): Promise<string> {
     .join("");
 }
 
-export const DISPOSITIONS: Record<ImportRecordResult["disposition"], string> = {
+export const DISPOSITIONS: Record<IntakeDisposition, string> = {
   created: "新增",
   enriched: "补全",
   matched: "已在库",
+  restored: "恢复",
   conflict: "冲突",
   rejected: "未接纳",
+  "pending-decision": "待决定",
+  excluded: "不入库",
 };
-export const FILE_STATES: Record<ImportFileStatus["status"], string> = {
+export const FILE_STATES: Record<IntakeFileState, string> = {
   pending: "待交",
   uploaded: "已上传",
   existing: "已有",

@@ -18,11 +18,10 @@ import {
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
 import type { ApiClient } from "../../data/api.js";
-import { OperationDialog } from "../library/OperationDialog.js";
 import type { JsonRecord } from "../../data/wire.js";
 import { readIntakeReport, type IntakeReport } from "../../data/intake.js";
 import { IntakeRecords } from "./IntakeRecords.js";
-import { ImportForm, ImportSessionPage, ImportSessions } from "./Import.js";
+import { ImportBatches, ImportBatchPage, ImportForm } from "./Import.js";
 import { useUrlState } from "../../data/url.js";
 import { errorMessage } from "../../strings.js";
 const reports = new WeakMap<
@@ -40,9 +39,6 @@ export default function Intake() {
     [to, setTo] = useState(""),
     [seed, setSeed] = useState(""),
     [direction, setDirection] = useState("references"),
-    [file, setFile] = useState<File | null>(null),
-    [literature, setLiterature] = useState(""),
-    [upload, setUpload] = useState(false),
     [history, setHistory] = useState(() => reports.get(api) ?? []);
   const mutation = useMutation({
     mutationFn: async () => {
@@ -85,14 +81,14 @@ export default function Intake() {
     return (
       <EmptyState
         title="此入口不提供发现与入库"
-        description="请从完整工作台启动发现、导入或 PDF 上传。"
+        description="请从完整工作台启动发现或导入。"
       />
     );
   return (
     <section className="feature-page intake-page">
       <PageHeader title="入库" />
       {session ? (
-        <ImportSessionPage id={session} />
+        <ImportBatchPage id={session} />
       ) : (
         <>
           <Tabs
@@ -101,7 +97,6 @@ export default function Intake() {
             onChange={(value) => {
               if (!mutation.isPending) {
                 setMode(value);
-                setFile(null);
                 mutation.reset();
               }
             }}
@@ -109,13 +104,12 @@ export default function Intake() {
               { id: "topic", label: "主题发现" },
               { id: "cite", label: "引用扩展" },
               { id: "import", label: "导入" },
-              { id: "pdf", label: "上传 PDF" },
             ]}
           >
             {mode === "import" ? (
               <>
                 <ImportForm />
-                <ImportSessions />
+                <ImportBatches />
               </>
             ) : (
               <div className="intake-form">
@@ -211,62 +205,26 @@ export default function Intake() {
                         />
                       </Definition>
                     </>
-                  ) : (
-                    <>
-                      <Definition
-                        term="目标文献 ID"
-                        description="PDF 会接纳到这篇文献。"
-                      >
-                        <TextField
-                          label="目标文献 ID"
-                          value={literature}
-                          onChange={setLiterature}
-                        />
-                      </Definition>
-                      <Definition term="PDF 文件">
-                        <label className="ui-field">
-                          <span className="ui-label">PDF 文件</span>
-                          <input
-                            className="ui-file"
-                            type="file"
-                            accept="application/pdf"
-                            onChange={(event) =>
-                              setFile(event.target.files?.[0] ?? null)
-                            }
-                          />
-                        </label>
-                      </Definition>
-                    </>
-                  )}
+                  ) : null}
                 </Definitions>
-                {mode === "pdf" ? (
-                  <Button
-                    variant="primary"
-                    isDisabled={!literature.trim() || !file}
-                    onPress={() => setUpload(true)}
-                  >
-                    选择并上传
-                  </Button>
-                ) : (
-                  <Button
-                    variant="primary"
-                    isDisabled={mutation.isPending}
-                    confirm={{
-                      title: "确认发现文献",
-                      description:
-                        "将通过已配置的文献来源查找并接纳元数据，不会自动获取 PDF。",
-                      scope: `每来源最多 ${limit} 条`,
-                      service: "已配置的文献来源",
-                    }}
-                    // Discovery can take minutes; the dialog closes at once and the
-                    // batch's progress shows in the records below.
-                    onPress={() => {
-                      mutation.mutate();
-                    }}
-                  >
-                    {mutation.isPending ? "正在发现…" : "开始发现"}
-                  </Button>
-                )}
+                <Button
+                  variant="primary"
+                  isDisabled={mutation.isPending}
+                  confirm={{
+                    title: "确认发现文献",
+                    description:
+                      "将通过已配置的文献来源查找并接纳元数据，不会自动获取 PDF。",
+                    scope: `每来源最多 ${limit} 条`,
+                    service: "已配置的文献来源",
+                  }}
+                  // Discovery can take minutes; the dialog closes at once and the
+                  // batch's progress shows in the records below.
+                  onPress={() => {
+                    mutation.mutate();
+                  }}
+                >
+                  {mutation.isPending ? "正在发现…" : "开始发现"}
+                </Button>
                 {mutation.isPending ? (
                   <p role="status">
                     正在查找，进度见下方入库记录；完成前请不要关闭本页。
@@ -324,14 +282,6 @@ export default function Intake() {
           />
         </>
       )}
-      {upload && file ? (
-        <OperationDialog
-          ids={[literature.trim()]}
-          kind="upload"
-          file={file}
-          onClose={() => setUpload(false)}
-        />
-      ) : null}
     </section>
   );
 }

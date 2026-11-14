@@ -79,7 +79,7 @@ it(
         devices: {
           service: env.app.deviceConnections,
           routes: new DeviceRouteRegistry(
-            importHttpRoutes(env.app.importSessions),
+            importHttpRoutes(env.app.importSessions, env.app.deviceConnections),
           ),
         },
         library: {

@@ -18,21 +18,23 @@ import {
 import { emptyQuery } from "../../data/library.js";
 import { openBatch } from "../library/Folders.js";
 import { navigate } from "../../data/url.js";
-import { useImportSessions } from "./Import.js";
 import { AcquireDialog, type AcquireScope } from "../library/AcquireDialog.js";
 import { errorMessage, localTime } from "../../strings.js";
 
-const STATUS: Partial<
-  Record<
-    IntakeBatch["status"],
-    { badge: "running" | "partial" | "failed"; label: string }
-  >
-> = {
-  running: { badge: "running", label: "进行中" },
-  partial: { badge: "partial", label: "部分完成" },
-  interrupted: { badge: "partial", label: "已中断" },
-  failed: { badge: "failed", label: "失败" },
-};
+/** Only what needs attention is badged: running, or finished other than complete. */
+function statusOf(
+  batch: IntakeBatch,
+): { badge: "running" | "partial" | "failed"; label: string } | null {
+  if (batch.state === "running") return { badge: "running", label: "进行中" };
+  if (batch.state !== "finished") return null;
+  return batch.result === "partial"
+    ? { badge: "partial", label: "部分完成" }
+    : batch.result === "interrupted"
+      ? { badge: "partial", label: "已中断" }
+      : batch.result === "failed"
+        ? { badge: "failed", label: "失败" }
+        : null;
+}
 
 /** What the person asked for, in a few words: years, sources, file. */
 function requestText(batch: IntakeBatch) {
@@ -58,8 +60,7 @@ export function IntakeRecords({
   highlight: string | null;
   submitting?: boolean;
 }) {
-  const batches = useIntakeBatches(submitting),
-    sessions = useImportSessions().data;
+  const batches = useIntakeBatches(submitting);
   const [acquire, setAcquire] = useState<AcquireScope | null>(null);
   const items = batches.data?.pages.flatMap((page) => page.items) ?? [];
   return (
@@ -79,11 +80,6 @@ export function IntakeRecords({
               key={batch.batch_id}
               batch={batch}
               open={batch.batch_id === highlight}
-              session={
-                sessions?.find(
-                  (session) => session.intake_batch_id === batch.batch_id,
-                )?.session_id ?? null
-              }
               onAcquire={() =>
                 setAcquire({
                   kind: "query",
@@ -123,13 +119,10 @@ export function IntakeRecords({
 function Record({
   batch,
   open,
-  session,
   onAcquire,
 }: {
   batch: IntakeBatch;
   open: boolean;
-  /** The import session that formed this batch, when it is among the recent ones. */
-  session: string | null;
   onAcquire: () => void;
 }) {
   const api = useApi(),
@@ -148,7 +141,7 @@ function Record({
   });
   const c = batch.counts,
     pdf = batch.pdf;
-  const status = STATUS[batch.status];
+  const status = statusOf(batch);
   const legacy = batch.kind === "legacy";
   const share = (n: number) => (c.hits ? `${(n / c.hits) * 100}%` : "0%");
   return (
@@ -282,10 +275,13 @@ function Record({
           <Button onPress={() => openBatch(batch.batch_id)}>
             在文献库查看
           </Button>
-          {session ? (
-            <Button onPress={() => navigate({ session })}>导入报告</Button>
+          {/* Only a batch formed from submitted data has an import report. */}
+          {batch.kind === "import" && batch.request.format ? (
+            <Button onPress={() => navigate({ session: batch.batch_id })}>
+              导入报告
+            </Button>
           ) : null}
-          {pdf.pending > 0 && batch.status !== "running" ? (
+          {pdf.pending > 0 && batch.state !== "running" ? (
             <Button variant="primary" onPress={onAcquire}>
               获取 PDF <span>{pdf.pending.toLocaleString()}</span>
             </Button>
