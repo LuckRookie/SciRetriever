@@ -58,6 +58,8 @@ HTTP 关闭先取消并排空正在处理的请求；生产组装随后停止 du
 
 `POST /api/v1/intake/literatures/:literature_id/pdf` 只接受登录 Web，注册表没有为它授予设备用途。正文为 PDF/八位字节流，文件名头 X-Sciretriever-File-Name 是百分号编码 UTF-8 的 basename；回应 result 包含 batch_id 和 file。它复用同一流式文件通道与按入口每日开放批次，没有 16 MiB 限制。原维护 PDF 地址保留 receipt 响应，生产组装同样传入流式接纳方法。
 
+`POST /api/v1/intake/folders` 通过入库用途或原网页登录准入后只读调用文件夹服务的 list，返回完整文件夹树，不受批次归属限制；read/operate 不能代替 intake。批次、报告含按论文的 full_text；批次 estimates 对应按批次筛选创建获取 PDF/解析任务的预估。既有 `/api/tasks` 接受 acquire-pdf 与 parse-documents 两种范围任务，创建不启动执行。
+
 [capture-http.ts](capture-http.ts) 登记 `/api/v1/intake/pages/preview|save`。保存暂收扩展已解读的书目字段，有标题即可入库；设备当天的开放批次始终 running，文件经相同的 batches 文件通道交付。单篇保存限定有真实设备身份；Web 可预览与操作全部已建批次。扩展、Agent 指南与 skill 下载由 device-http 的显式 intake GET 路由读取固定构建产物，允许登录 Web，原 import/capture 与 device-connections 下载路由已移除。
 
 正文时限由 http.ts 统一接收守卫管理：数据分段、批次文件字节、补 PDF、MCP 与原维护 PDF 输入使用 60 秒空闲时限，其他正文为 5 秒总时限，头部为 5 秒。提前响应后的未收完正文最多再排空 5 秒，持续发送不续期；及时收完仍可复用 socket。

@@ -48,6 +48,10 @@ export interface PdfSelection {
     readonly version_role: import("@sciretriever/contracts").VersionRole;
   }[];
 }
+export interface ParseDocumentSelection {
+  readonly counts: import("@sciretriever/contracts").ParseDocumentCounts;
+  readonly items: PdfSelection["items"];
+}
 export interface LibraryQueryRepository {
   intakeBatches?(
     value: unknown,
@@ -65,6 +69,10 @@ export interface LibraryQueryRepository {
     request: PdfSelectionRequest,
     signal?: AbortSignal,
   ): Promise<PdfSelection>;
+  parseDocumentSelection?(
+    request: PdfSelectionRequest,
+    signal?: AbortSignal,
+  ): Promise<ParseDocumentSelection>;
   libraryCounts(
     query: LibraryQuery,
     ftsQuery: string | null,
@@ -587,6 +595,34 @@ export class LiteratureQueryService {
             .map((t) => `"${t}"`)
             .join(" AND ");
     return this.repository.acquirePdfSelection({ selector, ftsQuery }, signal);
+  }
+  parseSelection(value: unknown, signal?: AbortSignal) {
+    if (!this.repository.parseDocumentSelection)
+      throw new LiteratureQueryError();
+    const selector = parseAcquirePdfSelector(value);
+    const terms =
+      selector.kind === "query" && selector.query.text !== null
+        ? queryTerms(selector.query.text)
+        : null;
+    if (terms !== null && terms.length === 0)
+      return Promise.resolve<ParseDocumentSelection>({
+        counts: {
+          matched: 0,
+          process: 0,
+          skipped_no_pdf: 0,
+          skipped_parsed: 0,
+          over_limit: 0,
+        },
+        items: [],
+      });
+    return this.repository.parseDocumentSelection(
+      {
+        selector,
+        ftsQuery:
+          terms === null ? null : terms.map((t) => `"${t}"`).join(" AND "),
+      },
+      signal,
+    );
   }
   async detail(value: unknown): Promise<LiteratureDetail> {
     const id = parseLiteratureId(value);

@@ -11,6 +11,7 @@ import {
   type LiteratureId,
 } from "./index.js";
 import { tagInteger } from "./tags.js";
+import { parseFullTextCounts, type FullTextCounts } from "./library-counts.js";
 function tagRecord(
   value: unknown,
   required: readonly string[],
@@ -76,6 +77,8 @@ export interface IntakeBatch {
   readonly initiated_by: string;
   readonly source: IntakeSource | null;
   readonly progress: IntakeProgress | null;
+  readonly full_text: FullTextCounts;
+  readonly estimates: { readonly acquire_pdf: number; readonly parse: number };
   readonly request: {
     readonly query?: string;
     readonly year_from?: number | null;
@@ -84,6 +87,7 @@ export interface IntakeBatch {
     readonly direction?: "references" | "cited-by";
     readonly format?: string;
     readonly file_name?: string | null;
+    readonly metadata_only?: boolean;
     readonly providers?: readonly string[];
   };
   readonly counts: {
@@ -166,6 +170,51 @@ export interface AcquirePdfCounts {
 export interface AcquirePdfScope {
   readonly selector: AcquirePdfSelector;
   readonly counts: AcquirePdfCounts;
+}
+export interface ParseDocumentCounts {
+  readonly matched: number;
+  readonly process: number;
+  readonly skipped_no_pdf: number;
+  readonly skipped_parsed: number;
+  readonly over_limit: number;
+}
+export interface ParseDocumentScope {
+  readonly selector: AcquirePdfSelector;
+  readonly counts: ParseDocumentCounts;
+}
+export type IntakeTaskScope = AcquirePdfScope | ParseDocumentScope;
+export function parseIntakeTaskScope(value: unknown): IntakeTaskScope {
+  const r = tagRecord(value, ["selector", "counts"]);
+  if (
+    r.counts &&
+    typeof r.counts === "object" &&
+    "skipped_no_pdf" in r.counts
+  ) {
+    const c = tagRecord(r.counts, [
+      "matched",
+      "process",
+      "skipped_no_pdf",
+      "skipped_parsed",
+      "over_limit",
+    ]);
+    const counts = {
+      matched: tagInteger(c.matched),
+      process: tagInteger(c.process),
+      skipped_no_pdf: tagInteger(c.skipped_no_pdf),
+      skipped_parsed: tagInteger(c.skipped_parsed),
+      over_limit: tagInteger(c.over_limit),
+    };
+    if (
+      counts.matched !==
+      counts.process +
+        counts.skipped_no_pdf +
+        counts.skipped_parsed +
+        counts.over_limit
+    )
+      fail();
+    return { selector: parseAcquirePdfSelector(r.selector), counts };
+  }
+  return parseAcquirePdfScope(value);
 }
 function fail(): never {
   throw new ContractValidationError(["intake"]);
@@ -302,6 +351,8 @@ export function parseIntakeBatch(value: unknown): IntakeBatch {
     "initiated_by",
     "source",
     "progress",
+    "full_text",
+    "estimates",
     "request",
     "counts",
     "pdf",
@@ -436,7 +487,7 @@ export function parseIntakeBatch(value: unknown): IntakeBatch {
       : kind === "citation"
         ? ["seed_literature_id", "direction", "providers"]
         : kind === "import"
-          ? ["format", "file_name"]
+          ? ["format", "file_name", "metadata_only"]
           : [],
   );
   const request: IntakeBatch["request"] = {
@@ -450,6 +501,12 @@ export function parseIntakeBatch(value: unknown): IntakeBatch {
           direction: member(q.direction, ["references", "cited-by"] as const),
         }),
     ...(q.format === undefined ? {} : { format: text(q.format) }),
+    ...(q.metadata_only === undefined
+      ? {}
+      : {
+          metadata_only:
+            typeof q.metadata_only === "boolean" ? q.metadata_only : fail(),
+        }),
     ...(q.file_name === undefined
       ? {}
       : { file_name: nullableText(q.file_name) }),
@@ -485,6 +542,14 @@ export function parseIntakeBatch(value: unknown): IntakeBatch {
   )
     fail();
   return {
+    full_text: parseFullTextCounts(r.full_text),
+    estimates: (() => {
+      const estimates = tagRecord(r.estimates, ["acquire_pdf", "parse"]);
+      return {
+        acquire_pdf: tagInteger(estimates.acquire_pdf),
+        parse: tagInteger(estimates.parse),
+      };
+    })(),
     batch_id: parseIntakeBatchId(r.batch_id),
     kind,
     label,
@@ -674,6 +739,7 @@ export interface IntakeFileStatus {
   readonly reason: string | null;
 }
 export interface IntakeSummary {
+  readonly full_text: FullTextCounts;
   readonly records: {
     readonly created: number;
     readonly enriched: number;
@@ -784,12 +850,14 @@ export function parseIntakeCreate(value: unknown) {
   const r = importObject(
     value,
     ["format", "source", "scope"],
-    ["import_user_tags", "file_name"],
+    ["import_user_tags", "file_name", "metadata_only"],
   );
   if (
     r.import_user_tags !== undefined &&
     typeof r.import_user_tags !== "boolean"
   )
+    throw new ContractValidationError();
+  if (r.metadata_only !== undefined && typeof r.metadata_only !== "boolean")
     throw new ContractValidationError();
   let source: {
     system: string;
@@ -825,6 +893,7 @@ export function parseIntakeCreate(value: unknown) {
         ? null
         : importString(r.file_name, 1024),
     import_user_tags: r.import_user_tags !== false,
+    metadata_only: r.metadata_only === true,
   };
 }
 export function parseIntakeData(value: unknown): IntakeData {
@@ -949,6 +1018,7 @@ export function parseIntakeData(value: unknown): IntakeData {
 
 /** Implemented intake routes. Later recognition/decision/withdrawal routes register when connected. */
 export const INTAKE_HTTP_ENDPOINTS = [
+  ["POST", "/api/v1/intake/folders", "folders", "{}", "{folders:Folder[]}"],
   [
     "POST",
     "/api/v1/intake/literatures/:literature_id/pdf",

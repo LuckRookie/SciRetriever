@@ -142,7 +142,8 @@ export function createTaskOperations(app: Application) {
           ],
         });
       }
-      if (r.kind !== "acquire-pdf") throw new ContractValidationError();
+      if (r.kind !== "acquire-pdf" && r.kind !== "parse-documents")
+        throw new ContractValidationError();
       inputRecord(value, ["kind", "idempotency_key", "selector"], ["policy"]);
       if (
         typeof r.idempotency_key !== "string" ||
@@ -182,7 +183,8 @@ export function createTaskOperations(app: Application) {
       return app.jobService!.create({
         target_kind: "selector",
         selector: taskSelector(r.selector),
-        goal: "pdf",
+        goal: r.kind === "acquire-pdf" ? "pdf" : "parser",
+        ...(r.kind === "parse-documents" ? { parse_only: true } : {}),
         policy_version: "workbench-v1",
         policy,
         idempotency_key: r.idempotency_key,

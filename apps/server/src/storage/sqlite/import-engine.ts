@@ -20,6 +20,12 @@ const { readIntakeBatch }: typeof import("./intake-engine.js") = await import(
 import type { RetiredArtifact } from "../files/reclamation.js";
 
 type Row = Record<string, SQLOutputValue>;
+function summaryJson(summary: unknown): string {
+  // Full-text availability is a live read projection, never a persisted fact.
+  return JSON.stringify(summary, (key, value) =>
+    key === "full_text" ? undefined : value,
+  );
+}
 export interface StoredImportSession {
   readonly batch_id: string;
   readonly library_key: string;
@@ -28,6 +34,7 @@ export interface StoredImportSession {
   readonly scope: string;
   readonly file_name: string | null;
   readonly import_user_tags: boolean;
+  readonly metadata_only: boolean;
   readonly state: IntakeBatch["state"];
   readonly confirmation: IntakeBatch["confirmation"];
   readonly created_at: string;
@@ -43,7 +50,14 @@ export interface StoredImportSession {
   readonly processed_records: number;
   readonly pending_files: number;
   readonly origin: "web" | "cli" | "mcp";
-  readonly summary: ImportSummary | null;
+  readonly summary: Omit<ImportSummary, "full_text"> | null;
+}
+export interface ImportReportSnapshot {
+  readonly batch: IntakeBatch;
+  readonly summary: Omit<ImportSummary, "full_text"> | null;
+  readonly counts: Pick<ImportSummary, "records" | "files"> | null;
+  readonly items: readonly ImportRecordResult[];
+  readonly next_cursor: string | null;
 }
 export interface ImportPart extends RetiredArtifact {
   readonly artifact_id: string;
@@ -51,6 +65,12 @@ export interface ImportPart extends RetiredArtifact {
   readonly record_count: number;
 }
 export type ImportRead =
+  | {
+      op: "report-snapshot";
+      batch_id: string;
+      cursor: string | null;
+      limit: number;
+    }
   | { op: "workflow"; batch_id: string }
   | { op: "batch"; batch_id: string }
   | { op: "owner"; batch_id: string }
@@ -172,7 +192,7 @@ function nullable(v: SQLOutputValue | undefined): string | null {
 function row(db: DatabaseSync, id: string): Row {
   const r = db
     .prepare(
-      "SELECT s.*,b.state,b.result,b.confirmation,b.confirmed_at,b.finished_at,b.initiated_by,b.origin,b.owner_pid FROM import_sessions s JOIN intake_batches b USING(batch_id) WHERE batch_id=?",
+      "SELECT s.*,b.state,b.result,b.confirmation,b.confirmed_at,b.finished_at,b.initiated_by,b.origin,b.owner_pid,coalesce(json_extract(b.request_json,'$.metadata_only'),0) AS metadata_only FROM import_sessions s JOIN intake_batches b USING(batch_id) WHERE batch_id=?",
     )
     .get(id);
   if (!r) fail("intake-batch-state");
@@ -193,6 +213,7 @@ function session(db: DatabaseSync, r: Row): StoredImportSession {
     scope: str(r.scope),
     file_name: nullable(r.file_name),
     import_user_tags: r.import_user_tags === 1,
+    metadata_only: r.metadata_only === 1,
     state: r.state as IntakeBatch["state"],
     confirmation: r.confirmation as IntakeBatch["confirmation"],
     created_at: str(r.created_at),
@@ -283,9 +304,43 @@ function map(db: DatabaseSync, m: ExternalObjectMapping) {
     m.state,
   );
 }
-export function readImportStorage(db: DatabaseSync, r: ImportRead): unknown {
+export function readImportStorage(
+  db: DatabaseSync,
+  r: ImportRead,
+  profile = "vlm-engine",
+): unknown {
+  if (r.op === "report-snapshot") {
+    const batch = readIntakeBatch(db, r.batch_id, profile);
+    if (batch.kind !== "import" || batch.source === null)
+      return {
+        batch,
+        summary: null,
+        counts: null,
+        items: [],
+        next_cursor: null,
+      } satisfies ImportReportSnapshot;
+    return {
+      batch,
+      summary: session(db, row(db, r.batch_id)).summary,
+      counts: readImportStorage(
+        db,
+        { op: "aggregate", batch_id: r.batch_id },
+        profile,
+      ) as ImportReportSnapshot["counts"],
+      ...(readImportStorage(
+        db,
+        {
+          op: "results",
+          batch_id: r.batch_id,
+          cursor: r.cursor,
+          limit: r.limit,
+        },
+        profile,
+      ) as Pick<ImportReportSnapshot, "items" | "next_cursor">),
+    } satisfies ImportReportSnapshot;
+  }
   if (r.op === "workflow") return session(db, row(db, r.batch_id));
-  if (r.op === "batch") return readIntakeBatch(db, r.batch_id);
+  if (r.op === "batch") return readIntakeBatch(db, r.batch_id, profile);
   if (r.op === "owner") {
     const value = db
       .prepare("SELECT initiated_by FROM intake_batches WHERE batch_id=?")
@@ -296,7 +351,7 @@ export function readImportStorage(db: DatabaseSync, r: ImportRead): unknown {
   if (r.op === "active")
     return db
       .prepare(
-        "SELECT s.*,b.state,b.result,b.confirmation,b.confirmed_at,b.finished_at,b.initiated_by,b.origin,b.owner_pid FROM import_sessions s JOIN intake_batches b USING(batch_id) WHERE s.active=1 ORDER BY s.created_at,s.batch_id",
+        "SELECT s.*,b.state,b.result,b.confirmation,b.confirmed_at,b.finished_at,b.initiated_by,b.origin,b.owner_pid,coalesce(json_extract(b.request_json,'$.metadata_only'),0) AS metadata_only FROM import_sessions s JOIN intake_batches b USING(batch_id) WHERE s.active=1 ORDER BY s.created_at,s.batch_id",
       )
       .all()
       .map((r) => session(db, r));
@@ -339,7 +394,7 @@ export function readImportStorage(db: DatabaseSync, r: ImportRead): unknown {
     return {
       items: rows
         .slice(0, r.limit)
-        .map((v) => readIntakeBatch(db, str(v.batch_id))),
+        .map((v) => readIntakeBatch(db, str(v.batch_id), profile)),
       next_cursor:
         rows.length > r.limit ? str(rows[r.limit - 1]!.batch_id) : null,
     };
@@ -600,7 +655,7 @@ export function writeImportStorage(
         ).run(r.now, process.pid, r.batch_id);
         db.prepare(
           "UPDATE import_sessions SET phase='metadata',last_file_at=?,updated_at=?,summary_json=? WHERE batch_id=?",
-        ).run(r.now, r.now, JSON.stringify(r.summary), r.batch_id);
+        ).run(r.now, r.now, summaryJson(r.summary), r.batch_id);
       }
     } else if (r.op === "supplement") {
       const opener = `supplement:${r.batch.origin}`;
@@ -715,7 +770,7 @@ export function writeImportStorage(
           ).run(r.now, r.batch_id);
           db.prepare(
             "UPDATE import_sessions SET active=0,phase='closing',summary_json=? WHERE batch_id=?",
-          ).run(JSON.stringify(summary), r.batch_id);
+          ).run(summaryJson(summary), r.batch_id);
         }
       }
     } else if (r.op === "result") {
@@ -756,7 +811,7 @@ export function writeImportStorage(
       live(db, r.batch_id, ["running"]);
       db.prepare(
         "UPDATE import_sessions SET metadata_complete=1,storage_failures=0,phase='files',summary_json=?,updated_at=? WHERE batch_id=?",
-      ).run(JSON.stringify(r.summary), r.now, r.batch_id);
+      ).run(summaryJson(r.summary), r.now, r.batch_id);
       db.prepare("UPDATE intake_batches SET rejected=? WHERE batch_id=?").run(
         r.summary.records.rejected,
         r.batch_id,
@@ -819,7 +874,7 @@ export function writeImportStorage(
           "UPDATE import_sessions SET active=0,phase='closing',updated_at=?,summary_json=coalesce(?,summary_json) WHERE batch_id=?",
         ).run(
           r.now,
-          r.summary === null ? null : JSON.stringify(r.summary),
+          r.summary === null ? null : summaryJson(r.summary),
           r.batch_id,
         );
       }

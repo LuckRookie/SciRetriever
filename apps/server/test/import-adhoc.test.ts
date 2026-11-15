@@ -14,6 +14,104 @@ import { workbenchPdf } from "../src/workbench/synthetic-fixture.js";
 
 const bibliography =
   "@article{same-local-key,title={One-off source},author={Lovelace, Ada},year={2026}}";
+
+it("retains metadata_only across reopening and imports the raw bibliography with no file manifest", async () => {
+  const f = await fixture();
+  let reopened: Awaited<ReturnType<typeof createApplication>> | undefined;
+  try {
+    const source = bibliography.replace(
+      "year={2026}",
+      "year={2026},file={Full Text PDF:files/a.pdf:application/pdf}",
+    );
+    const batch = await f.app.importSessions.create(
+      {
+        format: "bibtex",
+        source: null,
+        scope: "Metadata only",
+        metadata_only: true,
+      },
+      { kind: "local", origin: "web" },
+    );
+    await f.app.importSessions.putData(batch.batch_id, 0, source);
+    await f.app.close();
+    reopened = await createApplication(f.home, {
+      indexRefreshIntervalMs: null,
+      importSessions: { maintain: false },
+    });
+    const result = await reopened.importSessions.confirm(batch.batch_id);
+    expect(result).toMatchObject({
+      state: "finished",
+      result: "completed",
+      request: { format: "bibtex", metadata_only: true },
+    });
+    expect(
+      (
+        await reopened.importSessions.missingFiles(
+          batch.batch_id,
+          null,
+          50,
+          false,
+        )
+      ).items,
+    ).toEqual([]);
+    expect(
+      (await reopened.importSessions.report(batch.batch_id)).summary.excluded,
+    ).toEqual([{ kind: "metadata-only-attachment", count: 1 }]);
+  } finally {
+    await reopened?.close();
+    await f.close();
+  }
+}, 30_000);
+
+it("preserves UTF-16 and malformed-record receipts through the thin bibliography wrapper", async () => {
+  const f = await fixture();
+  try {
+    const utf16 = Buffer.from("\ufeff" + bibliography, "utf16le");
+    const imported = await f.app.importSessions.importBibliography(
+      utf16,
+      "bibtex",
+      "utf16.bib",
+      "cli",
+    );
+    expect(imported).toMatchObject({
+      format: "bibtex",
+      items: [{ record_index: 0, disposition: "created", reason: null }],
+    });
+    expect(
+      (await f.app.importSessions.status(imported.intake_batch_id!)).request,
+    ).toMatchObject({ format: "bibtex", metadata_only: true });
+    const malformed = await f.app.importSessions.importBibliography(
+      Buffer.from('[{"title":"Valid raw entry"},"invalid"]'),
+      "csl-json",
+      "mixed.json",
+      "mcp",
+    );
+    expect(malformed.items).toMatchObject([
+      { record_index: 0, disposition: "created" },
+      { record_index: 1, disposition: "rejected", reason: "malformed-record" },
+    ]);
+    const invalidEncoding = await f.app.importSessions.importBibliography(
+      Buffer.from([0xc0, 0x80]),
+      "bibtex",
+      "invalid.bib",
+      "cli",
+    );
+    expect(invalidEncoding).toEqual({
+      format: "bibtex",
+      items: [
+        {
+          record_index: 0,
+          disposition: "rejected",
+          literature_id: null,
+          meta_literature_id: null,
+          reason: "malformed-document",
+        },
+      ],
+    });
+  } finally {
+    await f.close();
+  }
+}, 30_000);
 async function fixture() {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-import-adhoc-"));
   const app = await createApplication(home, {
@@ -358,9 +456,13 @@ it("allows file sessions for all local actors and preserves real CLI/stdio bibli
       (s) => s.request.file_name === "batch-fixture.bib",
     )) {
       expect(s).toMatchObject({ state: "finished", progress: null });
+      expect(s.request.metadata_only).toBe(true);
       expect(
         (await f.app.importSessions.missingFiles(s.batch_id)).items,
       ).toEqual([]);
+      expect(
+        (await f.app.importSessions.report(s.batch_id)).summary.excluded,
+      ).toContainEqual({ kind: "metadata-only-attachment", count: 1 });
     }
   } finally {
     await client.close();

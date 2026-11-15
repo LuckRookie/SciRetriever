@@ -319,12 +319,35 @@ it("admits 5000 real HTTP records immediately, publishes increasing progress and
     expect(confirmations[0]!.batch.progress!.processed_items).toBe(0);
     expect(confirmMs).toBeLessThan(2000);
     let advanced = false,
-      highest = 0;
+      highest = 0,
+      nextProgress = 1000,
+      statusRequests = 0,
+      statusMs = 0;
     await until(async () => {
+      const statusStarted = performance.now();
       const b = await f.status(id);
+      statusRequests++;
+      statusMs += performance.now() - statusStarted;
+      expect(b.full_text).toEqual({
+        total: b.counts.hits,
+        obtained: 0,
+        missing: b.counts.hits,
+        exhausted: 0,
+      });
+      expect(b.estimates).toEqual({ acquire_pdf: b.counts.hits, parse: 0 });
       if (b.progress) {
         highest = Math.max(highest, b.progress.processed_items);
         if (highest > 0 && highest < 5000) advanced = true;
+        if (highest >= nextProgress) {
+          console.log(
+            "intake-http-progress",
+            JSON.stringify({
+              processed: highest,
+              elapsed_ms: performance.now() - started,
+            }),
+          );
+          nextProgress += 1000;
+        }
       }
       return b.state === "finished";
     }, 480_000);
@@ -347,6 +370,8 @@ it("admits 5000 real HTTP records immediately, publishes increasing progress and
         completion_ms: performance.now() - started,
         processed: 5000,
         intermediate_progress: highest,
+        status_requests: statusRequests,
+        status_ms: statusMs,
       }),
     );
   } finally {

@@ -24,6 +24,8 @@
 
 - [import-adapters.ts](import-adapters.ts)：中性记录与书目格式的纯适配器登记；只转换输入，不访问时钟、随机数、网络、文件或数据库。[bibliography-attachments.ts](bibliography-attachments.ts) 读取 BibTeX/BibLaTeX file 与 RIS L1，形成首选 PDF 的中性引用、脱敏本机路径并统计未导入附件；CSL JSON 不推断附件。
 
+书目适配器只收原始文本；bibliography-import 的 bibliographyText 共用 UTF-8/带 BOM UTF-16 的严格字节解码，供本地入口转换文本。只导书目的文件策略由 Entry 的批次选项处理，纯适配器仍返回同样的文件引用与排除计数。
+
 - `bibliography-import.ts`：共享的 BibTeX/RIS/CSL 解码和元数据导入；从 Entry 移入同一 Literature 所有者，CLI、MCP 与引用关联复用一份实现。`reference-matching.ts` 优先 DOI 精确身份；只有可确定完整书目字段的结构化引用才使用现有严格后备键，普通非结构化文本不做模糊猜测。
 
 - `reference-matching.ts` / `archive-references.ts`：固定校订稿参考文献的保守库内匹配与原子关系支持；不依靠模糊题名猜测。`bibliography-import.ts` 是书目解码与导入的共享实现，Entry 不再持有重复副本。
@@ -31,3 +33,5 @@
 - [folders.ts](folders.ts)：文献文件夹、批量成员与显式阅读历史的操作边界；目录与阅读历史不改变文献事实、资产或就绪状态。`query.ts` 的快速筛选计数与搜索共享筛选条件，入库排序取最早关联观测时间。
 
 `metadata-rules.ts` 将作者声明（declared_keywords）投影为作者关键词，逐字段裁决仍保留人工 > 校订证据 > 来源的优先级及锁。数据库主题词由 provider 顺序合并、忽略大小写去重并限于 8 项；不进入书目导出的作者关键词。`query.ts` 提供批次读取、整个筛选范围的词频，以及按当前排序冻结的 PDF 获取预览；分页搜索与批量范围使用同一 SQL 条件。
+
+`query.ts` 的 parseSelection 复用获取 PDF 的范围选择器，读取有主 PDF 且没有当前部署 profile 原始解析的版本；它只读，不下载、解析或创建任务。批次读取返回按论文的 full_text 及按版本的 acquire_pdf/parse 预估；文献库 LibraryCounts 的扩展另行接入同一计数 owner。

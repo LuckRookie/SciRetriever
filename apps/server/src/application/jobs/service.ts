@@ -1,7 +1,8 @@
 import type { CatalogWriteAdmission } from "../../storage/write-admission.js";
 import {
   parseAcquirePdfSelector,
-  type AcquirePdfScope,
+  type IntakeTaskScope,
+  parseIntakeTaskScope,
 } from "@sciretriever/contracts";
 import { randomUUID } from "node:crypto";
 import type {
@@ -515,7 +516,7 @@ export class ExecutionJobService {
     private readonly repository: ExecutionRepository,
     private readonly completion: DatabaseCompletionService,
     private readonly library: Pick<LiteratureQueryService, "detail"> &
-      Partial<Pick<LiteratureQueryService, "pdfSelection">>,
+      Partial<Pick<LiteratureQueryService, "pdfSelection" | "parseSelection">>,
     private readonly writes?: CatalogWriteAdmission,
   ) {}
 
@@ -523,6 +524,7 @@ export class ExecutionJobService {
     input: Omit<CreateExecutionJobInput, "selector"> & {
       readonly selector: LiteratureSelector;
       readonly goal?: "pdf" | "parser";
+      readonly parse_only?: boolean;
     },
   ) {
     return this.writes
@@ -533,11 +535,26 @@ export class ExecutionJobService {
     input: Omit<CreateExecutionJobInput, "selector"> & {
       readonly selector: LiteratureSelector;
       readonly goal?: "pdf" | "parser";
+      readonly parse_only?: boolean;
     },
   ) {
-    const { selector, goal = "parser", ...jobInput } = input;
+    const {
+      selector,
+      goal = "parser",
+      parse_only = false,
+      ...jobInput
+    } = input;
+    if (
+      parse_only &&
+      (goal !== "parser" ||
+        (selector.kind !== "query" && selector.kind !== "literatures"))
+    )
+      throw new TypeError("parse selector is invalid");
+    if (parse_only && !this.library.parseSelection)
+      throw new TypeError("parse selection is unavailable");
     const policyForCount = (count: number) =>
-      jobInput.policy.max_attempts === undefined && goal === "pdf"
+      jobInput.policy.max_attempts === undefined &&
+      (goal === "pdf" || parse_only)
         ? {
             ...jobInput.policy,
             max_attempts: Math.max(
@@ -567,7 +584,8 @@ export class ExecutionJobService {
       const saved = existing.selector as {
         selector?: unknown;
         goal?: unknown;
-        scope?: AcquirePdfScope;
+        scope?: IntakeTaskScope;
+        parse_only?: boolean;
       };
       const savedPolicy = await admissionPolicy(
         saved.scope?.counts.process ?? 0,
@@ -578,6 +596,7 @@ export class ExecutionJobService {
         existing.target_kind !== jobInput.target_kind ||
         existing.policy_version !== savedPolicy.policy_version ||
         saved.goal !== goal ||
+        Boolean(saved.parse_only) !== parse_only ||
         !Buffer.from(canonicalJsonBytes(saved.selector)).equals(
           Buffer.from(canonicalJsonBytes(selector)),
         )
@@ -590,23 +609,24 @@ export class ExecutionJobService {
         ...savedPolicy,
       });
     }
-    const selection =
-      goal === "pdf" &&
-      this.library.pdfSelection &&
-      (selector.kind === "query" || selector.kind === "literatures")
+    const selection = parse_only
+      ? await this.library.parseSelection!(parseAcquirePdfSelector(selector))
+      : goal === "pdf" &&
+          this.library.pdfSelection &&
+          (selector.kind === "query" || selector.kind === "literatures")
         ? await this.library.pdfSelection(parseAcquirePdfSelector(selector))
         : null;
-    const scope: AcquirePdfScope | null = selection
-      ? {
+    const scope: IntakeTaskScope | null = selection
+      ? parseIntakeTaskScope({
           selector: parseAcquirePdfSelector(selector),
           counts: selection.counts,
-        }
+        })
       : null;
     const frozen: readonly FrozenCompletionTarget[] = selection
       ? selection.items.map((item) => ({
           target: { kind: "literature", literature_id: item.literature_id },
           candidates: [item.literature_id],
-          clear_exhaustion: selector.kind === "literatures",
+          clear_exhaustion: goal === "pdf" && selector.kind === "literatures",
         }))
       : await this.completion.freezeRequest({
           selector,
@@ -643,6 +663,7 @@ export class ExecutionJobService {
       selector: {
         schema_version: 2,
         goal,
+        ...(parse_only ? { parse_only: true } : {}),
         selector,
         frozen_targets: frozen,
         ...(scope ? { scope } : {}),

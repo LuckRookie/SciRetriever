@@ -4690,10 +4690,15 @@ port.on("message", (message: WorkerMessage) => {
                 ? readTransaction(() => {
                     if (
                       command.action.op === "batch" ||
+                      command.action.op === "report-snapshot" ||
                       command.action.op === "sessions"
                     )
                       registerLibraryStates();
-                    return importModule.readImportStorage(db, command.action);
+                    return importModule.readImportStorage(
+                      db,
+                      command.action,
+                      data.archive_profile,
+                    );
                   })
                 : importModule.writeImportStorage(
                     db,
@@ -5189,7 +5194,11 @@ port.on("message", (message: WorkerMessage) => {
         const c = message.command;
         value = readTransaction(() => {
           registerLibraryStates();
-          return intakeModule.queryIntakeBatches(db, c.value);
+          return intakeModule.queryIntakeBatches(
+            db,
+            c.value,
+            data.archive_profile,
+          );
         });
         break;
       }
@@ -5221,6 +5230,18 @@ port.on("message", (message: WorkerMessage) => {
         value = readTransaction(() => {
           registerLibraryStates();
           return libraryPageModule.acquirePdfSelection(db, c.request);
+        });
+        break;
+      }
+      case "parse_document_selection": {
+        const c = message.command;
+        value = readTransaction(() => {
+          registerLibraryStates();
+          return libraryPageModule.parseDocumentSelection(
+            db,
+            c.request,
+            data.archive_profile,
+          );
         });
         break;
       }

@@ -394,16 +394,7 @@ export function acquirePdfSelection(
   request: PdfSelectionRequest,
 ): PdfSelection {
   const selector = request.selector;
-  const ids =
-    selector.kind === "query"
-      ? libraryPageIds(db, {
-          query: selector.query,
-          sort: selector.sort,
-          after: null,
-          limit: Number.MAX_SAFE_INTEGER,
-          ftsQuery: request.ftsQuery,
-        }).rows.map((row) => String(row.literature_id))
-      : [...selector.literature_ids];
+  const ids = selectionIds(db, request);
   const facts = db
     .prepare(
       "SELECT l.literature_id,l.version_role,EXISTS(SELECT 1 FROM literature_assets a WHERE a.literature_id=l.literature_id AND a.role='primary-pdf') AS has_pdf,EXISTS(SELECT 1 FROM automatic_pdf_acquisition_exhaustions ex WHERE ex.literature_id=l.literature_id) AND sr_status(l.literature_id)='UNREVIEWED' AS unavailable FROM literatures l WHERE l.literature_id IN (SELECT value FROM json_each(?))",
@@ -427,6 +418,86 @@ export function acquirePdfSelection(
     if (selector.kind === "query" && row.has_pdf) counts.skipped_has_pdf++;
     else if (selector.kind === "query" && row.unavailable)
       counts.skipped_unavailable++;
+    else if (
+      selector.kind === "query" &&
+      selector.limit !== null &&
+      items.length >= selector.limit
+    )
+      counts.over_limit++;
+    else {
+      items.push({
+        literature_id: id as PdfSelection["items"][number]["literature_id"],
+        version_role:
+          row.version_role as PdfSelection["items"][number]["version_role"],
+      });
+      counts.process++;
+    }
+  }
+  return { counts, items };
+}
+function selectionIds(
+  db: DatabaseSync,
+  request: PdfSelectionRequest,
+): string[] {
+  const selector = request.selector;
+  return selector.kind === "query"
+    ? libraryPageIds(db, {
+        query: selector.query,
+        sort: selector.sort,
+        after: null,
+        limit: Number.MAX_SAFE_INTEGER,
+        ftsQuery: request.ftsQuery,
+      }).rows.map((row) => String(row.literature_id))
+    : [...selector.literature_ids];
+}
+
+const CURRENT_PARSE_SQL =
+  "EXISTS(SELECT 1 FROM raw_parse_current c WHERE c.source_asset_id=a.asset_id AND c.source_sha256=a.sha256 AND c.profile=? AND c.raw_parse_id IS NOT NULL)";
+
+/** Count the same eligible primary PDFs without ordering or allocating task targets. */
+export function parseDocumentCount(
+  db: DatabaseSync,
+  matching: { sql: string; parameters: readonly SQLInputValue[] },
+  profile: string,
+): number {
+  return Number(
+    db
+      .prepare(
+        `SELECT count(*) AS n FROM literature_assets la JOIN assets a ON a.asset_id=la.asset_id WHERE la.role='primary-pdf' AND la.literature_id IN (${matching.sql}) AND NOT ${CURRENT_PARSE_SQL}`,
+      )
+      .get(...matching.parameters, profile)!.n,
+  );
+}
+
+export function parseDocumentSelection(
+  db: DatabaseSync,
+  request: PdfSelectionRequest,
+  profile: string,
+): import("../../literature/query.js").ParseDocumentSelection {
+  const selector = request.selector,
+    ids = selectionIds(db, request);
+  const facts = db
+    .prepare(
+      `SELECT l.literature_id,l.version_role,a.asset_id AS asset_id,${CURRENT_PARSE_SQL} AS parsed FROM literatures l LEFT JOIN literature_assets la ON la.literature_id=l.literature_id AND la.role='primary-pdf' LEFT JOIN assets a ON a.asset_id=la.asset_id WHERE l.literature_id IN (SELECT value FROM json_each(?))`,
+    )
+    .all(profile, JSON.stringify(ids));
+  if (facts.length !== ids.length)
+    throw Object.assign(new Error("literature not found"), {
+      code: "literature-not-found",
+    });
+  const byId = new Map(facts.map((r) => [r.literature_id, r]));
+  const counts = {
+    matched: ids.length,
+    process: 0,
+    skipped_no_pdf: 0,
+    skipped_parsed: 0,
+    over_limit: 0,
+  };
+  const items: Array<PdfSelection["items"][number]> = [];
+  for (const id of ids) {
+    const row = byId.get(id)!;
+    if (!row.asset_id) counts.skipped_no_pdf++;
+    else if (row.parsed) counts.skipped_parsed++;
     else if (
       selector.kind === "query" &&
       selector.limit !== null &&

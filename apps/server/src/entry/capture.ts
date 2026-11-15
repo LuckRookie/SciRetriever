@@ -1,6 +1,4 @@
-import { createHash } from "node:crypto";
 import {
-  canonicalJsonBytes,
   parseIntakePageSave as parseCaptureSave,
   parseIntakePagePreview,
   parseMetadataObservation,
@@ -22,12 +20,8 @@ export class CaptureError extends Error {
     super("Capture request rejected");
   }
 }
-const hash = (value: unknown) =>
-  createHash("sha256").update(canonicalJsonBytes(value)).digest("hex");
-const id = (value: unknown) => {
-  const h = hash(value);
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
-};
+import { intakeDigest as hash } from "./intake-digest.js";
+const id = (value: unknown) => hash(value, "uuid");
 export interface CaptureOptions {
   readonly now?: () => number;
 }
@@ -196,6 +190,8 @@ export class CaptureService {
             pending_decision: 0,
             needs_metadata: 0,
           },
+          full_text: { total: 0, obtained: 0, missing: 0, exhausted: 0 },
+          estimates: { acquire_pdf: 0, parse: 0 },
           pdf: { has_pdf: 0, unavailable: 0, pending: 0 },
           discovery_run_id: null,
           source_failures: 0,

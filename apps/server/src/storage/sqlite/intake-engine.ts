@@ -7,6 +7,23 @@ import {
   type IntakeBatch,
   type IntakeBatchId,
 } from "@sciretriever/contracts";
+const {
+  fullTextCountsProjection,
+  fullTextCountsFromRow,
+}: typeof import("./full-text-counts.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./full-text-counts.ts"
+      : "./full-text-counts.js",
+    import.meta.url,
+  ).href
+);
+const { parseDocumentCount }: typeof import("./library-page.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts") ? "./library-page.ts" : "./library-page.js",
+    import.meta.url,
+  ).href
+);
 
 export interface IntakeMember {
   readonly batch_id: IntakeBatchId;
@@ -49,7 +66,11 @@ export function intakeMemberships(db: DatabaseSync, id: string) {
     )
     .all(id);
 }
-export function readIntakeBatch(db: DatabaseSync, id: string): IntakeBatch {
+export function readIntakeBatch(
+  db: DatabaseSync,
+  id: string,
+  profile = "vlm-engine",
+): IntakeBatch {
   const row = db
     .prepare("SELECT * FROM intake_batches WHERE batch_id=?")
     .get(id);
@@ -57,16 +78,21 @@ export function readIntakeBatch(db: DatabaseSync, id: string): IntakeBatch {
     throw Object.assign(new Error("intake batch not found"), {
       code: "intake-batch-missing",
     });
+  const matching = {
+    sql: "SELECT literature_id FROM intake_batch_members WHERE batch_id=?",
+    parameters: [id],
+  };
+  const fullText = fullTextCountsProjection(
+    matching.sql,
+    "count(DISTINCT l.meta_literature_id)",
+  );
   const counts = db
     .prepare(
-      "SELECT count(*) AS hits,coalesce(sum(disposition='created'),0) AS created,coalesce(sum(disposition='enriched'),0) AS enriched,coalesce(sum(disposition='matched'),0) AS matched,coalesce(sum(disposition='restored'),0) AS restored FROM intake_batch_members WHERE batch_id=?",
+      `WITH ${fullText.cte} SELECT ${fullText.columns},count(*) AS hits,coalesce(sum(m.disposition='created'),0) AS created,coalesce(sum(m.disposition='enriched'),0) AS enriched,coalesce(sum(m.disposition='matched'),0) AS matched,coalesce(sum(m.disposition='restored'),0) AS restored,count(n.literature_id) AS needs_metadata,count(p.literature_id) AS has_pdf,coalesce(sum(CASE WHEN p.literature_id IS NULL AND EXISTS(SELECT 1 FROM automatic_pdf_acquisition_exhaustions ex WHERE ex.literature_id=m.literature_id) THEN sr_status(m.literature_id)='UNREVIEWED' ELSE 0 END),0) AS unavailable FROM intake_batch_members m JOIN literatures l ON l.literature_id=m.literature_id LEFT JOIN literature_assets p ON p.literature_id=m.literature_id AND p.role='primary-pdf' LEFT JOIN literature_needs_metadata n ON n.literature_id=m.literature_id WHERE m.batch_id=?`,
     )
-    .get(id)!;
-  const pdf = db
-    .prepare(
-      "WITH members AS MATERIALIZED (SELECT m.literature_id,EXISTS(SELECT 1 FROM literature_assets p WHERE p.literature_id=m.literature_id AND p.role='primary-pdf') AS has_pdf FROM intake_batch_members m WHERE batch_id=?) SELECT coalesce(sum(has_pdf),0) AS has_pdf,coalesce(sum(NOT has_pdf AND EXISTS(SELECT 1 FROM automatic_pdf_acquisition_exhaustions ex WHERE ex.literature_id=members.literature_id) AND sr_status(literature_id)='UNREVIEWED'),0) AS unavailable FROM members",
-    )
-    .get(id)!;
+    .get(...matching.parameters, id)!;
+  const { has_pdf, unavailable, total, obtained, exhausted, ...members } =
+    counts;
   const imported =
     row.kind === "import"
       ? db.prepare("SELECT * FROM import_sessions WHERE batch_id=?").get(id)
@@ -93,17 +119,21 @@ export function readIntakeBatch(db: DatabaseSync, id: string): IntakeBatch {
       "SELECT coalesce(sum(json_array_length(possible_duplicates_json)>0),0) AS possible_duplicates FROM intake_items WHERE batch_id=?",
     )
     .get(id)!;
-  const needs = db
-    .prepare(
-      "SELECT count(*) n FROM intake_batch_members m JOIN literature_needs_metadata n USING(literature_id) WHERE m.batch_id=?",
-    )
-    .get(id)!.n;
   const files = db
     .prepare(
       "SELECT coalesce(sum(status='uploaded'),0) AS uploaded,coalesce(sum(status='existing'),0) AS existing,coalesce(sum(status='conflict'),0) AS conflicts,coalesce(sum(status='pending'),0) AS pending FROM import_files WHERE batch_id=?",
     )
     .get(id)!;
+  // Query acquisition skips exactly the two categories already counted here.
+  const pendingPdf =
+    Number(counts.hits) - Number(has_pdf) - Number(unavailable);
   return parseIntakeBatch({
+    full_text: fullTextCountsFromRow({ total, obtained, exhausted }),
+    estimates: {
+      acquire_pdf: pendingPdf,
+      parse:
+        Number(has_pdf) === 0 ? 0 : parseDocumentCount(db, matching, profile),
+    },
     batch_id: row.batch_id,
     kind: row.kind,
     label: row.label ?? row.default_label,
@@ -129,25 +159,29 @@ export function readIntakeBatch(db: DatabaseSync, id: string): IntakeBatch {
         : null,
     request: JSON.parse(String(row.request_json)),
     counts: {
-      ...counts,
+      ...members,
       rejected: imported ? Number(records.rejected) : Number(row.rejected),
       conflicts: records.conflicts,
       pending_decision: records.pending_decision,
       possible_duplicates: items.possible_duplicates,
-      needs_metadata: needs,
     },
     pdf: {
-      ...pdf,
-      pending:
-        Number(counts.hits) - Number(pdf.has_pdf) - Number(pdf.unavailable),
+      has_pdf,
+      unavailable,
+      pending: pendingPdf,
     },
     discovery_run_id: row.discovery_run_id,
     source_failures: row.source_failures,
   });
 }
-export function queryIntakeBatches(db: DatabaseSync, value: unknown) {
+export function queryIntakeBatches(
+  db: DatabaseSync,
+  value: unknown,
+  profile = "vlm-engine",
+) {
   const q = parseIntakeBatchQuery(value);
-  if (q.operation === "get") return readIntakeBatch(db, q.request.batch_id);
+  if (q.operation === "get")
+    return readIntakeBatch(db, q.request.batch_id, profile);
   const { limit, cursor } = q.request;
   let after: { at: string; id: string } | null = null;
   if (cursor !== null) {
@@ -173,7 +207,7 @@ export function queryIntakeBatches(db: DatabaseSync, value: unknown) {
   return {
     items: rows
       .slice(0, limit)
-      .map((row) => readIntakeBatch(db, String(row.batch_id))),
+      .map((row) => readIntakeBatch(db, String(row.batch_id), profile)),
     next_cursor:
       rows.length > limit && last
         ? Buffer.from(

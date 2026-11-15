@@ -106,6 +106,38 @@ it("shares the exact import handlers between authenticated Web and import-purpos
         Authorization: `Bearer ${importToken}`,
         Origin: "chrome-extension://synthetic",
       };
+    const parent = (await app.folders.manage({
+      operation: "create",
+      request: { parent_id: null, name: "User folder", position: null },
+    })) as { folder_id: string };
+    await app.folders.manage({
+      operation: "create",
+      request: { parent_id: parent.folder_id, name: "Child", position: null },
+    });
+    const expectedFolders = await app.folders.query({
+      operation: "list",
+      request: {},
+    });
+    for (const response of [
+      await send("/api/v1/intake/folders", {}, deviceHeaders),
+      await web("/api/v1/intake/folders", {}),
+    ]) {
+      expect(response.status).toBe(200);
+      expect((await response.json()).result).toEqual(expectedFolders);
+    }
+    for (const purpose of ["read", "operate"] as const)
+      expect(
+        (
+          await send(
+            "/api/v1/intake/folders",
+            {},
+            {
+              Authorization: `Bearer ${await token(purpose)}`,
+            },
+          )
+        ).status,
+      ).toBe(403);
+    expect((await send("/api/v1/intake/folders", {}, {})).status).toBe(401);
     for (const contentType of [
       "application/json; charset=utf-8",
       "Application/JSON; CHARSET=UTF-8",
@@ -358,6 +390,7 @@ it("shares the exact import handlers between authenticated Web and import-purpos
       state: "finished",
       progress: null,
     });
+    expect(legacySession.request.metadata_only).toBe(true);
     expect(
       (await app.importSessions.missingFiles(legacySession.batch_id)).items,
     ).toEqual([]);
@@ -366,7 +399,7 @@ it("shares the exact import handlers between authenticated Web and import-purpos
     });
     expect(docs.status).toBe(200);
     const reference = (await docs.json()).result;
-    expect(reference.endpoints).toHaveLength(19);
+    expect(reference.endpoints).toHaveLength(20);
     expect(reference.endpoints).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

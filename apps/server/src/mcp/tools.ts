@@ -1220,7 +1220,7 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
   ),
   tool(
     "create_task",
-    "Save a durable Web-compatible task without executing it. request is {kind: processing, request: ProcessingTaskRequest}, {kind: metadata, idempotency_key, request: MetadataTaskRequest (providers optional)}, or {kind: acquire-pdf, idempotency_key, selector, policy?}. Call control_task run explicitly after inspecting the saved scope.",
+    "Save a durable Web-compatible task without executing it. request is {kind: processing, request: ProcessingTaskRequest}, {kind: metadata, idempotency_key, request: MetadataTaskRequest (providers optional)}, or {kind: acquire-pdf|parse-documents, idempotency_key, selector, policy?}. Scoped parsing selects only primary PDFs without the current deployment parse. Call control_task run explicitly after inspecting the saved scope.",
     object({ request: { type: "object" } }),
     false,
   ),

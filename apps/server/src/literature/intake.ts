@@ -62,6 +62,8 @@ export async function startIntake(
       pending_decision: 0,
       needs_metadata: 0,
     },
+    full_text: { total: 0, obtained: 0, missing: 0, exhausted: 0 },
+    estimates: { acquire_pdf: 0, parse: 0 },
     pdf: { has_pdf: 0, unavailable: 0, pending: 0 },
     discovery_run_id: null,
     source_failures: 0,

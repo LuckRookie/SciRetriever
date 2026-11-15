@@ -830,6 +830,17 @@ function parseFields(
   return parseCsl(source);
 }
 
+/** Preserve the bibliography codec's BOM-aware, strict text decoding for local entry wrappers. */
+export function bibliographyText(source: Uint8Array): string {
+  const encoding =
+    source[0] === 0xff && source[1] === 0xfe
+      ? "utf-16le"
+      : source[0] === 0xfe && source[1] === 0xff
+        ? "utf-16be"
+        : "utf-8";
+  return new TextDecoder(encoding, { fatal: true }).decode(source);
+}
+
 /** Raw source-local fields for the pure adapter, not public paths or identities. */
 export function bibliographyRecordInputs(
   source: Uint8Array,
@@ -839,16 +850,7 @@ export function bibliographyRecordInputs(
   attachment_fields: readonly string[];
 }[] {
   try {
-    const encoding =
-      source[0] === 0xff && source[1] === 0xfe
-        ? "utf-16le"
-        : source[0] === 0xfe && source[1] === 0xff
-          ? "utf-16be"
-          : "utf-8";
-    return parseFields(
-      format,
-      new TextDecoder(encoding, { fatal: true }).decode(source),
-    ).map((record) => ({
+    return parseFields(format, bibliographyText(source)).map((record) => ({
       external_id: record?.fields.__external_id ?? null,
       attachment_fields: record?.attachment_fields ?? [],
     }));
@@ -886,16 +888,7 @@ export function decodeBibliography(
   };
   let fields: readonly ParsedFields[];
   try {
-    const encoding =
-      source[0] === 0xff && source[1] === 0xfe
-        ? "utf-16le"
-        : source[0] === 0xfe && source[1] === 0xff
-          ? "utf-16be"
-          : "utf-8";
-    fields = parseFields(
-      format,
-      new TextDecoder(encoding, { fatal: true }).decode(source),
-    );
+    fields = parseFields(format, bibliographyText(source));
   } catch {
     return {
       format,

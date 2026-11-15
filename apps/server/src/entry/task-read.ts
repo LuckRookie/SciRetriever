@@ -1,7 +1,7 @@
-import { parseAcquirePdfScope } from "@sciretriever/contracts";
+import { parseIntakeTaskScope } from "@sciretriever/contracts";
 function taskScope(selector: unknown) {
   return selector && typeof selector === "object" && "scope" in selector
-    ? parseAcquirePdfScope(selector.scope)
+    ? parseIntakeTaskScope(selector.scope)
     : null;
 }
 import {

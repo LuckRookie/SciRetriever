@@ -17,6 +17,15 @@ it("keeps the import model neutral, rejects unknown properties and leaves adhoc 
     scope: "selected group",
   };
   expect(parseIntakeCreate(base).import_user_tags).toBe(true);
+  expect(parseIntakeCreate(base).metadata_only).toBe(false);
+  expect(
+    parseIntakeCreate({ ...base, metadata_only: false }).metadata_only,
+  ).toBe(false);
+  expect(
+    parseIntakeCreate({ ...base, metadata_only: true }).metadata_only,
+  ).toBe(true);
+  for (const metadata_only of [null, 1, "true"])
+    expect(() => parseIntakeCreate({ ...base, metadata_only })).toThrow();
   expect(() => parseIntakeCreate({ ...base, library: base.source })).toThrow();
   const { source, ...old } = base;
   expect(() => parseIntakeCreate({ ...old, library: source })).toThrow();

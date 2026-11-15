@@ -2,9 +2,6 @@ import {
   ContractValidationError,
   IMPORT_LIMITS,
   parseImportData,
-  importObject,
-  importInteger,
-  importString,
   type ImportAdapter,
   type ImportAdapterResult,
 } from "@sciretriever/contracts";
@@ -42,36 +39,6 @@ export function bibliographyAdapter(
   return {
     format,
     decode(value, sequence): ImportAdapterResult {
-      // Only the internal adhoc facade supplies already decoded records. It
-      // preserves codec failures and byte encodings without reparsing new text.
-      if (typeof value !== "string") {
-        const r = importObject(value, ["legacy_decoded"]);
-        if (!Array.isArray(r.legacy_decoded))
-          throw new ContractValidationError();
-        return {
-          groups: [],
-          excluded: [],
-          items: r.legacy_decoded.map((value) => {
-            const item = importObject(value, [
-              "record_index",
-              "record",
-              "reason",
-            ]);
-            return {
-              record_index: importInteger(
-                item.record_index,
-                IMPORT_LIMITS.records,
-              ),
-              record:
-                item.record === null
-                  ? null
-                  : parseImportData({ records: [item.record] }).records[0]!,
-              reason:
-                item.reason === null ? null : importString(item.reason, 128),
-            };
-          }),
-        };
-      }
       if (typeof value !== "string") throw new ContractValidationError();
       const bytes = Buffer.from(value),
         inputs = bibliographyRecordInputs(bytes, format),

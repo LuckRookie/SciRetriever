@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   canonicalJsonBytes,
   parseMetadataObservation,
@@ -28,6 +28,7 @@ import type {
   ImportWrite,
   ImportPart,
   StoredImportSession,
+  ImportReportSnapshot,
 } from "../storage/sqlite/import-engine.js";
 import type { FileStore } from "../storage/files/store.js";
 import type { CatalogWriteAdmission } from "../storage/write-admission.js";
@@ -41,7 +42,7 @@ import { activityContext } from "../logging/activity.js";
 import { importAdapters } from "../literature/import-adapters.js";
 import { SOURCE_TYPE_MAPPING_VERSION } from "../literature/metadata-types.js";
 import {
-  decodeBibliography,
+  bibliographyText,
   type BibliographyInputFormat,
   type BibliographyImportResult,
 } from "../literature/bibliography-import.js";
@@ -57,6 +58,8 @@ import {
   settleFileState,
 } from "./import-files.js";
 export { ImportSessionError } from "./import-files.js";
+import { intakeDigest as hash } from "./intake-digest.js";
+const intakeId = (value: unknown) => hash(value, "uuid");
 
 export type ImportActor =
   | { readonly kind: "device"; readonly connection_id: string }
@@ -68,8 +71,6 @@ export interface ImportSessionOptions {
   /** Only long-lived service entry points enable recovery and expiry. */
   readonly maintain?: boolean;
 }
-const hash = (v: unknown) =>
-  createHash("sha256").update(canonicalJsonBytes(v)).digest("hex");
 function storageFailure(error: unknown): boolean {
   let current = error;
   for (let i = 0; i < 8 && current && typeof current === "object"; i++) {
@@ -98,12 +99,9 @@ function storageFailure(error: unknown): boolean {
   }
   return false;
 }
-function stableId(v: unknown) {
-  const h = hash(v);
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
-}
 function blank(): ImportSummary {
   return {
+    full_text: { total: 0, obtained: 0, missing: 0, exhausted: 0 },
     records: {
       created: 0,
       enriched: 0,
@@ -210,7 +208,7 @@ export class ImportSessionReadService {
       op: "aggregate",
       batch_id: s.batch_id,
     });
-    return { ...(s.summary ?? blank()), ...counts };
+    return { ...blank(), ...s.summary, ...counts };
   }
   report(
     id: string,
@@ -218,9 +216,25 @@ export class ImportSessionReadService {
     limit: number = IMPORT_LIMITS.page_items,
   ) {
     return this.tracked(async () => {
-      const batch = await this.read<IntakeBatch>({ op: "batch", batch_id: id });
-      if (batch.kind !== "import" || batch.source === null) {
-        const summary = blank();
+      const {
+        batch,
+        summary: storedSummary,
+        counts,
+        items,
+        next_cursor,
+      } = await this.read<ImportReportSnapshot>({
+        op: "report-snapshot",
+        batch_id: id,
+        cursor,
+        limit,
+      });
+      const summary = {
+        ...blank(),
+        ...storedSummary,
+        ...counts,
+        full_text: batch.full_text,
+      };
+      if (!counts) {
         Object.assign(summary.records, {
           created: batch.counts.created,
           enriched: batch.counts.enriched,
@@ -228,24 +242,13 @@ export class ImportSessionReadService {
           restored: batch.counts.restored,
           rejected: batch.counts.rejected,
         });
-        return {
-          batch,
-          estimated: false as const,
-          summary,
-          items: [],
-          next_cursor: null,
-        };
       }
-      const s = await this.stored(id),
-        page = await this.read<{
-          items: ImportRecordResult[];
-          next_cursor: string | null;
-        }>({ op: "results", batch_id: id, cursor, limit });
       return {
-        batch: await this.project(s),
+        batch,
         estimated: false as const,
-        summary: await this.summary(s),
-        ...page,
+        summary,
+        items,
+        next_cursor,
       };
     });
   }
@@ -263,6 +266,10 @@ export class ImportSessionService extends ImportSessionReadService {
   private readonly confirmations = new Map<string, Promise<IntakeBatch>>();
   private readonly admissions = new Map<string, Promise<IntakeBatch>>();
   private readonly background = new Map<string, Promise<void>>();
+  private readonly preparedConfirmations = new Map<
+    string,
+    Awaited<ReturnType<ImportSessionService["prepare"]>>
+  >();
   private readonly retries = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly failures = new Map<
     string,
@@ -321,6 +328,11 @@ export class ImportSessionService extends ImportSessionReadService {
   formats(): readonly string[] {
     return [...this.adapters.keys()];
   }
+  listFolders() {
+    return this.tracked(() =>
+      this.folders.query({ operation: "list", request: {} }),
+    );
+  }
   create(value: unknown, actor: ImportActor) {
     return this.tracked(() =>
       this.createOwned(parseIntakeCreate(value), actor),
@@ -376,7 +388,11 @@ export class ImportSessionService extends ImportSessionReadService {
           : `local:${actor.origin}`,
       source,
       progress: null,
-      request: { format: r.format, file_name: r.file_name },
+      request: {
+        format: r.format,
+        file_name: r.file_name,
+        metadata_only: r.metadata_only,
+      },
       counts: {
         hits: 0,
         created: 0,
@@ -389,6 +405,8 @@ export class ImportSessionService extends ImportSessionReadService {
         pending_decision: 0,
         needs_metadata: 0,
       },
+      full_text: { total: 0, obtained: 0, missing: 0, exhausted: 0 },
+      estimates: { acquire_pdf: 0, parse: 0 },
       pdf: { has_pdf: 0, unavailable: 0, pending: 0 },
       discovery_run_id: null,
       source_failures: 0,
@@ -426,18 +444,12 @@ export class ImportSessionService extends ImportSessionReadService {
   putData(id: string, sequence: number, data: unknown) {
     return this.tracked(() => this.putDataOwned(id, sequence, data));
   }
-  private async putDataOwned(
-    id: string,
-    sequence: number,
-    data: unknown,
-    decodedBibliography = false,
-  ) {
+  private async putDataOwned(id: string, sequence: number, data: unknown) {
     importInteger(sequence, IMPORT_LIMITS.parts - 1);
     const s = await this.stored(id);
     if (
       ["bibtex", "biblatex", "ris", "csl-json"].includes(s.format) &&
-      typeof data !== "string" &&
-      !decodedBibliography
+      typeof data !== "string"
     )
       throw new ImportSessionError("intake-input-invalid");
     const decoded = this.decode(s.format, data, sequence);
@@ -467,8 +479,9 @@ export class ImportSessionService extends ImportSessionReadService {
       for (const item of decoded.items)
         if (item.record) {
           keys.push({ kind: "record", id: item.record.external_id });
-          for (const f of item.record.files)
-            keys.push({ kind: "file", id: f.external_id });
+          if (!s.metadata_only)
+            for (const f of item.record.files)
+              keys.push({ kind: "file", id: f.external_id });
         }
       await this.writes.run(async () => {
         const old = (
@@ -523,29 +536,47 @@ export class ImportSessionService extends ImportSessionReadService {
       }),
       groups = new Map<string, ImportGroup>(),
       references = new Set<string>(),
+      decoded = new Map<number, ImportAdapterResult>(),
       summary = blank();
     for (const part of parts) {
       const data = await this.decodePart(s.format, part);
+      decoded.set(part.sequence, data);
       if (s.source.identity === "adhoc") {
         if (data.groups.length)
           addExcluded(summary, "groups", data.groups.length);
       } else
         for (const group of data.groups) groups.set(group.external_id, group);
-      for (const e of data.excluded) addExcluded(summary, e.kind, e.count);
+      for (const e of data.excluded)
+        addExcluded(
+          summary,
+          s.metadata_only &&
+            ["additional-file", "non-pdf-file"].includes(e.kind)
+            ? "metadata-only-attachment"
+            : e.kind,
+          e.count,
+        );
       for (const item of data.items)
         if (item.record) {
           const record = item.record,
-            primary = selected(record);
+            primary = s.metadata_only ? null : selected(record);
           if (s.source.identity !== "adhoc")
             for (const id of record.groups) references.add(id);
-          for (const f of record.files)
-            if (f !== primary)
+          if (s.metadata_only) {
+            if (record.files.length)
               addExcluded(
                 summary,
-                f.media_type === "application/pdf"
-                  ? "additional-file"
-                  : "non-pdf-file",
+                "metadata-only-attachment",
+                record.files.length,
               );
+          } else
+            for (const f of record.files)
+              if (f !== primary)
+                addExcluded(
+                  summary,
+                  f.media_type === "application/pdf"
+                    ? "additional-file"
+                    : "non-pdf-file",
+                );
           if (!s.import_user_tags && record.user_tags.length)
             addExcluded(summary, "user-tags-disabled", record.user_tags.length);
           for (const a of record.annotations) {
@@ -571,16 +602,29 @@ export class ImportSessionService extends ImportSessionReadService {
           }
         }
     }
-    const visit = (id: string, chain = new Set<string>()) => {
-      if (chain.has(id)) throw new ImportSessionError("intake-group-cycle");
+    const visiting = new Set<string>(),
+      depths = new Map<string, number>();
+    const visit = (id: string): number => {
+      const cached = depths.get(id);
+      if (cached !== undefined) return cached;
+      if (visiting.has(id)) throw new ImportSessionError("intake-group-cycle");
       const group = groups.get(id);
       if (!group) throw new ImportSessionError("intake-group-missing");
-      if (chain.size >= 128) throw new ImportSessionError("intake-group-depth");
-      if (group.parent_external_id !== null)
-        visit(group.parent_external_id, new Set([...chain, id]));
+      if (visiting.size >= 128)
+        throw new ImportSessionError("intake-group-depth");
+      visiting.add(id);
+      const depth =
+        group.parent_external_id === null
+          ? 1
+          : 1 + visit(group.parent_external_id);
+      visiting.delete(id);
+      if (depth > 128) throw new ImportSessionError("intake-group-depth");
+      depths.set(id, depth);
+      return depth;
     };
-    for (const id of new Set([...groups.keys(), ...references])) visit(id);
-    return { parts, groups, summary };
+    for (const id of groups.keys()) visit(id);
+    for (const id of references) visit(id);
+    return { parts, groups, summary, decoded };
   }
   private mapping(
     library_key: string,
@@ -601,14 +645,14 @@ export class ImportSessionService extends ImportSessionReadService {
     const content = hash(record),
       legacy = s.source.identity === "adhoc";
     return parseMetadataObservation({
-      observation_id: stableId([
+      observation_id: intakeId([
         s.library_key,
         record.external_id,
         content,
         "observation",
       ]),
       provenance: {
-        provenance_id: stableId([
+        provenance_id: intakeId([
           s.library_key,
           record.external_id,
           content,
@@ -711,7 +755,7 @@ export class ImportSessionService extends ImportSessionReadService {
       const prepared = await this.prepare(s),
         summary = prepared.summary;
       for (const part of prepared.parts)
-        for (const item of (await this.decodePart(s.format, part)).items) {
+        for (const item of prepared.decoded.get(part.sequence)!.items) {
           if (!item.record) {
             (summary.records as { rejected: number }).rejected++;
             continue;
@@ -730,7 +774,7 @@ export class ImportSessionService extends ImportSessionReadService {
           if (decision.disposition === "created")
             (summary.records as { created: number }).created++;
           else (summary.records as { matched: number }).matched++;
-          if (selected(record)) {
+          if (!s.metadata_only && selected(record)) {
             const facts = decision.literature_id
               ? await this.database.currentFacts(decision.literature_id)
               : null;
@@ -740,10 +784,11 @@ export class ImportSessionService extends ImportSessionReadService {
             (summary.files as { missing: number }).missing++;
           }
         }
+      const batch = await this.project(s);
       return {
-        batch: await this.project(s),
+        batch,
         estimated: true as const,
-        summary,
+        summary: { ...summary, full_text: batch.full_text },
       };
     });
   }
@@ -753,27 +798,32 @@ export class ImportSessionService extends ImportSessionReadService {
     if (current) return current;
     const admitted = this.tracked(async () => {
       const s = await this.stored(id);
+      let prepared:
+        | Awaited<ReturnType<ImportSessionService["prepare"]>>
+        | undefined;
       if (this.stopping.has(id))
         throw new ImportSessionError("intake-batch-state");
       if (s.state === "awaiting-confirmation") {
-        const prepared = await this.prepare(s);
+        const ready = await this.prepare(s);
         await this.writes.run(async () => {
           const parts = await this.read<ImportPart[]>({
             op: "parts",
             batch_id: id,
           });
-          if (hash(parts) !== hash(prepared.parts))
+          if (hash(parts) !== hash(ready.parts))
             throw new ImportSessionError("intake-data-changed");
           await this.write({
             op: "begin",
             batch_id: id,
-            summary: prepared.summary,
+            summary: ready.summary,
             now: new Date(this.now()).toISOString(),
           });
         });
+        prepared = ready;
       } else if (!["running", "finished"].includes(s.state))
         throw new ImportSessionError("intake-batch-state");
       const batch = await this.status(id);
+      if (prepared) this.preparedConfirmations.set(id, prepared);
       setImmediate(() => {
         if (!this.stop.signal.aborted) void this.runInBackground(id);
       });
@@ -907,7 +957,9 @@ export class ImportSessionService extends ImportSessionReadService {
       (s.state === "running" && s.metadata_complete)
     )
       return this.project(s);
-    const prepared = await this.prepare(s);
+    const prepared =
+      this.preparedConfirmations.get(id) ?? (await this.prepare(s));
+    this.preparedConfirmations.delete(id);
     await this.writes.run(async () => {
       const current = await this.read<ImportPart[]>({
         op: "parts",
@@ -941,7 +993,7 @@ export class ImportSessionService extends ImportSessionReadService {
         }
       });
     for (const part of prepared.parts)
-      for (const item of (await this.decodePart(s.format, part)).items) {
+      for (const item of prepared.decoded.get(part.sequence)!.items) {
         if (this.stop.signal.aborted || this.stopping.has(id))
           return this.project(await this.stored(id));
         await this.writes.run(async () => {
@@ -1064,13 +1116,13 @@ export class ImportSessionService extends ImportSessionReadService {
                       : error.code,
                   );
                 }
-                const primary = selected(record);
+                const primary = s.metadata_only ? null : selected(record);
                 if (primary) {
                   const facts = await this.database.currentFacts(
                     decision.literature_id,
                   );
                   files.push({
-                    file_id: stableId([id, primary.external_id]),
+                    file_id: intakeId([id, primary.external_id]),
                     external_id: primary.external_id,
                     record_external_id: record.external_id,
                     literature_id: decision.literature_id,
@@ -1090,7 +1142,7 @@ export class ImportSessionService extends ImportSessionReadService {
             op: "result",
             batch_id: id,
             item: result,
-            item_id: stableId([
+            item_id: intakeId([
               "intake-item",
               id,
               part.sequence,
@@ -1140,7 +1192,7 @@ export class ImportSessionService extends ImportSessionReadService {
       parent_id: parent,
     });
     const folderId =
-      mapped?.internal_id ?? stableId(["import-folder", s.library_key, key]);
+      mapped?.internal_id ?? intakeId(["import-folder", s.library_key, key]);
     const mapping = (state: "pending" | "settled") =>
       this.write({
         op: "mapping",
@@ -1307,6 +1359,7 @@ export class ImportSessionService extends ImportSessionReadService {
   }
   private async terminate(id: string, state: "finished" | "cancelled") {
     this.stopping.add(id);
+    this.preparedConfirmations.delete(id);
     const retry = this.retries.get(id);
     if (retry) {
       clearTimeout(retry);
@@ -1553,6 +1606,8 @@ export class ImportSessionService extends ImportSessionReadService {
         pending_decision: 0,
         needs_metadata: 0,
       },
+      full_text: { total: 0, obtained: 0, missing: 0, exhausted: 0 },
+      estimates: { acquire_pdf: 0, parse: 0 },
       pdf: { has_pdf: 0, unavailable: 0, pending: 0 },
       discovery_run_id: null,
       source_failures: 0,
@@ -1619,65 +1674,44 @@ export class ImportSessionService extends ImportSessionReadService {
     origin: "web" | "cli" | "mcp",
   ): Promise<BibliographyImportResult> {
     return this.tracked(async () => {
-      const decoded = decodeBibliography(bytes, format);
-      const s = await this.createOwned(
+      const rejected = (reason: string): BibliographyImportResult => ({
+        format,
+        items: [
+          {
+            record_index: 0,
+            disposition: "rejected",
+            literature_id: null,
+            meta_literature_id: null,
+            reason,
+          },
+        ],
+      });
+      if (bytes.byteLength > IMPORT_LIMITS.request_bytes)
+        return rejected("input-too-large");
+      let text: string;
+      try {
+        text = bibliographyText(bytes);
+      } catch {
+        return rejected("malformed-document");
+      }
+      if (
+        canonicalJsonBytes({ import_data: text }).byteLength >
+        IMPORT_LIMITS.request_bytes
+      )
+        return rejected("input-too-large");
+      const s = await this.create(
         {
           format,
           source: null,
           scope: "single bibliography file",
           file_name: fileName,
           import_user_tags: false,
+          metadata_only: true,
         },
         { kind: "local", origin },
       );
       try {
-        const batches: {
-          record_index: number;
-          record: ImportRecord | null;
-          reason: string | null;
-        }[][] = [[]];
-        const overhead = canonicalJsonBytes({
-          import_data: { legacy_decoded: [] },
-        }).byteLength;
-        let batchBytes = overhead;
-        for (const item of decoded.items) {
-          const record: ImportRecord | null =
-            item.observation === null
-              ? null
-              : {
-                  external_id: String(item.record_index),
-                  metadata: item.observation.metadata,
-                  source_type: item.observation.source_type,
-                  groups: [],
-                  user_tags: [],
-                  files: [],
-                  annotations: [],
-                };
-          const entry = {
-            record_index: item.record_index,
-            record,
-            reason: item.reason,
-          };
-          let batch = batches[batches.length - 1]!;
-          const entryBytes = canonicalJsonBytes(entry).byteLength + 1;
-          if (
-            batchBytes + entryBytes > IMPORT_LIMITS.request_bytes &&
-            batch.length
-          ) {
-            batch = [];
-            batches.push(batch);
-            batchBytes = overhead;
-          }
-          batch.push(entry);
-          batchBytes += entryBytes;
-        }
-        for (const [sequence, items] of batches.entries())
-          await this.putDataOwned(
-            s.batch_id,
-            sequence,
-            { legacy_decoded: items },
-            true,
-          );
+        await this.putData(s.batch_id, 0, text);
         const done = await this.confirm(s.batch_id),
           items: ImportRecordResult[] = [];
         let cursor: string | null = null;
@@ -1714,5 +1748,6 @@ export class ImportSessionService extends ImportSessionReadService {
     this.retries.clear();
     await super.close();
     this.failures.clear();
+    this.preparedConfirmations.clear();
   }
 }

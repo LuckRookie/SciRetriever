@@ -4,6 +4,36 @@ import {
   type LiteratureStatus,
 } from "./index.js";
 
+export interface FullTextCounts {
+  readonly total: number;
+  readonly obtained: number;
+  readonly missing: number;
+  readonly exhausted: number;
+}
+export function parseFullTextCounts(value: unknown): FullTextCounts {
+  const fail = (): never => {
+    throw new ContractValidationError();
+  };
+  if (!value || typeof value !== "object" || Array.isArray(value)) fail();
+  const r = value as Record<string, unknown>;
+  if (Object.keys(r).sort().join() !== "exhausted,missing,obtained,total")
+    fail();
+  const count = (v: unknown) =>
+    typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : fail();
+  const result = {
+    total: count(r.total),
+    obtained: count(r.obtained),
+    missing: count(r.missing),
+    exhausted: count(r.exhausted),
+  };
+  if (
+    result.total !== result.obtained + result.missing ||
+    result.exhausted > result.missing
+  )
+    fail();
+  return Object.freeze(result);
+}
+
 export interface LibraryCounts {
   readonly total: number;
   readonly recently_opened: number;

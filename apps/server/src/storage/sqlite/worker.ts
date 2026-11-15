@@ -322,6 +322,10 @@ export type SqliteCommand =
       readonly kind: "acquire_pdf_selection";
       readonly request: import("../../literature/query.js").PdfSelectionRequest;
     }
+  | {
+      readonly kind: "parse_document_selection";
+      readonly request: import("../../literature/query.js").PdfSelectionRequest;
+    }
   | { readonly kind: "folders"; readonly value: unknown }
   | { readonly kind: "marks"; readonly value: unknown }
   | {
@@ -1243,6 +1247,7 @@ export class SqliteWorker {
       "intake_read",
       "library_facets",
       "acquire_pdf_selection",
+      "parse_document_selection",
       "metadata_fields_read",
       "article_identity_get",
       "article_identity_current",
@@ -1300,6 +1305,7 @@ export class SqliteWorker {
       "library_search_page",
       "library_facets",
       "acquire_pdf_selection",
+      "parse_document_selection",
     ].includes(copy.kind);
     const send = () => {
       if (signal?.aborted)
@@ -2552,6 +2558,15 @@ export class SqliteWorker {
   ) {
     return this.run<import("../../literature/query.js").PdfSelection>(
       { kind: "acquire_pdf_selection", request },
+      signal,
+    );
+  }
+  parseDocumentSelection(
+    request: import("../../literature/query.js").PdfSelectionRequest,
+    signal?: AbortSignal,
+  ) {
+    return this.run<import("../../literature/query.js").ParseDocumentSelection>(
+      { kind: "parse_document_selection", request },
       signal,
     );
   }

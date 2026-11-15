@@ -45,10 +45,10 @@ LiteratureMetadata = {title:string|null,authors:Author[],abstract:string|null,pu
 Author = {kind:person|organization|unknown,display_name:string,given_name:string|null,family_name:string|null,orcid:string|null,affiliations:{name:string,ror:string|null}[]}
 IntakeFile = {external_id:string,file_name:string,media_type:string,preferred:boolean,size_bytes?:number|null,sha256?:string|null}
 IntakeAnnotation = {external_id:string,file_external_id:string,kind:highlight|underline|region|note|text|ink,quote?:string,note?:string,color?:string|null,page_index?:number|null,coordinate_space?:pdf-bottom-left|normalized-top-left,rects?:[number,number,number,number][]}
-IntakeBatch = {batch_id:string,kind:topic|citation|import|legacy,source:{system:string,library_id:string,identity:global|local|adhoc,name:string}|null,confirmation:batch|per-item|null,state:collecting|awaiting-confirmation|running|finished|cancelled|withdrawn,result:completed|partial|failed|interrupted|null,initiated_by:string,created_at:string,confirmed_at:string|null,finished_at:string|null,label:string,default_label:string,renamed:boolean,request:object,counts:{hits:number,created:number,enriched:number,matched:number,rejected:number,restored:number,conflicts:number,possible_duplicates:number,pending_decision:number,needs_metadata:number},pdf:{has_pdf:number,unavailable:number,pending:number},progress:{phase:metadata|files|closing,processed_items:number,total_items:number,files:object}|null}
+IntakeBatch = {batch_id:string,kind:topic|citation|import|legacy,source:{system:string,library_id:string,identity:global|local|adhoc,name:string}|null,confirmation:batch|per-item|null,state:collecting|awaiting-confirmation|running|finished|cancelled|withdrawn,result:completed|partial|failed|interrupted|null,initiated_by:string,created_at:string,confirmed_at:string|null,finished_at:string|null,label:string,default_label:string,renamed:boolean,request:object,counts:{hits:number,created:number,enriched:number,matched:number,rejected:number,restored:number,conflicts:number,possible_duplicates:number,pending_decision:number,needs_metadata:number},pdf:{has_pdf:number,unavailable:number,pending:number},full_text:{total:number,obtained:number,missing:number,exhausted:number},estimates:{acquire_pdf:number,parse:number},progress:{phase:metadata|files|closing,processed_items:number,total_items:number,files:object}|null}
 IntakeFileStatus = {file_id:string,external_id:string,record_external_id:string,literature_id:string,file_name:string,size_bytes:number|null,expected_sha256:string|null,action:upload|hash,status:pending|uploaded|existing|conflict,sha256:string|null,reason:string|null}
 IntakeItemResult = {sequence:number,record_index:number,external_id:string,disposition:created|enriched|matched|restored|conflict|rejected|pending-decision|excluded,literature_id:string|null,meta_literature_id:string|null,reason:string|null}
-IntakeSummary = {records:{created:number,enriched:number,matched:number,conflicts:number,rejected:number,restored:number,possible_duplicates:number,pending_decision:number,needs_metadata:number},files:{upload:number,hash:number,uploaded:number,existing:number,conflicts:number,missing:number,unpaired:number},annotations:{supported:number,unsupported:number,imported:0,deferred:number},excluded:{kind:string,count:number}[]}`;
+IntakeSummary = {full_text:{total:number,obtained:number,missing:number,exhausted:number},records:{created:number,enriched:number,matched:number,conflicts:number,rejected:number,restored:number,possible_duplicates:number,pending_decision:number,needs_metadata:number},files:{upload:number,hash:number,uploaded:number,existing:number,conflicts:number,missing:number,unpaired:number},annotations:{supported:number,unsupported:number,imported:0,deferred:number},excluded:{kind:string,count:number}[]}`;
 const errorStatuses: Readonly<Record<string, number>> = INTAKE_ERROR_STATUSES;
 export function importInterface(formats: readonly string[]) {
   return {
@@ -82,10 +82,13 @@ export function importInterface(formats: readonly string[]) {
       "One active batch per source library. A repeated sequence replaces that part until confirmation.",
       "Global source library IDs are independent of device; local library IDs are scoped to device connection. source=null creates an isolated one-off file source; it cannot resume a source namespace and uses bibliographic-import semantics.",
       "Import adds observations, folders/members and missing primary PDFs; never deletes or replaces accepted materials.",
+      "metadata_only defaults to false and is fixed in batch.request. When true, attachment references are counted as metadata-only-attachment without creating file entries; bibliography-only CLI/stdio/legacy Web wrappers always set it.",
       "Upload the preferred PDF only when action=upload; action=hash needs only sha256. Missing files are paginated; repeat uploads are idempotent.",
       "No file-size ceiling; data requests and batch items have the limits above. Interrupted files restart from byte zero; accepted files remain durable.",
       "Unconfirmed batches cancel after seven days; running batches finish after seven days without a newly settled file. Raw staged data is deleted at the end.",
       "Supported annotations are counted and deferred until the annotation import release; no reading marks are written.",
+      "POST /folders lists the full folder tree through the FolderService; it requires intake or authenticated Web, without a batch owner check.",
+      "Full-text counts deduplicate papers and inspect all current versions. Batch estimates count eligible versions; explicit acquire-pdf/parse-documents tasks freeze the batch query scope and do not run on import.",
       "Reports retain actual record outcomes and per-file status. Use files with pending=false for the final file report, including missing files.",
     ],
   };
@@ -337,7 +340,10 @@ export function importHttpRoutes(
           );
           if (operation === "create")
             result = { batch: await service.create(request, actor) };
-          else if (operation === "list") {
+          else if (operation === "folders") {
+            importObject(request, []);
+            result = await service.listFolders();
+          } else if (operation === "list") {
             const p = page(request, "batch");
             result = await service.list(p.cursor, p.limit, actor);
           } else if (operation === "data") {

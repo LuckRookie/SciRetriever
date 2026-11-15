@@ -66,3 +66,7 @@ schema 15 增加入库批次、成员与主题词；13 的按篇状态失效提�
 统一入库从建批次时就有唯一 batch_id。intake_batches 是状态与结果的所有者，import_sessions 仅保存来源、分段与检查点，其 active 与批次状态在同一写事务中变化。导入根目录的外部对应先 pending 预留编号，再创建目录，最后 settled；content_sha256 只保存内容 hash。schema.ts 的 IMPORT_SCHEMA_V16 汇集全部入库与未来认篇/决定/撤回 DDL，import-schema-migration.ts 在单一 15→16 事务中回填旧批次并保留全部旧表行数。未来功能的表先保留结构，不由启动流程产生决定、撤回或书目待补事实；这些表不参与建档状态输入或检索修订。
 
 后台入库复用 phase、storage_failures 与 updated_at 保存检查点和一分钟重试间隔；成功的逐条结算重置连续失败数，第三次存储失败同事务结束为 failed，summary.excluded 写明 storage-failure 与 unprocessed-records。失败计数按显式累计值幂等写入；若连失败检查点也暂时无法落盘，进程保留累计值，达到三次后只重试写入失败终态，不再接纳记录。进程退出前始终无法写入的计数不能跨重启保存，恢复以最后落盘的检查点为准。补 PDF 的开放批次使用 supplement:web/cli/mcp 与本地日期，条目、matched 成员及待交文件同事务登记；不增加第二套文件状态表。
+
+[full-text-counts.ts](full-text-counts.ts) 是全文取得情况的共用只读 SQL 投影：范围先选 Literature，再按 MetaLiterature 去重，是否取得与耗尽检查全部当前版本，不以建档状态排除已有 PDF。intake-engine 将此投影与成员、PDF、书目待补计数合并，在同一只读快照返回 full_text 与两个任务预估；import-engine 不将 full_text 写入 summary_json。library-page 的获取/解析选择共用筛选，解析选择绑定当前主 PDF 的 hash 和部署 profile，不把其它 profile 的结果算成已解析。批次预估复用已有 PDF 分类计数和与任务选择相同的当前解析判定，以聚合 SQL 读取，不为计数展开或排序任务成员，也不保存另一份计数或新增表。当前快照没有 PDF 或耗尽事实时，可直接证明相应计数为零；这些判断不跨请求缓存。
+
+metadata_only 仅存 intake_batches.request_json，不增加列；import-engine 读取工作状态时从此字段投影，旧记录缺省为 false。只导书目的普通元数据接纳、分段检查点和终态沿用同一事务，文件关系不产生。

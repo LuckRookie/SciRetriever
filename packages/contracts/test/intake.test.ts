@@ -9,6 +9,8 @@ import {
   parseIntakeBatchPage,
   parseIntakeBatchQuery,
   parseIntakeBatchRename,
+  parseIntakeTaskScope,
+  parseFullTextCounts,
   parseLibraryFacets,
   parseLibraryFacetsRequest,
   parseLibraryQuery,
@@ -51,9 +53,65 @@ const batch = {
     needs_metadata: 0,
   },
   pdf: { has_pdf: 1, unavailable: 1, pending: 1 },
+  full_text: { total: 3, obtained: 1, missing: 2, exhausted: 1 },
+  estimates: { acquire_pdf: 1, parse: 1 },
   discovery_run_id: null,
   source_failures: 0,
 };
+it("validates paper-level full-text counts and disjoint parse task scopes", () => {
+  expect(parseFullTextCounts(batch.full_text)).toEqual(batch.full_text);
+  const scope = {
+    selector: { kind: "query", query: {}, sort: "title-asc", limit: null },
+    counts: {
+      matched: 4,
+      process: 1,
+      skipped_no_pdf: 2,
+      skipped_parsed: 1,
+      over_limit: 0,
+    },
+  };
+  expect(parseIntakeTaskScope(scope)).toMatchObject({ counts: scope.counts });
+  for (const counts of [
+    { ...scope.counts, process: 2 },
+    { ...scope.counts, skipped_no_pdf: -1 },
+    { ...scope.counts, skipped_has_pdf: 0 },
+  ])
+    expect(() => parseIntakeTaskScope({ ...scope, counts })).toThrow();
+  for (const counts of [
+    { total: 3, obtained: 2, missing: 2, exhausted: 0 },
+    { total: 3, obtained: 2, missing: 1, exhausted: 2 },
+    { ...batch.full_text, total: -1 },
+    { ...batch.full_text, obtained: 1.5 },
+    { ...batch.full_text, extra: 0 },
+  ])
+    expect(() => parseFullTextCounts(counts)).toThrow();
+});
+it("round-trips the optional persisted metadata-only flag without accepting it on discovery batches", () => {
+  const imported = {
+    ...batch,
+    kind: "import",
+    confirmation: "batch",
+    request: { format: "bibtex", metadata_only: true },
+  };
+  expect(parseIntakeBatch(imported).request.metadata_only).toBe(true);
+  expect(
+    parseIntakeBatch({ ...imported, request: { format: "bibtex" } }).request
+      .metadata_only,
+  ).toBeUndefined();
+  for (const metadata_only of [1, "true", null])
+    expect(() =>
+      parseIntakeBatch({
+        ...imported,
+        request: { format: "bibtex", metadata_only },
+      }),
+    ).toThrow();
+  expect(() =>
+    parseIntakeBatch({
+      ...batch,
+      request: { ...batch.request, metadata_only: true },
+    }),
+  ).toThrow();
+});
 it("validates batch counters including the legacy exception and closed kind-specific inputs", () => {
   expect(parseIntakeBatch(batch)).toEqual(batch);
   const query = "energy\nAND storage";
@@ -81,6 +139,9 @@ it("validates batch counters including the legacy exception and closed kind-spec
   for (const v of [
     { ...batch, counts: { ...batch.counts, hits: 4 } },
     { ...batch, pdf: { ...batch.pdf, pending: 0 } },
+    { ...batch, full_text: { ...batch.full_text, total: 4 } },
+    { ...batch, full_text: { ...batch.full_text, exhausted: 3 } },
+    { ...batch, estimates: { acquire_pdf: -1, parse: 0 } },
     { ...batch, origin: "guessed" },
     { ...batch, request: { format: "ris" } },
     { ...batch, counts: { ...batch.counts, rejected: 1 } },

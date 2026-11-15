@@ -6,6 +6,15 @@ import {
 } from "../src/literature/import-adapters.js";
 import { decodeBibliography } from "../src/literature/bibliography-import.js";
 
+it.each(["bibtex", "biblatex", "ris", "csl-json"] as const)(
+  "requires original %s text and rejects the retired predecoded object shape",
+  (format) => {
+    expect(() =>
+      bibliographyAdapter(format).decode({ legacy_decoded: [] }, 0),
+    ).toThrow();
+  },
+);
+
 it.each([
   {
     format: "bibtex" as const,
