@@ -459,12 +459,27 @@ export interface DocumentSegmentLocation {
 export function parseDocumentSegmentLocation(
   value: unknown,
 ): DocumentSegmentLocation {
-  return parseDocumentSegmentLocationForVersion(value, 2);
+  return parseSegmentLocation(value, ["text-layer", "image-only", "manual"]);
 }
-/** Draft reads explicitly select their basis set; the legacy entry stays closed. */
+/** Version-aware corrected reads include v5 unreviewed long-document bases.
+ * The fixed builder and paired page status are verified before producing them;
+ * unversioned callers keep the original corrected-only set.
+ */
 export function parseDocumentSegmentLocationForVersion(
   value: unknown,
   schemaVersion: 2 | 3,
+): DocumentSegmentLocation {
+  if (schemaVersion !== 2 && schemaVersion !== 3) fail();
+  return parseSegmentLocation(
+    value,
+    schemaVersion === 3
+      ? DRAFT_BASES
+      : ["text-layer", "image-only", "manual", ...DRAFT_BASES],
+  );
+}
+function parseSegmentLocation(
+  value: unknown,
+  bases: readonly string[],
 ): DocumentSegmentLocation {
   const r = object(value, [
     "block_id",
@@ -486,13 +501,7 @@ export function parseDocumentSegmentLocationForVersion(
     r.continuation_regions.length > 10000
   )
     fail();
-  const bases: readonly string[] =
-    schemaVersion === 3 ? DRAFT_BASES : ["text-layer", "image-only", "manual"];
-  if (
-    (schemaVersion !== 2 && schemaVersion !== 3) ||
-    !bases.includes(String(r.basis))
-  )
-    fail();
+  if (typeof r.basis !== "string" || !bases.includes(r.basis)) fail();
   return {
     block_id: token(r.block_id),
     page,

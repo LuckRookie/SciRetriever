@@ -31,6 +31,9 @@ import {
   type ArchiveSectionRole,
   ARCHIVE_STEPS,
   ARCHIVE_DROP_REASONS,
+  DRAFT_BASES,
+  longDocumentInfo,
+  type DocumentBasis,
 } from "./index.js";
 
 export interface ArchiveTextBundleV2 {
@@ -44,7 +47,7 @@ export interface ArchiveTextBundleV2 {
     readonly corrected_text: string;
     readonly correction_ids: readonly string[];
     readonly text_source: "parser" | "agent" | "manual";
-    readonly basis: "text-layer" | "image-only" | "manual";
+    readonly basis: DocumentBasis;
   }[];
 }
 export interface ProofreadVersionV2 {
@@ -236,7 +239,10 @@ export function parseArchiveTextBundleV2(value: unknown): ArchiveTextBundleV2 {
           JSON.parse(new TextDecoder().decode(canonicalJsonBytes(leaf))),
         ) ||
       !["parser", "agent", "manual"].includes(String(q.text_source)) ||
-      !["text-layer", "image-only", "manual"].includes(String(q.basis))
+      typeof q.basis !== "string" ||
+      !["text-layer", "image-only", "manual", ...DRAFT_BASES].includes(
+        String(q.basis),
+      )
     )
       throw new ContractValidationError();
     const root = source_blocks.find(
@@ -250,6 +256,18 @@ export function parseArchiveTextBundleV2(value: unknown): ArchiveTextBundleV2 {
     )
       throw new ContractValidationError();
     const destination = parseLeafDestination(q.destination);
+    // The paired proofread pages are checked by the storage owner. The bundle
+    // alone can only prove that this is unchanged retained long-document text.
+    if (
+      DRAFT_BASES.some((basis) => basis === q.basis) &&
+      (!longDocumentInfo(arrangement?.classification) ||
+        destination.kind !== "assigned" ||
+        q.text_source !== "parser" ||
+        q.corrected_text !== leaf.original_text ||
+        !Array.isArray(q.correction_ids) ||
+        q.correction_ids.length !== 0)
+    )
+      throw new ContractValidationError();
     if (
       JSON.stringify(destination) !==
       JSON.stringify(
@@ -264,7 +282,7 @@ export function parseArchiveTextBundleV2(value: unknown): ArchiveTextBundleV2 {
       corrected_text: archiveText(q.corrected_text),
       correction_ids: archiveList(q.correction_ids, parseAssetId),
       text_source: q.text_source as "parser" | "agent" | "manual",
-      basis: q.basis as "text-layer" | "image-only" | "manual",
+      basis: q.basis as DocumentBasis,
     };
   });
   if (

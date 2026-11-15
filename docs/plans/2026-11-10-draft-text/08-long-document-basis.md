@@ -2,7 +2,7 @@
 
 类型：计划（结果块）
 负责：长文档简化建档时，未逐页校订页上片段的核对依据改取初稿的三种取值
-状态：Pending
+状态：Completed（2026-11-15）
 
 ## Outcome
 
@@ -32,10 +32,10 @@
 
 ## Tasks
 
-- [ ] **8.1 取值**：建档组装校订内容时（`text-pipeline.ts` 现在只按页面类型取 `text-layer` 或 `image-only`），对 `unreviewed` 页上的保留叶块调用 02 的对比函数，逐叶块取值，写进 `ArchiveTextBundleV2` 叶块的 `basis`（04 §8.3“长文档”）。页面分类与文字层取自建档来源，不另调用页面工具。
-- [ ] **8.2 合同**：校订内容与结构的 `basis` 解析扩为六种，三种初稿取值只允许出现在 `unreviewed` 页的叶块上；其余情形照旧拒绝。
-- [ ] **8.3 builder**：新增 `source-order-leaves-v5`：渲染与 v4 完全相同，只多接受三种取值；v4 遇到它们拒绝。长文档新形成的校订内容用 v5，普通文献继续用 v4。`document/storage.ts` 的 builder 分派加入 v5。
-- [ ] **8.4 对外读取**：segments、slice、evidence 返回这些取值；`processor-value-checks.ts` 已在 07 的 7.7 放宽。若本块先于 07 合入，在本块放宽该合同。
+- [x] **8.1 取值**：建档组装校订内容时（`text-pipeline.ts` 现在只按页面类型取 `text-layer` 或 `image-only`），对 `unreviewed` 页上的保留叶块调用 02 的对比函数，逐叶块取值，写进 `ArchiveTextBundleV2` 叶块的 `basis`（04 §8.3“长文档”）。页面分类与文字层取自建档来源，不另调用页面工具。
+- [x] **8.2 合同**：校订内容与结构的 `basis` 解析扩为六种，三种初稿取值只允许出现在 `unreviewed` 页的叶块上；其余情形照旧拒绝。
+- [x] **8.3 builder**：新增 `source-order-leaves-v5`：渲染与 v4 完全相同，只多接受三种取值；v4 遇到它们拒绝。长文档新形成的校订内容用 v5，普通文献继续用 v4。`document/storage.ts` 的 builder 分派加入 v5。
+- [x] **8.4 对外读取**：segments、slice、evidence 返回这些取值；`processor-value-checks.ts` 已在 07 的 7.7 放宽。若本块先于 07 合入，在本块放宽该合同。
 
 ## 集成与影响
 

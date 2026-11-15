@@ -33,7 +33,7 @@
 - [proofread.ts](proofread.ts)：校订区块与版本、来源、失败和方法的中性合同；耗时不进入内容或版本身份。
 - [metadata-types.ts](metadata-types.ts)：出版形式与文章性质的封闭枚举及统一中文名称；主元数据与 LibraryQuery 均使用新字段；旧字段不兼容。
 
-- [document-structure-v2.ts](document-structure-v2.ts)：校订稿片段、页码区域、来源与 UTF-8 区间的结构校验；章节角色固定留空，由后续独立结构注释提供。
+- [document-structure-v2.ts](document-structure-v2.ts)：校订稿片段、页码区域、来源与 UTF-8 区间的结构校验；章节角色固定留空，由后续独立结构注释提供。v5 长文档由显式 parseLongDocumentStructure 接受混合核对依据，旧解析入口仍拒绝新增取值；页状态由文本存储使用配对版本验证。片段/切片/证据的版本化读取可返回这些取值，旧的无版本位置解析与加工逐值核对仍保留三取值边界。
 
 - 文档输入按 schema 判别旧固定版本与直接引用校订版本的新表示；`document-structure-v2.ts` 定义区块结构，`page-region-v1` 采用公开 1 起计页码。
 

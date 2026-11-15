@@ -114,6 +114,22 @@ export function parseDraftDocumentStructure(
     fail();
   return parsed;
 }
+/** v5 corrected long documents may mix reviewed and unreviewed leaf bases.
+ * Page status is verified against the paired proofread content before rebuild.
+ */
+export function parseLongDocumentStructure(
+  value: unknown,
+  markdownBytes: number,
+): DocumentStructureV2<DocumentBasis> {
+  const parsed = parseStructure<DocumentBasis>(value, markdownBytes, [
+    "text-layer",
+    "image-only",
+    "manual",
+    ...DRAFT_BASES,
+  ]);
+  if (!parsed.long_document) fail();
+  return parsed;
+}
 function parseStructure<B extends DocumentBasis>(
   value: unknown,
   markdownBytes: number,

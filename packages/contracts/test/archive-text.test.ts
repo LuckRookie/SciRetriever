@@ -12,6 +12,9 @@ import {
   parseArchiveModelUsage,
   parseArrangementSourceBlock,
   parseArrangementSnapshot,
+  parseArchiveTextBundleV2,
+  classifyArchiveDocument,
+  DRAFT_BASES,
 } from "../src/index.js";
 const id = "00000000-0000-0000-0000-000000000001",
   hash = "a".repeat(64);
@@ -222,6 +225,58 @@ it("rejects invalid page counts, leaf spans, duplicate destinations and dangling
     manual_revision: 0,
   };
   expect(parseArrangementSnapshot(snapshot, 1).leaves).toHaveLength(1);
+  const bundle = {
+    schema_version: 2,
+    page_count: 51,
+    source_blocks: [
+      {
+        root_block_id: id2,
+        raw_parse_id: id3,
+        result_sha256: hash,
+        source_sha256: hash,
+        locator: {
+          kind: "raw-block",
+          page_index: 0,
+          block_index: 0,
+          field: "text",
+        },
+        type: "text",
+        text: "x",
+        page_hint: 0,
+        region_hint: null,
+        image_ref: null,
+        title_level: null,
+      },
+    ],
+    arrangement: {
+      ...snapshot,
+      classification: classifyArchiveDocument(51, 100),
+    },
+    leaves: [
+      {
+        leaf,
+        destination: snapshot.destinations[0]!.destination,
+        corrected_text: "x",
+        correction_ids: [],
+        text_source: "parser",
+        basis: "text-layer-match",
+      },
+    ],
+  };
+  for (const basis of DRAFT_BASES) {
+    const row = { ...bundle.leaves[0]!, basis };
+    expect(
+      parseArchiveTextBundleV2({ ...bundle, leaves: [row] }).leaves[0]!.basis,
+    ).toBe(basis);
+    for (const changed of [
+      { ...bundle, arrangement: snapshot },
+      { ...bundle, leaves: [{ ...row, text_source: "manual" }] },
+      { ...bundle, leaves: [{ ...row, corrected_text: "changed" }] },
+      { ...bundle, leaves: [{ ...row, correction_ids: [id3] }] },
+      { ...bundle, leaves: [{ ...row, basis: { toString: () => basis } }] },
+    ])
+      expect(() => parseArchiveTextBundleV2(changed)).toThrow();
+  }
   for (const change of [
     { destinations: [...snapshot.destinations, ...snapshot.destinations] },
     { destinations: [] },

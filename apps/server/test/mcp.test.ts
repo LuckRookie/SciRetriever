@@ -70,13 +70,18 @@ describe("formal MCP product adapter", () => {
       env.setParseHook(async () => {});
       await env.reopen();
       await call("control_task", { job_id: job.job_id, action: "retry" });
-      await vi.waitFor(async () => {
-        const state = await env.app.processingTasks!.read(job.job_id);
-        expect(state.targets[0]?.stage, JSON.stringify(state)).toBe(
-          "completed",
-        );
-        expect(state.job.status).toBe("completed");
-      });
+      // Retry is accepted before its durable task finishes. Use the same
+      // asynchronous completion budget as the other MCP task tests.
+      await vi.waitFor(
+        async () => {
+          const state = await env.app.processingTasks!.read(job.job_id);
+          expect(state.targets[0]?.stage, JSON.stringify(state)).toBe(
+            "completed",
+          );
+          expect(state.job.status).toBe("completed");
+        },
+        { timeout: 20_000 },
+      );
       const target = (await env.app.jobs!.listTargets(job.job_id))[0]!;
       expect(await env.app.jobs!.listAttempts(target.target_id)).toHaveLength(
         2,

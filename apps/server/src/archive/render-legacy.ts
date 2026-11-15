@@ -5,6 +5,7 @@ import {
   canonicalJsonBytes,
   type ArchiveTextBundleV2,
   type DocumentStructureV2,
+  type DocumentBasis,
   type ArchiveSectionRole,
   type RawParseResource,
   type ProofreadSegmentKind,
@@ -48,7 +49,7 @@ export function renderLegacyArrangement(
     return d.target.role;
   };
   const sections: DocumentStructureV2["sections"][number][] = [],
-    segments: DocumentStructureV2["segments"][number][] = [],
+    segments: DocumentStructureV2<DocumentBasis>["segments"][number][] = [],
     source_map: LeafSourceMap[] = [],
     structural_ranges: {
       kind: string;

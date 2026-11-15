@@ -6,7 +6,48 @@ import {
   parseArchiveDocumentClassification,
   parseLongDocumentInfo,
   parsePageProofreadRecord,
+  parseLongDocumentStructure,
+  parseDocumentStructureV2,
+  DRAFT_BASES,
 } from "../src/index.js";
+
+it("accepts mixed bases only through the explicit long-document structure parser", () => {
+  const bases = ["text-layer", "image-only", "manual", ...DRAFT_BASES];
+  const value = {
+    schema_version: 2,
+    text_encoding: "utf8",
+    page_count: 51,
+    long_document: classifyArchiveDocument(51, 100),
+    sections: [],
+    segments: bases.map((basis, i) => ({
+      segment_id: `s${i}`,
+      block_id: `b${i}`,
+      kind: "text",
+      section_id: null,
+      start_utf8: i,
+      end_utf8: i + 1,
+      page: i,
+      region: null,
+      continuation_regions: [],
+      locate: "page",
+      source: "parser",
+      basis,
+    })),
+  };
+  expect(
+    parseLongDocumentStructure(value, 6).segments.map((s) => s.basis),
+  ).toEqual(bases);
+  expect(() => parseDocumentStructureV2(value, 6)).toThrow();
+  const { long_document: _marker, ...unmarked } = value;
+  void _marker;
+  expect(() => parseLongDocumentStructure(unmarked, 6)).toThrow();
+  expect(() =>
+    parseLongDocumentStructure(
+      { ...value, segments: [{ ...value.segments[0], basis: "unknown" }] },
+      6,
+    ),
+  ).toThrow();
+});
 
 it("classifies strict page and UTF-8 input boundaries and parses the saved evidence without guessing", () => {
   const regular = classifyArchiveDocument(50, ARRANGE_INPUT_MAX_BYTES);

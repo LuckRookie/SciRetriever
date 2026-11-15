@@ -24,6 +24,7 @@ import { SqliteAnnotationStorage } from "../storage/structure-annotations.js";
 import { SqliteDocumentStorage } from "../document/storage.js";
 import { documentRepresentationHash } from "../document/contract.js";
 import { documentIdentity } from "../document/proofread-publication.js";
+import { compareDraftLeaves } from "../document/draft-builder.js";
 import type { PdfPages } from "../proofread/contract.js";
 import type { DshAgentRuntime } from "../agents/dsh/runtime.js";
 import { ArchivePageProofreadService } from "../proofread/page-service.js";
@@ -54,6 +55,8 @@ import {
   arrangementAnnotation,
   arrangedStructureSatisfied,
   ARRANGED_DOCUMENT_BUILDER,
+  LONG_DOCUMENT_BUILDER,
+  arrangedBuilderFor,
 } from "./render.js";
 
 export function archiveStop(
@@ -109,6 +112,25 @@ export async function archiveTextVersion(
         c,
       ]);
   }
+  const unreviewed = new Set(
+    pages.filter((p) => p.status === "unreviewed").map((p) => p.page_index),
+  );
+  const compared = new Map(
+    (unreviewed.size
+      ? await compareDraftLeaves(
+          arrangement?.leaves.filter(
+            (leaf) =>
+              destinations.get(leaf.leaf_id)?.kind === "assigned" &&
+              unreviewed.has(leaf.page_index) &&
+              !(corrections.get(leaf.leaf_id) ?? []).some(
+                (c) => c.source === "manual",
+              ),
+          ) ?? [],
+          source.pages,
+        )
+      : []
+    ).map((leaf) => [leaf.leaf_id, leaf.basis]),
+  );
   const bundle = parseArchiveTextBundleV2({
     schema_version: 2,
     page_count: source.raw.page_count,
@@ -129,9 +151,10 @@ export async function archiveTextVersion(
               : "parser",
           basis: records.some((c) => c.source === "manual")
             ? "manual"
-            : source.pages[leaf.page_index]!.kind === "text-layer"
-              ? "text-layer"
-              : "image-only",
+            : (compared.get(leaf.leaf_id) ??
+              (source.pages[leaf.page_index]!.kind === "text-layer"
+                ? "text-layer"
+                : "image-only")),
         };
       }) ?? [],
   });
@@ -280,13 +303,19 @@ export class ArchiveTextPipeline {
     if (
       !fixed ||
       fixed.version.schema_version !== 2 ||
-      fixed.version.builder_version !== ARRANGED_DOCUMENT_BUILDER
+      ![ARRANGED_DOCUMENT_BUILDER, LONG_DOCUMENT_BUILDER].includes(
+        fixed.version.builder_version,
+      )
     )
       throw new ArchiveTextError("archive-contract-obsolete");
     const output = await this.storage.load(fixed.version.proofread_id, signal);
     if (!output || output.version.arrangement_id !== arrangement)
       throw new ArchiveTextError("input-stale");
-    const rendered = renderArrangement(output.bundle, output.version.resources);
+    const rendered = renderArrangement(
+      output.bundle,
+      output.version.resources,
+      fixed.version.builder_version,
+    );
     if (
       rendered.sha256 !== fixed.version.structure.sha256 ||
       byteHash(rendered.markdown) !== fixed.version.markdown.sha256
@@ -637,7 +666,8 @@ export class ArchiveTextPipeline {
     const raw = await this.raw.current(asset, signal);
     if (!raw.some((r) => r.result?.raw_parse_id === v.draft_input.raw_parse_id))
       throw new ArchiveTextError("input-stale");
-    const rendered = renderArrangement(output.bundle, v.resources),
+    const builder = arrangedBuilderFor(output.bundle);
+    const rendered = renderArrangement(output.bundle, v.resources, builder),
       documents = new SqliteDocumentStorage(db, files);
     await documents.withVerifiedArtifact(
       material.path,
@@ -676,8 +706,7 @@ export class ArchiveTextPipeline {
         source_material_ref: material.material,
         proofread_id: v.proofread_id,
         proofread_content_sha256: v.content_sha256,
-        builder_version:
-          ARRANGED_DOCUMENT_BUILDER as typeof ARRANGED_DOCUMENT_BUILDER,
+        builder_version: builder,
         locator_scheme: "utf8-segment-v1" as const,
         markdown: artifact(rendered.markdown, "text/markdown"),
         structure: artifact(rendered.bytes, "application/json"),
@@ -702,8 +731,7 @@ export class ArchiveTextPipeline {
         {
           ...markdown,
           kind: "markdown" as const,
-          logical_reference:
-            "render/" + ARRANGED_DOCUMENT_BUILDER + "/" + markdown.sha256,
+          logical_reference: "render/" + builder + "/" + markdown.sha256,
         },
       ];
       const publishedResources: import("../storage/sqlite/proofread-engine.js").ProofreadPublication["resources"][number][] =

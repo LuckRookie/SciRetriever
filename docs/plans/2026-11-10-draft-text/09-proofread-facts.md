@@ -31,7 +31,7 @@
 
 ## Tasks
 
-- [ ] **9.1 投影写入**：按 07 §4.2 写 `processor_unfound_citations`：只为引用初稿版本的来源写行，结果删除时级联删除。schema 17 之前没有初稿，不回填（07 §4.2）。
+- [ ] **9.1 投影写入**（2026-11-15 随计划 16 暂缓：现行算子只读校订稿，投影恒为空；计划 16 让算子读取初稿时，在结果发布事务里补上这项写入）：按 07 §4.2 写 `processor_unfound_citations`：只为引用初稿版本的来源写行，结果删除时级联删除。schema 17 之前没有初稿，不回填（07 §4.2）。
 - [ ] **9.2 聚合读取**：按本页文献 ID 批量读取 `DraftFacts`；`citing_results` 与 `unfound_citations` 的口径见 04 §8.7，按 `document_version_id` 查索引（03 建的索引），不扫描全部结果、不打开结果文件。
 - [ ] **9.3 字段**：文献库条目与文献详情的 `draft_facts`、`LiteratureAssetView.default_text`、建档状态 `parts[].draft_facts`（06 §2.1.7）。
 - [ ] **9.4 筛选与排序**：按 06 §2.1.7 实现 `text_levels`、`has_draft_differences`、`has_image_only_pages`、`cited_by_results`、`has_unfound_citations` 与四个排序键。省略的新字段不进入规范化查询，已有请求、cursor 与任务里保存的 selector 字节不变；接受 `LibrarySort` 的地方（包括 `AcquirePdfSelector`，因此也包括 05 的 `form-drafts`）都接受新键。

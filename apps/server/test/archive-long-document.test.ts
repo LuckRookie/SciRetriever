@@ -2,11 +2,16 @@ import { expect, it } from "vitest";
 import {
   ARRANGE_INPUT_MAX_BYTES,
   classifyArchiveDocument,
+  canonicalJsonBytes,
 } from "@sciretriever/contracts";
 import { ArchiveArrangementService } from "../src/archive/arrangement-service.js";
 import { boundedArrangementBatches } from "../src/archive/arrangement-batches.js";
 import { ArchivePageProofreadService } from "../src/proofread/page-service.js";
-import { archiveTextVersion } from "../src/archive/text-pipeline.js";
+import {
+  archiveTextVersion,
+  pendingArchivePages,
+} from "../src/archive/text-pipeline.js";
+import { byteHash } from "../src/archive/text-source.js";
 import { emptyArchiveUsage } from "../src/archive/text-session.js";
 import { renderArrangement } from "../src/archive/render.js";
 import {
@@ -45,6 +50,216 @@ const answer = (
     captions: [],
     splits: [],
   });
+
+const fixtureMethod = {
+  arrange: "fixture",
+  page_classify: "fixture",
+  suspects: "fixture",
+  correction: "fixture",
+  model_config_sha256: null,
+};
+function classifiedSnapshot(
+  source: Awaited<ReturnType<typeof archiveTextFixture>>["source"],
+) {
+  const operations = assigned(source),
+    review = reviewArrangement(source, operations);
+  return acceptArrangement(
+    source,
+    {
+      schema_version: 1,
+      source_input_sha256: source.input_sha256,
+      reviewed_candidates_sha256: review.candidates_sha256,
+      operations,
+      break_decisions: [],
+    },
+    "c".repeat(64),
+    { classification: classifyArchiveDocument(source.raw.page_count, 100) },
+  );
+}
+
+it("keeps ordinary proofread content, Markdown and structure bytes at the pre-v5 fingerprints", async () => {
+  const f = await archiveTextFixture([
+    { text: "Original heading", type: "title" },
+    { text: "Aligned original text α🙂." },
+    { text: "E = mc^2", type: "equation", image: true, page: 1 },
+  ]);
+  const snapshot = classifiedSnapshot(f.source),
+    output = await archiveTextVersion(
+      f.source,
+      snapshot,
+      pendingArchivePages(f.source, snapshot),
+      emptyArchiveUsage(),
+      fixtureMethod,
+      [],
+      null,
+    ),
+    rendered = renderArrangement(output.bundle, f.source.raw.resources);
+  expect({
+    content: byteHash(canonicalJsonBytes(output.bundle)),
+    markdown: byteHash(rendered.markdown),
+    structure: rendered.sha256,
+  }).toEqual({
+    content: "d27b337a5c7ae0880bc79163e1626cdc67496f39d2556822dd773f3cfee412f9",
+    markdown:
+      "7a989d1aa9bb0dbff81efd476fd5fa170a8f44688bd5ba749b608794f7f8c4a7",
+    structure:
+      "ca486bf10aadf8e0e7e6739ee973548bb6cdbb49f98f16e48d70c595b1296c01",
+  });
+});
+
+it("compares every retained unreviewed long-document leaf using the draft rule without page tools", async () => {
+  const f = await archiveTextFixture(
+    [
+      { text: "Aligned original text." },
+      { text: "We observed 18 molecules in the synthetic sample.", page: 1 },
+      { text: "Scanned text remains unchanged.", page: 2 },
+    ],
+    {
+      page_count: 51,
+      layers: [
+        "Aligned original text.",
+        "We observed 19 molecules in the synthetic sample.",
+        "",
+      ],
+    },
+  );
+  const snapshot = classifiedSnapshot(f.source),
+    pages = pendingArchivePages(f.source, snapshot).map((page) =>
+      page.retained_leaf_ids.length
+        ? {
+            ...page,
+            status: "unreviewed" as const,
+            unreviewed_reason: "long-document" as const,
+            stop: null,
+          }
+        : page,
+    ),
+    output = await archiveTextVersion(
+      f.source,
+      snapshot,
+      pages,
+      emptyArchiveUsage(),
+      fixtureMethod,
+      [],
+      null,
+    );
+  expect(output.bundle.leaves.map((leaf) => leaf.basis)).toEqual([
+    "text-layer-match",
+    "text-layer-differs",
+    "no-text-layer",
+  ]);
+  const rendered = renderArrangement(
+    output.bundle,
+    [],
+    "source-order-leaves-v5",
+  );
+  expect(rendered.structure.segments.map((segment) => segment.basis)).toEqual([
+    "text-layer-match",
+    "text-layer-differs",
+    "no-text-layer",
+  ]);
+  expect(() =>
+    renderArrangement(output.bundle, [], "source-order-leaves-v4"),
+  ).toThrow();
+  const runtime = fakeTextRuntime(async () =>
+    modelTool("submit_corrections", { corrections: [], uncertain: [] }),
+  );
+  try {
+    const service = new ArchivePageProofreadService(
+      runtime,
+      fakePages(f.pages),
+      memoryTextCache().cache,
+    );
+    const initial = await service.build(
+      f.source,
+      snapshot,
+      f.pages,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      true,
+    );
+    const retried = await service.build(
+      f.source,
+      snapshot,
+      f.pages,
+      undefined,
+      [],
+      undefined,
+      new Map(
+        initial.pages
+          .filter((p) => p.page_index !== 1 && p.page_index !== 2)
+          .map((p) => [p.page_index, p]),
+      ),
+    );
+    expect(retried.pages.slice(0, 3).map((p) => p.status)).toEqual([
+      "unreviewed",
+      "accepted",
+      "accepted",
+    ]);
+    const mixed = await archiveTextVersion(
+      f.source,
+      snapshot,
+      retried.pages,
+      retried.usage,
+      fixtureMethod,
+      [],
+      null,
+    );
+    expect(mixed.bundle.leaves.map((l) => l.basis)).toEqual([
+      "text-layer-match",
+      "text-layer",
+      "image-only",
+    ]);
+    expect(
+      renderArrangement(
+        mixed.bundle,
+        [],
+        "source-order-leaves-v5",
+      ).structure.segments.map((s) => s.basis),
+    ).toEqual(["text-layer-match", "text-layer", "image-only"]);
+  } finally {
+    await runtime.close();
+  }
+});
+
+it("renders historical long content with identical v4 and v5 bytes, including the equation resource closure", async () => {
+  const f = await archiveTextFixture(
+    [
+      { text: "Original heading", type: "title" },
+      { text: "E = mc^2", type: "equation", image: true },
+      { text: "An unchanged synthetic paragraph.", page: 1 },
+    ],
+    { page_count: 51 },
+  );
+  const snapshot = classifiedSnapshot(f.source),
+    output = await archiveTextVersion(
+      f.source,
+      snapshot,
+      pendingArchivePages(f.source, snapshot),
+      emptyArchiveUsage(),
+      fixtureMethod,
+      [],
+      null,
+    ),
+    v4 = renderArrangement(
+      output.bundle,
+      f.source.raw.resources,
+      "source-order-leaves-v4",
+    ),
+    v5 = renderArrangement(
+      output.bundle,
+      f.source.raw.resources,
+      "source-order-leaves-v5",
+    );
+  expect(v5.markdown).toEqual(v4.markdown);
+  expect(v5.bytes).toEqual(v4.bytes);
+  expect(v5.sha256).toBe(v4.sha256);
+  expect(v4.resources).toEqual([]);
+  expect(v5.resources).toEqual(v4.resources);
+  expect(v5.source_map).toEqual(v4.source_map);
+});
 
 it("packs whole pages under the request limit, carries an additional section across batches, and globally validates the merged result", async () => {
   const f = await archiveTextFixture([

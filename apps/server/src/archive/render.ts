@@ -2,6 +2,8 @@ import { longDocumentInfo } from "@sciretriever/contracts";
 import {
   parseArchiveTextBundleV2,
   parseDocumentStructureV2,
+  parseLongDocumentStructure,
+  DRAFT_BASES,
   canonicalJsonBytes,
   type ArchiveTextBundleV2,
   type DocumentStructureV2,
@@ -10,6 +12,7 @@ import {
   type ProofreadSegmentKind,
   type DocumentLayout,
   type ArrangementLeaf,
+  type DocumentBasis,
 } from "@sciretriever/contracts";
 import { BODY_ROLES } from "./arrangement.js";
 import { byteHash, textHash } from "./text-source.js";
@@ -17,10 +20,18 @@ import { structureReferences } from "../document/structure-extract.js";
 import { arrangeSourceLayout, headingLevels } from "./source-layout.js";
 import { renderLegacyArrangement } from "./render-legacy.js";
 export const ARRANGED_DOCUMENT_BUILDER = "source-order-leaves-v4";
+export const LONG_DOCUMENT_BUILDER = "source-order-leaves-v5";
+export const arrangedBuilderFor = (
+  bundle: ArchiveTextBundleV2,
+): typeof LONG_DOCUMENT_BUILDER | typeof ARRANGED_DOCUMENT_BUILDER =>
+  longDocumentInfo(bundle.arrangement?.classification)
+    ? LONG_DOCUMENT_BUILDER
+    : ARRANGED_DOCUMENT_BUILDER;
 export const SOURCE_ORDER_DOCUMENT_BUILDER_V3 = "source-order-leaves-v3";
 export const LEGACY_ARRANGED_DOCUMENT_BUILDER = "arranged-leaves-v2";
 export const isArrangedBuilder = (value: string) =>
   value === ARRANGED_DOCUMENT_BUILDER ||
+  value === LONG_DOCUMENT_BUILDER ||
   value === SOURCE_ORDER_DOCUMENT_BUILDER_V3 ||
   value === LEGACY_ARRANGED_DOCUMENT_BUILDER;
 export interface LeafSourceMap {
@@ -34,8 +45,14 @@ export interface LeafSourceMap {
 export function renderArrangement(
   value: ArchiveTextBundleV2,
   available: readonly RawParseResource[],
-  builder: string = ARRANGED_DOCUMENT_BUILDER,
+  builder: string = arrangedBuilderFor(value),
 ) {
+  // Historical builders never accept the unreviewed values, even on long parts.
+  if (
+    builder !== LONG_DOCUMENT_BUILDER &&
+    value.leaves.some((row) => DRAFT_BASES.some((basis) => basis === row.basis))
+  )
+    throw Error("render-builder-basis-unsupported");
   if (builder === LEGACY_ARRANGED_DOCUMENT_BUILDER)
     return renderLegacyArrangement(value, available);
   if (!isArrangedBuilder(builder)) throw Error("render-builder-unsupported");
@@ -49,7 +66,7 @@ export function renderArrangement(
   };
   const sections: Section[] = [],
     stack: Section[] = [],
-    segments: DocumentStructureV2["segments"][number][] = [],
+    segments: DocumentStructureV2<DocumentBasis>["segments"][number][] = [],
     source_map: LeafSourceMap[] = [],
     structural_ranges: {
       kind: string;
@@ -199,7 +216,11 @@ export function renderArrangement(
       .map((s) => ({ ...range(s.segment_id), page_index: s.page })),
   };
   const markdown = Buffer.from(text),
-    documentStructure = parseDocumentStructureV2(
+    documentStructure = (
+      builder === LONG_DOCUMENT_BUILDER
+        ? parseLongDocumentStructure
+        : parseDocumentStructureV2
+    )(
       {
         schema_version: 2,
         text_encoding: "utf8",
@@ -357,7 +378,8 @@ export function renderLeafPayload(
   if (
     leaf.image_ref &&
     !(
-      builder === ARRANGED_DOCUMENT_BUILDER &&
+      (builder === ARRANGED_DOCUMENT_BUILDER ||
+        builder === LONG_DOCUMENT_BUILDER) &&
       leaf.type === "equation" &&
       text.trim()
     )

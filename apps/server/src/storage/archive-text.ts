@@ -1,5 +1,6 @@
 import {
   longDocumentInfo,
+  DRAFT_BASES,
   canonicalJsonBytes,
   parseArtifactRef,
   parseArchiveTextBundleV2,
@@ -36,6 +37,12 @@ function verifyText(version: ProofreadVersionV2, bundle: ArchiveTextBundleV2) {
       !longDocumentInfo(bundle.arrangement?.classification))
   )
     refuse();
+  for (const row of bundle.leaves)
+    if (
+      DRAFT_BASES.some((basis) => basis === row.basis) &&
+      version.pages[row.leaf.page_index]?.status !== "unreviewed"
+    )
+      refuse();
   for (const root of bundle.source_blocks)
     if (
       root.raw_parse_id !== version.draft_input.raw_parse_id ||

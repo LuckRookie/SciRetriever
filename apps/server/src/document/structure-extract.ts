@@ -3,9 +3,13 @@ import {
   type DocumentStructureV2,
   type DocumentPartRole,
   type SectionRole,
+  type DocumentBasis,
 } from "@sciretriever/contracts";
 import type { AssignedSection } from "./section-rules.js";
-type Segment = DocumentStructureV2["segments"][number];
+type Segment = Pick<
+  DocumentStructureV2["segments"][number],
+  "start_utf8" | "end_utf8"
+>;
 const decode = (bytes: Uint8Array, s: Segment) =>
   new TextDecoder("utf-8", { fatal: true }).decode(
     bytes.subarray(s.start_utf8, s.end_utf8),
@@ -116,7 +120,7 @@ function referenceDoi(text: string): string | null {
 }
 /** Numbered entries can continue in later reference blocks; otherwise each block is its own unnumbered entry. */
 export function structureReferences(
-  structure: DocumentStructureV2,
+  structure: DocumentStructureV2<DocumentBasis>,
   markdown: Uint8Array,
   roles: readonly SegmentRole[],
 ): readonly StructureReference[] {

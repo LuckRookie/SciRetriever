@@ -1,12 +1,12 @@
 import type {
   DocumentStructure,
   DocumentStructureV2,
-  DraftBasis,
+  DocumentBasis,
 } from "@sciretriever/contracts";
 import type { FileFingerprint } from "../storage/files/reader.js";
 export type VerifiedDocumentStructure =
   | DocumentStructure
-  | DocumentStructureV2<DraftBasis>;
+  | DocumentStructureV2<DocumentBasis>;
 /** Legacy callers accept corrected bases only until their draft read contract is connected. */
 export function isProofreadDocumentStructure(
   structure: VerifiedDocumentStructure,

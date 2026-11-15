@@ -24,7 +24,7 @@ import {
 import { emptyArchiveUsage } from "./text-session.js";
 import {
   renderArrangement,
-  ARRANGED_DOCUMENT_BUILDER,
+  arrangedBuilderFor,
   LEGACY_ARRANGED_DOCUMENT_BUILDER,
   isArrangedBuilder,
 } from "./render.js";
@@ -167,7 +167,7 @@ export class ArchiveArrangementAccess {
       isArrangedBuilder(fixed.version.builder_version)
         ? fixed.version.builder_version
         : version.method.arrange.includes("/arrangement-single-pass-v2/")
-          ? ARRANGED_DOCUMENT_BUILDER
+          ? arrangedBuilderFor(bundle)
           : LEGACY_ARRANGED_DOCUMENT_BUILDER;
     return renderArrangement(bundle, version.resources, builder);
   }

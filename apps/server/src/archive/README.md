@@ -14,5 +14,7 @@
 
 `text-pipeline.ts` 是生产六步前半段的组装：中性 source、整理、逐页校订、文本清单 CAS、文档/注释发布和索引刷新。`render.ts` 只生成确定性 Markdown、结构、source map 与派生注释；`arrangement-access.ts` 提供固定版本查询、人工恢复/重归属与锁，`markdown-edit.ts` 校验整份 Markdown 的唯一叶块映射。
 
+新长文档在组装校订内容时，用 source 内已有的页分类与文字层对比未逐页校订的保留叶块，复用相邻 document/draft-builder 的比较规则；人工文字锁保持 manual。普通校订页的依据不变。长文档新渲染用 source-order-leaves-v5，普通文献继续 v4；两者排版相同，v5 多接受未校订页的三种依据。历史固定版本按记录的 builder 重建，v4 及更早版本拒绝新依据，不重写历史产物。
+
 默认生产编排使用 schema 2；旧请求不作为别名。历史 immutable 校订稿和注释由各自历史解码器读取，旧步骤单列，不自动重建。新清单、人工决定和页缓存由相邻 storage 模块保存，原始解析继续 pin；所有模型工作仍只经受控 DSH。
 \n`preprocess.ts`、`pdf-geometry.ts` 与 `paragraph-breaks.ts` 实现程序页眉页脚删除、可见文字层度量和断段三类判定；`source-layout.ts` 与 `render.ts` 实现普通 Markdown 的原文顺序排版，`render-legacy.ts` 仅重现历史 builder 字节。`reading-order.ts` 的纠正开关默认关闭。\n

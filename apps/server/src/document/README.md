@@ -45,4 +45,4 @@
 
 新建档的结构注释由相邻 archive/render 的整理结果派生；`annotations.ts`、`section-rules.ts` 与 `section-classifier.ts` 保留历史生成/测试辅助，公开旧写请求已停用，历史 schema 1 注释仍可读。`annotation-read.ts` 提供固定注释有界续读，outline/segments 经同一注释存储返回角色和过滤结果。引用关系仍由后续 Literature 接入负责，注释不拥有文献身份或关系合并。
 
-`storage.ts` 按 builder_version 分派 proofread-blocks-v1、arranged-leaves-v2、source-order-leaves-v3 与 source-order-leaves-v4；新固定文档从 V2 文本清单重新生成并核对结构/正文和实际渲染的资源闭包，不能将历史 hash 交给新 parser，也不能省略仍被正文引用的图片或声明未使用的截图。`read.ts` 同时提供有界 JSON 资源分页与经过整篇核验的完整图片字节流。
+`storage.ts` 按 builder_version 分派 proofread-blocks-v1、arranged-leaves-v2、source-order-leaves-v3、source-order-leaves-v4 与 source-order-leaves-v5；固定文档从 V2 文本清单重新生成并核对结构/正文和实际渲染的资源闭包，不能将历史 hash 交给新 parser，也不能省略仍被正文引用的图片或声明未使用的截图。v5 长文档的等级仍为 proofread，segments、slice、evidence 可返回未校订页的三种比较依据；核验证明容纳同篇混合依据，加工用的旧三取值守卫不变。校订稿不提供 draft-differences。`read.ts` 同时提供有界 JSON 资源分页与经过整篇核验的完整图片字节流。
