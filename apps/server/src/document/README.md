@@ -15,7 +15,9 @@
 - [storage.ts](storage.ts)：文档存储协作接口。
 - [verification-cache.ts](verification-cache.ts)：有界校验证明、LRU 淘汰与同版本首次核验合并。
 
-`storage.ts` 的 `commitDraftVersion` 校验固定初稿内容与产物字节，worker 在同一事务登记版本、资源闭包、计数、当前指针与默认关系，复检原始解析仍为当前并按两个独立 CAS（初稿当前、文档默认）更新。`sqlite/document-defaults.ts` 由原始解析当前切换、初稿登记与校订发布各自在自己的事务里调用：有效完整校订稿优先，其次有效当前初稿，两者都没有则删除默认关系。重新解析会先失去旧默认，新的初稿失败时返回 `document-missing`。旧固定版本的字节与证据不变。补形成的维护入口尚未接入。
+`storage.ts` 的 `commitDraftVersion` 校验固定初稿内容与产物字节，worker 在同一事务登记版本、资源闭包、计数、当前指针与默认关系，复检原始解析仍为当前并按两个独立 CAS（初稿当前、文档默认）更新。`sqlite/document-defaults.ts` 由原始解析当前切换、初稿登记与校订发布各自在自己的事务里调用：有效完整校订稿优先，其次有效当前初稿，两者都没有则删除默认关系。重新解析会先失去旧默认，新的初稿失败时返回 `document-missing`。旧固定版本的字节与证据不变。
+
+`application/jobs/drafts.ts` 提供显式补形成：预览只读候选元数据，创建时固定文献、PDF 部分与原始解析；执行复用本模块的初稿发布，不调用解析、模型或网络。`currentDraftMethod` 与 `currentDraftMethodHash` 为 builder 和旧方法筛选提供同一份方法定义，不为预览构建文本。HTTP 预览 `/api/v1/query/form-drafts-preview` 与创建 `/api/v1/maintenance/form-drafts` 只走 Web/维护认证；CLI 为 `form-drafts preview|start`，MCP 为 `form_drafts_preview`（read）和 `form_drafts`（operate），设备经 `/mcp`。CLI start 等待本进程内的持久任务结束；HTTP/MCP 返回已创建任务，由原运行时继续执行。任务读取返回逐部分回执，取消保留已提交版本。
 
 显式校订稿发布先读默认关系：HTTP `POST /api/v1/query/document-default`、CLI `document default` 或 MCP `document_read/default` 返回当前 revision。发布请求的 `expected_default_revision` 填这个值，当前默认是初稿时也一样；只有没有默认关系时才用 null。HTTP `POST /api/v1/maintenance/document-publish-proofread`、CLI `document publish-proofread` 与 MCP `document_publish_proofread` 共用发布 owner；`publication-conflict`（HTTP 409）要求重读默认关系、确认当前校订输入后重试。默认 CAS 失败保留已经登记的固定版本，不把登记成功当作默认更新成功。建档自己的发布在写入范围内读当前 revision，不复用解析前的旧值。
 

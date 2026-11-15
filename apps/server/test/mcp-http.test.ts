@@ -129,6 +129,92 @@ async function fixture(
 function structured(result: unknown): unknown {
   return (result as { structuredContent: unknown }).structuredContent;
 }
+it("keeps draft preview in read and creation in operate without registering either direct HTTP device route", async () => {
+  const f = await fixture();
+  try {
+    for (const purposes of [
+      ["read"],
+      ["operate"],
+      ["read", "operate"],
+    ] as DevicePurpose[][]) {
+      const paired = await f.token(purposes),
+        remote = await f.connect(paired.token);
+      const names = (await remote.client.listTools()).tools.map((t) => t.name);
+      expect(names.includes("form_drafts_preview")).toBe(
+        purposes.includes("read"),
+      );
+      expect(names.includes("form_drafts")).toBe(purposes.includes("operate"));
+      const selector = {
+        kind: "query",
+        query: {},
+        sort: "title-asc",
+        limit: null,
+      };
+      for (const [name, args, purpose] of [
+        ["form_drafts_preview", { selector }, "read"],
+        [
+          "form_drafts",
+          { selector, idempotency_key: `draft-purpose-${purposes.join("-")}` },
+          "operate",
+        ],
+      ] as const) {
+        const result = await remote.client.callTool({ name, arguments: args });
+        if (purposes.includes(purpose)) {
+          expect(result.isError).not.toBe(true);
+          if (purpose === "read")
+            expect(structured(result)).toMatchObject({
+              result: { matched: 0, process: 0, process_parts: 0 },
+            });
+          else
+            expect(structured(result)).toMatchObject({
+              result: {
+                selector: { goal: "draft", scope: { counts: { process: 0 } } },
+              },
+            });
+        } else {
+          expect(result.isError).toBe(true);
+          expect(structured(result)).toMatchObject({
+            result: { failure: { code: "device-purpose-forbidden" } },
+          });
+        }
+      }
+      for (const path of [
+        "/api/v1/query/form-drafts-preview",
+        "/api/v1/maintenance/form-drafts",
+      ]) {
+        const denied = await fetch(f.http.origin + path, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${paired.token}`,
+            "Content-Type": "application/json",
+          },
+          body: "{}",
+        });
+        expect(denied.status).toBe(403);
+        expect(await denied.json()).toMatchObject({
+          code: "device-purpose-forbidden",
+        });
+      }
+    }
+    const intake = await f.token(["intake"]);
+    expect(
+      (
+        await f.rpc(intake.token, {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-03-26",
+            capabilities: {},
+            clientInfo: { name: "synthetic-intake", version: "1" },
+          },
+        })
+      ).status,
+    ).toBe(403);
+  } finally {
+    await f.close();
+  }
+}, 60_000);
 it("uses the official HTTP client, lists independent read/operate tools and matches the shared stdio implementation", async () => {
   const f = await fixture();
   const stdio = createMcpServer({

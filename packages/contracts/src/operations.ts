@@ -20,6 +20,53 @@ import {
   parseMetadataTaskRequest,
   type MetadataTaskRequest,
 } from "./source-results.js";
+import { parseAcquirePdfSelector } from "./intake.js";
+import { tagRecord } from "./tags.js";
+import type {
+  FormDraftsPreviewRequest,
+  FormDraftsRequest,
+} from "./form-drafts.js";
+
+function formDraftsFields(value: unknown, required: readonly string[]) {
+  const optional =
+    value &&
+    typeof value === "object" &&
+    Object.hasOwn(value, "include_older_method")
+      ? ["include_older_method"]
+      : [];
+  return tagRecord(value, [...required, ...optional]);
+}
+export function parseFormDraftsPreviewRequest(
+  value: unknown,
+): FormDraftsPreviewRequest {
+  const r = formDraftsFields(value, ["selector"]);
+  if (
+    r.include_older_method !== undefined &&
+    typeof r.include_older_method !== "boolean"
+  )
+    throw new ContractValidationError(["form-drafts"]);
+  return {
+    selector: parseAcquirePdfSelector(r.selector),
+    include_older_method: r.include_older_method ?? false,
+  };
+}
+export function parseFormDraftsRequest(value: unknown): FormDraftsRequest {
+  const r = formDraftsFields(value, ["selector", "idempotency_key"]);
+  if (
+    typeof r.idempotency_key !== "string" ||
+    !/^[A-Za-z0-9._:-]{1,128}$/u.test(r.idempotency_key)
+  )
+    throw new ContractValidationError(["form-drafts"]);
+  return {
+    ...parseFormDraftsPreviewRequest({
+      selector: r.selector,
+      ...(r.include_older_method === undefined
+        ? {}
+        : { include_older_method: r.include_older_method }),
+    }),
+    idempotency_key: r.idempotency_key,
+  };
+}
 
 export type ProcessingOperation =
   | {

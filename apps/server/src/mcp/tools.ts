@@ -234,6 +234,17 @@ export const BROWSER_MAINTENANCE_TOOLS: readonly Tool[] = [
 ];
 export const QUERY_TOOLS: readonly Tool[] = [
   tool(
+    "form_drafts_preview",
+    "Preview missing or explicitly older-method drafts from existing current raw parses. Returns mutually exclusive paper counts plus process_parts. Read-only: no PDF inspection, draft formation, parser, model or network. Devices use HTTP MCP with purpose read; no direct device query route.",
+    object(
+      {
+        selector: { type: "object" },
+        include_older_method: { type: "boolean" },
+      },
+      ["selector"],
+    ),
+  ),
+  tool(
     "intake_batch_status",
     "Read a persisted intake batch without initializing the library or resuming import work.",
     object({ batch_id: id }),
@@ -724,6 +735,19 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
 ];
 export const MAINTENANCE_TOOLS: readonly Tool[] = [
+  tool(
+    "form_drafts",
+    "Freeze and start a durable draft backfill task from existing raw parses. selector is the same query/literatures scope as PDF acquisition; include_older_method defaults false. Does not parse, archive, call models or use network. Returns a saved job with goal draft and scope; read_task gives progress and per-part results, control_task can cancel. Committed drafts survive cancellation. Requires operate over HTTP MCP.",
+    object(
+      {
+        selector: { type: "object" },
+        include_older_method: { type: "boolean" },
+        idempotency_key: text,
+      },
+      ["selector", "idempotency_key"],
+    ),
+    false,
+  ),
   tool(
     "configuration_apply",
     "Apply a saved binding in a managed runtime. Configuration-only processes return unmanaged and do not stop themselves.",

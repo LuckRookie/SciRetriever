@@ -167,7 +167,7 @@ function output(value: unknown, options: CliOptions): CliResult {
 
 function usage(options: CliOptions): CliResult {
   const text =
-    "Usage: sciretriever <web|discover|complete|literature|document|analysis|context|extraction|import|export|config|storage|maintenance|jobs|browser|mcp> ...\n" +
+    "Usage: sciretriever <web|discover|complete|literature|document|form-drafts|analysis|context|extraction|import|export|config|storage|maintenance|jobs|browser|mcp> ...\n" +
     "  web [--port 4174] [--host IPv4]  # login required; generates an API key unless SCIRETRIEVER_WEB_PASSWORD is set\n" +
     "  discover topic QUERY | discover citations --seed-literature-id ID\n" +
     "  metadata lookup ID[,ID] | sources statistics --request FILE|-\n" +
@@ -189,6 +189,7 @@ function usage(options: CliOptions): CliResult {
     "  literature status; literature search|read|references|reference|identity|artifact-chunk|bibliography --request FILE|-\n" +
     "  jobs list|inspect|create-request|resolve --request FILE|- (create-request only saves)\n" +
     "  library batches|facets|batch-rename --request FILE|-; acquire-pdf preview --request FILE|-\n" +
+    "  form-drafts preview|start --request FILE|-  # existing raw parses only; no model, network or parser; start waits for its durable task\n" +
     "  extraction create|read|submit|receipt|close|cancel|cleanup --request FILE|-\n" +
     "  config read; config preview|publish|credential|probe --request FILE|-\n" +
     "  import bibliography --request FILE|-; discover request --request FILE|-\n" +
@@ -998,6 +999,7 @@ async function execute(
     "library batches": "intake-batches",
     "library facets": "library-facets",
     "acquire-pdf preview": "acquire-pdf-preview",
+    "form-drafts preview": "form-drafts-preview",
     "maintenance index-status": "index-status",
     "literature metadata-fields": "metadata-fields",
     "jobs list": "task-list",
@@ -1094,6 +1096,7 @@ async function execute(
     return output({ protocol_version: 1, result: value }, options);
   }
   const maintenanceRoutes: Readonly<Record<string, MaintenanceOperation>> = {
+    "form-drafts start": "form-drafts",
     "library batch-rename": "intake-batch-rename",
     "literature resolve-references": "archive-references",
     "literature metadata-edit": "metadata-edit",
@@ -1118,14 +1121,19 @@ async function execute(
     const bytes = await inputBytes(source, options, 1024 * 1024 + 4096);
     if (bytes.byteLength > 1024 * 1024 + 4096) invalidInput();
     const request = parseStrictJsonValue(bytes);
-    const result = await withApplication(options, (app) =>
-      executeMaintenance(
+    const result = await withApplication(options, async (app) => {
+      const accepted = await executeMaintenance(
         app,
         maintenanceRoutes[queryKey]!,
         request,
         options.signal,
-      ),
-    );
+      );
+      if (maintenanceRoutes[queryKey] === "form-drafts") {
+        const job = accepted as { job_id: string };
+        await app.processingTasks!.run(job.job_id, options.signal);
+      }
+      return accepted;
+    });
     return output({ protocol_version: 1, result }, options);
   }
   if (group === "web") {

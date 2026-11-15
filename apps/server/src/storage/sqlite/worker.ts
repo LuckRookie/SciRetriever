@@ -1706,6 +1706,22 @@ export class SqliteWorker {
       request: { kind: "current", asset_id: assetId },
     });
   }
+  draftBackfillCandidates(
+    selector: import("@sciretriever/contracts").AcquirePdfSelector,
+    profile: string,
+    ftsQuery: string | null,
+    signal?: AbortSignal,
+  ): Promise<
+    readonly import("./draft-text-engine.js").DraftBackfillCandidate[]
+  > {
+    return this.run(
+      {
+        kind: "draft_text_read",
+        request: { kind: "backfill-candidates", selector, profile, ftsQuery },
+      },
+      signal,
+    );
+  }
   primaryDocumentDefaults(
     literatureIds: readonly string[],
   ): Promise<

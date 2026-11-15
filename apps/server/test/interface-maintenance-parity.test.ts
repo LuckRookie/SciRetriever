@@ -15,6 +15,14 @@ import { TypeScriptConfigurationOwner } from "../src/configuration/owner.js";
 import { startQueryOnlyHttp } from "../src/workbench/http.js";
 import { coreProcessingFixture } from "./core-processing-fixture.js";
 import * as applicationBootstrap from "../src/bootstrap/application.js";
+import { executeMaintenance } from "../src/entry/maintenance-operations.js";
+import { taskHttpAdapters } from "../src/bootstrap/workbench.js";
+import { startWorkbenchHttp } from "../src/workbench/http.js";
+import { ProductionWorkbenchSession } from "../src/workbench/production-session.js";
+import {
+  workbenchLogin,
+  workbenchTestAccess,
+} from "./workbench-auth-fixture.js";
 
 async function* stdin(value: unknown) {
   yield Buffer.from(JSON.stringify(value));
@@ -27,6 +35,192 @@ async function connect(host: ReturnType<typeof createMcpServer>) {
   return client;
 }
 describe("machine interfaces over shared maintenance owners", () => {
+  it("previews and starts the same frozen draft task through CLI, authenticated Web and shared MCP", async () => {
+    const env = await coreProcessingFixture({ offline: true });
+    let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined,
+      web: Awaited<ReturnType<typeof startWorkbenchHttp>> | undefined,
+      host: ReturnType<typeof createMcpServer> | undefined,
+      client: Client | undefined;
+    const screen = new ProductionWorkbenchSession(null, undefined);
+    try {
+      await env.app.rawParsing!.parseAsset(
+        env.asset.asset_id,
+        ["vlm-engine"],
+        undefined,
+        { expected_sha256: env.asset.sha256, force: false },
+      );
+      const parses = env.parseCalls,
+        calls = env.modelCalls;
+      query = await createQueryApplication(env.home);
+      web = await startWorkbenchHttp({
+        ...taskHttpAdapters(env.app),
+        session: screen,
+        access: workbenchTestAccess,
+        assets: new Map([
+          ["/", { contentType: "text/html", body: "synthetic" }],
+        ]),
+        query: {
+          application: query,
+          maintenance: env.app.maintenance!,
+          archiveOperation: (op, value, signal) =>
+            executeMaintenance(env.app, op, value, signal),
+        },
+      });
+      host = createMcpServer({
+        home: env.home,
+        maintenance: true,
+        sharedApplications: true,
+        applicationFactory: async () => env.app,
+        queryFactory: async () => query!,
+      });
+      client = await connect(host);
+      const login = await workbenchLogin(web.origin),
+        landing = await fetch(web.origin, { headers: { Cookie: login } });
+      const cookies = `${login}; ${landing.headers.get("set-cookie")!.split(";")[0]!}`;
+      const grant = await fetch(web.origin + "/api/clients", {
+        method: "POST",
+        headers: {
+          Cookie: cookies,
+          Origin: web.origin,
+          "Content-Type": "application/json",
+          "X-Workbench-Init": "1",
+        },
+        body: "{}",
+      });
+      const access = (await grant.json()) as {
+        client_id: string;
+        csrf: string;
+      };
+      const post = (path: string, request: unknown, csrf = access.csrf) =>
+        fetch(`${web!.origin}${path}?client_id=${access.client_id}`, {
+          method: "POST",
+          headers: {
+            Cookie: cookies,
+            Origin: web!.origin,
+            "Content-Type": "application/json",
+            "X-Workbench-CSRF": csrf,
+            "X-SciRetriever-Protocol-Version": "1",
+          },
+          body: JSON.stringify({ protocol_version: 1, request }),
+        });
+      const preview = {
+        selector: {
+          kind: "literatures",
+          literature_ids: [env.parseRequest.literature_id],
+        },
+      };
+      const cliPreview = await runCli(
+        ["form-drafts", "preview", "--request", "-", "--json"],
+        { home: env.home, stdin: stdin(preview) },
+      );
+      expect(cliPreview.code).toBe(0);
+      const httpPreview = await post(
+        "/api/v1/query/form-drafts-preview",
+        preview,
+      );
+      expect(httpPreview.status).toBe(200);
+      expect(await httpPreview.json()).toEqual(cliPreview.value);
+      const mcpPreview = await client.callTool({
+        name: "form_drafts_preview",
+        arguments: preview,
+      });
+      expect(mcpPreview.isError).not.toBe(true);
+      expect(mcpPreview.structuredContent).toEqual(cliPreview.value);
+      const request = { ...preview, idempotency_key: "drafts-three-ports" };
+      // Reuse the real production graph and its fake external page port. Only
+      // CLI ownership of this shared fixture's lifetime is suppressed.
+      const factory = vi
+        .spyOn(applicationBootstrap, "createApplication")
+        .mockResolvedValueOnce({ ...env.app, close: async () => {} });
+      let cli;
+      try {
+        cli = await runCli(
+          ["form-drafts", "start", "--request", "-", "--json"],
+          { home: env.home, stdin: stdin(request) },
+        );
+      } finally {
+        factory.mockRestore();
+      }
+      expect(cli.code).toBe(0);
+      const created = (
+        cli.value as { result: { job_id: string; selector: unknown } }
+      ).result;
+      expect((await env.app.jobs!.getJob(created.job_id))!.status).toBe(
+        "completed",
+      );
+      const httpCreated = await post(
+        "/api/v1/maintenance/form-drafts",
+        request,
+      );
+      expect(httpCreated.status).toBe(200);
+      expect(await httpCreated.json()).toMatchObject({
+        result: { job_id: created.job_id, selector: created.selector },
+      });
+      const mcpCreated = await client.callTool({
+        name: "form_drafts",
+        arguments: request,
+      });
+      expect(mcpCreated.isError).not.toBe(true);
+      expect(mcpCreated.structuredContent).toMatchObject({
+        result: { job_id: created.job_id, selector: created.selector },
+      });
+      const taskRequest = { job_id: created.job_id };
+      const cliTask = await runCli(
+        ["jobs", "inspect", "--request", "-", "--json"],
+        { home: env.home, stdin: stdin(taskRequest) },
+      );
+      expect(cliTask.code).toBe(0);
+      const webTask = await fetch(
+        `${web.origin}/api/tasks/${created.job_id}?client_id=${access.client_id}`,
+        { headers: { Cookie: cookies, Origin: web.origin } },
+      );
+      expect(webTask.status).toBe(200);
+      const cliRead = (
+        cliTask.value as { result: { scope: unknown; results: unknown } }
+      ).result;
+      expect(await webTask.json()).toMatchObject({
+        task: { scope: cliRead.scope, results: cliRead.results },
+      });
+      const mcpTask = await client.callTool({
+        name: "inspect_task",
+        arguments: taskRequest,
+      });
+      expect(mcpTask.isError).not.toBe(true);
+      expect(mcpTask.structuredContent).toEqual(cliTask.value);
+      expect(cliTask.value).toMatchObject({
+        result: {
+          results: [
+            {
+              result: { parts: [{ status: "formed", default_changed: true }] },
+            },
+          ],
+        },
+      });
+      expect(
+        (await post("/api/v1/maintenance/form-drafts", request, "wrong"))
+          .status,
+      ).toBe(403);
+      expect(
+        (
+          await fetch(web.origin + "/api/v1/query/form-drafts-preview", {
+            method: "POST",
+            headers: { Origin: web.origin, "Content-Type": "application/json" },
+            body: JSON.stringify({ protocol_version: 1, request: preview }),
+          })
+        ).status,
+      ).toBe(401);
+      expect(env.parseCalls).toBe(parses);
+      expect(env.modelCalls).toBe(calls);
+    } finally {
+      vi.restoreAllMocks();
+      await client?.close();
+      await host?.close();
+      await web?.close();
+      await screen.close();
+      await query?.close();
+      await env.close();
+    }
+  }, 60_000);
   it.each([false, true])(
     "prints the complete parser report with its unmodified receipt (draft failure: %s)",
     async (failDraft) => {

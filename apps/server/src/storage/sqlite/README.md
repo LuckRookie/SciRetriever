@@ -8,7 +8,7 @@
 - [repositories.ts](repositories.ts)：文献等事实仓库。
 - [worker.ts](worker.ts)：Worker 调用边界。
 - [worker-runtime.ts](worker-runtime.ts)：SQLite worker 运行实现。
-- [draft-text-engine.ts](draft-text-engine.ts)：初稿版本、资源闭包、不可变计数、当前指针及默认关系的同事务登记；按版本读事实、按本页文献批量读主 PDF 默认版本与等级，不读取文件。
+- [draft-text-engine.ts](draft-text-engine.ts)：初稿版本、资源闭包、不可变计数、当前指针及默认关系的同事务登记；按版本读事实、按本页文献批量读主 PDF 默认版本与等级。补形成候选共用文献库筛选和排序，在同一只读快照返回 PDF 部分、当前部署/历史 Markdown raw、指定 raw 的既有初稿 ID 和当前初稿方法；不读取正文或其它文件，业务跳过、limit 与任务冻结由应用层决定。
 - [document-defaults.ts](document-defaults.ts)：原始解析当前切换、初稿登记与校订发布事务内按独立 CAS 重求默认文本，优先有效完整校订稿，再选有效当前初稿，否则删除默认关系。校订发布可提名刚登记的版本，仍复检当前校订内容、人工 revision 和原始解析 pin；相同校订内容的等价方法版本可以复用固定表示。没有提名时保留仍有效的默认表示。资产当前指针切换同时重求其全部文献关系；读取不重求。
 - [draft-text-schema-migration.ts](draft-text-schema-migration.ts)：独立离线 16→17；精确匹配冻结 16，原地重建文档父表、子表不改名或重建，核对全部旧表行数及校订行、内容版本、事件和结果过时状态；不形成初稿，不访问 artifact。
 - [library-state-cache.ts](library-state-cache.ts)：基于事务内输入版本的建档状态缓存。

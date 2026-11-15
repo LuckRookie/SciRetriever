@@ -264,6 +264,7 @@ export function createMcpServer(options: McpOptions = {}) {
       );
     }
     const maintenanceRoutes: Readonly<Record<string, MaintenanceOperation>> = {
+      form_drafts: "form-drafts",
       snapshot_create: "snapshots",
       snapshot_rename: "snapshot-rename",
       folders_manage: "folders",
@@ -488,6 +489,7 @@ export function createMcpServer(options: McpOptions = {}) {
       intake_batches: "intake-batches",
       library_facets: "library-facets",
       acquire_pdf_preview: "acquire-pdf-preview",
+      form_drafts_preview: "form-drafts-preview",
       index_status: "index-status",
       read_literature: "literature-read",
       read_task: "task-read",

@@ -2533,6 +2533,7 @@ export async function startWorkbenchHttp(
 }
 
 const ARCHIVE_HTTP_WRITES = [
+  "form-drafts",
   "intake-batch-rename",
   "archive-arrangement-edit",
   "folders",
@@ -2553,6 +2554,7 @@ const ARCHIVE_HTTP_WRITES = [
   "archive-references",
 ] as const;
 const ARCHIVE_HTTP_READS = [
+  "form-drafts-preview",
   "intake-batches",
   "library-facets",
   "acquire-pdf-preview",

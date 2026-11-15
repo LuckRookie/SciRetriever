@@ -12,6 +12,7 @@ import {
 } from "./index.js";
 import { tagInteger } from "./tags.js";
 import { parseFullTextCounts, type FullTextCounts } from "./library-counts.js";
+import { parseFormDraftsCounts } from "./form-drafts.js";
 function tagRecord(
   value: unknown,
   required: readonly string[],
@@ -182,9 +183,21 @@ export interface ParseDocumentScope {
   readonly selector: AcquirePdfSelector;
   readonly counts: ParseDocumentCounts;
 }
-export type IntakeTaskScope = AcquirePdfScope | ParseDocumentScope;
+export type IntakeTaskScope =
+  | AcquirePdfScope
+  | ParseDocumentScope
+  | import("./form-drafts.js").FormDraftsScope;
 export function parseIntakeTaskScope(value: unknown): IntakeTaskScope {
   const r = tagRecord(value, ["selector", "counts"]);
+  if (
+    r.counts &&
+    typeof r.counts === "object" &&
+    "skipped_no_raw_parse" in r.counts
+  )
+    return {
+      selector: parseAcquirePdfSelector(r.selector),
+      counts: parseFormDraftsCounts(r.counts),
+    };
   if (
     r.counts &&
     typeof r.counts === "object" &&

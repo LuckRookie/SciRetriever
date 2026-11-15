@@ -34,6 +34,7 @@ export const CONTRACTS_VERSION = "v1" as const;
 
 export * from "./article-identity.js";
 export * from "./operations.js";
+export * from "./form-drafts.js";
 export * from "./intake.js";
 export * from "./capture.js";
 export * from "./long-document.js";

@@ -12,6 +12,7 @@ import {
   parseDocumentDraftDifferencesRequest,
   parseDocumentDraftDifferencesResult,
   parseDocumentReadResult,
+  parseFormDraftsPartResult,
   parseLibrarySearchRequest,
   parseLiteratureId,
   type DocumentReadOperation,
@@ -86,6 +87,7 @@ export const QUERY_OPERATIONS = [
   "intake-batches",
   "library-facets",
   "acquire-pdf-preview",
+  "form-drafts-preview",
   "library-search",
   "library-counts",
   "folders",
@@ -261,6 +263,10 @@ async function readQuery(
     const r = operationRecord(value, ["selector"]);
     return (await q.query.pdfSelection(r.selector, signal)).counts;
   }
+  if (operation === "form-drafts-preview") {
+    if (!q.formDraftsPreview) unavailable();
+    return q.formDraftsPreview(value, signal);
+  }
   if (operation === "usage-estimate") {
     if (!q.usageEstimate) unavailable();
     return q.usageEstimate(value, signal);
@@ -275,6 +281,56 @@ async function readQuery(
     const report = await q.reviewRead("task-run", value);
     if (!report || !q.tasks) return report;
     const task = await q.tasks.read(String(r.job_id));
+    const selector = task.job.selector;
+    if (
+      selector &&
+      typeof selector === "object" &&
+      "goal" in selector &&
+      selector.goal === "draft"
+    ) {
+      if (
+        typeof report !== "object" ||
+        !("items" in report) ||
+        !Array.isArray(report.items)
+      )
+        throw new TypeError("draft task run report is invalid");
+      const receipts = new Map<
+        string,
+        ReturnType<typeof parseFormDraftsPartResult>[]
+      >();
+      // A complete receipt wins over earlier partial attempts; otherwise the
+      // latest partial receipt preserves committed work after cancellation.
+      for (const value of [...task.partial_results, ...task.results]) {
+        if (
+          !value ||
+          typeof value !== "object" ||
+          !("target_id" in value) ||
+          !("result" in value)
+        )
+          continue;
+        const result = value.result;
+        if (
+          result &&
+          typeof result === "object" &&
+          "parts" in result &&
+          Array.isArray(result.parts)
+        )
+          receipts.set(
+            String(value.target_id),
+            result.parts.map(parseFormDraftsPartResult),
+          );
+      }
+      return {
+        ...report,
+        items: report.items.map((item: Record<string, unknown>) => ({
+          ...item,
+          operation: "form-drafts",
+          draft_parts: receipts.get(String(item.target_id)) ?? [],
+        })),
+        source_results: task.source_results,
+        scope: task.scope,
+      };
+    }
     return {
       ...report,
       source_results: task.source_results,

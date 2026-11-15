@@ -5,10 +5,19 @@ import {
   type ArtifactRef,
   type DraftDocumentRef,
   type TextLevel,
+  type AcquirePdfSelector,
+  type VersionRole,
 } from "@sciretriever/contracts";
 import type * as Logging from "../../logging/index.js";
 import type * as Defaults from "./document-defaults.js";
 import type { DocumentDefaultRequest } from "./document-defaults.js";
+import type * as LibraryPage from "./library-page.js";
+const { libraryPageIds }: typeof LibraryPage = await import(
+  new URL(
+    import.meta.url.endsWith(".ts") ? "./library-page.ts" : "./library-page.js",
+    import.meta.url,
+  ).href
+);
 const { createLogger }: typeof Logging = await import(
   new URL(
     import.meta.url.endsWith(".ts")
@@ -58,9 +67,30 @@ export interface PrimaryDocumentDefault {
   readonly document_version_id: string | null;
   readonly text_level: TextLevel | null;
 }
+/** Catalog facts only; the application owns eligibility, limits and execution. */
+export interface DraftBackfillCandidate {
+  readonly literature_id: string;
+  readonly version_role: VersionRole;
+  readonly parts: readonly {
+    readonly asset_id: string;
+    readonly asset_sha256: string;
+    readonly part: "main" | "supplementary";
+    readonly raw_parse_id: string | null;
+    readonly raw_result_sha256: string | null;
+    readonly has_draft: boolean;
+    readonly known_version_ids: readonly string[];
+    readonly current_method_sha256: string | null;
+  }[];
+}
 export type DraftTextRead =
   | { readonly kind: "facts"; readonly document_version_id: string }
   | { readonly kind: "current"; readonly asset_id: string }
+  | {
+      readonly kind: "backfill-candidates";
+      readonly selector: AcquirePdfSelector;
+      readonly ftsQuery: string | null;
+      readonly profile: string;
+    }
   | {
       readonly kind: "primary-defaults";
       readonly literature_ids: readonly string[];
@@ -84,6 +114,71 @@ function requireSchema(db: DatabaseSync) {
 }
 export function runDraftTextRead(db: DatabaseSync, request: DraftTextRead) {
   requireSchema(db);
+  if (request.kind === "backfill-candidates") {
+    const selector = request.selector;
+    const ids =
+      selector.kind === "query"
+        ? libraryPageIds(db, {
+            query: selector.query,
+            sort: selector.sort,
+            after: null,
+            limit: Number.MAX_SAFE_INTEGER,
+            ftsQuery: request.ftsQuery,
+          }).rows.map((row) => String(row.literature_id))
+        : [...selector.literature_ids];
+    const members = db
+      .prepare(
+        "SELECT literature_id,version_role FROM literatures WHERE literature_id IN (SELECT value FROM json_each(?))",
+      )
+      .all(JSON.stringify(ids));
+    if (members.length !== ids.length) fail("literature-not-found");
+    const parts = db
+      .prepare(
+        `SELECT la.literature_id,a.asset_id,a.sha256 AS asset_sha256,CASE la.role WHEN 'primary-pdf' THEN 'main' ELSE 'supplementary' END AS part,
+       r.raw_parse_id,r.result_sha256 AS raw_result_sha256,
+       EXISTS(SELECT 1 FROM document_versions v WHERE v.schema_version=3 AND v.raw_parse_id=r.raw_parse_id AND v.raw_parse_result_sha256=r.result_sha256 AND v.literature_id=la.literature_id) AS has_draft,
+       (SELECT json_group_array(v.document_version_id) FROM document_versions v WHERE v.schema_version=3 AND v.raw_parse_id=r.raw_parse_id AND v.raw_parse_result_sha256=r.result_sha256 AND v.literature_id=la.literature_id) AS known_versions_json,
+       d.draft_method_sha256 AS current_method_sha256
+       FROM literature_assets la JOIN assets a ON a.asset_id=la.asset_id
+       LEFT JOIN raw_parse_current rc ON rc.source_asset_id=a.asset_id AND rc.source_sha256=a.sha256 AND rc.profile=?
+       LEFT JOIN raw_parse_current legacy ON legacy.source_asset_id=a.asset_id AND legacy.source_sha256=a.sha256 AND legacy.profile='vlm-engine-markdown-only'
+       LEFT JOIN raw_parses r ON r.raw_parse_id=coalesce(rc.raw_parse_id,legacy.raw_parse_id)
+       LEFT JOIN draft_current dc ON dc.part_asset_id=a.asset_id AND dc.part_sha256=a.sha256
+       LEFT JOIN document_versions d ON d.document_version_id=dc.document_version_id AND d.literature_id=la.literature_id
+       WHERE la.literature_id IN (SELECT value FROM json_each(?)) AND la.role IN ('primary-pdf','supplementary-pdf') AND a.media_type='application/pdf'
+       ORDER BY la.literature_id,CASE la.role WHEN 'primary-pdf' THEN 0 ELSE 1 END,a.asset_id`,
+      )
+      .all(request.profile, JSON.stringify(ids));
+    const byId = new Map(
+      members.map((row) => [String(row.literature_id), row]),
+    );
+    const byLiterature = new Map<
+      string,
+      DraftBackfillCandidate["parts"][number][]
+    >();
+    for (const row of parts) {
+      const id = String(row.literature_id);
+      const list = byLiterature.get(id) ?? [];
+      list.push({
+        asset_id: String(row.asset_id),
+        asset_sha256: String(row.asset_sha256),
+        part: row.part as "main" | "supplementary",
+        raw_parse_id: row.raw_parse_id as string | null,
+        raw_result_sha256: row.raw_result_sha256 as string | null,
+        has_draft: row.has_draft === 1,
+        known_version_ids: JSON.parse(
+          String(row.known_versions_json),
+        ) as string[],
+        current_method_sha256: row.current_method_sha256 as string | null,
+      });
+      byLiterature.set(id, list);
+    }
+    return ids.map((id) => ({
+      literature_id: id,
+      version_role: byId.get(id)!.version_role as VersionRole,
+      parts: byLiterature.get(id) ?? [],
+    }));
+  }
   if (request.kind === "facts") {
     const row = db
       .prepare(

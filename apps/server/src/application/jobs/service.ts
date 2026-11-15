@@ -31,6 +31,7 @@ import {
   type FrozenCompletionTarget,
 } from "../../entry/database-completion.js";
 import type { InterventionService } from "./interventions.js";
+import type { DraftBackfillService } from "./drafts.js";
 
 export interface ExecutionRunResult {
   readonly target_id: string;
@@ -518,12 +519,14 @@ export class ExecutionJobService {
     private readonly library: Pick<LiteratureQueryService, "detail"> &
       Partial<Pick<LiteratureQueryService, "pdfSelection" | "parseSelection">>,
     private readonly writes?: CatalogWriteAdmission,
+    private readonly drafts?: Pick<DraftBackfillService, "create">,
   ) {}
 
   create(
     input: Omit<CreateExecutionJobInput, "selector"> & {
       readonly selector: LiteratureSelector;
-      readonly goal?: "pdf" | "parser";
+      readonly goal?: "pdf" | "parser" | "draft";
+      readonly include_older_method?: boolean;
       readonly parse_only?: boolean;
     },
   ) {
@@ -534,10 +537,19 @@ export class ExecutionJobService {
   private async createOwned(
     input: Omit<CreateExecutionJobInput, "selector"> & {
       readonly selector: LiteratureSelector;
-      readonly goal?: "pdf" | "parser";
+      readonly goal?: "pdf" | "parser" | "draft";
+      readonly include_older_method?: boolean;
       readonly parse_only?: boolean;
     },
   ) {
+    if (input.goal === "draft") {
+      if (!this.drafts) throw new TypeError("draft completion is unavailable");
+      return this.drafts.create({
+        ...input,
+        selector: parseAcquirePdfSelector(input.selector),
+        include_older_method: input.include_older_method ?? false,
+      });
+    }
     const {
       selector,
       goal = "parser",
@@ -679,6 +691,7 @@ export class ExecutionJobService {
 
 export interface ExecutionTaskRuntime {
   readonly completion: DatabaseCompletionService;
+  readonly drafts?: Pick<DraftBackfillService, "run">;
 }
 
 /**
@@ -714,6 +727,16 @@ export class ExecutionTaskService {
     const job = await this.repository.getJob(jobId);
     if (!job) throw new TypeError("execution job is unavailable");
     if (!["queued", "running"].includes(job.status)) return [];
+    if (
+      job.selector &&
+      typeof job.selector === "object" &&
+      "goal" in job.selector &&
+      job.selector.goal === "draft"
+    ) {
+      if (!this.runtime.drafts)
+        throw new TypeError("draft completion is unavailable");
+      return this.runtime.drafts.run(jobId, job.selector, options);
+    }
     const max =
       options.max_targets ??
       (job.selector &&

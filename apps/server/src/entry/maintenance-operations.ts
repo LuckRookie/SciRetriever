@@ -18,6 +18,7 @@ import {
   parseExtractionSubmission,
   parseLiteratureId,
   parseIndexRebuildRequest,
+  parseFormDraftsRequest,
 } from "@sciretriever/contracts";
 import { SnapshotError } from "../analysis/snapshots.js";
 import { ArchiveError } from "../archive/orchestrator.js";
@@ -119,6 +120,7 @@ export const MAINTENANCE_OPERATIONS = [
   "discover",
   "import-bibliography",
   "task-create",
+  "form-drafts",
   "resolve-intervention",
   "rebuild-index",
   "index-refresh",
@@ -162,6 +164,22 @@ async function performMaintenance(
   signal?: AbortSignal,
 ): Promise<unknown> {
   if (signal?.aborted) throw new ProductOperationError("operation-cancelled");
+  if (operation === "form-drafts") {
+    const request = parseFormDraftsRequest(input);
+    if (!app.jobService || !app.processingTasks)
+      throw new ProductOperationError("processing-unavailable");
+    const job = await app.jobService.create({
+      target_kind: "selector",
+      goal: "draft",
+      selector: request.selector,
+      include_older_method: request.include_older_method,
+      idempotency_key: request.idempotency_key,
+      policy_version: "form-drafts-v1",
+      policy: { mode: "never", max_retries: 0, max_model_calls: 0 },
+    });
+    app.processingTasks.start(job.job_id);
+    return job;
+  }
   if (operation === "intake-batch-rename") {
     const r = parseIntakeBatchRename(input);
     await app.database.writeIntake({ operation: "rename", request: r });

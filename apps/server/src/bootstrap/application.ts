@@ -204,6 +204,10 @@ import { pdfPages } from "../proofread/pdf-pages.js";
 import { MupdfPageRenderer, resolveMupdfRuntime } from "../proofread/mupdf.js";
 import type { PdfPages } from "../proofread/contract.js";
 import { DraftPublicationService } from "../document/draft-publication.js";
+import {
+  DraftBackfillSelection,
+  DraftBackfillService,
+} from "../application/jobs/drafts.js";
 import { ProofreadService } from "../proofread/service.js";
 import {
   IndexRefreshService,
@@ -371,6 +375,10 @@ export type ProcessorReader = Pick<
   | "records"
 >;
 export interface QueryApplication {
+  readonly formDraftsPreview?: (
+    value: unknown,
+    signal?: AbortSignal,
+  ) => Promise<import("@sciretriever/contracts").FormDraftsCounts>;
   readonly importSessions?: Pick<ImportSessionReadService, "status" | "report">;
   readonly archiveArrangement?: ArchiveArrangementAccess;
   readonly usageEstimate?: (
@@ -1691,16 +1699,32 @@ async function createApplicationOwned(
         completion: completion ?? null,
         acquisition: pdfAcquisition,
       });
+    const draftBackfill =
+      jobs && queue && rawParseStorage && draftDocuments
+        ? new DraftBackfillService(
+            new DraftBackfillSelection(
+              database,
+              configuration.parsing.archive_profile,
+            ),
+            jobs,
+            queue,
+            rawParseStorage,
+            draftDocuments,
+            configuration.execution.max_concurrency,
+          )
+        : null;
     if (jobs && databaseCompletion)
       jobService = new ExecutionJobService(
         jobs,
         databaseCompletion,
         library,
         writes,
+        draftBackfill ?? undefined,
       );
     if (jobs && queue && interventions && databaseCompletion)
       taskService = new ExecutionTaskService(jobs, queue, interventions, {
         completion: databaseCompletion,
+        ...(draftBackfill ? { drafts: draftBackfill } : {}),
       });
     const tags = new TagService(
       database,
@@ -2440,6 +2464,11 @@ export async function createQueryApplication(
     );
     return {
       importSessions,
+      formDraftsPreview: (value, signal) =>
+        new DraftBackfillSelection(
+          database,
+          configuration.parsing.archive_profile,
+        ).preview(value, signal),
       usageEstimate: (value, signal) => estimating.estimate(value, signal),
       readiness: {
         status: "ready",

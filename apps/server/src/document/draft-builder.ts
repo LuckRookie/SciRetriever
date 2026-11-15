@@ -68,6 +68,18 @@ async function checkpoint(index: number, signal?: AbortSignal) {
 }
 export const draftMethodHash = (method: DraftMethod): Sha256 =>
   textHash(method) as Sha256;
+/** Shared by the builder and metadata-only backfill selection; no inputs are read. */
+export const currentDraftMethod = (
+  correctReadingOrder = READING_ORDER_ENABLED,
+): DraftMethod => ({
+  chrome: CHROME_RULE,
+  breaks: PARAGRAPH_BREAK_RULE,
+  reading_order: correctReadingOrder,
+  comparison: DRAFT_COMPARISON,
+  builder: DRAFT_BUILDER,
+});
+export const currentDraftMethodHash = (): Sha256 =>
+  draftMethodHash(currentDraftMethod());
 export const pageLayerHash = (pages: readonly PdfPageInspection[]): Sha256 =>
   textHash(pages.map(pdfPageText)) as Sha256;
 
@@ -491,13 +503,7 @@ export async function buildDraftDocument(
       raw.source_sha256 !== material.asset_sha256
     )
       throw new DraftBuildError("source-integrity");
-    const method: DraftMethod = {
-      chrome: CHROME_RULE,
-      breaks: PARAGRAPH_BREAK_RULE,
-      reading_order: options.correct_reading_order ?? READING_ORDER_ENABLED,
-      comparison: DRAFT_COMPARISON,
-      builder: DRAFT_BUILDER,
-    };
+    const method = currentDraftMethod(options.correct_reading_order);
     const guardedReader: ProofreadInputReader = {
       readArtifact: async (...args) => {
         try {
