@@ -1,3 +1,4 @@
+import { parseTextLevel, type TextLevel } from "./draft-document.js";
 import { parseNetworkReadiness, type NetworkReadiness } from "./network.js";
 import { parseDocumentReceipt, type ParseDocumentReceipt } from "./document.js";
 export * from "./network.js";
@@ -302,6 +303,7 @@ export interface LibrarySearchRequest {
   readonly cursor: string | null;
 }
 export interface LiteratureSearchItem {
+  readonly text_level?: TextLevel | null;
   readonly long_document?: LongDocumentInfo | null;
   readonly folder_ids?: readonly string[];
   readonly last_opened_at?: string | null;
@@ -548,6 +550,11 @@ export function parseLiteratureSearchItem(
     },
     [
       "tags",
+      ...(value &&
+      typeof value === "object" &&
+      Object.hasOwn(value, "text_level")
+        ? ["text_level"]
+        : []),
       "long_document",
       "intake_at",
       "last_opened_at",
@@ -568,6 +575,12 @@ export function parseLiteratureSearchItem(
   )
     fail(["intake_at"]);
   return Object.freeze({
+    ...(Object.hasOwn(r, "text_level")
+      ? {
+          text_level:
+            r.text_level === null ? null : parseTextLevel(r.text_level),
+        }
+      : {}),
     long_document:
       r.long_document === null ? null : parseLongDocumentInfo(r.long_document),
     intake_at: r.intake_at as string | null,
@@ -3620,6 +3633,11 @@ export async function parseLiteratureDetail(
     },
     [
       "intake_batches",
+      ...(value &&
+      typeof value === "object" &&
+      Object.hasOwn(value, "text_level")
+        ? ["text_level"]
+        : []),
       "long_document",
       "tags",
       "intake_at",
@@ -3641,6 +3659,7 @@ export async function parseLiteratureDetail(
     [],
   );
   const item = parseLiteratureSearchItem({
+    ...(Object.hasOwn(r, "text_level") ? { text_level: r.text_level } : {}),
     intake_at: r.intake_at,
     last_opened_at: r.last_opened_at,
     folder_ids: r.folder_ids,

@@ -54,6 +54,8 @@ HTTP 关闭先取消并排空正在处理的请求；生产组装随后停止 du
 
 `device-connections.ts` 拥有一次性配对、仅派生值持久化和设备认证；`device-http.ts` 在 Web 会话之前分流设备请求，统一按登记的用途准入，拒绝令牌进入 Web/配置/管理路径。设备管理继续经过原 Web client/CSRF；提交撤销后通知同进程协议连接立即失效。设备与通过原 client/同源准入的登录 Web 用户共用安装后的 agent-access 只读下载，缺失有明确错误；不在认证层生成 skill 内容。业务接口登记在源码树内的 `bootstrap/device-routes.ts`。`/mcp` 由相邻的 `mcp/http.ts` 处理 GET/POST/DELETE，工具级用途由共用 MCP server 再核对；工作台关闭先释放该 registry 的协议连接。
 
+`POST /api/v1/query/document-draft-differences` 返回固定初稿片段中已保存差异的有界 JSON UTF-8 分片，经原 Web 登录、Cookie、client、Origin 与 CSRF 准入后读取。这条查询路径不登记于设备路由表，设备令牌直接访问被拒绝；设备通过 HTTP MCP 的 `document_read` / `draft-differences` 读取，要求 read 用途，operate 和 intake 不能代替。文档与证据的 JSON 读取结果按固定版本给出 text_level，初稿 describe 另带 draft_summary。
+
 [import-http.ts](import-http.ts) 提供 `/api/v1/intake/` 下的接口说明、批次、预览/确认、文件清单/流式上传与报告。设备分支要求 intake 用途并在读正文前检查批次归属；列表与游标也限本连接。Web 经既有 Cookie、client_id、Origin 和 POST CSRF 后共用处理函数，可操作全部批次。确认只固定 running 并返回进度，接纳在后台继续。设备文件上传订阅撤销，撤销时先尽可能发出 401 device-revoked 并关闭连接；未接纳的候选清理，已接纳事实保留。data 为 8 MiB，其余批次 JSON 为 64 KiB。
 
 `POST /api/v1/intake/literatures/:literature_id/pdf` 只接受登录 Web，注册表没有为它授予设备用途。正文为 PDF/八位字节流，文件名头 X-Sciretriever-File-Name 是百分号编码 UTF-8 的 basename；回应 result 包含 batch_id 和 file。它复用同一流式文件通道与按入口每日开放批次，没有 16 MiB 限制。原维护 PDF 地址保留 receipt 响应，生产组装同样传入流式接纳方法。

@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  canonicalJsonBytes,
   parseDocumentRef,
   parseDocumentRequest,
   parseDocumentReceipt,
   parseDocumentRepresentationInput,
   parseDocumentReadRequest,
   parseDocumentReadResult,
+  parseDocumentDraftDifferencesRequest,
+  parseDocumentDraftDifferencesResult,
+  DRAFT_ROLE_COVERAGE_NOTE,
   parseDocumentMaterialBytesRequest,
   parseDocumentResourceBytesRequest,
   parseEvidenceRef,
@@ -299,6 +303,212 @@ describe("Document reading response bounds", () => {
     page: false,
     bbox: false,
   };
+
+  it("preserves old response/request bytes when grades are absent and strictly parses draft summaries", () => {
+    const request = { document_version_id: versionId };
+    expect(JSON.stringify(parseDocumentReadRequest("describe", request))).toBe(
+      JSON.stringify(request),
+    );
+    const continued = {
+      document_version_id: versionId,
+      section_id: null,
+      limit: 2,
+      cursor: "c3ludGhldGlj",
+    };
+    expect(
+      JSON.stringify(parseDocumentReadRequest("segments", continued)),
+    ).toBe(JSON.stringify(continued));
+    const legacy = {
+      document,
+      capabilities,
+      gaps: [],
+      section_count: 1,
+      segment_count: 3,
+      resource_count: 0,
+    };
+    expect(
+      canonicalJsonBytes(parseDocumentReadResult("describe", legacy, request)),
+    ).toEqual(canonicalJsonBytes(legacy));
+    const draft = {
+      ...legacy,
+      text_level: "draft",
+      draft_summary: {
+        differs_segments: 1,
+        differences: 2,
+        image_only_pages: 0,
+      },
+    };
+    expect(parseDocumentReadResult("describe", draft, request)).toEqual(draft);
+    expect(
+      parseDocumentReadResult(
+        "describe",
+        { ...legacy, text_level: "proofread" },
+        request,
+      ),
+    ).not.toHaveProperty("draft_summary");
+    for (const bad of [
+      { ...legacy, text_level: "draft" },
+      { ...draft, text_level: "proofread" },
+      { ...draft, text_level: "raw" },
+      { ...draft, draft_summary: { ...draft.draft_summary, differences: -1 } },
+      { ...draft, draft_summary: { ...draft.draft_summary, extra: 1 } },
+      { ...draft, extra: 1 },
+    ])
+      expect(() => parseDocumentReadResult("describe", bad, request)).toThrow();
+  });
+
+  it("requires draft-only bases and exact role coverage on explicitly graded pages", () => {
+    const request = {
+      document_version_id: versionId,
+      section_id: null,
+      limit: 2,
+      cursor: null,
+      roles: ["references"] as const,
+    };
+    const location = {
+      block_id: "b1",
+      page: 1,
+      region: null,
+      continuation_regions: [],
+      source: "parser",
+      basis: "text-layer-match",
+      locate: "page",
+    };
+    const value = {
+      document,
+      text_level: "draft",
+      segments: [
+        {
+          ...location,
+          segment_id: "s1",
+          section_id: null,
+          kind: "text",
+          start_utf8: 0,
+          end_utf8: 2,
+        },
+      ],
+      total: 1,
+      next_cursor: null,
+      capabilities,
+      gaps: [],
+      coverage_note: DRAFT_ROLE_COVERAGE_NOTE,
+    };
+    expect(parseDocumentReadResult("segments", value, request)).toEqual(value);
+    for (const bad of [
+      { ...value, text_level: "proofread" },
+      { ...value, text_level: undefined },
+      { ...value, coverage_note: "A different note" },
+      { ...value, segments: [{ ...value.segments[0], basis: "text-layer" }] },
+      { ...value, segments: [{ ...value.segments[0], extra: true }] },
+    ])
+      expect(() => parseDocumentReadResult("segments", bad, request)).toThrow();
+    const { coverage_note: _note, ...missing } = value;
+    void _note;
+    expect(() =>
+      parseDocumentReadResult("segments", missing, request),
+    ).toThrow();
+    expect(() =>
+      parseDocumentReadResult("segments", value, { ...request, roles: [] }),
+    ).toThrow();
+    const outlineRequest = {
+      document_version_id: versionId,
+      limit: 2,
+      cursor: null,
+    };
+    const { segments: _segments, coverage_note: _coverage, ...base } = value;
+    void _segments;
+    void _coverage;
+    const section = {
+      section_id: "s1",
+      title: "Synthetic title",
+      title_truncated: false,
+      level: 2,
+      start_utf8: 0,
+      end_utf8: 2,
+      role: null,
+      role_source: null,
+    };
+    expect(
+      parseDocumentReadResult(
+        "outline",
+        { ...base, sections: [section] },
+        outlineRequest,
+      ).sections[0]!.role,
+    ).toBeNull();
+    expect(() =>
+      parseDocumentReadResult(
+        "outline",
+        {
+          ...base,
+          sections: [{ ...section, role: "references", role_source: "manual" }],
+        },
+        outlineRequest,
+      ),
+    ).toThrow();
+    expect(() =>
+      parseDocumentReadResult(
+        "segments",
+        { ...value, annotation_id: hash("a") },
+        request,
+      ),
+    ).toThrow();
+  });
+
+  it("binds the dedicated difference result to request, draft basis and bounded JSON byte ranges", () => {
+    const request = parseDocumentDraftDifferencesRequest({
+      document_version_id: versionId,
+      segment_id: "s1",
+      max_bytes: 10,
+      continuation: null,
+    });
+    const location = {
+      block_id: "s1",
+      page: 1,
+      region: null,
+      continuation_regions: [],
+      source: "parser",
+      basis: "text-layer-match",
+      locate: "page",
+    };
+    const value = {
+      document,
+      segment_id: "s1",
+      location,
+      text_level: "draft",
+      basis: "text-layer-match",
+      encoding: "json-utf8",
+      text: "[]",
+      actual_range: { start_utf8: 0, end_utf8: 2 },
+      total_bytes: 2,
+      continuation: null,
+    };
+    expect(parseDocumentDraftDifferencesResult(value, request)).toEqual(value);
+    for (const bad of [
+      { ...request, max_bytes: 65537 },
+      { ...request, max_bytes: 0 },
+      { ...request, path: "private" },
+      { ...request, segment_id: "../bad" },
+    ])
+      expect(() => parseDocumentDraftDifferencesRequest(bad)).toThrow();
+    for (const bad of [
+      { ...value, text_level: "proofread" },
+      { ...value, basis: "no-text-layer" },
+      { ...value, location: { ...location, basis: "text-layer" } },
+      { ...value, segment_id: "another" },
+      { ...value, document: { ...document, document_version_id: assetId } },
+      { ...value, location: { ...location, block_id: "another" } },
+      { ...value, total_bytes: 3 },
+      {
+        ...value,
+        actual_range: { start_utf8: 1, end_utf8: 3 },
+        total_bytes: 3,
+      },
+      { ...value, text: "中文" },
+      { ...value, text: "x".repeat(11) },
+      { ...value, extra: 1 },
+    ])
+      expect(() => parseDocumentDraftDifferencesResult(bad, request)).toThrow();
+  });
 
   it("accepts 200 slice evidence records while preserving item and text byte limits", () => {
     const request = parseDocumentReadRequest("slice", {

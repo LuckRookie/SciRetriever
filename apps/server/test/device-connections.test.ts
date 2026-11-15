@@ -728,6 +728,7 @@ it("serves only authenticated bounded build artifacts, reports their absence, an
       "/api/configuration/read",
       "/api/v1/device-connections/revoke",
       "/api/v1/query/library-search",
+      "/api/v1/query/document-draft-differences",
     ]) {
       expect(
         () =>

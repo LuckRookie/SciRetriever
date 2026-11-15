@@ -179,6 +179,7 @@ function usage(options: CliOptions): CliResult {
     "  config [--theme auto|dark|light|mono] | config status [--json] [--theme ...] | config test ...\n" +
     "  jobs create [--text QUERY] | jobs submit --request FILE|- | jobs run|show|pause|cancel|resume|retry JOB_ID\n" +
     "  document default|describe|outline|segments|slice|resources|resource|evidence|material --request FILE|-\n" +
+    "  document draft-differences --request FILE|-  # saved draft differences as bounded json-utf8; collect continuations before parsing\n" +
     "  context search|knowledge --request FILE|-; analysis prepare --request FILE|-; extraction prepare --request FILE|-\n" +
     "  literature status; literature search|read|references|reference|identity|artifact-chunk|bibliography --request FILE|-\n" +
     "  jobs list|inspect|create-request|resolve --request FILE|- (create-request only saves)\n" +
@@ -1022,6 +1023,7 @@ async function execute(
     "document references": "document-reference-texts",
     "document parts": "document-parts",
     "document corrections": "document-corrections",
+    "document draft-differences": "document-draft-differences",
     "document parsing-status": "document-parsing-status",
     "document default": "document-default",
     "document describe": "document-describe",

@@ -7,6 +7,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   ContractValidationError,
   parseDocumentReadRequest,
+  parseDocumentDraftDifferencesRequest,
   parseDocumentMaterialBytesRequest,
   parseDocumentResourceBytesRequest,
   documentReadTitle,
@@ -16,8 +17,11 @@ import {
   parseDocumentMaterialRef,
   parseEvidenceRef,
   sha256,
+  canonicalJsonBytes,
+  DRAFT_ROLE_COVERAGE_NOTE,
   type DocumentReadOperation,
   type DocumentReadRequestMap,
+  type DocumentReadResultMap,
   type DocumentMaterialRef,
   type DocumentRef,
   type DocumentResource,
@@ -26,7 +30,10 @@ import {
 } from "@sciretriever/contracts";
 import type { SqliteWorker } from "../storage/sqlite/worker.js";
 import { SqliteDocumentStorage } from "./storage.js";
-import { isProofreadDocumentStructure } from "./verification-cache.js";
+import {
+  isProofreadDocumentStructure,
+  type VerifiedDocumentStructure,
+} from "./verification-cache.js";
 
 const MAX_MATERIAL_BYTES = 256 * 1024 * 1024;
 const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -150,26 +157,39 @@ function safeEnd(bytes: Uint8Array, start: number, end: number): number {
   }
   return start;
 }
-function capabilities(document?: DocumentRef) {
+function capabilities(
+  document?: DocumentRef,
+  structure?: VerifiedDocumentStructure,
+) {
   return {
     text: true,
     outline: true,
     resources: true,
     table_context: document?.schema_version === 2,
     figure_caption: document?.schema_version === 2,
-    page: document?.schema_version === 2,
-    bbox: document?.schema_version === 2,
+    page:
+      document?.schema_version === 2 ||
+      !!structure?.segments.some((s) => "page" in s),
+    bbox:
+      document?.schema_version === 2 ||
+      !!structure?.segments.some((s) => "region" in s && s.region !== null),
   } as const;
 }
-function gaps(document?: DocumentRef) {
-  if (document?.schema_version === 2) return [] as const;
+function gaps(document?: DocumentRef, structure?: VerifiedDocumentStructure) {
+  const caps = capabilities(document, structure);
   return [
-    "table-structure-unavailable",
-    "figure-caption-unavailable",
-    "page-location-unavailable",
-    "bbox-unavailable",
-  ] as const;
+    ...(!caps.table_context ? ["table-structure-unavailable" as const] : []),
+    ...(!caps.figure_caption ? ["figure-caption-unavailable" as const] : []),
+    ...(!caps.page ? ["page-location-unavailable" as const] : []),
+    ...(!caps.bbox ? ["bbox-unavailable" as const] : []),
+  ];
 }
+function textLevel(document: DocumentRef) {
+  return document.schema_version === 3
+    ? ("draft" as const)
+    : ("proofread" as const);
+}
+
 function readingRef(document: DocumentRef) {
   return {
     document_id: document.document_id,
@@ -180,7 +200,7 @@ function readingRef(document: DocumentRef) {
   };
 }
 function resourceContext(
-  structure: DocumentStructure,
+  structure: VerifiedDocumentStructure,
   bytes: Uint8Array,
   reference: string,
 ) {
@@ -243,7 +263,7 @@ export class DocumentReadService {
       {
         version: DocumentRef;
         markdown: Uint8Array;
-        structure: DocumentStructure;
+        structure: VerifiedDocumentStructure;
       }
     >;
   }>();
@@ -288,7 +308,7 @@ export class DocumentReadService {
         {
           version: DocumentRef;
           markdown: Uint8Array;
-          structure: DocumentStructure;
+          structure: VerifiedDocumentStructure;
         }
       >(),
     };
@@ -309,7 +329,7 @@ export class DocumentReadService {
     consume: (
       version: DocumentRef,
       markdown: Uint8Array,
-      structure: DocumentStructure,
+      structure: VerifiedDocumentStructure,
     ) => Promise<T>,
     reserveVerifiedBytes?: (bytes: number) => void,
   ): Promise<T> {
@@ -349,11 +369,6 @@ export class DocumentReadService {
       const result = await this.storage.withVerifiedDocument(
         id,
         async (version, bytes, structure) => {
-          if (
-            version.schema_version === 3 ||
-            !isProofreadDocumentStructure(structure)
-          )
-            throw new DocumentReadError("document-unsupported");
           if (
             version.document_version_id !==
               snapshot.version.document_version_id ||
@@ -402,7 +417,19 @@ export class DocumentReadService {
     reserveVerifiedBytes?: (bytes: number) => void,
   ): Promise<T> {
     return this.run(() =>
-      this.version(documentVersionId, signal, consume, reserveVerifiedBytes),
+      this.version(
+        documentVersionId,
+        signal,
+        async (version, bytes, structure) => {
+          if (
+            version.schema_version === 3 ||
+            !isProofreadDocumentStructure(structure)
+          )
+            throw new DocumentReadError("document-unsupported");
+          return consume(version, bytes, structure);
+        },
+        reserveVerifiedBytes,
+      ),
     );
   }
 
@@ -489,14 +516,78 @@ export class DocumentReadService {
       );
     });
   }
+  draftDifferences(value: unknown, signal?: AbortSignal) {
+    return this.run(async () => {
+      let r;
+      try {
+        r = parseDocumentDraftDifferencesRequest(value);
+      } catch (error) {
+        if (error instanceof ContractValidationError) return invalid();
+        throw error;
+      }
+      return this.version(
+        r.document_version_id,
+        signal,
+        async (document, _bytes, structure) => {
+          if (document.schema_version !== 3)
+            throw new DocumentReadError("document-unsupported");
+          const segment = structure.segments.find(
+            (s) => s.segment_id === r.segment_id,
+          );
+          const location = segment && segmentLocation(segment);
+          if (!segment || !location) invalid();
+          const differences = await this.storage.draftDifferences(
+            document,
+            r.segment_id,
+            signal,
+          );
+          const bytes = canonicalJsonBytes(differences);
+          const selector = { kind: "segment", segment_id: r.segment_id };
+          const start = cursorPosition(
+            r.continuation,
+            "draft-differences",
+            document,
+            selector,
+            0,
+            bytes.length,
+          );
+          const end = safeEnd(
+            bytes,
+            start,
+            Math.min(bytes.length, start + r.max_bytes),
+          );
+          if (end <= start) invalid();
+          return {
+            document: readingRef(document),
+            segment_id: r.segment_id,
+            location,
+            text_level: "draft" as const,
+            basis: location.basis,
+            encoding: "json-utf8" as const,
+            text: decoder.decode(bytes.subarray(start, end)),
+            actual_range: { start_utf8: start, end_utf8: end },
+            total_bytes: bytes.length,
+            continuation:
+              end < bytes.length
+                ? cursor("draft-differences", document, selector, end)
+                : null,
+          };
+        },
+      );
+    });
+  }
   describe(value: unknown, signal?: AbortSignal) {
     return this.run(async () => {
       const r = request("describe", value);
       const id = r.document_version_id;
       return this.version(id, signal, async (document, _bytes, structure) => ({
+        text_level: textLevel(document),
+        ...(document.schema_version === 3
+          ? { draft_summary: (await this.database.draftVersionFacts(id))! }
+          : {}),
         document: readingRef(document),
-        capabilities: capabilities(document),
-        gaps: gaps(document),
+        capabilities: capabilities(document, structure),
+        gaps: gaps(document, structure),
         section_count: structure.sections.length,
         segment_count: structure.segments.length,
         resource_count: document.resources.length,
@@ -548,13 +639,20 @@ export class DocumentReadService {
     if (a && a.document_version_id !== id) invalid();
     return a;
   }
-  outline(value: unknown, signal?: AbortSignal) {
+  outline(
+    value: unknown,
+    signal?: AbortSignal,
+  ): Promise<DocumentReadResultMap["outline"]> {
     return this.run(async () => {
       const r = request("outline", value);
       const id = r.document_version_id;
       const limit = r.limit;
       return this.version(id, signal, async (document, _bytes, structure) => {
-        const annotation = await this.annotation(id, r.annotation_id, signal);
+        if (document.schema_version === 3 && r.annotation_id) invalid();
+        const annotation =
+          document.schema_version === 3
+            ? null
+            : await this.annotation(id, r.annotation_id, signal);
         const roles = new Map(
           annotation?.sections.map((s) => [s.section_id, s]),
         );
@@ -567,32 +665,34 @@ export class DocumentReadService {
           0,
           structure.sections.length + 1,
         );
-        const items = structure.sections
-          .slice(start, start + limit)
-          .map((item) => ({
+        const items: DocumentReadResultMap["outline"]["sections"] =
+          structure.sections.slice(start, start + limit).map((item) => ({
             ...item,
-            ...(roles.has(item.section_id)
-              ? {
-                  role: roles.get(item.section_id)!.role,
-                  role_source: roles.get(item.section_id)!.role_source,
-                }
-              : {}),
+            ...(document.schema_version === 3
+              ? { role: null, role_source: null }
+              : roles.has(item.section_id)
+                ? {
+                    role: roles.get(item.section_id)!.role,
+                    role_source: roles.get(item.section_id)!.role_source,
+                  }
+                : {}),
             ...documentReadTitle(item.title),
           }));
         const next = start + items.length;
         return {
           ...(annotation ? { annotation_id: annotation.annotation_id } : {}),
           document: readingRef(document),
+          text_level: textLevel(document),
           sections: items,
           total: structure.sections.length,
           next_cursor:
             next < structure.sections.length
               ? cursor("outline", document, selected, next)
               : null,
-          capabilities: capabilities(document),
+          capabilities: capabilities(document, structure),
           gaps: items.some((item) => item.title_truncated)
-            ? [...gaps(document), "outline-title-truncated"]
-            : gaps(document),
+            ? [...gaps(document, structure), "outline-title-truncated"]
+            : gaps(document, structure),
         };
       });
     });
@@ -609,8 +709,14 @@ export class DocumentReadService {
           !structure.sections.some((s) => s.section_id === sectionId)
         )
           invalid();
-        const annotation = await this.annotation(id, r.annotation_id, signal);
-        if (r.roles?.length && !annotation) invalid();
+        if (document.schema_version === 3 && r.annotation_id) invalid();
+        const annotation =
+          document.schema_version === 3
+            ? null
+            : await this.annotation(id, r.annotation_id, signal);
+        if (r.roles?.length && !annotation && document.schema_version !== 3)
+          invalid();
+        const wholeDraft = document.schema_version === 3 && !!r.roles?.length;
         const roles = new Map(
           annotation?.segment_roles.map((s) => [s.segment_id, s.role]),
         );
@@ -623,14 +729,15 @@ export class DocumentReadService {
               }
             : sectionId;
         const candidates =
-          sectionId === null
+          wholeDraft || sectionId === null
             ? structure.segments
             : structure.segments.filter((s) => s.section_id === sectionId);
-        const items = r.roles?.length
-          ? candidates.filter((s) =>
-              r.roles!.some((role) => role === roles.get(s.segment_id)),
-            )
-          : candidates;
+        const items =
+          r.roles?.length && !wholeDraft
+            ? candidates.filter((s) =>
+                r.roles!.some((role) => role === roles.get(s.segment_id)),
+              )
+            : candidates;
         const start = cursorPosition(
           r.cursor,
           "segments",
@@ -644,14 +751,16 @@ export class DocumentReadService {
         return {
           ...(annotation ? { annotation_id: annotation.annotation_id } : {}),
           document: readingRef(document),
+          text_level: textLevel(document),
           segments: page.map(readSegment),
+          ...(wholeDraft ? { coverage_note: DRAFT_ROLE_COVERAGE_NOTE } : {}),
           total: items.length,
           next_cursor:
             next < items.length
               ? cursor("segments", document, selector, next)
               : null,
-          capabilities: capabilities(document),
-          gaps: gaps(document),
+          capabilities: capabilities(document, structure),
+          gaps: gaps(document, structure),
         };
       });
     });
@@ -661,7 +770,7 @@ export class DocumentReadService {
       const r = request("resources", value);
       const id = r.document_version_id;
       const limit = r.limit;
-      return this.version(id, signal, async (document) => {
+      return this.version(id, signal, async (document, _bytes, structure) => {
         const start = cursorPosition(
           r.cursor,
           "resources",
@@ -674,14 +783,15 @@ export class DocumentReadService {
         const next = start + page.length;
         return {
           document: readingRef(document),
+          text_level: textLevel(document),
           resources: page,
           total: document.resources.length,
           next_cursor:
             next < document.resources.length
               ? cursor("resources", document, null, next)
               : null,
-          capabilities: capabilities(document),
-          gaps: gaps(document),
+          capabilities: capabilities(document, structure),
+          gaps: gaps(document, structure),
         };
       });
     });
@@ -724,6 +834,7 @@ export class DocumentReadService {
         if (resource && !context)
           return {
             document: readingRef(document),
+            text_level: textLevel(document),
             selector,
             actual_range: null,
             text: "",
@@ -731,8 +842,11 @@ export class DocumentReadService {
             related_resources: [resource],
             truncated: false,
             continuation: null,
-            capabilities: capabilities(document),
-            gaps: [...gaps(document), "resource-context-unavailable"],
+            capabilities: capabilities(document, structure),
+            gaps: [
+              ...gaps(document, structure),
+              "resource-context-unavailable",
+            ],
           };
         if (!selected) invalid();
         const start = cursorPosition(
@@ -808,11 +922,12 @@ export class DocumentReadService {
         check(signal);
         return {
           document: readingRef(document),
+          text_level: textLevel(document),
           selector,
           actual_range: { start_utf8: start, end_utf8: end },
           text,
           evidence,
-          ...(document.schema_version === 2
+          ...(document.schema_version === 2 || document.schema_version === 3
             ? {
                 locations: covered.flatMap((s) => {
                   const location = segmentLocation(s);
@@ -825,9 +940,9 @@ export class DocumentReadService {
           continuation: truncated
             ? cursor("slice", document, selector, end)
             : null,
-          capabilities: capabilities(document),
+          capabilities: capabilities(document, structure),
           gaps: [
-            ...gaps(document),
+            ...gaps(document, structure),
             ...(partialSegment ? ["partial-segment"] : []),
             ...(evidencePageLimit ? ["evidence-page-limit"] : []),
           ],
@@ -853,6 +968,7 @@ export class DocumentReadService {
         )
           return {
             document: readingRef(document),
+            text_level: textLevel(document),
             resource,
             bytes_base64: null,
             actual_range: null,
@@ -887,6 +1003,7 @@ export class DocumentReadService {
         const truncated = end < bytes.length;
         return {
           document: readingRef(document),
+          text_level: textLevel(document),
           resource,
           bytes_base64: bytes.subarray(start, end).toString("base64"),
           actual_range: { start_byte: start, end_byte: end },
@@ -1183,6 +1300,7 @@ export class DocumentReadService {
           return {
             evidence,
             document: readingRef(document),
+            text_level: textLevel(document),
             granularity: "segment",
             ...(location ? { location } : {}),
             target_range: {
@@ -1196,7 +1314,7 @@ export class DocumentReadService {
             continuation: truncated
               ? cursor("evidence", document, evidence.locator, end)
               : null,
-            gaps: gaps(document),
+            gaps: gaps(document, structure),
           };
         },
       );

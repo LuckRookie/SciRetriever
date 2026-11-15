@@ -2,7 +2,7 @@
 
 类型：计划（结果块）
 负责：文本等级与核对依据在三端读取中的表达，差异的有界读取，以及交给计划 16 的加工读取合同
-状态：Pending
+状态：In progress（2026-11-15 7.1–7.3 完成；7.4–7.6、7.8 进行中；7.7 暂缓）
 
 ## Outcome
 
@@ -43,13 +43,13 @@ Agent 经 HTTP、CLI、MCP 读到同样的结果：
 
 ## Tasks
 
-- [ ] **7.1 读取合同**：按 04 §8.4 与 06 §2.1.7 扩展 describe（`text_level`、`draft_summary`）、segments/slice 的位置、evidence、`LiteratureSearchItem.text_level`、`ArchiveState.parts[].text_level`、`MaterialContextItem.text_level` 的类型与解析函数。现有解析函数按精确键集解析，生产者与消费者同时更新；06 §2.1.7 的新字段可选，省略时已有请求与 cursor 的字节不变。
-- [ ] **7.2 文档读取**：`read.ts` 读取初稿版本：
+- [x] **7.1 读取合同**：按 04 §8.4 与 06 §2.1.7 扩展 describe（`text_level`、`draft_summary`）、segments/slice 的位置、evidence、`LiteratureSearchItem.text_level`、`ArchiveState.parts[].text_level`、`MaterialContextItem.text_level` 的类型与解析函数。现有解析函数按精确键集解析，生产者与消费者同时更新；06 §2.1.7 的新字段可选，省略时已有请求与 cursor 的字节不变。
+- [x] **7.2 文档读取**：`read.ts` 读取初稿版本：
   - describe、outline、segments、slice、resources、resource-bytes、evidence 都可用；
   - 按版本取等级，不按默认关系推断；
   - 可读性校验调用 03 的 3.3（从初稿内容重建，不跑 PDF 工具）；初稿内容计入校验证明的文件指纹与预算（04 §8.3 verified reader 一段）；
   - `segments` 带 `roles` 读初稿时返回整篇与 `coverage_note`（04 §8.6）。
-- [ ] **7.3 差异读取**：按 04 §8.3“差异的有界读取”实现 `draft-differences`：HTTP `POST /api/v1/query/document-draft-differences`、CLI `sciretriever document draft-differences`、MCP `document_read` 的 `draft-differences` 操作，用途 `read`。只读初稿内容中已保存的差异。
+- [x] **7.3 差异读取**：按 04 §8.3“差异的有界读取”实现 `draft-differences`：HTTP `POST /api/v1/query/document-draft-differences`、CLI `sciretriever document draft-differences`、MCP `document_read` 的 `draft-differences` 操作，用途 `read`。只读初稿内容中已保存的差异。
 - [ ] **7.4 文献库与建档状态**：按本页文献 ID 批量读取主 PDF 默认文本的等级，不读正文；建档状态的 `parts[]` 逐部分给出。同一次读取的等级与 `document_version_id` 来自同一个只读快照（06 §2.1.7“一致性”）。
 - [ ] **7.5 查找**：
   - 全文索引收入全部已接纳的固定文档版本，两级相同（04 §8.10）；索引构建现在只认校订稿的 builder，要按 builder 分派；

@@ -18,6 +18,8 @@ import {
   parseStableFailure,
   parseStrictJsonObject,
   parseLibraryQuery,
+  parseLiteratureSearchItem,
+  parseLiteratureDetail,
 } from "../src/index.js";
 
 const fixture = JSON.parse(
@@ -52,6 +54,52 @@ function rejects(value: unknown, parser: (input: unknown) => unknown): void {
 }
 
 describe("closed provider-neutral contracts", () => {
+  it("accepts optional text grades on list/detail projections without injecting absent fields", async () => {
+    const item = {
+      literature: {
+        literature_id: "00000000-0000-0000-0000-000000000004",
+        meta_literature_id: "00000000-0000-0000-0000-000000000006",
+        version_role: "published",
+        metadata,
+        status: "UNREVIEWED",
+      },
+      metadata_revision: 1,
+      metadata_sha256: "a".repeat(64),
+      missing_step: "primary-pdf",
+      needs_manual_pdf: false,
+    };
+    const detail = {
+      ...item,
+      meta_literature: fixture.literature,
+      metadata_observations: [],
+      primary_pdf: null,
+      additional_assets: [],
+      other_versions: [],
+      reference_count: 0,
+      cited_by_count: 0,
+    };
+    expect(parseLiteratureSearchItem(item)).not.toHaveProperty("text_level");
+    expect(await parseLiteratureDetail(detail)).not.toHaveProperty(
+      "text_level",
+    );
+    for (const text_level of ["draft", "proofread", null]) {
+      expect(
+        parseLiteratureSearchItem({ ...item, text_level }).text_level,
+      ).toBe(text_level);
+      expect(
+        (await parseLiteratureDetail({ ...detail, text_level })).text_level,
+      ).toBe(text_level);
+    }
+    for (const text_level of ["raw", undefined, 1]) {
+      expect(() =>
+        parseLiteratureSearchItem({ ...item, text_level }),
+      ).toThrow();
+      await expect(
+        parseLiteratureDetail({ ...detail, text_level }),
+      ).rejects.toThrow();
+    }
+    expect(() => parseLiteratureSearchItem({ ...item, extra: true })).toThrow();
+  });
   it("parses current contracts while preserving the historical encoding fixture", () => {
     expect(parseProvenance(fixture.provenance).source_name).toBe(
       "fixture-provider",

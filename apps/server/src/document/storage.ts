@@ -12,6 +12,7 @@ import {
   DOCUMENT_READ_MAX_RESOURCE_BYTES,
   parseDocumentRepresentationInput,
   MAX_DRAFT_CONTENT_BYTES,
+  parseDraftContent,
   type DraftDocumentRef,
   type ArtifactRef,
   type DocumentRef,
@@ -518,6 +519,38 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
     )
       throw new Error("document draft content mismatch");
     return { bytes: built.structure_bytes, structure: built.structure };
+  }
+  /** The caller verified the document closure; delivered content bytes are rechecked. */
+  async draftDifferences(
+    v: DraftDocumentRef,
+    segmentId: string,
+    signal?: AbortSignal,
+  ) {
+    const snapshot = await this.database.documentVersion(v.document_version_id);
+    if (
+      !snapshot?.draft_content_artifact_path ||
+      snapshot.version.representation_sha256 !== v.representation_sha256
+    )
+      throw new Error("document draft content missing");
+    const bytes = await this.readBytes(
+      snapshot.draft_content_artifact_path,
+      v.draft_content,
+      MAX_DRAFT_CONTENT_BYTES,
+      signal,
+    );
+    const content = parseDraftContent(
+      JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)),
+    );
+    const group = content.operations.find(
+      (op) => op.kind === "merge" && op.leaf_ids[0] === segmentId,
+    );
+    const ids = group?.kind === "merge" ? group.leaf_ids : [segmentId];
+    const leaves = new Map(content.leaves.map((l) => [l.leaf_id, l]));
+    return ids.flatMap((id) => {
+      const leaf = leaves.get(id);
+      if (!leaf) throw new Error("document draft segment missing");
+      return leaf.differences;
+    });
   }
   private async proofreadBinding(
     v: Extract<DocumentRef, { schema_version: 2 }>,

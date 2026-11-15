@@ -1,8 +1,6 @@
-import type {
-  DocumentStructure,
-  PageRegionLocator,
-} from "@sciretriever/contracts";
-type Segment = DocumentStructure["segments"][number];
+import type { PageRegionLocator } from "@sciretriever/contracts";
+import type { VerifiedDocumentStructure } from "./verification-cache.js";
+type Segment = VerifiedDocumentStructure["segments"][number];
 /** Public pages start at one; all immutable structures keep zero-based page indices. */
 export function segmentLocation(segment: Segment) {
   if (!("page" in segment)) return null;

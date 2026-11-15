@@ -1,3 +1,4 @@
+import type { TextLevel } from "./draft-document.js";
 import type { LongDocumentInfo } from "./long-document.js";
 import {
   canonicalJsonBytes,
@@ -62,6 +63,7 @@ export interface ArchiveStepReceipt {
   readonly output_tokens: number;
 }
 export interface ArchivePart {
+  readonly text_level?: TextLevel | null;
   readonly long_document?: LongDocumentInfo | null;
   readonly format?: "arranged-v2" | "legacy-v1" | "not-built";
   readonly legacy_steps?: readonly ArchiveStepReceipt[];
@@ -89,6 +91,7 @@ export interface ArchiveIssue {
   readonly resolution: "continue" | "skip" | "cancel" | null;
 }
 export interface ArchiveState {
+  readonly text_level?: TextLevel | null;
   readonly long_document?: LongDocumentInfo | null;
   readonly literature_id: string;
   readonly mode: ArchiveMode;

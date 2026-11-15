@@ -1,6 +1,6 @@
 # 可读文档与证据
 
-提供固定版本的正文、片段、资源与证据读取。解析操作先提交原始解析，再独立形成初稿；complete 校订稿仍显式发布为校订文档。对外读取目前只接纳校订稿，初稿的读取接入需与解析后的初稿形成一起部署。建档编排在 archive 模块。
+提供初稿与校订稿固定版本的正文、片段、资源与证据读取。解析操作先提交原始解析，再独立形成初稿；complete 校订稿仍显式发布为校订文档。文本等级按固定版本的 schema 判定，不随默认关系变化；初稿形成与公开读取须一起部署。建档编排在 archive 模块。
 
 ## 内容入口
 
@@ -9,7 +9,7 @@
 - [draft-publication.ts](draft-publication.ts)：核验指定原始解析与固定 PDF，复用逐页校订的页面工具，调用纯构建器，以 create-if-absent 发布不可变内容、正文、结构并沿用原始图片。同事务登记版本、事实、当前指针及默认关系；相同身份复用。每个资产串行，取消保留已提交事实，关闭中断并等在途清理；索引请求失败只记录警告。
 - [proofread-builder.ts](proofread-builder.ts)：历史 complete 校订版本到 v2 结构的确定性构建，保存区块 ID、页码与区域。
 - [service.ts](service.ts)：`document parse` 的操作边界。本次部署 profile 发布或复用成功后形成初稿；其它 profile 或本次失败不回退旧原始解析。逐 profile 的回执之外返回独立 `draft`，初稿失败不改变解析结果。
-- [read.ts](read.ts)：统一文档与证据读取、部分分页、用于人工核对的有界对照。
+- [read.ts](read.ts)：统一文档与证据读取、部分分页、校订对照和初稿保存差异的有界读取。describe 给出等级和初稿计数；初稿 outline 没有角色，按角色读 segments 时返回整篇与固定覆盖说明。
 - [proofread-publication.ts](proofread-publication.ts)：完整校订版本到固定文档的显式发布与默认版本 CAS；索引刷新失败单独报告，不撤销有效文档。
 - [location.ts](location.ts)：统一存储页码到公开页码的转换。
 - [storage.ts](storage.ts)：文档存储协作接口。
@@ -17,7 +17,9 @@
 
 `storage.ts` 的 `commitDraftVersion` 校验固定初稿内容与产物字节，worker 在同一事务登记版本、资源闭包、计数、当前指针与默认关系，复检原始解析仍为当前并按两个独立 CAS（初稿当前、文档默认）更新。`sqlite/document-defaults.ts` 由原始解析当前切换、初稿登记与校订发布各自在自己的事务里调用：有效完整校订稿优先，其次有效当前初稿，两者都没有则删除默认关系。重新解析会先失去旧默认，新的初稿失败时返回 `document-missing`。旧固定版本的字节与证据不变。补形成的维护入口尚未接入。
 
-`draft-leaves-v1` 的可读性核验使用 `rebuildDraftDocument`，只从固定初稿内容重建，不调用 PDF 页面工具；核验初稿计数、正文、结构和原始解析 ID/hash/part 绑定。初稿证明的文件指纹包含 PDF、全部图片、正文、结构和初稿内容；缓存命中仍比对 SQLite 原始解析声明与版本事实，并计入相同逻辑字节预算。缓存只略过未变化文件的字节重算，不放松单独交付资源时的实际字节核验。HTTP/机器读取方的初稿接入另由读取合同完成，既有校订入口保持其等级限制。
+`draft-leaves-v1` 的可读性核验使用 `rebuildDraftDocument`，只从固定初稿内容重建，不调用 PDF 页面工具；核验初稿计数、正文、结构和原始解析 ID/hash/part 绑定。初稿证明的文件指纹包含 PDF、全部图片、正文、结构和初稿内容；缓存命中仍比对 SQLite 原始解析声明与版本事实，并计入相同逻辑字节预算。缓存只略过未变化文件的字节重算，不放松单独交付资源时的实际字节核验。`draftDifferences` 再核验所交付的初稿内容字节，按合并片段中叶块的保存顺序组织差异，返回规范 JSON 的 UTF-8 字节分页；游标绑定固定版本、表示 hash、片段与位置，不重算对比。校订稿不提供初稿差异，初稿不提供 corrections。
+
+本模块的公开 describe、outline、segments、slice、resources、resource-bytes 和 evidence 支持初稿。内部 `withVerifiedVersion` 仍只接纳校订稿，包括同一读取范围已缓存初稿的情形；依赖它的检索、加工等读取方不会隐式取得初稿准入。
 
 `read.ts` 的内部 `withReadScope` 供知识／结果读取在一次逻辑操作内复用已核验文档；最多保留 16 份、32 MiB 的正文与序列化结构计量，结束即清空。带独立预算计量的检索不走此复用。
 

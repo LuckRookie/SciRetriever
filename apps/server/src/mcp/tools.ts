@@ -607,7 +607,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "document_read",
-    "Read figures/reference-texts with {document_version_id,annotation_id,max_bytes,continuation} as a bounded JSON stream. Read parts with {literature_id,offset,limit}; corrections with {document_version_id,segment_id,max_bytes,continuation} returns a bounded resumable JSON UTF-8 stream for human audit. Describe optionally returns layout ranges for article information, figure/table groups and page footnotes in UTF-8 bytes. Outline titles are null when the source has no heading. Outline and segments accept annotation_id to pin role interpretation; segments also accepts roles to filter corrected blocks. Read raw parsing status with operation parsing-status and {literature_id, asset_id}. Read existing document data. request follows the named operation's closed document-read contract. Uses bounded pagination; does not parse or download.",
+    "Read figures/reference-texts with {document_version_id,annotation_id,max_bytes,continuation} as a bounded JSON stream. Read parts with {literature_id,offset,limit}; corrections with {document_version_id,segment_id,max_bytes,continuation} returns a bounded resumable JSON UTF-8 stream for human audit. draft-differences uses the same request on a draft version, returning its saved difference list as json-utf8 with text_level and basis; collect all chunks before parsing JSON. Describe optionally returns layout ranges for article information, figure/table groups and page footnotes in UTF-8 bytes. Outline titles are null when the source has no heading. Outline and segments accept annotation_id to pin role interpretation; segments also accepts roles to filter corrected blocks. Read raw parsing status with operation parsing-status and {literature_id, asset_id}. Read existing document data. request follows the named operation's closed document-read contract. Uses bounded pagination; does not parse or download.",
     object({
       operation: {
         enum: [
@@ -615,6 +615,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
           "reference-texts",
           "parts",
           "corrections",
+          "draft-differences",
           "parsing-status",
           "default",
           "describe",

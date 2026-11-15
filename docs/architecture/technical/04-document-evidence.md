@@ -711,7 +711,7 @@ interface DraftDifference {
 - 结果：`{document, segment_id, location, text_level, basis, encoding: "json-utf8", text, actual_range, total_bytes, continuation}`。`text` 是该片段差异列表（`DraftDifference[]`，可能为空）规范 JSON 的有界字节片段，不截断 UTF-8 字符；按 `continuation` 收集后再解析，可以无损读取。`location` 同片段读取，页码从 1 起。
 - 继续位置绑定版本、片段与字节位置，不能用于别的版本。
 - 版本不是初稿（`schema_version` 不是 3）时返回 `document-unsupported`；片段不存在时按请求无效拒绝。
-- HTTP 为 `POST /api/v1/query/document-draft-differences`，CLI 为 `sciretriever document draft-differences --request FILE|-`，MCP 为 `document_read` 的 `draft-differences` 操作。三者共用同一合同与上限，设备连接的用途为 `read`。
+- HTTP 为 `POST /api/v1/query/document-draft-differences`，CLI 为 `sciretriever document draft-differences --request FILE|-`，MCP 为 `document_read` 的 `draft-differences` 操作。三者共用同一合同与上限。设备不登记这条 HTTP 路由，经 HTTP 版 MCP 的 `document_read` 读取，用途为 `read`（[01 §2.4.1](01-product-interface.md#241-设备连接与按用途准入)）。
 - 读取不形成初稿，不打开页面工具，不调用模型。
 
 **长文档。** 长文档（6.5）里未逐页校订的页（`unreviewed`）的文字没有经过校订：
@@ -921,4 +921,4 @@ FormDraftsPartResult
 | 预览     | `POST /api/v1/query/form-drafts-preview`，request `{selector, include_older_method}` | `sciretriever form-drafts preview --request FILE\|-` | `form_drafts_preview` | `read`    |
 | 创建任务 | `POST /api/v1/maintenance/form-drafts`，request `FormDraftsRequest`                  | `sciretriever form-drafts start --request FILE\|-`   | `form_drafts`         | `operate` |
 
-HTTP 使用 `protocol_version: 1` 封套与现有维护认证；任务进度与结果用现有任务读取。
+HTTP 使用 `protocol_version: 1` 封套与现有维护认证；任务进度与结果用现有任务读取。“设备用途”是设备经 HTTP 版 MCP 调用该工具时的用途；这两条 HTTP 路由不登记于设备路由表。

@@ -11,7 +11,13 @@ import {
   type ProofreadSegmentKind,
 } from "./document-structure-v2.js";
 import type { ProofreadSource } from "./proofread.js";
-import { DRAFT_BASES, type DocumentBasis } from "./draft-document.js";
+import {
+  DRAFT_BASES,
+  parseTextLevel,
+  type TextLevel,
+  type DraftBasis,
+  type DocumentBasis,
+} from "./draft-document.js";
 import {
   ContractValidationError,
   parseAssetId,
@@ -33,6 +39,21 @@ const decoder = new TextDecoder("utf-8", { fatal: true });
 const encoder = new TextEncoder();
 const digestPattern = /^[0-9a-f]{64}$/;
 const tokenPattern = /^[a-z0-9][a-z0-9._:/-]{0,127}$/;
+export const DRAFT_ROLE_COVERAGE_NOTE = "初稿没有章节角色，读取了整篇";
+function levelKeys(value: unknown): string[] {
+  return value &&
+    typeof value === "object" &&
+    Object.hasOwn(value, "text_level")
+    ? ["text_level"]
+    : [];
+}
+function levelFields(value: Record<string, unknown>): {
+  readonly text_level?: TextLevel;
+} {
+  return Object.hasOwn(value, "text_level")
+    ? { text_level: parseTextLevel(value.text_level) }
+    : {};
+}
 function fail(): never {
   throw new ContractValidationError();
 }
@@ -159,6 +180,7 @@ export interface DocumentReadRequestMap {
     readonly max_bytes: number;
     readonly continuation: string | null;
   };
+
   material: { readonly literature_id: string; readonly asset_id: string };
   evidence: {
     readonly evidence: EvidenceRef;
@@ -280,6 +302,7 @@ export function parseDocumentReadRequest<K extends DocumentReadOperation>(
       };
       break;
     }
+
     case "material": {
       const r = object(value, ["literature_id", "asset_id"]);
       result = {
@@ -484,7 +507,7 @@ export function parseDocumentSegmentLocationForVersion(
     }),
   };
 }
-function section(value: unknown) {
+function section(value: unknown, level?: TextLevel) {
   const annotated = Boolean(
     value && typeof value === "object" && "role" in value,
   );
@@ -497,6 +520,11 @@ function section(value: unknown) {
     "end_utf8",
     ...(annotated ? ["role", "role_source"] : []),
   ]);
+  if (
+    level === "draft" &&
+    (!annotated || r.role !== null || r.role_source !== null)
+  )
+    fail();
   if (
     (r.title !== null &&
       (typeof r.title !== "string" ||
@@ -535,7 +563,7 @@ function section(value: unknown) {
     ),
   });
 }
-function segment(value: unknown) {
+function segment(value: unknown, level?: TextLevel) {
   const located = Boolean(
     value && typeof value === "object" && "block_id" in value,
   );
@@ -557,18 +585,22 @@ function segment(value: unknown) {
         ]
       : []),
   ]);
+  if (level === "draft" && !located) fail();
   if (!PROOFREAD_SEGMENT_KINDS.includes(r.kind as ProofreadSegmentKind)) fail();
   return Object.freeze({
     ...(located
-      ? parseDocumentSegmentLocation({
-          block_id: r.block_id,
-          page: r.page,
-          region: r.region,
-          continuation_regions: r.continuation_regions,
-          locate: r.locate,
-          source: r.source,
-          basis: r.basis,
-        })
+      ? parseDocumentSegmentLocationForVersion(
+          {
+            block_id: r.block_id,
+            page: r.page,
+            region: r.region,
+            continuation_regions: r.continuation_regions,
+            locate: r.locate,
+            source: r.source,
+            basis: r.basis,
+          },
+          level === "draft" ? 3 : 2,
+        )
       : {}),
     segment_id: token(r.segment_id),
     kind: r.kind as ProofreadSegmentKind,
@@ -583,7 +615,7 @@ function segment(value: unknown) {
 function page(
   value: unknown,
   field: "sections" | "segments" | "resources",
-  parseItem: (value: unknown) => unknown,
+  parseItem: (value: unknown, level?: TextLevel) => unknown,
   limit: number,
 ) {
   const annotated = Boolean(
@@ -597,12 +629,31 @@ function page(
     "capabilities",
     "gaps",
     ...(annotated ? ["annotation_id"] : []),
+    ...levelKeys(value),
+    ...(field === "segments" &&
+    value &&
+    typeof value === "object" &&
+    Object.hasOwn(value, "coverage_note")
+      ? ["coverage_note"]
+      : []),
   ]);
+  const level = levelFields(r);
+  if (level.text_level === "draft" && r.annotation_id != null) fail();
+  if (
+    Object.hasOwn(r, "coverage_note") &&
+    (level.text_level !== "draft" ||
+      r.coverage_note !== DRAFT_ROLE_COVERAGE_NOTE)
+  )
+    fail();
   if (!Array.isArray(r[field]) || r[field].length > limit) fail();
   const total = nonnegative(r.total);
   if (total < r[field].length) fail();
   const next = cursor(r.next_cursor);
   return {
+    ...level,
+    ...(Object.hasOwn(r, "coverage_note")
+      ? { coverage_note: DRAFT_ROLE_COVERAGE_NOTE }
+      : {}),
     ...(annotated
       ? {
           annotation_id:
@@ -610,7 +661,7 @@ function page(
         }
       : {}),
     document: parseDocumentReadingRef(r.document),
-    [field]: Object.freeze(r[field].map(parseItem)),
+    [field]: Object.freeze(r[field].map((v) => parseItem(v, level.text_level))),
     total,
     next_cursor: next,
     capabilities: capabilities(r.capabilities),
@@ -630,6 +681,7 @@ function matchPage(
   if (request.cursor !== null && result.next_cursor === request.cursor) fail();
 }
 interface ReadPage {
+  readonly text_level?: TextLevel;
   readonly annotation_id?: string | null;
   readonly document: DocumentReadingRef;
   readonly total: number;
@@ -664,6 +716,12 @@ export interface DocumentReadResultMap {
     readonly gap: "document-missing" | null;
   };
   describe: {
+    readonly text_level?: TextLevel;
+    readonly draft_summary?: {
+      readonly differs_segments: number;
+      readonly differences: number;
+      readonly image_only_pages: number;
+    };
     readonly long_document?: LongDocumentInfo | null;
     readonly document: DocumentReadingRef;
     readonly capabilities: DocumentReadCapabilities;
@@ -674,9 +732,13 @@ export interface DocumentReadResultMap {
     readonly resource_count: number;
   };
   outline: ReadPage & { readonly sections: readonly ReadSection[] };
-  segments: ReadPage & { readonly segments: readonly ReadSegment[] };
+  segments: ReadPage & {
+    readonly segments: readonly ReadSegment[];
+    readonly coverage_note?: typeof DRAFT_ROLE_COVERAGE_NOTE;
+  };
   resources: ReadPage & { readonly resources: readonly DocumentResource[] };
   slice: {
+    readonly text_level?: TextLevel;
     readonly document: DocumentReadingRef;
     readonly selector: DocumentSelector;
     readonly locations?: readonly DocumentSegmentLocation[];
@@ -693,6 +755,7 @@ export interface DocumentReadResultMap {
     readonly gaps: readonly DocumentReadGap[];
   };
   resource: {
+    readonly text_level?: TextLevel;
     readonly document: DocumentReadingRef;
     readonly resource: DocumentResource;
     readonly bytes_base64: string | null;
@@ -710,6 +773,7 @@ export interface DocumentReadResultMap {
     readonly gaps: readonly DocumentReadGap[];
   };
   evidence: {
+    readonly text_level?: TextLevel;
     readonly evidence: EvidenceRef;
     readonly location?: DocumentSegmentLocation;
     readonly granularity: "file" | "segment";
@@ -781,6 +845,12 @@ function parseResult<K extends DocumentReadOperation>(
         "section_count",
         "segment_count",
         "resource_count",
+        ...levelKeys(value),
+        ...(value &&
+        typeof value === "object" &&
+        Object.hasOwn(value, "draft_summary")
+          ? ["draft_summary"]
+          : []),
         ...(value && typeof value === "object" && "long_document" in value
           ? ["long_document"]
           : []),
@@ -790,7 +860,27 @@ function parseResult<K extends DocumentReadOperation>(
       ]);
       const document = parseDocumentReadingRef(r.document);
       matchDocument(document, req as DocumentReadRequestMap["describe"]);
+      const level = levelFields(r);
+      if ((level.text_level === "draft") !== Object.hasOwn(r, "draft_summary"))
+        fail();
+      const summary = Object.hasOwn(r, "draft_summary")
+        ? object(r.draft_summary, [
+            "differs_segments",
+            "differences",
+            "image_only_pages",
+          ])
+        : undefined;
       return Object.freeze({
+        ...level,
+        ...(summary
+          ? {
+              draft_summary: Object.freeze({
+                differs_segments: nonnegative(summary.differs_segments),
+                differences: nonnegative(summary.differences),
+                image_only_pages: nonnegative(summary.image_only_pages),
+              }),
+            }
+          : {}),
         document,
         capabilities: capabilities(r.capabilities),
         gaps: gaps(r.gaps),
@@ -834,6 +924,13 @@ function parseResult<K extends DocumentReadOperation>(
       const pinned = req as DocumentReadRequestMap["outline"];
       if (pinned.annotation_id && parsed.annotation_id !== pinned.annotation_id)
         fail();
+      if (
+        kind === "segments" &&
+        parsed.text_level === "draft" &&
+        Boolean((req as DocumentReadRequestMap["segments"]).roles?.length) !==
+          Object.hasOwn(parsed, "coverage_note")
+      )
+        fail();
       return Object.freeze(parsed);
     }
     case "slice": {
@@ -852,6 +949,7 @@ function parseResult<K extends DocumentReadOperation>(
         "capabilities",
         "gaps",
         ...(located ? ["locations"] : []),
+        ...levelKeys(value),
       ]);
       const request = req as DocumentReadRequestMap["slice"];
       const document = parseDocumentReadingRef(r.document);
@@ -913,9 +1011,15 @@ function parseResult<K extends DocumentReadOperation>(
       )
         fail();
       const locations = located
-        ? (r.locations as unknown[]).map(parseDocumentSegmentLocation)
+        ? (r.locations as unknown[]).map((v) =>
+            parseDocumentSegmentLocationForVersion(
+              v,
+              r.text_level === "draft" ? 3 : 2,
+            ),
+          )
         : null;
       return Object.freeze({
+        ...levelFields(r),
         document,
         ...(locations ? { locations } : {}),
         selector,
@@ -938,6 +1042,7 @@ function parseResult<K extends DocumentReadOperation>(
         "truncated",
         "continuation",
         "gap",
+        ...levelKeys(value),
       ]);
       const request = req as DocumentReadRequestMap["resource"];
       const document = parseDocumentReadingRef(r.document);
@@ -957,6 +1062,7 @@ function parseResult<K extends DocumentReadOperation>(
         )
           fail();
         return Object.freeze({
+          ...levelFields(r),
           document,
           resource,
           bytes_base64: null,
@@ -994,6 +1100,7 @@ function parseResult<K extends DocumentReadOperation>(
       )
         fail();
       return Object.freeze({
+        ...levelFields(r),
         document,
         resource,
         bytes_base64: r.bytes_base64,
@@ -1057,6 +1164,7 @@ function parseResult<K extends DocumentReadOperation>(
         "continuation",
         "gaps",
         ...(located ? ["location"] : []),
+        ...levelKeys(r),
       ]);
       const evidence = parseEvidenceRef(d.evidence);
       const document = parseDocumentReadingRef(d.document);
@@ -1091,11 +1199,17 @@ function parseResult<K extends DocumentReadOperation>(
       )
         fail();
       return Object.freeze({
+        ...levelFields(d),
         evidence,
         document,
         granularity: "segment" as const,
         ...(located
-          ? { location: parseDocumentSegmentLocation(d.location) }
+          ? {
+              location: parseDocumentSegmentLocationForVersion(
+                d.location,
+                d.text_level === "draft" ? 3 : 2,
+              ),
+            }
           : {}),
         target_range,
         actual_range,
@@ -1130,4 +1244,98 @@ export function documentReadTitle(title: string | null): {
     }
   }
   return { title: "", title_truncated: true };
+}
+
+export interface DocumentDraftDifferencesRequest {
+  readonly document_version_id: string;
+  readonly segment_id: string;
+  readonly max_bytes: number;
+  readonly continuation: string | null;
+}
+
+export interface DocumentDraftDifferencesResult {
+  readonly document: DocumentReadingRef;
+  readonly segment_id: string;
+  readonly location: DocumentSegmentLocation;
+  readonly text_level: "draft";
+  readonly basis: DraftBasis;
+  readonly encoding: "json-utf8";
+  readonly text: string;
+  readonly actual_range: {
+    readonly start_utf8: number;
+    readonly end_utf8: number;
+  };
+  readonly total_bytes: number;
+  readonly continuation: string | null;
+}
+
+/** Dedicated audit contract, like corrections; ordinary Web read operations stay closed. */
+export function parseDocumentDraftDifferencesRequest(
+  value: unknown,
+): DocumentDraftDifferencesRequest {
+  const r = object(value, [
+    "document_version_id",
+    "segment_id",
+    "max_bytes",
+    "continuation",
+  ]);
+  return Object.freeze({
+    document_version_id: uuid(r.document_version_id),
+    segment_id: token(r.segment_id),
+    max_bytes: count(r.max_bytes, DOCUMENT_READ_MAX_BYTES),
+    continuation: cursor(r.continuation),
+  });
+}
+export function parseDocumentDraftDifferencesResult(
+  value: unknown,
+  request: DocumentDraftDifferencesRequest,
+): DocumentDraftDifferencesResult {
+  const r = object(value, [
+    "document",
+    "segment_id",
+    "location",
+    "text_level",
+    "basis",
+    "encoding",
+    "text",
+    "actual_range",
+    "total_bytes",
+    "continuation",
+  ]);
+  const expected = request;
+  const document = parseDocumentReadingRef(r.document);
+  matchDocument(document, expected);
+  const location = parseDocumentSegmentLocationForVersion(r.location, 3);
+  const actual_range = range(r.actual_range, "start_utf8", "end_utf8");
+  const total_bytes = count(r.total_bytes, 16 * 1024 * 1024);
+  const continuation = cursor(r.continuation);
+  if (
+    r.text_level !== "draft" ||
+    r.segment_id !== expected.segment_id ||
+    location.block_id !== r.segment_id ||
+    r.encoding !== "json-utf8" ||
+    r.basis !== location.basis ||
+    !DRAFT_BASES.includes(r.basis as DraftBasis) ||
+    typeof r.text !== "string" ||
+    encoder.encode(r.text).length > expected.max_bytes ||
+    encoder.encode(r.text).length !==
+      actual_range.end_utf8 - actual_range.start_utf8 ||
+    actual_range.end_utf8 > total_bytes ||
+    (expected.continuation === null && actual_range.start_utf8 !== 0) ||
+    Boolean(continuation) !== actual_range.end_utf8 < total_bytes ||
+    (expected.continuation !== null && continuation === expected.continuation)
+  )
+    fail();
+  return Object.freeze({
+    document,
+    segment_id: token(r.segment_id),
+    location,
+    text_level: "draft",
+    basis: r.basis as DraftBasis,
+    encoding: "json-utf8",
+    text: r.text,
+    actual_range,
+    total_bytes,
+    continuation,
+  });
 }

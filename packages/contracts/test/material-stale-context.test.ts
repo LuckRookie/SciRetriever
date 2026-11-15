@@ -56,6 +56,60 @@ it("accepts verified items, continuation and bounded stale-source gaps with both
   const value = counted(fixture());
   expect(parseMaterialContextBundle(value, request)).toEqual(value);
 });
+it("parses optional grades only on source-text hits and preserves their fixed document reference", () => {
+  const selected = parseMaterialContextRequest({
+    ...request,
+    kinds: ["document"],
+  });
+  const original = fixture();
+  const item = {
+    ...original.items[0]!,
+    kind: "source-text",
+    reference: {
+      kind: "document",
+      literature_id: id,
+      document_version_id: id,
+      representation_sha256: "a".repeat(64),
+      asset_id: id,
+      asset_sha256: "b".repeat(64),
+      start_utf8: 0,
+      end_utf8: 16,
+    },
+    evidence: [
+      {
+        schema_version: 1,
+        target_kind: "document",
+        locator_scheme: "utf8-segment-v1",
+        document_version_id: id,
+        representation_sha256: "a".repeat(64),
+        locator: { kind: "segment", segment_id: "s1" },
+        content_sha256: null,
+      },
+    ],
+  };
+  const legacy = counted({ ...original, items: [item] });
+  expect(parseMaterialContextBundle(legacy, selected)).toEqual(legacy);
+  for (const text_level of ["draft", "proofread"]) {
+    const value = counted({ ...original, items: [{ ...item, text_level }] });
+    expect(parseMaterialContextBundle(value, selected)).toEqual(value);
+  }
+  for (const text_level of ["raw", null, undefined])
+    expect(() =>
+      parseMaterialContextBundle(
+        counted({ ...original, items: [{ ...item, text_level }] }),
+        selected,
+      ),
+    ).toThrow();
+  expect(() =>
+    parseMaterialContextBundle(
+      counted({
+        ...original,
+        items: [{ ...original.items[0]!, text_level: "draft" }],
+      }),
+      request,
+    ),
+  ).toThrow();
+});
 it("retains strict negative, byte, itemless-error and gap-limit validation", () => {
   for (const change of [
     { indexed_revision: -1 },

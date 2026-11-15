@@ -1,3 +1,4 @@
+import { parseTextLevel, type TextLevel } from "./draft-document.js";
 import {
   ContractValidationError,
   parseEvidenceRef,
@@ -235,6 +236,7 @@ export type MaterialContextReference =
       readonly end_utf8: number;
     };
 export interface MaterialContextItem {
+  readonly text_level?: TextLevel;
   readonly kind: "metadata" | "source-text";
   readonly literature_id: string;
   readonly meta_literature_id: string;
@@ -342,6 +344,9 @@ export function parseMaterialContextBundle(
   const items = r.items.map((raw) => {
     const item = exact(raw, [
       "kind",
+      ...(raw && typeof raw === "object" && Object.hasOwn(raw, "text_level")
+        ? ["text_level"]
+        : []),
       "literature_id",
       "meta_literature_id",
       "reference",
@@ -353,6 +358,7 @@ export function parseMaterialContextBundle(
       "gap",
     ]);
     if (item.kind !== "metadata" && item.kind !== "source-text") fail();
+    if (item.kind === "metadata" && Object.hasOwn(item, "text_level")) fail();
     const literature_id = String(parseLiteratureId(item.literature_id));
     const meta_literature_id = String(
       parseLiteratureId(item.meta_literature_id),
@@ -458,6 +464,9 @@ export function parseMaterialContextBundle(
         fail();
     }
     return {
+      ...(Object.hasOwn(item, "text_level")
+        ? { text_level: parseTextLevel(item.text_level) }
+        : {}),
       kind: item.kind,
       literature_id,
       meta_literature_id,

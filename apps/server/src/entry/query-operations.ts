@@ -9,6 +9,8 @@ import {
   createInputManifest,
   parseAssetId,
   parseDocumentReadRequest,
+  parseDocumentDraftDifferencesRequest,
+  parseDocumentDraftDifferencesResult,
   parseDocumentReadResult,
   parseLibrarySearchRequest,
   parseLiteratureId,
@@ -106,6 +108,7 @@ export const QUERY_OPERATIONS = [
   "proofread-page",
   "document-parts",
   "document-corrections",
+  "document-draft-differences",
   "document-parsing-status",
   "document-default",
   "document-describe",
@@ -321,6 +324,19 @@ async function readQuery(
     if (arranged) return arranged;
     if (!q.proofreadRead) unavailable();
     return q.proofreadRead.inspect(value, signal);
+  }
+  if (operation === "document-draft-differences") {
+    if (!q.documentRead) unavailable();
+    let request;
+    try {
+      request = parseDocumentDraftDifferencesRequest(value);
+    } catch (error) {
+      throw new DocumentReadError("document-invalid", { cause: error });
+    }
+    return parseDocumentDraftDifferencesResult(
+      await q.documentRead.draftDifferences(request, signal),
+      request,
+    );
   }
   if (operation === "document-corrections") {
     if (!q.documentRead) unavailable();

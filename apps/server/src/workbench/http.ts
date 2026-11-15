@@ -3226,6 +3226,7 @@ function createQueryHttpHandler(
       case "/api/v1/query/document-segments":
       case "/api/v1/query/document-resources":
       case "/api/v1/query/document-slice":
+      case "/api/v1/query/document-draft-differences":
       case "/api/v1/query/document-resource":
       case "/api/v1/query/material-evidence":
       case "/api/v1/query/evidence-resolve": {
@@ -3253,13 +3254,16 @@ function createQueryHttpHandler(
                     ? "segments"
                     : url.pathname === "/api/v1/query/document-resources"
                       ? "resources"
-                      : url.pathname === "/api/v1/query/document-slice"
-                        ? "slice"
-                        : url.pathname === "/api/v1/query/document-resource"
-                          ? "resource"
-                          : url.pathname === "/api/v1/query/material-evidence"
-                            ? "material"
-                            : "evidence";
+                      : url.pathname ===
+                          "/api/v1/query/document-draft-differences"
+                        ? "draft-differences"
+                        : url.pathname === "/api/v1/query/document-slice"
+                          ? "slice"
+                          : url.pathname === "/api/v1/query/document-resource"
+                            ? "resource"
+                            : url.pathname === "/api/v1/query/material-evidence"
+                              ? "material"
+                              : "evidence";
           const readRequest =
             kind === "evidence" &&
             command.request &&

@@ -19,6 +19,10 @@ import {
 import type { RawParseSourceProfile } from "./raw-parsing.js";
 
 export type TextLevel = "draft" | "proofread";
+export function parseTextLevel(value: unknown): TextLevel {
+  if (value !== "draft" && value !== "proofread") fail();
+  return value;
+}
 export const DRAFT_BASES = [
   "text-layer-match",
   "text-layer-differs",
