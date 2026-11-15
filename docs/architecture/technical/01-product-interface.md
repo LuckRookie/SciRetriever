@@ -245,7 +245,7 @@ Web 管理均为 POST，要求登录 Cookie、工作台 Cookie、client_id、同
 - 输入为 `{protocol_version:1,request}`，成功为 `{protocol_version:1,result}`；未知字段拒绝。
 - 请求含封套的上限：`/data` 为 8 MiB；`/pages/preview` 与 `/pages/save` 为 640 KiB；其余为 64 KiB。
 - 字节路由不带 JSON 封套，只接受 `application/pdf` 或 `application/octet-stream`，不接受压缩正文。
-- 文件名放在请求头 `X-Sciretriever-File-Name`，值为百分号编码的 UTF-8，解码后为 1–255 字节，不得含路径分隔符。设备请求不允许带查询串（[2.4.1](#241-设备连接与按用途准入)），所以文件名不放在地址里。
+- 文件名放在请求头 `X-Sciretriever-File-Name`，值为百分号编码的 UTF-8，解码后为 1–255 字节，不得含路径分隔符。从文件夹交来的文件另带请求头 `X-Sciretriever-Relative-Path`：百分号编码的 UTF-8，以 `/` 分段，解码后 1–1024 字节；不以 `/` 开头，没有空段、`.`、`..` 与反斜杠，最后一段等于文件名。它只用于[文献与材料 6.4.3](03-literature-materials.md#643-只有文件的条目与配对)的配对，不保存为来源地址；没有这个头时按文件名配对。设备请求不允许带查询串（[2.4.1](#241-设备连接与按用途准入)），所以文件名不放在地址里。
 
 **路由**
 

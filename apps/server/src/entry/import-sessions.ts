@@ -643,7 +643,7 @@ export class ImportSessionService extends ImportSessionReadService {
     record: ImportRecord,
   ): MetadataObservation {
     const content = hash(record),
-      legacy = s.source.identity === "adhoc";
+      legacy = s.source.identity === "adhoc" && s.format !== "web-page";
     return parseMetadataObservation({
       observation_id: intakeId([
         s.library_key,
@@ -659,7 +659,12 @@ export class ImportSessionService extends ImportSessionReadService {
           "provenance",
         ]),
         source_kind: "user",
-        source_name: legacy ? "bibliographic-import" : "import",
+        source_name:
+          s.format === "web-page"
+            ? "web-capture"
+            : legacy
+              ? "bibliographic-import"
+              : "import",
         source_record_id: legacy
           ? null
           : JSON.stringify([s.library_key, record.external_id]),

@@ -1,0 +1,67 @@
+import {
+  canonicalJsonBytes,
+  ContractValidationError,
+  parsePublicSourceUrl,
+} from "./index.js";
+import { importObject } from "./intake.js";
+
+export const WEB_PAGE_LIMITS = {
+  bytes: 512 * 1024,
+  meta: 500,
+  json_ld: 5,
+  json_ld_bytes: 64 * 1024,
+} as const;
+/** Original page values; interpretation belongs to the server adapter. */
+export interface WebPageData {
+  readonly url: string;
+  readonly title: string | null;
+  readonly meta: readonly {
+    readonly attribute: "name" | "property";
+    readonly key: string;
+    readonly content: string;
+  }[];
+  readonly json_ld: readonly string[];
+  readonly is_pdf: boolean;
+}
+function raw(value: unknown): string {
+  if (typeof value !== "string") throw new ContractValidationError();
+  return value;
+}
+export function parseWebPageData(value: unknown): WebPageData {
+  const r = importObject(value, ["url", "title", "meta", "json_ld", "is_pdf"]);
+  if (
+    !Array.isArray(r.meta) ||
+    r.meta.length > WEB_PAGE_LIMITS.meta ||
+    !Array.isArray(r.json_ld) ||
+    r.json_ld.length > WEB_PAGE_LIMITS.json_ld ||
+    typeof r.is_pdf !== "boolean"
+  )
+    throw new ContractValidationError();
+  const page: WebPageData = {
+    url: parsePublicSourceUrl(r.url),
+    title: r.title === null ? null : raw(r.title),
+    meta: r.meta.map((value) => {
+      const v = importObject(value, ["attribute", "key", "content"]);
+      if (v.attribute !== "name" && v.attribute !== "property")
+        throw new ContractValidationError();
+      return {
+        attribute: v.attribute,
+        key: raw(v.key),
+        content: raw(v.content),
+      };
+    }),
+    json_ld: r.json_ld.map((value) => {
+      const text = raw(value);
+      if (
+        new TextEncoder().encode(text).byteLength >
+        WEB_PAGE_LIMITS.json_ld_bytes
+      )
+        throw new ContractValidationError();
+      return text;
+    }),
+    is_pdf: r.is_pdf,
+  };
+  if (canonicalJsonBytes(page).byteLength > WEB_PAGE_LIMITS.bytes)
+    throw new ContractValidationError();
+  return page;
+}

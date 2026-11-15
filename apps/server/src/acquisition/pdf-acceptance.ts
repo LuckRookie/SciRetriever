@@ -7,7 +7,13 @@ export interface PdfAcceptance {
 }
 export class PdfAcceptanceError extends Error {
   readonly code = "pdf-acceptance" as const;
-  constructor(cause?: unknown) {
+  constructor(
+    cause?: unknown,
+    readonly reason:
+      | "pdf-invalid"
+      | "non-pdf-file"
+      | "encrypted-pdf" = "pdf-invalid",
+  ) {
     super("pdf acceptance failed", { cause });
     this.name = "PdfAcceptanceError";
   }
@@ -121,14 +127,11 @@ async function runPdfTool(
 }
 
 function acceptedReport(report: string): PdfAcceptance {
+  if (/^Encrypted:\s+yes\b/mu.test(report))
+    throw new PdfAcceptanceError(undefined, "encrypted-pdf");
   const pages = /^Pages:\s+(\d+)$/mu.exec(report);
   const count = Number(pages?.[1]);
-  if (
-    !Number.isSafeInteger(count) ||
-    count < 1 ||
-    /^Encrypted:\s+yes\b/mu.test(report)
-  )
-    throw new PdfAcceptanceError();
+  if (!Number.isSafeInteger(count) || count < 1) throw new PdfAcceptanceError();
   return Object.freeze({ accepted: true, page_count: count });
 }
 
@@ -148,12 +151,13 @@ export async function acceptPdfFile(
     throw new PdfAcceptanceError();
   const decoder = new TextDecoder();
   const head = await file.readRange(0, Math.min(8, file.size));
-  if (!decoder.decode(head).startsWith("%PDF-")) throw new PdfAcceptanceError();
+  if (!decoder.decode(head).startsWith("%PDF-"))
+    throw new PdfAcceptanceError(undefined, "non-pdf-file");
   const length = Math.min(file.size, 2 * 1024 * 1024);
   const prefix = decoder.decode(await file.readRange(0, length));
   const tail = decoder.decode(await file.readRange(file.size - length, length));
   if (/\/Encrypt\b/u.test(prefix) || /\/Encrypt\b/u.test(tail))
-    throw new PdfAcceptanceError();
+    throw new PdfAcceptanceError(undefined, "encrypted-pdf");
   const report = await file.withDescriptor((fd) =>
     runPdfTool(fd, "pdfinfo", timeoutMs, signal),
   );
@@ -169,7 +173,7 @@ export async function acceptPdf(
     !(bytes instanceof Uint8Array) ||
     !new TextDecoder().decode(bytes.slice(0, 8)).startsWith("%PDF-")
   )
-    throw new PdfAcceptanceError();
+    throw new PdfAcceptanceError(undefined, "non-pdf-file");
   // An encrypted document must never reach the identity extractor. The
   // encryption dictionary is normally in the trailer, so inspect both the
   // header and a bounded tail without decoding the full input as text.
@@ -180,7 +184,7 @@ export async function acceptPdf(
   const tailStart = Math.max(0, bytes.byteLength - 2 * 1024 * 1024);
   const tail = decoder.decode(bytes.slice(tailStart));
   if (/\/Encrypt\b/u.test(prefix) || /\/Encrypt\b/u.test(tail))
-    throw new PdfAcceptanceError();
+    throw new PdfAcceptanceError(undefined, "encrypted-pdf");
   const report = await readPdfTool(bytes, "pdfinfo", timeoutMs, signal);
   return acceptedReport(report);
 }

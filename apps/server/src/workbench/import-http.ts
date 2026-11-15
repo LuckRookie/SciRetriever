@@ -4,6 +4,7 @@ import {
   IMPORT_LIMITS,
   INTAKE_HTTP_ENDPOINTS,
   INTAKE_ERROR_STATUSES,
+  WEB_PAGE_LIMITS,
   importObject,
   importInteger,
   importHash,
@@ -38,7 +39,8 @@ const endpoints = INTAKE_HTTP_ENDPOINTS.filter(
       "page-save",
     ].includes(e[2]),
 );
-const model = `IntakeData = { records: IntakeItem[], groups?: IntakeGroup[], excluded?: {kind:string,count:number}[] }
+const model = `WebPageData = {url:string,title:string|null,meta:{attribute:name|property,key:string,content:string}[],json_ld:string[],is_pdf:boolean}
+IntakeData = { records: IntakeItem[], groups?: IntakeGroup[], excluded?: {kind:string,count:number}[] }
 IntakeGroup = {external_id:string,parent_external_id:string|null,name:string}
 IntakeItem = {external_id:string,metadata:LiteratureMetadata,source_type?:string|null,groups?:string[],user_tags?:string[],files?:IntakeFile[],annotations?:IntakeAnnotation[]}
 LiteratureMetadata = {title:string|null,authors:Author[],abstract:string|null,publication_date:string|null,publication_year:number|null,publication_form:journal-article|conference-paper|book-or-chapter|thesis|patent|report-or-standard|null,article_kind:research-article|review|letter-or-communication|perspective-or-commentary|correction-or-editorial|null,language:string|null,venue:string|null,publisher:string|null,volume:string|null,issue:string|null,pages:string|null,identifiers:{namespace:string,value:string}[],keywords:string[],subject_terms:string[]}
@@ -76,11 +78,12 @@ export function importInterface(formats: readonly string[]) {
     ),
     semantics: [
       "records is a public format for neutral items. When a source has a dedicated adapter, send its original data instead of rewriting it into records.",
+      `web-page data is original WebPageData. Its server adapter interprets bibliographic tags and supported JSON-LD, counts invalid JSON blocks and returns file-required for a PDF page. Limits: ${WEB_PAGE_LIMITS.meta} meta tags, ${WEB_PAGE_LIMITS.json_ld} JSON-LD blocks, ${WEB_PAGE_LIMITS.json_ld_bytes} UTF-8 bytes per block, ${WEB_PAGE_LIMITS.bytes} canonical JSON bytes in total.`,
       "Preview is read-only and estimated; confirm decides again and checkpoints each record.",
       "Batch confirmation returns running with progress immediately; the service resumes checkpoints and expires batches. Local CLI/stdio bibliography imports finish synchronously without recovering unrelated batches.",
       "The literature PDF supplement endpoint is Web-only, requires the percent-encoded UTF-8 X-Sciretriever-File-Name header and returns {batch_id,file}; devices are not granted this route. It shares the streaming file channel and a per-entry daily open batch.",
       "One active batch per source library. Repeating a sequence with identical data is idempotent; different data is rejected with intake-data-conflict, without replacing the staged part.",
-      "Global source library IDs are independent of device; local library IDs are scoped to device connection. source=null creates an isolated one-off file source; it cannot resume a source namespace and uses bibliographic-import semantics.",
+      "Global source library IDs are independent of device; local library IDs are scoped to device connection. source=null creates an isolated one-off source; it cannot resume a source namespace and uses bibliographic-import semantics, except web-page fields retain user/web-capture provenance.",
       "Import adds observations, folders/members and missing primary PDFs; never deletes or replaces accepted materials.",
       "metadata_only defaults to false and is fixed in batch.request. When true, attachment references are counted as metadata-only-attachment without creating file entries; bibliography-only CLI/stdio/legacy Web wrappers always set it.",
       "Upload the preferred PDF only when action=upload; action=hash needs only sha256. Missing files are paginated; repeat uploads are idempotent.",

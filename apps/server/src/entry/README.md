@@ -41,3 +41,5 @@ CLI/MCP/HTTP 只适配请求；供应商协议、材料验收和事实写入仍�
 建批次的 metadata_only 默认 false，保存在既有 request_json。为 true 时不登记文件清单或外部文件键；跳过的附件记 metadata-only-attachment，映射为“附件（只导书目）”。CLI、stdio 与旧 Web 书目入口统一调用 create/putData/confirm/report 并显式开启此选项，提交原始格式文本，不再接收预解码对象；命令和回执格式保持原样。
 
 library-facets 返回全部命中的标签、作者关键词、主题词，以及各层覆盖篇数。标签主次均计，只列 active 的直接标注；父标签不累计子标签。返回的作者关键词至多 30 个，按规范化名称精确查询 active 标签别名，并附当前标签 ID/名称；词频、覆盖和别名从同一读取快照产生。HTTP、CLI、MCP 共用此投影。
+
+批次的 `web-page` 格式从原始页面标签形成书目，读出的字段以 `user/web-capture` 来源接纳；原单篇收藏入口的过渡书目请求仍由 `capture.ts` 处理，两者不在 adapter 中发起查询。

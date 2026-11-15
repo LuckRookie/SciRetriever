@@ -11,6 +11,8 @@ import {
   type BibliographyInputFormat,
 } from "./bibliography-import.js";
 import { bibliographyAttachments } from "./bibliography-attachments.js";
+import { webPageAdapter } from "./web-page-adapter.js";
+export { FileClueReader, type FileClues } from "./file-clues.js";
 
 export const nativeImportAdapter: ImportAdapter = {
   format: "records",
@@ -97,6 +99,7 @@ export function importAdapters(
     ...(["bibtex", "biblatex", "ris", "csl-json"] as const).map(
       bibliographyAdapter,
     ),
+    webPageAdapter,
     ...additional,
   ];
   const result = new Map<string, ImportAdapter>();

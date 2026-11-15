@@ -421,6 +421,8 @@ it("shares the exact import handlers between authenticated Web and import-purpos
       ]),
     );
     expect(reference.formats).toContain("records");
+    expect(reference.formats).toContain("web-page");
+    expect(reference.model).toContain("WebPageData");
     expect(JSON.stringify(reference)).not.toMatch(
       /\bsessions?\b|\/api\/v1\/(?:import|capture)/u,
     );

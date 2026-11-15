@@ -6,6 +6,25 @@ import {
 } from "../src/literature/import-adapters.js";
 import { decodeBibliography } from "../src/literature/bibliography-import.js";
 
+it("registers the server-side original web-page adapter without interpreting a PDF page as bibliography", () => {
+  const page = {
+    url: "https://synthetic.invalid/article",
+    title: "Page title",
+    meta: [],
+    json_ld: [],
+    is_pdf: false,
+  };
+  expect(
+    importAdapters().get("web-page")!.decode(page, 0).items[0]!.record!.metadata
+      .title,
+  ).toBe("Page title");
+  expect(
+    importAdapters()
+      .get("web-page")!
+      .decode({ ...page, is_pdf: true }, 0).items[0],
+  ).toMatchObject({ record: null, reason: "file-required" });
+});
+
 it.each(["bibtex", "biblatex", "ris", "csl-json"] as const)(
   "requires original %s text and rejects the retired predecoded object shape",
   (format) => {

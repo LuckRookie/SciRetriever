@@ -3487,6 +3487,7 @@ function publicSourceUrl(value: unknown): string {
     fail();
   return s;
 }
+export { publicSourceUrl as parsePublicSourceUrl };
 function observationText(value: unknown): string {
   if (typeof value !== "string" || hasLoneSurrogate(value) || !value.trim())
     fail();
@@ -3831,3 +3832,4 @@ export * from "./translation.js";
 
 export * from "./document-layout.js";
 export * from "./draft-document.js";
+export * from "./intake-page.js";

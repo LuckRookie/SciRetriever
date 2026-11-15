@@ -12,7 +12,7 @@
 
 - [assembly.ts](assembly.ts)：获取来源与执行组件组装。
 - [tiered.ts](tiered.ts)：获取阶段、批次执行与来源级安全结果；实际请求由 Network 派发通知区分，轨迹由 Entry/Jobs 保存。
-- [pdf-acceptance.ts](pdf-acceptance.ts)：PDF 文件可用性验收。
+- [pdf-acceptance.ts](pdf-acceptance.ts)：PDF 文件可用性验收；错误的 reason 区分非 PDF、加密与其它无效文件，接纳条件及既有错误码不变。
 - [candidate-publication.ts](candidate-publication.ts)：将候选发布为文献材料。
 
 ## 放置边界

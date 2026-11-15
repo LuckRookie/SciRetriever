@@ -22,7 +22,9 @@
 - `metadata-fields.ts` / `metadata-service.ts`：逐字段裁决、来源、冲突及人工编辑/解锁；与 identity 共同使用单个元数据发布事务和 revision CAS，不建立第二套元数据。
 - `metadata-proposals.ts` / `metadata-agent.ts` / `archive-metadata.ts`：建档内部的 DSH 元数据提议；只读固定校订稿的第一页及 front-matter/abstract/keywords，逐字段核对片段和 DOI。无模型时明确失败，不回退到旧两阶段总结。建档编排由相邻的 `archive/` 模块调用。
 
-- [import-adapters.ts](import-adapters.ts)：中性记录与书目格式的纯适配器登记；只转换输入，不访问时钟、随机数、网络、文件或数据库。[bibliography-attachments.ts](bibliography-attachments.ts) 读取 BibTeX/BibLaTeX file 与 RIS L1，形成首选 PDF 的中性引用、脱敏本机路径并统计未导入附件；CSL JSON 不推断附件。
+- [import-adapters.ts](import-adapters.ts)：中性记录、书目格式和网页原始标签的纯适配器登记；decode 只转换输入，不访问时钟、随机数、网络、文件或数据库。[bibliography-attachments.ts](bibliography-attachments.ts) 读取 BibTeX/BibLaTeX file 与 RIS L1，形成首选 PDF 的中性引用、脱敏本机路径并统计未导入附件；CSL JSON 不推断附件。
+- [web-page-adapter.ts](web-page-adapter.ts)：按标签与 JSON-LD 优先序产生中性书目、PDF 地址和无效 JSON 计数；原始 `web-page` 可交给批次的数据入口，PDF 页面返回需要文件的结果，不据页面地址猜书目。
+- [file-clues.ts](file-clues.ts)：单个受控 PDF 的只读线索端口，由适配器入口导出；复用基本验收，再用受限 MuPDF 读取文档信息、XMP、首页/必要的第二页和醒目标题，全部操作受 10 秒总时限约束，不查库、不联网、不调用模型。文件条目上传与确认的组装不在此端口中。[import-clues.ts](import-clues.ts) 共用字符串及标识规范化。
 
 书目适配器只收原始文本；bibliography-import 的 bibliographyText 共用 UTF-8/带 BOM UTF-16 的严格字节解码，供本地入口转换文本。只导书目的文件策略由 Entry 的批次选项处理，纯适配器仍返回同样的文件引用与排除计数。
 
