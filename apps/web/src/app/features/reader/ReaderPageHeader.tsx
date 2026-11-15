@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   PUBLICATION_FORM_LABELS,
   type LiteratureSearchItem,
+  type TextLevel,
 } from "@sciretriever/contracts";
 import { paperAuthors, paperTitle } from "../../data/library.js";
 import type { PdfControls } from "../../../reading/contract.js";
@@ -40,12 +41,20 @@ export function paperSource(paper: LiteratureSearchItem): string {
 function ViewText({
   kind,
   pdf,
+  level,
 }: {
   kind: "doc" | "pdf";
   pdf: PdfControls | null;
+  level: TextLevel | null;
 }) {
   const [editing, setEditing] = useState(false);
-  if (kind === "doc") return <span>原文</span>;
+  if (kind === "doc")
+    return (
+      <span>
+        原文
+        {level ? ` · ${level === "draft" ? "初稿" : "校订稿"}` : ""}
+      </span>
+    );
   if (!pdf) return <span>PDF</span>;
   const zoom = pdf.zoom === "fit" ? "适宽" : `${Math.round(pdf.zoom * 100)}%`;
   const go = (field: HTMLInputElement) => {
@@ -104,11 +113,14 @@ export function ReaderPageHeader({
   paper,
   narrow,
   pdf,
+  level,
   back,
   line,
   scroller,
 }: {
   kind: "doc" | "pdf";
+  /** The full text's level, once read (reading-experience 1.2, 3.4). */
+  level: TextLevel | null;
   paper: LiteratureSearchItem;
   /** The top bar is narrower than 640 px: the title replaces the source. */
   narrow: boolean;
@@ -157,7 +169,7 @@ export function ReaderPageHeader({
             {back.label}
           </button>
         ) : null}
-        <ViewText kind={kind} pdf={pdf} />
+        <ViewText kind={kind} pdf={pdf} level={level} />
       </span>
       {shown ? (
         <p

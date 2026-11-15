@@ -594,7 +594,8 @@
     color: var(--fg2);
     font-weight: 500;
   }
-  .mark-card-where {
+  .mark-card-where,
+  .mark-card-level {
     color: var(--fg3);
   }
   .mark-card-tools {

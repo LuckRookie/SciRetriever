@@ -910,6 +910,18 @@
     content: "·";
     margin-inline: 2px 4px;
   }
+  /* The status, and under it in small text what kind of text the paper has. */
+  .paper-status-cell {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+  }
+  .paper-status-note {
+    color: var(--fg3);
+    font-size: var(--text-caption);
+    white-space: nowrap;
+  }
 }
 
 @layer pages {

@@ -1,6 +1,10 @@
 import {
+  parseDocumentDraftDifferencesRequest,
+  parseDocumentDraftDifferencesResult,
   parseDocumentReadResult,
+  parseDraftDifference,
   sha256,
+  type DraftDifference,
   type DocumentMaterialRef,
   type DocumentReadingRef,
   type DocumentResource,
@@ -412,4 +416,42 @@ export function nextEvidencePage(
         expectedStart: result.actual_range?.end_utf8 ?? null,
       }
     : null;
+}
+/**
+ * Reading-experience 2.5: the saved differences of one draft segment
+ * (`draft-differences`, technical 04 §8.3), collected through its
+ * continuations. Reading forms nothing and compares nothing again.
+ */
+export async function readDraftDifferences(
+  ctx: ReadingContext,
+  documentVersionId: string,
+  segmentId: string,
+): Promise<readonly DraftDifference[]> {
+  const bytes: Uint8Array[] = [];
+  let continuation: string | null = null;
+  do {
+    const request = parseDocumentDraftDifferencesRequest({
+      document_version_id: documentVersionId,
+      segment_id: segmentId,
+      max_bytes: 65536,
+      continuation,
+    });
+    const reply = await ctx.api.query(
+      "document-draft-differences",
+      request,
+      ctx.signal,
+    );
+    const part = parseDocumentDraftDifferencesResult(reply.result, request);
+    bytes.push(new TextEncoder().encode(part.text));
+    continuation = part.continuation;
+  } while (continuation);
+  const all = new Uint8Array(bytes.reduce((n, b) => n + b.length, 0));
+  let at = 0;
+  for (const b of bytes) {
+    all.set(b, at);
+    at += b.length;
+  }
+  const list: unknown = JSON.parse(new TextDecoder().decode(all));
+  if (!Array.isArray(list)) throw new Error("初稿差异回执无效");
+  return list.map((item) => parseDraftDifference(item));
 }

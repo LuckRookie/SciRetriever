@@ -8,6 +8,7 @@ import { expect, it } from "vitest";
 import type { Page } from "playwright";
 import { nextWorkspace } from "./next-workspace-fixture.js";
 import { missingId } from "./processor-workspace-fixture.js";
+import { draftPdf, formDraft } from "./draft-fixture.js";
 import { workbenchPdf } from "../../server/src/workbench/synthetic-fixture.js";
 import { join } from "node:path";
 async function select(page: Page, label: string, option: string) {
@@ -333,3 +334,81 @@ it("requires confirmation before a PDF dropped on a library row is accepted and 
     await w.close();
   }
 }, 60000);
+
+it("marks draft rows, filters and sorts by the draft facts, and hands the results to archiving without starting work (plan 21 block 10)", async () => {
+  const w = await nextWorkspace({ setup: draftPdf });
+  try {
+    const page = w.page;
+    await formDraft(w);
+    const before = {
+      parses: w.env.parseCalls,
+      models: w.env.modelCalls,
+      jobs: (await w.env.app.jobs!.listJobs(50)).length,
+    };
+    await page.reload();
+    await showAllLibraryStatuses(page);
+    const draftRow = page.getByRole("article", {
+      name: "Unparsed source",
+      exact: true,
+    });
+    // The primary PDF's default text is a draft: said under the status,
+    // where “长文档” is, not inside the status badge.
+    await expect
+      .poll(() => draftRow.locator(".paper-status-note").allInnerTexts())
+      .toContain("初稿");
+    expect(await draftRow.locator(".paper-status").innerText()).not.toContain(
+      "初稿",
+    );
+    // The sort menu offers the two draft facts processing does not need.
+    await page
+      .getByRole("button", { name: /排序/ })
+      .and(page.locator('[aria-haspopup="listbox"]'))
+      .click();
+    const sorts = await page.getByRole("option").allInnerTexts();
+    expect(sorts).toEqual(
+      expect.arrayContaining(["初稿差异：多到少", "扫描页：多到少"]),
+    );
+    expect(sorts).not.toContain("被结果引用：多到少");
+    expect(sorts).not.toContain("找不到的引用：多到少");
+    await page.keyboard.press("Escape");
+    await select(page, "排序", "初稿差异：多到少");
+    expect(new URL(page.url()).searchParams.get("sort")).toBe(
+      "draft-differences-desc",
+    );
+    await expect
+      .poll(() => draftRow.locator(".paper-status-note").allInnerTexts())
+      .toContain("初稿 · 差异 0 段");
+    await select(page, "排序", "扫描页：多到少");
+    await expect
+      .poll(() => draftRow.locator(".paper-status-note").allInnerTexts())
+      .toContain("初稿 · 扫描 0 页");
+    // The filters: text level, and the two yes-or-no draft facts.
+    await page.getByRole("button", { name: /^筛选/ }).click();
+    await page
+      .getByRole("menuitem", { name: /^(?:筛选条件…|收起筛选条件)$/ })
+      .click();
+    await select(page, "文本等级", "初稿");
+    await select(page, "初稿与文字层有差异", "没有");
+    await page.getByRole("button", { name: "应用筛选", exact: true }).click();
+    await expect.poll(() => page.locator(".paper-row").count()).toBe(1);
+    expect(
+      JSON.parse(new URL(page.url()).searchParams.get("query")!),
+    ).toMatchObject({ text_levels: ["draft"], has_draft_differences: false });
+    const chips = await page.locator(".library-applied").innerText();
+    expect(chips).toContain("文本等级：初稿");
+    expect(chips).toContain("初稿与文字层有差异：没有");
+    // “用当前结果 → 建档…” opens the archiving scope with its count.
+    await page.getByRole("button", { name: "用当前结果", exact: true }).click();
+    await page.getByRole("menuitem", { name: "建档…", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByText("范围已固定：1 篇文献。", { exact: true }).waitFor();
+    await dialog.getByRole("button", { name: "取消", exact: true }).click();
+    // Opening, filtering and sorting start nothing.
+    expect(w.env.parseCalls).toBe(before.parses);
+    expect(w.env.modelCalls).toBe(before.models);
+    expect((await w.env.app.jobs!.listJobs(50)).length).toBe(before.jobs);
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);

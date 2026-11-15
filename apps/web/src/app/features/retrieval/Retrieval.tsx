@@ -608,6 +608,12 @@ function Result({
         <Highlighted text={textOf(item)} terms={terms} />
       </p>
       <div className="retrieval-source">
+        {/* Page specs “全文检索”: the level of the version the hit is in. */}
+        {"text_level" in item && item.text_level ? (
+          <span className="retrieval-level" data-testid="retrieval-level">
+            {item.text_level === "draft" ? "初稿" : "校订稿"}
+          </span>
+        ) : null}
         <span data-testid="retrieval-kind">
           {item.kind === "generated-result"
             ? item.processor_id === "knowledge-synthesis"

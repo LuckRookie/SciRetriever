@@ -238,14 +238,14 @@ it("marks a long document above the text, in the information panel and in the li
     const note = w.page.locator(".reading-long-document");
     await note.waitFor();
     expect(await note.innerText()).toBe(
-      "长文档（294 页）：按简化流程建档，未逐页校订，文字可能含解析错误；以 PDF 为准。",
+      "长文档：按简化流程建档，未逐页校订，文字可能含解析错误；以 PDF 为准（294 页）",
     );
     expect(await w.page.getByText("长文档（294 页）· 未逐页校订").count()).toBe(
       1,
     );
     await w.page.goto(`${w.origin}/?view=lib`);
     await w.page
-      .locator(".paper-status small", { hasText: "长文档" })
+      .locator(".paper-status-note", { hasText: "长文档" })
       .first()
       .waitFor();
     expect(w.errors).toEqual([]);

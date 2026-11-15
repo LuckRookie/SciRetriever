@@ -12,6 +12,7 @@ import {
   type LiteratureDetail,
   type MarkColor,
   type ReadingMark,
+  type TextLevel,
 } from "@sciretriever/contracts";
 import {
   Button,
@@ -32,6 +33,9 @@ import { preferences } from "../../../data/preferences.js";
 import { MarkBar, MarkBarButton, NotePopover } from "./MarkOverlays.js";
 import { MarksPanel } from "./MarksPanel.js";
 import { useMarks } from "./use-marks.js";
+import { useQueries } from "@tanstack/react-query";
+import { readDocument } from "../../../../reading/transport.js";
+import { useApi } from "../../../data/query.js";
 import { TranslationPopover } from "../translation/TranslationViews.js";
 import type { ReaderTranslation } from "../translation/use-translation.js";
 import "./marks.css";
@@ -88,6 +92,37 @@ export function useReaderMarks({
     mode === "pdf" ? "pdf" : mode === "doc" ? "doc" : null;
   const active = enabled && !!view;
   const store = useMarks(id, enabled, notify);
+  // Plan 21 block 10: each mark says on which level of text it was made —
+  // the level of the document version its anchor names.
+  const api = useApi();
+  const versions = useMemo(
+    () => [
+      ...new Set(
+        store.marks.flatMap((m) =>
+          m.document ? [m.document.document_version_id] : [],
+        ),
+      ),
+    ],
+    [store.marks],
+  );
+  const described = useQueries({
+    queries: versions.map((version) => ({
+      queryKey: ["document", "describe", version],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        readDocument(
+          { api, signal, root: document.body, refresh: () => {} },
+          "describe",
+          { document_version_id: version },
+        ),
+      staleTime: Infinity,
+      retry: false,
+    })),
+  });
+  const levels = new Map<string, TextLevel>();
+  versions.forEach((version, index) => {
+    const value = described[index]?.data;
+    if (value) levels.set(version, value.text_level ?? "proofread");
+  });
   const toast = useToast();
   const surface = useRef<MarkSurface | null>(null),
     body = useRef<HTMLElement | null>(null);
@@ -436,6 +471,7 @@ export function useReaderMarks({
   const panel: ReactNode = active ? (
     <MarksPanel
       marks={store.marks}
+      levels={levels}
       view={view!}
       hot={hot}
       active={current}

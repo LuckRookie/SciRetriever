@@ -126,6 +126,10 @@
   .retrieval-source {
     margin-top: var(--space-1);
   }
+  /* The hit's text level, first in the row: secondary small text. */
+  .retrieval-level {
+    color: var(--fg3);
+  }
   .retrieval-source .ui-button {
     height: var(--control-inline-height, 26px);
     padding-inline: var(--space-2);

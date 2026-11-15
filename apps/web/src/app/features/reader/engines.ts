@@ -1,4 +1,5 @@
 import {
+  type TextLevel,
   parsePageRegion,
   type DocumentMaterialRef,
   type DocumentReadingRef,
@@ -63,6 +64,8 @@ export interface ViewUi {
   issue: ReaderIssue | null;
   /** The material has nothing to read (spec 3.9): no text, or no PDF. */
   empty: "text" | "pdf" | null;
+  /** The level of the full text shown (reading-experience 3.4); null until read. */
+  textLevel: TextLevel | null;
   ready: boolean;
   resources: readonly ReaderResourceEntry[];
   /** Which paper and view this is; null when nothing shows. */
@@ -126,6 +129,7 @@ export const emptyUi = (): ViewUi => ({
   nextMatch: null,
   issue: null,
   empty: null,
+  textLevel: null,
   ready: false,
   resources: [],
   shown: null,
@@ -167,6 +171,12 @@ export interface ReaderBindings {
   openMark(id: string): void;
   image(src: string, alt: string): void;
   documentLink(preview: DocumentLinkPreview): void;
+  /** A draft segment's “疑点” pressed (reading-experience 2.5). */
+  doubt(target: {
+    anchor: HTMLElement;
+    segmentId: string;
+    documentVersionId: string;
+  }): void;
   openPaper(id: string, mode: ReaderMode, source: Record<string, string>): void;
   notify(message: string): void;
   retry(): void;
@@ -588,9 +598,16 @@ function build(
     };
     const frame: ReaderFrame = {
       onLoadStep: (at, count) => step(at, count),
-      onSegment: (segment) => {
+      onSegment: (segment, page) => {
         const pdfMaterial = material.material;
         if (!pdfMaterial) return;
+        // A draft gives its page: there is no proofread leaf to look up.
+        if (page !== undefined)
+          return b.openPaper(id, "pdf", {
+            asset: pdfMaterial.asset_id,
+            assetHash: pdfMaterial.asset_sha256,
+            page: String(page),
+          });
         void leafPage(api, pdfMaterial.asset_id, segment, controller.signal)
           .then((page) =>
             b.openPaper(id, "edit", {
@@ -624,6 +641,14 @@ function build(
       },
       onImage: (src, alt) => {
         if (shows(view)) b.image(src, alt);
+      },
+      onDoubt: (anchor, segmentId) => {
+        if (shows(view) && material.document)
+          b.doubt({
+            anchor,
+            segmentId,
+            documentVersionId: material.document.document_version_id,
+          });
       },
       onDocumentLink: (preview) => {
         if (!controller.signal.aborted && shows(view)) b.documentLink(preview);
@@ -704,6 +729,9 @@ function build(
       },
       onEmpty: (what) => {
         if (!controller.signal.aborted) update(view, { empty: what });
+      },
+      onTextLevel: (level) => {
+        if (!controller.signal.aborted) update(view, { textLevel: level });
       },
     };
     view.frame = frame;

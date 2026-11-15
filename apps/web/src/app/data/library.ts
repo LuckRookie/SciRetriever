@@ -24,7 +24,11 @@ export const SORT_LABELS: Record<LibrarySort, string> = {
   "citing-results-desc": "被结果引用：多到少",
   "unfound-citations-desc": "找不到的引用：多到少",
 };
-/** Sorts offered in the library menu; the draft-fact sorts join in plan 21 block 10.6. */
+/**
+ * Sorts offered in the library menu (page specs “文献库”). The two sorts by
+ * what processing found in drafts stay out while it does not read drafts:
+ * they are 0 for every paper until then.
+ */
 export const LIBRARY_MENU_SORTS: readonly LibrarySort[] = [
   "intake-desc",
   "opened-desc",
@@ -33,6 +37,8 @@ export const LIBRARY_MENU_SORTS: readonly LibrarySort[] = [
   "title-asc",
   "title-desc",
   "relevance",
+  "draft-differences-desc",
+  "image-only-pages-desc",
 ];
 export async function searchLibrary(
   api: ApiClient,

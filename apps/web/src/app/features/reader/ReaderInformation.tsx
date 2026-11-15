@@ -17,6 +17,7 @@ import {
   parseReferenceDetail,
   type DocumentReadingRef,
   type LiteratureDetail,
+  type TextLevel,
 } from "@sciretriever/contracts";
 import {
   Button,
@@ -214,7 +215,11 @@ export function ReaderInformation({
   const reading = useQuery({
     queryKey: ["document", "reading-status", assetId],
     queryFn: ({ signal }) => readReadingStatus(api, assetId!, signal),
-    enabled: !!assetId && detail.literature.status === "READY",
+    // A proofread text's account; a draft has none (technical 04 §8.10).
+    enabled:
+      !!assetId &&
+      (detail.literature.status === "READY" ||
+        detail.text_level === "proofread"),
     retry: false,
   });
   const id = detail.literature.literature_id,
@@ -226,6 +231,20 @@ export function ReaderInformation({
   // Archiving parses first when needed (Owner 2026-10-30): one next step.
   const next = detail.literature.status === "ASSET_READY" ? "archive" : null,
     unparsed = next && detail.missing_step === "raw-parse";
+  // The parts with a default text: the main text, then each supplement.
+  const supplements = detail.additional_assets.filter(
+    (part) => part.default_text !== undefined,
+  );
+  const levels: [string, TextLevel][] = [
+    ...(detail.text_level
+      ? [["全文", detail.text_level] as [string, TextLevel]]
+      : []),
+    ...supplements.flatMap((part, index): [string, TextLevel][] =>
+      part.default_text
+        ? [[`补充材料 ${index + 1}`, part.default_text.text_level]]
+        : [],
+    ),
+  ];
   const identity = detail.primary_pdf
     ? (detail.primary_pdf.article_identity_status ?? "unverified")
     : null;
@@ -653,6 +672,17 @@ export function ReaderInformation({
                 未逐页校订，文字可能含解析错误；以 PDF 为准
               </p>
             ) : null}
+            {/* Reading-experience 1.4, 3.4: each part's default text, by level. */}
+            {levels.map(([part, level]) => (
+              <p key={part} className="ui-description reader-text-level">
+                {part}：{level === "draft" ? "初稿" : "校订稿"}
+              </p>
+            ))}
+            {levels.some(([, level]) => level === "draft") ? (
+              <p className="ui-description">
+                初稿不接受改字，建档后在校订稿上修改
+              </p>
+            ) : null}
           </Step>
         </ul>
         {reading.data ? (
@@ -685,7 +715,10 @@ export function ReaderInformation({
         {next && maintenance ? (
           <div className="reader-next-step">
             <p>
-              建档后可以读全文、翻译和运行算子。
+              {/* Reading-experience 3.4: what archiving adds to a draft. */}
+              {detail.text_level === "draft"
+                ? "已有初稿，可以阅读和翻译；建档后得到校订稿，可以改字和运行算子。"
+                : "建档后可以读全文、翻译和运行算子。"}
               {unparsed
                 ? "会先用 MinerU 解析版面，再调用模型校订全文、补全元数据。"
                 : "会调用模型校订全文、补全元数据。"}

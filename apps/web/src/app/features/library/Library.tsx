@@ -22,6 +22,7 @@ import {
   parseLibrarySearchRequest,
   type LibraryQuery,
   type LibrarySort,
+  type TextLevel,
   type LiteratureSearchItem,
 } from "@sciretriever/contracts";
 import {
@@ -129,6 +130,23 @@ function loadViews(key: string): SavedView[] {
     return [];
   }
 }
+/** Text levels in words (page specs “文献库”, reading-experience 3.4). */
+export const TEXT_LEVEL_LABELS = {
+  draft: "初稿",
+  proofread: "校订稿",
+} as const satisfies Record<TextLevel, string>;
+/**
+ * The draft mark on a row; sorted by a draft fact, followed by its count
+ * (page specs “文献库”): “初稿 · 差异 12 段”, “初稿 · 扫描 3 页”.
+ */
+function draftNote(item: LiteratureSearchItem, sort: LibrarySort) {
+  const facts = item.draft_facts;
+  if (facts && sort === "draft-differences-desc")
+    return `初稿 · 差异 ${facts.differs_segments} 段`;
+  if (facts && sort === "image-only-pages-desc")
+    return `初稿 · 扫描 ${facts.image_only_pages} 页`;
+  return "初稿";
+}
 export default function Library() {
   const api = useApi(),
     shell = useShell(),
@@ -162,13 +180,18 @@ export default function Library() {
       article_kinds: "文章性质",
       tags: "标签",
       needs_manual_pdf: "无法获取",
+      text_levels: "文本等级",
+      has_draft_differences: "初稿与文字层有差异",
+      has_image_only_pages: "含扫描页",
     };
     // Folder and "recently read" are the page's scope, shown in its title.
     if (
       key === "folder" ||
       key === "recently_opened" ||
       value === null ||
-      value === false ||
+      (value === false &&
+        key !== "has_draft_differences" &&
+        key !== "has_image_only_pages") ||
       (Array.isArray(value) && !value.length)
     )
       return [];
@@ -186,9 +209,18 @@ export default function Library() {
               ? route.query.statuses
                   .map((status) => statusLabels[status])
                   .join("、")
-              : Array.isArray(value)
-                ? value.join("、")
-                : String(value);
+              : key === "text_levels"
+                ? (route.query.text_levels ?? [])
+                    .map((level) => TEXT_LEVEL_LABELS[level])
+                    .join("、")
+                : key === "has_draft_differences" ||
+                    key === "has_image_only_pages"
+                  ? value
+                    ? "有"
+                    : "没有"
+                  : Array.isArray(value)
+                    ? value.join("、")
+                    : String(value);
     return [
       {
         key,
@@ -602,6 +634,21 @@ export default function Library() {
                 });
               },
             },
+            // The current results go to archiving as a fixed scope, as the
+            // selection does (page specs “文献库”).
+            ...(api.workspace.capabilities.maintenance
+              ? [
+                  {
+                    id: "archive",
+                    label: "建档…",
+                    disabled: total === 0,
+                    onAction: () => {
+                      setMobileTools(false);
+                      void operate("archive", false);
+                    },
+                  },
+                ]
+              : []),
             {
               id: "snapshot",
               label: "生成快照",
@@ -841,6 +888,7 @@ export default function Library() {
         )}
         <LibraryList
           items={items}
+          sort={route.sort}
           selected={shell.selected}
           mutable={mutable}
           scrollKey={scrollKey}
@@ -1122,6 +1170,7 @@ const STATUS_FILTERS = [
 /** Scroll-range updates belong to the list, not the page's forms and motion layout. */
 const LibraryList = memo(function LibraryList({
   items,
+  sort,
   selected,
   mutable,
   scrollKey,
@@ -1147,6 +1196,7 @@ const LibraryList = memo(function LibraryList({
   onDragRow,
 }: {
   items: readonly LiteratureSearchItem[];
+  sort: LibrarySort;
   selected: ReadonlySet<string>;
   mutable: boolean;
   scrollKey: string;
@@ -1294,6 +1344,7 @@ const LibraryList = memo(function LibraryList({
             row={row}
             offset={scrollMargin}
             item={items[row.index]!}
+            sort={sort}
             selected={selected.has(items[row.index]!.literature.literature_id)}
             mutable={mutable}
             measure={virtual.measureElement}
@@ -1349,6 +1400,7 @@ const LibraryRow = memo(function LibraryRow({
   row,
   offset,
   item,
+  sort,
   selected,
   mutable,
   measure,
@@ -1367,6 +1419,7 @@ const LibraryRow = memo(function LibraryRow({
   row: VirtualItem;
   offset: number;
   item: LiteratureSearchItem;
+  sort: LibrarySort;
   selected: boolean;
   mutable: boolean;
   measure: (element: HTMLElement | null) => void;
@@ -1485,45 +1538,60 @@ const LibraryRow = memo(function LibraryRow({
         // Almost the whole catalog is metadata-only; only departures get a tag.
         <span />
       ) : (
-        <span
-          className="paper-status"
-          data-state={
-            item.needs_manual_pdf ? "UNAVAILABLE" : item.literature.status
-          }
-        >
-          {item.needs_manual_pdf
-            ? "无法获取"
-            : statusLabels[item.literature.status]}
-          {item.literature.status === "ASSET_READY" ? (
-            <small>待建档</small>
-          ) : null}
+        <span className="paper-status-cell">
+          <span
+            className="paper-status"
+            data-state={
+              item.needs_manual_pdf ? "UNAVAILABLE" : item.literature.status
+            }
+          >
+            {item.needs_manual_pdf
+              ? "无法获取"
+              : statusLabels[item.literature.status]}
+            {item.literature.status === "ASSET_READY" ? (
+              <small>待建档</small>
+            ) : null}
+            {item.literature.status === "ARCHIVING" ? (
+              <small>
+                {item.missing_step
+                  ? archiveReason(item.missing_step)
+                  : "正在执行"}
+              </small>
+            ) : null}
+            {item.literature.status === "EXCLUDED" ? (
+              <small>
+                {item.literature.metadata.article_kind
+                  ? ARTICLE_KIND_LABELS[item.literature.metadata.article_kind]
+                  : "待改判"}
+              </small>
+            ) : null}
+            {item.literature.status === "ARCHIVE_FAILED" ? (
+              <Button
+                variant="text"
+                size="compact"
+                onPress={() => navigate({ view: "archive", literature: null })}
+              >
+                查看问题
+              </Button>
+            ) : null}
+          </span>
+          {/* Page specs “文献库”: under the status, in small text — a long
+            document, or a primary PDF whose default text is a draft. */}
           {item.literature.status === "READY" && item.long_document ? (
-            <small title="按简化流程建档，未逐页校订；以 PDF 为准">
+            <small
+              className="paper-status-note"
+              title="按简化流程建档，未逐页校订；以 PDF 为准"
+            >
               长文档
             </small>
           ) : null}
-          {item.literature.status === "ARCHIVING" ? (
-            <small>
-              {item.missing_step
-                ? archiveReason(item.missing_step)
-                : "正在执行"}
-            </small>
-          ) : null}
-          {item.literature.status === "EXCLUDED" ? (
-            <small>
-              {item.literature.metadata.article_kind
-                ? ARTICLE_KIND_LABELS[item.literature.metadata.article_kind]
-                : "待改判"}
-            </small>
-          ) : null}
-          {item.literature.status === "ARCHIVE_FAILED" ? (
-            <Button
-              variant="text"
-              size="compact"
-              onPress={() => navigate({ view: "archive", literature: null })}
+          {item.text_level === "draft" ? (
+            <small
+              className="paper-status-note"
+              title="未经校订，文字可能含解析错误；以 PDF 为准"
             >
-              查看问题
-            </Button>
+              {draftNote(item, sort)}
+            </small>
           ) : null}
         </span>
       )}
@@ -1573,6 +1641,14 @@ const LibraryRow = memo(function LibraryRow({
   );
 });
 
+/** A yes/no filter that may be left open: 不限, 有, 没有. */
+const FLAG_OPTIONS = [
+  { value: "", label: "不限" },
+  { value: "yes", label: "有" },
+  { value: "no", label: "没有" },
+];
+const flag = (value: boolean | null | undefined) =>
+  value === true ? "yes" : value === false ? "no" : "";
 function Filters({
   query,
   onApply,
@@ -1591,6 +1667,11 @@ function Filters({
     [form, setForm] = useState(query.publication_forms[0] ?? ""),
     [kind, setKind] = useState(query.article_kinds[0] ?? ""),
     [tag, setTag] = useState(query.tags?.ids[0] ?? ""),
+    [level, setLevel] = useState(
+      query.text_levels?.length === 1 ? query.text_levels[0]! : "",
+    ),
+    [differs, setDiffers] = useState(flag(query.has_draft_differences)),
+    [scanned, setScanned] = useState(flag(query.has_image_only_pages)),
     [tagMode, setTagMode] = useState(query.tags?.mode ?? "any"),
     [error, setError] = useState("");
   const api = useApi();
@@ -1623,6 +1704,9 @@ function Filters({
                 venue: venue || null,
                 keywords: keyword ? [keyword] : [],
                 identifiers: doi ? [{ namespace: "doi", value: doi }] : [],
+                text_levels: level ? [level] : [],
+                has_draft_differences: differs ? differs === "yes" : null,
+                has_image_only_pages: scanned ? scanned === "yes" : null,
               },
             }).query,
           );
@@ -1687,6 +1771,29 @@ function Filters({
               }))
             : []),
         ]}
+      />
+      {/* Page specs “文献库”: the primary PDF's default text. */}
+      <Select
+        label="文本等级"
+        value={level}
+        onChange={(value) => setLevel(value as TextLevel | "")}
+        options={[
+          { value: "", label: "全部" },
+          { value: "draft", label: TEXT_LEVEL_LABELS.draft },
+          { value: "proofread", label: TEXT_LEVEL_LABELS.proofread },
+        ]}
+      />
+      <Select
+        label="初稿与文字层有差异"
+        value={differs}
+        onChange={setDiffers}
+        options={FLAG_OPTIONS}
+      />
+      <Select
+        label="含扫描页"
+        value={scanned}
+        onChange={setScanned}
+        options={FLAG_OPTIONS}
       />
       <Select
         label="标签范围"

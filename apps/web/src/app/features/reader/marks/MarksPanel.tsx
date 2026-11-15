@@ -4,6 +4,7 @@ import {
   MARK_COLOR_LABELS,
   type MarkColor,
   type ReadingMark,
+  type TextLevel,
 } from "@sciretriever/contracts";
 import {
   Button,
@@ -47,6 +48,7 @@ function NoteText({ text }: { text: string }) {
  */
 export function MarksPanel({
   marks,
+  levels,
   view,
   hot,
   active,
@@ -61,6 +63,8 @@ export function MarksPanel({
   onExport,
 }: {
   marks: readonly ReadingMark[];
+  /** The text level of each document version a mark is anchored to. */
+  levels: ReadonlyMap<string, TextLevel>;
   view: "pdf" | "doc";
   hot: string | null;
   active: string | null;
@@ -196,6 +200,15 @@ export function MarksPanel({
                             ? "笔记"
                             : "高亮"}
                       </span>
+                      {m.document &&
+                      levels.has(m.document.document_version_id) ? (
+                        <span className="mark-card-level">
+                          {levels.get(m.document.document_version_id) ===
+                          "draft"
+                            ? "初稿上"
+                            : "校订稿上"}
+                        </span>
+                      ) : null}
                       {where ? (
                         <span className="mark-card-where">{where}</span>
                       ) : null}

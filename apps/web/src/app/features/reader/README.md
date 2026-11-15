@@ -1,6 +1,6 @@
 # 阅读界面
 
-这里拥有阅读页顶栏里的阅读控件（视图、查找、排版、侧栏、“更多”，经外壳给出的插槽放进顶栏；导航按钮与标签页属外壳）、纸页的页眉（`ReaderPageHeader.tsx`）、纸页上的加载骨架（`ReaderPreparing.tsx`）、案头几何、PDF 页列与顶栏收起（`geometry.ts`）、专注模式（状态在外壳，顶栏由外壳收起）、可收起的信息栏、总结分组和证据预览。`Reader.tsx` 根据既有 URL、固定材料与文档来源创建生命周期；`ReaderInformation.tsx` 呈现书目摘要、来源、已保存引用与处理入口；`SummaryView.tsx` 验证并展示当前单篇算子结果，以短证据编号打开原文。
+这里拥有阅读页顶栏里的阅读控件（视图、查找、排版、侧栏、“更多”，经外壳给出的插槽放进顶栏；导航按钮与标签页属外壳）、纸页的页眉（`ReaderPageHeader.tsx`）、纸页上的加载骨架（`ReaderPreparing.tsx`）、案头几何、PDF 页列与顶栏收起（`geometry.ts`）、专注模式（状态在外壳，顶栏由外壳收起）、初稿的疑点浮层（`DraftDoubt.tsx`，读取已保存的 `draft-differences`）、可收起的信息栏、总结分组和证据预览。`Reader.tsx` 根据既有 URL、固定材料与文档来源创建生命周期；`ReaderInformation.tsx` 呈现书目摘要、来源、已保存引用与处理入口；`SummaryView.tsx` 验证并展示当前单篇算子结果，以短证据编号打开原文。
 
 PDF.js、连续 Markdown/KaTeX 与字节校验保留在 [reading](../../../reading/README.md) 的框架无关引擎中。React 通过 `ReaderFrame` 接收页码、目录、查找、可重试错误与图片/文内链接预览，不接管已稳定渲染的正文节点。切换材料会取消旧请求并释放 worker、canvas 和对象 URL。阅读位置按库、文献、模式及不可变材料隔离；关闭标签释放会话状态。
 

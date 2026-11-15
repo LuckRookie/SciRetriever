@@ -45,6 +45,8 @@ export interface DesignSampleIds {
   agent: string;
   /** Reader samples: a long document, a 100-page PDF without text, a bibliography only. */
   longDocument: string;
+  /** Parsed, not archived: its default text is a draft (plan 21). */
+  draft: string;
   pdfOnly: string;
   metadataOnly: string;
 }
@@ -262,15 +264,36 @@ export async function seedDesignSamples(options: { homeParent?: string } = {}) {
       }
       if (n >= 29 && n <= 31)
         await app.database.setAutomaticPdfExhaustion(papers[n]!);
-      if (n <= 16 || n === LONG_DOCUMENT) {
+      if (n <= 16 || n === LONG_DOCUMENT || n === 18 || n === 19) {
         e.setText(
           n === LONG_DOCUMENT ? longReadingText() : text(n >= 15 ? 15 : n),
         );
-        await app.documentProcessing.parseDocuments({
-          ...requests.get(papers[n]!)!,
-          profiles: ["vlm-engine"],
-          force: false,
-        });
+        // Parsed as a processing task, a paper gets its draft (plan 21):
+        // samples 18 and 19 stay unarchived and read it.
+        if (n === 18 || n === 19) {
+          const job = await app.processingTasks!.submit({
+            schema_version: 1,
+            idempotency_key: `design-draft-${n}`,
+            operations: [
+              {
+                operation: "parse-documents",
+                request: {
+                  ...requests.get(papers[n]!)!,
+                  profiles: ["vlm-engine"],
+                  force: false,
+                },
+              },
+            ],
+          });
+          await app.processingTasks!.run(job.job_id);
+          if ((await app.library.detail(papers[n]!)).text_level !== "draft")
+            throw new Error(`Sample ${n} did not get its draft`);
+        } else
+          await app.documentProcessing.parseDocuments({
+            ...requests.get(papers[n]!)!,
+            profiles: ["vlm-engine"],
+            force: false,
+          });
       }
       // Full text is readable once archived; the long document is archived too.
       if (n <= 10 || n === LONG_DOCUMENT) {
@@ -674,6 +697,7 @@ export async function seedDesignSamples(options: { homeParent?: string } = {}) {
         resultHash: String(record.content_sha256),
         agent: agent.session_id,
         longDocument: papers[LONG_DOCUMENT]!,
+        draft: papers[18]!,
         pdfOnly: papers[PDF_ONLY]!,
         metadataOnly: papers[METADATA_ONLY]!,
       } satisfies DesignSampleIds,

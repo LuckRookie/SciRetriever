@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import type { DesignSampleIds } from "./design-samples-fixture.js";
+import { doubtfulDraft, doubtfulFacts } from "./draft-doubts.js";
 
 export interface DesignSamplePage {
   id: string;
@@ -160,6 +161,33 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     route: route("lib"),
     interaction: "展开筛选",
     prepare: async (p) => {
+      await p.locator(".paper-row").first().waitFor();
+      if (
+        await p
+          .getByRole("button", { name: "更多操作", exact: true })
+          .isVisible()
+      )
+        await p.getByRole("button", { name: "更多操作", exact: true }).click();
+      await p
+        .getByRole("button", { name: /^筛选/ })
+        .filter({ visible: true })
+        .click();
+      await p.getByRole("menuitem", { name: "筛选条件…", exact: true }).click();
+    },
+    ready: ".library-filters",
+  },
+  {
+    id: "library-drafts",
+    name: "文献库 · 初稿行与新筛选",
+    // Plan 21: draft papers, sorted by their differences, the filters open.
+    route: () =>
+      `/?view=lib&query=${encodeURIComponent(JSON.stringify({ text_levels: ["draft"] }))}&sort=draft-differences-desc`,
+    interaction: "按文本等级“初稿”筛选、按初稿差异排序，展开筛选",
+    // The sample's drafts agree with their text layers; the first is given
+    // the same simulated doubt as “reader-draft”, so the two pages agree.
+    prepare: async (p, ids) => {
+      await doubtfulFacts(p, ids.draft);
+      await p.reload();
       await p.locator(".paper-row").first().waitFor();
       if (
         await p
@@ -390,6 +418,35 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     ready: '.react-reader[data-reading-ready="true"]',
   },
   {
+    id: "reader-draft",
+    name: "阅读 · 初稿（核对依据与差异浮层）",
+    route: (ids) => `/?literature=${ids.draft}&reader=doc`,
+    // The sample's page layer agrees with its parse: the doubts come from
+    // served replies made doubtful, as in the reader's tests.
+    interaction: "显示核对依据，点开第一个“疑点”",
+    prepare: async (p) => {
+      await doubtfulDraft(p);
+      await p.reload();
+      await p.locator('.react-reader[data-reading-ready="true"]').waitFor();
+      const type = p.getByRole("button", { name: "排版", exact: true });
+      if (await type.isVisible()) await type.click();
+      else {
+        await p.getByRole("button", { name: "更多", exact: true }).click();
+        await p.getByRole("menuitem", { name: "排版", exact: true }).click();
+      }
+      await p
+        .getByRole("menuitem", { name: "显示核对依据", exact: true })
+        .click();
+      await p.locator(".ui-menu").waitFor({ state: "detached" });
+      // The popover closes when the text scrolls: bring the mark in first.
+      const doubt = p.locator("button.reading-doubt").first();
+      await doubt.scrollIntoViewIfNeeded();
+      await p.waitForTimeout(400);
+      await doubt.click();
+    },
+    ready: ".reader-doubt strong",
+  },
+  {
     id: "reader-long",
     name: "阅读 · 长文档（分批载入）",
     route: (ids) => `/?literature=${ids.longDocument}&reader=doc`,
@@ -569,6 +626,27 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     name: "全文检索 · 算子结果",
     route: route("ask", "&results=all"),
     ready: ".result-pagination",
+  },
+  {
+    id: "retrieval-text",
+    name: "全文检索 · 全文命中",
+    route: route("ask"),
+    // Page specs “全文检索”: each text hit names its version's level.
+    interaction: "检索“spectroscopy”",
+    prepare: async (p) => {
+      const box = p.locator('input[placeholder="输入要查找的问题或关键词"]');
+      await box.fill("spectroscopy");
+      // Search once the sample's index is current (its status line gone).
+      await p
+        .getByTestId("retrieval-index")
+        .waitFor({ state: "hidden", timeout: 15_000 })
+        .catch(() => undefined);
+      await p
+        .getByRole("main")
+        .getByRole("button", { name: "检索", exact: true })
+        .click();
+    },
+    ready: '[data-testid="retrieval-level"]',
   },
   {
     id: "insights",

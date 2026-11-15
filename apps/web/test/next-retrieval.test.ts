@@ -238,6 +238,13 @@ it("searches source and knowledge in all three modes, paginates, and explains Ch
     expect(
       await w.page.locator('[data-testid="retrieval-kind"]').allTextContents(),
     ).toEqual(expect.arrayContaining(["原文", "知识"]));
+    // Page specs “全文检索”: each text hit first names its version's level.
+    const kinds = await w.page
+      .locator('[data-testid="retrieval-kind"]')
+      .allTextContents();
+    expect(
+      await w.page.locator('[data-testid="retrieval-level"]').allTextContents(),
+    ).toEqual(kinds.filter((kind) => kind === "原文").map(() => "校订稿"));
     await search(w.page, "nanocrystal", "source");
     expect(w.requests.at(-1)?.kinds).toEqual(["metadata", "document"]);
     expect(

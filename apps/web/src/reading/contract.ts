@@ -101,7 +101,10 @@ export interface ReaderFrame {
     id: LoadStep["id"],
     count?: { done: number; total: number },
   ) => void;
-  onSegment?: (id: string) => void;
+  /** A block's source: its PDF page, given for a draft (no proofread leaf to look up). */
+  onSegment?: (id: string, page?: number) => void;
+  /** “疑点” of a draft segment pressed: its differences (reading-experience 2.5). */
+  onDoubt?: (anchor: HTMLElement, segmentId: string) => void;
   pdfLocation?: {
     page: number;
     region: import("@sciretriever/contracts").PageRegion | null;
@@ -145,6 +148,8 @@ export interface ReaderFrame {
   onAnchor?: () => void;
   /** A one-line explanation under the page header (spec 1.2), or null to clear it. */
   onNote?: (text: string | null) => void;
+  /** The level of the text being read (reading-experience 3.4). */
+  onTextLevel?: (level: import("@sciretriever/contracts").TextLevel) => void;
   /** The material has nothing to read: spec 3.9 says so on the sheet. */
   onEmpty?: (what: "text" | "pdf") => void;
   /** The remembered full-text place belongs to another text version (spec 4.5). */

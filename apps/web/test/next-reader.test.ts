@@ -15,6 +15,7 @@ import {
   readerType,
 } from "./reader-controls.js";
 import { missingId } from "./processor-workspace-fixture.js";
+import { doubtfulDraft, draftPdf, formDraft } from "./draft-fixture.js";
 import { expect, it } from "vitest";
 
 import {
@@ -767,6 +768,127 @@ it("does not let a late PDF response overwrite a newer full-text view", async ()
     expect(w.errors).toEqual([]);
   } finally {
     release?.();
+    await w.close();
+  }
+}, 90000);
+
+it("reads a draft as the default text: its level, its note, no editing, its doubts and their differences, and starts no processing (plan 21 block 10)", async () => {
+  const w = await nextWorkspace({ ready: "body", setup: draftPdf });
+  try {
+    await w.page.setViewportSize({ width: 1440, height: 900 });
+    const draft = await formDraft(w);
+    const doubtful = await doubtfulDraft(w.page);
+    const before = {
+      parses: w.env.parseCalls,
+      models: w.env.modelCalls,
+      jobs: (await w.env.app.jobs!.listJobs(50)).length,
+    };
+    // A mark made on the draft says so in the marks list (technical 09 §9.2).
+    const segments = await w.env.app.documentRead.segments({
+      document_version_id: draft,
+      section_id: null,
+      limit: 100,
+      cursor: null,
+    });
+    const first = segments.segments.find((s) => s.kind === "text")!;
+    await w.env.app.marks.manage({
+      operation: "create",
+      request: {
+        literature_id: missingId,
+        kind: "highlight",
+        color: "blue",
+        quote: "Page 1: reported results and evidence.",
+        document: {
+          document_version_id: draft,
+          start_utf8: first.start_utf8,
+          end_utf8: first.end_utf8,
+        },
+      },
+    });
+    await w.page.goto(`${w.origin}/?literature=${missingId}&reader=doc`);
+    await w.page.locator('.react-reader[data-reading-ready="true"]').waitFor();
+    const shown = ".reader-engine:not([hidden]) .reader-view:not([hidden])";
+    // The page header names the level; the note above the text is the spec's sentence.
+    await expect
+      .poll(() =>
+        w.page.locator(`${shown} .reader-page-header-view`).innerText(),
+      )
+      .toBe("原文 · 初稿");
+    expect(
+      await w.page.locator(`${shown} .reading-long-document`).innerText(),
+    ).toBe("初稿：未经校订，文字可能含解析错误；以 PDF 为准");
+    // The information panel: each part's level, and why there is no editing.
+    const information = w.page.locator(".reader-information");
+    await expect.poll(() => information.innerText()).toContain("全文：初稿");
+    expect(await information.innerText()).toContain(
+      "初稿不接受改字，建档后在校订稿上修改",
+    );
+    await w.page.getByRole("button", { name: "更多", exact: true }).click();
+    expect(
+      await w.page
+        .getByRole("menuitem", { name: "编辑校订稿", exact: true })
+        .count(),
+    ).toBe(0);
+    await w.page.keyboard.press("Escape");
+    // The marks list says on which level each mark was made.
+    await w.page.getByRole("tab", { name: /^批注/ }).click();
+    await expect
+      .poll(() => w.page.locator(".mark-card-level").allInnerTexts())
+      .toEqual(["初稿上"]);
+    await w.page.getByRole("tab", { name: "信息", exact: true }).click();
+    // “显示核对依据”: the draft's three values, and the doubts in the left margin.
+    await readerType(w.page, "显示核对依据");
+    expect(doubtful.size).toBe(2);
+    const sources = await w.page
+      .locator(`${shown} .reading-block-source`)
+      .allInnerTexts();
+    expect(sources).toEqual(
+      expect.arrayContaining([
+        "与文字层一致",
+        "与文字层有差异",
+        "没有文字层可以核对",
+      ]),
+    );
+    expect(
+      await w.page.locator(`${shown} .reading-doubt`).allInnerTexts(),
+    ).toEqual(["疑点", "无文字层"]);
+    // “疑点” opens the saved differences: text layer over draft, or another page.
+    await w.page
+      .locator(`${shown} .reading-doubt`)
+      .getByText("疑点", { exact: true })
+      .click();
+    const popover = w.page.locator(".reader-doubt");
+    await expect.poll(() => popover.innerText()).toContain("疑点 · 2 处差异");
+    const text = await popover.innerText();
+    expect(text).toContain("文字层：findings");
+    expect(text).toContain("初稿：results");
+    expect(text).toContain("这段文字在本页的文字层里找不到，出现在第 3 页。");
+    await w.page.keyboard.press("Escape");
+    // Reading forms, parses and runs nothing.
+    expect(w.env.parseCalls).toBe(before.parses);
+    expect(w.env.modelCalls).toBe(before.models);
+    expect((await w.env.app.jobs!.listJobs(50)).length).toBe(before.jobs);
+    // An archived paper reads its proofread text: no note, and it can be edited.
+    await w.page.unrouteAll({ behavior: "wait" });
+    await w.page.goto(
+      `${w.origin}/?literature=${w.env.parseRequest.literature_id}&reader=doc`,
+    );
+    await expect
+      .poll(
+        () => w.page.locator(`${shown} .reader-page-header-view`).innerText(),
+        { timeout: 20_000 },
+      )
+      .toBe("原文 · 校订稿");
+    expect(
+      await w.page.locator(`${shown} .reading-long-document`).count(),
+    ).toBe(0);
+    await w.page.getByRole("button", { name: "更多", exact: true }).click();
+    await w.page
+      .getByRole("menuitem", { name: "编辑校订稿", exact: true })
+      .waitFor();
+    await w.page.keyboard.press("Escape");
+    expect(w.errors).toEqual([]);
+  } finally {
     await w.close();
   }
 }, 90000);

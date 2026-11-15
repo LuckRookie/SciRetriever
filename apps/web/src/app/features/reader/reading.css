@@ -1575,3 +1575,72 @@
     padding-inline-start: var(--sheet-margin-left);
   }
 }
+
+/* Reading-experience 2.5: doubts of a draft, in the left margin while
+   “显示核对依据” is on — a 1 px --fg3 dashed rule beside the segment and
+   “疑点” (it opens the differences) or “无文字层”. */
+@layer pages {
+  .react-reader .reading-doubt {
+    display: none;
+  }
+  .react-reader .reading-show-sources section[data-basis] {
+    position: relative;
+  }
+  .react-reader .reading-show-sources .reading-doubt {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: calc(100% + 14px);
+    display: block;
+    width: max-content;
+    margin: 0;
+    padding: 0 var(--space-2) 0 0;
+    border: 0;
+    border-right: 1px dashed var(--fg3);
+    background: none;
+    color: var(--fg3);
+    font: 400 var(--text-caption) / 1.5 var(--sans);
+    text-align: right;
+  }
+  .react-reader .reading-show-sources button.reading-doubt {
+    cursor: pointer;
+  }
+  .react-reader .reading-show-sources button.reading-doubt:hover {
+    color: var(--fg2);
+  }
+  /* Below 96 px of margin the mark stays, its word does not (spec 1.1). */
+  .react-reader
+    :is([data-sheet="narrow"], [data-sheet="full"])
+    .reading-show-sources
+    .reading-doubt,
+  .react-reader
+    .reading-show-sources:is([data-sheet="narrow"], [data-sheet="full"])
+    .reading-doubt {
+    width: 8px;
+    overflow: hidden;
+    color: transparent;
+  }
+  .reader-doubt {
+    display: grid;
+    gap: var(--space-2);
+    max-width: 360px;
+    font-size: var(--text-secondary);
+  }
+  .reader-doubt-pair {
+    display: grid;
+    gap: var(--space-1);
+  }
+  .reader-doubt-label {
+    color: var(--fg2);
+  }
+  .reader-doubt p {
+    overflow-wrap: anywhere;
+  }
+  .reader-doubt p {
+    margin: 0;
+  }
+  .reader-doubt-text {
+    text-decoration: underline 1px var(--reader-check-fail);
+    text-underline-offset: 3px;
+  }
+}

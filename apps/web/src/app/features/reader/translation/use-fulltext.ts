@@ -22,7 +22,8 @@ function message(error: unknown): string {
   if (failure) return failure;
   if (error instanceof ApiError) {
     if (error.code === "translation-not-archived")
-      return "这篇文献还没有建档，建档后才能翻译全文。";
+      // Technical 04 §8.10: a draft is translated too; this means no default text.
+      return "这份资料还没有可读的文本，无法翻译全文。";
     if (error.code === "translation-model-unavailable")
       return "所选模型不可用：在翻译页换一个模型，或登记模型后重启服务。";
     if (error.code === "translation-unavailable")

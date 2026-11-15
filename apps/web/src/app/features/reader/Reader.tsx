@@ -77,6 +77,7 @@ import { useReaderTranslation } from "./translation/use-translation.js";
 import { type FullTextLayer } from "./translation/fulltext-layer.js";
 import { FullTextControls } from "./translation/FullTextControls.js";
 import { ReaderOutline } from "./ReaderOutline.js";
+import { DraftDoubt } from "./DraftDoubt.js";
 import {
   createReaderEngines,
   duration,
@@ -145,6 +146,7 @@ export default function Reader() {
     [nextMatch, setNextMatch] = useState<(() => void) | null>(null),
     [issue, setIssue] = useState<ReaderIssue | null>(null),
     [empty, setEmpty] = useState<ViewUi["empty"]>(null),
+    [textLevel, setTextLevel] = useState<ViewUi["textLevel"]>(null),
     [ready, setReady] = useState(false),
     [operation, setOperation] = useState<string | null>(null),
     [runner, setRunner] = useState(false),
@@ -155,6 +157,13 @@ export default function Reader() {
     null,
   );
   const linkAnchor = useRef<Element | null>(null);
+  // Reading-experience 2.5: the draft segment whose differences show.
+  const [doubt, setDoubt] = useState<{
+    anchor: HTMLElement;
+    segmentId: string;
+    documentVersionId: string;
+  } | null>(null);
+  const doubtAnchor = useRef<Element | null>(null);
   const [resources, setResources] = useState<readonly ReaderResourceEntry[]>(
     [],
   );
@@ -260,6 +269,7 @@ export default function Reader() {
   wantsPdf.current = (chosen || !!picked) && viewOf(mode) === "pdf";
   useLayoutEffect(() => {
     setDocumentLink(null);
+    setDoubt(null);
     setZoomImage(null);
     setResources([]);
   }, [id, mode, sourceKey]);
@@ -381,6 +391,7 @@ export default function Reader() {
         nextMatch: (value) => setNextMatch(() => value),
         issue: setIssue,
         empty: setEmpty,
+        textLevel: setTextLevel,
         ready: setReady,
         resources: setResources,
         shown: setShown,
@@ -399,6 +410,10 @@ export default function Reader() {
       documentLink: (preview) => {
         linkAnchor.current = preview.anchor;
         setDocumentLink(preview);
+      },
+      doubt: (target) => {
+        doubtAnchor.current = target.anchor;
+        setDoubt(target);
       },
       cover: () => coverRef.current(),
       progress: (paper, kind, progress) =>
@@ -903,6 +918,10 @@ export default function Reader() {
       </section>
     );
   if (!detail.data) return <Skeleton label="正在读取文献" rows={6} />;
+  // The text read is a draft: no editing and no structure annotation (technical 04 §8.10).
+  const draftText =
+    textLevel === "draft" ||
+    (textLevel === null && detail.data.text_level === "draft");
   // The empty full text offers “建立文献档案”: one primary button per screen.
   const archiveInText =
     lacking === "text" && !!api.workspace.capabilities.maintenance;
@@ -914,7 +933,7 @@ export default function Reader() {
         document={sources.data?.document ?? null}
         archivePrimaryElsewhere={archiveInText}
       />
-      {sources.data?.document ? (
+      {sources.data?.document && !draftText ? (
         <StructurePanel
           id={id}
           document={sources.data.document.document_version_id}
@@ -1070,7 +1089,9 @@ export default function Reader() {
           },
         ]
       : []),
-    ...(sources.data?.material
+    // Reading-experience 3.4: a draft takes no edits; there is no proofread
+    // text to edit until it is archived.
+    ...(sources.data?.material && !draftText
       ? [
           {
             id: "edit",
@@ -1466,6 +1487,7 @@ export default function Reader() {
                     paper={detail.data}
                     narrow={barWidth > 0 ? narrowBar : narrowTop}
                     pdf={pdf}
+                    level={textLevel}
                     back={
                       historyBack
                         ? { label: historyBack.label, go: () => engines.back() }
@@ -1587,6 +1609,16 @@ export default function Reader() {
           onClose={() => setOperation(null)}
         />
       )}
+      <AnchoredPopover
+        label="疑点"
+        triggerRef={doubtAnchor}
+        isOpen={!!doubt}
+        onOpenChange={(open) => {
+          if (!open) setDoubt(null);
+        }}
+      >
+        {doubt ? <DraftDoubt {...doubt} /> : null}
+      </AnchoredPopover>
       <AnchoredPopover
         label="文内引用预览"
         triggerRef={linkAnchor}

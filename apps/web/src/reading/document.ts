@@ -122,12 +122,18 @@ export async function renderDocument(
     appendTitle(title, titleParts(frame.documentTitle));
     article.append(title);
   }
-  // ADR 0055: a long document took the simplified path; say so above the text.
-  if (described.long_document) {
+  // Reading-experience 3.4: the text's level; a draft and a long document
+  // (ADR 0055) say so above the text, scrolling with it, never dismissed.
+  const level = described.text_level ?? "proofread";
+  frame.onTextLevel?.(level);
+  if (level === "draft" || described.long_document) {
     const note = document.createElement("p");
     note.className = "reading-long-document";
     note.setAttribute("role", "note");
-    note.textContent = `长文档（${described.long_document.pages} 页）：按简化流程建档，未逐页校订，文字可能含解析错误；以 PDF 为准。`;
+    note.textContent =
+      level === "draft"
+        ? "初稿：未经校订，文字可能含解析错误；以 PDF 为准"
+        : `长文档：按简化流程建档，未逐页校订，文字可能含解析错误；以 PDF 为准（${described.long_document!.pages} 页）`;
     article.append(note);
   }
   layer.append(article);
@@ -628,6 +634,10 @@ export async function renderDocument(
               "text-layer": "文字层核对",
               "image-only": "原图核对",
               manual: "人工核对",
+              // A draft's three (technical 04 §8.3).
+              "text-layer-match": "与文字层一致",
+              "text-layer-differs": "与文字层有差异",
+              "no-text-layer": "没有文字层可以核对",
             } as Record<string, string>
           )[segment.basis ?? ""] ?? "查看来源";
         if (segment.locate === "page") source.textContent += " · 仅页级定位";
@@ -635,8 +645,33 @@ export async function renderDocument(
           "aria-label",
           `查看区块来源：${source.textContent}`,
         );
-        source.onclick = () => frame.onSegment?.(segment.segment_id);
+        source.onclick = () =>
+          frame.onSegment?.(
+            segment.segment_id,
+            level === "draft" && typeof segment.page === "number"
+              ? segment.page
+              : undefined,
+          );
         el.prepend(source);
+      }
+      // Reading-experience 2.5: a doubtful draft segment is marked in the
+      // left margin; its saved differences open from “疑点”.
+      if (
+        segment &&
+        (segment.basis === "text-layer-differs" ||
+          segment.basis === "no-text-layer")
+      ) {
+        const differs = segment.basis === "text-layer-differs";
+        const mark = document.createElement(differs ? "button" : "span");
+        mark.className = "reading-doubt";
+        mark.textContent = differs ? "疑点" : "无文字层";
+        if (mark instanceof HTMLButtonElement) {
+          mark.type = "button";
+          mark.setAttribute("aria-haspopup", "dialog");
+          mark.onclick = () => frame.onDoubt?.(mark, segment.segment_id);
+        }
+        el.dataset.basis = segment.basis;
+        el.prepend(mark);
       }
       if (frame.documentTitle) {
         for (const heading of el.querySelectorAll("h1,h2,h3,h4,h5")) {
