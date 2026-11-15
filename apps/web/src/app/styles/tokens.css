@@ -143,6 +143,14 @@
     --status-excluded-bg: var(--hover);
     /* Reading page (design core "阅读页"): skeleton bars and image or PDF page placeholders. */
     --reader-skeleton: rgba(55, 53, 47, 0.07);
+    --reader-desk: var(--pdfbg);
+    --reader-sheet: var(--bg);
+    --reader-pen: var(--blue);
+    --reader-pen-soft: rgba(47, 75, 168, 0.55);
+    --reader-spine-a: rgba(55, 53, 47, 0.16);
+    --reader-spine-b: rgba(55, 53, 47, 0.3);
+    --reader-tick-evidence: #f0c41e;
+    --reader-check-fail: #a03a33;
   }
   :root[data-theme="dark"] {
     color-scheme: dark;
@@ -192,6 +200,12 @@
     --chart-ink: rgba(227, 229, 232, 0.5);
     --chart-muted: rgba(255, 255, 255, 0.14);
     --reader-skeleton: rgba(255, 255, 255, 0.06);
+    --reader-sheet: #1f2226;
+    --reader-pen-soft: rgba(142, 162, 240, 0.6);
+    --reader-spine-a: rgba(255, 255, 255, 0.16);
+    --reader-spine-b: rgba(255, 255, 255, 0.3);
+    --reader-tick-evidence: #e6c34a;
+    --reader-check-fail: #f2726a;
   }
   :root[data-theme="green"] {
     --bg: #fbfcf8;

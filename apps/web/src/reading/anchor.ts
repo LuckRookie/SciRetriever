@@ -16,6 +16,17 @@ export interface Area {
 }
 export const readingLine = (area: Area, share = READING_LINE) =>
   area.top + area.height * share;
+/**
+ * Spec 4.1: the visible desk below the page header's rule — the header stays
+ * at the top of the scroll area while the sheet scrolls under it.
+ */
+export function readingArea(body: HTMLElement, header?: HTMLElement): Area {
+  const top = body.getBoundingClientRect().top;
+  // Where its rule is once stuck at the top: a line that moved with the
+  // scroll position would move every place measured against it.
+  const rule = header?.isConnected ? header.offsetHeight : 0;
+  return { top: top + rule, height: Math.max(0, body.clientHeight - rule) };
+}
 
 export interface Box {
   readonly top: number;

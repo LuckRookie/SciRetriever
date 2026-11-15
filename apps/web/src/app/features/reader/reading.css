@@ -1339,3 +1339,128 @@
     gap: var(--space-2);
   }
 }
+
+/* Spec 1.1: the full text on a sheet on the desk. The geometry comes from
+   `geometry.ts` as custom properties on the scroll area. */
+@layer pages {
+  .react-reader .reading-scroll[data-mode="doc"] {
+    padding: 20px 0 48px;
+    background: var(--reader-desk);
+  }
+  .react-reader .reading-scroll[data-mode="doc"][data-sheet="full"] {
+    padding: 0;
+  }
+  .react-reader .reader-view[data-view="doc"] {
+    box-sizing: border-box;
+    width: var(--sheet-width);
+    min-height: 100%;
+    margin-left: var(--sheet-left);
+    padding: 0 var(--sheet-margin-right) var(--space-7) var(--sheet-margin-left);
+    background: var(--reader-sheet);
+    box-shadow: var(--shadow-1);
+  }
+  .react-reader [data-sheet="full"] .reader-view[data-view="doc"] {
+    box-shadow: none;
+  }
+  .react-reader .reader-view[data-view="doc"] .reading-article {
+    max-width: none;
+    width: var(--sheet-column);
+    margin: 0;
+    padding-top: var(--space-6);
+  }
+
+  /* Spec 1.2: the page header, 40 px, fixed at the top of the visible sheet. */
+  .react-reader .reader-page-header {
+    position: sticky;
+    /* Stuck at the scroll area's edge, over its top padding, so nothing shows
+       above it. Set per view by selector: a custom property on the scroll
+       area would restyle the whole text at every switch of view. */
+    top: calc(-1 * var(--space-5));
+    z-index: 3;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+    height: 40px;
+    padding: 0 var(--sheet-header-indent, 16px);
+    border-bottom: 1px solid var(--line2);
+    background: var(--reader-sheet);
+    font-family: var(--sans);
+    font-size: var(--text-secondary);
+    line-height: 1;
+  }
+  .react-reader
+    [data-mode="doc"]
+    .reader-view[data-view="doc"]
+    .reader-page-header {
+    top: -20px;
+  }
+  .react-reader
+    [data-mode="doc"][data-sheet="full"]
+    .reader-view[data-view="doc"]
+    .reader-page-header {
+    top: 0;
+  }
+  @media (max-width: 900px) {
+    .react-reader .reading-pdf-pages > .reader-page-header {
+      top: calc(-1 * var(--space-4));
+    }
+  }
+  .react-reader .reader-view[data-view="doc"] .reader-page-header {
+    margin: 0 calc(-1 * var(--sheet-margin-right)) 0
+      calc(-1 * var(--sheet-margin-left));
+  }
+  .react-reader .reading-pdf-pages > .reader-page-header {
+    width: var(--pdf-page-width, 100%);
+    margin-bottom: calc(-1 * var(--space-5) + var(--space-3));
+  }
+  .react-reader .reader-page-header-source {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--fg3);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .react-reader .reader-page-header-view {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: var(--space-3);
+    color: var(--fg2);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+  .react-reader .reader-page-header-back,
+  .react-reader .reader-page-header-action {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--blue);
+    font: inherit;
+    cursor: pointer;
+  }
+  .react-reader .reader-page-header-action {
+    margin-inline-start: var(--space-2);
+  }
+  /* One line under the rule, over the text so the text never moves. */
+  .react-reader .reader-page-header-line {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    margin: 0;
+    padding: var(--space-1) var(--sheet-header-indent, 16px);
+    background: var(--reader-sheet);
+    color: var(--fg2);
+    font-size: var(--text-secondary);
+    font-weight: 400;
+    line-height: 1.5;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .react-reader .reader-view[data-view="doc"] .reader-page-header-line {
+    padding-inline-start: var(--sheet-margin-left);
+  }
+}

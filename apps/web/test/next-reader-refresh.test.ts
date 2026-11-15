@@ -97,11 +97,14 @@ it("keeps the reader through a minute of background refresh and offers a new tex
     expect(await find.evaluate((el) => el === document.activeElement)).toBe(
       true,
     );
-    // A new default text version is offered in the status bar, not swapped in.
+    // A new default text version is offered in the line under the page
+    // header (spec 1.2), not swapped in.
     w.env.setText(paragraphs(300, "a revised measurement"));
     await w.env.build(request);
     await changeTasks(12);
-    const status = w.page.locator(".reading-status");
+    const status = w.page.locator(
+      ".reader-engine:not([hidden]) .reader-view:not([hidden]) .reader-page-header",
+    );
     await expect
       .poll(() => status.innerText(), { timeout: 20_000 })
       .toContain("有新版本文本。");
@@ -109,10 +112,20 @@ it("keeps the reader through a minute of background refresh and offers a new tex
     expect(await body.evaluate((el) => el.scrollTop)).toBe(before.scroll);
     expect(await engines()).toBe(before.engines);
     await status.getByRole("button", { name: "切换", exact: true }).click();
+    // The new text's engine takes over; until its text is laid out there is none to read.
     await expect
-      .poll(() => article.innerText(), { timeout: 20_000 })
+      .poll(() => article.innerText({ timeout: 1000 }).catch(() => ""), {
+        timeout: 20_000,
+      })
       .toContain("a revised measurement");
-    expect(await status.innerText()).not.toContain("有新版本文本。");
+    // The offer is gone from every page header (the new text's engine has its own).
+    await expect
+      .poll(() =>
+        w.page
+          .locator(".reader-page-header-line", { hasText: "有新版本文本。" })
+          .count(),
+      )
+      .toBe(0);
     expect(w.errors).toEqual([]);
   } finally {
     for (const job of jobs)

@@ -57,6 +57,8 @@ export interface ViewUi {
   shown: { id: string; kind: ViewKind } | null;
   /** Its first screen is drawn: preparing is over (spec 6.3). */
   prepared: boolean;
+  /** The sheet's page header the reader page fills (spec 1.2). */
+  header: HTMLElement | null;
 }
 const STEPS: Record<ViewKind, readonly Pick<LoadStep, "id" | "label">[]> = {
   pdf: [
@@ -115,6 +117,7 @@ export const emptyUi = (): ViewUi => ({
   resources: [],
   shown: null,
   prepared: false,
+  header: null,
 });
 export type UiSetters = { [K in keyof ViewUi]: (value: ViewUi[K]) => void };
 function applyUi(set: UiSetters, patch: Partial<ViewUi>) {
@@ -413,6 +416,10 @@ function build(
     layer.dataset.view = kind;
     layer.hidden = true;
     container.append(layer);
+    // The page header: first on the sheet (the full text) or the page column (the PDF).
+    const header = document.createElement("header");
+    header.className = "reader-page-header";
+    if (kind === "doc") layer.append(header);
     // Loading shows as the skeleton and its steps, not here (spec 10).
     const statusText = document.createElement("span");
     const view: ReaderView = {
@@ -422,7 +429,7 @@ function build(
       findStatus: document.createElement("span"),
       // Engines mark readiness here; it reaches the reader while the view shows.
       marker: document.createElement("div"),
-      ui: { ...emptyUi(), shown: { id, kind } },
+      ui: { ...emptyUi(), shown: { id, kind }, header },
       twins: null,
       surface: null,
       frame: null as unknown as ReaderFrame,
@@ -557,6 +564,7 @@ function build(
       },
       body: host,
       layer,
+      header,
       controls: document.createElement("div"),
       outline: document.createElement("nav"),
       status: statusText,

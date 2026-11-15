@@ -12,7 +12,13 @@ import type { ReadingPosition } from "./state.js";
 import { readerProblem } from "./dom.js";
 import type { ReaderFrame } from "./contract.js";
 import { READER_PROBE, probeBitmap, probeCount } from "./probe.js";
-import { anchorIndex, anchorRatio, placeDelta, readingLine } from "./anchor.js";
+import {
+  anchorIndex,
+  anchorRatio,
+  placeDelta,
+  readingArea,
+  readingLine,
+} from "./anchor.js";
 import { canon, indexText, locate, PLACE, rangeOf } from "./mark-locate.js";
 import type { ReadingAnchor } from "./contract.js";
 
@@ -63,6 +69,8 @@ export async function renderPdf(
   zoom.value = String(state.zoom);
   const pages = document.createElement("div");
   pages.className = "reading-pdf-pages library-pdf-reading";
+  // The page header sits at the top of the page column (spec 1.2).
+  if (frame.header) pages.append(frame.header);
   (frame.layer ?? frame.body).append(pages);
   const workerPort = new Worker("/reader/pdf.worker.mjs", { type: "module" });
   if (READER_PROBE) probeCount("workersStarted");
@@ -210,7 +218,8 @@ export async function renderPdf(
       frame.body.clientHeight === 0
     )
       return;
-    const top = frame.body.getBoundingClientRect().top;
+    // The first page below the page header (spec 1.2) is the one being read.
+    const top = readingArea(frame.body, frame.header).top;
     const index = placeholders.findIndex(
       (p) => p.getBoundingClientRect().bottom > top + 12,
     );
@@ -237,12 +246,9 @@ export async function renderPdf(
     }
     frame.onAnchor?.();
   };
-  /** Spec 10: 28% down the scroll area, from its top. */
+  /** Spec 4.1: 28% down the visible desk, below the page header. */
   function line() {
-    return readingLine({
-      top: frame.body.getBoundingClientRect().top,
-      height: frame.body.clientHeight,
-    });
+    return readingLine(readingArea(frame.body, frame.header));
   }
   /** Spec 4.2: after a change of size, the anchor page goes back to where it was, before paint. */
   function keep() {
@@ -564,7 +570,7 @@ export async function renderPdf(
     const target = placeholders[state.page - 1]!;
     frame.body.scrollTop +=
       target.getBoundingClientRect().top -
-      frame.body.getBoundingClientRect().top +
+      readingArea(frame.body, frame.header).top +
       target.clientHeight * offset -
       12;
     updateStatus();
@@ -601,6 +607,8 @@ export async function renderPdf(
             ),
           )
         : state.zoom;
+    // The page header spans the page column (spec 1.2).
+    pages.style.setProperty("--pdf-page-width", `${baseWidth * scale}px`);
     for (let i = 0; i < placeholders.length; i++) {
       const size = sizeOf(i + 1),
         p = placeholders[i]!;

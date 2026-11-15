@@ -1329,7 +1329,8 @@ describe("bounded document and material reading", () => {
         .locator('.reading-pdf-page[data-rendered="true"]')
         .first()
         .waitFor();
-      expect(await page.locator(".reading-article").count()).toBe(0);
+      // The hidden full-text view stays resident; a late valid read may fill it.
+      expect(await page.locator(".reading-article:visible").count()).toBe(0);
       expect(new URL(page.url()).searchParams.get("reader")).toBe("pdf");
       await page.route("**/document-slice", async (route) => {
         const response = await route.fetch();
@@ -1341,6 +1342,9 @@ describe("bounded document and material reading", () => {
         (response) =>
           new URL(response.url()).pathname === "/api/v1/query/document-slice",
       );
+      // The resident full-text view already holds the late valid read, so a
+      // fresh page is needed for the next read to receive the mismatch.
+      await page.reload();
       await page.getByRole("tab", { name: "全文", exact: true }).click();
       await (await mismatchedSlice).finished();
       await expect

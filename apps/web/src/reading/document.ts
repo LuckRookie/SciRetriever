@@ -20,6 +20,7 @@ import {
   anchorRatio,
   placeDelta,
   pdfToText,
+  readingArea,
   readingLine,
   textToPdf,
   type TextBlock,
@@ -289,12 +290,8 @@ export async function renderDocument(
         el.classList.add("reading-figure-caption");
     }
   };
-  /** Spec 10: 28% down the scroll area, from its top. */
-  const line = () =>
-    readingLine({
-      top: frame.body.getBoundingClientRect().top,
-      height: frame.body.clientHeight,
-    });
+  /** Spec 4.1: 28% down the visible desk, below the page header. */
+  const line = () => readingLine(readingArea(frame.body, frame.header));
   const blockAt = (offset: number) =>
     rendered[search((b) => Number(b.dataset.byteEnd) > offset)]?.element ??
     blocks().at(-1);
@@ -383,9 +380,10 @@ export async function renderDocument(
     const block = blockAt(offset);
     if (block && folded(block)) setInfoOpen(true);
     if (block) {
+      // Just below the page header (spec 1.2), which stays over the text.
       const delta =
         block.getBoundingClientRect().top -
-        frame.body.getBoundingClientRect().top +
+        readingArea(frame.body, frame.header).top +
         ratio * block.clientHeight -
         12;
       if (

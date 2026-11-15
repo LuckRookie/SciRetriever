@@ -10,7 +10,7 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { copyText } from "../../../browser-platform.js";
 import type {
   DocumentLinkPreview,
@@ -88,6 +88,8 @@ import {
   type ViewUi,
 } from "./engines.js";
 import { createPreparingStore, ReaderPreparing } from "./ReaderPreparing.js";
+import { ReaderPageHeader, type HeaderLine } from "./ReaderPageHeader.js";
+import { sheetGeometry } from "./geometry.js";
 import { useFullTextTranslation } from "./translation/use-fulltext.js";
 
 export default function Reader() {
@@ -353,7 +355,10 @@ export default function Reader() {
   // The latest step of whichever view is being prepared, shown or still off screen.
   const [preparingStore] = useState(createPreparingStore);
   const [shown, setShown] = useState<ViewUi["shown"]>(null),
-    [prepared, setPrepared] = useState(false);
+    [prepared, setPrepared] = useState(false),
+    [headerHost, setHeaderHost] = useState<HTMLElement | null>(null),
+    // The top bar is narrower than 640 px: the page header shows the title (spec 1.2).
+    [narrowTop, setNarrowTop] = useState(false);
   // The first drawn screen lets the shell warm the other pages (cold open).
   useEffect(() => {
     if (prepared) window.dispatchEvent(new Event(READER_PAINTED));
@@ -380,6 +385,7 @@ export default function Reader() {
         resources: setResources,
         shown: setShown,
         prepared: setPrepared,
+        header: setHeaderHost,
       },
       frame,
       twins: fullTextLayer,
@@ -436,6 +442,52 @@ export default function Reader() {
     // Until the view is picked nothing is built, and what shows stays.
     if (chosen) engines.view(viewOf(mode));
   }, [engines, mode, chosen]);
+  // Spec 1.1: the sheet's geometry follows the desk's width and the reading
+  // size; the current width setting still widens the text column.
+  const columnEm = layoutPosition.fullWidth
+    ? 1000
+    : layoutPosition.wide
+      ? 46
+      : 34;
+  useLayoutEffect(() => {
+    const scroller = body.current,
+      page = root.current;
+    if (!scroller || !page) return;
+    const apply = () => {
+      setNarrowTop(page.clientWidth > 0 && page.clientWidth < 640);
+      const desk = scroller.clientWidth;
+      if (!desk) return;
+      const g = sheetGeometry(desk, layoutPosition.fontSize, columnEm),
+        style = scroller.style;
+      style.setProperty("--sheet-width", `${g.sheet}px`);
+      style.setProperty("--sheet-left", `${g.left}px`);
+      style.setProperty("--sheet-margin-left", `${g.marginLeft}px`);
+      style.setProperty("--sheet-margin-right", `${g.marginRight}px`);
+      style.setProperty("--sheet-column", `${g.column}px`);
+      style.setProperty("--sheet-header-indent", `${g.headerIndent}px`);
+      scroller.dataset.sheet = g.tier;
+      scroller.dataset.notes = g.notes;
+    };
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(scroller);
+    observer.observe(page);
+    return () => observer.disconnect();
+  }, [layoutPosition.fontSize, columnEm, layout, detailReady]);
+  // One line under the page header, at most (spec 1.2): a note, else the offer of a new text.
+  const headerLine = useMemo(
+    (): HeaderLine | null =>
+      note
+        ? { transient: true, text: note }
+        : update
+          ? {
+              transient: false,
+              text: "有新版本文本。",
+              action: { label: "切换", run: update.apply },
+            }
+          : null,
+    [note, update],
+  );
   useLayoutEffect(() => {
     const material = sources.data;
     if (!chosen || !detailReady || !body.current || !material || source.error)
@@ -1142,18 +1194,6 @@ export default function Reader() {
             />
           )}
           <div className="reader-surface">
-            {historyBack && (mode === "doc" || mode === "pdf") ? (
-              // Spec 10: a small button over the content's top right, not a row of its own.
-              <button
-                type="button"
-                className="reader-return-jump"
-                title="Alt+←"
-                onClick={() => engines.back()}
-              >
-                ↩ 回到{historyBack.label.startsWith("¶") ? " " : ""}
-                {historyBack.label}
-              </button>
-            ) : null}
             {sources.error && mode !== "know" && mode !== "results" ? (
               <ErrorNotice
                 message={errorMessage(sources.error)}
@@ -1185,6 +1225,27 @@ export default function Reader() {
               }
             />
             {marks.rail}
+            {headerHost &&
+            shown?.id === id &&
+            detail.data &&
+            !detail.isPlaceholderData
+              ? createPortal(
+                  <ReaderPageHeader
+                    kind={shown.kind}
+                    paper={detail.data}
+                    narrow={narrowTop}
+                    pdf={pdf}
+                    back={
+                      historyBack
+                        ? { label: historyBack.label, go: () => engines.back() }
+                        : null
+                    }
+                    line={headerLine}
+                    scroller={body.current}
+                  />,
+                  headerHost,
+                )
+              : null}
             {skeleton}
             {source.value?.kind === "metadata" &&
               mode !== "know" &&
@@ -1288,21 +1349,6 @@ export default function Reader() {
               }
             >
               <span ref={status} />
-              {note ? (
-                <span className="reading-status-note">{note}</span>
-              ) : null}
-              {update ? (
-                <span className="reading-status-note">
-                  有新版本文本。
-                  <button
-                    type="button"
-                    className="reading-status-action"
-                    onClick={update.apply}
-                  >
-                    切换
-                  </button>
-                </span>
-              ) : null}
             </div>
             {mode === "know" && (
               <div className="reading-status">

@@ -155,6 +155,38 @@ const colorRoles = [
   { name: "图表弱色", token: "--chart-muted", usage: "图表底轨" },
   { name: "底块", token: "--surface-sunken", usage: "节的内容区、侧栏" },
 ] as const;
+/** Design core "阅读页": the manuscript on a desk, read and marked with a blue pen. */
+const readerTokens = [
+  {
+    name: "案头",
+    token: "--reader-desk",
+    usage: "原文与 PDF 共用的阅读区底色",
+  },
+  { name: "纸页", token: "--reader-sheet", usage: "纸页与书脊的底色" },
+  {
+    name: "蓝笔",
+    token: "--reader-pen",
+    usage: "划线、批注文字、框选、书脊视窗",
+  },
+  {
+    name: "淡蓝笔",
+    token: "--reader-pen-soft",
+    usage: "关键句竖线、批注引线、PDF 定位线",
+  },
+  { name: "书脊单数段", token: "--reader-spine-a", usage: "书脊章节段" },
+  { name: "书脊双数段", token: "--reader-spine-b", usage: "书脊章节段" },
+  {
+    name: "证据刻度",
+    token: "--reader-tick-evidence",
+    usage: "证据与查找命中的刻度",
+  },
+  { name: "核对不符", token: "--reader-check-fail", usage: "与原文不符的引用" },
+  {
+    name: "骨架",
+    token: "--reader-skeleton",
+    usage: "骨架条与图片、PDF 页的占位",
+  },
+] as const;
 const archiveStates = [
   "READY",
   "ASSET_READY",
@@ -186,6 +218,20 @@ function Foundations() {
       <Example title="颜色角色" usage="每种颜色只有一种用途；其余一律用灰阶。">
         <ul className="lab-swatches">
           {colorRoles.map((role) => (
+            <li key={role.token}>
+              <span style={{ background: `var(${role.token})` }} />
+              <strong>{role.name}</strong>
+              <small>{role.usage}</small>
+            </li>
+          ))}
+        </ul>
+      </Example>
+      <Example
+        title="阅读页"
+        usage="案头上一张纸页，用蓝笔批过；这些颜色只在阅读页里用。"
+      >
+        <ul className="lab-swatches">
+          {readerTokens.map((role) => (
             <li key={role.token}>
               <span style={{ background: `var(${role.token})` }} />
               <strong>{role.name}</strong>

@@ -277,7 +277,15 @@ it("keeps the block at the reading line in place across font size, information p
     /** The block at the reading line and its top, or that block's top now. */
     const anchor = (key?: string) =>
       body.evaluate((el, wanted) => {
-        const line = el.getBoundingClientRect().top + el.clientHeight * 0.28;
+        // Spec 4.1: 28% down the visible desk, below the page header.
+        const header = el.querySelector<HTMLElement>(
+            ".reader-view:not([hidden]) .reader-page-header",
+          ),
+          below = header?.getClientRects().length ? header.offsetHeight : 0;
+        const line =
+          el.getBoundingClientRect().top +
+          below +
+          (el.clientHeight - below) * 0.28;
         const blocks = [
           ...el.querySelectorAll<HTMLElement>(
             ".reader-view:not([hidden]) article > section[data-byte-start]",
@@ -375,7 +383,15 @@ it("returns from an outline jump with Alt+← and reopens a paper where it was l
     });
     const atLine = () =>
       body.evaluate((el) => {
-        const line = el.getBoundingClientRect().top + el.clientHeight * 0.28;
+        // Spec 4.1: 28% down the visible desk, below the page header.
+        const header = el.querySelector<HTMLElement>(
+            ".reader-view:not([hidden]) .reader-page-header",
+          ),
+          below = header?.getClientRects().length ? header.offsetHeight : 0;
+        const line =
+          el.getBoundingClientRect().top +
+          below +
+          (el.clientHeight - below) * 0.28;
         const block = [
           ...el.querySelectorAll<HTMLElement>(
             ".reader-view:not([hidden]) article > section[data-byte-start]",
@@ -403,7 +419,10 @@ it("returns from an outline jump with Alt+← and reopens a paper where it was l
     await w.page
       .locator(".reader-outline-entry", { hasText: "Conclusion" })
       .click();
-    const back = w.page.locator(".reader-return-jump");
+    // Spec 1.2: the way back sits in the page header, before what shows.
+    const back = w.page.locator(
+      ".reader-view:not([hidden]) .reader-page-header-back",
+    );
     await expect.poll(() => back.textContent()).toMatch(/^↩ 回到 ¶\d+$/u);
     // Back: the block that was at the reading line is there again (the outline
     // panel opened meanwhile, so lines wrap differently; the block is the place).
@@ -421,6 +440,29 @@ it("returns from an outline jump with Alt+← and reopens a paper where it was l
     await body.evaluate((el) => {
       el.scrollTop += 640;
     });
+    await w.page.waitForTimeout(400);
+    // The record is the block and where the line falls in it (spec 4.1); a line
+    // in the space between two blocks is recorded as the lower block's top.
+    // Put the line inside a block, so the remembered place is exact.
+    const gap = await atLine();
+    const line = await body.evaluate((el) => {
+      const header = el.querySelector<HTMLElement>(
+          ".reader-view:not([hidden]) .reader-page-header",
+        ),
+        below = header?.getClientRects().length ? header.offsetHeight : 0;
+      return (
+        el.getBoundingClientRect().top +
+        below +
+        (el.clientHeight - below) * 0.28
+      );
+    });
+    if (gap.top > line)
+      await body.evaluate(
+        (el, by) => {
+          el.scrollTop += by;
+        },
+        gap.top - line + 6,
+      );
     await w.page.waitForTimeout(800);
     const left = await atLine();
     await w.page.goto(url);
@@ -490,7 +532,10 @@ it("records the place before the marks list moves the reader", async () => {
     await w.page
       .getByRole("button", { name: /^转到批注：Paragraph 3/u })
       .click();
-    const back = w.page.locator(".reader-return-jump");
+    // Spec 1.2: the way back sits in the page header, before what shows.
+    const back = w.page.locator(
+      ".reader-view:not([hidden]) .reader-page-header-back",
+    );
     await expect.poll(() => back.textContent()).toMatch(/^↩ 回到 ¶\d+$/u);
     await back.click();
     await expect

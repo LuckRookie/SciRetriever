@@ -79,7 +79,8 @@ const report = {
   created_at: new Date().toISOString(),
   synthetic: true,
   spec: "docs/architecture/web/reading-experience.md#82-浏览器检查",
-  reading_line: "spec section 10: 28% of the reader scroll area, from its top",
+  reading_line:
+    "spec 4.1: 28% of the visible desk below the page header (section 10 where there is no header)",
   settled: "spec 8.2: no layout change for 200 ms, at most 2 s",
   viewport: { width: 1440, height: 900 },
   checks: {} as Partial<Record<CheckId, Check>>,
@@ -216,9 +217,14 @@ function installHelpers() {
     inputAt: 0,
     body: () =>
       document.querySelector<HTMLElement>(".reader-engine-body:not([hidden])"),
+    // Spec 4.1: 28% down the visible desk below the page header (none: the scroll area's top).
     line: (b: HTMLElement) => {
-      const r = b.getBoundingClientRect();
-      return r.top + r.height * 0.28;
+      const r = b.getBoundingClientRect(),
+        header = b.querySelector<HTMLElement>(
+          ".reader-view:not([hidden]) .reader-page-header",
+        ),
+        below = header?.getClientRects().length ? header.offsetHeight : 0;
+      return r.top + below + (b.clientHeight - below) * 0.28;
     },
     blocks: (b: HTMLElement) =>
       [
@@ -813,7 +819,7 @@ it("anchor keeping (4.2)", async () => {
     await image.page.evaluate(() => {
       const b = rs().body()!;
       const figure = b.querySelector<HTMLElement>("[data-resource]")!;
-      const line = b.getBoundingClientRect().top + b.clientHeight * 0.28;
+      const line = rs().line(b);
       b.scrollTop += figure.getBoundingClientRect().bottom - (line - 80);
     });
     await still(image.page);
@@ -969,7 +975,7 @@ it("position shared between views (4.3)", async () => {
         const h = rs();
         const a = h.anchor();
         const b = h.body()!;
-        const line = b.getBoundingClientRect().top + b.clientHeight * 0.28;
+        const line = h.line(b);
         const target = page
           ? b.querySelector<HTMLElement>(
               `.reading-pdf-page[data-pdf-page="${page}"]`,

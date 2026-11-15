@@ -91,6 +91,11 @@ export interface LoadProgress {
   readonly fraction: number;
 }
 export interface ReaderFrame {
+  /**
+   * The sheet's page header (spec 1.2): the engine puts it at the top of its
+   * content; the reader page fills it. The reading line is measured below it.
+   */
+  header?: HTMLElement;
   /** The engine reports where its loading is (spec 6.3). */
   onLoadStep?: (
     id: LoadStep["id"],
