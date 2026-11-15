@@ -9,6 +9,15 @@ import {
   parseDocumentMaterialBytesRequest,
   parseDocumentResourceBytesRequest,
   parseEvidenceRef,
+  parseDraftDocumentRef,
+  parseDraftDifference,
+  parseDraftContent,
+  parseDraftOutcome,
+  parseDocumentSegmentLocation,
+  parseDocumentSegmentLocationForVersion,
+  parseDraftDocumentStructure,
+  parseDocumentStructureV2,
+  type DocumentRef,
 } from "../src/index.js";
 
 const literatureId = "00000000-0000-0000-0000-000000000951";
@@ -20,6 +29,221 @@ const artifact = (digit: string, media_type: string) => ({
   sha256: hash(digit),
   byte_size: 12,
   media_type,
+});
+
+describe("Draft contracts are explicitly versioned", () => {
+  const draft = () => ({
+    schema_version: 3,
+    text_level: "draft",
+    document_id: documentId,
+    document_version_id: versionId,
+    representation_sha256: hash("a"),
+    source_material_ref: material,
+    raw_parse_id: assetId,
+    raw_parse_result_sha256: hash("b"),
+    page_layer_sha256: hash("c"),
+    draft_method_sha256: hash("d"),
+    draft_content: artifact("e", "application/json"),
+    builder_version: "draft-leaves-v1",
+    locator_scheme: "utf8-segment-v1",
+    markdown: artifact("1", "text/markdown"),
+    structure: artifact("2", "application/json"),
+    resources: [],
+  });
+  it("accepts schema 3 only through the draft parser and keeps the schema 2 parser closed", () => {
+    const value = draft();
+    const parsed: DocumentRef = parseDraftDocumentRef(value);
+    expect(parsed).toEqual(value);
+    expect(() => parseDocumentRef(value)).toThrow();
+    for (const bad of [
+      { ...value, text_level: "proofread" },
+      { ...value, builder_version: "source-order-leaves-v4" },
+      { ...value, proofread_id: assetId },
+      { ...value, raw_parse_id: "invalid" },
+      { ...value, page_layer_sha256: "invalid" },
+      { ...value, draft_content: artifact("e", "text/markdown") },
+      {
+        ...value,
+        draft_content: {
+          ...value.draft_content,
+          byte_size: 16 * 1024 * 1024 + 1,
+        },
+      },
+    ])
+      expect(() => parseDraftDocumentRef(bad)).toThrow();
+  });
+  it("binds each segment location's six bases to its explicit version", () => {
+    const value = {
+      block_id: "b1",
+      page: 1,
+      region: null,
+      continuation_regions: [],
+      source: "parser",
+      locate: "page",
+    };
+    for (const basis of [
+      "text-layer-match",
+      "text-layer-differs",
+      "no-text-layer",
+    ]) {
+      expect(
+        parseDocumentSegmentLocationForVersion({ ...value, basis }, 3).basis,
+      ).toBe(basis);
+      expect(() => parseDocumentSegmentLocation({ ...value, basis })).toThrow();
+    }
+    for (const basis of ["text-layer", "image-only", "manual"]) {
+      expect(
+        parseDocumentSegmentLocationForVersion({ ...value, basis }, 2).basis,
+      ).toBe(basis);
+      expect(() =>
+        parseDocumentSegmentLocationForVersion({ ...value, basis }, 3),
+      ).toThrow();
+    }
+    const structure = {
+      schema_version: 2,
+      text_encoding: "utf8",
+      page_count: 1,
+      sections: [],
+      segments: [
+        {
+          ...value,
+          region: null,
+          segment_id: "s1",
+          section_id: null,
+          start_utf8: 0,
+          end_utf8: 1,
+          kind: "text",
+          page: 0,
+          basis: "text-layer-match",
+        },
+      ],
+    };
+    expect(parseDraftDocumentStructure(structure, 1).segments[0]!.basis).toBe(
+      "text-layer-match",
+    );
+    expect(() => parseDocumentStructureV2(structure, 1)).toThrow();
+    expect(() =>
+      parseDraftDocumentStructure(
+        {
+          ...structure,
+          segments: [{ ...structure.segments[0], basis: "manual" }],
+        },
+        1,
+      ),
+    ).toThrow();
+  });
+  it("rejects ambiguous difference records and closes outcome failure codes", () => {
+    const mismatch = {
+      leaf_id: assetId,
+      page_index: 0,
+      kind: "mismatch",
+      parsed: "50",
+      text_layer: "60",
+      other_page_index: null,
+    };
+    expect(parseDraftDifference(mismatch, 2)).toEqual(mismatch);
+    const elsewhere = {
+      ...mismatch,
+      kind: "elsewhere",
+      parsed: "these four words differ",
+      text_layer: "",
+      other_page_index: 1,
+    };
+    expect(parseDraftDifference(elsewhere, 2)).toEqual(elsewhere);
+    for (const bad of [
+      { ...mismatch, other_page_index: 1 },
+      { ...mismatch, parsed: "60" },
+      { ...mismatch, kind: "other" },
+      { ...elsewhere, other_page_index: 0 },
+      { ...elsewhere, other_page_index: 2 },
+      { ...elsewhere, text_layer: "words" },
+    ])
+      expect(() => parseDraftDifference(bad, 2)).toThrow();
+    const failed = {
+      status: "failed",
+      raw_parse_id: assetId,
+      failure_code: "cancelled",
+    };
+    expect(parseDraftOutcome(failed)).toEqual(failed);
+    expect(() =>
+      parseDraftOutcome({ ...failed, failure_code: "input-missing" }),
+    ).toThrow();
+    expect(
+      parseDraftOutcome({
+        status: "not-formed",
+        reason: "profile-not-requested",
+      }),
+    ).toMatchObject({ status: "not-formed" });
+    const formed = {
+      status: "formed",
+      raw_parse_id: assetId,
+      document_version_id: versionId,
+      representation_sha256: hash("a"),
+      default_changed: false,
+      default_text_level: "proofread",
+    };
+    expect(parseDraftOutcome(formed)).toEqual(formed);
+    expect(() =>
+      parseDraftOutcome({ ...formed, default_changed: "false" }),
+    ).toThrow();
+  });
+  it("parses immutable draft content without text-layer text and validates page/leaf difference bindings", () => {
+    const value = {
+      schema_version: 1,
+      format: "draft-content-v1",
+      differences_format: "draft-differences-v1",
+      raw: {
+        raw_parse_id: assetId,
+        result_sha256: hash("a"),
+        profile: "vlm-engine",
+      },
+      page_layer_sha256: hash("b"),
+      pages: [{ page_index: 0, kind: "text-layer" }],
+      method: {
+        chrome: "page-chrome-v1",
+        breaks: "paragraph-break-v3",
+        reading_order: false,
+        comparison: "draft-compare-v1",
+        builder: "draft-leaves-v1",
+      },
+      draft_method_sha256: hash("c"),
+      source_blocks: [],
+      operations: [],
+      leaves: [],
+    };
+    expect(parseDraftContent(value)).toEqual(value);
+    for (const bad of [
+      { ...value, pages: [{ page_index: 1, kind: "text-layer" }] },
+      {
+        ...value,
+        pages: [{ page_index: 0, kind: "text-layer", text: "not stored here" }],
+      },
+      { ...value, method: { ...value.method, comparison: "future-rule" } },
+      {
+        ...value,
+        leaves: [
+          {
+            leaf_id: assetId,
+            page_index: 0,
+            basis: "text-layer-differs",
+            differences: [],
+          },
+        ],
+      },
+      {
+        ...value,
+        leaves: [
+          {
+            leaf_id: assetId,
+            page_index: 0,
+            basis: "text-layer-match",
+            differences: [],
+          },
+        ],
+      },
+    ])
+      expect(() => parseDraftContent(bad)).toThrow();
+  });
 });
 
 describe("Document reading response bounds", () => {

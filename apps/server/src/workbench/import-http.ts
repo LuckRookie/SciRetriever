@@ -79,7 +79,7 @@ export function importInterface(formats: readonly string[]) {
       "Preview is read-only and estimated; confirm decides again and checkpoints each record.",
       "Batch confirmation returns running with progress immediately; the service resumes checkpoints and expires batches. Local CLI/stdio bibliography imports finish synchronously without recovering unrelated batches.",
       "The literature PDF supplement endpoint is Web-only, requires the percent-encoded UTF-8 X-Sciretriever-File-Name header and returns {batch_id,file}; devices are not granted this route. It shares the streaming file channel and a per-entry daily open batch.",
-      "One active batch per source library. A repeated sequence replaces that part until confirmation.",
+      "One active batch per source library. Repeating a sequence with identical data is idempotent; different data is rejected with intake-data-conflict, without replacing the staged part.",
       "Global source library IDs are independent of device; local library IDs are scoped to device connection. source=null creates an isolated one-off file source; it cannot resume a source namespace and uses bibliographic-import semantics.",
       "Import adds observations, folders/members and missing primary PDFs; never deletes or replaces accepted materials.",
       "metadata_only defaults to false and is fixed in batch.request. When true, attachment references are counted as metadata-only-attachment without creating file entries; bibliography-only CLI/stdio/legacy Web wrappers always set it.",

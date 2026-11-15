@@ -4,7 +4,14 @@ import {
   parseIntakeData,
   parseMetadataObservation,
   EMPTY_METADATA,
+  INTAKE_HTTP_ENDPOINTS,
 } from "../src/index.js";
+it("documents the optional metadata-only flag on intake creation", () => {
+  const create = INTAKE_HTTP_ENDPOINTS.find(
+    (endpoint) => endpoint[2] === "create",
+  )!;
+  expect(create[3]).toContain("metadata_only?:boolean");
+});
 it("keeps the import model neutral, rejects unknown properties and leaves adhoc identities internal", () => {
   const base = {
     format: "records",

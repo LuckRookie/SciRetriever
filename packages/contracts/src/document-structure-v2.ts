@@ -9,6 +9,11 @@ import {
   type PageRegion,
 } from "./index.js";
 import type { ProofreadSource, ProofreadBasis } from "./proofread.js";
+import {
+  DRAFT_BASES,
+  type DraftBasis,
+  type DocumentBasis,
+} from "./draft-document.js";
 export const PROOFREAD_SEGMENT_KINDS = [
   "heading",
   "text",
@@ -22,7 +27,7 @@ export const PROOFREAD_SEGMENT_KINDS = [
 ] as const;
 export type ProofreadSegmentKind = (typeof PROOFREAD_SEGMENT_KINDS)[number];
 /** Stored page indices are zero based. Human-facing evidence readers display page + 1. */
-export interface DocumentStructureV2 {
+export interface DocumentStructureV2<B extends DocumentBasis = ProofreadBasis> {
   readonly long_document?: LongDocumentInfo;
   readonly schema_version: 2;
   readonly text_encoding: "utf8";
@@ -52,7 +57,7 @@ export interface DocumentStructureV2 {
     }[];
     readonly locate: "region" | "page";
     readonly source: ProofreadSource;
-    readonly basis: ProofreadBasis;
+    readonly basis: B;
   }[];
 }
 function fail(): never {
@@ -89,6 +94,31 @@ export function parseDocumentStructureV2(
   value: unknown,
   markdownBytes: number,
 ): DocumentStructureV2 {
+  return parseStructure(value, markdownBytes, [
+    "text-layer",
+    "image-only",
+    "manual",
+  ]);
+}
+/** Explicit draft entry: legacy callers still reject draft bases. */
+export function parseDraftDocumentStructure(
+  value: unknown,
+  markdownBytes: number,
+): DocumentStructureV2<DraftBasis> {
+  const parsed = parseStructure(value, markdownBytes, DRAFT_BASES);
+  if (
+    parsed.layout ||
+    parsed.long_document ||
+    parsed.sections.some((s) => s.level < 2)
+  )
+    fail();
+  return parsed;
+}
+function parseStructure<B extends DocumentBasis>(
+  value: unknown,
+  markdownBytes: number,
+  bases: readonly B[],
+): DocumentStructureV2<B> {
   const r = object(value, [
     "schema_version",
     "text_encoding",
@@ -119,7 +149,7 @@ export function parseDocumentStructureV2(
   )
     fail();
   const sections = r.sections.map(
-    (value): DocumentStructureV2["sections"][number] => {
+    (value): DocumentStructureV2<B>["sections"][number] => {
       const s = object(value, [
         "section_id",
         "title",
@@ -163,7 +193,7 @@ export function parseDocumentStructureV2(
     stack.push(s);
   }
   const segments = r.segments.map(
-    (value): DocumentStructureV2["segments"][number] => {
+    (value): DocumentStructureV2<B>["segments"][number] => {
       const s = object(value, [
         "segment_id",
         "block_id",
@@ -184,8 +214,7 @@ export function parseDocumentStructureV2(
         !Array.isArray(s.continuation_regions)
       )
         fail();
-      if (!["text-layer", "image-only", "manual"].includes(String(s.basis)))
-        fail();
+      if (!bases.includes(s.basis as B)) fail();
       if (s.locate !== (s.region === null ? "page" : "region")) fail();
       const start = integer(s.start_utf8, 0, markdownBytes),
         end = integer(s.end_utf8, start + 1, markdownBytes),
@@ -215,7 +244,7 @@ export function parseDocumentStructureV2(
         continuation_regions: continuation,
         locate: s.region === null ? "page" : "region",
         source: s.source as ProofreadSource,
-        basis: s.basis as ProofreadBasis,
+        basis: s.basis as B,
       };
     },
   );

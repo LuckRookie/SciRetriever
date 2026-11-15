@@ -11,7 +11,7 @@ import {
 import { join } from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
-import { sha256 } from "@sciretriever/contracts";
+import { sha256, parseDocumentRef } from "@sciretriever/contracts";
 import { coreProcessingFixture } from "./core-processing-fixture.js";
 import { archiveFixture } from "./archive-fixture.js";
 import { correctedDocumentFixture } from "./corrected-document-fixture.js";
@@ -105,7 +105,8 @@ async function fixture(arranged = false) {
     database = new SqliteWorker(join(e.home, "catalog.sqlite"), undefined, {
       readOnly: true,
     });
-    const snapshot = (await database.documentVersion(versionId))!;
+    const row = (await database.documentVersion(versionId))!;
+    const snapshot = { ...row, version: parseDocumentRef(row.version) };
     files = new FileStore(e.app.files.root);
     const storage = new SqliteDocumentStorage(database, files);
     const binding = await new SqliteProofreadStorage(

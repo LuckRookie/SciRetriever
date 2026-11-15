@@ -9,6 +9,34 @@ export function paragraphBreakEvidence(
   leaves: readonly ArrangementLeaf[],
   destinations: ReadonlyMap<string, LeafDestination>,
 ) {
+  return paragraphBreakEvidenceForBody(
+    source,
+    leaves,
+    (l) => {
+      const d = destinations.get(l.leaf_id);
+      return (
+        d?.kind === "assigned" &&
+        d.presentation.kind === "content" &&
+        [
+          "introduction",
+          "methods",
+          "results-discussion",
+          "conclusion",
+          "additional",
+        ].includes(d.target.role)
+      );
+    },
+    (l) => destinations.get(l.leaf_id)?.kind === "dropped",
+  );
+}
+
+/** Layout evidence is shared; the caller owns the meaning of body/dropped. */
+export function paragraphBreakEvidenceForBody(
+  source: ArchiveTextSource,
+  leaves: readonly ArrangementLeaf[],
+  body: (leaf: ArrangementLeaf) => boolean,
+  dropped: (leaf: ArrangementLeaf) => boolean,
+) {
   const roots = new Map(source.blocks.map((b) => [b.root_block_id, b]));
   const geometry = (l: ArrangementLeaf) => {
     const root = roots.get(l.source.root_block_id);
@@ -18,20 +46,6 @@ export function paragraphBreakEvidence(
       l.source.end === [...root.text].length
       ? root.pdf_geometry
       : undefined;
-  };
-  const body = (l: ArrangementLeaf) => {
-    const d = destinations.get(l.leaf_id);
-    return (
-      d?.kind === "assigned" &&
-      d.presentation.kind === "content" &&
-      [
-        "introduction",
-        "methods",
-        "results-discussion",
-        "conclusion",
-        "additional",
-      ].includes(d.target.role)
-    );
   };
   const prose = (l: ArrangementLeaf) =>
     body(l) &&
@@ -114,7 +128,7 @@ export function paragraphBreakEvidence(
     if (
       skipped.some(
         (l) =>
-          destinations.get(l.leaf_id)?.kind !== "dropped" &&
+          !dropped(l) &&
           ["image", "table", "caption", "footnote"].includes(l.type),
       )
     )

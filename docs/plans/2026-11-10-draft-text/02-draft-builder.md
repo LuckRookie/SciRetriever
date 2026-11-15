@@ -2,7 +2,7 @@
 
 类型：计划（结果块）
 负责：从原始解析与 PDF 文字层确定性地得到初稿的正文、结构、片段核对依据与差异记录
-状态：Pending
+状态：Completed（2026-11-15）
 
 ## Outcome
 
@@ -37,22 +37,22 @@
 
 ## Tasks
 
-- [ ] **2.1 合同类型**（`packages/contracts`）
+- [x] **2.1 合同类型**（`packages/contracts`）
   - `TextLevel`；`DraftDocumentRef`（`schema_version: 3`，builder `draft-leaves-v1`）与 `DocumentRef` 并集；`DraftDifference`；`DraftOutcome` 与 `DraftFailureCode`；初稿内容 `draft-content-v1` 的类型与解析函数。字段见 04 §8.2“回执”“失败”与 §8.3“DocumentRef”“初稿内容”“差异记录”。
   - `DocumentSegmentLocation.basis` 扩为六种取值，解析时按所在版本核对取值集合（04 §8.3“核对依据的取值”）。校订稿 DocumentRef（`schema_version: 2`）的解析与字节不变。
   - 现有只接受 `schema_version: 2` 的解析函数遇到初稿照旧拒绝（04 §8.3）。
   - 输出：导出的类型与解析函数；`packages/contracts/test/` 中的合同测试。
-- [ ] **2.2 来源准备**
+- [x] **2.2 来源准备**
   - 直接复用 `prepareArrangementSource` 构造并核验来源区块（含可选的 `pdf_geometry`），不复制它的逻辑（04 §8.2“输入”）。
   - 构建器接收调用方选好的原始解析；选择规则（哪次解析形成初稿）由 04 块按 04 §8.2“输入”实现。
   - 在初稿一侧把 `input-missing` 转换为 `needs-parse`，其余失败按 04 §8.2“失败”的表映射。`archive/` 里的错误码不改。
   - 阅读顺序纠正使用与建档相同的开关（当前默认关闭）；开关值进入方法 hash（04 §8.2“版本”）。
-- [ ] **2.3 规则预处理（没有章节角色）**
+- [x] **2.3 规则预处理（没有章节角色）**
   - 页眉页脚：原样调用 `programChromeDrops`。
   - 断段：把 `paragraphBreakEvidence` 中与角色无关的部分（版面边界判定与“直接合并”的条件）抽成接受“正文判定”参数的函数。建档一侧传入现有的角色判定，结果逐字节不变；初稿一侧传入 04 §8.2“没有章节角色时的判定”。
   - 合并的范围与接缝、不做的整理、叶块 ID 的生成，见 04 §8.2“规则”第 2、4 条。
   - 删除与合并记入初稿内容的 `operations`（04 §8.3“初稿内容”）。
-- [ ] **2.4 叶块与文字层对比**（04 §8.3“对比规则（`draft-compare-v1`）”）
+- [x] **2.4 叶块与文字层对比**（04 §8.3“对比规则（`draft-compare-v1`）”）
   - 从 `pageReviewPlan` 抽出对齐与差异提取这一步（`matchingBlocks`、`opcodes`），放进共用函数。
   - 逐页校订一侧保持现在的行为，见 04 §8.3 对比规则之后的一段。用现有 `page-review.test.ts` 与 `page-proofread.test.ts` 证明。
   - 初稿一侧按规则第 1–7 步实现。实现时要注意的现有代码：
@@ -61,13 +61,13 @@
     - “另一页”判定复用 6.2 页归属的 `textLayerPage`（第 5 步）。
   - 按 04 §8.3“片段与叶块”把叶块取值合成片段取值，差异按叶块保存。
   - 输出：每个叶块的取值与差异、每个片段的取值，以及 04 §8.3“差异记录”末条的三个计数。
-- [ ] **2.5 渲染**
+- [x] **2.5 渲染**
   - builder `draft-leaves-v1`，按 04 §8.2“渲染”：片段的组成与 `continuation_regions`、标题片段与章节、层级、不写 `layout`、资源闭包。
   - 公式、图片、表格沿用 `source-order-leaves-v4` 的写法：从 `render.ts` 抽出逐叶块的写法函数，v4 的字节不变（`archive-render-v2.test.ts` 不改断言）。
   - 层级规则与校订稿不同（题名参加样式统计、不使用层级 1）：从 `source-layout.ts` 的 `headingLevels` 抽出样式统计部分，建档一侧输出不变。
   - 上限：正文 8 MiB、结构 16 MiB（`document/limits.ts`），初稿内容 16 MiB；超过时为 `draft-too-large`。
   - 长循环让出事件循环，响应取消（`cancelled`）。
-- [ ] **2.6 初稿内容与重建**
+- [x] **2.6 初稿内容与重建**
   - 形成初稿内容 `draft-content-v1`（04 §8.3“初稿内容”）。
   - 计算 `page_layer_sha256`、`draft_method_sha256`（04 §8.2“版本”）与 representation hash（04 §8.3“DocumentRef”）。
   - 提供“从初稿内容重建 Markdown 与结构”的函数，供 03 的可读性校验调用。重建不打开 PDF 页面工具、不重算对比、不读原始解析的区块文件（04 §8.3 verified reader 一段）。
@@ -105,6 +105,11 @@
 ## 证据
 
 提交号；定向测试命令与结果；回归文件的通过记录；一份合成样例的初稿 Markdown 与片段取值（放 `sandbox/reports/`，计划只记位置）。
+
+- 2026-11-15，后端实施者完成，总设计师审查后提交。证据：`sandbox/reports/2026-11-15-plan21-02/EVIDENCE.md`。
+- 新增 `apps/server/src/document/draft-builder.ts`（`draft-leaves-v1`、`draft-compare-v1`、片段核对依据与差异、资源闭包、计数、固定的哈希与编号、从封存内容重建）与合同 `packages/contracts/src/draft-document.ts`（schema 3 的显式解析入口，schema 2 入口行为不变）。未接入生产对象图，不落库、不改表。
+- 为复用规则预处理与渲染，改动了 `archive/render.ts`、`source-layout.ts`、`paragraph-breaks.ts`、`text-source.ts` 与 `proofread/page-review.ts`；实施者对照 HEAD，5 组完整校订请求与 `page_input_sha256` 相同，9 组历史构建输出全部字段相同。
+- 总设计师复跑：排版、校订、文档、合同与入库说明共 38 个测试文件 259 项通过；类型检查通过。
 
 ## 退出条件
 

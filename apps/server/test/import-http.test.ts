@@ -12,6 +12,7 @@ import { createMetadataOperations } from "../src/entry/metadata-operations.js";
 import { deviceBusinessRoutes } from "../src/bootstrap/device-routes.js";
 import { startWorkbenchHttp } from "../src/workbench/http.js";
 import { ProductionWorkbenchSession } from "../src/workbench/production-session.js";
+import { importInterface } from "../src/workbench/import-http.js";
 import {
   FIXTURE_LITERATURE,
   workbenchPdf,
@@ -20,6 +21,17 @@ import {
   workbenchLogin,
   workbenchTestAccess,
 } from "./workbench-auth-fixture.js";
+
+it("describes metadata-only creation and idempotent, immutable data sequences", () => {
+  const docs = importInterface(["records"]);
+  expect(
+    docs.endpoints.find((endpoint) => endpoint.operation === "create")?.request,
+  ).toContain("metadata_only?:boolean");
+  expect(docs.semantics.join(" ")).toContain(
+    "Repeating a sequence with identical data is idempotent; different data is rejected with intake-data-conflict",
+  );
+  expect(docs.semantics.join(" ")).not.toContain("replaces that part");
+});
 
 it("shares the exact import handlers between authenticated Web and import-purpose devices without granting other purposes", async () => {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-import-http-")),

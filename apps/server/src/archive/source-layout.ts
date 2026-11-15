@@ -295,12 +295,46 @@ export function headingLevels(bundle: ArchiveTextBundleV2) {
         r.destination.target.role,
       ),
   );
+  const { reliable, guessed } = headingStyleLevels(
+    body,
+    (r) => roots.get(r.leaf.source.root_block_id)?.pdf_geometry,
+  );
+  for (const r of headings) {
+    const d = r.destination;
+    if (d.kind !== "assigned") continue;
+    const numbered = /^\s*(\d+(?:\.\d+)*)(?:\.?\s+|[)．]\s*)\p{L}/u.exec(
+      r.corrected_text.replace(/^#{1,6}\s+/u, ""),
+    );
+    const level =
+      d.target.role === "title"
+        ? 1
+        : ["end-matter", "references"].includes(d.target.role)
+          ? 2
+          : numbered
+            ? Math.min(6, numbered[1]!.split(".").length + 1)
+            : reliable
+              ? (guessed[body.indexOf(r)] ?? 2)
+              : d.presentation.kind === "subheading"
+                ? d.presentation.level
+                : 2;
+    levels.set(r.leaf.leaf_id, level);
+  }
+  return levels;
+}
+
+/** Same recurring-style statistics, with the caller selecting the heading population. */
+export function headingStyleLevels<T>(
+  body: readonly T[],
+  geometry: (
+    row: T,
+  ) => import("@sciretriever/contracts").PdfBlockGeometry | undefined,
+) {
   const styles = new Map<
     string,
     { size: number; count: number; first: number }
   >();
-  const style = (r: (typeof headings)[number]) => {
-    const p = roots.get(r.leaf.source.root_block_id)?.pdf_geometry;
+  const style = (r: T) => {
+    const p = geometry(r);
     return p
       ? {
           key: `${Math.round(p.font_size * 2) / 2}:${p.font}`,
@@ -348,25 +382,5 @@ export function headingLevels(bundle: ArchiveTextBundleV2) {
     guessed[0] === 2 &&
     deeper > 0 &&
     nested / deeper >= 0.9;
-  for (const r of headings) {
-    const d = r.destination;
-    if (d.kind !== "assigned") continue;
-    const numbered = /^\s*(\d+(?:\.\d+)*)(?:\.?\s+|[)．]\s*)\p{L}/u.exec(
-      r.corrected_text.replace(/^#{1,6}\s+/u, ""),
-    );
-    const level =
-      d.target.role === "title"
-        ? 1
-        : ["end-matter", "references"].includes(d.target.role)
-          ? 2
-          : numbered
-            ? Math.min(6, numbered[1]!.split(".").length + 1)
-            : reliable
-              ? (guessed[body.indexOf(r)] ?? 2)
-              : d.presentation.kind === "subheading"
-                ? d.presentation.level
-                : 2;
-    levels.set(r.leaf.leaf_id, level);
-  }
-  return levels;
+  return { reliable, guessed };
 }

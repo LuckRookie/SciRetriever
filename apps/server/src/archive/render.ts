@@ -9,6 +9,7 @@ import {
   type RawParseResource,
   type ProofreadSegmentKind,
   type DocumentLayout,
+  type ArrangementLeaf,
 } from "@sciretriever/contracts";
 import { BODY_ROLES } from "./arrangement.js";
 import { byteHash, textHash } from "./text-source.js";
@@ -116,34 +117,23 @@ export function renderArrangement(
       const start = offset;
       if (i === 0 && heading && !/^\s*#{1,6}\s/u.test(row.corrected_text))
         structure(`${"#".repeat(levels.get(id)!)} `, "heading-marker");
-      if (
-        leaf.image_ref &&
-        !(
-          builder === ARRANGED_DOCUMENT_BUILDER &&
-          leaf.type === "equation" &&
-          row.corrected_text.trim()
-        )
-      ) {
-        const r = available.find((r) => r.reference === leaf.image_ref);
-        if (!r) throw Error("render-resource-missing");
+      for (const r of renderLeafPayload(
+        leaf,
+        row.corrected_text,
+        available,
+        {
+          structure,
+          payload: (value) =>
+            source_map.push({
+              leaf_id: id,
+              ...append(value),
+              source: leaf.source,
+              correction_ids: row.correction_ids,
+            }),
+        },
+        builder,
+      ))
         resources.set(r.reference, r);
-        structure(`![](${r.reference})\n`, "resource-reference");
-      }
-      const math =
-        leaf.type === "equation" &&
-        !!row.corrected_text.trim() &&
-        !/^\s*(?:\$\$|\\\[)/u.test(row.corrected_text);
-      if (math) structure("$$\n", "equation-delimiter");
-      source_map.push({
-        leaf_id: id,
-        ...append(row.corrected_text),
-        source: leaf.source,
-        correction_ids: row.correction_ids,
-      });
-      if (math) structure("\n$$", "equation-delimiter");
-      for (const r of available)
-        if (row.corrected_text.includes(r.reference))
-          resources.set(r.reference, r);
       if (offset === start) structure("\n", "empty-object");
       const kind: ProofreadSegmentKind =
         i === 0 && heading
@@ -350,4 +340,41 @@ export function arrangedStructureSatisfied(
         l.corrected_text.trim().length > 0,
     )
   );
+}
+
+/** Ordinary Markdown leaf syntax shared by fixed proofread and draft builders. */
+export function renderLeafPayload(
+  leaf: Pick<ArrangementLeaf, "image_ref" | "type">,
+  text: string,
+  available: readonly RawParseResource[],
+  writer: {
+    structure(value: string, kind: string): void;
+    payload(value: string): void;
+  },
+  builder: string = ARRANGED_DOCUMENT_BUILDER,
+): readonly RawParseResource[] {
+  const resources = new Map<string, RawParseResource>();
+  if (
+    leaf.image_ref &&
+    !(
+      builder === ARRANGED_DOCUMENT_BUILDER &&
+      leaf.type === "equation" &&
+      text.trim()
+    )
+  ) {
+    const r = available.find((r) => r.reference === leaf.image_ref);
+    if (!r) throw Error("render-resource-missing");
+    resources.set(r.reference, r);
+    writer.structure(`![](${r.reference})\n`, "resource-reference");
+  }
+  const math =
+    leaf.type === "equation" &&
+    !!text.trim() &&
+    !/^\s*(?:\$\$|\\\[)/u.test(text);
+  if (math) writer.structure("$$\n", "equation-delimiter");
+  writer.payload(text);
+  if (math) writer.structure("\n$$", "equation-delimiter");
+  for (const r of available)
+    if (text.includes(r.reference)) resources.set(r.reference, r);
+  return [...resources.values()];
 }

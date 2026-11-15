@@ -10,6 +10,7 @@
 - [intake.ts](intake.ts)：统一批次、条目、来源、分段、纯适配器、报告、文件状态、状态/结果、进度、端点与错误码；source 可为 null，由服务形成一次性来源。也拥有范围词频与 PDF 获取范围/预览合同。
 - [acquisition.ts](acquisition.ts)：当前/待生效来源与有界安全获取轨迹，供配置、任务和浏览器读取。
 - [document.ts](document.ts)：文档合同。
+- [draft-document.ts](draft-document.ts)：两级文本、schema 3 初稿引用、初稿内容、差异与形成回执的严格合同；初稿用显式解析入口，原 `parseDocumentRef` 仍只接受 schema 2。片段核对依据按显式版本校验。
 - [raw-parsing.ts](raw-parsing.ts)：双 profile 原始解析与中性区块合同，校验坐标、页码、资源引用和不可变清单身份。
 - [archive-text.ts](archive-text.ts)：source/叶块、整理操作与快照、逐页改字与处置、停止原因及实际用量的严格合同；新服务使用，发布与传输接入另行实施。
 - [processors.ts](processors.ts)：知识产物合同。

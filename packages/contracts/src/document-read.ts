@@ -10,7 +10,8 @@ import {
   PROOFREAD_SEGMENT_KINDS,
   type ProofreadSegmentKind,
 } from "./document-structure-v2.js";
-import type { ProofreadSource, ProofreadBasis } from "./proofread.js";
+import type { ProofreadSource } from "./proofread.js";
+import { DRAFT_BASES, type DocumentBasis } from "./draft-document.js";
 import {
   ContractValidationError,
   parseAssetId,
@@ -428,12 +429,19 @@ export interface DocumentSegmentLocation {
     readonly region: import("./raw-parsing.js").PageRegion;
   }[];
   readonly source: ProofreadSource;
-  readonly basis: ProofreadBasis;
+  readonly basis: DocumentBasis;
 
   readonly locate: "region" | "page";
 }
 export function parseDocumentSegmentLocation(
   value: unknown,
+): DocumentSegmentLocation {
+  return parseDocumentSegmentLocationForVersion(value, 2);
+}
+/** Draft reads explicitly select their basis set; the legacy entry stays closed. */
+export function parseDocumentSegmentLocationForVersion(
+  value: unknown,
+  schemaVersion: 2 | 3,
 ): DocumentSegmentLocation {
   const r = object(value, [
     "block_id",
@@ -455,13 +463,19 @@ export function parseDocumentSegmentLocation(
     r.continuation_regions.length > 10000
   )
     fail();
-  if (!["text-layer", "image-only", "manual"].includes(String(r.basis))) fail();
+  const bases: readonly string[] =
+    schemaVersion === 3 ? DRAFT_BASES : ["text-layer", "image-only", "manual"];
+  if (
+    (schemaVersion !== 2 && schemaVersion !== 3) ||
+    !bases.includes(String(r.basis))
+  )
+    fail();
   return {
     block_id: token(r.block_id),
     page,
     region,
     source: r.source as ProofreadSource,
-    basis: r.basis as ProofreadBasis,
+    basis: r.basis as DocumentBasis,
 
     locate: r.locate as "region" | "page",
     continuation_regions: r.continuation_regions.map((v) => {

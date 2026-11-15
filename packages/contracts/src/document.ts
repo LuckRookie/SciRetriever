@@ -67,7 +67,9 @@ export interface ProofreadDocumentRef
   readonly representation_sha256: Sha256;
 }
 export type DocumentRepresentationInput = ProofreadDocumentRepresentationInput;
-export type DocumentRef = ProofreadDocumentRef;
+export type DocumentRef =
+  | ProofreadDocumentRef
+  | import("./draft-document.js").DraftDocumentRef;
 export type DocumentStructure =
   | DocumentStructureV1
   | import("./document-structure-v2.js").DocumentStructureV2;
@@ -284,7 +286,7 @@ export function parseDocumentRepresentationInput(
     resources: Object.freeze(resources),
   });
 }
-export function parseDocumentRef(value: unknown): DocumentRef {
+export function parseDocumentRef(value: unknown): ProofreadDocumentRef {
   const r = exact(value, [
     "schema_version",
     "document_id",

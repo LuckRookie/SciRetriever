@@ -132,6 +132,37 @@ export interface PageReviewPlan {
   /** Each leaf's stretch of text-layer words; null for figure text. */
   readonly windows: ReadonlyMap<string, readonly string[] | null>;
 }
+/** Shared alignment only. Tokenization, coverage and page trust belong to callers. */
+export function alignReviewTokens(
+  parsed: readonly string[],
+  layer: readonly string[],
+  minimumCoverage = 0,
+) {
+  const blocks = layer.length ? matchingBlocks(parsed, layer) : [];
+  const coverage = blocks.reduce((n, b) => n + b.size, 0);
+  if (!blocks.length || coverage < minimumCoverage * parsed.length) return null;
+  const start = blocks[0]!.b,
+    end = blocks.at(-1)!.b + blocks.at(-1)!.size,
+    span = layer.slice(start, end);
+  const differences: { parsed: string; text_layer: string }[] = [];
+  let equal = 0;
+  for (const [tag, i1, i2, k1, k2] of opcodes(parsed, span)) {
+    if (tag === "equal") {
+      equal += i2 - i1;
+      continue;
+    }
+    const a = parsed.slice(i1, i2),
+      b = span.slice(k1, k2);
+    if (a.join("") !== b.join(""))
+      differences.push({ parsed: a.join(" "), text_layer: b.join(" ") });
+  }
+  return {
+    coverage,
+    equal,
+    differences,
+    window: layer.slice(Math.max(0, start - 3), end + 3),
+  };
+}
 export function pageReviewPlan(
   page: PdfPageInspection,
   retained: readonly ArrangementLeaf[],
@@ -146,35 +177,18 @@ export function pageReviewPlan(
   for (const leaf of retained) {
     const lt = reviewTokens(leaf.original_text);
     if (!lt.length) continue;
-    const blocks = layer.length ? matchingBlocks(lt, layer) : [];
-    if (
-      !blocks.length ||
-      blocks.reduce((n, b) => n + b.size, 0) < LEAF_COVERAGE * lt.length
-    ) {
+    const aligned = alignReviewTokens(lt, layer, LEAF_COVERAGE);
+    if (!aligned || aligned.coverage < LEAF_COVERAGE * lt.length) {
       windows.set(leaf.leaf_id, null);
       figure.push(leaf.leaf_id);
       continue;
     }
-    const j0 = blocks[0]!.b,
-      j1 = blocks.at(-1)!.b + blocks.at(-1)!.size,
-      span = layer.slice(j0, j1);
-    windows.set(leaf.leaf_id, layer.slice(Math.max(0, j0 - 3), j1 + 3));
+    windows.set(leaf.leaf_id, aligned.window);
     total += lt.length;
-    for (const [tag, i1, i2, k1, k2] of opcodes(lt, span)) {
-      if (tag === "equal") {
-        matched += i2 - i1;
-        continue;
-      }
-      const a = lt.slice(i1, i2),
-        b = span.slice(k1, k2);
-      // Only where the words are split differently: notation, not a difference.
-      if (a.join("") !== b.join(""))
-        differences.push({
-          leaf_id: leaf.leaf_id,
-          parsed: a.join(" "),
-          text_layer: b.join(" "),
-        });
-    }
+    matched += aligned.equal;
+    differences.push(
+      ...aligned.differences.map((d) => ({ leaf_id: leaf.leaf_id, ...d })),
+    );
   }
   const trusted =
     page.kind === "text-layer" && total > 0 && matched / total >= PAGE_TRUST;

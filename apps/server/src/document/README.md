@@ -5,6 +5,7 @@
 ## 内容入口
 
 - [limits.ts](limits.ts)：发布和读取共享的正文、结构字节上限。
+- [draft-builder.ts](draft-builder.ts)：独立的初稿纯构建器；从调用方给定的 raw reader、PDF 页面检查与固定资产声明形成 Markdown、结构、核对依据、差异与表示身份。只读取输入，不写库、发布或调用模型；尚未接入解析操作。`rebuildDraftDocument` 仅凭固定引用与初稿内容重建，不访问页面工具或原始区块文件。
 - [proofread-builder.ts](proofread-builder.ts)：历史 complete 校订版本到 v2 结构的确定性构建，保存区块 ID、页码与区域。
 - [service.ts](service.ts)：`document parse` 的 raw 操作边界，不生成 Document，不更新默认全文。
 - [read.ts](read.ts)：统一文档与证据读取、部分分页、用于人工核对的有界对照。

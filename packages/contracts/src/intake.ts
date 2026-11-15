@@ -1046,7 +1046,7 @@ export const INTAKE_HTTP_ENDPOINTS = [
     "POST",
     "/api/v1/intake/batches",
     "create",
-    "{format,source:null|{system,library_id,identity:global|local,name},scope,import_user_tags?:boolean,file_name?:string|null}",
+    "{format,source:null|{system,library_id,identity:global|local,name},scope,import_user_tags?:boolean,file_name?:string|null,metadata_only?:boolean}",
     "{batch:IntakeBatch}",
   ],
   [

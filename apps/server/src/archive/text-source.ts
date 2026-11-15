@@ -1,6 +1,7 @@
 import { correctReadingOrder } from "./reading-order.js";
 import { measurePdfBlock } from "./pdf-geometry.js";
 import { createHash } from "node:crypto";
+import { setImmediate as yieldSource } from "node:timers/promises";
 import {
   canonicalJsonBytes,
   parseRawBlocksV1,
@@ -47,7 +48,10 @@ export async function prepareArrangementSource(
   reader: ProofreadInputReader,
   pages: readonly PdfPageInspection[],
   signal?: AbortSignal,
-  options: { readonly correct_reading_order?: boolean } = {},
+  options: {
+    readonly correct_reading_order?: boolean;
+    readonly cooperative?: boolean;
+  } = {},
 ): Promise<ArchiveTextSource> {
   const raw = await parseRawParse(rawValue);
   signal?.throwIfAborted();
@@ -69,6 +73,12 @@ export async function prepareArrangementSource(
     throw new ArchiveTextError("source-integrity");
   const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   const sources: ArrangementSourceBlock[] = [];
+  const checkpoint = async (index: number) => {
+    if (options.cooperative && index % 64 === 0) {
+      await yieldSource();
+      signal?.throwIfAborted();
+    }
+  };
   const add = (
     data: Omit<
       ArrangementSourceBlock,
@@ -123,7 +133,8 @@ export async function prepareArrangementSource(
           ] as const)
         : box;
     };
-    for (const b of parsed.blocks) {
+    for (const [index, b] of parsed.blocks.entries()) {
+      if (options.cooperative) await checkpoint(index);
       const field = b.type === "table" && b.html !== null ? "html" : "text";
       add({
         locator: {
@@ -154,6 +165,7 @@ export async function prepareArrangementSource(
     let previous = 0;
     const pageTokens = pages.map((p) => new Set(textTokens(p.text)));
     for (const match of text.matchAll(/[^]*?(?:\n\s*\n|$)/gu)) {
+      if (options.cooperative) await checkpoint(sources.length);
       const piece = match[0];
       if (!piece.length) continue;
       const tokens = textTokens(piece);

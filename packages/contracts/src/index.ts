@@ -3697,3 +3697,4 @@ export * from "./index-refresh.js";
 export * from "./translation.js";
 
 export * from "./document-layout.js";
+export * from "./draft-document.js";
