@@ -986,7 +986,7 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
 
   tool(
     "document_publish_proofread",
-    "Explicitly publish a complete immutable proofreading version as the default readable document. No parser or model call.",
+    "Explicitly publish a complete immutable proofreading version as the default readable document. Read document_read/default first and supply its current revision as expected_default_revision, including when the current default is a draft; null means no default. On publication-conflict, read default again, check the current proofreading input and retry with the returned revision. An accepted fixed version is retained even if the default CAS fails. No parser or model call.",
     object({
       schema_version: { const: 2 },
       literature_id: id,

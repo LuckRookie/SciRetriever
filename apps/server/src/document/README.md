@@ -17,6 +17,8 @@
 
 `storage.ts` 的 `commitDraftVersion` 校验固定初稿内容与产物字节，worker 在同一事务登记版本、资源闭包、计数、当前指针与默认关系，复检原始解析仍为当前并按两个独立 CAS（初稿当前、文档默认）更新。`sqlite/document-defaults.ts` 由原始解析当前切换、初稿登记与校订发布各自在自己的事务里调用：有效完整校订稿优先，其次有效当前初稿，两者都没有则删除默认关系。重新解析会先失去旧默认，新的初稿失败时返回 `document-missing`。旧固定版本的字节与证据不变。补形成的维护入口尚未接入。
 
+显式校订稿发布先读默认关系：HTTP `POST /api/v1/query/document-default`、CLI `document default` 或 MCP `document_read/default` 返回当前 revision。发布请求的 `expected_default_revision` 填这个值，当前默认是初稿时也一样；只有没有默认关系时才用 null。HTTP `POST /api/v1/maintenance/document-publish-proofread`、CLI `document publish-proofread` 与 MCP `document_publish_proofread` 共用发布 owner；`publication-conflict`（HTTP 409）要求重读默认关系、确认当前校订输入后重试。默认 CAS 失败保留已经登记的固定版本，不把登记成功当作默认更新成功。建档自己的发布在写入范围内读当前 revision，不复用解析前的旧值。
+
 `draft-leaves-v1` 的可读性核验使用 `rebuildDraftDocument`，只从固定初稿内容重建，不调用 PDF 页面工具；核验初稿计数、正文、结构和原始解析 ID/hash/part 绑定。初稿证明的文件指纹包含 PDF、全部图片、正文、结构和初稿内容；缓存命中仍比对 SQLite 原始解析声明与版本事实，并计入相同逻辑字节预算。缓存只略过未变化文件的字节重算，不放松单独交付资源时的实际字节核验。`draftDifferences` 再核验所交付的初稿内容字节，按合并片段中叶块的保存顺序组织差异，返回规范 JSON 的 UTF-8 字节分页；游标绑定固定版本、表示 hash、片段与位置，不重算对比。校订稿不提供初稿差异，初稿不提供 corrections。
 
 本模块的公开 describe、outline、segments、slice、resources、resource-bytes 和 evidence 支持初稿。内部 `withVerifiedTextVersion` 为全文索引、查找、身份核验与外部提取显式开放两级固定文本，使用相同的整篇核验与预算。`withVerifiedVersion` 仍只接纳校订稿，包括同一读取范围已缓存初稿的情形；加工输入与逐值核对不会隐式取得初稿准入。结构注释对初稿返回 `document-unsupported`，不会读取正文或调用模型。

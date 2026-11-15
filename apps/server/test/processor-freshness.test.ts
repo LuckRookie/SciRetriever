@@ -2,7 +2,11 @@ import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
-import { parseAsset, sha256 } from "@sciretriever/contracts";
+import {
+  canonicalJsonBytes,
+  parseAsset,
+  sha256,
+} from "@sciretriever/contracts";
 import {
   archiveFixture,
   moveIntroductionToMethods,
@@ -11,7 +15,17 @@ import { workbenchPdf } from "../src/workbench/synthetic-fixture.js";
 it("marks only read content stale, including newly present supplementary material, and never recomputes on read", async () => {
   const e = await archiveFixture();
   try {
-    await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
+    const parsed = await e.app.documentProcessing.parseDocuments(
+      e.rawParseRequest,
+    );
+    if (parsed.draft.status !== "formed" && parsed.draft.status !== "reused")
+      throw new Error("Synthetic draft missing");
+    const draftContent = await sha256(
+      canonicalJsonBytes({
+        text_level: "draft",
+        document_version_id: parsed.draft.document_version_id,
+      }),
+    );
     await e.submit("ready");
     e.setModel((input) => ({
       answer: "reported",
@@ -139,24 +153,44 @@ it("marks only read content stale, including newly present supplementary materia
     expect(e.modelCalls).toBe(calls);
     // Flow X (06ca0af) derives section roles from the arrangement; the v1
     // annotation role edit is retired, so move the introduction text there.
+    const oldContent = (await e.app.archive.status(e.id)).parts.find(
+      (part) => part.asset_id === e.asset.asset_id,
+    )!.content_version;
+    expect(oldContent).not.toBeNull();
     await moveIntroductionToMethods(e, "fixture");
+    const newContent = (await e.app.archive.status(e.id)).parts.find(
+      (part) => part.asset_id === e.asset.asset_id,
+    )!.content_version;
+    expect(newContent).not.toBeNull();
     const stale = await e.app.processorRead!.byId(main);
     expect(stale!.freshness?.state).toBe("stale");
-    // An arrangement edit publishes the new proofread and renders it after
-    // (06ca0af), so the content head moves old -> none -> new: one reason per
-    // transition, and nothing else.
+    // With schema 17 the manual publication falls back to the valid draft,
+    // before render publishes the new corrected version and its annotation.
+    // Keep one reason for each exact transition, including both null windows.
     expect(stale!.freshness?.reasons).toEqual([
       expect.objectContaining({
         kind: "content-version-changed",
         asset_id: e.asset.asset_id,
-        old_version: expect.any(String),
+        old_version: oldContent,
         new_version: null,
       }),
       expect.objectContaining({
         kind: "content-version-changed",
         asset_id: e.asset.asset_id,
         old_version: null,
-        new_version: expect.any(String),
+        new_version: draftContent,
+      }),
+      expect.objectContaining({
+        kind: "content-version-changed",
+        asset_id: e.asset.asset_id,
+        old_version: draftContent,
+        new_version: null,
+      }),
+      expect.objectContaining({
+        kind: "content-version-changed",
+        asset_id: e.asset.asset_id,
+        old_version: null,
+        new_version: newContent,
       }),
     ]);
     expect((await e.app.processorRead!.byId(main))!.freshness).toEqual(

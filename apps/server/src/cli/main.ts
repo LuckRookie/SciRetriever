@@ -179,6 +179,8 @@ function usage(options: CliOptions): CliResult {
     "  config [--theme auto|dark|light|mono] | config status [--json] [--theme ...] | config test ...\n" +
     "  jobs create [--text QUERY] | jobs submit --request FILE|- | jobs run|show|pause|cancel|resume|retry JOB_ID\n" +
     "  document default|describe|outline|segments|slice|resources|resource|evidence|material --request FILE|-\n" +
+    "  document publish-proofread --request FILE|-  # expected_default_revision is the current document default revision, including a draft; null only when absent\n" +
+    "    On publication-conflict, read document default again, check the proofreading input and retry with its revision; the accepted fixed version is retained\n" +
     "    text_level=draft|proofread belongs to the fixed version; describe adds draft_summary={differs_segments,differences,image_only_pages} for drafts\n" +
     "    Draft locations use basis=text-layer-match|text-layer-differs|no-text-layer; roles returns the whole draft with coverage_note; corrected basis is unchanged\n" +
     "  document draft-differences --request FILE|-  # saved draft differences as bounded json-utf8; collect continuations before parsing\n" +
