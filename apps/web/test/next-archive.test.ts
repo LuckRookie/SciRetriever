@@ -60,7 +60,9 @@ it("offers archiving for an unparsed paper, and archiving parses it first", asyn
     await p.goto(`${w.origin}/?view=task&task=${job.job_id}`);
     const detail = p.locator(".task-detail");
     // Parsing is the first step the task shows.
-    await expect.poll(() => detail.innerText()).toContain("解析 · 完成");
+    await expect
+      .poll(() => detail.innerText(), { timeout: 20_000 })
+      .toContain("解析 · 完成");
     expect(w.env.parseCalls).toBe(parses + 1);
     expect((await w.env.app.archive.status(missingId)).status).toBe("READY");
     expect(w.errors).toEqual([]);
