@@ -26,6 +26,7 @@ import {
 } from "@sciretriever/contracts";
 import type { SqliteWorker } from "../storage/sqlite/worker.js";
 import { SqliteDocumentStorage } from "./storage.js";
+import { isProofreadDocumentStructure } from "./verification-cache.js";
 
 const MAX_MATERIAL_BYTES = 256 * 1024 * 1024;
 const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -335,7 +336,7 @@ export class DocumentReadService {
         );
       }
     }
-    if (![16].includes(Number((await this.database.schema()).schema_version)))
+    if (![17].includes(Number((await this.database.schema()).schema_version)))
       throw new DocumentReadError("document-v3-required");
     let snapshot;
     try {
@@ -348,6 +349,11 @@ export class DocumentReadService {
       const result = await this.storage.withVerifiedDocument(
         id,
         async (version, bytes, structure) => {
+          if (
+            version.schema_version === 3 ||
+            !isProofreadDocumentStructure(structure)
+          )
+            throw new DocumentReadError("document-unsupported");
           if (
             version.document_version_id !==
               snapshot.version.document_version_id ||
@@ -508,7 +514,7 @@ export class DocumentReadService {
       const literature = r.literature_id;
       const asset = r.asset_id;
       check(signal);
-      if (![16].includes(Number((await this.database.schema()).schema_version)))
+      if (![17].includes(Number((await this.database.schema()).schema_version)))
         throw new DocumentReadError("document-v3-required");
       const material = await this.database.documentMaterial(literature, asset);
       if (!material || material.material.asset_sha256 !== r.asset_sha256)

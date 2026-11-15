@@ -8,6 +8,8 @@ const directories = {
   "raw-parse-manifest": "parsed/raw/manifests",
   "raw-parse-blocks": "parsed/raw/blocks",
   "raw-parse-private": "parsed/raw/private",
+  "draft-content": "parsed/draft/content",
+  "draft-markdown": "parsed/draft/markdown",
   "proofread-manifest": "parsed/proofread/manifests",
   "proofread-blocks": "parsed/proofread/blocks",
   "proofread-markdown": "parsed/proofread/markdown",

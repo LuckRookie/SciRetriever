@@ -13,6 +13,9 @@
 ## 内容入口
 
 - [artifact-layout.ts](artifact-layout.ts)：原始文件、解析与知识产物的分类目录、hash 分桶和真实扩展名；已有 catalog 路径优先复用。
+
+初稿内容与 Markdown 的新对象目录分别为 `parsed/draft/content`、`parsed/draft/markdown`；结构继续使用 `parsed/structure`，图片只引用原始解析已经登记的资源对象。固定文档的初稿读写通过相邻 document 模块与 sqlite/draft-text-engine 协作。
+
 - [locking.ts](locking.ts)：文件锁与写入协作。
 - [write-admission.ts](write-admission.ts)：写入准入。
 - [retrieval-refresh.ts](retrieval-refresh.ts)：catalog 旁的非秘密索引刷新队列状态，严格读取、原子替换和写入串行化；不保存文献正文或配置。

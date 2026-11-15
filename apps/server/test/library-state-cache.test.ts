@@ -8,7 +8,103 @@ import { LibraryStateCache } from "../src/storage/sqlite/library-state-cache.js"
 import { deriveCurrentState } from "../src/literature/state.js";
 import { LiteratureQueryService } from "../src/literature/query.js";
 import { SqliteWorker } from "../src/storage/sqlite/worker.js";
-import { LIBRARY_STATE_INPUT_TABLES } from "../src/storage/sqlite/schema.js";
+import {
+  LIBRARY_STATE_INPUT_TABLES,
+  LIBRARY_STATE_INPUT_TABLES_V16,
+} from "../src/storage/sqlite/schema.js";
+import { draftStorageFixture } from "./draft-text-storage-fixture.js";
+
+it("invalidates for every mutable draft input, keeps facts immutable and preserves cached/uncached parity", async () => {
+  expect(
+    LIBRARY_STATE_INPUT_TABLES.filter(
+      (table) =>
+        !(LIBRARY_STATE_INPUT_TABLES_V16 as readonly string[]).includes(table),
+    ).sort(),
+  ).toEqual(["draft_current", "draft_version_facts"]);
+  const f = await draftStorageFixture();
+  try {
+    await f.storage.commitDraftVersion(f.publication);
+    const db = new DatabaseSync(join(f.e.home, "catalog.sqlite"));
+    db.exec("PRAGMA foreign_keys=ON");
+    try {
+      const cache = new LibraryStateCache();
+      const read = () => {
+        db.exec("BEGIN");
+        try {
+          return cache.read(db, "draft-fixture", 6, "vlm-engine", () => {});
+        } finally {
+          db.exec("COMMIT");
+        }
+      };
+      const current = db.prepare("SELECT * FROM draft_current").get()!;
+      const facts = db.prepare("SELECT * FROM draft_version_facts").get()!;
+      const changes = [
+        () => db.exec("UPDATE draft_current SET revision=revision+1"),
+        () => db.exec("DELETE FROM draft_current"),
+        () =>
+          db
+            .prepare("INSERT INTO draft_current VALUES(?,?,?,?)")
+            .run(
+              current.part_asset_id!,
+              current.part_sha256!,
+              current.document_version_id!,
+              current.revision!,
+            ),
+        () => db.exec("DELETE FROM draft_version_facts"),
+        () =>
+          db
+            .prepare("INSERT INTO draft_version_facts VALUES(?,?,?,?)")
+            .run(
+              facts.document_version_id!,
+              facts.differs_segments!,
+              facts.differences!,
+              facts.image_only_pages!,
+            ),
+      ];
+      for (const change of changes) {
+        const before = read();
+        const revision = Number(
+          db.prepare("SELECT revision FROM library_state_revision").get()!
+            .revision,
+        );
+        change();
+        expect(
+          Number(
+            db
+              .prepare(
+                "SELECT revision FROM library_state_changes WHERE literature_id=?",
+              )
+              .get(f.e.parseRequest.literature_id)!.revision,
+          ),
+        ).toBeGreaterThan(revision);
+        const after = read();
+        expect(after).not.toBe(before);
+        expect(after).toEqual(
+          new Map(
+            [...archiveStates(db)].map(([id, state]) => [
+              id,
+              deriveCurrentState(state),
+            ]),
+          ),
+        );
+      }
+      const stable = read();
+      const revision = db.prepare("SELECT * FROM library_state_revision").get();
+      expect(() =>
+        db.exec("UPDATE draft_version_facts SET differences=differences+1"),
+      ).toThrow("draft version facts are immutable");
+      expect(db.prepare("SELECT * FROM library_state_revision").get()).toEqual(
+        revision,
+      );
+      expect(read()).toBe(stable);
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  } finally {
+    await f.close();
+  }
+}, 30_000);
 
 it(
   "matches uncached state/counts/filters after each state input changes, including external commits and rollback",
@@ -171,7 +267,7 @@ it(
         await check("restored " + table);
       }
       expect([...touched].sort()).toEqual(
-        [...LIBRARY_STATE_INPUT_TABLES].sort(),
+        [...LIBRARY_STATE_INPUT_TABLES_V16].sort(),
       );
       // Config is part of the key; compare each variant against the same domain function.
       for (const [maxTags, profile] of [

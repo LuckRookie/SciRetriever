@@ -9,11 +9,11 @@ import {
 import {
   SCHEMA_MANIFEST_V15,
   SCHEMA_FINGERPRINT_V15,
-  SCHEMA_MANIFEST,
-  SCHEMA_FINGERPRINT,
-  SCHEMA_VERSION,
+  SCHEMA_MANIFEST_V16 as SCHEMA_MANIFEST,
+  SCHEMA_FINGERPRINT_V16 as SCHEMA_FINGERPRINT,
   IMPORT_SCHEMA_V16,
 } from "./schema.js";
+const SCHEMA_VERSION = 16;
 function refuse(): never {
   throw Object.assign(new Error("import schema migration refused"), {
     code: "import-schema-migration-refused",

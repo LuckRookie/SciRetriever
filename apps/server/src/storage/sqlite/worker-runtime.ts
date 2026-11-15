@@ -159,6 +159,14 @@ const rawParseModule = await import(
     import.meta.url,
   ).href
 );
+const draftTextModule = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./draft-text-engine.ts"
+      : "./draft-text-engine.js",
+    import.meta.url,
+  ).href
+);
 const processorModule = await import(
   new URL(
     import.meta.url.endsWith(".ts")
@@ -3507,8 +3515,23 @@ function documentVersion(versionId: Dynamic): Dynamic {
     document_id: v.document_id,
     document_version_id: v.document_version_id,
     representation_sha256: v.representation_sha256,
-    proofread_id: v.proofread_id,
-    proofread_content_sha256: v.proofread_content_sha256,
+    ...(v.schema_version === 3
+      ? {
+          text_level: "draft",
+          raw_parse_id: v.raw_parse_id,
+          raw_parse_result_sha256: v.raw_parse_result_sha256,
+          page_layer_sha256: v.page_layer_sha256,
+          draft_method_sha256: v.draft_method_sha256,
+          draft_content: {
+            sha256: v.draft_content_sha256,
+            byte_size: v.draft_content_byte_size,
+            media_type: v.draft_content_media_type,
+          },
+        }
+      : {
+          proofread_id: v.proofread_id,
+          proofread_content_sha256: v.proofread_content_sha256,
+        }),
     builder_version: v.builder_version,
     locator_scheme: v.locator_scheme,
     source_material_ref: {
@@ -3552,6 +3575,9 @@ function documentVersion(versionId: Dynamic): Dynamic {
     source_artifact_path: v.source_artifact_path,
     markdown_artifact_path: v.markdown_artifact_path,
     structure_artifact_path: v.structure_artifact_path,
+    ...(v.schema_version === 3
+      ? { draft_content_artifact_path: v.draft_content_artifact_path }
+      : {}),
     resource_artifact_paths: Object.fromEntries(
       paths.map((r: Dynamic) => [r.reference, r.artifact_path]),
     ),
@@ -4882,6 +4908,36 @@ port.on("message", (message: WorkerMessage) => {
               typeof error.code === "string"
                 ? error.code
                 : "proofread-storage-failed",
+          };
+        }
+        break;
+      case "draft_text_read": {
+        const request = message.command.request;
+        value = readTransaction(() =>
+          draftTextModule.runDraftTextRead(db, request),
+        );
+        break;
+      }
+      case "draft_text_write":
+        try {
+          value = {
+            ok: true,
+            value: draftTextModule.runDraftTextWrite(
+              db,
+              message.command.request,
+            ),
+          };
+        } catch (error) {
+          throwCatalogCorruption(error);
+          value = {
+            ok: false,
+            code:
+              error &&
+              typeof error === "object" &&
+              "code" in error &&
+              typeof error.code === "string"
+                ? error.code
+                : "draft-text-storage-failed",
           };
         }
         break;

@@ -14,6 +14,7 @@ import {
   parseCandidatePublicationReceipt,
   parseDocumentMaterialRef,
   parseDocumentRef,
+  parseDraftDocumentRef,
   parseDurableCandidate,
   parseIdentifier,
   parseLiterature,
@@ -119,6 +120,11 @@ export class KnowledgeStorageError extends Error {
     super("knowledge storage operation failed");
   }
 }
+export class DraftTextStorageError extends Error {
+  constructor(readonly code: string) {
+    super("draft text storage operation failed");
+  }
+}
 
 export interface DocumentVersionPublication {
   readonly version: DocumentRef;
@@ -142,6 +148,7 @@ export interface DocumentVersionSnapshot {
   readonly source_artifact_path: string;
   readonly markdown_artifact_path: string;
   readonly structure_artifact_path: string;
+  readonly draft_content_artifact_path?: string;
   readonly resource_artifact_paths: Readonly<Record<string, string>>;
 }
 
@@ -287,6 +294,14 @@ function parseDiscoveryPublication(value: unknown): DiscoveryPublication {
 }
 
 export type SqliteCommand =
+  | {
+      readonly kind: "draft_text_read";
+      readonly request: import("./draft-text-engine.js").DraftTextRead;
+    }
+  | {
+      readonly kind: "draft_text_write";
+      readonly request: import("./draft-text-engine.js").DraftTextWrite;
+    }
   | {
       readonly kind: "capture_read";
       readonly action: import("./capture-engine.js").CaptureRead;
@@ -882,7 +897,8 @@ export interface ExecutionRuntimeInspection {
     | 13
     | 14
     | 15
-    | 16;
+    | 16
+    | 17;
   readonly catalog_fingerprint: string;
   readonly version: number | null;
   readonly fingerprint: string | null;
@@ -1244,6 +1260,7 @@ export class SqliteWorker {
       return Promise.reject(new SqliteWorkerError());
     const copy = structuredClone(command);
     const readOnly = new Set<string>([
+      "draft_text_read",
       "intake_read",
       "library_facets",
       "acquire_pdf_selection",
@@ -1669,6 +1686,69 @@ export class SqliteWorker {
       return reply.value as T;
     };
     return read ? send() : this.admission!.run(send);
+  }
+  draftVersionFacts(
+    versionId: string,
+  ): Promise<import("./draft-text-engine.js").DraftVersionFacts | null> {
+    return this.run({
+      kind: "draft_text_read",
+      request: { kind: "facts", document_version_id: versionId },
+    });
+  }
+  draftCurrent(assetId: string): Promise<{
+    part_asset_id: string;
+    part_sha256: string;
+    document_version_id: string;
+    revision: number;
+  } | null> {
+    return this.run({
+      kind: "draft_text_read",
+      request: { kind: "current", asset_id: assetId },
+    });
+  }
+  primaryDocumentDefaults(
+    literatureIds: readonly string[],
+  ): Promise<
+    readonly import("./draft-text-engine.js").PrimaryDocumentDefault[]
+  > {
+    return this.run({
+      kind: "draft_text_read",
+      request: { kind: "primary-defaults", literature_ids: literatureIds },
+    });
+  }
+  private async draftTextWrite<T>(
+    request: import("./draft-text-engine.js").DraftTextWrite,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    if (this.readOnly || !this.admission)
+      throw new DraftTextStorageError("write-admission-required");
+    const copy = structuredClone(request);
+    return this.admission.run(async () => {
+      signal?.throwIfAborted();
+      const reply = await this.send<{ ok: boolean; value?: T; code?: string }>({
+        kind: "draft_text_write",
+        request: copy,
+      });
+      if (!reply.ok)
+        throw new DraftTextStorageError(
+          reply.code ?? "draft-text-storage-failed",
+        );
+      return reply.value as T;
+    }, signal);
+  }
+  commitDraftVersion(
+    publication: import("./draft-text-engine.js").DraftVersionPublication,
+    signal?: AbortSignal,
+  ): Promise<import("./draft-text-engine.js").DraftVersionCommit> {
+    return this.draftTextWrite({ kind: "commit", publication }, signal);
+  }
+  recomputeDocumentDefault(
+    request: import("./document-defaults.js").DocumentDefaultRequest,
+    signal?: AbortSignal,
+  ): Promise<
+    ReturnType<typeof import("./document-defaults.js").recomputeDocumentDefault>
+  > {
+    return this.draftTextWrite({ kind: "recompute-default", request }, signal);
   }
   async rawParse<T>(
     action: import("./raw-parsing-engine.js").RawParseStorageAction,
@@ -2405,7 +2485,18 @@ export class SqliteWorker {
           snapshot.default_revision < 1))
     )
       throw new SqliteWorkerError();
-    return { ...snapshot, version: parseDocumentRef(snapshot.version) };
+    if (
+      snapshot.version.schema_version === 3 &&
+      typeof snapshot.draft_content_artifact_path !== "string"
+    )
+      throw new SqliteWorkerError();
+    return {
+      ...snapshot,
+      version:
+        snapshot.version.schema_version === 3
+          ? parseDraftDocumentRef(snapshot.version)
+          : parseDocumentRef(snapshot.version),
+    };
   }
   async documentDefault(
     literatureId: string,

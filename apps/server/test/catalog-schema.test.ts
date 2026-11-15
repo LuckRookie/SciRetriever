@@ -19,6 +19,9 @@ import { initializeCurrentCatalog } from "../src/storage/sqlite/catalog-layout.j
 import {
   SCHEMA_VERSION,
   SCHEMA_FINGERPRINT,
+  SCHEMA_MANIFEST,
+  SCHEMA_MANIFEST_V16,
+  SCHEMA_FINGERPRINT_V16,
 } from "../src/storage/sqlite/schema.js";
 import { SqliteWorker } from "../src/storage/sqlite/worker.js";
 import { runCli } from "../src/cli/main.js";
@@ -26,6 +29,140 @@ const digest = async (path: string) =>
   createHash("sha256")
     .update(await readFile(path))
     .digest("hex");
+it("pins frozen 16 and verifies the exact current 17 manifest and version-specific column checks", () => {
+  expect(SCHEMA_VERSION).toBe(17);
+  expect(SCHEMA_MANIFEST_V16).toHaveLength(378);
+  expect(SCHEMA_FINGERPRINT_V16).toBe(
+    "8545637a22c2341066427f71195eec5465e4c906f3dabd2c2cbad2a4c512f0f8",
+  );
+  expect(
+    createHash("sha256").update(JSON.stringify(SCHEMA_MANIFEST)).digest("hex"),
+  ).toBe(SCHEMA_FINGERPRINT);
+  const db = new DatabaseSync(":memory:");
+  try {
+    initializeCurrentCatalog(db);
+    for (const sql of SCHEMA_MANIFEST) {
+      const name =
+        /^CREATE (?:UNIQUE )?(?:VIRTUAL )?(?:TABLE|INDEX|TRIGGER|VIEW) ([a-z_][a-z0-9_]*)/u.exec(
+          sql,
+        )![1]!;
+      expect(
+        db.prepare("SELECT sql FROM sqlite_master WHERE name=?").get(name)!.sql,
+        name,
+      ).toBe(sql);
+    }
+    // Isolate CHECK/level constraints here; transaction tests use real complete FKs.
+    db.exec("PRAGMA foreign_keys=OFF");
+    const hash = "a".repeat(64);
+    const v2 = {
+      document_version_id: "corrected",
+      document_id: "doc",
+      schema_version: 2,
+      literature_id: "paper",
+      source_asset_id: "pdf",
+      source_sha256: hash,
+      source_byte_size: 1,
+      source_media_type: "application/pdf",
+      source_artifact_path: "originals/pdf/a.pdf",
+      builder_version: "proofread-blocks-v1",
+      locator_scheme: "utf8-segment-v1",
+      representation_sha256: hash,
+      markdown_artifact_path: "parsed/a.md",
+      markdown_sha256: hash,
+      markdown_byte_size: 1,
+      markdown_media_type: "text/markdown",
+      structure_artifact_path: "parsed/a.json",
+      structure_sha256: hash,
+      structure_byte_size: 1,
+      structure_media_type: "application/json",
+      proofread_id: "proofread",
+      proofread_content_sha256: hash,
+      created_at: "2026-11-15T00:00:00Z",
+    };
+    const v3 = {
+      ...v2,
+      document_version_id: "draft",
+      representation_sha256: "b".repeat(64),
+      schema_version: 3,
+      proofread_id: null,
+      proofread_content_sha256: null,
+      builder_version: "draft-leaves-v1",
+      raw_parse_id: "raw",
+      raw_parse_result_sha256: hash,
+      page_layer_sha256: hash,
+      draft_method_sha256: hash,
+      draft_content_artifact_path: "parsed/draft/content/a.json",
+      draft_content_sha256: hash,
+      draft_content_byte_size: 1,
+      draft_content_media_type: "application/json",
+    };
+    const insert = (row: Record<string, string | number | null>) =>
+      db
+        .prepare(
+          "INSERT INTO document_versions(" +
+            Object.keys(row).join(",") +
+            ") VALUES(" +
+            Object.keys(row)
+              .map(() => "?")
+              .join(",") +
+            ")",
+        )
+        .run(...Object.values(row));
+    let n = 0;
+    const invalid = (row: Record<string, string | number | null>) => {
+      expect(() =>
+        insert({ ...row, document_version_id: "invalid-" + ++n }),
+      ).toThrow(/CHECK/u);
+    };
+    invalid({ ...v2, proofread_id: null });
+    invalid({ ...v2, proofread_content_sha256: null });
+    for (const key of [
+      "raw_parse_id",
+      "raw_parse_result_sha256",
+      "page_layer_sha256",
+      "draft_method_sha256",
+      "draft_content_artifact_path",
+      "draft_content_sha256",
+      "draft_content_byte_size",
+      "draft_content_media_type",
+    ])
+      invalid({ ...v3, [key]: null });
+    invalid({ ...v2, raw_parse_id: "raw" });
+    invalid({
+      ...v3,
+      proofread_id: "proofread",
+      proofread_content_sha256: hash,
+    });
+    invalid({ ...v3, schema_version: 4 });
+    invalid({ ...v3, page_layer_sha256: "A".repeat(64) });
+    invalid({ ...v3, draft_content_byte_size: 0 });
+    invalid({ ...v3, draft_content_media_type: "text/plain" });
+    insert(v2);
+    insert(v3);
+    expect(() =>
+      db.exec("INSERT INTO draft_version_facts VALUES('corrected',0,0,0)"),
+    ).toThrow("draft version required");
+    expect(() =>
+      db.exec(
+        "INSERT INTO draft_current VALUES('pdf','" + hash + "','corrected',1)",
+      ),
+    ).toThrow("draft version required");
+    expect(() =>
+      db.exec(
+        "INSERT INTO processor_unfound_citations VALUES('result','record','/value','corrected')",
+      ),
+    ).toThrow("draft version required");
+    db.exec("INSERT INTO draft_version_facts VALUES('draft',1,2,0)");
+    expect(() =>
+      db.exec("UPDATE draft_version_facts SET differences=2"),
+    ).toThrow("draft version facts are immutable");
+    expect(() =>
+      db.exec("INSERT INTO draft_version_facts VALUES('missing',-1,0,0)"),
+    ).toThrow();
+  } finally {
+    db.close();
+  }
+});
 async function fixture(run: (root: string, catalog: string) => Promise<void>) {
   const root = await mkdtemp(join(tmpdir(), "sciretriever-current-catalog-"));
   try {

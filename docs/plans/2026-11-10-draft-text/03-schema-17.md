@@ -2,7 +2,7 @@
 
 类型：计划（结果块）
 负责：catalog 对初稿版本、初稿事实、引用保护与“找不到”投影的结构，及 16 → 17 的离线迁移
-状态：Pending
+状态：In progress（3.1–3.5 完成，2026-11-15；3.6 待 G2，不阻塞 04）
 
 ## Outcome
 
@@ -29,10 +29,10 @@
 
 ## Tasks
 
-- [ ] **3.1 表结构清单与测试数据**
+- [x] **3.1 表结构清单与测试数据**
   - 对照 07 §2.3.4 与 §4.2 写出 schema 17 的 DDL 清单：要重建的表、要替换的视图与触发器、新表与新索引。记入本块回执，交总设计师核对后再写进 `schema.ts`。
   - 准备合成的 schema 16 库：含校订稿、长文档、加工结果、批注、全文索引，供 3.5 的迁移测试使用。
-- [ ] **3.2 schema 17 清单**
+- [x] **3.2 schema 17 清单**
   - 保留 `SCHEMA_MANIFEST_V16` 与其指纹作为迁移的精确输入；`SCHEMA_MANIFEST` 与 `SCHEMA_VERSION` 改为 17。
   - 按 07 §2.3.4 实现：
     - 重建 `document_versions`（`schema_version` 2 或 3，两组列按版本恰好一组非空，外键 `ON DELETE RESTRICT`）。文本等级由 `schema_version` 推出，不另设列；
@@ -42,20 +42,20 @@
   - 视图 `archive_current_parts`：默认文本是初稿时给出 04 §8.5 的初稿内容版本；默认文本是校订稿时，内容版本 JSON 与 schema 16 **逐字节相同**。
   - 原始解析退役：`raw-parsing-engine.ts` 的 `retire` 增加“有文档版本引用它”的判断，返回 `raw-parse-in-use`（07 §2.3.4“对原始解析的保护”）。
   - 文献库状态缓存：初稿登记、当前初稿与默认关系改变时，相关文献的 `library_state_changes` 要更新，沿用现有触发器写法。规格没有规定这一点，做法记入回执。
-- [ ] **3.3 写入与读取函数**
+- [x] **3.3 写入与读取函数**
   - 在 storage owner 内实现：
     - 登记初稿版本：版本行、资源闭包、版本事实、当前初稿指针在同一事务；文件目录与复用按 07 §2.3.4“文件”（图片沿用原始解析的资源对象，不复制）；
-    - 默认关系：04 §8.5 列出的三种写入（原始解析当前指针切换、初稿形成或复用、校订稿发布）都在各自的事务内重新求默认文本，两者都没有时删除默认关系。其中原始解析当前指针的切换在 `raw-parsing-engine.ts` 的发布事务里，现在不碰默认关系，要补上；
+    - 默认关系（2026-11-15 定：本块只建好并测试重求函数 `recomputeDocumentDefault`，三种写入的接入移到 04 的 4.1）：04 §8.5 列出的三种写入（原始解析当前指针切换、初稿形成或复用、校订稿发布）都在各自的事务内重新求默认文本，两者都没有时删除默认关系。其中原始解析当前指针的切换在 `raw-parsing-engine.ts` 的发布事务里，现在不碰默认关系，要补上；
     - 按版本读取初稿事实；按本页文献 ID 批量读取主 PDF 默认文本的版本与等级（供 07、09 使用，不读正文）。
   - 可读性校验（`document/storage.ts`）按 builder 分派：`draft-leaves-v1` 调用 02 的 2.6 重建，不调用 PDF 页面工具。
-- [ ] **3.4 当前 schema 编号的检查**
+- [x] **3.4 当前 schema 编号的检查**
   - 现在有十余处写死 `[16].includes(...)`，都改为 17：
     - `document/service.ts`、`document/proofread-publication.ts`、`document/read.ts`（两处）；
     - `parsing/article-identity.ts`；
     - `storage/sqlite/` 下的 `extraction-engine.ts`、`processor-engine.ts`、`proofread-engine.ts`、`structure-annotation-engine.ts`、`raw-parsing-engine.ts`；
     - 以及 `rg -n '\[16\]\.includes' apps/server/src` 找到的其它位置。
   - 计划 20 若在此后还要写 schema 16 的代码，这个列表要和它对齐（C1）。
-- [ ] **3.5 离线迁移**
+- [x] **3.5 离线迁移**
   - 迁移模块与脚本，沿用 `import-schema-migration.ts` 的结构：
     - 规则见 07 §2.3.4“迁移”：精确输入布局、拒绝运行中的任务与建档、事务内 DDL 与身份替换；
     - 校验 SQLite 完整性与外键；

@@ -15,6 +15,38 @@ import { SqliteRawParseStorage } from "../src/storage/raw-parsing.js";
 import { SqliteWorker } from "../src/storage/sqlite/worker.js";
 import { stageLegacyRawParse } from "../src/parsing/legacy-raw.js";
 import { TypeScriptConfigurationOwner } from "../src/configuration/owner.js";
+import { DatabaseSync } from "node:sqlite";
+import { draftStorageFixture } from "./draft-text-storage-fixture.js";
+
+it("refuses to retire a raw parse referenced only by an immutable draft version", async () => {
+  const f = await draftStorageFixture();
+  try {
+    await f.storage.commitDraftVersion(f.publication);
+    const id = f.output.document.raw_parse_id;
+    const db = new DatabaseSync(join(f.e.home, "catalog.sqlite"));
+    try {
+      db.prepare(
+        "UPDATE raw_parse_current SET raw_parse_id=NULL WHERE raw_parse_id=?",
+      ).run(id);
+      expect(
+        db.prepare("SELECT 1 FROM raw_parse_pins WHERE raw_parse_id=?").get(id),
+      ).toBeUndefined();
+      expect(
+        db
+          .prepare("SELECT 1 FROM raw_parse_current WHERE raw_parse_id=?")
+          .get(id),
+      ).toBeUndefined();
+    } finally {
+      db.close();
+    }
+    await expect(f.e.app.database.rawParse("retire", id)).rejects.toMatchObject(
+      { code: "raw-parse-in-use" },
+    );
+    expect((await f.rawStore.load(id))!.result.raw_parse_id).toBe(id);
+  } finally {
+    await f.close();
+  }
+}, 30_000);
 
 async function fixture() {
   const f = await coreProcessingFixture();

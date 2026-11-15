@@ -8,9 +8,11 @@ import {
   SCHEMA_MANIFEST_V15,
   SCHEMA_FINGERPRINT_V15,
   SCHEMA_VERSION,
+  SCHEMA_FINGERPRINT_V16,
 } from "../src/storage/sqlite/schema.js";
 import { CURRENT_CATALOG_CONFIG } from "../src/storage/sqlite/catalog-layout.js";
 import { migrateImportSchema } from "../src/storage/sqlite/import-schema-migration.js";
+import { migrateDraftTextSchema } from "../src/storage/sqlite/draft-text-schema-migration.js";
 import { inspectCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
 import {
   createApplication,
@@ -205,6 +207,25 @@ it("migrates exact schema 15 to 16 atomically, preserves all facts and enables d
       "intake_withdrawn_objects",
     ])
       expect(result.after[table], table).toBe(0);
+    const v16 = new DatabaseSync(path, { readOnly: true });
+    expect(
+      v16
+        .prepare(
+          "SELECT schema_version,schema_fingerprint FROM schema_identity",
+        )
+        .get(),
+    ).toEqual({
+      schema_version: 16,
+      schema_fingerprint: SCHEMA_FINGERPRINT_V16,
+    });
+    v16.close();
+    await expect(migrateImportSchema(path)).rejects.toMatchObject({
+      code: "import-schema-migration-refused",
+    });
+    await expect(inspectCatalogSchema(path)).rejects.toMatchObject({
+      reason: "catalog-layout-not-current",
+    });
+    await migrateDraftTextSchema(path);
     expect((await inspectCatalogSchema(path)).schema_version).toBe(
       SCHEMA_VERSION,
     );

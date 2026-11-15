@@ -64,7 +64,7 @@ export function runRawParseStorage(
   args: unknown,
 ): unknown {
   if (
-    ![16].includes(
+    ![17].includes(
       Number(
         one(db, "SELECT schema_version FROM schema_identity WHERE singleton=1")
           ?.schema_version,
@@ -212,7 +212,8 @@ export function runRawParseStorage(
       const id = String(args);
       if (
         one(db, "SELECT 1 FROM raw_parse_pins WHERE raw_parse_id=?", id) ||
-        one(db, "SELECT 1 FROM raw_parse_current WHERE raw_parse_id=?", id)
+        one(db, "SELECT 1 FROM raw_parse_current WHERE raw_parse_id=?", id) ||
+        one(db, "SELECT 1 FROM document_versions WHERE raw_parse_id=?", id)
       )
         fail("raw-parse-in-use");
       db.prepare("DELETE FROM raw_parse_resources WHERE raw_parse_id=?").run(

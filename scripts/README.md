@@ -28,7 +28,8 @@
 - [migrate-library-state-v13.mjs](migrate-library-state-v13.mjs)：对精确匹配的离线 12 库安装按篇状态失效提示、反向索引和当前 13 身份，完整校验并保持全部旧表行数；只接受绝对路径，打开库不会调用它。旧建档转换工具仍固定到 12，之后显式使用本工具。
 
 - [migrate-intake-v15.mjs](migrate-intake-v15.mjs)：构建 server 后对绝对路径的离线 14 库执行 14 → 15；在同一事务中回填批次、重解释主题词、重投影作者关键词并更新全文索引。保留文献、观测与来源 hash，核对旧事实行数及外键；正式执行前必须完整备份并先在副本演练。
-- [migrate-import-v16.mjs](migrate-import-v16.mjs)：构建 server 后，对显式绝对路径的离线 schema 15 库执行 15→16；单事务追加设备认证、通用导入会话/外部对应及收藏按日批次/请求表，核对旧表行数和外键，不伪造历史来源对应。后续 M1 表继续并入同一工具，运行入口不自动迁移；正式执行前须另行授权、停服和备份。
+- [migrate-import-v16.mjs](migrate-import-v16.mjs)：构建 server 后，对显式绝对路径的离线 schema 15 库执行 15→16；单事务追加设备认证、通用导入会话/外部对应及收藏按日批次/请求表，核对旧表行数和外键，不伪造历史来源对应。16 输出已冻结，运行入口不自动迁移；正式执行前须另行授权、停服和备份。
+- [migrate-draft-text-v17.mjs](migrate-draft-text-v17.mjs)：构建 server 后，对显式绝对路径的离线 schema 16 库执行 16→17；重建文档版本父表，增加初稿当前指针、版本事实和“找不到”引用投影。保持全部旧表行数、校订稿字段、内容版本事件、加工结果过时状态和索引不变；完整布局/完整性/外键核验后提交。不读取个人配置、不访问 artifact、不形成初稿；失败保留原始异常并回滚，可重跑。正式执行须另行授权。
 - [cleanup-openalex-top-concepts.mjs](cleanup-openalex-top-concepts.mjs)：构建 server 后对绝对路径的离线当前 schema 库清理旧 OpenAlex 顶层大类，单事务重排观测 ordinal、按篇重投影并同步 Library FTS；可重复运行，无 schema 变更。正式执行须先停服和完整备份，先在独立副本演练；全量检索索引由既有增量刷新追赶，不在此脚本重建。
 
 ## 放置边界

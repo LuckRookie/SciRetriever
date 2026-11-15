@@ -12,6 +12,7 @@ import {
   type SectionRole,
 } from "@sciretriever/contracts";
 import { SqliteDocumentStorage } from "./storage.js";
+import { isProofreadDocumentStructure } from "./verification-cache.js";
 import { SqliteAnnotationStorage } from "../storage/structure-annotations.js";
 import {
   assignSectionRoles,
@@ -202,7 +203,11 @@ export class StructureAnnotationService {
       annotation = await this.documents.withVerifiedDocument(
         id,
         async (version, markdown, structure) => {
-          if (version.schema_version !== 2 || structure.schema_version !== 2)
+          if (
+            version.schema_version !== 2 ||
+            structure.schema_version !== 2 ||
+            !isProofreadDocumentStructure(structure)
+          )
             throw new AnnotationError("annotation-proofread-required");
           const sections = await assignSectionRoles({
             structure,

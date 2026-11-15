@@ -1,7 +1,7 @@
 import {
   LIBRARY_STATE_SCHEMA,
   SCHEMA_MANIFEST_V13,
-  LIBRARY_STATE_INPUT_TABLES,
+  LIBRARY_STATE_INPUT_TABLES_V16 as LIBRARY_STATE_INPUT_TABLES,
 } from "./schema.js";
 
 /** Frozen offline input/target only. Never accepted by the current catalog opener. */

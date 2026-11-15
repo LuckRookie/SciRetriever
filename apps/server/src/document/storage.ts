@@ -11,10 +11,11 @@ import {
   sha256,
   DOCUMENT_READ_MAX_RESOURCE_BYTES,
   parseDocumentRepresentationInput,
+  MAX_DRAFT_CONTENT_BYTES,
+  type DraftDocumentRef,
   type ArtifactRef,
   type DocumentRef,
   type DocumentRepresentationInput,
-  type DocumentStructure,
   type RawParseResource,
   type DocumentResource,
 } from "@sciretriever/contracts";
@@ -25,7 +26,15 @@ import {
   DocumentVerificationCache,
   type DocumentVerificationCacheLimits,
   type DocumentVerificationProof,
+  type VerifiedDocumentStructure,
 } from "./verification-cache.js";
+import {
+  DRAFT_BUILDER,
+  draftRepresentationHash,
+  rebuildDraftDocument,
+} from "./draft-builder.js";
+import type { DraftVersionPublication } from "../storage/sqlite/draft-text-engine.js";
+import type { DocumentVersionSnapshot } from "../storage/sqlite/worker.js";
 import type { DocumentStoragePort } from "./contract.js";
 import { documentRepresentationHash } from "./contract.js";
 import {
@@ -51,7 +60,7 @@ function sameResourceClosure(
   );
 }
 
-/** Verifies the immutable closure of a corrected Document. */
+/** Verifies the immutable closure of either text level, using its fixed builder. */
 export class SqliteDocumentStorage implements DocumentStoragePort {
   private readonly verification: DocumentVerificationCache;
   constructor(
@@ -157,6 +166,56 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
   ): ReturnType<DocumentStoragePort["commitVersion"]> {
     return this.database.commitDocumentVersion(input, signal);
   }
+  async commitDraftVersion(
+    input: Omit<DraftVersionPublication, "facts">,
+    signal?: AbortSignal,
+  ) {
+    const v = input.version;
+    const content = await this.readBytes(
+      input.draft_content_artifact_path,
+      v.draft_content,
+      MAX_DRAFT_CONTENT_BYTES,
+      signal,
+    );
+    const built = await rebuildDraftDocument(v, content, signal);
+    const artifacts: [string, ArtifactRef][] = [
+      [input.source_artifact_path, v.source_material_ref.artifact],
+      [input.markdown_artifact_path, v.markdown],
+      [input.structure_artifact_path, v.structure],
+      ...v.resources.map((r): [string, ArtifactRef] => [
+        input.resource_artifact_paths[r.reference]!,
+        r.artifact,
+      ]),
+    ];
+    if (
+      v.source_material_ref.byte_size > 256 * 1024 * 1024 ||
+      v.resources.length > 4096 ||
+      v.resources.some(
+        (r) => r.artifact.byte_size > DOCUMENT_READ_MAX_RESOURCE_BYTES,
+      ) ||
+      v.resources.reduce((n, r) => n + r.artifact.byte_size, 0) >
+        128 * 1024 * 1024
+    )
+      throw new Error("document artifact limit exceeded");
+    for (const [path, artifact] of artifacts) {
+      if (!path) throw new Error("document resource missing");
+      await this.withVerifiedArtifact(
+        path,
+        artifact,
+        async (chunks) => {
+          for await (const chunk of chunks) {
+            void chunk;
+            signal?.throwIfAborted();
+          }
+        },
+        signal,
+      );
+    }
+    return this.database.commitDraftVersion(
+      { ...input, facts: built.counts },
+      signal,
+    );
+  }
 
   withPinnedVersion<T>(
     documentVersionId: string,
@@ -177,7 +236,7 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
     consume: (
       version: DocumentRef,
       markdown: Uint8Array,
-      structure: DocumentStructure,
+      structure: VerifiedDocumentStructure,
     ) => Promise<T>,
     signal?: AbortSignal,
     reserveVerifiedBytes?: (bytes: number) => void,
@@ -226,27 +285,32 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
     )
       throw new Error("document artifact limit exceeded");
     if (
-      v.schema_version !== 2 ||
-      (v.builder_version !== PROOFREAD_DOCUMENT_BUILDER_VERSION &&
+      (v.schema_version === 3 &&
+        (v.builder_version !== DRAFT_BUILDER ||
+          v.draft_content.byte_size > MAX_DRAFT_CONTENT_BYTES)) ||
+      (v.schema_version === 2 &&
+        v.builder_version !== PROOFREAD_DOCUMENT_BUILDER_VERSION &&
         !isArrangedBuilder(v.builder_version))
     )
       throw new Error("document builder unsupported");
     if (
-      (await documentRepresentationHash({
-        source_material_ref: v.source_material_ref,
-        proofread_id: v.proofread_id,
-        proofread_content_sha256: v.proofread_content_sha256,
-        builder_version: v.builder_version,
-        locator_scheme: v.locator_scheme,
-        markdown: v.markdown,
-        structure: v.structure,
-        resources: v.resources,
-      })) !== v.representation_sha256
+      (v.schema_version === 3
+        ? draftRepresentationHash(v)
+        : await documentRepresentationHash({
+            source_material_ref: v.source_material_ref,
+            proofread_id: v.proofread_id,
+            proofread_content_sha256: v.proofread_content_sha256,
+            builder_version: v.builder_version,
+            locator_scheme: v.locator_scheme,
+            markdown: v.markdown,
+            structure: v.structure,
+            resources: v.resources,
+          })) !== v.representation_sha256
     )
       throw new Error("document representation hash mismatch");
     const key = `${documentVersionId}:${v.representation_sha256}`;
     this.verification.discardVersion(documentVersionId, key);
-    const binding = await this.proofreadBinding(v, signal);
+    const binding = await this.verificationBinding(v, snapshot, signal);
     // A cache hit admits the same logical closure as a cold verification. It
     // must not let a caller bypass its aggregate verified-byte budget.
     reserveVerifiedBytes?.(
@@ -258,9 +322,7 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
           0,
         ),
     );
-    if (!isArrangedBuilder(v.builder_version))
-      reserveVerifiedBytes?.(binding.manifest.artifact.byte_size);
-    reserveVerifiedBytes?.(binding.blocks.artifact.byte_size);
+    reserveVerifiedBytes?.(binding.verified_bytes);
     const binary: [string, ArtifactRef][] = [
       [snapshot.source_artifact_path, v.source_material_ref.artifact],
     ];
@@ -274,8 +336,7 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
         ...binary.map(([path]) => path),
         snapshot.markdown_artifact_path,
         snapshot.structure_artifact_path,
-        binding.manifest.reference,
-        binding.blocks.reference,
+        ...binding.paths,
       ]),
     ];
     const declarations = JSON.stringify({
@@ -336,14 +397,17 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
             MAX_DOCUMENT_STRUCTURE_BYTES,
             stop,
           );
-          const built = await this.verifiedProofreadStructure(
-            v,
-            markdown,
-            stop,
-          );
+          const built =
+            v.schema_version === 3
+              ? await this.verifiedDraftStructure(v, snapshot, markdown, stop)
+              : await this.verifiedProofreadStructure(v, markdown, stop);
           if (!Buffer.from(built.bytes).equals(Buffer.from(structure)))
             throw new Error("document structure mismatch");
-          const afterBinding = await this.proofreadBinding(v, stop);
+          const afterBinding = await this.verificationBinding(
+            v,
+            snapshot,
+            stop,
+          );
           const after = await this.fingerprints(paths, stop);
           if (
             !isDeepStrictEqual(before, after) ||
@@ -390,6 +454,70 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
     const failure = checks.find((r) => r.status === "rejected");
     if (failure?.status === "rejected") throw failure.reason;
     return result;
+  }
+  private async verificationBinding(
+    v: DocumentRef,
+    snapshot: DocumentVersionSnapshot,
+    signal?: AbortSignal,
+  ) {
+    if (v.schema_version === 3) {
+      if (!snapshot.draft_content_artifact_path)
+        throw new Error("document draft content missing");
+      const raw = await this.database.rawParse<Record<string, unknown> | null>(
+        "get",
+        v.raw_parse_id,
+        signal,
+      );
+      const facts = await this.database.draftVersionFacts(
+        v.document_version_id,
+      );
+      if (
+        !raw ||
+        raw.result_sha256 !== v.raw_parse_result_sha256 ||
+        raw.source_asset_id !== v.source_material_ref.asset_id ||
+        raw.source_sha256 !== v.source_material_ref.asset_sha256 ||
+        !facts
+      )
+        throw new Error("document raw binding mismatch");
+      return {
+        source: { raw, facts },
+        paths: [snapshot.draft_content_artifact_path],
+        verified_bytes: v.draft_content.byte_size,
+      };
+    }
+    const source = await this.proofreadBinding(v, signal);
+    return {
+      source,
+      paths: [source.manifest.reference, source.blocks.reference],
+      verified_bytes:
+        source.blocks.artifact.byte_size +
+        (isArrangedBuilder(v.builder_version)
+          ? 0
+          : source.manifest.artifact.byte_size),
+    };
+  }
+  private async verifiedDraftStructure(
+    v: DraftDocumentRef,
+    snapshot: DocumentVersionSnapshot,
+    markdown: Uint8Array,
+    signal?: AbortSignal,
+  ) {
+    if (!snapshot.draft_content_artifact_path)
+      throw new Error("document draft content missing");
+    const content = await this.readBytes(
+      snapshot.draft_content_artifact_path,
+      v.draft_content,
+      MAX_DRAFT_CONTENT_BYTES,
+      signal,
+    );
+    const built = await rebuildDraftDocument(v, content, signal);
+    const facts = await this.database.draftVersionFacts(v.document_version_id);
+    if (
+      !Buffer.from(markdown).equals(Buffer.from(built.markdown)) ||
+      !isDeepStrictEqual(facts, built.counts)
+    )
+      throw new Error("document draft content mismatch");
+    return { bytes: built.structure_bytes, structure: built.structure };
   }
   private async proofreadBinding(
     v: Extract<DocumentRef, { schema_version: 2 }>,

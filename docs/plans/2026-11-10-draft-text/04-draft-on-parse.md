@@ -28,7 +28,8 @@
   - `apps/server/src/archive/orchestrator.ts`（建档第一步解析）；
   - `apps/server/src/application/jobs/processing.ts`（`parse-documents` 任务的结果）；
   - `apps/server/src/cli/main.ts`、`apps/server/src/workbench/http.ts`、`apps/server/src/mcp/tools.ts` 的解析入口；
-  - `apps/server/src/bootstrap/application.ts`（把 PDF 页面工具与文件存储交给初稿发布服务）。
+  - `apps/server/src/bootstrap/application.ts`（把 PDF 页面工具与文件存储交给初稿发布服务）；
+  - `apps/server/src/storage/sqlite/raw-parsing-engine.ts` 与 `proofread-engine.ts`（发布事务内调用默认文本重求，见 4.1）。
 - 不改：`RawParsingService` 的发布与失败语义；建档的整理、校订与发布；MinerU 适配器。
 
 ## Tasks
@@ -37,6 +38,7 @@
   - 输入：文献、部分资产、调用方指定的原始解析（04 块传本次解析的结果，05 块按 04 §8.11 选择）。
   - 步骤：用本机 PDF 页面工具检查页面（与逐页校订同一个 `PdfPages`）；调用 02 的构建器；以 create-if-absent 发布不可变文件（初稿内容、Markdown、结构；差异记录在初稿内容里，图片沿用原始解析的资源对象，见 07 §2.3.4“文件”）；调用 03 的 3.3 在一个事务里登记版本、事实与当前初稿，并按 04 §8.5 重新求默认文本。
   - 身份相同的初稿已存在时为 `reused`，登记为当前、不重复登记版本（04 §8.2“版本”）。
+  - 默认关系的三种写入（04 §8.5）都接到 03 建好的 `recomputeDocumentDefault`（`storage/sqlite/document-defaults.ts`），各在自己的事务里调用：原始解析当前指针切换（`raw-parsing-engine.ts` 的发布事务）、初稿形成或复用、校订稿发布（`proofread-engine.ts`）。03 只建好并测试了这个函数，没有接入。
   - 默认关系改变或删除时请求全文索引刷新，等法同校订稿发布：只等刷新请求持久化，失败不撤销初稿（04 §6.5）。
   - 关闭时等待在途工作结束；失败与取消按 04 §8.2“失败”的表返回，不登记部分产物。
 - [ ] **4.2 接到解析操作的末尾**

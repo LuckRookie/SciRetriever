@@ -1,11 +1,29 @@
-import type { DocumentStructure } from "@sciretriever/contracts";
+import type {
+  DocumentStructure,
+  DocumentStructureV2,
+  DraftBasis,
+} from "@sciretriever/contracts";
 import type { FileFingerprint } from "../storage/files/reader.js";
+export type VerifiedDocumentStructure =
+  | DocumentStructure
+  | DocumentStructureV2<DraftBasis>;
+/** Legacy callers accept corrected bases only until their draft read contract is connected. */
+export function isProofreadDocumentStructure(
+  structure: VerifiedDocumentStructure,
+): structure is DocumentStructure {
+  return (
+    structure.schema_version === 1 ||
+    structure.segments.every((segment) =>
+      ["text-layer", "image-only", "manual"].includes(segment.basis),
+    )
+  );
+}
 
 export interface DocumentVerificationProof {
   readonly declarations: string;
   readonly fingerprints: ReadonlyMap<string, FileFingerprint>;
   readonly markdown: Uint8Array;
-  readonly structure: DocumentStructure;
+  readonly structure: VerifiedDocumentStructure;
   readonly weight: number;
 }
 export interface DocumentVerificationCacheLimits {

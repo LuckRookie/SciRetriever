@@ -14,6 +14,10 @@
 - [storage.ts](storage.ts)：文档存储协作接口。
 - [verification-cache.ts](verification-cache.ts)：有界校验证明、LRU 淘汰与同版本首次核验合并。
 
+初稿的 storage 端口已具备：`storage.ts` 的 `commitDraftVersion` 校验固定初稿内容与产物字节，worker 在同一事务登记版本、资源闭包、计数及当前指针，复检原始解析仍为当前并按 CAS 更新。该端口尚未接入解析或补形成操作，也不自动重求默认文本。`sqlite/document-defaults.ts` 提供独立默认 CAS 的事务内重求函数，供发布流程接入。
+
+`draft-leaves-v1` 的可读性核验使用 `rebuildDraftDocument`，只从固定初稿内容重建，不调用 PDF 页面工具；核验初稿计数、正文、结构和原始解析 ID/hash/part 绑定。初稿证明的文件指纹包含 PDF、全部图片、正文、结构和初稿内容；缓存命中仍比对 SQLite 原始解析声明与版本事实，并计入相同逻辑字节预算。缓存只略过未变化文件的字节重算，不放松单独交付资源时的实际字节核验。HTTP/机器读取方的初稿接入另由读取合同完成，既有校订入口保持其等级限制。
+
 `read.ts` 的内部 `withReadScope` 供知识／结果读取在一次逻辑操作内复用已核验文档；最多保留 16 份、32 MiB 的正文与序列化结构计量，结束即清空。带独立预算计量的检索不走此复用。
 
 `storage.ts` 在同一实例与 FileStore 内跨请求缓存整篇校验证明，键绑定 document_version_id 与 representation_sha256。每次仍核对版本声明、builder、限额及表示 hash，并通过索引查询校对稿的 complete 状态、content hash、part 绑定及 manifest/blocks 描述。正常校对稿写入只追加版本，派生资源只能补登记且不能覆盖；缓存仍比较上述 SQLite 绑定，不仅依赖这一写入约定。

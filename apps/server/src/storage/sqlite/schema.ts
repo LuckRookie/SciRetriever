@@ -2,10 +2,10 @@ import { PROCESSOR_METHOD_REVISION } from "@sciretriever/contracts";
 import { createHash } from "node:crypto";
 
 // One current catalog layout. This is not a migration ladder or a list of supported historic layouts.
-export const SCHEMA_VERSION = 16 as const;
+export const SCHEMA_VERSION = 17 as const;
 // Inputs read by archiveStates/deriveCurrentState, including view dependencies.
 // Reading history, folders and processing outputs do not invalidate this projection.
-export const LIBRARY_STATE_INPUT_TABLES = [
+export const LIBRARY_STATE_INPUT_TABLES_V16 = [
   "literatures",
   "literature_metadata",
   "literature_metadata_authors",
@@ -27,6 +27,11 @@ export const LIBRARY_STATE_INPUT_TABLES = [
   "archive_issues",
   "literature_tag_items",
   "archive_description_heads",
+] as const;
+export const LIBRARY_STATE_INPUT_TABLES = [
+  ...LIBRARY_STATE_INPUT_TABLES_V16,
+  "draft_current",
+  "draft_version_facts",
 ] as const;
 const earliestIntake = (id: string) =>
   `(SELECT strftime('%Y-%m-%dT%H:%M:%fZ',min(julianday(p.observed_at))) FROM literature_metadata_observations lo JOIN metadata_observations o ON o.observation_id=lo.observation_id JOIN provenances p ON p.provenance_id=o.provenance_id WHERE lo.literature_id=${id})`;
@@ -71,7 +76,7 @@ export const LIBRARY_STATE_SCHEMA = [
     (event) =>
       `CREATE TRIGGER library_state_revision_${event.toLowerCase()} AFTER ${event} ON library_state_revision WHEN NEW.revision<>NEW.tracked_revision BEGIN UPDATE library_state_revision SET full_revision=revision,tracked_revision=revision WHERE singleton=1; END`,
   ),
-  ...LIBRARY_STATE_INPUT_TABLES.flatMap((table) =>
+  ...LIBRARY_STATE_INPUT_TABLES_V16.flatMap((table) =>
     ["INSERT", "UPDATE", "DELETE"].map((event) => {
       const sides =
         event === "INSERT"
@@ -478,16 +483,119 @@ export const IMPORT_SCHEMA_V16 = [
   ...DEVICE_CONNECTION_SCHEMA,
   ...IMPORT_SESSION_SCHEMA,
 ] as const;
-export const SCHEMA_MANIFEST = [
+export const SCHEMA_MANIFEST_V16 = [
   ...SCHEMA_MANIFEST_V15.filter(
     (sql) =>
       !/^CREATE (?:TABLE intake_batches\(|INDEX intake_batches_order |INDEX intake_batch_members_literature |TABLE intake_batch_members\()/u.test(
         sql,
       ),
-  ).map((sql) =>
-    sql.replace("CHECK(schema_version=15)", "CHECK(schema_version=16)"),
-  ),
+  ).map((sql) => {
+    const next = sql.replace(
+      "CHECK(schema_version=15)",
+      "CHECK(schema_version=16)",
+    );
+    // A mutable current processor method must not redefine the offline v16 input.
+    return next.startsWith("CREATE VIEW processor_result_currentness ")
+      ? next.replace(
+          "'" + PROCESSOR_METHOD_REVISION + "'",
+          "'text-evidence-hierarchical-v2'",
+        )
+      : next;
+  }),
   ...IMPORT_SCHEMA_V16,
+] as const;
+export const SCHEMA_FINGERPRINT_V16 = createHash("sha256")
+  .update(JSON.stringify(SCHEMA_MANIFEST_V16))
+  .digest("hex");
+
+const nullableDraftHash = (name: string) =>
+  `${name} TEXT CHECK(${name} IS NULL OR (length(${name})=64 AND ${name}=lower(${name}) AND ${name} NOT GLOB '*[^0-9a-f]*'))`;
+const draftColumns = [
+  "raw_parse_id TEXT",
+  nullableDraftHash("raw_parse_result_sha256"),
+  nullableDraftHash("page_layer_sha256"),
+  nullableDraftHash("draft_method_sha256"),
+  "draft_content_artifact_path TEXT",
+  nullableDraftHash("draft_content_sha256"),
+  "draft_content_byte_size INTEGER CHECK(draft_content_byte_size IS NULL OR draft_content_byte_size>0)",
+  "draft_content_media_type TEXT CHECK(draft_content_media_type IS NULL OR draft_content_media_type='application/json')",
+];
+const draftColumnNames = draftColumns.map((column) => column.split(" ")[0]!);
+const draftPairCheck = `CHECK((schema_version=2 AND proofread_id IS NOT NULL AND proofread_content_sha256 IS NOT NULL AND ${draftColumnNames.map((name) => `${name} IS NULL`).join(" AND ")}) OR (schema_version=3 AND proofread_id IS NULL AND proofread_content_sha256 IS NULL AND ${draftColumnNames.map((name) => `${name} IS NOT NULL`).join(" AND ")}))`;
+
+/** New DDL only; the frozen v16 manifest remains the exact offline input. */
+export const DRAFT_TEXT_SCHEMA_V17 = [
+  "CREATE TABLE draft_current(part_asset_id TEXT NOT NULL PRIMARY KEY,part_sha256 TEXT NOT NULL,document_version_id TEXT NOT NULL,revision INTEGER NOT NULL CHECK(revision>0),FOREIGN KEY(document_version_id,part_asset_id,part_sha256) REFERENCES document_versions(document_version_id,source_asset_id,source_sha256) ON DELETE RESTRICT) STRICT",
+  "CREATE TABLE draft_version_facts(document_version_id TEXT NOT NULL PRIMARY KEY,differs_segments INTEGER NOT NULL CHECK(differs_segments>=0),differences INTEGER NOT NULL CHECK(differences>=0),image_only_pages INTEGER NOT NULL CHECK(image_only_pages>=0),FOREIGN KEY(document_version_id) REFERENCES document_versions(document_version_id) ON DELETE RESTRICT) STRICT",
+  "CREATE TABLE processor_unfound_citations(result_id TEXT NOT NULL,record_id TEXT NOT NULL CHECK(length(trim(record_id))>0),pointer TEXT NOT NULL,document_version_id TEXT NOT NULL,PRIMARY KEY(result_id,record_id,pointer,document_version_id),FOREIGN KEY(result_id) REFERENCES processor_results(result_id) ON DELETE CASCADE,FOREIGN KEY(document_version_id) REFERENCES document_versions(document_version_id) ON DELETE RESTRICT) STRICT",
+  "CREATE INDEX document_versions_raw_parse ON document_versions(raw_parse_id)",
+  "CREATE INDEX processor_result_documents_version ON processor_result_documents(document_version_id,result_id)",
+  "CREATE INDEX processor_unfound_citations_version ON processor_unfound_citations(document_version_id,result_id,record_id,pointer)",
+  ...[
+    "draft_current",
+    "draft_version_facts",
+    "processor_unfound_citations",
+  ].flatMap((table) =>
+    (table === "draft_version_facts" ? ["INSERT"] : ["INSERT", "UPDATE"]).map(
+      (event) =>
+        `CREATE TRIGGER ${table}_draft_${event.toLowerCase()} BEFORE ${event} ON ${table} WHEN NOT EXISTS(SELECT 1 FROM document_versions WHERE document_version_id=NEW.document_version_id AND schema_version=3) BEGIN SELECT RAISE(ABORT,'draft version required'); END`,
+    ),
+  ),
+  "CREATE TRIGGER draft_version_facts_immutable BEFORE UPDATE ON draft_version_facts BEGIN SELECT RAISE(ABORT,'draft version facts are immutable'); END",
+  ...["draft_current", "draft_version_facts"].flatMap((table) => {
+    const source =
+      table === "draft_current" ? "proofread_current" : "structure_annotations";
+    return LIBRARY_STATE_SCHEMA.filter((sql) =>
+      sql.startsWith("CREATE TRIGGER library_state_" + source + "_"),
+    ).map((sql) => sql.replaceAll(source, table));
+  }),
+] as const;
+
+export const SCHEMA_MANIFEST = [
+  ...SCHEMA_MANIFEST_V16.map((sql) => {
+    if (sql.startsWith("CREATE VIEW processor_result_currentness "))
+      return sql.replace(
+        "'text-evidence-hierarchical-v2'",
+        "'" + PROCESSOR_METHOD_REVISION + "'",
+      );
+    if (sql.startsWith("CREATE TABLE schema_identity("))
+      return sql.replace(
+        "CHECK(schema_version=16)",
+        "CHECK(schema_version=17)",
+      );
+    if (sql.startsWith("CREATE TABLE document_versions("))
+      return sql
+        .replace("CHECK(schema_version=2)", "CHECK(schema_version IN (2,3))")
+        .replace("proofread_id TEXT NOT NULL", "proofread_id TEXT")
+        .replace(
+          "proofread_content_sha256 TEXT NOT NULL",
+          "proofread_content_sha256 TEXT",
+        )
+        .replace(
+          "FOREIGN KEY(proofread_id,",
+          `${draftColumns.join(",")},${draftPairCheck},UNIQUE(document_version_id,source_asset_id,source_sha256),FOREIGN KEY(raw_parse_id,raw_parse_result_sha256) REFERENCES raw_parses(raw_parse_id,result_sha256) ON DELETE RESTRICT,FOREIGN KEY(draft_content_artifact_path,draft_content_sha256,draft_content_byte_size,draft_content_media_type) REFERENCES artifact_objects(relative_path,sha256,byte_size,media_type) ON DELETE RESTRICT,FOREIGN KEY(proofread_id,`,
+        );
+    if (sql.startsWith("CREATE VIEW archive_current_parts ")) {
+      // Draft content-version JSON is intentionally ordered text_level, then
+      // document_version_id. Keep the v2 JSON expression byte-for-byte unchanged.
+      return sql
+        .replace(
+          "CASE WHEN ac.annotation_id IS NOT NULL THEN json_object",
+          "CASE WHEN d.schema_version=3 THEN json_object('text_level','draft','document_version_id',d.document_version_id) WHEN ac.annotation_id IS NOT NULL THEN json_object",
+        )
+        .replace(" AND d.schema_version=2)", ")")
+        .replace(
+          "AND d.proofread_content_sha256=pv.content_sha256 AND pv.status='complete'",
+          "AND ((d.schema_version=2 AND d.proofread_content_sha256=pv.content_sha256 AND pv.status='complete') OR (d.schema_version=3 AND EXISTS(SELECT 1 FROM draft_current dc JOIN raw_parses r ON r.raw_parse_id=d.raw_parse_id AND r.result_sha256=d.raw_parse_result_sha256 JOIN raw_parse_current rc ON rc.source_asset_id=r.source_asset_id AND rc.source_sha256=r.source_sha256 AND rc.profile=r.profile AND rc.raw_parse_id=r.raw_parse_id WHERE dc.document_version_id=d.document_version_id AND dc.part_asset_id=a.asset_id AND dc.part_sha256=a.sha256)))",
+        )
+        .replace(
+          "ac.document_version_id=d.document_version_id LEFT",
+          "ac.document_version_id=d.document_version_id AND d.schema_version=2 LEFT",
+        );
+    }
+    return sql;
+  }),
+  ...DRAFT_TEXT_SCHEMA_V17,
 ] as const;
 export const SCHEMA_FINGERPRINT = createHash("sha256")
   .update(JSON.stringify(SCHEMA_MANIFEST))

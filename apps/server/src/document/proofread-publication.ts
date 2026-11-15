@@ -84,7 +84,7 @@ export class ProofreadDocumentService {
         Number(r.expected_default_revision) < 1)
     )
       throw new ContractValidationError();
-    if (![16].includes(Number((await this.database.schema()).schema_version)))
+    if (![17].includes(Number((await this.database.schema()).schema_version)))
       throw new ProofreadDocumentError("catalog-current-required");
     const source = await this.database.documentMaterial(literature, asset);
     if (!source) throw new ProofreadDocumentError("material-missing");
