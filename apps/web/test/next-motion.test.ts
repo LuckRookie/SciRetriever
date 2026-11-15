@@ -155,3 +155,153 @@ it.each(["no-preference", "reduce"] as const)(
   },
   90000,
 );
+
+/** Every running animation per frame, as "kind:properties", while `act` runs. */
+async function animationsDuring(page: Page, act: () => Promise<void>) {
+  await page.evaluate(() => {
+    const seen = new Set<string>();
+    let on = true;
+    const loop = () => {
+      if (!on) return;
+      for (const a of document.getAnimations()) {
+        const css = a as Animation & { transitionProperty?: string };
+        if (css.transitionProperty)
+          seen.add(`transition:${css.transitionProperty}`);
+        else if (a.effect instanceof KeyframeEffect)
+          seen.add(
+            `animate:${[
+              ...new Set(
+                a.effect
+                  .getKeyframes()
+                  .flatMap((k) =>
+                    Object.keys(k).filter(
+                      (p) =>
+                        ![
+                          "offset",
+                          "easing",
+                          "composite",
+                          "computedOffset",
+                        ].includes(p),
+                    ),
+                  ),
+              ),
+            ].join("+")}`,
+          );
+      }
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
+    (window as unknown as { __seen: () => string[] }).__seen = () => {
+      on = false;
+      return [...seen];
+    };
+  });
+  await act();
+  await page.waitForTimeout(400);
+  return page.evaluate(() =>
+    (window as unknown as { __seen: () => string[] }).__seen(),
+  );
+}
+it.each(["no-preference", "reduce"] as const)(
+  "slides the side panel and crossfades the views; reduced motion keeps only colour and opacity (spec 6.1, %s)",
+  async (reducedMotion) => {
+    const w = await nextWorkspace({ ready: "body" });
+    try {
+      await w.page.emulateMedia({ reducedMotion });
+      await w.page.setViewportSize({ width: 1440, height: 900 });
+      const id = w.env.parseRequest.literature_id;
+      await w.page.goto(`${w.origin}/?literature=${id}&reader=doc`);
+      await w.page
+        .locator('.react-reader[data-reading-ready="true"]')
+        .waitFor();
+      const seen = await animationsDuring(w.page, async () => {
+        await w.page
+          .getByRole("button", { name: "收起信息", exact: true })
+          .click();
+        await w.page
+          .getByRole("button", { name: "显示信息", exact: true })
+          .click();
+        await w.page.getByRole("tab", { name: "PDF", exact: true }).click();
+        await w.page
+          .locator(
+            '.reader-view[data-view="pdf"]:not([hidden]) .reading-pdf-page[data-rendered="true"]',
+          )
+          .first()
+          .waitFor();
+        await w.page.getByRole("tab", { name: "原文", exact: true }).click();
+      });
+      const moving = seen.filter((a) =>
+        /transform|translate|scale|rotate|clip-path|inset|left|top|width|height|margin/.test(
+          a,
+        ),
+      );
+      const colour = seen.filter((a) =>
+        /opacity|color|background|filter/.test(a),
+      );
+      // The views crossfade either way: only opacity animates.
+      expect(colour.length, seen.join(" ")).toBeGreaterThan(0);
+      if (reducedMotion === "reduce")
+        expect(moving, seen.join(" ")).toEqual([]);
+      // The side panel slides and the sheet moves with it.
+      else
+        expect(
+          moving.some((a) => a.includes("transform")),
+          seen.join(" "),
+        ).toBe(true);
+      expect(w.errors).toEqual([]);
+    } finally {
+      await w.close();
+    }
+  },
+  60000,
+);
+
+it("keeps the jump target's ground fading under reduced motion, as a colour transition (spec 4.4, 6.1)", async () => {
+  const w = await nextWorkspace({ ready: "body" });
+  try {
+    await w.page.emulateMedia({ reducedMotion: "reduce" });
+    await w.page.setViewportSize({ width: 1440, height: 900 });
+    const id = w.env.parseRequest.literature_id;
+    await w.page.goto(`${w.origin}/?literature=${id}&reader=doc`);
+    await w.page.locator('.react-reader[data-reading-ready="true"]').waitFor();
+    await w.page
+      .locator(".reader-engine-body")
+      .click({ position: { x: 5, y: 5 } });
+    await w.page.keyboard.press("o");
+    // Watch the target block from the jump on: --sel at once, then a
+    // background-color transition takes it back.
+    await w.page.evaluate(() => {
+      const seen: string[] = [];
+      (window as unknown as { __jump: string[] }).__jump = seen;
+      const loop = () => {
+        const block = document.querySelector<HTMLElement>(
+          ".reading-jump-flash, .reading-jump-fading",
+        );
+        if (block) {
+          seen.push(block.className.includes("fading") ? "fading" : "flash");
+          for (const a of block.getAnimations())
+            seen.push(
+              `${(a as Animation & { transitionProperty?: string }).transitionProperty ?? "keyframes"}`,
+            );
+        }
+        if (seen.length < 400) requestAnimationFrame(loop);
+      };
+      requestAnimationFrame(loop);
+    });
+    await w.page.locator(".reader-outline button").last().click();
+    await expect
+      .poll(() =>
+        w.page.evaluate(
+          () => (window as unknown as { __jump: string[] }).__jump,
+        ),
+      )
+      .toEqual(expect.arrayContaining(["flash", "fading", "background-color"]));
+    const seen = await w.page.evaluate(
+      () => (window as unknown as { __jump: string[] }).__jump,
+    );
+    expect(seen).not.toContain("keyframes");
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 60000);

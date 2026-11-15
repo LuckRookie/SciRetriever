@@ -67,6 +67,20 @@
   .reader-without-information > .ui-split-pane > .ui-split-side {
     display: none;
   }
+  /* Spec 6.1: closing, the panel slides out over the desk that the sheet
+     is moving into. */
+  .react-reader[data-panel-leaving] > .ui-split-pane > .ui-split-side {
+    overflow: visible;
+  }
+  .react-reader .reader-information[data-leaving] {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 4;
+    background: var(--bg);
+    pointer-events: none;
+  }
   .reader-center {
     height: 100%;
     min-height: 0;
@@ -113,17 +127,15 @@
   .react-reader .reader-return-jump:hover {
     color: var(--fg);
   }
-  /* A far jump lands at once; its target block flashes the selection ground. */
+  /* A far jump lands at once; its target block takes the selection ground
+     and lets it fade by a colour transition (spec 4.4, 6.1), which reduced
+     motion keeps. */
   .react-reader .reading-jump-flash {
-    animation: reading-jump-flash var(--dur-highlight) var(--ease-out);
+    background-color: var(--sel);
+    transition: none;
   }
-  @keyframes reading-jump-flash {
-    from {
-      background: var(--sel);
-    }
-    to {
-      background: transparent;
-    }
+  .react-reader .reading-jump-fading {
+    transition: background-color var(--dur-highlight) var(--ease-out);
   }
   .reader-surface > .ui-error-notice {
     flex-shrink: 0;
@@ -511,12 +523,17 @@
     max-width: 100%;
     height: auto;
   }
+  /* Spec 3.5: one sheet per page, 16 px of desk between them; the column
+     where the sheet is at 适宽, else centred with the spine (pdf.ts sets the
+     left edge). The right padding keeps the spine's room on a wide page. */
   .react-reader .reading-pdf-pages {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: var(--space-5);
-    min-width: max-content;
+    align-items: flex-start;
+    gap: var(--space-4);
+    width: max-content;
+    margin-left: var(--pdf-column-left, 0px);
+    padding-right: calc(8px + 16px + var(--space-4));
   }
   .react-reader .reading-pdf-page {
     position: relative;
@@ -579,27 +596,6 @@
     to {
       background: var(--mark-soft);
     }
-  }
-  .react-reader .reading-status {
-    padding: var(--space-2) var(--space-4);
-    font-size: var(--text-caption);
-    color: var(--fg2);
-    border-top: 1px solid var(--line);
-    background: var(--bg);
-    flex-shrink: 0;
-    overflow-wrap: anywhere;
-  }
-  .react-reader .reading-status-note:not(:first-child) {
-    margin-inline-start: var(--space-3);
-  }
-  .react-reader .reading-status-action {
-    margin-inline-start: var(--space-2);
-    padding: 0;
-    border: 0;
-    background: none;
-    color: var(--blue);
-    font: inherit;
-    cursor: pointer;
   }
   .react-reader .reading-continuation {
     padding: var(--space-4);
@@ -1201,42 +1197,52 @@
   }
 }
 
-/* Spec 6.3 and 10: the skeleton of a view being prepared, over the content area
-   in the text column (or the page column), so nothing moves when it goes. */
+/* Spec 6.3: the skeleton of a view being prepared, on the sheet where its
+   text or pages will be, over the desk, so nothing moves when it goes. */
 @layer pages {
-  .react-reader .reading-status {
-    position: relative;
-    z-index: 3;
-  }
-  /* One line high even while empty: the loading text is gone (spec 10), and a
-     bar that grows when the status arrives would move the reading line. */
-  .react-reader .reading-status::before {
-    content: "\200b";
-  }
   .react-reader .reader-preparing {
     position: absolute;
     inset: 0;
     z-index: 2;
     overflow: hidden;
-    padding: var(--space-5);
-    background: var(--pdfbg);
+    padding: 20px 0 0;
+    background: var(--reader-desk);
     scrollbar-gutter: stable;
   }
-  /* The text column as the text will have it (.reading-article). */
+  .react-reader [data-sheet="full"] > .reader-preparing {
+    padding: 0;
+  }
+  /* The sheet (spec 1.1), or the PDF's first page in its column (spec 3.5). */
   .react-reader .reader-preparing-sheet {
+    box-sizing: border-box;
+    width: var(--sheet-width);
+    min-height: 100%;
+    margin-left: var(--sheet-left);
+    padding: 0 var(--sheet-margin-right) var(--space-7) var(--sheet-margin-left);
+    background: var(--reader-sheet);
+    box-shadow: var(--shadow-1);
     font-family: var(--serif);
     font-size: var(--reading-font-size, 20px);
     line-height: 1.75;
-    max-width: min(100%, 36em);
-    margin: 0 auto;
     color: var(--fg);
   }
-  .react-reader .reading-wide .reader-preparing-sheet {
-    max-width: min(100%, 46em);
+  .react-reader
+    [data-sheet="full"]
+    > .reader-preparing
+    .reader-preparing-sheet {
+    box-shadow: none;
   }
-  .react-reader .reading-full .reader-preparing-sheet,
-  .react-reader .reader-preparing .reader-preparing-pages {
-    max-width: none;
+  .react-reader .reader-preparing-sheet > .reader-page-header {
+    position: static;
+    margin: 0 calc(-1 * var(--sheet-margin-right)) 0
+      calc(-1 * var(--sheet-margin-left));
+  }
+  .react-reader .reader-preparing-column {
+    width: var(--sheet-column);
+    padding-top: var(--space-6);
+  }
+  .react-reader .reader-preparing[data-view="pdf"] .reader-preparing-column {
+    width: auto;
   }
   .react-reader .reader-preparing-title {
     font-size: 1.6em;
@@ -1325,7 +1331,6 @@
   .react-reader .reader-skeleton-page {
     aspect-ratio: 612 / 792;
     background: var(--reader-skeleton);
-    box-shadow: var(--shadow-1);
   }
   /* What the paper lacks lies over the empty view: the scroll area keeps its size. */
   .react-reader .reader-lacking {
@@ -1350,6 +1355,42 @@
   .react-reader .reading-scroll[data-mode="doc"][data-sheet="full"] {
     padding: 0;
   }
+  /* Spec 5.1 and 6.1: the views of one engine lie in one cell, so the old
+     one can fade out over the new. A hidden view keeps its laid-out text
+     (content-visibility), so showing it again does not lay it out anew;
+     it neither paints nor takes part in hit testing, focus or the
+     accessibility tree. */
+  .react-reader .reader-engine {
+    display: grid;
+  }
+  .react-reader .reader-engine[hidden] {
+    display: none;
+  }
+  .react-reader .reader-view {
+    grid-area: 1 / 1;
+    min-width: 0;
+  }
+  /* The shown view lies over a leaving one, and takes the pointer. */
+  .react-reader .reader-view:not([hidden]) {
+    z-index: 1;
+  }
+  .react-reader .reader-view[hidden] {
+    display: block;
+    content-visibility: hidden;
+  }
+  /* Not stretched to the shown view's height: its empty box would lie
+     over it. */
+  .react-reader .reader-view[hidden]:not([data-leaving]) {
+    align-self: start;
+    min-height: 0;
+    background: none;
+    box-shadow: none;
+  }
+  /* Leaving: still drawn while it fades out (for --dur-1). No inherited
+     property changes here: one would restyle the whole text twice. */
+  .react-reader .reader-view[hidden][data-leaving] {
+    content-visibility: visible;
+  }
   .react-reader .reader-view[data-view="doc"] {
     box-sizing: border-box;
     width: var(--sheet-width);
@@ -1367,6 +1408,31 @@
     width: var(--sheet-column);
     margin: 0;
     padding-top: var(--space-6);
+  }
+
+  /* Spec 3.5: the PDF on the same desk as the sheet. */
+  .react-reader .reading-scroll:is([data-mode="pdf"], [data-mode="edit"]) {
+    padding: 20px 0 48px;
+    background: var(--reader-desk);
+  }
+  .react-reader
+    .reading-scroll:is(
+      [data-mode="pdf"],
+      [data-mode="edit"]
+    )[data-sheet="full"] {
+    padding: 0;
+  }
+  /* From the full text: a line left of the paragraph, faded after 3 s. */
+  .react-reader .reading-pdf-locator {
+    position: absolute;
+    z-index: 2;
+    width: 2px;
+    background: var(--reader-pen-soft);
+    pointer-events: none;
+    transition: opacity var(--dur-2) var(--ease-out);
+  }
+  .react-reader .reading-pdf-locator[data-fading] {
+    opacity: 0;
   }
 
   /* Spec 1.2: the page header, 40 px, fixed at the top of the visible sheet. */
@@ -1402,18 +1468,28 @@
     .reader-page-header {
     top: 0;
   }
-  @media (max-width: 900px) {
-    .react-reader .reading-pdf-pages > .reader-page-header {
-      top: calc(-1 * var(--space-4));
-    }
+  .react-reader
+    :is([data-mode="pdf"], [data-mode="edit"])
+    .reading-pdf-pages
+    > .reader-page-header {
+    top: -20px;
+  }
+  .react-reader
+    :is([data-mode="pdf"], [data-mode="edit"])[data-sheet="full"]
+    .reading-pdf-pages
+    > .reader-page-header {
+    top: 0;
   }
   .react-reader .reader-view[data-view="doc"] .reader-page-header {
     margin: 0 calc(-1 * var(--sheet-margin-right)) 0
       calc(-1 * var(--sheet-margin-left));
   }
+  /* At the top of the page column, on the first page: no desk between. */
   .react-reader .reading-pdf-pages > .reader-page-header {
     width: var(--pdf-page-width, 100%);
-    margin-bottom: calc(-1 * var(--space-5) + var(--space-3));
+    margin-bottom: calc(-1 * var(--space-4));
+    box-shadow: var(--shadow-1);
+    clip-path: inset(-12px -12px 0 -12px);
   }
   .react-reader .reader-page-header-source {
     min-width: 0;
@@ -1443,17 +1519,28 @@
   .react-reader .reader-page-header-action {
     margin-inline-start: var(--space-2);
   }
-  /* The PDF's page number is a text button (spec 1.2); pressed, a field. */
+  /* The PDF's page number is a text button (spec 1.2; design core: no fill,
+     no edge, a light fill on hover); pressed, a field. */
   .react-reader .reader-page-header-page {
-    padding: 0;
+    height: 24px;
+    margin: 0 calc(-1 * var(--space-1));
+    padding: 0 var(--space-1);
     border: 0;
-    background: none;
+    border-radius: var(--radius-xs);
+    background: transparent;
     color: inherit;
     font: inherit;
     cursor: pointer;
+    transition: var(--feedback);
   }
   .react-reader .reader-page-header-page:hover {
-    color: var(--blue);
+    background: var(--hover);
+    color: var(--fg);
+    transition: var(--feedback-hot);
+  }
+  .react-reader .reader-page-header-page:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--focus-ring);
   }
   .react-reader .reader-page-header-page-field {
     width: 5em;
@@ -1473,8 +1560,16 @@
     font-weight: 400;
     line-height: 1.5;
     white-space: nowrap;
+    display: flex;
+    align-items: baseline;
+  }
+  .react-reader .reader-page-header-line-text {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .react-reader .reader-page-header-action {
+    flex-shrink: 0;
   }
   .react-reader .reader-view[data-view="doc"] .reader-page-header-line {
     padding-inline-start: var(--sheet-margin-left);

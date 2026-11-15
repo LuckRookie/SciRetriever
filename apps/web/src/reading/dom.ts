@@ -61,7 +61,6 @@ export function readerProblem(
   text: string,
   retry?: () => void,
 ): void {
-  frame.status.textContent = text;
   if (frame.onIssue) {
     frame.onIssue(text, retry);
     return;

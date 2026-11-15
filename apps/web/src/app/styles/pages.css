@@ -320,6 +320,34 @@
     background: var(--bg);
     border-bottom-color: var(--line2);
   }
+  /* Spec 1.7: focus mode folds the top bar up (--dur-2, spec 6.1); its row
+     stays on the desk, so the sheet, its header and the spine do not move.
+     Pointing at the window's top brings it back over the desk. */
+  .reader-topbar {
+    position: relative;
+    z-index: 20;
+    transition:
+      transform var(--dur-2) var(--ease-out),
+      visibility 0s;
+  }
+  [data-reader-page][data-focus] .workspace-main {
+    background: var(--reader-desk);
+  }
+  [data-reader-page][data-focus] .reader-topbar {
+    transform: translateY(-100%);
+    visibility: hidden;
+    transition:
+      transform var(--dur-2) var(--ease-in),
+      visibility 0s var(--dur-2);
+  }
+  [data-reader-page][data-focus][data-peek] .reader-topbar {
+    transform: none;
+    visibility: visible;
+    box-shadow: var(--shadow-pop);
+    transition:
+      transform var(--dur-2) var(--ease-out),
+      visibility 0s;
+  }
   .reader-topbar .paper-tab {
     min-width: 0;
     max-width: 232px;

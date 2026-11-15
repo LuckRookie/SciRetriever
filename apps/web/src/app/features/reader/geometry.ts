@@ -109,6 +109,42 @@ export function sheetGeometry(
 }
 
 /**
+ * Spec 3.5: the PDF's page column on the same desk. At “适合宽度” a page is
+ * as wide as the sheet and where the sheet is; zoomed, the column and the
+ * spine are centred together. `pageWidth` is the zoomed page width, null at
+ * 适宽. With a translation twin beside each page (`columns` 2, ADR 0051) the
+ * pair shares the desk less the spine's room, as before the sheet.
+ */
+export interface PageColumn {
+  /** One page's width, px. */
+  pageWidth: number;
+  /** The whole column (pages and twins), px, and its left edge on the desk. */
+  width: number;
+  left: number;
+}
+export const TWIN_GAP = 24;
+export function pageColumn(
+  desk: number,
+  fontSize: number,
+  pageWidth: number | null,
+  columns = 1,
+): PageColumn {
+  const spine = desk >= 640,
+    gaps = (columns - 1) * TWIN_GAP;
+  if (pageWidth === null && columns === 1) {
+    const g = sheetGeometry(desk, fontSize);
+    return { pageWidth: g.sheet, width: g.sheet, left: g.left };
+  }
+  const room = desk - (spine ? SIDE : 0);
+  const page = pageWidth ?? Math.max(0, (room - gaps) / Math.max(1, columns)),
+    width = page * columns + gaps;
+  const left = spine
+    ? Math.max(EDGE, (desk - width - SPINE_GAP - SPINE_WIDTH) / 2)
+    : Math.max(0, (desk - width) / 2);
+  return { pageWidth: page, width, left };
+}
+
+/**
  * Spec 1.3: what the reader's top bar folds away as it narrows. Below 1180
  * px only the current paper's tab, the others in a menu; below 760 px find,
  * type and the side panel go into “更多”; below 640 px no tabs, and the

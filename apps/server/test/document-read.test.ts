@@ -25,6 +25,7 @@ import { startQueryOnlyWorkbench } from "../src/bootstrap/workbench.js";
 import { TypeScriptParserArtifactRules } from "../src/parsing/artifact-rules.js";
 import type { ParserBackend } from "./parser-fixture-types.js";
 import { DocumentReadError } from "../src/document/read.js";
+import { readerMore } from "../../web/test/reader-controls.js";
 import { SqliteDocumentStorage } from "../src/document/storage.js";
 import {
   FIXTURE_LITERATURE,
@@ -1296,7 +1297,8 @@ describe("bounded document and material reading", () => {
           timeout: 20_000,
         })
         .toContain("introduction without heading");
-      await page.getByRole("button", { name: "显示目录", exact: true }).click();
+      // The outline is in the top bar's “更多” (reading-experience 1.3).
+      await readerMore(page, "显示目录");
       expect(await page.locator(".reader-outline button").count()).toBe(0);
       await page
         .locator(".reader-information")
@@ -1345,10 +1347,13 @@ describe("bounded document and material reading", () => {
       // The resident full-text view already holds the late valid read, so a
       // fresh page is needed for the next read to receive the mismatch.
       await page.reload();
-      await page.getByRole("tab", { name: "全文", exact: true }).click();
+      await page.getByRole("tab", { name: "原文", exact: true }).click();
       await (await mismatchedSlice).finished();
+      // The reader page has no status bar: the rejection is in its error notice.
       await expect
-        .poll(() => page.locator(".reading-status").innerText())
+        .poll(() =>
+          page.locator(".reader-surface .ui-error-notice").innerText(),
+        )
         .toMatch(/无法|invalid|失败|validation failed/);
       expect(await page.locator(".reading-article section").count()).toBe(0);
       await page.unroute("**/document-slice");
@@ -1414,7 +1419,8 @@ describe("bounded document and material reading", () => {
       // validated page as the resource descriptor source for this pagination probe.
       await page.reload();
       await page
-        .getByRole("button", { name: "图表资源 51 项", exact: true })
+        // The relations row names its label and count without a space between.
+        .getByRole("button", { name: /^图表资源\s*51 项$/ })
         .click();
       expect(await page.locator(".reader-resources button").count()).toBe(51);
       expect(

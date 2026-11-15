@@ -114,7 +114,6 @@ export interface ReaderFrame {
   layer?: HTMLElement;
   controls: HTMLElement;
   outline: HTMLElement;
-  status: HTMLElement;
   findStatus: HTMLElement;
   onFind: (query: string) => void | Promise<void>;
   beforeLayout: () => () => void;
@@ -144,8 +143,10 @@ export interface ReaderFrame {
   beforeJump?: () => void;
   /** The anchor moved (the reader scrolled or a change was absorbed). */
   onAnchor?: () => void;
-  /** A one-line explanation for the status bar (spec 10), or null to clear it. */
+  /** A one-line explanation under the page header (spec 1.2), or null to clear it. */
   onNote?: (text: string | null) => void;
+  /** The material has nothing to read: spec 3.9 says so on the sheet. */
+  onEmpty?: (what: "text" | "pdf") => void;
   /** The remembered full-text place belongs to another text version (spec 4.5). */
   remembered?: "same" | "other-version";
   animateNavigation?: () => boolean;
@@ -155,6 +156,15 @@ export interface ReaderFrame {
   onPdfControls?: (controls: PdfControls) => void;
   /** Columns that share the PDF width at 适宽: 2 while a translation twin sits beside each page (ADR 0051). */
   pdfColumns?: number;
+  /**
+   * The PDF's page column on the desk (spec 3.5): one page's width and the
+   * column's width and left edge, for the zoomed page width or 适宽 (null).
+   */
+  pageColumn?: (
+    desk: number,
+    pageWidth: number | null,
+    columns: number,
+  ) => { pageWidth: number; width: number; left: number };
   /** A page's text layer is drawn; called again for every redraw after zoom or resize. */
   onPdfPage?: (view: PdfPageView) => void;
   /** Full-text blocks were painted or extended. */
@@ -164,8 +174,14 @@ export interface ReaderFrame {
   onPosition?: (offset: number) => void;
   onOutlineEmpty?: (message: string) => void;
   onFindNext?: (next: (() => void) | null) => void;
+  /**
+   * A problem said in the reader's error notice: `message` for people;
+   * `retained` what still shows; `detail` the internal cause, for the
+   * notice's technical details.
+   */
   onIssue?: (
     message: string | null,
     retry?: () => void | Promise<void>,
+    more?: { retained?: string; detail?: string },
   ) => void;
 }

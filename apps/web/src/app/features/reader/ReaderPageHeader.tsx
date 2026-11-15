@@ -32,9 +32,10 @@ export function paperSource(paper: LiteratureSearchItem): string {
 }
 
 /**
- * What shows and on which text (spec 1.2); the text version comes with plan
- * 21. In the PDF the page number is a text button: pressed, it becomes a
- * field, and the page typed there is opened.
+ * What shows and on which text (spec 1.2): the text's grade (初稿, 校订稿)
+ * comes with plan 21's 10.3; no version number is written. In the PDF the
+ * page number is a text button: pressed, it becomes a field, and the page
+ * typed there is opened.
  */
 function ViewText({
   kind,
@@ -164,7 +165,10 @@ export function ReaderPageHeader({
           role="status"
           data-transient={shown.transient || undefined}
         >
-          {shown.text}
+          {/* One line: what does not fit is cut, and shows in full on hover. */}
+          <span className="reader-page-header-line-text" title={shown.text}>
+            {shown.text}
+          </span>
           {shown.action ? (
             <button
               type="button"

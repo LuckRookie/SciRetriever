@@ -1,6 +1,7 @@
 import {
   readerMore,
   readerNavigation,
+  readerTextComplete,
   readerToLibrary,
 } from "./reader-controls.js";
 import { showAllLibraryStatuses } from "./next-workspace-fixture.js";
@@ -228,10 +229,8 @@ it("keeps parsing separate from document publication and reads existing verified
     // A fresh reader load takes ~1.9 s here; the 1 s poll default is too
     // tight right after a navigation.
     await expect
-      .poll(() => page.locator(".reading-status:visible").textContent(), {
-        timeout: 20_000,
-      })
-      .toContain("全文已加载");
+      .poll(() => readerTextComplete(page), { timeout: 20_000 })
+      .toBe(true);
     await readerMore(page, "显示目录");
     await page.locator(".reader-outline button").first().click();
     expect(await page.locator(".reader-engine-body").textContent()).toContain(

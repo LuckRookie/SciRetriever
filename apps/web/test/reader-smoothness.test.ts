@@ -593,10 +593,12 @@ async function openReader(
 }
 const readerUrl = (id: string, mode: "pdf" | "doc") =>
   `/?literature=${id}&reader=${mode}`;
+// In the shown engine and view: a hidden engine (the previous tab) may hold
+// the other view of its paper, prepared ahead (spec 5.1).
 const ready = (page: Page, id: string, mode: "pdf" | "doc") =>
   page
     .locator(
-      `.reader-engine-body[data-literature-id="${id}"][data-mode="${mode}"] ${mode === "pdf" ? '.reading-pdf-page[data-rendered="true"]' : "section[data-byte-start]"}`,
+      `.reader-engine-body[data-literature-id="${id}"][data-mode="${mode}"] .reader-engine:not([hidden]) .reader-view:not([hidden]) ${mode === "pdf" ? '.reading-pdf-page[data-rendered="true"]' : "section[data-byte-start]"}`,
     )
     .first()
     .waitFor();

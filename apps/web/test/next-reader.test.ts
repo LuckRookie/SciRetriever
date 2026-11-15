@@ -90,7 +90,11 @@ it.each(["no-preference", "reduce"] as const)(
         )
         .toContain("4.2 eV");
       expect(
-        await w.page.locator(".reading-status:visible").textContent(),
+        await w.page
+          .locator(
+            ".reader-engine:not([hidden]) .reader-view:not([hidden]) .reader-page-header",
+          )
+          .textContent(),
       ).not.toContain("字节");
       expect(
         await w.page
@@ -380,8 +384,9 @@ it("shows the loading skeleton with its steps in order past 300 ms, and none whe
     expect(
       await skeleton.locator(".reader-preparing-step").allInnerTexts(),
     ).toEqual(["下载 PDF", "校验", "解析", "排版"]);
-    expect(await w.page.locator(".reading-status").innerText()).not.toContain(
-      "正在",
+    // The page header on the skeleton's sheet says what is being prepared (spec 6.3).
+    expect(await skeleton.locator(".reader-page-header-view").innerText()).toBe(
+      "PDF · 正在准备",
     );
     // Released slowly enough for each step to show.
     await w.page.unroute(

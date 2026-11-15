@@ -101,12 +101,19 @@
   svg {
     flex-shrink: 0;
   }
+  /* Reduced motion (the system's or the person's choice, kept on the root
+     by the motion provider): movement and scaling are immediate; changes
+     of colour and opacity keep their transitions (reading-experience 6.1).
+     Keyframe animations stay off, as before; the reader's view crossfade is
+     a script animation of opacity alone. */
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,
     *::after {
       animation: none !important;
-      transition: none !important;
+      transition-property:
+        opacity, color, background-color, border-color, outline-color,
+        text-decoration-color, box-shadow, fill, stroke, filter !important;
       scroll-behavior: auto !important;
     }
   }
@@ -114,7 +121,9 @@
   :root[data-reduced-motion="true"] *::before,
   :root[data-reduced-motion="true"] *::after {
     animation: none !important;
-    transition: none !important;
+    transition-property:
+      opacity, color, background-color, border-color, outline-color,
+      text-decoration-color, box-shadow, fill, stroke, filter !important;
     scroll-behavior: auto !important;
   }
 }

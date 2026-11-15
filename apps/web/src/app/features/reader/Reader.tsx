@@ -61,7 +61,7 @@ import {
   useUrlState,
   type ReaderMode,
 } from "../../data/url.js";
-import { AnimatedPanel } from "../../motion/index.js";
+import { AnimatedPanel, useMotionPreference } from "../../motion/index.js";
 import { READER_PAINTED, useShell } from "../../shell/context.js";
 import { errorMessage } from "../../strings.js";
 import { ProofreadEditor } from "./ProofreadEditor.js";
@@ -79,14 +79,17 @@ import { FullTextControls } from "./translation/FullTextControls.js";
 import { ReaderOutline } from "./ReaderOutline.js";
 import {
   createReaderEngines,
+  duration,
+  easing,
   loadProgress,
   viewOf,
+  type ReaderIssue,
   type ReaderUpdate,
   type ViewUi,
 } from "./engines.js";
 import { createPreparingStore, ReaderPreparing } from "./ReaderPreparing.js";
 import { ReaderPageHeader, type HeaderLine } from "./ReaderPageHeader.js";
-import { sheetGeometry, topBarLayout } from "./geometry.js";
+import { pageColumn, sheetGeometry, topBarLayout } from "./geometry.js";
 import { useFullTextTranslation } from "./translation/use-fulltext.js";
 
 export default function Reader() {
@@ -128,7 +131,6 @@ export default function Reader() {
   }, [sourceKey]);
   const root = useRef<HTMLElement>(null),
     body = useRef<HTMLDivElement>(null),
-    status = useRef<HTMLSpanElement>(null),
     findStatus = useRef<HTMLSpanElement>(null),
     frame = useRef<ReaderFrame | null>(null);
   const [revision, retry] = useState(0),
@@ -141,10 +143,8 @@ export default function Reader() {
     [outlineNote, setOutlineNote] = useState(""),
     [readingOffset, setReadingOffset] = useState<number | null>(null),
     [nextMatch, setNextMatch] = useState<(() => void) | null>(null),
-    [issue, setIssue] = useState<{
-      message: string;
-      retry?: () => void | Promise<void>;
-    } | null>(null),
+    [issue, setIssue] = useState<ReaderIssue | null>(null),
+    [empty, setEmpty] = useState<ViewUi["empty"]>(null),
     [ready, setReady] = useState(false),
     [operation, setOperation] = useState<string | null>(null),
     [runner, setRunner] = useState(false),
@@ -299,6 +299,8 @@ export default function Reader() {
     }
     return value;
   }, [shell.reading, api.workspace.catalog, id]);
+  const fontSizeRef = useRef(layoutPosition.fontSize);
+  fontSizeRef.current = layoutPosition.fontSize;
   const refresh = () => retry((value) => value + 1);
   const notify = (message: string) => readerActions.current.notify(message);
   const translation = useReaderTranslation(
@@ -369,7 +371,6 @@ export default function Reader() {
   const [engines] = useState(() =>
     createReaderEngines({
       root: () => root.current,
-      statusHost: () => status.current,
       findHost: () => findStatus.current,
       set: {
         pdf: setPdf,
@@ -379,6 +380,7 @@ export default function Reader() {
         readingOffset: setReadingOffset,
         nextMatch: (value) => setNextMatch(() => value),
         issue: setIssue,
+        empty: setEmpty,
         ready: setReady,
         resources: setResources,
         shown: setShown,
@@ -410,6 +412,7 @@ export default function Reader() {
       note: setNote,
       history: setHistoryBack,
       changeView: (kind) => changeModeRef.current(kind),
+      fontSize: () => fontSizeRef.current,
     }),
   );
   const detailReady = !!detail.data && !detail.isPlaceholderData,
@@ -452,8 +455,10 @@ export default function Reader() {
       setNarrowTop(page.clientWidth > 0 && page.clientWidth < 640);
       const desk = scroller.clientWidth;
       if (!desk) return;
+      // On the surface: the scroll area and the skeleton over it share it.
       const g = sheetGeometry(desk, layoutPosition.fontSize, columnEm),
-        style = scroller.style;
+        surface = scroller.parentElement ?? scroller,
+        style = surface.style;
       style.setProperty("--sheet-width", `${g.sheet}px`);
       style.setProperty("--sheet-left", `${g.left}px`);
       style.setProperty("--sheet-margin-left", `${g.marginLeft}px`);
@@ -461,6 +466,7 @@ export default function Reader() {
       style.setProperty("--sheet-column", `${g.column}px`);
       style.setProperty("--sheet-header-indent", `${g.headerIndent}px`);
       scroller.dataset.sheet = g.tier;
+      surface.dataset.sheet = g.tier;
       scroller.dataset.notes = g.notes;
     };
     apply();
@@ -469,6 +475,103 @@ export default function Reader() {
     observer.observe(page);
     return () => observer.disconnect();
   }, [layoutPosition.fontSize, columnEm, layout, detailReady]);
+  /**
+   * Spec 6.1: the side panel slides in from the right (--dur-3, --ease-out)
+   * and out (--dur-2, --ease-in), and the sheet moves to its new place on
+   * the desk by a translation at the same time. Reduced motion: at once.
+   */
+  const { reduced } = useMotionPreference();
+  const panelShown = layoutPosition.information && !shell.readerFocus;
+  const [panelLeaving, setPanelLeaving] = useState(false);
+  // When the person asked: the slide ends its token's time after that
+  // (spec 6.1), counting the frame it starts in.
+  const panelInput = useRef(0);
+  const remaining = (total: number) => {
+    const spent = performance.now() - panelInput.current + 16;
+    return spent >= 0 && spent < total ? Math.max(60, total - spent) : total;
+  };
+  const panelBefore = useRef<boolean | null>(null),
+    panelInputs = useRef({
+      reduced,
+      mode,
+      informationWidth,
+      pdf,
+      layoutPosition,
+    });
+  panelInputs.current = {
+    reduced,
+    mode,
+    informationWidth,
+    pdf,
+    layoutPosition,
+  };
+  useLayoutEffect(() => {
+    const { reduced, mode, informationWidth, pdf, layoutPosition } =
+      panelInputs.current;
+    const before = panelBefore.current;
+    panelBefore.current = panelShown;
+    const scroller = body.current;
+    if (before === null || before === panelShown || !scroller) return;
+    if (reduced || mode === "edit") return;
+    const opening = panelShown,
+      ms = remaining(
+        duration(opening ? "--dur-3" : "--dur-2", opening ? 240 : 180),
+      ),
+      ease = opening
+        ? easing("--ease-out", "ease-out")
+        : easing("--ease-in", "ease-in");
+    // Where the sheet (or the PDF's page column) was and is now on the desk.
+    const desk = scroller.clientWidth,
+      was = opening ? desk + informationWidth : desk - informationWidth;
+    const pages = scroller.querySelector<HTMLElement>(
+        ".reader-engine:not([hidden]) .reader-view:not([hidden]) .reading-pdf-pages",
+      ),
+      zoomed = Number.parseFloat(
+        pages?.style.getPropertyValue("--pdf-page-width") ?? "",
+      );
+    const left = (width: number) =>
+      pages && pdf && pdf.zoom !== "fit" && zoomed > 0
+        ? pageColumn(width, layoutPosition.fontSize, zoomed).left
+        : sheetGeometry(width, layoutPosition.fontSize).left;
+    const shift = left(was) - left(desk);
+    const engine = scroller.querySelector<HTMLElement>(
+      ".reader-engine:not([hidden])",
+    );
+    if (engine && Math.abs(shift) >= 1)
+      engine.animate(
+        [{ transform: `translateX(${shift}px)` }, { transform: "none" }],
+        { duration: ms, easing: ease },
+      );
+    if (opening)
+      root.current
+        ?.querySelector<HTMLElement>(".reader-information")
+        ?.animate([{ transform: "translateX(100%)" }, { transform: "none" }], {
+          duration: ms,
+          easing: ease,
+        });
+    else setPanelLeaving(true);
+  }, [panelShown]);
+  useLayoutEffect(() => {
+    if (!panelLeaving) return;
+    const aside = root.current?.querySelector<HTMLElement>(
+      ".reader-information",
+    );
+    if (!aside) return setPanelLeaving(false);
+    const animation = aside.animate(
+      [{ transform: "none" }, { transform: "translateX(100%)" }],
+      {
+        duration: remaining(duration("--dur-2", 180)),
+        easing: easing("--ease-in", "ease-in"),
+        fill: "forwards",
+      },
+    );
+    animation.onfinish = () => {
+      // Gone in this frame; the page catches up with its next render.
+      aside.hidden = true;
+      setPanelLeaving(false);
+    };
+    return () => animation.cancel();
+  }, [panelLeaving]);
   // One line under the page header, at most (spec 1.2): a note, else the
   // offer of a new text, else the way back to a fixed source.
   const backRef = useRef<() => void>(() => {}),
@@ -480,6 +583,11 @@ export default function Reader() {
             ? "返回结果"
             : "返回检索"
           : null;
+  // A fixed text passage: its paragraphs are marked, and it has no PDF page.
+  const evidenceNote =
+    source.value?.kind === "document" && mode === "doc"
+      ? "高亮为证据所在段落；无可靠 PDF 页码"
+      : "";
   const headerLine = useMemo(
     (): HeaderLine | null =>
       note
@@ -493,11 +601,11 @@ export default function Reader() {
           : fromWhere
             ? {
                 transient: false,
-                text: "正在查看固定来源，阅读不会修改材料。",
+                text: `正在查看固定来源，阅读不会修改材料。${evidenceNote ? `${evidenceNote}。` : ""}`,
                 action: { label: fromWhere, run: () => backRef.current() },
               }
             : null,
-    [note, update, fromWhere],
+    [note, update, fromWhere, evidenceNote],
   );
   useLayoutEffect(() => {
     const material = sources.data;
@@ -718,7 +826,12 @@ export default function Reader() {
         ? ("bibliography" as const)
         : mode === "doc" && !sources.data.document
           ? ("text" as const)
-          : null
+          : // The engine found nothing to read in what it was given.
+            shown?.id === id && shown.kind === viewOf(mode) && empty
+            ? empty === "text"
+              ? ("text" as const)
+              : ("bibliography" as const)
+            : null
       : null;
   // Spec 6.2 and 6.3: the view asked for is not on screen, or not drawn yet.
   const wanted =
@@ -751,12 +864,10 @@ export default function Reader() {
         id={id}
         store={preparingStore}
         initial={loadProgress(wanted, wanted === "pdf" ? "download" : "read")}
-        width={
-          layoutPosition.fullWidth
-            ? "reading-full"
-            : layoutPosition.wide
-              ? "reading-wide"
-              : ""
+        narrow={
+          shell.readerBarWidth > 0
+            ? topBarLayout(shell.readerBarWidth).views === "menu"
+            : narrowTop
         }
         fontSize={layoutPosition.fontSize}
       />
@@ -830,10 +941,24 @@ export default function Reader() {
     changeLayout(() => {
       layoutPosition.outline = !layoutPosition.outline;
     });
-  const toggleInformation = () =>
+  // Spec 1.7: focus mode closes the side panel without changing what is kept
+  // for the paper; leaving it brings the panel back as it was.
+  const focus = shell.readerFocus,
+    informationShown = layoutPosition.information && !focus;
+  const toggleInformation = () => {
+    panelInput.current = performance.now();
+    if (focus) {
+      shell.setReaderFocus(false);
+      if (layoutPosition.information) return;
+    }
     changeLayout(() => {
       layoutPosition.information = !layoutPosition.information;
     });
+  };
+  const toggleFocus = () => {
+    panelInput.current = performance.now();
+    shell.setReaderFocus(!focus);
+  };
   const pdfZoom = mode === "pdf" || mode === "edit";
   // “排版”: the reading size, or the PDF's zoom; then the two switches.
   const typeItems: MenuOption[] = [
@@ -930,7 +1055,7 @@ export default function Reader() {
           },
           {
             id: "information",
-            label: layoutPosition.information ? "收起信息" : "显示信息",
+            label: informationShown ? "收起信息" : "显示信息",
             onAction: toggleInformation,
           },
         ]
@@ -965,6 +1090,13 @@ export default function Reader() {
           },
         ]
       : []),
+    {
+      id: "focus",
+      label: "专注模式",
+      checked: focus,
+      shortcut: "F",
+      onAction: toggleFocus,
+    },
     ...marks.toolItems,
     ...(partItems.length
       ? [
@@ -1075,6 +1207,21 @@ export default function Reader() {
       toggleOutline();
       return true;
     }
+    if (plain && event.key.toLowerCase() === "f") {
+      toggleFocus();
+      return true;
+    }
+    // Esc leaves focus mode, unless a menu or popover is the one to close.
+    if (
+      plain &&
+      event.key === "Escape" &&
+      focus &&
+      !document.querySelector(".ui-menu, .ui-popover, [role='dialog']")
+    ) {
+      panelInput.current = performance.now();
+      shell.setReaderFocus(false);
+      return true;
+    }
     return false;
   };
   const topBarTools = (
@@ -1118,8 +1265,8 @@ export default function Reader() {
             items={typeItems}
           />
           <IconButton
-            aria-label={layoutPosition.information ? "收起信息" : "显示信息"}
-            aria-pressed={layoutPosition.information}
+            aria-label={informationShown ? "收起信息" : "显示信息"}
+            aria-pressed={informationShown}
             onPress={toggleInformation}
           >
             <Icon name="book" />
@@ -1140,8 +1287,9 @@ export default function Reader() {
   return (
     <section
       ref={root}
-      className={`react-reader reader-workspace ${mode === "edit" ? "reader-editing" : !layoutPosition.information ? "reader-without-information" : ""}`}
+      className={`react-reader reader-workspace ${mode === "edit" ? "reader-editing" : !informationShown && !panelLeaving ? "reader-without-information" : ""}`}
       data-layout={layout}
+      data-panel-leaving={panelLeaving || undefined}
       aria-label="文献阅读器"
     >
       {shell.readerBar ? createPortal(topBarTools, shell.readerBar) : null}
@@ -1177,7 +1325,7 @@ export default function Reader() {
         width={
           mode === "edit"
             ? editorWidth
-            : layoutPosition.information
+            : informationShown
               ? informationWidth
               : 0
         }
@@ -1208,7 +1356,9 @@ export default function Reader() {
           ) : (
             <aside
               className="reader-information"
-              hidden={!layoutPosition.information}
+              hidden={!informationShown && !panelLeaving}
+              data-leaving={panelLeaving || undefined}
+              style={panelLeaving ? { width: informationWidth } : undefined}
             >
               {marks.active ? (
                 <Tabs
@@ -1281,10 +1431,15 @@ export default function Reader() {
             {issue && mode !== "know" && mode !== "results" && (
               <ErrorNotice
                 message={issue.message}
-                retained="已加载的内容仍然保留。"
+                retained={issue.retained ?? "已加载的内容仍然保留。"}
                 {...(issue.retry ? { onRetry: issue.retry } : {})}
               />
             )}
+            {issue?.detail && mode !== "know" && mode !== "results" ? (
+              <TechDetails copyText={issue.detail}>
+                <p>{issue.detail}</p>
+              </TechDetails>
+            ) : null}
             <div
               ref={body}
               data-mode={mode}
@@ -1411,24 +1566,6 @@ export default function Reader() {
                   search={search}
                   position={position}
                 />
-              </div>
-            )}
-            {/* Notes live in the status bar so the text never moves (spec 10). */}
-            <div
-              className="reading-status"
-              role="status"
-              aria-live="polite"
-              hidden={
-                mode === "know" ||
-                mode === "results" ||
-                source.value?.kind === "metadata"
-              }
-            >
-              <span ref={status} />
-            </div>
-            {mode === "know" && (
-              <div className="reading-status">
-                已保存总结 · 选择证据编号核对原文
               </div>
             )}
           </div>

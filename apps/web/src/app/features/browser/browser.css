@@ -12,7 +12,10 @@
     grid-template-columns: minmax(0, 1fr);
     gap: var(--space-4);
   }
-  .browser-section .ui-badge:has(svg) > span[aria-hidden="true"] {
+  /* The icon takes the dot's place. Not `:has(svg)`: that made every icon
+     inserted anywhere restyle each aria-hidden span of the page, the
+     reader's formulae among them. */
+  .browser-badge-icon > .ui-badge > span[aria-hidden="true"] {
     display: none;
   }
   .browser-section > h2 {

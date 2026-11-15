@@ -19,6 +19,9 @@ export interface ShellState {
   readerBar: HTMLElement | null;
   /** The top bar's width, which decides what it folds away. */
   readerBarWidth: number;
+  /** Spec 1.7: focus mode, in which the top bar folds up and the side panel closes. */
+  readerFocus: boolean;
+  setReaderFocus(value: boolean): void;
   reading: ReadingState;
   theme: Theme;
   setTheme(value: Theme): void;

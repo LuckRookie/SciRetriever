@@ -1,5 +1,10 @@
 import { expect, it } from "vitest";
-import { readerMore, readerToLibrary, readerType } from "./reader-controls.js";
+import {
+  readerMore,
+  readerToLibrary,
+  readerType,
+  readerView,
+} from "./reader-controls.js";
 import { nextWorkspace } from "./next-workspace-fixture.js";
 
 const TEXT = [
@@ -621,6 +626,7 @@ it("puts the reader under one top bar: navigation in a drawer, the views, find, 
       "运行算子…",
       "编辑校订稿",
       "显示目录",
+      "专注模式",
       "高亮笔",
       "笔颜色",
       "获取 PDF",
@@ -722,6 +728,112 @@ it("puts the reader under one top bar: navigation in a drawer, the views, find, 
     await w.page.setViewportSize({ width: 1440, height: 900 });
     await readerToLibrary(w.page);
     await w.page.locator("aside.navigation").waitFor();
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);
+
+it("lays the PDF on the sheet's desk, one sheet per page, and folds the top bar in focus mode (spec 3.5, 1.7)", async () => {
+  const w = await nextWorkspace({ ready: "body" });
+  const box = async (selector: string) =>
+    (await w.page.locator(selector).first().boundingBox())!;
+  const shown = ".reader-engine:not([hidden]) .reader-view:not([hidden])";
+  try {
+    await w.page.setViewportSize({ width: 1440, height: 900 });
+    const id = w.env.parseRequest.literature_id;
+    await w.page.goto(`${w.origin}/?literature=${id}&reader=doc`);
+    await w.page.locator('.react-reader[data-reading-ready="true"]').waitFor();
+    const sheet = await box(`${shown}[data-view="doc"]`);
+    await readerView(w.page, "PDF");
+    await w.page
+      .locator(
+        `${shown}[data-view="pdf"] .reading-pdf-page[data-rendered="true"]`,
+      )
+      .first()
+      .waitFor();
+    // At 适宽 a page is the sheet: as wide, at the same place.
+    const page = await box(`${shown} .reading-pdf-page`);
+    expect(Math.abs(page.x - sheet.x)).toBeLessThan(1);
+    expect(Math.abs(page.width - sheet.width)).toBeLessThan(1);
+    // The page header sits on the column's top, over the first page.
+    const header = await box(`${shown} .reader-page-header`);
+    expect(Math.abs(header.x - page.x)).toBeLessThan(1);
+    expect(Math.abs(header.width - page.width)).toBeLessThan(1);
+    expect(Math.abs(header.y + header.height - page.y)).toBeLessThan(1);
+    // Pages are separate sheets with 16 px of desk between them.
+    expect(
+      await w.page
+        .locator(`${shown} .reading-pdf-pages`)
+        .evaluate((el) => getComputedStyle(el).rowGap),
+    ).toBe("16px");
+    // Zoomed, the column and the spine (8 + 16 px) are centred on the desk.
+    await readerType(w.page, "50%");
+    await expect
+      .poll(async () =>
+        Math.round((await box(`${shown} .reading-pdf-page`)).width),
+      )
+      .toBe(306);
+    const desk = await w.page.locator(".reader-engine-body").evaluate((el) => ({
+      left: el.getBoundingClientRect().left,
+      width: el.clientWidth,
+    }));
+    const zoomed = await box(`${shown} .reading-pdf-page`);
+    expect(
+      Math.abs(
+        zoomed.x -
+          desk.left -
+          Math.max(16, (desk.width - zoomed.width - 24) / 2),
+      ),
+    ).toBeLessThan(1.5);
+    await readerType(w.page, "适合宽度");
+    // Focus mode: F folds the top bar up and closes the side panel; the
+    // sheet's header stays where it was, and nothing else moves the text.
+    await readerView(w.page, "原文");
+    await w.page
+      .locator(`${shown}[data-view="doc"] .reading-article`)
+      .waitFor();
+    const before = await box(`${shown} .reader-page-header`);
+    await w.page
+      .locator(".reader-engine-body")
+      .click({ position: { x: 5, y: 5 } });
+    await w.page.keyboard.press("f");
+    const bar = w.page.locator(".reader-topbar");
+    await expect
+      .poll(() => bar.evaluate((el) => getComputedStyle(el).visibility))
+      .toBe("hidden");
+    await expect
+      .poll(() => w.page.locator(".reader-information").isVisible())
+      .toBe(false);
+    expect(
+      Math.abs((await box(`${shown} .reader-page-header`)).y - before.y),
+    ).toBeLessThan(1);
+    // The pointer resting at the window's top brings the bar back over the desk.
+    await w.page.mouse.move(700, 4);
+    await expect
+      .poll(() => bar.evaluate((el) => getComputedStyle(el).visibility))
+      .toBe("visible");
+    await w.page.mouse.move(700, 500);
+    await expect
+      .poll(() => bar.evaluate((el) => getComputedStyle(el).visibility), {
+        timeout: 3000,
+      })
+      .toBe("hidden");
+    // Esc leaves it: the top bar and the side panel as they were.
+    await w.page.keyboard.press("Escape");
+    await expect
+      .poll(() => bar.evaluate((el) => getComputedStyle(el).visibility))
+      .toBe("visible");
+    await w.page.locator(".reader-information").waitFor();
+    // “更多 → 专注模式” enters it too; F leaves it.
+    await readerMore(w.page, "专注模式");
+    await expect
+      .poll(() => bar.evaluate((el) => getComputedStyle(el).visibility))
+      .toBe("hidden");
+    await w.page.keyboard.press("f");
+    await expect
+      .poll(() => bar.evaluate((el) => getComputedStyle(el).visibility))
+      .toBe("visible");
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();

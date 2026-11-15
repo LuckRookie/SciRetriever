@@ -6,6 +6,7 @@ import {
   nextWorkspace,
   libraryStatus,
 } from "../../web/test/next-workspace-fixture.js";
+import { readerMore } from "../../web/test/reader-controls.js";
 
 it(
   "connects intake navigation, filtering, reading, correction, the four-step operator, visible DSH and named snapshots",
@@ -47,20 +48,24 @@ it(
       await page.locator(`[data-literature-id="${id}"]`).waitFor();
       await capture("library-filter");
       await page.locator(`[data-literature-id="${id}"] .paper-open`).click();
+      // A paper with text opens its full text (reading-experience 6.4); the
+      // views are the top bar's 原文 and PDF, the rest are in “更多” (1.3).
+      await page.locator(".reading-article").waitFor();
+      await page.getByRole("tab", { name: "PDF", exact: true }).click();
       await page
         .locator('.reading-pdf-page[data-rendered="true"]')
         .first()
         .waitFor();
       await capture("reader-pdf");
-      await page.getByRole("tab", { name: "全文", exact: true }).click();
+      await page.getByRole("tab", { name: "原文", exact: true }).click();
       await page.locator(".reading-article").waitFor();
       await capture("reader-text");
-      await page.getByRole("tab", { name: "结果", exact: true }).click();
+      await readerMore(page, "加工结果");
       await page
         .getByRole("region", { name: "文献参与的全部结果", exact: true })
         .waitFor();
-      await page.getByRole("tab", { name: "全文", exact: true }).click();
-      await page.getByRole("tab", { name: "编辑", exact: true }).click();
+      await page.getByRole("tab", { name: "原文", exact: true }).click();
+      await readerMore(page, "编辑校订稿");
       const editor = page.getByRole("region", {
         name: "校订稿编辑",
         exact: true,

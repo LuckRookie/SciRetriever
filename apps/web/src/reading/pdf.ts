@@ -218,10 +218,14 @@ export async function renderPdf(
       frame.body.clientHeight === 0
     )
       return;
-    // The first page below the page header (spec 1.2) is the one being read.
-    const top = readingArea(frame.body, frame.header).top;
+    // The page being read (spec 1.2): the first below the page header that
+    // reaches a quarter down the visible desk, so the last strip of the page
+    // before (pages lie 16 px apart, spec 3.5) does not count.
+    const area = readingArea(frame.body, frame.header),
+      top = area.top,
+      reach = Math.max(12, area.height / 4);
     const index = placeholders.findIndex(
-      (p) => p.getBoundingClientRect().bottom > top + 12,
+      (p) => p.getBoundingClientRect().bottom > top + reach,
     );
     const n = index < 0 ? placeholders.length : index + 1;
     state.page = n;
@@ -283,6 +287,7 @@ export async function renderPdf(
     clearTimeout(sharpTimer);
     resize.disconnect();
     frame.body.removeEventListener("scroll", onScroll);
+    marker?.off();
     for (const n of new Set([...rendered.keys(), ...drawing.keys()]))
       clearPage(n, false);
     for (const n of [...bitmaps.keys()]) dropBitmap(n);
@@ -329,7 +334,6 @@ export async function renderPdf(
       state.page <= 1;
     node<HTMLButtonElement>("#reader-next", controls).disabled =
       state.page >= pdf.numPages;
-    frame.status.textContent = `固定 PDF · 第 ${state.page} / ${pdf.numPages} 页 · ${state.zoom === "fit" ? "适宽" : `${Math.round(state.zoom * 100)}%`}`;
     frame.onPdfControls?.({
       page: state.page,
       total: pdf.numPages,
@@ -568,11 +572,14 @@ export async function renderPdf(
     // Hidden: remember the place; `show` scrolls there.
     if (hidden) return;
     const target = placeholders[state.page - 1]!;
-    frame.body.scrollTop +=
-      target.getBoundingClientRect().top -
-      readingArea(frame.body, frame.header).top +
-      target.clientHeight * offset -
-      12;
+    // The first page's top is the column's top: the sheet as it opens (spec 3.5).
+    if (state.page === 1 && offset === 0) frame.body.scrollTop = 0;
+    else
+      frame.body.scrollTop +=
+        target.getBoundingClientRect().top -
+        readingArea(frame.body, frame.header).top +
+        target.clientHeight * offset -
+        12;
     updateStatus();
     visible();
   };
@@ -590,25 +597,37 @@ export async function renderPdf(
    * frame as the anchor (4.2); 120 ms after the last change they are drawn sharp.
    * Nothing is cleared first.
    */
+  const columnsNow = () => Math.max(1, frame.pdfColumns ?? 1);
+  /** Spec 3.5: one page's width at 适宽 — the sheet's, or a share of the desk beside a twin. */
+  const fitWidth = () => {
+    const desk = frame.body.clientWidth,
+      columns = columnsNow();
+    return frame.pageColumn
+      ? frame.pageColumn(desk, null, columns).pageWidth
+      : (desk - 52 - (columns - 1) * 24) / columns;
+  };
+  /** The page column where the sheet is, or centred with the spine when zoomed (spec 3.5). */
+  const placeColumn = () => {
+    const desk = frame.body.clientWidth,
+      page = baseWidth * scale,
+      column = frame.pageColumn?.(
+        desk,
+        state.zoom === "fit" ? null : page,
+        columnsNow(),
+      );
+    // The page header spans the page column (spec 1.2).
+    pages.style.setProperty("--pdf-page-width", `${page}px`);
+    pages.style.setProperty("--pdf-column-left", `${column?.left ?? 0}px`);
+  };
   const reflow = () => {
     if (!pdf || closed) return;
     const page = state.page,
       offset = state.pageOffset;
-    const columns = Math.max(1, frame.pdfColumns ?? 1);
     scale =
       state.zoom === "fit"
-        ? Math.max(
-            0.15,
-            Math.min(
-              3,
-              (frame.body.clientWidth - 52 - (columns - 1) * 24) /
-                columns /
-                baseWidth,
-            ),
-          )
+        ? Math.max(0.15, Math.min(3, fitWidth() / baseWidth))
         : state.zoom;
-    // The page header spans the page column (spec 1.2).
-    pages.style.setProperty("--pdf-page-width", `${baseWidth * scale}px`);
+    placeColumn();
     for (let i = 0; i < placeholders.length; i++) {
       const size = sizeOf(i + 1),
         p = placeholders[i]!;
@@ -639,7 +658,11 @@ export async function renderPdf(
       wider = Math.abs(lastWidth - width) >= 1;
     lastWidth = width;
     if (wider && state.zoom === "fit") reflow();
-    else keep();
+    else {
+      // Zoomed: the same pages, centred again on the new desk.
+      if (wider) placeColumn();
+      keep();
+    }
   });
   let left: { el: HTMLElement; offset: number } | null = null;
   frame.hide = (release = false) => {
@@ -663,11 +686,19 @@ export async function renderPdf(
     preparing = false;
     if (!pdf) return;
     const width = frame.body.clientWidth;
-    // The window or the side panel changed while hidden: fit again.
-    if (state.zoom === "fit" && Math.abs(lastWidth - width) >= 1) {
+    // The window, the side panel or the reading size (the sheet) changed
+    // while hidden: fit again.
+    if (
+      state.zoom === "fit" &&
+      (Math.abs(lastWidth - width) >= 1 ||
+        Math.abs(fitWidth() - baseWidth * scale) >= 1)
+    ) {
       lastWidth = width;
       kept = null;
       reflow();
+    } else if (Math.abs(lastWidth - width) >= 1) {
+      lastWidth = width;
+      placeColumn();
     }
     // The anchor page returns to its distance from the top.
     if (left?.el.isConnected)
@@ -696,6 +727,54 @@ export async function renderPdf(
     frame.body.scrollTop += box.top - line();
     capture();
   }
+  /**
+   * Spec 3.5: from the full text, a 2 px line left of the paragraph's region
+   * on its page; it fades after 3 s or at the reader's next scroll.
+   */
+  let marker: { el: HTMLElement; off: () => void } | null = null;
+  const locator = (
+    page: number,
+    region: readonly [number, number, number, number],
+  ) => {
+    marker?.off();
+    const host = placeholders[page - 1];
+    if (!host) return;
+    const el = document.createElement("div");
+    el.className = "reading-pdf-locator";
+    el.setAttribute("aria-hidden", "true");
+    el.style.top = `${region[1] / 10}%`;
+    el.style.height = `${Math.max(0, region[3] - region[1]) / 10}%`;
+    el.style.left = `calc(${region[0] / 10}% - 8px)`;
+    host.append(el);
+    let armed = false;
+    const fade = () => {
+      if (marker?.el !== el) return;
+      marker.off();
+    };
+    const onScroll = () => {
+      if (armed) fade();
+    };
+    const timer = setTimeout(fade, 3000);
+    // The next scroll by the reader, not the one that brought the page here.
+    const arm = requestAnimationFrame(() =>
+      requestAnimationFrame(() => (armed = true)),
+    );
+    frame.body.addEventListener("scroll", onScroll, { passive: true });
+    marker = {
+      el,
+      off: () => {
+        clearTimeout(timer);
+        cancelAnimationFrame(arm);
+        frame.body.removeEventListener("scroll", onScroll);
+        marker = null;
+        el.dataset.fading = "true";
+        // Gone once faded; at once where no transition runs.
+        const remove = () => el.remove();
+        el.addEventListener("transitionend", remove, { once: true });
+        setTimeout(remove, 400);
+      },
+    };
+  };
   frame.anchor = () => {
     return {
       kind: "pdf",
@@ -732,6 +811,8 @@ export async function renderPdf(
       return;
     }
     place(anchor.pdf.page, anchor.pdf.ratio);
+    if (anchor.pdf.exact && anchor.region)
+      locator(anchor.pdf.page, anchor.region);
     frame.onNote?.(
       anchor.pdf.exact
         ? null
@@ -836,7 +917,7 @@ export async function renderPdf(
               ? await pdf.getDestination(item.dest)
               : item.dest;
           if (!dest?.length) {
-            frame.status.textContent = "此目录项没有可定位的内部页码。";
+            frame.onNote?.("此目录项没有可定位的内部页码。");
             return;
           }
           const value = dest[0];

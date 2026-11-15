@@ -1,6 +1,7 @@
 /** Spec 8.1 "版面计算": the sheet on the desk at the widths of spec 1.1, either side of each step. */
 import { describe, expect, it } from "vitest";
 import {
+  pageColumn,
   sheetGeometry,
   topBarLayout,
 } from "../src/app/features/reader/geometry.js";
@@ -112,5 +113,39 @@ describe("the top bar folding away (spec 1.3)", () => {
       tools: "buttons",
       views: "segmented",
     });
+  });
+});
+
+describe("the PDF's page column (spec 3.5)", () => {
+  it("is the sheet at 适宽: as wide, at the same place, at every tier", () => {
+    for (const desk of [1920, 1440, 1110, 1087, 900, 700, 639, 390]) {
+      const sheet = sheetGeometry(desk, 20),
+        column = pageColumn(desk, 20, null);
+      expect(column.pageWidth, String(desk)).toBe(sheet.sheet);
+      expect(column.left, String(desk)).toBe(sheet.left);
+    }
+  });
+  it("follows the reading size at 适宽, as the sheet does", () => {
+    expect(pageColumn(1440, 24, null).pageWidth).toBe(
+      sheetGeometry(1440, 24).sheet,
+    );
+  });
+  it("centres a zoomed column with the spine, and keeps 16 px of desk when wider", () => {
+    // 306 px pages (50%) on a 1110 px desk: (1110 − 306 − 8 − 16) / 2.
+    expect(pageColumn(1110, 20, 306)).toEqual({
+      pageWidth: 306,
+      width: 306,
+      left: 390,
+    });
+    expect(pageColumn(1110, 20, 1836).left).toBe(16);
+    // Below 640 px there is no spine: centred on the desk, at least 0.
+    expect(pageColumn(390, 20, 306).left).toBe(42);
+    expect(pageColumn(390, 20, 612).left).toBe(0);
+  });
+  it("shares the desk less the spine's room between a page and its translation", () => {
+    const pair = pageColumn(1110, 20, null, 2);
+    expect(pair.width).toBe(1110 - 56);
+    expect(pair.pageWidth).toBe((1110 - 56 - 24) / 2);
+    expect(pair.left).toBe(16);
   });
 });

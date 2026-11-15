@@ -2,7 +2,12 @@ import { useSyncExternalStore, type CSSProperties } from "react";
 import type { LiteratureSearchItem } from "@sciretriever/contracts";
 import type { LoadProgress, LoadStep } from "../../../reading/contract.js";
 import { RichTitle } from "../../components/index.js";
-import { paperAuthors, paperTitleParts } from "../../data/library.js";
+import {
+  paperAuthors,
+  paperTitle,
+  paperTitleParts,
+} from "../../data/library.js";
+import { paperSource } from "./ReaderPageHeader.js";
 
 /** The latest step of the view being prepared; only the skeleton listens, once a frame. */
 export interface PreparingProgress {
@@ -45,11 +50,12 @@ function stepText(step: LoadStep) {
 }
 
 /**
- * Spec 6.3 (with section 10 before the new layout): the skeleton of the view
- * being prepared, in the content area where its text or pages will be. The
- * title, authors and source come from the bibliography at once; below them
- * the steps of the actual loading and a 2 px bar; then skeleton lines. It lies
- * over the content, so nothing moves when the text replaces it.
+ * Spec 6.3: the skeleton of the view being prepared, drawn on the sheet where
+ * its text or pages will be. The page header shows as usual, its right side
+ * saying “原文 · 正在准备”; the title, authors and source come from the
+ * bibliography at once; below them the steps of the actual loading and a 2 px
+ * bar; then skeleton lines. It lies over the desk, so nothing moves when the
+ * text replaces it.
  */
 export function ReaderPreparing({
   id,
@@ -57,7 +63,7 @@ export function ReaderPreparing({
   paper,
   store,
   initial,
-  width,
+  narrow,
   fontSize,
 }: {
   id: string;
@@ -67,8 +73,9 @@ export function ReaderPreparing({
   store: PreparingStore;
   /** The steps before the engine reports any. */
   initial: LoadProgress;
-  /** The text column's width class and font size, as the text will have them. */
-  width: "" | "reading-wide" | "reading-full";
+  /** The top bar is narrower than 640 px: the header shows the title (spec 1.2). */
+  narrow: boolean;
+  /** The reading size, as the text will have it. */
   fontSize: number;
 }) {
   const latest = useSyncExternalStore(store.subscribe, store.get),
@@ -78,81 +85,89 @@ export function ReaderPreparing({
     source = m ? [m.venue, m.publication_year].filter(Boolean).join(" · ") : "";
   return (
     <div
-      className={`reader-preparing ${width}`}
+      className="reader-preparing"
       style={{ "--reading-font-size": `${fontSize}px` } as CSSProperties}
       data-view={kind}
       role="status"
       aria-busy="true"
       aria-label={kind === "pdf" ? "正在准备 PDF" : "正在准备全文"}
     >
-      <article
-        className={`reader-preparing-sheet${kind === "pdf" ? " reader-preparing-pages" : ""}`}
-      >
-        <div className="reader-preparing-head">
-          {paper ? (
-            <>
-              <h1 className="reader-preparing-title">
-                <RichTitle parts={paperTitleParts(paper)} />
-              </h1>
-              <p className="reader-preparing-byline">
-                {paperAuthors(paper)}
-                {source ? <span> · {source}</span> : null}
-              </p>
-            </>
-          ) : (
-            <div className="reader-skeleton-title" aria-hidden="true">
-              <span />
-              <span />
-            </div>
-          )}
-          <p className="reader-preparing-steps">
-            <span>{kind === "pdf" ? "正在准备 PDF" : "正在准备全文"}</span>
-            {progress.steps.map((step) => (
-              <span
-                key={step.id}
-                className="reader-preparing-step"
-                data-state={step.state}
-              >
-                {step.state === "done" ? (
-                  <span className="reader-preparing-mark" aria-hidden="true">
-                    ✓
-                  </span>
-                ) : step.state === "current" ? (
-                  <span className="ui-spinner" aria-hidden="true" />
-                ) : null}
-                {stepText(step)}
-              </span>
-            ))}
-          </p>
-          <div
-            className="reader-preparing-bar"
-            role="progressbar"
-            aria-label="准备进度"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={Math.round(progress.fraction * 100)}
-          >
-            <span style={{ width: `${progress.fraction * 100}%` }} />
-          </div>
-        </div>
-        {kind === "pdf" ? (
-          <div className="reader-skeleton-page" aria-hidden="true" />
-        ) : (
-          <div className="reader-skeleton-text" aria-hidden="true">
-            <div className="reader-skeleton-abstract">
-              {[0, 1, 2].map((n) => (
-                <span key={n} />
+      <article className="reader-preparing-sheet">
+        <header className="reader-page-header">
+          <span className="reader-page-header-source">
+            {paper ? (narrow ? paperTitle(paper) : paperSource(paper)) : ""}
+          </span>
+          <span className="reader-page-header-view">
+            {kind === "pdf" ? "PDF" : "原文"} · 正在准备
+          </span>
+        </header>
+        <div className="reader-preparing-column">
+          <div className="reader-preparing-head">
+            {paper ? (
+              <>
+                <h1 className="reader-preparing-title">
+                  <RichTitle parts={paperTitleParts(paper)} />
+                </h1>
+                <p className="reader-preparing-byline">
+                  {paperAuthors(paper)}
+                  {source ? <span> · {source}</span> : null}
+                </p>
+              </>
+            ) : (
+              <div className="reader-skeleton-title" aria-hidden="true">
+                <span />
+                <span />
+              </div>
+            )}
+            <p className="reader-preparing-steps">
+              <span>{kind === "pdf" ? "正在准备 PDF" : "正在准备全文"}</span>
+              {progress.steps.map((step) => (
+                <span
+                  key={step.id}
+                  className="reader-preparing-step"
+                  data-state={step.state}
+                >
+                  {step.state === "done" ? (
+                    <span className="reader-preparing-mark" aria-hidden="true">
+                      ✓
+                    </span>
+                  ) : step.state === "current" ? (
+                    <span className="ui-spinner" aria-hidden="true" />
+                  ) : null}
+                  {stepText(step)}
+                </span>
               ))}
+            </p>
+            <div
+              className="reader-preparing-bar"
+              role="progressbar"
+              aria-label="准备进度"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(progress.fraction * 100)}
+            >
+              <span style={{ width: `${progress.fraction * 100}%` }} />
             </div>
-            {[5, 4, 6].map((lines, p) => (
-              <p key={p} className="reader-skeleton-paragraph">
-                {Array.from({ length: lines }, (_, n) => (
+          </div>
+          {kind === "pdf" ? (
+            <div className="reader-skeleton-page" aria-hidden="true" />
+          ) : (
+            <div className="reader-skeleton-text" aria-hidden="true">
+              <div className="reader-skeleton-abstract">
+                {[0, 1, 2].map((n) => (
                   <span key={n} />
                 ))}
-              </p>
-            ))}
-          </div>
-        )}
+              </div>
+              {[5, 4, 6].map((lines, p) => (
+                <p key={p} className="reader-skeleton-paragraph">
+                  {Array.from({ length: lines }, (_, n) => (
+                    <span key={n} />
+                  ))}
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
       </article>
     </div>
   );

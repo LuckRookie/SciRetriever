@@ -14,6 +14,7 @@ import { syntheticReadingPdf } from "./reading-pdf-fixture.js";
 import {
   readerMore,
   readerPageNumber,
+  readerTextComplete,
   readerToLibrary,
   readerType,
   readerTypeChoice,
@@ -194,20 +195,19 @@ it("continues fixed Unicode Markdown without rebuilding stable blocks and recove
     expect(reads).toBe(2);
     await w.page.getByRole("button", { name: "重试", exact: true }).click();
     await expect.poll(() => reads).toBe(3);
+    // The notice gives the reason in words; the internal cause is in its technical details.
     await expect
-      .poll(() => w.page.locator(".reading-status").innerText())
-      .toContain("缺少续读游标");
+      .poll(() =>
+        w.page.locator(".reader-surface .ui-error-notice").innerText(),
+      )
+      .toContain("正文续读位置失效，请重新打开。");
+    expect(
+      await w.page.locator(".reader-surface .ui-tech-details").textContent(),
+    ).toContain("缺少续读游标");
     expect(await article.locator("[data-preserved=yes]").count()).toBe(1);
     await w.page.getByRole("button", { name: "重试", exact: true }).click();
     await expect.poll(() => reads).toBeGreaterThan(3);
-    for (
-      let i = 0;
-      i < 20 &&
-      !(await w.page.locator(".reading-status").innerText()).includes(
-        "全文已加载",
-      );
-      i++
-    ) {
+    for (let i = 0; i < 20 && !(await readerTextComplete(w.page)); i++) {
       await bottom();
       await expect
         .poll(() => w.page.locator(".reading-continuation").innerText())
@@ -215,9 +215,7 @@ it("continues fixed Unicode Markdown without rebuilding stable blocks and recove
     }
     await expect.poll(() => article.innerText()).toContain("Paragraph 299:");
     expect(await article.locator("[data-preserved=yes]").count()).toBe(1);
-    expect(await w.page.locator(".reading-status").innerText()).toContain(
-      "全文已加载",
-    );
+    expect(await readerTextComplete(w.page)).toBe(true);
     const tailImage = article.locator('[data-resource="tail.png"] img');
     await article
       .locator('[data-resource="tail.png"]')
@@ -409,9 +407,10 @@ it("explains scan-only PDFs and refuses bytes whose immutable hash changed", asy
     );
     await w.page.reload();
     await expect
-      .poll(() => w.page.locator(".reading-status").innerText(), {
-        timeout: 20_000,
-      })
+      .poll(
+        () => w.page.locator(".reader-surface .ui-error-notice").innerText(),
+        { timeout: 20_000 },
+      )
       .toContain("PDF 完整性校验失败");
     expect(await w.page.locator("canvas").count()).toBe(0);
     expect(w.errors).toEqual([]);
@@ -461,9 +460,10 @@ it("keeps a verified PDF download available when its worker fails and supports r
     await w.page.route("**/reader/pdf.worker.mjs", (route) => route.abort());
     await open(w);
     await expect
-      .poll(() => w.page.locator(".reading-status").innerText(), {
-        timeout: 20_000,
-      })
+      .poll(
+        () => w.page.locator(".reader-surface .ui-error-notice").innerText(),
+        { timeout: 20_000 },
+      )
       .toContain("阅读组件未能加载");
     await w.page.getByRole("button", { name: "更多", exact: true }).click();
     expect(

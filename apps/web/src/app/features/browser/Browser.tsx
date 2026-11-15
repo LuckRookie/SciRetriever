@@ -115,10 +115,12 @@ type Session = WorkbenchArticleSession;
 function PhaseBadge({ session }: { session: Session }) {
   if (session.phase === "closed")
     return session.outcome?.kind === "published" ? (
-      <Badge status="metadata">
-        <Icon name="check" />
-        已入库
-      </Badge>
+      <span className="browser-badge-icon">
+        <Badge status="metadata">
+          <Icon name="check" />
+          已入库
+        </Badge>
+      </span>
     ) : (
       <Badge status="failed">未获取</Badge>
     );

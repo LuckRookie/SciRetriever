@@ -83,7 +83,8 @@ export async function renderDocument(
   await extendSegments();
   frame.onLoadStep?.("read", { done: segments.length, total: segments.length });
   if (!total) {
-    frame.status.textContent = "此文档没有可读取正文；不会自动重新解析。";
+    // Spec 3.9: the sheet says there is no readable text.
+    frame.onEmpty?.("text");
     return;
   }
   const resources = new Map<string, DocumentResource>();
@@ -401,15 +402,28 @@ export async function renderDocument(
       }
     }
   };
-  /** The target block's `--sel` ground fades once (spec 4.4). */
+  /**
+   * The target block's `--sel` ground fades once (spec 4.4): set at once,
+   * then from the next frame a colour transition takes it back.
+   */
   const flash = (block: HTMLElement) => {
-    block.classList.remove("reading-jump-flash");
-    void block.offsetWidth;
+    block.classList.remove("reading-jump-fading");
     block.classList.add("reading-jump-flash");
-    block.addEventListener(
-      "animationend",
-      () => block.classList.remove("reading-jump-flash"),
-      { once: true },
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        block.classList.add("reading-jump-fading");
+        block.classList.remove("reading-jump-flash");
+        const done = (event: TransitionEvent) => {
+          if (
+            event.target !== block ||
+            event.propertyName !== "background-color"
+          )
+            return;
+          block.classList.remove("reading-jump-fading");
+          block.removeEventListener("transitionend", done);
+        };
+        block.addEventListener("transitionend", done);
+      }),
     );
   };
   // The anchor keeper above restores the place; there is nothing to redo after a layout change.
@@ -685,7 +699,6 @@ export async function renderDocument(
     more.hidden = true;
     tail.hidden = finished;
     tail.textContent = finished ? "" : "继续向下阅读，正文将自动加载";
-    frame.status.textContent = `${finished ? "全文已加载" : "已加载部分正文 · 继续向下滚动自动加载"}${source?.kind === "document" ? " · 高亮为证据所在段落；无可靠 PDF 页码" : ""}`;
     frame.onIssue?.(null);
     ctx.root.dataset.readingReady = "true";
     frame.onDocumentPaint?.();
@@ -738,17 +751,22 @@ export async function renderDocument(
       // A rejected read must not be served again from the session cache.
       if (request) forgetDocumentRead("slice", request);
       if (!ctx.signal.aborted) {
-        frame.status.textContent = readerErrorMessage(
-          error,
-          "正文无法完成读取或校验；已读内容保留，请重试。",
-        );
         autoFailed = true;
         more.hidden = !!frame.onIssue;
-        frame.onIssue?.("加载暂停，已读正文保留。", async () => {
-          autoFailed = false;
-          await append();
-          void prefetch();
-        });
+        // The notice gives the reason in words; the internal cause goes to
+        // its technical details.
+        const detail = error instanceof Error ? error.message : String(error);
+        frame.onIssue?.(
+          /续读/u.test(detail)
+            ? "正文续读位置失效，请重新打开。"
+            : readerErrorMessage(error, "正文无法完成读取或校验，请重试。"),
+          async () => {
+            autoFailed = false;
+            await append();
+            void prefetch();
+          },
+          { retained: "加载暂停，已读正文保留。", detail },
+        );
         tail.hidden = false;
         tail.textContent = "加载暂停，已读正文保留。请重试。";
       }

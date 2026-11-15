@@ -267,6 +267,9 @@ function Workspace({ api }: { api: ApiClient }) {
     [readerNav, setReaderNav] = useState(false),
     [readerBar, setReaderBar] = useState<HTMLElement | null>(null),
     [readerBarWidth, setReaderBarWidth] = useState(0),
+    [readerFocus, setReaderFocus] = useState(false),
+    // In focus mode, the top bar shown over the desk for a while (spec 1.7).
+    [peek, setPeek] = useState(false),
     topBar = useRef<HTMLElement>(null);
   const [width, setWidth] = useState(() => {
     const value = preferences.read("sciretriever:panel:navigation:v1");
@@ -559,6 +562,44 @@ function Workspace({ api }: { api: ApiClient }) {
         ["disc", "task", "web", "stats"].includes(route.section)) ||
       (api.kind === "query" && route.section === "set")
     );
+  // Leaving the reader page leaves focus mode.
+  useEffect(() => {
+    if (!readerPage) setReaderFocus(false);
+  }, [readerPage]);
+  /**
+   * Spec 1.7: in focus mode the pointer resting within 8 px of the window's
+   * top for 150 ms brings the top bar back over the desk; 400 ms after the
+   * pointer leaves it, it folds up again.
+   */
+  useEffect(() => {
+    if (!readerPage || !readerFocus) {
+      setPeek(false);
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined,
+      shown = false;
+    const set = (value: boolean, after: number) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        shown = value;
+        setPeek(value);
+      }, after);
+    };
+    const move = (event: PointerEvent) => {
+      const bar = topBar.current?.getBoundingClientRect();
+      const over = !!bar && shown && event.clientY <= bar.bottom;
+      if (over) return clearTimeout(timer);
+      if (event.clientY <= 8) {
+        if (!shown) set(true, 150);
+      } else if (shown) set(false, 400);
+      else clearTimeout(timer);
+    };
+    window.addEventListener("pointermove", move, { passive: true });
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("pointermove", move);
+    };
+  }, [readerPage, readerFocus]);
   const closeTab = (tab: PaperTab) => {
     setTabs((items) => items.filter((item) => item.id !== tab.id));
     closeReadingState(reading, tab.id);
@@ -667,6 +708,8 @@ function Workspace({ api }: { api: ApiClient }) {
         notify,
         readerBar: readerPage ? readerBar : null,
         readerBarWidth: readerPage ? readerBarWidth : 0,
+        readerFocus: readerPage && readerFocus,
+        setReaderFocus,
         reading,
         theme,
         setTheme: (value) => {
@@ -676,7 +719,12 @@ function Workspace({ api }: { api: ApiClient }) {
       }}
     >
       {readerPage ? (
-        <div className="application-shell" data-reader-page="">
+        <div
+          className="application-shell"
+          data-reader-page=""
+          data-focus={readerFocus || undefined}
+          data-peek={(readerFocus && peek) || undefined}
+        >
           <div className="workspace-main">
             {readerTopBar}
             {content_}

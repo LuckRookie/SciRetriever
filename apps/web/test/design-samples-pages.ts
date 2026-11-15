@@ -310,6 +310,45 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     ready: ".ui-menu",
   },
   {
+    id: "reader-focus-mode",
+    name: "阅读 · 专注模式",
+    route: reader("doc"),
+    // Spec 1.7: the top bar folded up, the side panel closed.
+    interaction: "按 F 进入专注模式",
+    prepare: async (p) => {
+      await p.locator('.react-reader[data-reading-ready="true"]').waitFor();
+      await p
+        .locator(".reader-engine-body")
+        .click({ position: { x: 5, y: 5 } });
+      await p.keyboard.press("f");
+      await p.waitForTimeout(400);
+    },
+    ready: "[data-reader-page][data-focus]",
+  },
+  {
+    id: "reader-pdf-column",
+    name: "阅读 · PDF 页列（50%）",
+    route: reader("pdf"),
+    // Spec 3.5: zoomed, the page column and the spine centred on the desk.
+    interaction: "排版选 50%",
+    prepare: async (p) => {
+      await p
+        .locator('.reading-pdf-page[data-rendered="true"]')
+        .first()
+        .waitFor();
+      const type = p.getByRole("button", { name: "排版", exact: true });
+      if (await type.isVisible()) await type.click();
+      else {
+        await p.getByRole("button", { name: "更多", exact: true }).click();
+        await p.getByRole("menuitem", { name: "排版", exact: true }).click();
+      }
+      await p.getByRole("menuitem", { name: "50%", exact: true }).click();
+      await p.locator(".ui-menu").waitFor({ state: "detached" });
+      await p.waitForTimeout(600);
+    },
+    ready: '.reading-pdf-page[data-rendered="true"]',
+  },
+  {
     id: "reader-edit",
     name: "阅读 · 编辑",
     route: reader("edit"),

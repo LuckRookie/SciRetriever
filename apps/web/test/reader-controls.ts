@@ -64,6 +64,19 @@ export async function readerView(page: Page, name: "原文" | "PDF") {
   await page.getByRole("button", { name: /^视图：/ }).click();
   await page.getByRole("menuitem", { name, exact: true }).click();
 }
+/**
+ * The shown full text is loaded to its end: the row that loads more under the
+ * text is gone (the reader page has no status bar, spec 1).
+ */
+export async function readerTextComplete(page: Page) {
+  const tail = page.locator(
+    ".reader-engine:not([hidden]) .reader-view:not([hidden]) .reading-continuation",
+  );
+  return (
+    (await tail.count()) === 1 &&
+    (await tail.evaluate((el) => (el as HTMLElement).hidden))
+  );
+}
 /** Opens the reader page's navigation drawer (spec 1.3). */
 export async function readerNavigation(page: Page) {
   await page.getByRole("button", { name: "打开导航", exact: true }).click();

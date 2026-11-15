@@ -33,6 +33,7 @@ import type { ApiClient } from "../../data/api.js";
 import { record } from "../../data/wire.js";
 import type { ReaderMode } from "../../data/url.js";
 import { errorMessage } from "../../strings.js";
+import { pageColumn } from "./geometry.js";
 import {
   createFullTextLayer,
   type FullTextLayer,
@@ -42,6 +43,15 @@ export type ViewKind = "pdf" | "doc";
 export const viewOf = (mode: ReaderMode): ViewKind | null =>
   mode === "pdf" || mode === "edit" ? "pdf" : mode === "doc" ? "doc" : null;
 
+/** A problem shown in the reader's error notice (spec 6.2 keeps what was read). */
+export interface ReaderIssue {
+  message: string;
+  retry?: () => void | Promise<void>;
+  /** What still shows; the notice's default when absent. */
+  retained?: string;
+  /** The internal cause, for the notice's technical details. */
+  detail?: string;
+}
 /** What a view shows in the reader's own controls; kept while the view is hidden. */
 export interface ViewUi {
   pdf: PdfControls | null;
@@ -50,7 +60,9 @@ export interface ViewUi {
   outlineNote: string;
   readingOffset: number | null;
   nextMatch: (() => void) | null;
-  issue: { message: string; retry?: () => void | Promise<void> } | null;
+  issue: ReaderIssue | null;
+  /** The material has nothing to read (spec 3.9): no text, or no PDF. */
+  empty: "text" | "pdf" | null;
   ready: boolean;
   resources: readonly ReaderResourceEntry[];
   /** Which paper and view this is; null when nothing shows. */
@@ -113,6 +125,7 @@ export const emptyUi = (): ViewUi => ({
   readingOffset: null,
   nextMatch: null,
   issue: null,
+  empty: null,
   ready: false,
   resources: [],
   shown: null,
@@ -137,7 +150,6 @@ export interface ReaderUpdate {
 /** Stable hooks into the reader page; called at the time of use. */
 export interface ReaderBindings {
   root(): HTMLElement | null;
-  statusHost(): HTMLElement | null;
   findHost(): HTMLElement | null;
   set: UiSetters;
   frame: { current: ReaderFrame | null };
@@ -162,7 +174,7 @@ export interface ReaderBindings {
   viewChanged(): void;
   /** The update offered for the shown material, if any. */
   offer(update: ReaderUpdate | null): void;
-  /** A one-line explanation for the status bar (spec 10), or null. */
+  /** A one-line explanation under the page header (spec 1.2), or null. */
   note(text: string | null): void;
   /** The way back after a jump (spec 4.4), when its place is off screen. */
   history(back: { label: string } | null): void;
@@ -172,6 +184,8 @@ export interface ReaderBindings {
   progress(id: string, kind: ViewKind, value: LoadProgress): void;
   /** Shows another view of the current paper (a jump back into it). */
   changeView(kind: ViewKind): void;
+  /** The reading size now: the sheet, and the PDF page at 适宽, follow it (spec 1.1, 3.5). */
+  fontSize(): number;
 }
 /** One step of the jump history: which view and where. */
 interface Visit {
@@ -195,7 +209,6 @@ export interface EngineRequest {
 interface ReaderView {
   kind: ViewKind;
   layer: HTMLDivElement;
-  status: HTMLElement;
   findStatus: HTMLElement;
   marker: HTMLElement;
   ui: ViewUi;
@@ -233,6 +246,14 @@ interface ReaderEngine {
  * the switch never shows an empty frame.
  */
 export function createReaderEngines(b: ReaderBindings) {
+  for (const name of [
+    "--dur-1",
+    "--dur-2",
+    "--dur-3",
+    "--ease-in",
+    "--ease-out",
+  ])
+    token(name);
   const engines = new Map<string, ReaderEngine>();
   let current: ReaderEngine | null = null,
     pending: ReaderEngine | null = null,
@@ -367,6 +388,31 @@ export function createReaderEngines(b: ReaderBindings) {
 }
 export type ReaderEngines = ReturnType<typeof createReaderEngines>;
 
+/**
+ * A motion token of tokens.css (spec 6.1 takes every value from there), read
+ * once: reading it in the middle of a switch would restyle the page early.
+ */
+const tokens = new Map<string, string>();
+function token(name: string) {
+  let value = tokens.get(name);
+  if (value === undefined) {
+    value = getComputedStyle(document.documentElement)
+      .getPropertyValue(name)
+      .trim();
+    if (value) tokens.set(name, value);
+  }
+  return value;
+}
+/** A duration token in ms. */
+export function duration(name: string, fallback: number): number {
+  const value = token(name),
+    n = Number.parseFloat(value);
+  if (!Number.isFinite(n)) return fallback;
+  return value.endsWith("ms") ? n : value.endsWith("s") ? n * 1000 : n;
+}
+export const easing = (name: string, fallback: string) =>
+  token(name) || fallback;
+
 function build(
   request: EngineRequest,
   b: ReaderBindings,
@@ -402,6 +448,29 @@ function build(
     view.settled = true;
     if (deferred?.view === view) deferred.go();
     if (view.kind === target) engine.onSettled?.();
+    if (visible && active === view) prefetch();
+  };
+  /**
+   * Spec 8.2 (a view switch within 200 ms): once the full text is drawn and
+   * the page is idle, the PDF prepares off screen, so switching to it shows
+   * its pages at once (spec 5.1: one reader, its views layers in it). The
+   * full text, once shown, keeps its laid-out text while hidden; it is not
+   * built ahead for a paper opened in its PDF (spec 6.4).
+   */
+  let prefetching = 0;
+  const prefetch = () => {
+    if (prefetching || !active || active.kind !== "doc") return;
+    const other: ViewKind = "pdf";
+    if (views.has(other) || !material.material) return;
+    const run = () => {
+      prefetching = 0;
+      if (controller.signal.aborted || !visible || views.has(other)) return;
+      buildView(other, true);
+    };
+    prefetching =
+      typeof requestIdleCallback === "function"
+        ? requestIdleCallback(run, { timeout: 2000 })
+        : window.setTimeout(run, 500);
   };
   /** A view switch waiting for the new view's first screen (spec 6.2). */
   let deferred: { view: ReaderView; go: () => void } | null = null,
@@ -420,12 +489,9 @@ function build(
     const header = document.createElement("header");
     header.className = "reader-page-header";
     if (kind === "doc") layer.append(header);
-    // Loading shows as the skeleton and its steps, not here (spec 10).
-    const statusText = document.createElement("span");
     const view: ReaderView = {
       kind,
       layer,
-      status: statusText,
       findStatus: document.createElement("span"),
       // Engines mark readiness here; it reaches the reader while the view shows.
       marker: document.createElement("div"),
@@ -567,7 +633,6 @@ function build(
       header,
       controls: document.createElement("div"),
       outline: document.createElement("nav"),
-      status: statusText,
       findStatus: view.findStatus,
       onFind: () => {},
       beforeLayout: () => () => {},
@@ -629,16 +694,21 @@ function build(
       onFindNext: (value) => {
         if (!controller.signal.aborted) update(view, { nextMatch: value });
       },
-      onIssue: (message, again) => {
+      onIssue: (message, again, more) => {
         if (!controller.signal.aborted)
           update(view, {
             issue: message
-              ? { message, ...(again ? { retry: again } : {}) }
+              ? { message, ...(again ? { retry: again } : {}), ...more }
               : null,
           });
       },
+      onEmpty: (what) => {
+        if (!controller.signal.aborted) update(view, { empty: what });
+      },
     };
     view.frame = frame;
+    frame.pageColumn = (desk, pageWidth, columns) =>
+      pageColumn(desk, b.fontSize(), pageWidth, columns);
     if (kind === "pdf") {
       // The translated twin pages live as long as this PDF document (ADR 0051).
       const twins = createFullTextLayer(
@@ -659,7 +729,7 @@ function build(
     const run = async () => {
       if (kind === "pdf") {
         if (!material.material) {
-          statusText.textContent = "尚无 PDF。可从信息栏上传或显式获取。";
+          update(view, { empty: "pdf" });
           return;
         }
         // The engine's code loads while the bytes download.
@@ -699,7 +769,7 @@ function build(
         await pdfEngine.renderPdf(ctx, frame, position, bytes);
       } else {
         if (!material.document) {
-          statusText.textContent = "尚无已发布全文；阅读不会启动解析。";
+          update(view, { empty: "text" });
           return;
         }
         const documentEngine = await import("../../../reading/document.js");
@@ -720,7 +790,6 @@ function build(
     void run()
       .catch((error) => {
         if (!controller.signal.aborted) {
-          statusText.textContent = errorMessage(error);
           update(view, {
             issue: {
               message: errorMessage(error),
@@ -778,18 +847,58 @@ function build(
     publishHistory();
     return true;
   };
+  /**
+   * Spec 6.1: switching views, the old one fades out (--dur-1, --ease-in)
+   * over the new one fading in (--dur-2, --ease-out). The old layer stays
+   * where it was on screen while the shared scroll area moves for the new
+   * one; only opacity animates, so reduced motion keeps it.
+   */
+  const fades = new Map<ReaderView, () => void>();
+  const fadeOut = (view: ReaderView) => {
+    const layer = view.layer,
+      before = host.scrollTop;
+    layer.dataset.leaving = "true";
+    const follow = () => {
+      layer.style.transform = `translateY(${host.scrollTop - before}px)`;
+    };
+    host.addEventListener("scroll", follow, { passive: true });
+    const animation = layer.animate([{ opacity: 1 }, { opacity: 0 }], {
+      duration: duration("--dur-1", 120),
+      easing: easing("--ease-in", "ease-in"),
+      fill: "forwards",
+    });
+    const done = () => {
+      if (!fades.has(view)) return;
+      fades.delete(view);
+      host.removeEventListener("scroll", follow);
+      animation.cancel();
+      delete layer.dataset.leaving;
+      layer.style.removeProperty("transform");
+    };
+    fades.set(view, done);
+    animation.onfinish = done;
+  };
+  const fadeIn = (view: ReaderView) => {
+    fades.get(view)?.();
+    view.layer.animate([{ opacity: 0 }, { opacity: 1 }], {
+      duration: duration("--dur-2", 180),
+      easing: easing("--ease-out", "ease-out"),
+    });
+  };
   /** Hides the active view; a hidden engine keeps no canvases (spec 5.3). */
-  const leave = (view: ReaderView, release: boolean) => {
+  const leave = (view: ReaderView, release: boolean, fade = false) => {
     view.frame.hide(release);
+    if (fade) fadeOut(view);
+    else fades.get(view)?.();
     view.layer.hidden = true;
     view.surface?.destroy();
     view.surface = null;
   };
   const enter = (view: ReaderView) => {
+    fades.get(view)?.();
     view.layer.hidden = false;
     b.frame.current = view.frame;
     b.twins.current = view.twins;
-    b.statusHost()?.replaceChildren(view.status);
     b.findHost()?.replaceChildren(view.findStatus);
     applyUi(b.set, view.ui);
     syncReady(view);
@@ -818,7 +927,6 @@ function build(
   const clearPage = () => {
     b.frame.current = null;
     b.twins.current = null;
-    b.statusHost()?.replaceChildren();
     b.findHost()?.replaceChildren();
     applyUi(b.set, emptyUi());
     syncReady(null);
@@ -832,10 +940,11 @@ function build(
       anchor = from?.frame.anchor?.() ?? null,
       unread = !!from?.arrived;
     // The current material's hidden PDF view keeps its canvases (spec 5.3).
-    if (from) leave(from, false);
+    if (from) leave(from, false, !!next);
     active = next;
     if (!next) return clearPage();
     enter(next);
+    if (from) fadeIn(next);
     if (kind) rememberReading(catalog, id, { view: kind });
     const back = returning;
     returning = null;
@@ -916,6 +1025,7 @@ function build(
       cancelDeferred();
       visible = false;
       controller.abort();
+      for (const done of [...fades.values()]) done();
       for (const view of views.values()) {
         view.surface?.destroy();
         view.twins?.destroy();
