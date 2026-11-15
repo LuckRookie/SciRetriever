@@ -55,6 +55,8 @@ export interface UrlState {
   section: Section;
   literature: string | null;
   reader: ReaderMode;
+  /** The address names the view; otherwise the reader picks it (spec 6.4). */
+  readerChosen: boolean;
   query: LibraryQuery;
   sort: LibrarySort;
   parameters: URLSearchParams;
@@ -114,6 +116,7 @@ export function parseUrl(search: string): UrlState {
       reader === "results"
         ? reader
         : "pdf",
+    readerChosen: !!reader,
     query,
     sort,
     parameters,

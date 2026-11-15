@@ -88,9 +88,10 @@ function Palette({ onClose }: { onClose: () => void }) {
   const items = results.data?.items.slice(0, LIMIT) ?? [];
   useEffect(() => setActive(0), [term]);
   const open = (item: LiteratureSearchItem) => {
+    // The reader picks the view (spec 6.4).
     shell.openPaper(
       item.literature.literature_id,
-      "pdf",
+      undefined,
       undefined,
       paperTitle(item),
     );

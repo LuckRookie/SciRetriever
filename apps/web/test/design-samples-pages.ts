@@ -352,15 +352,16 @@ export const designSamplePages: readonly DesignSamplePage[] = [
   {
     id: "reader-metadata-only",
     name: "阅读 · 只有书目",
-    route: (ids) => `/?literature=${ids.metadataOnly}&reader=pdf`,
-    ready: '.reading-status:has-text("尚无 PDF")',
+    // Opened without a view: the reader picks the empty full text and the information panel (spec 6.4).
+    route: (ids) => `/?literature=${ids.metadataOnly}`,
+    ready: '.reader-surface .ui-empty:has-text("只有书目信息")',
   },
   ...(
     [
-      ["pdf", "PDF", "material-bytes", "正在读取并核验固定材料"],
+      ["pdf", "PDF", "material-bytes", "下载 PDF"],
       // The first full-text read: nothing of the text shows yet, so the
       // picture does not depend on how far loading got before the shot.
-      ["doc", "全文", "document-segments", "正在读取并核验固定材料"],
+      ["doc", "全文", "document-segments", "读取全文"],
     ] as const
   ).map(
     ([mode, label, operation, status]): DesignSamplePage => ({
@@ -372,7 +373,8 @@ export const designSamplePages: readonly DesignSamplePage[] = [
         await holdResponse(p, `/api/v1/query/${operation}`);
         await p.reload({ waitUntil: "domcontentloaded" });
       },
-      ready: `.reading-status:has-text("${status}")`,
+      // Spec 6.3: the skeleton with the step under way.
+      ready: `.reader-preparing .reader-preparing-step[data-state="current"]:has-text("${status}")`,
     }),
   ),
   ...stepNames.map(

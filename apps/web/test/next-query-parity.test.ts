@@ -374,10 +374,8 @@ it("reads, searches, follows references and downloads through the query-only pag
       exact: true,
     });
     await sourceResult.locator(".paper-open").click();
-    await page
-      .locator('.reading-pdf-page[data-rendered="true"]')
-      .first()
-      .waitFor();
+    // It opens in the view it has (spec 6.4); either way the reader is ready.
+    await page.locator('.react-reader[data-reading-ready="true"]').waitFor();
     expect(new URL(page.url()).searchParams.get("literature")).toBe(lit);
     await page.goBack();
     await expect
@@ -385,6 +383,8 @@ it("reads, searches, follows references and downloads through the query-only pag
       .toBe(false);
     await sourceResult.waitFor();
     await page.goForward();
+    // The downloads below come from the PDF view.
+    await page.getByRole("tab", { name: "PDF", exact: true }).click();
     await page
       .locator('.reading-pdf-page[data-rendered="true"]')
       .first()
@@ -468,9 +468,8 @@ it("reads, searches, follows references and downloads through the query-only pag
       .getByRole("article", { name: "Query reader without a PDF", exact: true })
       .locator(".paper-open")
       .click();
-    await page
-      .getByText("尚无 PDF。可从信息栏上传或显式获取。", { exact: true })
-      .waitFor();
+    // Opened from its row: no PDF and no text, so the empty full text (spec 6.4).
+    await page.getByText("这份资料只有书目信息。", { exact: true }).waitFor();
     await page.getByRole("button", { name: "更多", exact: true }).click();
     expect(
       await page

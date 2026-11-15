@@ -1200,3 +1200,142 @@
     font-size: var(--text-caption);
   }
 }
+
+/* Spec 6.3 and 10: the skeleton of a view being prepared, over the content area
+   in the text column (or the page column), so nothing moves when it goes. */
+@layer pages {
+  .react-reader .reading-status {
+    position: relative;
+    z-index: 3;
+  }
+  /* One line high even while empty: the loading text is gone (spec 10), and a
+     bar that grows when the status arrives would move the reading line. */
+  .react-reader .reading-status::before {
+    content: "\200b";
+  }
+  .react-reader .reader-preparing {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    overflow: hidden;
+    padding: var(--space-5);
+    background: var(--pdfbg);
+    scrollbar-gutter: stable;
+  }
+  /* The text column as the text will have it (.reading-article). */
+  .react-reader .reader-preparing-sheet {
+    font-family: var(--serif);
+    font-size: var(--reading-font-size, 20px);
+    line-height: 1.75;
+    max-width: min(100%, 36em);
+    margin: 0 auto;
+    color: var(--fg);
+  }
+  .react-reader .reading-wide .reader-preparing-sheet {
+    max-width: min(100%, 46em);
+  }
+  .react-reader .reading-full .reader-preparing-sheet,
+  .react-reader .reader-preparing .reader-preparing-pages {
+    max-width: none;
+  }
+  .react-reader .reader-preparing-title {
+    font-size: 1.6em;
+    font-weight: 600;
+    line-height: 1.3;
+    margin: 0 0 var(--space-2);
+    text-wrap: balance;
+  }
+  .react-reader .reader-preparing-byline {
+    margin: 0 0 var(--space-3);
+    font-family: var(--sans);
+    font-size: var(--text-secondary);
+    color: var(--fg2);
+  }
+  .react-reader .reader-preparing-steps {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1) var(--space-4);
+    margin: 0 0 var(--space-2);
+    font-family: var(--sans);
+    font-size: var(--text-secondary);
+    line-height: var(--lh-caption);
+    color: var(--fg2);
+  }
+  /* Not started: --fg3 rather than spec 6.3's --fg-quiet, which is below 4.5:1 on the desk. */
+  .react-reader .reader-preparing-step {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    color: var(--fg3);
+  }
+  .react-reader .reader-preparing-step[data-state="done"] {
+    color: var(--fg3);
+  }
+  .react-reader .reader-preparing-step[data-state="current"] {
+    color: var(--blue);
+    font-weight: 500;
+  }
+  .react-reader .reader-preparing-step .ui-spinner {
+    width: 12px;
+    height: 12px;
+  }
+  .react-reader .reader-preparing-bar {
+    height: 2px;
+    margin-bottom: var(--space-5);
+    background: var(--line);
+  }
+  .react-reader .reader-preparing-bar > span {
+    display: block;
+    height: 100%;
+    background: var(--blue);
+  }
+  /* Skeleton bars: 15 px high, one text line apart (1 em × 1.85). */
+  .react-reader .reader-skeleton-text span,
+  .react-reader .reader-skeleton-title span {
+    display: block;
+    height: 15px;
+    margin-bottom: calc(1.85em - 15px);
+    background: var(--reader-skeleton);
+  }
+  .react-reader .reader-skeleton-title span {
+    height: 24px;
+    margin-bottom: var(--space-3);
+  }
+  .react-reader .reader-skeleton-title span:last-child {
+    width: 40%;
+    height: 15px;
+  }
+  .react-reader .reader-skeleton-abstract {
+    padding-top: calc(1.85em - 15px);
+    margin-bottom: 1.85em;
+    border-top: 1px solid var(--line2);
+    border-bottom: 1px solid var(--line2);
+  }
+  .react-reader .reader-skeleton-paragraph {
+    margin: 0 0 calc(1.85em - 15px);
+  }
+  .react-reader .reader-skeleton-paragraph span:first-child {
+    margin-inline-start: 2em;
+  }
+  .react-reader .reader-skeleton-paragraph span:last-child,
+  .react-reader .reader-skeleton-abstract span:last-child {
+    width: 55%;
+  }
+  .react-reader .reader-skeleton-page {
+    aspect-ratio: 612 / 792;
+    background: var(--reader-skeleton);
+    box-shadow: var(--shadow-1);
+  }
+  /* What the paper lacks lies over the empty view: the scroll area keeps its size. */
+  .react-reader .reader-lacking {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+  }
+  .react-reader .reader-lacking-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+}

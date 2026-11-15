@@ -5,6 +5,8 @@ import {
 } from "@sciretriever/contracts";
 import type {
   DocumentLinkPreview,
+  LoadProgress,
+  LoadStep,
   PdfControls,
   ReaderFrame,
   ReaderOutlineEntry,
@@ -51,6 +53,55 @@ export interface ViewUi {
   issue: { message: string; retry?: () => void | Promise<void> } | null;
   ready: boolean;
   resources: readonly ReaderResourceEntry[];
+  /** Which paper and view this is; null when nothing shows. */
+  shown: { id: string; kind: ViewKind } | null;
+  /** Its first screen is drawn: preparing is over (spec 6.3). */
+  prepared: boolean;
+}
+const STEPS: Record<ViewKind, readonly Pick<LoadStep, "id" | "label">[]> = {
+  pdf: [
+    { id: "download", label: "下载 PDF" },
+    { id: "verify", label: "校验" },
+    { id: "parse", label: "解析" },
+    { id: "layout", label: "排版" },
+  ],
+  doc: [
+    { id: "read", label: "读取全文" },
+    { id: "layout", label: "排版" },
+  ],
+};
+/** The steps of preparing a view, `at` the current one (all done past the end). */
+export function loadProgress(
+  kind: ViewKind,
+  at: LoadStep["id"] | "done",
+  count?: { done: number; total: number },
+): LoadProgress {
+  const list = STEPS[kind],
+    index = at === "done" ? list.length : list.findIndex((s) => s.id === at);
+  const steps = list.map(
+    (step, i): LoadStep => ({
+      ...step,
+      state: i < index ? "done" : i === index ? "current" : "waiting",
+      ...(i === index && count
+        ? {
+            done: count.done,
+            total: count.total,
+            unit:
+              step.id === "download"
+                ? "bytes"
+                : step.id === "parse"
+                  ? "pages"
+                  : "blocks",
+          }
+        : {}),
+    }),
+  );
+  const part =
+    count && count.total > 0 ? Math.min(1, count.done / count.total) : 0;
+  return {
+    steps,
+    fraction: Math.min(1, (Math.max(0, index) + part) / list.length),
+  };
 }
 export const emptyUi = (): ViewUi => ({
   pdf: null,
@@ -62,6 +113,8 @@ export const emptyUi = (): ViewUi => ({
   issue: null,
   ready: false,
   resources: [],
+  shown: null,
+  prepared: false,
 });
 export type UiSetters = { [K in keyof ViewUi]: (value: ViewUi[K]) => void };
 function applyUi(set: UiSetters, patch: Partial<ViewUi>) {
@@ -110,6 +163,10 @@ export interface ReaderBindings {
   note(text: string | null): void;
   /** The way back after a jump (spec 4.4), when its place is off screen. */
   history(back: { label: string } | null): void;
+  /** Puts the loading skeleton on screen now, before a view that is not ready replaces the old one. */
+  cover(): void;
+  /** Where a view's preparation is, shown or not: the skeleton shows it (spec 6.3). */
+  progress(id: string, kind: ViewKind, value: LoadProgress): void;
   /** Shows another view of the current paper (a jump back into it). */
   changeView(kind: ViewKind): void;
 }
@@ -168,8 +225,9 @@ interface ReaderEngine {
  * The live reader engines of one reader page (spec 5.1): the current tab's
  * and the previous tab's. A third material releases the least recently used
  * engine first, so at most two PDF workers exist. A new engine prepares off
- * screen and replaces the old picture once its first screen can show, or after
- * 300 ms (spec 6.2).
+ * screen and replaces the old picture once its first screen can show, or
+ * after 300 ms with the reader's skeleton laid over it first (spec 6.2), so
+ * the switch never shows an empty frame.
  */
 export function createReaderEngines(b: ReaderBindings) {
   const engines = new Map<string, ReaderEngine>();
@@ -243,7 +301,11 @@ export function createReaderEngines(b: ReaderBindings) {
     next.prepare(kind);
     next.onSettled = () => swap(next);
     if (next.settled()) return swap(next);
-    timer = setTimeout(() => swap(next), 300);
+    timer = setTimeout(() => {
+      // Past 300 ms: the skeleton goes over the old picture first.
+      b.cover();
+      swap(next);
+    }, 300);
   };
   return {
     open(request: EngineRequest, scroller: HTMLElement) {
@@ -335,7 +397,15 @@ function build(
   };
   const settle = (view: ReaderView) => {
     view.settled = true;
+    if (deferred?.view === view) deferred.go();
     if (view.kind === target) engine.onSettled?.();
+  };
+  /** A view switch waiting for the new view's first screen (spec 6.2). */
+  let deferred: { view: ReaderView; go: () => void } | null = null,
+    deferTimer: ReturnType<typeof setTimeout> | undefined;
+  const cancelDeferred = () => {
+    clearTimeout(deferTimer);
+    deferred = null;
   };
   const buildView = (kind: ViewKind, offScreen: boolean): ReaderView => {
     const layer = document.createElement("div");
@@ -343,8 +413,8 @@ function build(
     layer.dataset.view = kind;
     layer.hidden = true;
     container.append(layer);
+    // Loading shows as the skeleton and its steps, not here (spec 10).
     const statusText = document.createElement("span");
-    statusText.textContent = "正在读取并核验固定材料…";
     const view: ReaderView = {
       kind,
       layer,
@@ -352,7 +422,7 @@ function build(
       findStatus: document.createElement("span"),
       // Engines mark readiness here; it reaches the reader while the view shows.
       marker: document.createElement("div"),
-      ui: emptyUi(),
+      ui: { ...emptyUi(), shown: { id, kind } },
       twins: null,
       surface: null,
       frame: null as unknown as ReaderFrame,
@@ -360,7 +430,11 @@ function build(
       arrived: false,
     };
     const observer = new MutationObserver(() => {
-      if (view.marker.dataset.readingReady === "true") settle(view);
+      if (view.marker.dataset.readingReady === "true") {
+        // The first screen is drawn: preparing is over (spec 6.3).
+        step("done");
+        settle(view);
+      }
       if (shows(view)) syncReady(view);
     });
     observer.observe(view.marker, { attributes: true });
@@ -428,7 +502,19 @@ function build(
           });
       }, 400);
     };
+    let stepAt: LoadStep["id"] | "done" = kind === "pdf" ? "download" : "read";
+    const step = (
+      at: LoadStep["id"] | "done",
+      count?: { done: number; total: number },
+    ) => {
+      if (controller.signal.aborted || stepAt === "done") return;
+      stepAt = at;
+      // The steps go to the skeleton alone; the reader page hears only the end.
+      b.progress(id, kind, loadProgress(kind, at, count));
+      if (at === "done") update(view, { prepared: true });
+    };
     const frame: ReaderFrame = {
+      onLoadStep: (at, count) => step(at, count),
       onSegment: (segment) => {
         const pdfMaterial = material.material;
         if (!pdfMaterial) return;
@@ -477,8 +563,13 @@ function build(
       findStatus: view.findStatus,
       onFind: () => {},
       beforeLayout: () => () => {},
-      hide: () => {},
-      show: () => {},
+      // Until the engine takes these over, showing or hiding sets how it starts.
+      hide: () => {
+        frame.startHidden = true;
+      },
+      show: () => {
+        frame.startHidden = false;
+      },
       // Until the engine is running, a place to follow waits for it.
       follow: (anchor) =>
         new Promise<void>((done) => {
@@ -563,8 +654,23 @@ function build(
           statusText.textContent = "尚无 PDF。可从信息栏上传或显式获取。";
           return;
         }
+        let shownBytes = 0;
         const started = performance.now(),
-          bytes = await readPdfBytes(ctx, material.material);
+          bytes = await readPdfBytes(
+            ctx,
+            material.material,
+            (at, done, total) => {
+              // A step a frame is enough: report at most every 2% of the file.
+              if (
+                at === "download" &&
+                done < total &&
+                done - shownBytes < total / 50
+              )
+                return;
+              shownBytes = done;
+              step(at, at === "download" ? { done, total } : undefined);
+            },
+          );
         performance.measure("sciretriever-pdf-read-verify", {
           start: started,
           end: performance.now(),
@@ -576,6 +682,7 @@ function build(
         urls.add(url);
         if (READER_PROBE) probeCount("objectUrlsCreated");
         update(view, { pdfUrl: url });
+        step("parse");
         const pdfEngine = await import("../../../reading/pdf.js");
         controller.signal.throwIfAborted();
         await pdfEngine.renderPdf(ctx, frame, position, bytes);
@@ -594,7 +701,10 @@ function build(
           request.source,
         );
       }
-      if (!controller.signal.aborted) update(view, { ready: true });
+      if (!controller.signal.aborted) {
+        step("done");
+        update(view, { ready: true });
+      }
     };
     void run()
       .catch((error) => {
@@ -703,6 +813,26 @@ function build(
     syncReady(null);
     b.viewChanged();
   };
+  /** Shows `next` in place of the active view, carrying the place over. */
+  const switchTo = (next: ReaderView | null, kind: ViewKind | null) => {
+    // Spec 4.3: the place carries over, unless the reader went straight back
+    // without reading on; then each view keeps its own.
+    const from = active,
+      anchor = from?.frame.anchor?.() ?? null,
+      unread = !!from?.arrived;
+    // The current material's hidden PDF view keeps its canvases (spec 5.3).
+    if (from) leave(from, false);
+    active = next;
+    if (!next) return clearPage();
+    enter(next);
+    if (kind) rememberReading(catalog, id, { view: kind });
+    const back = returning;
+    returning = null;
+    const carried = back ?? (anchor && !unread ? anchor : null);
+    if (!carried) return;
+    next.arrived = !back;
+    void next.frame.follow?.(carried, !!back);
+  };
   const engine: ReaderEngine = {
     request,
     offered: null,
@@ -719,29 +849,38 @@ function build(
     activate(kind) {
       target = kind;
       if (!visible) return engine.prepare(kind);
-      const next = kind ? (views.get(kind) ?? buildView(kind, false)) : null;
+      if (deferred && deferred.view.kind === kind) return;
+      cancelDeferred();
+      // Spec 6.2: the old view stays on screen while the new one prepares off
+      // screen, until its first screen is drawn or 300 ms have passed.
+      const waiting =
+        !!kind && !!active && active.settled && !views.get(kind)?.settled;
+      const next = kind ? (views.get(kind) ?? buildView(kind, waiting)) : null;
       if (next === active) return;
-      // Spec 4.3: the place carries over, unless the reader went straight back
-      // without reading on; then each view keeps its own.
-      const from = active,
-        anchor = from?.frame.anchor?.() ?? null,
-        unread = !!from?.arrived;
-      // The current material's hidden PDF view keeps its canvases (spec 5.3).
-      if (from) leave(from, false);
-      active = next;
-      if (!next) return clearPage();
-      enter(next);
-      if (kind) rememberReading(catalog, id, { view: kind });
-      const back = returning;
-      returning = null;
-      const carried = back ?? (anchor && !unread ? anchor : null);
-      if (!carried) return;
-      next.arrived = !back;
-      void next.frame.follow?.(carried, !!back);
+      if (waiting && next) {
+        // The PDF prepares at the place it will show (spec 4.3), so its first
+        // screen is the right one; the switch follows the latest place again.
+        const anchor =
+          !active || active.arrived ? null : (active.frame.anchor?.() ?? null);
+        if (next.kind === "pdf" && anchor) void next.frame.follow?.(anchor);
+        const go = () => {
+          if (deferred?.view !== next) return;
+          cancelDeferred();
+          if (!visible) return;
+          // Past 300 ms: the skeleton goes over the old view first (spec 6.2).
+          if (!next.settled) b.cover();
+          switchTo(next, kind);
+        };
+        deferred = { view: next, go };
+        deferTimer = setTimeout(go, 300);
+        return;
+      }
+      switchTo(next, kind);
     },
     back: () => travel(past, future),
     forward: () => travel(future, past),
     show(kind) {
+      cancelDeferred();
       visible = true;
       container.hidden = false;
       active = null;
@@ -752,6 +891,7 @@ function build(
       else clearPage();
     },
     hide() {
+      cancelDeferred();
       visible = false;
       for (const view of views.values()) {
         if (view === active) leave(view, true);
@@ -762,6 +902,7 @@ function build(
       b.history(null);
     },
     destroy() {
+      cancelDeferred();
       visible = false;
       controller.abort();
       for (const view of views.values()) {

@@ -1080,7 +1080,7 @@ export default function Library() {
                 onPress={() => {
                   shell.openPaper(
                     peek!,
-                    "pdf",
+                    undefined,
                     undefined,
                     paperTitle(preview.data!),
                   );
@@ -1398,7 +1398,8 @@ const LibraryRow = memo(function LibraryRow({
         if (event.key === " ") {
           event.preventDefault();
           onToggle(id);
-        } else if (event.key === "Enter") onOpen(id, "pdf", undefined, title);
+        } else if (event.key === "Enter")
+          onOpen(id, undefined, undefined, title);
         else if (["ArrowDown", "ArrowUp"].includes(event.key)) {
           event.preventDefault();
           onMove(row.index + (event.key === "ArrowDown" ? 1 : -1));
@@ -1443,7 +1444,7 @@ const LibraryRow = memo(function LibraryRow({
       </span>
       <button
         className="paper-open"
-        onClick={() => onOpen(id, "pdf", undefined, title)}
+        onClick={() => onOpen(id, undefined, undefined, title)}
       >
         <span className="paper-title">
           <RichTitle parts={paperTitleParts(item)} />

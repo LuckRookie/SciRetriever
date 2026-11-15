@@ -80,6 +80,7 @@ export async function renderDocument(
   // Start with one known contiguous range; discover subsequent segment pages
   // only when reading reaches them. Each continuation stays bound to its range.
   await extendSegments();
+  frame.onLoadStep?.("read", { done: segments.length, total: segments.length });
   if (!total) {
     frame.status.textContent = "此文档没有可读取正文；不会自动重新解析。";
     return;
@@ -108,6 +109,7 @@ export async function renderDocument(
   );
   bound(described);
   const layout: DocumentLayout | null = described.layout ?? null;
+  frame.onLoadStep?.("layout");
   const article = document.createElement("article");
   article.className = "reading-article library-reading-text";
   // Folded front-page article information (ADR 0054); session state only.

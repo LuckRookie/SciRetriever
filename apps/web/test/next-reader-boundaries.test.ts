@@ -445,9 +445,12 @@ it("keeps encrypted PDF rejection at ingestion and reports no accepted PDF", asy
     // Navigation only loads the shell. Source resolution starts after the
     // literature receipt; do not spend the assertion window on application startup.
     await (await detailRead).finished();
-    await expect
-      .poll(() => w.page.locator(".reading-status").innerText())
-      .toContain("尚无 PDF");
+    // Without a PDF the paper does not open in the PDF view (spec 6.4, 3.9).
+    await w.page
+      .locator(".reader-surface .ui-empty")
+      .getByText("这份资料只有书目信息。", { exact: true })
+      .waitFor();
+    expect(new URL(w.page.url()).searchParams.get("reader")).toBe("doc");
     expect(await w.page.locator("canvas").count()).toBe(0);
     expect(w.errors).toEqual([]);
   } finally {

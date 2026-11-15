@@ -185,9 +185,11 @@ export async function resolveReadingSources(
   }
   return { material, document };
 }
+/** `progress` hears the bytes as they arrive, then the start of the hash check (spec 6.3). */
 export async function readPdfBytes(
   ctx: ReadingContext,
   material: DocumentMaterialRef,
+  progress?: (step: "download" | "verify", done: number, total: number) => void,
 ): Promise<Uint8Array<ArrayBuffer>> {
   if (
     material.media_type !== "application/pdf" ||
@@ -239,6 +241,7 @@ export async function readPdfBytes(
         throw new Error("PDF 响应超过声明大小");
       bytes.set(chunk.value, offset);
       offset += chunk.value.byteLength;
+      progress?.("download", offset, bytes.length);
     }
   } finally {
     await reader.cancel();
@@ -246,6 +249,7 @@ export async function readPdfBytes(
   }
   if (READER_PROBE && offset === bytes.length)
     probeCountKey("pdfHashes", material.asset_sha256);
+  progress?.("verify", 0, 1);
   if (
     offset !== bytes.length ||
     (await sha256(bytes)) !== material.asset_sha256

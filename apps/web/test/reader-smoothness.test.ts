@@ -61,9 +61,8 @@ const ENFORCED: readonly (CheckId | `${CheckId}.${string}`)[] = [
   "anchor",
   "views",
   "zoom",
-  // 05: zooming and scrolling the PDF; view and tab switches follow in 06.
-  "blank.zoom",
-  "blank.scroll",
+  // 05 zoom and scroll, 06 view and tab switches: every frame has a picture.
+  "blank",
 ];
 const enforce = new Set<string>([
   ...ENFORCED,
@@ -176,6 +175,8 @@ interface Frame {
   content: boolean;
   /** Every visible PDF page shows its drawn page or a bitmap of it (not a placeholder). */
   picture: boolean;
+  /** The loading skeleton (spec 6.3) is on screen. */
+  skeleton: boolean;
   painted: boolean;
   sharp: boolean;
   animations: string[];
@@ -415,6 +416,7 @@ function installHelpers() {
           t,
           content: rs.content(),
           picture: mode === "pdf" ? rs.picture() : true,
+          skeleton: !!document.querySelector(".reader-preparing"),
           painted: mode ? rs.painted(mode) : false,
           sharp: mode === "pdf" ? rs.sharp(width) : false,
           animations: document.getAnimations().flatMap((a) => {
@@ -470,6 +472,20 @@ function installHelpers() {
   // The input event that starts a change: the press or key that triggered it.
   for (const type of ["pointerdown", "keydown"])
     addEventListener(type, (event) => (rs.inputAt = event.timeStamp), true);
+  // Long main-thread tasks, to see where a cold open waits.
+  const longTasks: { start: number; ms: number }[] = [];
+  try {
+    new PerformanceObserver((list) => {
+      for (const e of list.getEntries())
+        longTasks.push({
+          start: Math.round(e.startTime),
+          ms: Math.round(e.duration),
+        });
+    }).observe({ type: "longtask", buffered: true });
+  } catch {
+    // Not every browser reports long tasks.
+  }
+  Object.assign(window, { __longTasks: longTasks });
   // The first drawn PDF page, timed from navigation start.
   const observer = new MutationObserver(() => {
     if (document.querySelector('.reading-pdf-page[data-rendered="true"]')) {
@@ -519,6 +535,8 @@ async function openReader(
     width?: number;
     height?: number;
     reducedMotion?: "reduce" | "no-preference";
+    /** Records a CPU profile from navigation on; `stop` returns it. */
+    profile?: boolean;
   } = {},
 ) {
   const context = await browser.newContext({
@@ -541,10 +559,21 @@ async function openReader(
   await loginWorkbenchPage(page, samples.origin, password);
   await page.addInitScript(() => localStorage.clear());
   await page.addInitScript(installHelpers);
+  // A performance trace (layout, style, scripts), as the browser's performance panel records it.
+  if (options.profile)
+    await browser.startTracing(page, {
+      categories: [
+        "devtools.timeline",
+        "disabled-by-default-devtools.timeline",
+        "blink.user_timing",
+        "loading",
+      ],
+    });
   await page.goto(samples.origin + path, { waitUntil: "domcontentloaded" });
   return {
     page,
     errors,
+    profile: async () => (options.profile ? await browser.stopTracing() : null),
     close: async () => {
       try {
         await cleanup();
@@ -633,6 +662,12 @@ function frameSummary(frames: Frame[], input: number) {
     longest_frame_gap_ms: Math.round(longestGap),
     first_frame_has_picture: after[0]?.content ?? null,
     first_frame_pages_pictured: after[0]?.picture ?? null,
+    skeleton_frames: after.filter((f) => f.skeleton).length,
+    // Spec 6.2: content ready within 300 ms never shows the skeleton.
+    first_skeleton_ms: (() => {
+      const f = after.find((f) => f.skeleton);
+      return f ? Math.round(f.t - input) : null;
+    })(),
     input_to_paint_ms: painted ? Math.round(painted.t - input) : null,
     input_to_sharp_ms: sharp ? Math.round(sharp.t - input) : null,
   };
@@ -1072,6 +1107,9 @@ it("no blank frames (6.2)", async () => {
   const views = shared.viewSwitch as
     | Record<string, ReturnType<typeof frameSummary>>
     | undefined;
+  // Spec 6.2: the old picture until the new one, the skeleton only past 300 ms.
+  const early = (s: ReturnType<typeof frameSummary>) =>
+    s.first_skeleton_ms === null || s.first_skeleton_ms >= 250;
   for (const [key, label] of [
     ["doc_to_pdf", "切换视图 原文 → PDF"],
     ["pdf_to_doc", "切换视图 PDF → 原文"],
@@ -1080,8 +1118,8 @@ it("no blank frames (6.2)", async () => {
     items.push({
       id: key,
       label,
-      criterion: "0 个无画面帧",
-      status: verdict(s ? s.blank_frames === 0 : null),
+      criterion: "0 个无画面帧；骨架不早于 300 ms 出现",
+      status: verdict(s ? s.blank_frames === 0 && early(s) : null),
       numbers: s ?? {},
     });
   }
@@ -1170,8 +1208,8 @@ it("no blank frames (6.2)", async () => {
     items.push({
       id: "tab-switch",
       label: "切换标签页（两份资料）",
-      criterion: "0 个无画面帧",
-      status: verdict(s.blank_frames === 0),
+      criterion: "0 个无画面帧；骨架不早于 300 ms 出现",
+      status: verdict(s.blank_frames === 0 && early(s)),
       numbers: s,
     });
   } finally {
@@ -1510,13 +1548,61 @@ it("transitions (6.1)", async () => {
 
 it("performance (100-page synthetic text PDF)", async () => {
   const id = samples.ids.pdfOnly;
-  const r = await openReader(readerUrl(id, "pdf"));
+  const profiling = process.env.SCIRETRIEVER_READER_PROFILE === "1";
+  const r = await openReader(readerUrl(id, "pdf"), { profile: profiling });
   try {
     // Cold: a new browser context, from navigation start to the first drawn page.
     const cold = await r.page.evaluate(async () => {
       const h = rs();
       await h.until(() => h.firstRendered !== null);
       return h.firstRendered;
+    });
+    // SCIRETRIEVER_READER_PROFILE=1: the cold open's CPU profile beside the report.
+    const profile = await r.profile();
+    if (profile)
+      await writeFile(
+        reportFile.replace(/\.json$/u, "-cold.trace.json"),
+        profile,
+      );
+    // Where the cold open spends its time: navigation, requests and the reader's own marks.
+    const coldParts = await r.page.evaluate(() => {
+      const nav = performance.getEntriesByType(
+        "navigation",
+      )[0] as PerformanceNavigationTiming;
+      const round = (n: number) => Math.round(n);
+      const first = rs().firstRendered ?? Infinity;
+      return {
+        long_tasks: (
+          window as unknown as { __longTasks: { start: number; ms: number }[] }
+        ).__longTasks.filter((t) => t.start <= first),
+        dom_content_loaded: nav ? round(nav.domContentLoadedEventEnd) : null,
+        load: nav ? round(nav.loadEventEnd) : null,
+        requests: (
+          performance.getEntriesByType(
+            "resource",
+          ) as PerformanceResourceTiming[]
+        )
+          .filter((e) => e.startTime <= (rs().firstRendered ?? Infinity))
+          .map((e) => {
+            const u = new URL(e.name);
+            return {
+              path:
+                u.pathname +
+                (u.pathname.startsWith("/api") ? u.search.slice(0, 60) : ""),
+              start: round(e.startTime),
+              end: round(e.responseEnd),
+            };
+          }),
+        marks: performance
+          .getEntriesByType("measure")
+          .concat(performance.getEntriesByType("mark"))
+          .filter((e) => e.name.startsWith("sciretriever"))
+          .map((e) => ({
+            name: e.name,
+            start: round(e.startTime),
+            end: round(e.startTime + e.duration),
+          })),
+      };
     });
     await still(r.page);
     // Warm: leave for the library and come back in the same session.
@@ -1587,7 +1673,7 @@ it("performance (100-page synthetic text PDF)", async () => {
           label: "冷开（新的浏览器会话，导航开始到第一页画出）",
           criterion: "≤ 2000 ms",
           status: verdict(cold !== null && cold <= 2000),
-          numbers: { ms: ms(cold) },
+          numbers: { ms: ms(cold), parts: coldParts },
         },
         {
           id: "warm",

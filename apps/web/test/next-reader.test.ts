@@ -284,6 +284,153 @@ it("groups existing statements, hides technical IDs, verifies nearby evidence an
   }
 }, 90000);
 
+it("opens a paper in the view this browser remembers before the view its material suggests (spec 6.4)", async () => {
+  const w = await nextWorkspace({ ready: "body" });
+  try {
+    const id = w.env.parseRequest.literature_id;
+    const view = () => new URL(w.page.url()).searchParams.get("reader");
+    // Nothing remembered: the paper has text, so its full text.
+    await w.page.goto(`${w.origin}/?literature=${id}`);
+    await w.page
+      .locator(
+        '.reader-view[data-view="doc"]:not([hidden]) section[data-byte-start]',
+      )
+      .first()
+      .waitFor();
+    expect(view()).toBe("doc");
+    await w.page.getByRole("tab", { name: "PDF", exact: true }).click();
+    await w.page
+      .locator(
+        '.reader-view[data-view="pdf"]:not([hidden]) .reading-pdf-page[data-rendered="true"]',
+      )
+      .first()
+      .waitFor();
+    // Opened again without a view: the remembered PDF view.
+    await w.page.goto(`${w.origin}/?literature=${id}`);
+    await w.page
+      .locator(
+        '.reader-view[data-view="pdf"]:not([hidden]) .reading-pdf-page[data-rendered="true"]',
+      )
+      .first()
+      .waitFor();
+    expect(view()).toBe("pdf");
+    expect(
+      await w.page.locator('.reader-view[data-view="doc"]').count(),
+      "the full text was not built on the way",
+    ).toBe(0);
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);
+
+it("shows the loading skeleton with its steps in order past 300 ms, and none when the view is ready sooner (spec 6.3)", async () => {
+  const w = await nextWorkspace({
+    ready: "body",
+    setup: async (env) => {
+      await env.app.maintenance!.ingestPdf({
+        literature_id: missingId,
+        bytes: syntheticReadingPdf(20),
+      });
+    },
+  });
+  try {
+    // Every state the skeleton shows, in order, and when it first appeared.
+    await w.page.addInitScript(() => {
+      const seen: string[] = [];
+      const record = { seen, first: null as number | null };
+      new MutationObserver(() => {
+        const root = document.querySelector(".reader-preparing");
+        if (!root) return;
+        record.first ??= performance.now();
+        const current = root.querySelector(
+          '.reader-preparing-step[data-state="current"]',
+        );
+        const text = current?.textContent?.replace(/[\d.]+ MB.*$/u, "").trim();
+        if (text && seen.at(-1) !== text) seen.push(text);
+      }).observe(document, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        characterData: true,
+      });
+      Object.assign(window, { preparing: record });
+    });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await w.page.route(
+      (url) => url.pathname === "/api/v1/query/material-bytes",
+      async (route) => {
+        await held;
+        await route.continue().catch(() => undefined);
+      },
+    );
+    await w.page.goto(`${w.origin}/?literature=${missingId}&reader=pdf`);
+    const skeleton = w.page.locator(".reader-preparing");
+    await skeleton
+      .locator('.reader-preparing-step[data-state="current"]')
+      .getByText("下载 PDF")
+      .waitFor();
+    // In the content area, with the title from the bibliography, the four steps and the bar.
+    expect(await skeleton.locator(".reader-preparing-title").innerText()).toBe(
+      "Unparsed source",
+    );
+    expect(
+      await skeleton.locator(".reader-preparing-step").allInnerTexts(),
+    ).toEqual(["下载 PDF", "校验", "解析", "排版"]);
+    expect(await w.page.locator(".reading-status").innerText()).not.toContain(
+      "正在",
+    );
+    // Released slowly enough for each step to show.
+    await w.page.unroute(
+      (url) => url.pathname === "/api/v1/query/material-bytes",
+    );
+    release();
+    await w.page
+      .locator('.reading-pdf-page[data-rendered="true"]')
+      .first()
+      .waitFor();
+    await skeleton.waitFor({ state: "detached" });
+    const record = await w.page.evaluate(
+      () => (window as unknown as { preparing: { seen: string[] } }).preparing,
+    );
+    // Each step shown in the order the loading went; at least the first and last.
+    const order = ["下载 PDF", "校验", "解析", "排版"];
+    const seen = record.seen.map((s) =>
+      order.findIndex((o) => s.startsWith(o)),
+    );
+    expect(seen[0]).toBe(0);
+    expect(seen.every((n, i) => n >= 0 && (i === 0 || n > seen[i - 1]!))).toBe(
+      true,
+    );
+    // Switching between views that are both ready shows no skeleton at all.
+    await w.page.getByRole("tab", { name: "全文", exact: true }).click();
+    await w.page
+      .locator(".reader-surface .ui-empty")
+      .getByText("这份资料还没有可读的文本。", { exact: true })
+      .waitFor();
+    await w.page.evaluate(() => {
+      (
+        window as unknown as { preparing: { first: number | null } }
+      ).preparing.first = null;
+    });
+    for (const name of ["PDF", "全文", "PDF"] as const) {
+      await w.page.getByRole("tab", { name, exact: true }).click();
+      await w.page.waitForTimeout(400);
+    }
+    expect(
+      await w.page.evaluate(
+        () =>
+          (window as unknown as { preparing: { first: number | null } })
+            .preparing.first,
+      ),
+    ).toBeNull();
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);
+
 it("stretches the drawn PDF pages in the first frame of a zoom, then replaces them sharp at the new scale", async () => {
   const w = await nextWorkspace({
     ready: "body",
@@ -419,6 +566,8 @@ it("keeps a 100-page PDF bounded over ten React reader switches and releases its
               `${String(cause)}\n${w.page.url()}\n${await w.page.locator("body").innerText()}\n${JSON.stringify(await w.page.locator(".library-list,.paper-row").evaluateAll((elements) => elements.map((el) => ({ tag: el.tagName, class: el.className, height: el.clientHeight, scroll: el.scrollTop, rect: el.getBoundingClientRect().toJSON() }))))}`,
             );
           });
+        // A paper with text opens its full text (spec 6.4); this check reads the PDF.
+        await w.page.getByRole("tab", { name: "PDF", exact: true }).click();
       }
       await w.page
         .locator(

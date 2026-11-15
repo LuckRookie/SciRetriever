@@ -10,6 +10,7 @@ import {
   useState,
   type CSSProperties,
 } from "react";
+import { flushSync } from "react-dom";
 import { copyText } from "../../../browser-platform.js";
 import type {
   DocumentLinkPreview,
@@ -79,7 +80,14 @@ import { useReaderTranslation } from "./translation/use-translation.js";
 import { type FullTextLayer } from "./translation/fulltext-layer.js";
 import { FullTextControls } from "./translation/FullTextControls.js";
 import { ReaderOutline } from "./ReaderOutline.js";
-import { createReaderEngines, viewOf, type ReaderUpdate } from "./engines.js";
+import {
+  createReaderEngines,
+  loadProgress,
+  viewOf,
+  type ReaderUpdate,
+  type ViewUi,
+} from "./engines.js";
+import { createPreparingStore, ReaderPreparing } from "./ReaderPreparing.js";
 import { useFullTextTranslation } from "./translation/use-fulltext.js";
 
 export default function Reader() {
@@ -105,7 +113,8 @@ export default function Reader() {
       ),
   });
   const id = route.literature ?? "",
-    mode = route.reader,
+    // Spec 6.4: an open without a view leaves the choice to the reader.
+    chosen = route.readerChosen,
     sourceKey = route.parameters.toString();
   // The material a reader engine is built for: the paper and its fixed source,
   // everything in the address except the view (`reader`) it is shown in.
@@ -152,11 +161,6 @@ export default function Reader() {
   const [sideTab, setSideTab] = useState<"info" | "marks" | "translation">(
     "info",
   );
-  useLayoutEffect(() => {
-    setDocumentLink(null);
-    setZoomImage(null);
-    setResources([]);
-  }, [id, mode, sourceKey]);
   const [informationWidth, setInformationWidth] = useState(() =>
     Math.min(
       520,
@@ -197,8 +201,7 @@ export default function Reader() {
       !!detail.data &&
       !detail.isPlaceholderData &&
       !source.error &&
-      mode !== "know" &&
-      mode !== "results" &&
+      (!chosen || (route.reader !== "know" && route.reader !== "results")) &&
       source.value?.kind !== "metadata",
     queryFn: ({ signal }) =>
       resolveReadingSources(
@@ -213,6 +216,49 @@ export default function Reader() {
         "doc",
       ),
   });
+  const catalog = api.workspace.catalog;
+  /**
+   * Spec 6.4 (first and third rules): the view this browser remembers for the
+   * paper, else what it has: text opens the full text, a PDF alone the PDF,
+   * neither the empty full text with the information panel. Decided from the
+   * paper's details and the sources the reader resolves anyway; null while
+   * those are still on their way.
+   */
+  const picked = useMemo((): ReaderMode | null => {
+    if (chosen || !detail.data || detail.isPlaceholderData) return null;
+    const remembered = recallReading(catalog, id).view,
+      hasPdf = !!detail.data.primary_pdf;
+    if (remembered === "doc") return "doc";
+    if (remembered === "pdf" && hasPdf) return "pdf";
+    if (!hasPdf || source.value?.kind === "metadata" || source.error)
+      return hasPdf ? "pdf" : "doc";
+    if (sources.isError) return "pdf";
+    if (!sources.data) return null;
+    return sources.data.document
+      ? "doc"
+      : sources.data.material
+        ? "pdf"
+        : "doc";
+  }, [
+    chosen,
+    detail.data,
+    detail.isPlaceholderData,
+    catalog,
+    id,
+    source.value,
+    source.error,
+    sources.isError,
+    sources.data,
+  ]);
+  // Until the choice is made the toolbar shows the likely view.
+  const mode: ReaderMode = chosen
+    ? route.reader
+    : (picked ?? (detail.data?.primary_pdf ? "pdf" : "doc"));
+  useLayoutEffect(() => {
+    setDocumentLink(null);
+    setZoomImage(null);
+    setResources([]);
+  }, [id, mode, sourceKey]);
   const position = useMemo(
     () =>
       readingPosition(
@@ -300,10 +346,15 @@ export default function Reader() {
   marksActive.current = marks.active;
   const detailRef = useRef(detail.data);
   detailRef.current = detail.data;
+  // The latest step of whichever view is being prepared, shown or still off screen.
+  const [preparingStore] = useState(createPreparingStore);
+  const [shown, setShown] = useState<ViewUi["shown"]>(null),
+    [prepared, setPrepared] = useState(false);
   const [update, setUpdate] = useState<ReaderUpdate | null>(null),
     [note, setNote] = useState<string | null>(null),
     [historyBack, setHistoryBack] = useState<{ label: string } | null>(null);
   const changeModeRef = useRef<(value: string) => void>(() => {});
+  const coverRef = useRef<() => void>(() => {});
   const [engines] = useState(() =>
     createReaderEngines({
       root: () => root.current,
@@ -319,6 +370,8 @@ export default function Reader() {
         issue: setIssue,
         ready: setReady,
         resources: setResources,
+        shown: setShown,
+        prepared: setPrepared,
       },
       frame,
       twins: fullTextLayer,
@@ -333,6 +386,9 @@ export default function Reader() {
         linkAnchor.current = preview.anchor;
         setDocumentLink(preview);
       },
+      cover: () => coverRef.current(),
+      progress: (paper, kind, progress) =>
+        preparingStore.set({ id: paper, kind, progress }),
       openPaper: (paper, value, parameters) =>
         readerActions.current.openPaper(paper, value, parameters),
       notify: (message) => readerActions.current.notify(message),
@@ -345,14 +401,37 @@ export default function Reader() {
     }),
   );
   const detailReady = !!detail.data && !detail.isPlaceholderData,
-    reading = shell.reading,
-    catalog = api.workspace.catalog;
+    reading = shell.reading;
+  // The view is picked: it goes into the address, in place of the open.
   useLayoutEffect(() => {
-    engines.view(viewOf(mode));
-  }, [engines, mode]);
+    if (!picked) return;
+    // Only a bibliography: the information panel says what is missing (spec 3.9).
+    if (!detail.data?.primary_pdf && !layoutPosition.information) {
+      layoutPosition.information = true;
+      setLayout((value) => value + 1);
+    }
+    navigate({ reader: picked }, { replace: true });
+  }, [picked, detail.data, layoutPosition]);
+  // No PDF: the paper does not open in the PDF view (spec 6.4), unless a fixed source names one.
+  useLayoutEffect(() => {
+    if (
+      chosen &&
+      route.reader === "pdf" &&
+      detailReady &&
+      !detail.data?.primary_pdf &&
+      !route.parameters.has("asset") &&
+      !route.parameters.has("document")
+    )
+      navigate({ reader: "doc" }, { replace: true });
+  }, [chosen, route.reader, route.parameters, detailReady, detail.data]);
+  useLayoutEffect(() => {
+    // Until the view is picked nothing is built, and what shows stays.
+    if (chosen) engines.view(viewOf(mode));
+  }, [engines, mode, chosen]);
   useLayoutEffect(() => {
     const material = sources.data;
-    if (!detailReady || !body.current || !material || source.error) return;
+    if (!chosen || !detailReady || !body.current || !material || source.error)
+      return;
     engines.open(
       {
         key: materialKey,
@@ -369,6 +448,7 @@ export default function Reader() {
     );
   }, [
     engines,
+    chosen,
     detailReady,
     materialKey,
     id,
@@ -538,6 +618,58 @@ export default function Reader() {
       `${id}.md`,
     );
   };
+  // Spec 3.9: what the paper lacks, said on the page where its text would be.
+  const lacking =
+    (mode === "doc" || mode === "pdf") &&
+    sources.isSuccess &&
+    source.value?.kind !== "metadata"
+      ? !sources.data.material
+        ? ("bibliography" as const)
+        : mode === "doc" && !sources.data.document
+          ? ("text" as const)
+          : null
+      : null;
+  // Spec 6.2 and 6.3: the view asked for is not on screen, or not drawn yet.
+  const wanted =
+    source.value?.kind === "metadata" || !detail.data ? null : viewOf(mode);
+  const preparing =
+    !!wanted &&
+    !issue &&
+    !sources.error &&
+    !lacking &&
+    !(shown?.id === id && shown.kind === wanted && prepared);
+  // Shown only past 300 ms: what is ready sooner replaces the old picture directly.
+  const preparingKey = preparing ? `${id}|${wanted}|${revision}` : null;
+  const [late, setLate] = useState<string | null>(null);
+  useEffect(() => {
+    if (!preparingKey) return;
+    const timer = setTimeout(() => setLate(preparingKey), 300);
+    return () => clearTimeout(timer);
+  }, [preparingKey]);
+  // The engines swap in a view that is not ready yet only past 300 ms; the
+  // skeleton is committed first, in the same task, so no empty frame paints.
+  coverRef.current = () => {
+    if (preparingKey && late !== preparingKey)
+      flushSync(() => setLate(preparingKey));
+  };
+  const skeleton =
+    preparing && late === preparingKey && wanted ? (
+      <ReaderPreparing
+        kind={wanted}
+        paper={detail.data && !detail.isPlaceholderData ? detail.data : null}
+        id={id}
+        store={preparingStore}
+        initial={loadProgress(wanted, wanted === "pdf" ? "download" : "read")}
+        width={
+          layoutPosition.fullWidth
+            ? "reading-full"
+            : layoutPosition.wide
+              ? "reading-wide"
+              : ""
+        }
+        fontSize={layoutPosition.fontSize}
+      />
+    ) : null;
   const invalidMetadata =
     source.value?.kind === "metadata" &&
     detail.data &&
@@ -571,11 +703,7 @@ export default function Reader() {
   if (!detail.data) return <Skeleton label="正在读取文献" rows={6} />;
   // The empty full text offers “建立文献档案”: one primary button per screen.
   const archiveInText =
-    mode === "doc" &&
-    sources.isSuccess &&
-    !sources.data.document &&
-    source.value?.kind !== "metadata" &&
-    !!api.workspace.capabilities.maintenance;
+    lacking === "text" && !!api.workspace.capabilities.maintenance;
   const information = (
     <>
       <ReaderInformation
@@ -1049,6 +1177,7 @@ export default function Reader() {
               }
             />
             {marks.rail}
+            {skeleton}
             {source.value?.kind === "metadata" &&
               mode !== "know" &&
               mode !== "results" && (
@@ -1077,27 +1206,37 @@ export default function Reader() {
                   </article>
                 </div>
               )}
-            {mode === "doc" &&
-            sources.isSuccess &&
-            !sources.data.document &&
-            source.value?.kind !== "metadata" ? (
-              <div className="reading-scroll">
+            {lacking === "text" ? (
+              <div className="reading-scroll reader-lacking">
                 <EmptyState
-                  title="这篇文献还没有建立档案"
-                  description="建档后才有可阅读、可编辑的全文。"
+                  title="这份资料还没有可读的文本。"
                   {...(api.workspace.capabilities.maintenance
                     ? {
                         action: (
-                          <Button
-                            variant="primary"
-                            isDisabled={!detail.data.primary_pdf}
-                            {...(detail.data.primary_pdf
-                              ? {}
-                              : { disabledReason: "请先获取或上传 PDF。" })}
-                            onPress={() => setOperation("archive")}
-                          >
+                          <Button onPress={() => setOperation("archive")}>
                             建立文献档案
                           </Button>
+                        ),
+                      }
+                    : {})}
+                />
+              </div>
+            ) : null}
+            {lacking === "bibliography" ? (
+              <div className="reading-scroll reader-lacking">
+                <EmptyState
+                  title="这份资料只有书目信息。"
+                  {...(api.workspace.capabilities.maintenance
+                    ? {
+                        action: (
+                          <div className="reader-lacking-actions">
+                            <Button onPress={() => setOperation("acquire")}>
+                              获取 PDF
+                            </Button>
+                            <Button onPress={() => setOperation("upload")}>
+                              上传 PDF
+                            </Button>
+                          </div>
                         ),
                       }
                     : {})}
@@ -1141,11 +1280,6 @@ export default function Reader() {
               }
             >
               <span ref={status} />
-              {sources.isFetching && !sources.data ? (
-                <span className="reading-status-note">
-                  正在核对固定材料与文档版本…
-                </span>
-              ) : null}
               {note ? (
                 <span className="reading-status-note">{note}</span>
               ) : null}

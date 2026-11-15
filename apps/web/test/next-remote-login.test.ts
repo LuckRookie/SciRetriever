@@ -222,6 +222,8 @@ describe("IP-address HTTP login and workspace", () => {
       expect(copied.residual).toBe(false);
       expect(copied.id).toMatch(/^[a-f0-9-]{36}$/u);
       await page.locator(".paper-row .paper-open").first().click();
+      // A paper with text opens its full text (spec 6.4); this check reads the PDF.
+      await page.getByRole("tab", { name: "PDF", exact: true }).click();
       await page
         .locator('.reading-pdf-page[data-rendered="true"]')
         .first()

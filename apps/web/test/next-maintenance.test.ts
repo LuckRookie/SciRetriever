@@ -353,6 +353,8 @@ it("accepts a selected PDF in Chromium, reads the same fact, and reports rejecti
       })
       .locator(".paper-open")
       .click();
+    // A paper with text opens its full text (spec 6.4); this check reads the PDF.
+    await page.getByRole("tab", { name: "PDF", exact: true }).click();
     await page
       .locator('.reading-pdf-page[data-rendered="true"]')
       .first()

@@ -75,7 +75,27 @@ export interface ReaderResourceEntry {
   reference: string;
   open(): Promise<void>;
 }
+/** One step of preparing a view (spec 6.3), as the loading actually goes. */
+export interface LoadStep {
+  readonly id: "download" | "verify" | "parse" | "read" | "layout";
+  readonly label: string;
+  readonly state: "done" | "current" | "waiting";
+  /** Counted progress within the step, e.g. bytes or pages. */
+  readonly done?: number;
+  readonly total?: number;
+  readonly unit?: "bytes" | "pages" | "blocks";
+}
+export interface LoadProgress {
+  readonly steps: readonly LoadStep[];
+  /** 0–1 over all steps. */
+  readonly fraction: number;
+}
 export interface ReaderFrame {
+  /** The engine reports where its loading is (spec 6.3). */
+  onLoadStep?: (
+    id: LoadStep["id"],
+    count?: { done: number; total: number },
+  ) => void;
   onSegment?: (id: string) => void;
   pdfLocation?: {
     page: number;

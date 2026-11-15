@@ -436,6 +436,8 @@ describe("live workbench on the installed Cloak runtime", () => {
           .getByRole("article", { name: FIXTURE_TITLE, exact: true })
           .locator(".paper-open")
           .click();
+        // A paper with text opens its full text (spec 6.4); this check reads the PDF.
+        await desktop.getByRole("tab", { name: "PDF", exact: true }).click();
         await desktop
           .locator('.reading-pdf-page[data-rendered="true"]')
           .first()
@@ -473,6 +475,7 @@ describe("live workbench on the installed Cloak runtime", () => {
           .fill("Synthetic literature");
         await expect.poll(() => mobile.locator(".paper-row").count()).toBe(1);
         await mobile.locator(".paper-open").click();
+        await mobile.getByRole("tab", { name: "PDF", exact: true }).click();
         await mobile
           .locator('.reading-pdf-page[data-rendered="true"]')
           .first()

@@ -229,7 +229,8 @@ export function Application() {
 interface PaperTab {
   id: string;
   title: string;
-  mode: ReaderMode;
+  /** Unset until the reader has picked the view (spec 6.4). */
+  mode: ReaderMode | undefined;
   source: Record<string, string>;
 }
 function Workspace({ api }: { api: ApiClient }) {
@@ -269,7 +270,7 @@ function Workspace({ api }: { api: ApiClient }) {
         title: activePaper.data
           ? paperTitle(activePaper.data)
           : (old?.title ?? "文献"),
-        mode: route.reader,
+        mode: route.readerChosen ? route.reader : old?.mode,
         source: Object.fromEntries(
           sourceParameterKeys.flatMap((key) =>
             route.parameters.has(key)
@@ -318,9 +319,10 @@ function Workspace({ api }: { api: ApiClient }) {
       invalidateMaterials(taskQueries);
     lastTasks.current = current;
   }, [tasks.data, taskQueries]);
+  /** Without a view the reader picks one: the remembered view, else what the paper has (spec 6.4). */
   const showPaper = (
     id: string,
-    mode: ReaderMode = "pdf",
+    mode?: ReaderMode,
     source: Record<string, string> = {},
     title?: string,
   ) => {
@@ -332,7 +334,7 @@ function Workspace({ api }: { api: ApiClient }) {
         : [...current, tab];
     });
     navigate(
-      { literature: id, reader: mode, ...source },
+      { literature: id, reader: mode ?? null, ...source },
       { clearSource: true },
     );
   };

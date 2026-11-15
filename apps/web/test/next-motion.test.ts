@@ -98,6 +98,8 @@ it.each(["no-preference", "reduce"] as const)(
       }
       const filters = await end(w.page);
       await w.page.locator(".paper-open").first().click();
+      // A paper with text opens its full text (spec 6.4); this check reads the PDF.
+      await w.page.getByRole("tab", { name: "PDF", exact: true }).click();
       await w.page
         .locator('.reading-pdf-page[data-rendered="true"]')
         .first()

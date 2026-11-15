@@ -10,6 +10,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { nextWorkspace } from "./next-workspace-fixture.js";
 import { FIXTURE_LITERATURE } from "../../server/src/workbench/synthetic-fixture.js";
+import { missingId } from "./processor-workspace-fixture.js";
+import { syntheticReadingPdf } from "./reading-pdf-fixture.js";
 
 it("paginates a 30,000-record library, bounds rendered rows, restores scroll and selection, and explains over-limit actions", async () => {
   const started = Date.now();
@@ -277,3 +279,98 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
     await w.close();
   }
 }, 180000);
+
+it("opens a paper from its row in the view it has: remembered, else full text, PDF alone, or the bibliography with its panel (spec 6.4, 3.9)", async () => {
+  const w = await nextWorkspace({ ready: "body" });
+  const openRow = async (title: string) => {
+    await w.page
+      .getByRole("navigation", { name: "工作区与阅读标签" })
+      .getByRole("button", { name: "文献库", exact: true })
+      .click();
+    await w.page
+      .getByRole("article", { name: title, exact: true })
+      .locator(".paper-open")
+      .click();
+  };
+  const view = () => new URL(w.page.url()).searchParams.get("reader");
+  try {
+    await w.page.goto(w.origin);
+    await showAllLibraryStatuses(w.page);
+    // Only a bibliography: the empty full text, the panel open on 信息, what is missing.
+    await openRow("Unparsed source");
+    await w.page
+      .locator(".reader-surface .ui-empty")
+      .getByText("这份资料只有书目信息。", { exact: true })
+      .waitFor();
+    expect(view()).toBe("doc");
+    expect(await w.page.locator(".reader-information").isVisible()).toBe(true);
+    expect(await w.page.locator(".reading-pdf-page").count()).toBe(0);
+    // A paper with text opens its full text.
+    await openRow("Synthetic literature workbench");
+    await w.page
+      .locator(
+        '.reader-view[data-view="doc"]:not([hidden]) section[data-byte-start]',
+      )
+      .first()
+      .waitFor();
+    expect(view()).toBe("doc");
+    // Read in the PDF view, and the next open from the row comes back to it.
+    await w.page.getByRole("tab", { name: "PDF", exact: true }).click();
+    await w.page
+      .locator(
+        '.reader-view[data-view="pdf"]:not([hidden]) .reading-pdf-page[data-rendered="true"]',
+      )
+      .first()
+      .waitFor();
+    await openRow("Synthetic literature workbench");
+    await expect.poll(view).toBe("pdf");
+    await w.page
+      .locator(
+        '.reader-view[data-view="pdf"]:not([hidden]) .reading-pdf-page[data-rendered="true"]',
+      )
+      .first()
+      .waitFor();
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);
+
+it("opens a PDF without text in the PDF view, and its full text says what is missing (spec 6.4, 3.9)", async () => {
+  const w = await nextWorkspace({
+    ready: "body",
+    setup: async (env) => {
+      await env.app.maintenance!.ingestPdf({
+        literature_id: missingId,
+        bytes: syntheticReadingPdf(3),
+      });
+    },
+  });
+  try {
+    await w.page.goto(w.origin);
+    await showAllLibraryStatuses(w.page);
+    await w.page
+      .getByRole("article", { name: "Unparsed source", exact: true })
+      .locator(".paper-open")
+      .click();
+    await w.page
+      .locator('.reading-pdf-page[data-rendered="true"]')
+      .first()
+      .waitFor();
+    expect(new URL(w.page.url()).searchParams.get("reader")).toBe("pdf");
+    await w.page.getByRole("tab", { name: "全文", exact: true }).click();
+    const empty = w.page.locator(".reader-surface .ui-empty");
+    await empty
+      .getByText("这份资料还没有可读的文本。", { exact: true })
+      .waitFor();
+    // A secondary button: one primary per screen at most.
+    expect(
+      await empty
+        .getByRole("button", { name: "建立文献档案", exact: true })
+        .getAttribute("data-variant"),
+    ).not.toBe("primary");
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);

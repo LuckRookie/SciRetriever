@@ -477,7 +477,8 @@ export async function renderPdf(
       }
       highlight(entry.text, n);
       placeholder.dataset.rendered = "true";
-      if (confirm?.page === n) settle(entry.text);
+      // Off screen the scroll area belongs to the view on screen: confirm once shown.
+      if (confirm?.page === n && !hidden) settle(entry.text);
       frame.onPdfPage?.({
         page: n,
         element: placeholder,
@@ -750,6 +751,9 @@ export async function renderPdf(
       dispose();
       return;
     }
+    // Spec 6.3: parsed, with its page count; the first screen is laid out next.
+    frame.onLoadStep?.("parse", { done: pdf.numPages, total: pdf.numPages });
+    frame.onLoadStep?.("layout");
     const first = await pdf.getPage(1),
       base = first.getViewport({ scale: 1 });
     baseWidth = base.width;
@@ -800,9 +804,9 @@ export async function renderPdf(
     } else if (frame.remembered === "same")
       place(state.anchorPage, state.anchorRatio);
     if (preparing)
-      // Off screen there is no layout: draw the page and its neighbours.
+      // Off screen there is no layout: draw the page at the reading line and its neighbours.
       await Promise.all(
-        [state.page, state.page - 1, state.page + 1]
+        [state.anchorPage, state.anchorPage - 1, state.anchorPage + 1]
           .filter((n) => n >= 1 && n <= pdf!.numPages)
           .map((n) => draw(n, true)),
       );
