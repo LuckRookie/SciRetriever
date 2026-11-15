@@ -65,7 +65,7 @@ import {
   type ReaderMode,
 } from "../../data/url.js";
 import { AnimatedPanel } from "../../motion/index.js";
-import { useShell } from "../../shell/context.js";
+import { READER_PAINTED, useShell } from "../../shell/context.js";
 import { errorMessage } from "../../strings.js";
 import { ProofreadEditor } from "./ProofreadEditor.js";
 import { StructurePanel } from "../archive/StructurePanel.js";
@@ -190,6 +190,8 @@ export default function Reader() {
     // Switching papers keeps the previous page until the new one can show (spec 5.1).
     placeholderData: keepPreviousData,
   });
+  // The PDF view is asked for: its bytes download alongside the text's reads.
+  const wantsPdf = useRef(false);
   const sources = useQuery({
     // Both views of one material share the resolution: the fixed PDF and, when
     // there is one, the full-text version it was published from.
@@ -214,6 +216,7 @@ export default function Reader() {
         detail.data!,
         source.value,
         "doc",
+        wantsPdf.current,
       ),
   });
   const catalog = api.workspace.catalog;
@@ -254,6 +257,7 @@ export default function Reader() {
   const mode: ReaderMode = chosen
     ? route.reader
     : (picked ?? (detail.data?.primary_pdf ? "pdf" : "doc"));
+  wantsPdf.current = (chosen || !!picked) && viewOf(mode) === "pdf";
   useLayoutEffect(() => {
     setDocumentLink(null);
     setZoomImage(null);
@@ -350,6 +354,10 @@ export default function Reader() {
   const [preparingStore] = useState(createPreparingStore);
   const [shown, setShown] = useState<ViewUi["shown"]>(null),
     [prepared, setPrepared] = useState(false);
+  // The first drawn screen lets the shell warm the other pages (cold open).
+  useEffect(() => {
+    if (prepared) window.dispatchEvent(new Event(READER_PAINTED));
+  }, [prepared]);
   const [update, setUpdate] = useState<ReaderUpdate | null>(null),
     [note, setNote] = useState<string | null>(null),
     [historyBack, setHistoryBack] = useState<{ label: string } | null>(null);

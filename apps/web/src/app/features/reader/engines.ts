@@ -654,6 +654,9 @@ function build(
           statusText.textContent = "尚无 PDF。可从信息栏上传或显式获取。";
           return;
         }
+        // The engine's code loads while the bytes download.
+        const engineCode = import("../../../reading/pdf.js");
+        engineCode.catch(() => undefined);
         let shownBytes = 0;
         const started = performance.now(),
           bytes = await readPdfBytes(
@@ -683,7 +686,7 @@ function build(
         if (READER_PROBE) probeCount("objectUrlsCreated");
         update(view, { pdfUrl: url });
         step("parse");
-        const pdfEngine = await import("../../../reading/pdf.js");
+        const pdfEngine = await engineCode;
         controller.signal.throwIfAborted();
         await pdfEngine.renderPdf(ctx, frame, position, bytes);
       } else {

@@ -110,11 +110,17 @@ const pdfBytes = new Map<
 >();
 let pdfBytesSize = 0;
 const PDF_BYTES_LIMIT = 256 * 1024 * 1024;
+/**
+ * `prefetchPdf`: the PDF view is wanted, so its bytes start downloading as
+ * soon as the material is known, alongside the text version's reads (cold
+ * open); the engine's own read joins that download.
+ */
 export async function resolveReadingSources(
   ctx: ReadingContext,
   detail: LiteratureDetail,
   source: FixedSource | null,
   mode: "pdf" | "doc",
+  prefetchPdf = false,
 ) {
   const params = new URL(location.href).searchParams,
     id = detail.literature.literature_id;
@@ -155,6 +161,8 @@ export async function resolveReadingSources(
       material = result.evidence.material;
       if (!expectedHash || material.asset_sha256 !== expectedHash)
         throw new Error("固定 PDF 与来源 hash 不匹配");
+      if (prefetchPdf && material.literature_id === id)
+        void readPdfBytes(ctx, material).catch(() => undefined);
     }
   }
   if (material && material.literature_id !== id)
@@ -185,11 +193,21 @@ export async function resolveReadingSources(
   }
   return { material, document };
 }
+type PdfProgress = (
+  step: "download" | "verify",
+  done: number,
+  total: number,
+) => void;
+/** Downloads under way, by SHA-256: a second reader joins the first. */
+const pdfInFlight = new Map<
+  string,
+  { bytes: Promise<Uint8Array<ArrayBuffer>>; listeners: Set<PdfProgress> }
+>();
 /** `progress` hears the bytes as they arrive, then the start of the hash check (spec 6.3). */
 export async function readPdfBytes(
   ctx: ReadingContext,
   material: DocumentMaterialRef,
-  progress?: (step: "download" | "verify", done: number, total: number) => void,
+  progress?: PdfProgress,
 ): Promise<Uint8Array<ArrayBuffer>> {
   if (
     material.media_type !== "application/pdf" ||
@@ -204,6 +222,39 @@ export async function readPdfBytes(
     pdfBytes.set(material.asset_sha256, cached);
     return cached.value.slice();
   }
+  const pending = pdfInFlight.get(material.asset_sha256);
+  if (pending) {
+    if (progress) pending.listeners.add(progress);
+    try {
+      const bytes = await pending.bytes;
+      ctx.signal.throwIfAborted();
+      return bytes.slice();
+    } catch (error) {
+      // The other reader gave up (it was cancelled): read it ourselves.
+      if (ctx.signal.aborted) throw error;
+    } finally {
+      if (progress) pending.listeners.delete(progress);
+    }
+  }
+  const listeners = new Set<PdfProgress>(progress ? [progress] : []);
+  const bytes = downloadPdf(ctx, material, (step, done, total) => {
+    for (const listener of listeners) listener(step, done, total);
+  });
+  const entry = { bytes, listeners };
+  pdfInFlight.set(material.asset_sha256, entry);
+  try {
+    return (await bytes).slice();
+  } finally {
+    if (pdfInFlight.get(material.asset_sha256) === entry)
+      pdfInFlight.delete(material.asset_sha256);
+  }
+}
+/** One request for the PDF, checked against its size and SHA-256, then cached. */
+async function downloadPdf(
+  ctx: ReadingContext,
+  material: DocumentMaterialRef,
+  progress: PdfProgress,
+): Promise<Uint8Array<ArrayBuffer>> {
   if (READER_PROBE) probeCountKey("pdfRequests", material.asset_sha256);
   const response = await ctx.api.fetch("/api/v1/query/material-bytes", {
     method: "POST",
@@ -241,7 +292,7 @@ export async function readPdfBytes(
         throw new Error("PDF 响应超过声明大小");
       bytes.set(chunk.value, offset);
       offset += chunk.value.byteLength;
-      progress?.("download", offset, bytes.length);
+      progress("download", offset, bytes.length);
     }
   } finally {
     await reader.cancel();
@@ -249,7 +300,7 @@ export async function readPdfBytes(
   }
   if (READER_PROBE && offset === bytes.length)
     probeCountKey("pdfHashes", material.asset_sha256);
-  progress?.("verify", 0, 1);
+  progress("verify", 0, 1);
   if (
     offset !== bytes.length ||
     (await sha256(bytes)) !== material.asset_sha256
@@ -264,7 +315,7 @@ export async function readPdfBytes(
     PDF_BYTES_LIMIT,
     pdfBytesSize,
   );
-  return bytes.slice();
+  return bytes;
 }
 
 /** One whole picture of a fixed document version, checked against its header and hash. */

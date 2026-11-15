@@ -16,6 +16,8 @@ export interface ShellState {
   theme: Theme;
   setTheme(value: Theme): void;
 }
+/** The reader announces its first drawn screen; page warming waits for it. */
+export const READER_PAINTED = "sciretriever:reader-painted";
 export const ShellContext = createContext<ShellState | null>(null);
 export function useShell(): ShellState {
   const shell = useContext(ShellContext);

@@ -219,8 +219,22 @@ export function AnimatedPanel({
       ref={element}
       className={className}
       layout={layout && !immediate ? "position" : false}
+      // Measured only when it opens or closes: measuring on every render of
+      // the page forced a full layout each time (the reader's cold open).
+      {...(layout && active !== undefined ? { layoutDependency: active } : {})}
       variants={presets[preset]}
-      initial={immediate || active !== undefined ? false : "initial"}
+      // A panel with an open state starts in it: its values are then known,
+      // and starting it never reads them back from the page (a forced layout
+      // that cost the reader's cold open about half a second).
+      initial={
+        immediate
+          ? false
+          : active === undefined
+            ? "initial"
+            : active
+              ? "visible"
+              : "initial"
+      }
       animate={controls}
       exit="exit"
       transition={{ duration, ease }}

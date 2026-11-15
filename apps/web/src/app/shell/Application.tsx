@@ -53,7 +53,7 @@ import {
 import { recordReadingOpen } from "../data/folders.js";
 import { LibraryFolders, withoutScope } from "../features/library/Folders.js";
 import { createReadingState, closeReadingState } from "../../reading/state.js";
-import { ShellContext } from "./context.js";
+import { READER_PAINTED, ShellContext } from "./context.js";
 import { Icon } from "./icon.js";
 import { CommandPalette } from "./CommandPalette.js";
 import { sectionLabels, errorMessage } from "../strings.js";
@@ -84,7 +84,8 @@ function page<P extends object>(
   };
 }
 function warmPages(): () => void {
-  let stopped = false;
+  let stopped = false,
+    handle = 0;
   const run = async () => {
     warmInterfaceFonts();
     for (const load of warm) {
@@ -92,12 +93,29 @@ function warmPages(): () => void {
       await load().catch(() => undefined);
     }
   };
-  const handle =
-    typeof requestIdleCallback === "function"
-      ? requestIdleCallback(() => void run(), { timeout: 4000 })
-      : window.setTimeout(() => void run(), 1500);
+  const schedule = () => {
+    if (stopped) return;
+    handle =
+      typeof requestIdleCallback === "function"
+        ? requestIdleCallback(() => void run(), { timeout: 4000 })
+        : window.setTimeout(() => void run(), 1500);
+  };
+  // Opened on a paper: compiling other pages in the reader's network gaps
+  // delayed its first screen; warm them once it is drawn, or after 6 s.
+  const reading = new URLSearchParams(location.search).has("literature");
+  let wait = 0;
+  if (reading) {
+    const go = () => {
+      window.clearTimeout(wait);
+      window.removeEventListener(READER_PAINTED, go);
+      schedule();
+    };
+    window.addEventListener(READER_PAINTED, go);
+    wait = window.setTimeout(go, 6000);
+  } else schedule();
   return () => {
     stopped = true;
+    window.clearTimeout(wait);
     if (typeof cancelIdleCallback === "function") cancelIdleCallback(handle);
     else window.clearTimeout(handle);
   };
@@ -252,9 +270,13 @@ function Workspace({ api }: { api: ApiClient }) {
   useEffect(() => bindTheme(theme), [theme]);
   // Pages share one scroll container; each route starts at the top and the
   // library restores its own remembered position afterwards.
-  const content = useRef<HTMLElement>(null);
+  const content = useRef<HTMLElement>(null),
+    mounted = useRef(false);
   useLayoutEffect(() => {
-    content.current?.scrollTo({ top: 0 });
+    // A new page starts at its top; the first one already does, and scrolling
+    // it would force a layout before the first paint.
+    if (mounted.current) content.current?.scrollTo({ top: 0 });
+    mounted.current = true;
   }, [route.section, route.literature]);
   const activePaper = useQuery({
     queryKey: ["literature", route.literature],

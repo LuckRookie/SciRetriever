@@ -535,7 +535,7 @@ async function openReader(
     width?: number;
     height?: number;
     reducedMotion?: "reduce" | "no-preference";
-    /** Records a CPU profile from navigation on; `stop` returns it. */
+    /** Records a performance trace from navigation on; `profile` returns it. */
     profile?: boolean;
   } = {},
 ) {
@@ -565,6 +565,8 @@ async function openReader(
       categories: [
         "devtools.timeline",
         "disabled-by-default-devtools.timeline",
+        // Which script forced each layout.
+        "disabled-by-default-devtools.timeline.stack",
         "blink.user_timing",
         "loading",
       ],
@@ -1557,7 +1559,7 @@ it("performance (100-page synthetic text PDF)", async () => {
       await h.until(() => h.firstRendered !== null);
       return h.firstRendered;
     });
-    // SCIRETRIEVER_READER_PROFILE=1: the cold open's CPU profile beside the report.
+    // SCIRETRIEVER_READER_PROFILE=1: the cold open's performance trace beside the report.
     const profile = await r.profile();
     if (profile)
       await writeFile(
