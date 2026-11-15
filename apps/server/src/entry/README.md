@@ -10,7 +10,7 @@
 - [maintenance-operations.ts](maintenance-operations.ts)：受控维护与提取交付，复用既有业务 owner。
 - [configuration-operations.ts](configuration-operations.ts)：非交互配置预览、CAS 发布、凭据设置/移除和显式 probe；不初始化 catalog。
 
-- [import-sessions.ts](import-sessions.ts)：持久入库批次、可独立组装的 ImportSessionReadService、只读预览、逐条接纳检查点与公共文件通道。HTTP 确认先固定 running，再在后台接纳；CLI/stdio 书目包装同步完成。恢复与七天过期维护只由服务组装显式启用，存储失败间隔一分钟重试、连续三次记 failed。补 PDF 按网页/CLI/MCP 与系统时区日期归入开放批次；身份、文件夹与 PDF 发布仍分别调用既有 owner。
+- [import-sessions.ts](import-sessions.ts)：持久入库批次、可独立组装的 ImportSessionReadService、不写文献事实的预览、逐条接纳检查点与公共文件通道。HTTP 确认先固定 running，再在后台接纳；CLI/stdio 书目包装同步完成。恢复与七天过期维护只由服务组装显式启用，存储失败间隔一分钟重试、连续三次记 failed。补 PDF 按网页/CLI/MCP 与系统时区日期归入开放批次；身份、文件夹与 PDF 发布仍分别调用既有 owner。
 - [manual-pdf.ts](manual-pdf.ts)：旧 PDF 维护入口的 receipt 适配；显式字节和流都委托入库文件通道，不另做发布。旧入口保留已有主 PDF 的冲突响应，新补 PDF 接口用文件状态返回 existing/conflict。
 - [capture.ts](capture.ts)：设备限定的单篇网页入库、只读身份预览、按日开放批次、幂等接纳及已有元数据任务补全；不接收浏览器 Cookie 或自定义 provenance，页面 URL 只作为原始数据。文件清单统一保存在批次下，[import-files.ts](import-files.ts) 拥有流式接收、哈希重放、磁盘保护、PDF 验收、metadata CAS 与不可变发布。
 - [intake-digest.ts](intake-digest.ts)：入库与单篇收藏共用的规范 JSON hash 和稳定编号格式，保持既有重放键不变。
@@ -45,3 +45,5 @@ library-facets 返回全部命中的标签、作者关键词、主题词，以�
 `capture.ts` 只收原始页面，调用网页适配器形成 `user/web-capture` 来源。当前页为 PDF 时先返回文件编号，字节交齐后认篇再接纳；实际下载地址只保留去掉查询串和 fragment 的安全地址。无标识的页面保存后后台认篇，重放读取最终补全结果。
 
 [intake-file-items.ts](intake-file-items.ts) 组织预览前的 PDF 暂存、安全相对路径配对、认篇进度与取消、条目决定及终态清理。书目确认后复用文件通道和 metadata CAS 接纳保留的字节；按 sha256 对应主 PDF 或补充材料，保留冲突。认篇结果存于条目，确认不再查询来源。
+
+可能重复的候选保存在条目工作状态，预览不建文献，确认按顺序重判。merge/new 决定保留来源入口与时间；未决定的条目不入库，终态保留数据和暂存 PDF 三十天。结束后补决定仍写原批次的报告与成员，通过专用的待决定接纳入口完成，不重开批次；PDF 准备在写入准入之外进行。单篇网页预览返回候选，保存前要求决定；保存时的重判、身份与条目检查点共用短写入准入，避免并发请求自动新增近似文献；PDF 字节认篇后新发现的重复也在接纳事实之前拒绝，调用方可用新的 request_id 提交明确决定。

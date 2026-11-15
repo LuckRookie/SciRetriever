@@ -9,7 +9,10 @@ import type {
   IntakeBatch,
 } from "@sciretriever/contracts";
 import type { IntakeWrite } from "./intake-engine.js";
-const { readIntakeBatch }: typeof import("./intake-engine.js") = await import(
+const {
+  readIntakeBatch,
+  recordResolvedIntakeMember,
+}: typeof import("./intake-engine.js") = await import(
   new URL(
     import.meta.url.endsWith(".ts")
       ? "./intake-engine.ts"
@@ -159,13 +162,23 @@ export type ImportWrite =
       title: string | null;
     }
   | {
-      op: "result";
+      op: "result" | "resolve-result";
       batch_id: string;
       item: ImportRecordResult;
       item_id: string;
       title: string | null;
       mapping: ExternalObjectMapping | null;
       files: readonly ImportFileStatus[];
+      now: string;
+    }
+  | {
+      op: "resolved-file";
+      batch_id: string;
+      item_id: string;
+      file_id: string;
+      status: "uploaded" | "existing" | "conflict";
+      sha256: string;
+      reason: string | null;
       now: string;
     }
   | {
@@ -194,6 +207,17 @@ export type ImportWrite =
   | { op: "retire-parts"; batch_id: string };
 function fail(code: string): never {
   throw Object.assign(new Error("Import storage rejected"), { code });
+}
+/** Reclassify a finished batch after a retained decision/file is settled, without reopening it. */
+function resolvedBatchResult(db: DatabaseSync, id: string) {
+  db.prepare(
+    "UPDATE intake_batches SET result=CASE WHEN NOT EXISTS(SELECT 1 FROM import_record_results WHERE batch_id=? AND disposition IN ('created','enriched','matched','restored')) THEN 'failed' WHEN EXISTS(SELECT 1 FROM import_record_results WHERE batch_id=? AND disposition IN ('conflict','rejected','pending-decision')) OR EXISTS(SELECT 1 FROM import_files WHERE batch_id=? AND status IN ('pending','conflict')) THEN 'partial' ELSE 'completed' END WHERE batch_id=? AND state='finished' AND result IN ('completed','partial','failed')",
+  ).run(id, id, id, id);
+}
+function retainPendingItems(db: DatabaseSync, id: string, now: string) {
+  db.prepare(
+    "UPDATE intake_items SET retain_until=? WHERE batch_id=? AND disposition='pending-decision' AND recognition_json IS NOT NULL AND retain_until IS NULL",
+  ).run(new Date(Date.parse(now) + 30 * 24 * 60 * 60 * 1000).toISOString(), id);
 }
 function str(v: SQLOutputValue | undefined): string {
   return String(v);
@@ -451,9 +475,9 @@ export function readImportStorage(
   if (r.op === "aggregate") {
     const records = db
       .prepare(
-        "SELECT count(CASE WHEN disposition='created' THEN 1 END) created,count(CASE WHEN disposition='enriched' THEN 1 END) enriched,count(CASE WHEN disposition='matched' THEN 1 END) matched,count(CASE WHEN disposition='conflict' THEN 1 END) conflicts,count(CASE WHEN disposition='rejected' THEN 1 END) rejected,count(CASE WHEN disposition='restored' THEN 1 END) restored,count(CASE WHEN disposition='pending-decision' THEN 1 END) pending_decision,0 possible_duplicates,(SELECT count(DISTINCT i.literature_id) FROM import_record_results i JOIN literature_needs_metadata n USING(literature_id) WHERE i.batch_id=import_record_results.batch_id) needs_metadata FROM import_record_results WHERE batch_id=?",
+        "SELECT count(CASE WHEN disposition='created' THEN 1 END) created,count(CASE WHEN disposition='enriched' THEN 1 END) enriched,count(CASE WHEN disposition='matched' THEN 1 END) matched,count(CASE WHEN disposition='conflict' THEN 1 END) conflicts,count(CASE WHEN disposition='rejected' THEN 1 END) rejected,count(CASE WHEN disposition='restored' THEN 1 END) restored,count(CASE WHEN disposition='pending-decision' THEN 1 END) pending_decision,(SELECT count(*) FROM intake_items WHERE batch_id=? AND json_array_length(possible_duplicates_json)>0) possible_duplicates,(SELECT count(DISTINCT i.literature_id) FROM import_record_results i JOIN literature_needs_metadata n USING(literature_id) WHERE i.batch_id=import_record_results.batch_id) needs_metadata FROM import_record_results WHERE batch_id=?",
       )
-      .get(r.batch_id);
+      .get(r.batch_id, r.batch_id);
     const files = db
       .prepare(
         "SELECT count(CASE WHEN status='pending' AND NOT EXISTS(SELECT 1 FROM literature_assets a WHERE a.literature_id=f.literature_id AND a.role='primary-pdf') THEN 1 END) upload,count(CASE WHEN status='pending' AND EXISTS(SELECT 1 FROM literature_assets a WHERE a.literature_id=f.literature_id AND a.role='primary-pdf') THEN 1 END) hash,count(CASE WHEN status='uploaded' THEN 1 END) uploaded,count(CASE WHEN status='existing' THEN 1 END) existing,count(CASE WHEN status='conflict' THEN 1 END) conflicts,count(CASE WHEN status='pending' THEN 1 END) missing,0 unpaired FROM import_files f WHERE batch_id=?",
@@ -792,10 +816,52 @@ export function writeImportStorage(
           db.prepare(
             "UPDATE import_sessions SET active=0,phase='closing',summary_json=? WHERE batch_id=?",
           ).run(summaryJson(summary), r.batch_id);
+          retainPendingItems(db, r.batch_id, r.now);
         }
       }
-    } else if (r.op === "result") {
-      live(db, r.batch_id, ["running"]);
+    } else if (r.op === "result" || r.op === "resolve-result") {
+      live(db, r.batch_id, [r.op === "result" ? "running" : "finished"]);
+      if (r.op === "resolve-result") {
+        const old = db
+          .prepare(
+            "SELECT * FROM intake_items WHERE batch_id=? AND item_id=? AND disposition='pending-decision' AND retain_until>? AND recognition_json IS NOT NULL",
+          )
+          .get(r.batch_id, r.item_id, r.now);
+        if (!old || old.decision_json === null) fail("intake-decision-invalid");
+        const decision = JSON.parse(str(old.decision_json));
+        if (
+          !["new", "merge"].includes(decision.kind) ||
+          (decision.kind === "merge" &&
+            decision.literature_id !== r.item.literature_id &&
+            r.item.literature_id !== null)
+        )
+          fail("intake-decision-invalid");
+        if (r.item.literature_id) {
+          if (
+            !["created", "matched", "enriched", "restored"].includes(
+              r.item.disposition,
+            )
+          )
+            fail("intake-decision-invalid");
+          recordResolvedIntakeMember(
+            db,
+            {
+              batch_id: r.batch_id as IntakeBatch["batch_id"],
+              literature_id: r.item.literature_id,
+              disposition: r.item.disposition as
+                | "created"
+                | "enriched"
+                | "matched"
+                | "restored",
+            },
+            r.item_id,
+            r.now,
+          );
+        }
+        db.prepare(
+          "DELETE FROM import_record_results WHERE item_id=? AND disposition='pending-decision'",
+        ).run(r.item_id);
+      }
       const i = r.item;
       db.prepare(
         "INSERT INTO intake_items(item_id,batch_id,origin,sequence,record_index,external_id,title,disposition,literature_id,created_at) VALUES(?,?,'data',?,?,?,?,?,?,?) ON CONFLICT(item_id) DO NOTHING",
@@ -825,12 +891,33 @@ export function writeImportStorage(
       );
       if (r.mapping) map(db, r.mapping);
       db.prepare(
-        "UPDATE intake_items SET disposition=?,literature_id=?,needs_decision=CASE WHEN ?='pending-decision' THEN needs_decision ELSE 0 END WHERE item_id=?",
-      ).run(i.disposition, i.literature_id, i.disposition, r.item_id);
+        "UPDATE intake_items SET sequence=?,record_index=?,disposition=?,literature_id=?,needs_decision=CASE WHEN ?='pending-decision' THEN needs_decision ELSE 0 END WHERE item_id=?",
+      ).run(
+        i.sequence,
+        i.record_index,
+        i.disposition,
+        i.literature_id,
+        i.disposition,
+        r.item_id,
+      );
       insertImportFiles(db, r.batch_id, r.item_id, r.files);
+      if (r.op === "resolve-result") resolvedBatchResult(db, r.batch_id);
       db.prepare(
         "UPDATE import_sessions SET storage_failures=0,updated_at=? WHERE batch_id=?",
       ).run(r.now, r.batch_id);
+    } else if (r.op === "resolved-file") {
+      live(db, r.batch_id, ["finished"]);
+      const old = db
+        .prepare(
+          "SELECT f.status FROM import_files f JOIN intake_items i USING(item_id) WHERE f.batch_id=? AND f.file_id=? AND i.item_id=? AND i.retain_until>? AND json_extract(i.decision_json,'$.kind') IN ('new','merge') AND json_array_length(i.possible_duplicates_json)>0 AND i.literature_id=f.literature_id AND i.disposition IN ('created','matched','enriched','restored')",
+        )
+        .get(r.batch_id, r.file_id, r.item_id, r.now);
+      if (!old) fail("intake-batch-state");
+      if (old.status === "pending")
+        db.prepare(
+          "UPDATE import_files SET status=?,sha256=?,reason=? WHERE file_id=?",
+        ).run(r.status, r.sha256, r.reason, r.file_id);
+      resolvedBatchResult(db, r.batch_id);
     } else if (r.op === "metadata-done") {
       live(db, r.batch_id, ["running"]);
       db.prepare(
@@ -901,6 +988,7 @@ export function writeImportStorage(
           r.summary === null ? null : summaryJson(r.summary),
           r.batch_id,
         );
+        if (r.state === "finished") retainPendingItems(db, r.batch_id, r.now);
       }
     } else {
       const s = live(db, r.batch_id, ["finished", "cancelled", "withdrawn"]);

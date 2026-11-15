@@ -1969,6 +1969,7 @@ async function createApplicationOwned(
       capture: guardRuntimeMethods(
         (capture = new CaptureService(
           database,
+          writes,
           identity,
           folders,
           async (literatureId, captureId, signal) => {

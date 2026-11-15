@@ -12,6 +12,7 @@ import {
   type IntakePageCompletion as CaptureCompletion,
 } from "@sciretriever/contracts";
 import type { SqliteWorker } from "../storage/sqlite/worker.js";
+import type { CatalogWriteAdmission } from "../storage/write-admission.js";
 import type {
   StoredCapture,
   CaptureWrite,
@@ -24,6 +25,10 @@ import { clueDois, clueArxiv } from "../literature/import-clues.js";
 import type { ImportSessionService } from "./import-sessions.js";
 import type { StoredImportSession } from "../storage/sqlite/import-engine.js";
 import type { StoredIntakeItem } from "../storage/sqlite/intake-items.js";
+import {
+  PossibleDuplicateService,
+  type PossibleDuplicatePaper,
+} from "../literature/possible-duplicates.js";
 
 export class CaptureError extends Error {
   constructor(readonly code: string) {
@@ -50,8 +55,10 @@ export class CaptureService {
   private readonly now: () => number;
   private readonly recognizing = new Set<string>();
   private readonly pdfUploads = new Map<string, Promise<ImportFileStatus>>();
+  private readonly duplicates: PossibleDuplicateService;
   constructor(
     private readonly database: SqliteWorker,
+    private readonly writes: CatalogWriteAdmission,
     private readonly identity: LiteratureIdentityService,
     private readonly folders: FolderService,
     private readonly complete: (
@@ -63,6 +70,19 @@ export class CaptureService {
     private readonly intake?: ImportSessionService,
   ) {
     this.now = options.now ?? Date.now;
+    this.duplicates =
+      intake?.possibleDuplicates ??
+      new PossibleDuplicateService(async () => {
+        const value = await database.run<{
+          ok: boolean;
+          value: PossibleDuplicatePaper[];
+        }>({
+          kind: "import_read",
+          action: { op: "items-read", query: { kind: "duplicate-candidates" } },
+        });
+        if (!value.ok) throw new CaptureError("intake-unavailable");
+        return value.value;
+      }, identity);
     intake?.setPagePdfHandler((s, item, chunks, signal) => {
       const previous = this.pdfUploads.get(item.item_id);
       const operation = this.tracked(async () => {
@@ -79,6 +99,15 @@ export class CaptureService {
           await this.intake!.fileItems.cleanup(s.batch_id, item.item_id);
         try {
           return await this.receivePdf(s, current, chunks, signal);
+        } catch (error) {
+          if (
+            error instanceof CaptureError &&
+            ["intake-decision-required", "intake-decision-invalid"].includes(
+              error.code,
+            )
+          )
+            await this.intake!.fileItems.cleanup(s.batch_id, item.item_id);
+          throw error;
         } finally {
           if (signal.aborted)
             await this.intake!.fileItems.cleanup(s.batch_id, item.item_id);
@@ -159,7 +188,14 @@ export class CaptureService {
           metadata,
           has_pdf: false,
           pdf_url,
-          possible_duplicates: [],
+          possible_duplicates: await this.duplicates.find(
+            this.observation(
+              metadata,
+              id(["preview", metadata]),
+              "1970-01-01T00:00:00Z",
+            ),
+            false,
+          ),
         };
       const decision = await this.identity.preview(
         this.observation(
@@ -180,7 +216,15 @@ export class CaptureService {
         metadata,
         has_pdf: !!facts?.primary_asset,
         pdf_url,
-        possible_duplicates: [],
+        possible_duplicates: await this.duplicates.find(
+          this.observation(
+            metadata,
+            id(["preview", metadata]),
+            "1970-01-01T00:00:00Z",
+          ),
+          false,
+          { assessment: decision },
+        ),
       };
     });
   }
@@ -203,8 +247,6 @@ export class CaptureService {
       throw new IntakeItemEmptyError();
     if (r.page.is_pdf && (!r.file || !this.intake))
       throw new IntakeItemEmptyError();
-    if (r.duplicate_decision?.kind === "merge")
-      throw new CaptureError("intake-decision-invalid");
     const active = this.saves.get(captureId);
     if (active) {
       if (active.hash !== requestHash)
@@ -212,165 +254,224 @@ export class CaptureService {
       return active.promise;
     }
     const promise = this.tracked(async () => {
-      const at = new Date(this.now()).toISOString(),
-        date = new Date(this.now()),
-        day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`,
-        batchId = parseIntakeBatchId(id([connection, day, "intake-batch"]));
-      let stored = await this.write({
-        op: "ensure",
-        item_id: captureId,
-        connection_id: connection,
-        request_id: r.request_id,
-        request_sha256: requestHash,
-        day,
-        now: at,
-        title: r.metadata.title,
-        file_name: r.file?.file_name ?? null,
-        batch: {
-          batch_id: batchId,
-          kind: "import",
-          label: `网页收藏 ${day}`,
-          default_label: `网页收藏 ${day}`,
-          renamed: false,
-          origin: "web",
-          created_at: at,
-          finished_at: null,
-          state: "running",
-          result: null,
-          confirmation: "per-item",
-          confirmed_at: at,
-          initiated_by: `device:${connection}`,
-          source: {
-            system: "web-page",
-            library_id: "",
-            identity: "adhoc",
-            name: "网页收藏",
-          },
-          progress: {
-            phase: "files",
-            processed_items: 0,
-            total_items: 0,
-            files: { uploaded: 0, existing: 0, conflicts: 0, pending: 0 },
-          },
-          request: { format: "web-page", file_name: null },
-          counts: {
-            hits: 0,
-            created: 0,
-            enriched: 0,
-            matched: 0,
-            rejected: 0,
-            restored: 0,
-            conflicts: 0,
-            possible_duplicates: 0,
-            pending_decision: 0,
-            needs_metadata: 0,
-          },
-          full_text: { total: 0, obtained: 0, missing: 0, exhausted: 0 },
-          estimates: { acquire_pdf: 0, parse: 0 },
-          pdf: { has_pdf: 0, unavailable: 0, pending: 0 },
-          discovery_run_id: null,
-          source_failures: 0,
-        },
-      });
-      if (stored.disposition !== null && stored.literature_id === null)
-        throw new CaptureError("intake-literature-missing");
-      if (stored.result) {
+      // Keep duplicate assessment and identity/checkpoint publication in one
+      // short catalog admission. Completion and all file preparation stay out.
+      const admitted = await this.writes.run(async () => {
+        const prior = await this.database.run<{
+          ok: boolean;
+          value: StoredCapture;
+          code?: string;
+        }>({
+          kind: "capture_read",
+          action: { item_id: captureId, connection_id: connection },
+        });
+        if (prior.ok && prior.value.request_sha256 !== requestHash)
+          throw new CaptureError("intake-request-conflict");
+        if (prior.ok && prior.value.result && prior.value.literature_id)
+          return { stored: prior.value, ready: true };
+        if (!prior.ok && prior.code !== "intake-item-missing")
+          throw new CaptureError(prior.code ?? "intake-unavailable");
+        const candidates = await this.duplicates.find(
+          this.observation(
+            r.metadata,
+            captureId,
+            new Date(this.now()).toISOString(),
+          ),
+          false,
+        );
+        if (candidates.length && !r.duplicate_decision)
+          throw new CaptureError("intake-decision-required");
+        const duplicateChoice = r.duplicate_decision;
         if (
-          stored.result.metadata.status === "pending" &&
+          duplicateChoice?.kind === "merge" &&
+          !candidates.some(
+            (c) => c.literature_id === duplicateChoice.literature_id,
+          ) &&
+          !(
+            prior.ok &&
+            (await this.database.getObservation(
+              id([captureId, "observation"]),
+            )) !== null
+          )
+        )
+          throw new CaptureError("intake-decision-invalid");
+        const at = new Date(this.now()).toISOString(),
+          date = new Date(this.now()),
+          day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`,
+          batchId = parseIntakeBatchId(id([connection, day, "intake-batch"]));
+        let stored = await this.write({
+          op: "ensure",
+          item_id: captureId,
+          connection_id: connection,
+          request_id: r.request_id,
+          request_sha256: requestHash,
+          day,
+          now: at,
+          title: r.metadata.title,
+          file_name: r.file?.file_name ?? null,
+          batch: {
+            batch_id: batchId,
+            kind: "import",
+            label: `网页收藏 ${day}`,
+            default_label: `网页收藏 ${day}`,
+            renamed: false,
+            origin: "web",
+            created_at: at,
+            finished_at: null,
+            state: "running",
+            result: null,
+            confirmation: "per-item",
+            confirmed_at: at,
+            initiated_by: `device:${connection}`,
+            source: {
+              system: "web-page",
+              library_id: "",
+              identity: "adhoc",
+              name: "网页收藏",
+            },
+            progress: {
+              phase: "files",
+              processed_items: 0,
+              total_items: 0,
+              files: { uploaded: 0, existing: 0, conflicts: 0, pending: 0 },
+            },
+            request: { format: "web-page", file_name: null },
+            counts: {
+              hits: 0,
+              created: 0,
+              enriched: 0,
+              matched: 0,
+              rejected: 0,
+              restored: 0,
+              conflicts: 0,
+              possible_duplicates: 0,
+              pending_decision: 0,
+              needs_metadata: 0,
+            },
+            full_text: { total: 0, obtained: 0, missing: 0, exhausted: 0 },
+            estimates: { acquire_pdf: 0, parse: 0 },
+            pdf: { has_pdf: 0, unavailable: 0, pending: 0 },
+            discovery_run_id: null,
+            source_failures: 0,
+          },
+        });
+        if (stored.disposition !== null && stored.literature_id === null)
+          throw new CaptureError("intake-literature-missing");
+        if (stored.result) return { stored, ready: true };
+        if (candidates.length || r.duplicate_decision?.kind === "new")
+          await this.write({
+            op: "decision",
+            item_id: captureId,
+            connection_id: connection,
+            candidates,
+            decision: r.duplicate_decision ?? null,
+            now: at,
+          });
+        if (r.page.is_pdf) {
+          if (!r.file || !this.intake)
+            throw new CaptureError("intake-item-empty");
+          const address = intakeSourceUrl(r.page.url);
+          if (!address) throw new CaptureError("intake-input-invalid");
+          await this.write({
+            op: "pending",
+            item_id: captureId,
+            connection_id: connection,
+            work: {
+              page: {
+                url: address,
+                title: null,
+                meta: [],
+                json_ld: [],
+                is_pdf: true,
+              },
+              url_identifiers: [
+                ...clueDois(r.page.url),
+                ...clueArxiv(r.page.url),
+              ],
+              excluded: r.excluded,
+              folder_ids: r.folder_ids,
+              source_url: r.file.source_url,
+              declared_file: r.file,
+              relative_path: null,
+              paired_to: null,
+              clues: null,
+              result: null,
+              reason: null,
+            },
+          });
+          stored = await this.write({
+            op: "result",
+            item_id: captureId,
+            connection_id: connection,
+            result: {
+              item_id: captureId,
+              batch_id: stored.batch_id,
+              literature_id: null,
+              disposition: null,
+              metadata: { status: "pending", job_id: null, code: null },
+              missing_folder_ids: [],
+            },
+          });
+          return { stored, ready: true };
+        }
+        if (!stored.literature_id) {
+          const observation = this.observation(
+            r.metadata,
+            captureId,
+            stored.created_at,
+          );
+          const replay =
+            (await this.database.getObservation(observation.observation_id)) !==
+            null;
+          const decision = await this.identity.observe(observation, {
+            intake_batch_id: parseIntakeBatchId(stored.batch_id),
+            ...(r.duplicate_decision?.kind === "merge"
+              ? { target_literature_id: r.duplicate_decision.literature_id }
+              : {}),
+          });
+          if (decision.disposition !== "accepted")
+            throw new CaptureError("intake-identity-conflict");
+          const facts = await this.database.currentFacts(
+            decision.literature_id,
+          );
+          stored = await this.write({
+            op: "accepted",
+            item_id: captureId,
+            connection_id: connection,
+            literature_id: decision.literature_id,
+            disposition: decision.outcome,
+            replay,
+            now: at,
+            source_url: r.file?.source_url ?? null,
+            excluded: r.excluded,
+            file: r.file
+              ? {
+                  file_id: id([captureId, "pdf"]),
+                  external_id: `${captureId}/pdf`,
+                  record_external_id: captureId,
+                  literature_id: decision.literature_id,
+                  file_name: r.file.file_name,
+                  size_bytes: r.file.size_bytes,
+                  expected_sha256: r.file.sha256,
+                  action: facts?.primary_asset ? "hash" : "upload",
+                  status: "pending",
+                  sha256: null,
+                  reason: null,
+                }
+              : null,
+          });
+        }
+        return { stored, ready: false };
+      });
+      let stored = admitted.stored;
+      if (admitted.ready) {
+        if (
+          stored.result?.metadata.status === "pending" &&
           stored.literature_id &&
           !r.metadata.identifiers.length
         )
           this.recognizePage(stored, r.page);
         return this.present(stored);
-      }
-      if (r.page.is_pdf) {
-        if (!r.file || !this.intake)
-          throw new CaptureError("intake-item-empty");
-        const address = intakeSourceUrl(r.page.url);
-        if (!address) throw new CaptureError("intake-input-invalid");
-        await this.write({
-          op: "pending",
-          item_id: captureId,
-          connection_id: connection,
-          work: {
-            page: {
-              url: address,
-              title: null,
-              meta: [],
-              json_ld: [],
-              is_pdf: true,
-            },
-            url_identifiers: [
-              ...clueDois(r.page.url),
-              ...clueArxiv(r.page.url),
-            ],
-            excluded: r.excluded,
-            folder_ids: r.folder_ids,
-            source_url: r.file.source_url,
-            declared_file: r.file,
-            relative_path: null,
-            paired_to: null,
-            clues: null,
-            result: null,
-            reason: null,
-          },
-        });
-        stored = await this.write({
-          op: "result",
-          item_id: captureId,
-          connection_id: connection,
-          result: {
-            item_id: captureId,
-            batch_id: stored.batch_id,
-            literature_id: null,
-            disposition: null,
-            metadata: { status: "pending", job_id: null, code: null },
-            missing_folder_ids: [],
-          },
-        });
-        return this.present(stored);
-      }
-      if (!stored.literature_id) {
-        const observation = this.observation(
-          r.metadata,
-          captureId,
-          stored.created_at,
-        );
-        const replay =
-          (await this.database.getObservation(observation.observation_id)) !==
-          null;
-        const decision = await this.identity.observe(observation, {
-          intake_batch_id: parseIntakeBatchId(stored.batch_id),
-        });
-        if (decision.disposition !== "accepted")
-          throw new CaptureError("intake-identity-conflict");
-        const facts = await this.database.currentFacts(decision.literature_id);
-        stored = await this.write({
-          op: "accepted",
-          item_id: captureId,
-          connection_id: connection,
-          literature_id: decision.literature_id,
-          disposition: decision.outcome,
-          replay,
-          now: at,
-          source_url: r.file?.source_url ?? null,
-          excluded: r.excluded,
-          file: r.file
-            ? {
-                file_id: id([captureId, "pdf"]),
-                external_id: `${captureId}/pdf`,
-                record_external_id: captureId,
-                literature_id: decision.literature_id,
-                file_name: r.file.file_name,
-                size_bytes: r.file.size_bytes,
-                expected_sha256: r.file.sha256,
-                action: facts?.primary_asset ? "hash" : "upload",
-                status: "pending",
-                sha256: null,
-                reason: null,
-              }
-            : null,
-        });
       }
       const missing: string[] = [];
       for (const folder_id of r.folder_ids) {
@@ -517,91 +618,124 @@ export class CaptureService {
       );
     }
     const recognized = await intake.fileItems.recognizeItem(staged, signal);
-    const owner = await intake.fileItems.read<{
-      literature_id: string;
-      asset_id: string;
-      role: string;
-      ambiguous?: number;
-    } | null>({ kind: "hash", sha256: candidate.sha256 });
-    signal.throwIfAborted();
-    const accepted = owner?.ambiguous
-      ? { disposition: "rejected" as const, reason: "file-identity-conflict" }
-      : await this.identity.observe(
-          this.observation(
-            recognized.metadata,
-            item.item_id,
-            original.value.created_at,
-          ),
-          {
+    const { owner, accepted, file } = await this.writes.run(async () => {
+      const owner = await intake.fileItems.read<{
+        literature_id: string;
+        asset_id: string;
+        role: string;
+        ambiguous?: number;
+      } | null>({ kind: "hash", sha256: candidate.sha256 });
+      signal.throwIfAborted();
+      const observation = this.observation(
+        recognized.metadata,
+        item.item_id,
+        original.value.created_at,
+      );
+      const duplicates = owner
+        ? []
+        : await this.duplicates.find(observation, false);
+      const choice = staged.decision;
+      if (
+        duplicates.length &&
+        choice?.kind !== "new" &&
+        choice?.kind !== "merge"
+      )
+        throw new CaptureError("intake-decision-required");
+      if (
+        duplicates.length &&
+        choice?.kind === "merge" &&
+        !duplicates.some((c) => c.literature_id === choice.literature_id)
+      )
+        throw new CaptureError("intake-decision-invalid");
+      if (duplicates.length)
+        await this.write({
+          op: "decision",
+          item_id: item.item_id,
+          connection_id: connection,
+          candidates: duplicates,
+          decision:
+            choice?.kind === "new" || choice?.kind === "merge" ? choice : null,
+          now: staged.decided_at ?? new Date(this.now()).toISOString(),
+        });
+      const accepted = owner?.ambiguous
+        ? { disposition: "rejected" as const, reason: "file-identity-conflict" }
+        : await this.identity.observe(observation, {
             signal,
             intake_batch_id: parseIntakeBatchId(s.batch_id),
-            ...(owner ? { target_literature_id: owner.literature_id } : {}),
+            ...(owner
+              ? { target_literature_id: owner.literature_id }
+              : choice?.kind === "merge"
+                ? { target_literature_id: choice.literature_id }
+                : {}),
+          });
+      if (accepted.disposition !== "accepted") {
+        await this.write({
+          op: "file-rejected",
+          item_id: item.item_id,
+          connection_id: connection,
+          reason: owner ? "file-identity-conflict" : accepted.reason,
+          result: {
+            item_id: item.item_id,
+            batch_id: s.batch_id,
+            literature_id: null,
+            disposition: null,
+            metadata: {
+              status: "failed",
+              job_id: null,
+              code: owner
+                ? "file-identity-conflict"
+                : "intake-identity-conflict",
+            },
+            missing_folder_ids: [],
           },
-        );
-    if (accepted.disposition !== "accepted") {
+        });
+        await intake.fileItems.cleanup(s.batch_id, item.item_id);
+        throw new CaptureError("intake-identity-conflict");
+      }
+      if (recognized.observation)
+        await this.identity.observe(recognized.observation, {
+          signal,
+          target_literature_id: accepted.literature_id,
+        });
+      if (
+        accepted.outcome === "created" &&
+        recognized.recognition.state !== "recognized"
+      )
+        await intake.fileItems.write({
+          kind: "needs",
+          literature_id: accepted.literature_id,
+          needed: true,
+          batch_id: s.batch_id,
+          now: new Date(this.now()).toISOString(),
+        });
+      const facts = await this.database.currentFacts(accepted.literature_id);
+      const file: ImportFileStatus = {
+        file_id: item.item_id,
+        external_id: `${item.item_id}/pdf`,
+        record_external_id: item.item_id,
+        literature_id: accepted.literature_id,
+        file_name: item.file_name!,
+        size_bytes: candidate.size_bytes,
+        expected_sha256: candidate.sha256,
+        action: facts?.primary_asset ? "hash" : "upload",
+        status: "pending",
+        sha256: null,
+        reason: null,
+      };
       await this.write({
-        op: "file-rejected",
+        op: "accepted",
         item_id: item.item_id,
         connection_id: connection,
-        reason: owner ? "file-identity-conflict" : accepted.reason,
-        result: {
-          item_id: item.item_id,
-          batch_id: s.batch_id,
-          literature_id: null,
-          disposition: null,
-          metadata: {
-            status: "failed",
-            job_id: null,
-            code: owner ? "file-identity-conflict" : "intake-identity-conflict",
-          },
-          missing_folder_ids: [],
-        },
-      });
-      await intake.fileItems.cleanup(s.batch_id, item.item_id);
-      throw new CaptureError("intake-identity-conflict");
-    }
-    if (recognized.observation)
-      await this.identity.observe(recognized.observation, {
-        signal,
-        target_literature_id: accepted.literature_id,
-      });
-    if (
-      accepted.outcome === "created" &&
-      recognized.recognition.state !== "recognized"
-    )
-      await intake.fileItems.write({
-        kind: "needs",
         literature_id: accepted.literature_id,
-        needed: true,
-        batch_id: s.batch_id,
+        disposition: owner ? "matched" : accepted.outcome,
+        replay: false,
+        file,
+        source_url: item.work?.source_url ?? null,
+        excluded: item.work?.excluded ?? [],
         now: new Date(this.now()).toISOString(),
       });
-    const facts = await this.database.currentFacts(accepted.literature_id);
-    const file: ImportFileStatus = {
-      file_id: item.item_id,
-      external_id: `${item.item_id}/pdf`,
-      record_external_id: item.item_id,
-      literature_id: accepted.literature_id,
-      file_name: item.file_name!,
-      size_bytes: candidate.size_bytes,
-      expected_sha256: candidate.sha256,
-      action: facts?.primary_asset ? "hash" : "upload",
-      status: "pending",
-      sha256: null,
-      reason: null,
-    };
-    await this.write({
-      op: "accepted",
-      item_id: item.item_id,
-      connection_id: connection,
-      literature_id: accepted.literature_id,
-      disposition: owner ? "matched" : accepted.outcome,
-      replay: false,
-      file,
-      source_url: item.work?.source_url ?? null,
-      excluded: item.work?.excluded ?? [],
-      now: new Date(this.now()).toISOString(),
-    });
+      return { owner, accepted, file };
+    }, signal);
     const missing: string[] = [];
     for (const folder_id of item.work?.folder_ids ?? []) {
       try {

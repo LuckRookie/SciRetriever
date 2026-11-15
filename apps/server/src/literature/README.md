@@ -39,3 +39,5 @@
 `query.ts` 的 parseSelection 复用获取 PDF 的范围选择器，读取有主 PDF 且没有当前部署 profile 原始解析的版本；它只读，不下载、解析或创建任务。批次读取返回按论文的 full_text 及按版本的 acquire_pdf/parse 预估；文献库 LibraryCounts 的扩展另行接入同一计数 owner。
 
 [intake-recognition.ts](intake-recognition.ts) 依次核对标识、标题与作者/年份，只复用配置允许的元数据查询；按 Unicode 码点计算标题相似度，候选不自动接纳。预览不写文献事实。[post-parse-recognition.ts](post-parse-recognition.ts) 在原始解析发布后只处理书目待补文献，保留来源与人工锁；不执行解析或模型。文献查询的 needs_metadata 标记独立于建档状态。
+
+[possible-duplicates.ts](possible-duplicates.ts) 提供可能重复的纯判断与只读服务：复用认篇的标题规范化和码点相似度，结合第一作者和年份给出最多三个有序候选；标识、来源库编号及严格身份命中优先。服务只调用身份预览与书目小投影，不写文献事实。入库预览只比较已在库文献，确认按顺序重判；同批已接纳的前序条目也参与比较。批次与网页收藏共用本判断，候选不自行触发合并或新增。

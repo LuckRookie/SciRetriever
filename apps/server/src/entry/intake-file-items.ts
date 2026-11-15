@@ -38,12 +38,19 @@ import {
 import { createLogger } from "../logging/index.js";
 
 export function publicIntakeItem(item: StoredIntakeItem): IntakeBatchItem {
-  const { batch_id, candidate_transfer_id, literature_id, work, ...value } =
-    item;
+  const {
+    batch_id,
+    candidate_transfer_id,
+    literature_id,
+    work,
+    retain_until,
+    ...value
+  } = item;
   void batch_id;
   void candidate_transfer_id;
   void literature_id;
   void work;
+  void retain_until;
   return value;
 }
 function suffix(a: string, b: string) {
@@ -437,6 +444,7 @@ export class IntakeFileItems {
     });
     for (const i of items)
       if (
+        i.origin === "file" &&
         i.work &&
         !i.work.result &&
         !i.work.reason &&
@@ -522,12 +530,39 @@ export class IntakeFileItems {
       ),
     );
   }
-  async cleanup(batchId: string, itemId?: string) {
-    for (const item of await this.read<StoredIntakeItem[]>({
+  async cleanup(batchId: string, itemId?: string, preservePending = false) {
+    const items = await this.read<StoredIntakeItem[]>({
       kind: "all",
       batch_id: batchId,
-    })) {
+    });
+    const pendingFiles = new Set(
+      preservePending
+        ? await this.read<string[]>({
+            kind: "pending-resolution-files",
+            batch_id: batchId,
+            now: new Date(this.now()).toISOString(),
+          })
+        : [],
+    );
+    const kept = new Set(
+      items
+        .filter(
+          (i) =>
+            preservePending &&
+            (i.disposition === "pending-decision" ||
+              pendingFiles.has(i.item_id)) &&
+            !!i.work?.record &&
+            !!i.retain_until &&
+            i.retain_until > new Date(this.now()).toISOString(),
+        )
+        .flatMap((i) => [
+          i.item_id,
+          ...(i.work?.retained_item_id ? [i.work.retained_item_id] : []),
+        ]),
+    );
+    for (const item of items) {
       if (itemId && item.item_id !== itemId) continue;
+      if (kept.has(item.item_id)) continue;
       const transferId =
         item.candidate_transfer_id ?? item.work?.retiring_transfer_id;
       if (!transferId) continue;
@@ -563,7 +598,7 @@ export class IntakeFileItems {
       ...(itemId ? { item_id: itemId } : {}),
     });
     for (const candidate of orphans)
-      if (candidate.capture)
+      if (candidate.capture && !kept.has(candidate.capture.article_id))
         await this.abandonment.abandon({
           article_id: candidate.capture.article_id,
           transfer_id: candidate.transfer_id,

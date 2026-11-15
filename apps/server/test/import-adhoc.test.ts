@@ -151,6 +151,37 @@ async function* chunks(bytes: Uint8Array) {
   yield bytes;
 }
 
+it("reports a corrected no-identifier BibTeX title as a possible duplicate without admitting it twice (review M4)", async () => {
+  const f = await fixture();
+  try {
+    const first = await f.create("review-M4.bib");
+    const original =
+      "@article{k,title={Solid electrolytes: a reveiw},author={Doe, Jane},year={2020},journal={J}}";
+    await f.app.importSessions.putData(first.batch_id, 0, original);
+    await f.app.importSessions.confirm(first.batch_id);
+    const second = await f.create("review-M4-corrected.bib");
+    await f.app.importSessions.putData(
+      second.batch_id,
+      0,
+      original.replace("reveiw", "review"),
+    );
+    const preview = await f.app.importSessions.preview(second.batch_id);
+    expect(preview.summary.records.possible_duplicates).toBe(1);
+    expect(preview.summary.records.created).toBe(0);
+    expect(f.count("literatures")).toBe(1);
+    await f.app.importSessions.confirm(second.batch_id);
+    const report = await f.app.importSessions.report(second.batch_id);
+    expect(report.summary.records.pending_decision).toBe(1);
+    expect(report.items[0]).toMatchObject({
+      disposition: "pending-decision",
+      literature_id: null,
+    });
+    expect(f.count("literatures")).toBe(1);
+  } finally {
+    await f.close();
+  }
+}, 30000);
+
 it.each(["bibtex", "biblatex", "ris"] as const)(
   "delivers a PDF named by the %s export through the one-off session file channel",
   async (format) => {

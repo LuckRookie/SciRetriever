@@ -66,6 +66,10 @@ import { IntakeFileItems, publicIntakeItem } from "./intake-file-items.js";
 import { IntakeRecognitionService } from "../literature/intake-recognition.js";
 import type { FileClueReader } from "../literature/file-clues.js";
 import type { StoredIntakeItem } from "../storage/sqlite/intake-items.js";
+import {
+  PossibleDuplicateService,
+  type PossibleDuplicatePaper,
+} from "../literature/possible-duplicates.js";
 const intakeId = (value: unknown) => hash(value, "uuid");
 
 export type ImportActor =
@@ -289,6 +293,7 @@ export class ImportSessionService extends ImportSessionReadService {
   private readonly uploadStops = new Map<string, Set<AbortController>>();
   readonly fileChannel: ImportFileChannel;
   readonly fileItems: IntakeFileItems;
+  readonly possibleDuplicates: PossibleDuplicateService;
   private pagePdfHandler?: (
     s: StoredImportSession,
     item: StoredIntakeItem,
@@ -343,6 +348,13 @@ export class ImportSessionService extends ImportSessionReadService {
         }),
       options.clueReader,
       this.now,
+    );
+    this.possibleDuplicates = new PossibleDuplicateService(
+      () =>
+        this.fileItems.read<PossibleDuplicatePaper[]>({
+          kind: "duplicate-candidates",
+        }),
+      identity,
     );
     if (options.maintain === true) {
       this.timer = setInterval(() => {
@@ -665,6 +677,63 @@ export class ImportSessionService extends ImportSessionReadService {
     for (const id of groups.keys()) visit(id);
     for (const id of references) visit(id);
     const fileItems = await this.fileItems.prepare(s, decoded);
+    const dataItems: StoredIntakeItem[] = [];
+    for (const [sequence, data] of decoded) {
+      if (sequence === IMPORT_LIMITS.parts) continue;
+      for (const value of data.items)
+        dataItems.push({
+          item_id: intakeId([
+            "intake-item",
+            s.batch_id,
+            sequence,
+            value.record_index,
+          ]),
+          batch_id: s.batch_id,
+          origin: "data",
+          sequence,
+          record_index: value.record_index,
+          external_id: value.record?.external_id ?? value.external_id ?? null,
+          title: value.record?.metadata.title ?? null,
+          file_name: null,
+          candidate_transfer_id: null,
+          recognition: null,
+          possible_duplicates: [],
+          unpaired: false,
+          needs_decision: false,
+          decision: null,
+          disposition: null,
+          literature_id: null,
+          decided_by: null,
+          decided_at: null,
+          work: value.record
+            ? {
+                relative_path: null,
+                paired_to: null,
+                clues: null,
+                result: null,
+                reason: null,
+                source_url: null,
+                record: value.record,
+                ...(fileItems.paired.get(value.record.external_id)
+                  ? {
+                      retained_item_id: fileItems.paired.get(
+                        value.record.external_id,
+                      )!.item_id,
+                    }
+                  : {}),
+              }
+            : null,
+        });
+    }
+    if (dataItems.length)
+      await this.writes.run(() =>
+        this.fileItems.write({
+          kind: "stage-data",
+          batch_id: s.batch_id,
+          items: dataItems,
+          now: new Date(this.now()).toISOString(),
+        }),
+      );
     (summary.files as { unpaired: number }).unpaired = fileItems.items.filter(
       (i) => i.unpaired,
     ).length;
@@ -793,6 +862,7 @@ export class ImportSessionService extends ImportSessionReadService {
     observation: MetadataObservation,
     mapping: ExternalObjectMapping | null,
     unchanged: boolean,
+    resolving = false,
   ): Promise<LiteratureIdentityDecision> {
     if (unchanged) {
       const facts = await this.database.currentFacts(mapping!.internal_id);
@@ -816,7 +886,9 @@ export class ImportSessionService extends ImportSessionReadService {
     }
     try {
       return await this.identity.observe(observation, {
-        intake_batch_id: parseIntakeBatchId(s.batch_id!),
+        ...(!resolving
+          ? { intake_batch_id: parseIntakeBatchId(s.batch_id!) }
+          : {}),
         ...(mapping ? { target_literature_id: mapping.internal_id } : {}),
       });
     } catch (error) {
@@ -832,6 +904,7 @@ export class ImportSessionService extends ImportSessionReadService {
       const prepared = await this.prepare(s),
         summary = prepared.summary;
       this.fileItems.start(s, prepared.fileItems.items);
+      let duplicateSnapshot: readonly PossibleDuplicatePaper[] | undefined;
       for (const sequence of prepared.sequences)
         for (const item of prepared.decoded.get(sequence)!.items) {
           if (!item.record) {
@@ -889,8 +962,51 @@ export class ImportSessionService extends ImportSessionReadService {
             sequence === IMPORT_LIMITS.parts ? candidate?.sha256 : undefined,
           );
           if (decision.disposition === "conflict") {
-            (summary.records as { conflicts: number }).conflicts++;
+            if (decision.reason === "missing-title-or-doi")
+              (summary.records as { rejected: number }).rejected++;
+            else (summary.records as { conflicts: number }).conflicts++;
             continue;
+          }
+          if (
+            (s.source.identity === "adhoc" ||
+              sequence === IMPORT_LIMITS.parts) &&
+            (!record.metadata.identifiers.length ||
+              !!retained?.possible_duplicates.length)
+          ) {
+            if (decision.disposition === "created")
+              duplicateSnapshot ??= await this.fileItems.read<
+                PossibleDuplicatePaper[]
+              >({ kind: "duplicate-candidates" });
+            const candidates = owner
+              ? []
+              : await this.possibleDuplicates.find(
+                  this.observation(s, record),
+                  false,
+                  {
+                    assessment: decision,
+                    ...(duplicateSnapshot
+                      ? { snapshot: duplicateSnapshot }
+                      : {}),
+                  },
+                );
+            const itemId =
+              sequence === IMPORT_LIMITS.parts
+                ? record.external_id
+                : intakeId(["intake-item", id, sequence, item.record_index]);
+            await this.writes.run(() =>
+              this.fileItems.write({
+                kind: "duplicates",
+                batch_id: id,
+                item_id: itemId,
+                candidates,
+                now: new Date(this.now()).toISOString(),
+              }),
+            );
+            if (candidates.length) {
+              (summary.records as { possible_duplicates: number })
+                .possible_duplicates++;
+              continue;
+            }
           }
           if (owner?.withdrawn)
             (summary.records as { restored: number }).restored++;
@@ -1016,16 +1132,79 @@ export class ImportSessionService extends ImportSessionReadService {
     decision: IntakeDecision,
     actor: ImportActor,
   ) {
-    return this.tracked(async () =>
-      this.fileItems.decide(
-        await this.stored(id),
-        itemId,
-        decision,
+    return this.tracked(async () => {
+      await this.requireOwner(id, actor);
+      const who =
         actor.kind === "device"
           ? `device:${actor.connection_id}`
-          : actor.origin,
-      ),
-    );
+          : actor.origin;
+      if (decision.kind !== "new" && decision.kind !== "merge")
+        return this.fileItems.decide(
+          await this.stored(id),
+          itemId,
+          decision,
+          who,
+        );
+      const settle = await this.writes.run(async () => {
+        const s = await this.stored(id);
+        const item = await this.fileItems.write<StoredIntakeItem>({
+          kind: "duplicate-decision",
+          batch_id: id,
+          item_id: itemId,
+          decision,
+          actor: who,
+          now: new Date(this.now()).toISOString(),
+        });
+        if (s.state === "finished") {
+          const all = await this.fileItems.read<StoredIntakeItem[]>({
+            kind: "all",
+            batch_id: id,
+          });
+          const retained =
+            item.origin === "file"
+              ? item
+              : all.find((i) => i.item_id === item.work?.retained_item_id);
+          const prepared = {
+            groups: new Map<string, ImportGroup>(),
+            summary: { ...blank(), ...s.summary },
+            fileItems: {
+              items: retained ? [retained] : [],
+              paired: new Map(
+                retained && item.work?.record
+                  ? [[item.work.record.external_id, retained]]
+                  : [],
+              ),
+              standalone: [],
+            },
+          };
+          const recordItem = {
+            record_index: item.record_index!,
+            external_id: item.external_id ?? item.work!.record!.external_id,
+            record: item.work!.record!,
+            reason: null,
+          };
+          await this.admitRecord(s, prepared, item.sequence!, recordItem, item);
+          return async () => {
+            await this.admitRetainedFile(
+              id,
+              prepared,
+              item.sequence!,
+              recordItem,
+            );
+            await this.cleanParts(id);
+          };
+        }
+        return null;
+      });
+      if (settle) await settle();
+      return publicIntakeItem(
+        await this.fileItems.read<StoredIntakeItem>({
+          kind: "one",
+          batch_id: id,
+          item_id: itemId,
+        }),
+      );
+    });
   }
   cancelPreview(id: string) {
     return this.tracked(async () => {
@@ -1273,324 +1452,7 @@ export class ImportSessionService extends ImportSessionReadService {
       for (const item of prepared.decoded.get(sequence)!.items) {
         if (this.stop.signal.aborted || this.stopping.has(id))
           return this.project(await this.stored(id));
-        await this.writes.run(async () => {
-          const current = await this.stored(id);
-          if (this.stopping.has(id) || current.state !== "running") return;
-          const old = await this.read<ImportRecordResult | null>({
-            op: "result",
-            batch_id: id,
-            sequence: sequence,
-            record_index: item.record_index,
-          });
-          if (old) return;
-          const record = item.record;
-          let result: ImportRecordResult = {
-            sequence: sequence,
-            record_index: item.record_index,
-            external_id:
-              record?.external_id ??
-              item.external_id ??
-              `rejected:${sequence}:${item.record_index}`,
-            disposition:
-              item.reason === "unpaired-file"
-                ? "excluded"
-                : item.reason === "excluded"
-                  ? "excluded"
-                  : "rejected",
-            literature_id: null,
-            meta_literature_id: null,
-            reason: item.reason ?? "malformed-record",
-          };
-          let mapping: ExternalObjectMapping | null = null;
-          const files: ImportFileStatus[] = [];
-          const retained = record
-            ? sequence === IMPORT_LIMITS.parts
-              ? prepared.fileItems.items.find(
-                  (i) => i.item_id === record.external_id,
-                )
-              : prepared.fileItems.paired.get(record.external_id)
-            : undefined;
-          const retainedCandidate = retained?.candidate_transfer_id
-            ? await this.fileItems.transfers.recover(
-                retained.candidate_transfer_id,
-              )
-            : null;
-          if (record) {
-            let existing = await this.mapping(
-              s.library_key,
-              "record",
-              record.external_id,
-            );
-            const hashOwner =
-              retainedCandidate &&
-              (s.source.identity === "adhoc" ||
-                sequence === IMPORT_LIMITS.parts)
-                ? await this.fileItems.read<{
-                    literature_id: string;
-                    asset_id: string;
-                    role: string;
-                    withdrawn: number;
-                    ambiguous?: number;
-                  } | null>({ kind: "hash", sha256: retainedCandidate.sha256 })
-                : null;
-            if (hashOwner)
-              existing = {
-                library_key: s.library_key,
-                object_kind: "record",
-                external_id: record.external_id,
-                internal_id: hashOwner.literature_id,
-                content_sha256: null,
-                observation_id: null,
-                state: "settled",
-              };
-            const content = hash(record),
-              observation = this.observation(
-                s,
-                record,
-                sequence === IMPORT_LIMITS.parts
-                  ? retainedCandidate?.sha256
-                  : undefined,
-              );
-            const assessment = hashOwner?.ambiguous
-              ? {
-                  disposition: "conflict" as const,
-                  literature_id: null,
-                  reason: "file-identity-conflict",
-                  unchanged: false,
-                }
-              : s.source.identity === "adhoc" && !hashOwner
-                ? {
-                    disposition: "created" as const,
-                    literature_id: null,
-                    reason: null,
-                    unchanged: false,
-                  }
-                : await this.assessRecord(
-                    s,
-                    record,
-                    existing,
-                    sequence === IMPORT_LIMITS.parts
-                      ? retainedCandidate?.sha256
-                      : undefined,
-                  );
-            if (assessment.disposition === "conflict")
-              result = {
-                ...result,
-                disposition: "conflict",
-                reason: hashOwner
-                  ? "file-identity-conflict"
-                  : assessment.reason,
-              };
-            else {
-              const replay = await this.database.getObservation(
-                observation.observation_id,
-              );
-              const decision = await this.observeRecord(
-                s,
-                record,
-                observation,
-                existing,
-                assessment.unchanged,
-              );
-              if (decision.disposition !== "accepted")
-                result = {
-                  ...result,
-                  disposition:
-                    decision.disposition === "rejected"
-                      ? "rejected"
-                      : "conflict",
-                  reason: hashOwner
-                    ? "file-identity-conflict"
-                    : decision.reason,
-                };
-              else {
-                // Replay after a process died between the identity commit and this checkpoint.
-                const member = await this.read<{
-                  disposition: "created" | "enriched" | "matched";
-                } | null>({
-                  op: "intake-member",
-                  batch_id: s.batch_id!,
-                  literature_id: decision.literature_id,
-                });
-                result = {
-                  ...result,
-                  disposition: hashOwner?.withdrawn
-                    ? "restored"
-                    : hashOwner
-                      ? "matched"
-                      : replay && !assessment.unchanged
-                        ? (member?.disposition ?? decision.outcome)
-                        : decision.outcome,
-                  literature_id: decision.literature_id,
-                  meta_literature_id: decision.meta_literature_id,
-                  reason:
-                    hashOwner?.role !== undefined &&
-                    hashOwner.role !== "primary-pdf"
-                      ? "matched-by-supplementary"
-                      : (retained?.work?.clues?.reason ?? null),
-                };
-                if (hashOwner) {
-                  if (hashOwner.withdrawn)
-                    await this.fileItems.write({
-                      kind: "restore",
-                      literature_id: decision.literature_id,
-                    });
-                  await this.database.writeIntake({
-                    operation: "member",
-                    member: {
-                      batch_id: parseIntakeBatchId(id),
-                      literature_id: decision.literature_id,
-                      disposition: hashOwner.withdrawn ? "restored" : "matched",
-                      authoritative: true,
-                    },
-                  });
-                }
-                const recognized = retained?.work?.result;
-                if (recognized?.observation)
-                  await this.identity.observe(recognized.observation, {
-                    target_literature_id: decision.literature_id,
-                  });
-                if (
-                  recognized &&
-                  decision.outcome === "created" &&
-                  recognized.recognition.state !== "recognized"
-                )
-                  await this.fileItems.write({
-                    kind: "needs",
-                    literature_id: decision.literature_id,
-                    needed: true,
-                    batch_id: id,
-                    now: new Date(this.now()).toISOString(),
-                  });
-                mapping =
-                  s.source.identity === "adhoc" ||
-                  sequence === IMPORT_LIMITS.parts
-                    ? null
-                    : {
-                        library_key: s.library_key,
-                        object_kind: "record",
-                        external_id: record.external_id,
-                        internal_id: decision.literature_id,
-                        content_sha256: content,
-                        observation_id: observation.observation_id,
-                        state: "settled",
-                      };
-                try {
-                  await this.addFolders(
-                    s,
-                    record,
-                    prepared.groups,
-                    decision.literature_id,
-                  );
-                } catch (error) {
-                  if (
-                    (!(error instanceof ImportSessionError) &&
-                      !(error instanceof FolderError)) ||
-                    storageFailure(error)
-                  )
-                    throw error;
-                  addExcluded(
-                    prepared.summary,
-                    error instanceof FolderError
-                      ? "intake-folder-target-missing"
-                      : error.code,
-                  );
-                }
-                const primary = s.metadata_only ? null : selected(record);
-                if (primary) {
-                  const facts = await this.database.currentFacts(
-                    decision.literature_id,
-                  );
-                  files.push({
-                    file_id: intakeId([id, primary.external_id]),
-                    external_id: primary.external_id,
-                    record_external_id: record.external_id,
-                    literature_id: decision.literature_id,
-                    file_name: primary.file_name,
-                    size_bytes: primary.size_bytes,
-                    expected_sha256: primary.sha256,
-                    action: facts?.primary_asset ? "hash" : "upload",
-                    status: "pending",
-                    sha256: null,
-                    reason: null,
-                  });
-                }
-              }
-            }
-          }
-          await this.write({
-            op: "result",
-            batch_id: id,
-            item: result,
-            item_id:
-              (sequence === IMPORT_LIMITS.parts
-                ? (record?.external_id ?? item.external_id)
-                : null) ??
-              intakeId(["intake-item", id, sequence, item.record_index]),
-            title: record?.metadata.title ?? null,
-            mapping,
-            files,
-            now: new Date(this.now()).toISOString(),
-          });
-          this.failures.delete(id);
-        });
-        const record = item.record;
-        const retained = record
-          ? sequence === IMPORT_LIMITS.parts
-            ? prepared.fileItems.items.find(
-                (i) => i.item_id === record.external_id,
-              )
-            : prepared.fileItems.paired.get(record.external_id)
-          : undefined;
-        if (retained?.candidate_transfer_id && record && selected(record)) {
-          const candidate = await this.fileItems.transfers.recover(
-            retained.candidate_transfer_id,
-          );
-          const result = await this.read<ImportRecordResult | null>({
-            op: "result",
-            batch_id: id,
-            sequence,
-            record_index: item.record_index,
-          });
-          if (candidate && result?.literature_id) {
-            const file = await this.read<ImportFileStatus>({
-              op: "file",
-              batch_id: id,
-              file_id: intakeId([id, selected(record)!.external_id]),
-            });
-            if (file.status === "pending") {
-              if (
-                (file.size_bytes !== null &&
-                  file.size_bytes !== candidate.size_bytes) ||
-                (file.expected_sha256 !== null &&
-                  file.expected_sha256 !== candidate.sha256)
-              )
-                await this.settleFile(id, file, candidate.sha256, null, false);
-              else {
-                const owner = await this.fileItems.read<{
-                  literature_id: string;
-                  asset_id: string;
-                  role: string;
-                } | null>({ kind: "hash", sha256: candidate.sha256 });
-                if (owner?.literature_id === result.literature_id)
-                  await this.settleFile(
-                    id,
-                    file,
-                    candidate.sha256,
-                    { asset_id: owner.asset_id, sha256: candidate.sha256 },
-                    false,
-                  );
-                else if (file.action === "hash")
-                  await this.reportHash(id, file.file_id, candidate.sha256);
-                else
-                  await this.fileItems.transfers.withCandidate(
-                    candidate,
-                    (input) => this.upload(id, file.file_id, input.chunks()),
-                  );
-              }
-            }
-          }
-        }
+        await this.admitItem(s, prepared, sequence, item);
       }
     const current = await this.stored(id);
     if (
@@ -1611,6 +1473,441 @@ export class ImportSessionService extends ImportSessionReadService {
     this.failures.delete(id);
     await this.finishIfComplete(id);
     return this.project(await this.stored(id));
+  }
+  private async admitItem(
+    s: StoredImportSession,
+    prepared: Pick<
+      Awaited<ReturnType<ImportSessionService["prepare"]>>,
+      "fileItems" | "groups" | "summary"
+    >,
+    sequence: number,
+    item: ImportAdapterResult["items"][number],
+  ) {
+    await this.admitRecord(s, prepared, sequence, item);
+    await this.admitRetainedFile(s.batch_id, prepared, sequence, item);
+  }
+  private async admitRecord(
+    s: StoredImportSession,
+    prepared: Pick<
+      Awaited<ReturnType<ImportSessionService["prepare"]>>,
+      "fileItems" | "groups" | "summary"
+    >,
+    sequence: number,
+    item: ImportAdapterResult["items"][number],
+    resolving?: StoredIntakeItem,
+  ) {
+    const id = s.batch_id;
+    await this.writes.run(async () => {
+      const current = await this.stored(id);
+      if (
+        this.stopping.has(id) ||
+        current.state !== (resolving ? "finished" : "running")
+      )
+        return;
+      const old = await this.read<ImportRecordResult | null>({
+        op: "result",
+        batch_id: id,
+        sequence: sequence,
+        record_index: item.record_index,
+      });
+      if (old && (!resolving || old.disposition !== "pending-decision")) return;
+      const record = item.record;
+      let result: ImportRecordResult = {
+        sequence: sequence,
+        record_index: item.record_index,
+        external_id:
+          record?.external_id ??
+          item.external_id ??
+          `rejected:${sequence}:${item.record_index}`,
+        disposition:
+          item.reason === "unpaired-file"
+            ? "excluded"
+            : item.reason === "excluded"
+              ? "excluded"
+              : "rejected",
+        literature_id: null,
+        meta_literature_id: null,
+        reason: item.reason ?? "malformed-record",
+      };
+      let mapping: ExternalObjectMapping | null = null;
+      const files: ImportFileStatus[] = [];
+      const retained = record
+        ? sequence === IMPORT_LIMITS.parts
+          ? prepared.fileItems.items.find(
+              (i) => i.item_id === record.external_id,
+            )
+          : prepared.fileItems.paired.get(record.external_id)
+        : undefined;
+      const retainedCandidate = retained?.candidate_transfer_id
+        ? await this.fileItems.transfers.recover(retained.candidate_transfer_id)
+        : null;
+      if (record) {
+        let existing = await this.mapping(
+          s.library_key,
+          "record",
+          record.external_id,
+        );
+        const hashOwner =
+          retainedCandidate &&
+          (s.source.identity === "adhoc" || sequence === IMPORT_LIMITS.parts)
+            ? await this.fileItems.read<{
+                literature_id: string;
+                asset_id: string;
+                role: string;
+                withdrawn: number;
+                ambiguous?: number;
+              } | null>({ kind: "hash", sha256: retainedCandidate.sha256 })
+            : null;
+        if (hashOwner)
+          existing = {
+            library_key: s.library_key,
+            object_kind: "record",
+            external_id: record.external_id,
+            internal_id: hashOwner.literature_id,
+            content_sha256: null,
+            observation_id: null,
+            state: "settled",
+          };
+        const content = hash(record),
+          observation = this.observation(
+            s,
+            record,
+            sequence === IMPORT_LIMITS.parts
+              ? retainedCandidate?.sha256
+              : undefined,
+          );
+        const assessment = hashOwner?.ambiguous
+          ? {
+              disposition: "conflict" as const,
+              literature_id: null,
+              reason: "file-identity-conflict",
+              unchanged: false,
+            }
+          : s.source.identity === "adhoc" &&
+              !hashOwner &&
+              record.metadata.identifiers.length > 0
+            ? {
+                disposition: "created" as const,
+                literature_id: null,
+                reason: null,
+                unchanged: false,
+              }
+            : await this.assessRecord(
+                s,
+                record,
+                existing,
+                sequence === IMPORT_LIMITS.parts
+                  ? retainedCandidate?.sha256
+                  : undefined,
+              );
+        let undecided = false;
+        if (
+          (s.source.identity === "adhoc" || sequence === IMPORT_LIMITS.parts) &&
+          (!record.metadata.identifiers.length ||
+            !!retained?.possible_duplicates.length) &&
+          assessment.disposition !== "conflict"
+        ) {
+          const itemId =
+            sequence === IMPORT_LIMITS.parts
+              ? record.external_id
+              : intakeId(["intake-item", id, sequence, item.record_index]);
+          let stored =
+            resolving ??
+            (await this.fileItems.read<StoredIntakeItem>({
+              kind: "one",
+              batch_id: id,
+              item_id: itemId,
+            }));
+          if (!resolving) {
+            const candidates = hashOwner
+              ? []
+              : await this.possibleDuplicates.find(observation, false, {
+                  assessment,
+                });
+            stored = await this.fileItems.write<StoredIntakeItem>({
+              kind: "duplicates",
+              batch_id: id,
+              item_id: itemId,
+              candidates,
+              work: {
+                ...(stored.work ?? {
+                  relative_path: null,
+                  paired_to: null,
+                  clues: null,
+                  result: null,
+                  reason: null,
+                  source_url: null,
+                }),
+                record,
+                ...(retained && retained.item_id !== itemId
+                  ? { retained_item_id: retained.item_id }
+                  : {}),
+              },
+              now: new Date(this.now()).toISOString(),
+            });
+          }
+          if (stored.possible_duplicates.length) {
+            const choice = stored.decision;
+            if (
+              choice?.kind === "merge" &&
+              stored.possible_duplicates.some(
+                (c) => c.literature_id === choice.literature_id,
+              )
+            ) {
+              existing = {
+                library_key: s.library_key,
+                object_kind: "record",
+                external_id: record.external_id,
+                internal_id: choice.literature_id,
+                content_sha256: null,
+                observation_id: null,
+                state: "settled",
+              };
+            } else if (choice?.kind !== "new") undecided = true;
+          }
+        }
+        if (undecided)
+          result = {
+            ...result,
+            disposition: "pending-decision",
+            reason: "possible-duplicate",
+          };
+        else if (assessment.disposition === "conflict")
+          result = {
+            ...result,
+            disposition:
+              assessment.reason === "missing-title-or-doi"
+                ? "rejected"
+                : "conflict",
+            reason: hashOwner ? "file-identity-conflict" : assessment.reason,
+          };
+        else {
+          const replay = await this.database.getObservation(
+            observation.observation_id,
+          );
+          const createsOnResolution =
+            resolving?.work?.creates_on_resolution ??
+            (assessment.disposition === "created" && !existing);
+          if (resolving && resolving.work?.creates_on_resolution === undefined)
+            await this.fileItems.write({
+              kind: "resolution-intent",
+              batch_id: id,
+              item_id: resolving.item_id,
+              creates: createsOnResolution,
+              now: new Date(this.now()).toISOString(),
+            });
+          const decision = await this.observeRecord(
+            s,
+            record,
+            observation,
+            existing,
+            assessment.unchanged,
+            !!resolving,
+          );
+          if (decision.disposition !== "accepted")
+            result = {
+              ...result,
+              disposition:
+                decision.disposition === "rejected" ? "rejected" : "conflict",
+              reason: hashOwner ? "file-identity-conflict" : decision.reason,
+            };
+          else {
+            // Replay after a process died between the identity commit and this checkpoint.
+            const member = await this.read<{
+              disposition: "created" | "enriched" | "matched";
+            } | null>({
+              op: "intake-member",
+              batch_id: s.batch_id!,
+              literature_id: decision.literature_id,
+            });
+            result = {
+              ...result,
+              disposition: hashOwner?.withdrawn
+                ? "restored"
+                : hashOwner
+                  ? "matched"
+                  : replay && !assessment.unchanged
+                    ? (member?.disposition ??
+                      (resolving && createsOnResolution
+                        ? "created"
+                        : decision.outcome))
+                    : decision.outcome,
+              literature_id: decision.literature_id,
+              meta_literature_id: decision.meta_literature_id,
+              reason:
+                hashOwner?.role !== undefined &&
+                hashOwner.role !== "primary-pdf"
+                  ? "matched-by-supplementary"
+                  : (retained?.work?.clues?.reason ?? null),
+            };
+            if (hashOwner) {
+              if (hashOwner.withdrawn)
+                await this.fileItems.write({
+                  kind: "restore",
+                  literature_id: decision.literature_id,
+                });
+              await this.database.writeIntake({
+                operation: "member",
+                member: {
+                  batch_id: parseIntakeBatchId(id),
+                  literature_id: decision.literature_id,
+                  disposition: hashOwner.withdrawn ? "restored" : "matched",
+                  authoritative: true,
+                },
+              });
+            }
+            const recognized = retained?.work?.result;
+            if (recognized?.observation)
+              await this.identity.observe(recognized.observation, {
+                target_literature_id: decision.literature_id,
+              });
+            if (
+              recognized &&
+              decision.outcome === "created" &&
+              recognized.recognition.state !== "recognized"
+            )
+              await this.fileItems.write({
+                kind: "needs",
+                literature_id: decision.literature_id,
+                needed: true,
+                batch_id: id,
+                now: new Date(this.now()).toISOString(),
+              });
+            mapping =
+              s.source.identity === "adhoc" || sequence === IMPORT_LIMITS.parts
+                ? null
+                : {
+                    library_key: s.library_key,
+                    object_kind: "record",
+                    external_id: record.external_id,
+                    internal_id: decision.literature_id,
+                    content_sha256: content,
+                    observation_id: observation.observation_id,
+                    state: "settled",
+                  };
+            try {
+              await this.addFolders(
+                s,
+                record,
+                prepared.groups,
+                decision.literature_id,
+              );
+            } catch (error) {
+              if (
+                (!(error instanceof ImportSessionError) &&
+                  !(error instanceof FolderError)) ||
+                storageFailure(error)
+              )
+                throw error;
+              addExcluded(
+                prepared.summary,
+                error instanceof FolderError
+                  ? "intake-folder-target-missing"
+                  : error.code,
+              );
+            }
+            const primary = s.metadata_only ? null : selected(record);
+            if (primary) {
+              const facts = await this.database.currentFacts(
+                decision.literature_id,
+              );
+              files.push({
+                file_id: intakeId([id, primary.external_id]),
+                external_id: primary.external_id,
+                record_external_id: record.external_id,
+                literature_id: decision.literature_id,
+                file_name: primary.file_name,
+                size_bytes: primary.size_bytes,
+                expected_sha256: primary.sha256,
+                action: facts?.primary_asset ? "hash" : "upload",
+                status: "pending",
+                sha256: null,
+                reason: null,
+              });
+            }
+          }
+        }
+      }
+      await this.write({
+        op: resolving ? "resolve-result" : "result",
+        batch_id: id,
+        item: result,
+        item_id:
+          (sequence === IMPORT_LIMITS.parts
+            ? (record?.external_id ?? item.external_id)
+            : null) ??
+          intakeId(["intake-item", id, sequence, item.record_index]),
+        title: record?.metadata.title ?? null,
+        mapping,
+        files,
+        now: new Date(this.now()).toISOString(),
+      });
+      this.failures.delete(id);
+    });
+  }
+  private async admitRetainedFile(
+    id: string,
+    prepared: Pick<
+      Awaited<ReturnType<ImportSessionService["prepare"]>>,
+      "fileItems"
+    >,
+    sequence: number,
+    item: ImportAdapterResult["items"][number],
+  ) {
+    const record = item.record;
+    const retained = record
+      ? sequence === IMPORT_LIMITS.parts
+        ? prepared.fileItems.items.find((i) => i.item_id === record.external_id)
+        : prepared.fileItems.paired.get(record.external_id)
+      : undefined;
+    if (retained?.candidate_transfer_id && record && selected(record)) {
+      const candidate = await this.fileItems.transfers.recover(
+        retained.candidate_transfer_id,
+      );
+      const result = await this.read<ImportRecordResult | null>({
+        op: "result",
+        batch_id: id,
+        sequence,
+        record_index: item.record_index,
+      });
+      if (candidate && result?.literature_id) {
+        const file = await this.read<ImportFileStatus>({
+          op: "file",
+          batch_id: id,
+          file_id: intakeId([id, selected(record)!.external_id]),
+        });
+        if (file.status === "pending") {
+          if (
+            (file.size_bytes !== null &&
+              file.size_bytes !== candidate.size_bytes) ||
+            (file.expected_sha256 !== null &&
+              file.expected_sha256 !== candidate.sha256)
+          )
+            await this.settleFile(id, file, candidate.sha256, null, false);
+          else {
+            const owner = await this.fileItems.read<{
+              literature_id: string;
+              asset_id: string;
+              role: string;
+            } | null>({ kind: "hash", sha256: candidate.sha256 });
+            if (owner?.literature_id === result.literature_id)
+              await this.settleFile(
+                id,
+                file,
+                candidate.sha256,
+                { asset_id: owner.asset_id, sha256: candidate.sha256 },
+                false,
+              );
+            else if (file.action === "hash")
+              await this.reportHash(id, file.file_id, candidate.sha256);
+            else
+              await this.fileItems.transfers.withCandidate(candidate, (input) =>
+                this.upload(id, file.file_id, input.chunks()),
+              );
+          }
+        }
+      }
+    }
   }
   private async ensureFolder(
     s: StoredImportSession,
@@ -1767,7 +2064,15 @@ export class ImportSessionService extends ImportSessionReadService {
       await this.write({ op: "retire-parts", batch_id: id });
       await this.recovery.complete(ticket);
     });
-    await this.fileItems.cleanup(id);
+    const s = await this.stored(id);
+    await this.fileItems.cleanup(id, undefined, s.state === "finished");
+    await this.writes.run(() =>
+      this.fileItems.write({
+        kind: "discard-settled-work",
+        batch_id: id,
+        now: new Date(this.now()).toISOString(),
+      }),
+    );
   }
   private async finishIfComplete(id: string) {
     const s = await this.stored(id);
@@ -1845,19 +2150,32 @@ export class ImportSessionService extends ImportSessionReadService {
       if (current.status !== "pending") {
         return settleFileState(current, sha256, asset, uploaded);
       }
-      if ((await this.stored(id)).state !== "running")
+      const resolving = await this.resolutionFile(id, file.file_id);
+      if ((await this.stored(id)).state !== "running" && !resolving)
         throw new ImportSessionError("intake-batch-state");
       const settled = settleFileState(current, sha256, asset, uploaded);
-      await this.write({
-        op: "file-result",
-        batch_id: id,
-        file_id: current.file_id,
-        status: settled.status as "conflict" | "uploaded" | "existing",
-        sha256,
-        internal_id: settled.status === "conflict" ? null : asset!.asset_id,
-        reason: settled.reason,
-        now: new Date(this.now()).toISOString(),
-      });
+      if (resolving)
+        await this.write({
+          op: "resolved-file",
+          batch_id: id,
+          item_id: resolving,
+          file_id: current.file_id,
+          status: settled.status as "conflict" | "uploaded" | "existing",
+          sha256,
+          reason: settled.reason,
+          now: new Date(this.now()).toISOString(),
+        });
+      else
+        await this.write({
+          op: "file-result",
+          batch_id: id,
+          file_id: current.file_id,
+          status: settled.status as "conflict" | "uploaded" | "existing",
+          sha256,
+          internal_id: settled.status === "conflict" ? null : asset!.asset_id,
+          reason: settled.reason,
+          now: new Date(this.now()).toISOString(),
+        });
       return this.read<ImportFileStatus>({
         op: "file",
         batch_id: id,
@@ -1865,7 +2183,16 @@ export class ImportSessionService extends ImportSessionReadService {
       });
     });
     await this.finishIfComplete(id);
+    if (await this.resolutionFile(id, file.file_id)) await this.cleanParts(id);
     return result;
+  }
+  private resolutionFile(id: string, fileId: string) {
+    return this.fileItems.read<string | null>({
+      kind: "resolution-file",
+      batch_id: id,
+      file_id: fileId,
+      now: new Date(this.now()).toISOString(),
+    });
   }
   settleRetainedHash(id: string, fileId: string, sha256: string) {
     return this.tracked(async () => {
@@ -1970,7 +2297,8 @@ export class ImportSessionService extends ImportSessionReadService {
         async () => {
           if (
             this.stopping.has(id) ||
-            (await this.stored(id)).state !== "running"
+            ((await this.stored(id)).state !== "running" &&
+              !(await this.resolutionFile(id, fileId)))
           )
             throw new ImportSessionError("intake-batch-state");
         },
@@ -2144,6 +2472,13 @@ export class ImportSessionService extends ImportSessionReadService {
         if (this.stop.signal.aborted) return;
         await this.cleanParts(id);
       }
+      const expired = await this.writes.run(() =>
+        this.fileItems.write<string[]>({
+          kind: "expire-decisions",
+          now: new Date(this.now()).toISOString(),
+        }),
+      );
+      for (const id of new Set(expired)) await this.cleanParts(id);
     });
     this.maintenance = pending;
     void pending.then(

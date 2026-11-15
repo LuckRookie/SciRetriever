@@ -56,6 +56,25 @@ export function recordIntakeMember(
     .get(member.batch_id);
   if (batch?.state !== "running")
     throw new Error("intake batch is not running");
+  insertIntakeMember(db, member);
+}
+/** Only resolution of a retained, decided item may add a member to a finished batch. */
+export function recordResolvedIntakeMember(
+  db: DatabaseSync,
+  member: IntakeMember,
+  itemId: string,
+  now: string,
+): void {
+  const pending = db
+    .prepare(
+      "SELECT 1 FROM intake_items i JOIN intake_batches b USING(batch_id) WHERE i.batch_id=? AND i.item_id=? AND b.state='finished' AND i.disposition='pending-decision' AND i.retain_until>? AND json_extract(i.decision_json,'$.kind') IN ('new','merge') AND json_array_length(i.possible_duplicates_json)>0",
+    )
+    .get(member.batch_id, itemId, now);
+  if (!pending)
+    throw new Error("intake item is not awaiting a retained decision");
+  insertIntakeMember(db, member);
+}
+function insertIntakeMember(db: DatabaseSync, member: IntakeMember): void {
   db.prepare(
     `INSERT INTO intake_batch_members VALUES(?,?,?) ON CONFLICT(batch_id,literature_id) DO UPDATE SET disposition=${member.authoritative ? "excluded.disposition" : "CASE WHEN disposition='restored' OR excluded.disposition='restored' THEN 'restored' WHEN disposition='created' OR excluded.disposition='created' THEN 'created' WHEN disposition='enriched' OR excluded.disposition='enriched' THEN 'enriched' ELSE 'matched' END"}`,
   ).run(member.batch_id, member.literature_id, member.disposition);

@@ -1,6 +1,9 @@
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import {
   IMPORT_LIMITS,
+  EMPTY_METADATA,
+  parseLiteratureId,
+  parseLiteratureMetadata,
   type IntakeBatchItem,
   type IntakeDecision,
   type ImportRecord,
@@ -26,14 +29,21 @@ export interface IntakeItemWork {
   readonly page?: import("@sciretriever/contracts").WebPageData;
   readonly folder_ids?: readonly string[];
   readonly record?: ImportRecord;
+  readonly retained_item_id?: string;
+  /** Intent checkpoint before a late decision publishes identity; used only with an observation replay. */
+  readonly creates_on_resolution?: boolean;
 }
 export interface StoredIntakeItem extends IntakeBatchItem {
   readonly batch_id: string;
   readonly candidate_transfer_id: string | null;
   readonly literature_id: string | null;
   readonly work: IntakeItemWork | null;
+  readonly retain_until?: string | null;
 }
 export type IntakeItemRead =
+  | { kind: "duplicate-candidates" }
+  | { kind: "pending-resolution-files"; batch_id: string; now: string }
+  | { kind: "resolution-file"; batch_id: string; file_id: string; now: string }
   | { kind: "batch-candidates"; batch_id: string; item_id?: string }
   | { kind: "all"; batch_id: string }
   | { kind: "one"; batch_id: string; item_id: string }
@@ -43,6 +53,37 @@ export type IntakeItemRead =
   | { kind: "source-url"; file_id: string };
 export type IntakeItemWrite =
   | { kind: "restore"; literature_id: string }
+  | {
+      kind: "stage-data";
+      batch_id: string;
+      items: readonly StoredIntakeItem[];
+      now: string;
+    }
+  | {
+      kind: "duplicates";
+      batch_id: string;
+      item_id: string;
+      candidates: IntakeBatchItem["possible_duplicates"];
+      work?: IntakeItemWork;
+      now: string;
+    }
+  | {
+      kind: "duplicate-decision";
+      batch_id: string;
+      item_id: string;
+      decision: Extract<IntakeDecision, { kind: "new" | "merge" }>;
+      actor: string;
+      now: string;
+    }
+  | { kind: "expire-decisions"; now: string }
+  | { kind: "discard-settled-work"; batch_id: string; now: string }
+  | {
+      kind: "resolution-intent";
+      batch_id: string;
+      item_id: string;
+      creates: boolean;
+      now: string;
+    }
   | { kind: "put"; item: StoredIntakeItem; now: string }
   | {
       kind: "update";
@@ -95,7 +136,7 @@ function stored(row: Record<string, SQLOutputValue>): StoredIntakeItem {
         : String(row.candidate_transfer_id),
     recognition:
       work?.result?.recognition ??
-      (work && !work.reason
+      (row.origin !== "data" && work && !work.reason
         ? { state: "pending", step: null, literature_id: null, candidates: [] }
         : null),
     possible_duplicates: JSON.parse(String(row.possible_duplicates_json)),
@@ -109,9 +150,47 @@ function stored(row: Record<string, SQLOutputValue>): StoredIntakeItem {
     decided_by: row.decided_by === null ? null : String(row.decided_by),
     decided_at: row.decided_at === null ? null : String(row.decided_at),
     work,
+    retain_until: row.retain_until === null ? null : String(row.retain_until),
   };
 }
 export function readIntakeItem(db: DatabaseSync, r: IntakeItemRead): unknown {
+  if (r.kind === "pending-resolution-files")
+    return db
+      .prepare(
+        "SELECT DISTINCT i.item_id FROM intake_items i JOIN import_files f USING(item_id) WHERE i.batch_id=? AND f.status='pending' AND i.retain_until>? AND json_extract(i.decision_json,'$.kind') IN ('new','merge') AND json_array_length(i.possible_duplicates_json)>0",
+      )
+      .all(r.batch_id, r.now)
+      .map((row) => String(row.item_id));
+  if (r.kind === "resolution-file")
+    return (
+      db
+        .prepare(
+          "SELECT i.item_id FROM intake_items i JOIN import_files f USING(item_id) JOIN intake_batches b ON b.batch_id=i.batch_id WHERE i.batch_id=? AND f.file_id=? AND b.state='finished' AND i.retain_until>? AND json_array_length(i.possible_duplicates_json)>0 AND json_extract(i.decision_json,'$.kind') IN ('new','merge') AND i.disposition IN ('created','matched','enriched','restored') AND i.literature_id=f.literature_id",
+        )
+        .get(r.batch_id, r.file_id, r.now)?.item_id ?? null
+    );
+  if (r.kind === "duplicate-candidates")
+    return db
+      .prepare(
+        "SELECT m.literature_id,m.title,m.publication_year,m.publication_form,(SELECT json_group_array(json_object('kind',kind,'display_name',display_name,'given_name',given_name,'family_name',family_name,'orcid',orcid,'affiliations',json('[]'))) FROM (SELECT * FROM literature_metadata_authors a WHERE a.literature_id=m.literature_id ORDER BY ordinal)) AS authors_json FROM literature_metadata m WHERE m.title IS NOT NULL AND NOT EXISTS(SELECT 1 FROM intake_withdrawn_objects w WHERE w.object_kind='literature' AND w.object_id=m.literature_id) ORDER BY m.literature_id",
+      )
+      .all()
+      .map((row) => {
+        const metadata = parseLiteratureMetadata({
+          ...EMPTY_METADATA,
+          title: row.title,
+          authors: JSON.parse(String(row.authors_json)),
+          publication_year: row.publication_year,
+          publication_form: row.publication_form,
+        });
+        return {
+          literature_id: parseLiteratureId(row.literature_id),
+          title: metadata.title,
+          authors: metadata.authors,
+          publication_year: metadata.publication_year,
+          publication_form: metadata.publication_form,
+        };
+      });
   if (r.kind === "batch-candidates")
     return db
       .prepare(
@@ -159,6 +238,147 @@ export function readIntakeItem(db: DatabaseSync, r: IntakeItemRead): unknown {
     .map(stored);
 }
 export function writeIntakeItem(db: DatabaseSync, r: IntakeItemWrite): unknown {
+  if (r.kind === "resolution-intent") {
+    const changed = db
+      .prepare(
+        "UPDATE intake_items SET recognition_json=json_set(recognition_json,'$.creates_on_resolution',json(?)) WHERE batch_id=? AND item_id=? AND disposition='pending-decision' AND retain_until>? AND json_type(recognition_json,'$.creates_on_resolution') IS NULL AND json_extract(decision_json,'$.kind') IN ('new','merge') AND EXISTS(SELECT 1 FROM intake_batches b WHERE b.batch_id=intake_items.batch_id AND b.state='finished')",
+      )
+      .run(JSON.stringify(r.creates), r.batch_id, r.item_id, r.now);
+    if (!changed.changes) fail("intake-batch-state");
+    return true;
+  }
+  if (r.kind === "discard-settled-work") {
+    const state = db
+      .prepare("SELECT state FROM intake_batches WHERE batch_id=?")
+      .get(r.batch_id)?.state;
+    if (!["finished", "cancelled", "withdrawn"].includes(String(state)))
+      fail("intake-batch-state");
+    db.prepare(
+      "UPDATE intake_items SET recognition_json=NULL WHERE batch_id=? AND origin='data' AND (?<>'finished' OR ((disposition IS NULL OR disposition<>'pending-decision') AND (retain_until IS NULL OR retain_until<=? OR NOT EXISTS(SELECT 1 FROM import_files f WHERE f.item_id=intake_items.item_id AND f.status='pending'))))",
+    ).run(r.batch_id, String(state), r.now);
+    return true;
+  }
+  if (r.kind === "expire-decisions") {
+    const rows = db
+      .prepare(
+        "SELECT i.item_id,i.batch_id FROM intake_items i JOIN intake_batches b USING(batch_id) WHERE b.state='finished' AND i.disposition='pending-decision' AND i.retain_until<=? AND i.recognition_json IS NOT NULL",
+      )
+      .all(r.now);
+    for (const item of rows) {
+      const work = db
+        .prepare(
+          "SELECT json_extract(recognition_json,'$.retained_item_id') AS paired FROM intake_items WHERE item_id=?",
+        )
+        .get(item.item_id!)!;
+      if (work.paired)
+        db.prepare(
+          "UPDATE intake_items SET recognition_json=CASE WHEN candidate_transfer_id IS NULL THEN NULL ELSE json_object('retiring_transfer_id',candidate_transfer_id) END,candidate_transfer_id=NULL WHERE item_id=? AND batch_id=?",
+        ).run(work.paired, item.batch_id!);
+      db.prepare(
+        "UPDATE intake_items SET recognition_json=CASE WHEN candidate_transfer_id IS NULL THEN NULL ELSE json_object('retiring_transfer_id',candidate_transfer_id) END,candidate_transfer_id=NULL,needs_decision=0 WHERE item_id=?",
+      ).run(item.item_id!);
+      db.prepare(
+        "UPDATE import_record_results SET reason='decision-expired' WHERE item_id=? AND disposition='pending-decision'",
+      ).run(item.item_id!);
+    }
+    return rows.map((row) => String(row.batch_id));
+  }
+  if (r.kind === "stage-data") {
+    const state = db
+      .prepare("SELECT state FROM intake_batches WHERE batch_id=?")
+      .get(r.batch_id)?.state;
+    if (
+      !["collecting", "awaiting-confirmation", "running"].includes(
+        String(state),
+      )
+    )
+      fail("intake-batch-state");
+    const put = db.prepare(
+      "INSERT INTO intake_items(item_id,batch_id,origin,sequence,record_index,external_id,title,recognition_json,created_at) VALUES(?,?,'data',?,?,?,?,?,?) ON CONFLICT(item_id) DO NOTHING",
+    );
+    for (const item of r.items)
+      put.run(
+        item.item_id,
+        r.batch_id,
+        item.sequence,
+        item.record_index,
+        item.external_id,
+        item.title,
+        JSON.stringify(item.work),
+        r.now,
+      );
+    return true;
+  }
+  if (r.kind === "duplicates" || r.kind === "duplicate-decision") {
+    const state = db
+      .prepare("SELECT state FROM intake_batches WHERE batch_id=?")
+      .get(r.batch_id)?.state;
+    const old = readIntakeItem(db, {
+      kind: "one",
+      batch_id: r.batch_id,
+      item_id: r.item_id,
+    }) as StoredIntakeItem;
+    if (r.kind === "duplicates") {
+      if (
+        !["collecting", "awaiting-confirmation", "running"].includes(
+          String(state),
+        ) ||
+        old.disposition !== null
+      )
+        fail("intake-batch-state");
+      const choice = old.decision;
+      const decided =
+        choice?.kind === "new" ||
+        (choice?.kind === "merge" &&
+          r.candidates.some((c) => c.literature_id === choice.literature_id));
+      db.prepare(
+        "UPDATE intake_items SET possible_duplicates_json=?,needs_decision=?,recognition_json=? WHERE item_id=?",
+      ).run(
+        JSON.stringify(r.candidates),
+        Number(r.candidates.length > 0 && !decided),
+        JSON.stringify(r.work ?? old.work),
+        r.item_id,
+      );
+    } else {
+      const pending =
+        state === "finished" &&
+        old.disposition === "pending-decision" &&
+        old.retain_until !== null &&
+        old.retain_until !== undefined &&
+        old.retain_until > r.now &&
+        !!old.work?.record;
+      if (
+        !pending &&
+        (!["collecting", "awaiting-confirmation"].includes(String(state)) ||
+          old.disposition !== null)
+      )
+        fail("intake-batch-state");
+      const choice = r.decision;
+      if (
+        !old.possible_duplicates.length ||
+        (choice.kind === "merge" &&
+          !old.possible_duplicates.some(
+            (c) => c.literature_id === choice.literature_id,
+          ))
+      )
+        fail("intake-decision-invalid");
+      // A failed checkpoint may follow an already committed identity. Its
+      // decision is pinned; retry the same decision without rewriting its audit.
+      if (pending && old.work?.creates_on_resolution !== undefined) {
+        if (JSON.stringify(old.decision) !== JSON.stringify(choice))
+          fail("intake-decision-invalid");
+        return old;
+      }
+      db.prepare(
+        "UPDATE intake_items SET decision_json=?,decided_by=?,decided_at=?,needs_decision=0 WHERE item_id=?",
+      ).run(JSON.stringify(r.decision), r.actor, r.now, r.item_id);
+    }
+    return readIntakeItem(db, {
+      kind: "one",
+      batch_id: r.batch_id,
+      item_id: r.item_id,
+    });
+  }
   if (r.kind === "restore") {
     const lit = r.literature_id;
     db.prepare(
@@ -192,7 +412,7 @@ export function writeIntakeItem(db: DatabaseSync, r: IntakeItemWrite): unknown {
   }
   if (r.kind === "retired") {
     db.prepare(
-      "UPDATE intake_items SET recognition_json=json_remove(recognition_json,'$.retiring_transfer_id') WHERE batch_id=? AND item_id=?",
+      "UPDATE intake_items SET recognition_json=nullif(json_remove(recognition_json,'$.retiring_transfer_id'),'{}') WHERE batch_id=? AND item_id=?",
     ).run(r.batch_id, r.item_id);
     return true;
   }

@@ -6,6 +6,7 @@ import {
   type ImportFileStatus,
   type IntakeBatch,
   type IntakeExcluded,
+  type IntakeBatchItem,
 } from "@sciretriever/contracts";
 import type * as Intake from "./intake-engine.js";
 import type { IntakeItemWork } from "./intake-items.js";
@@ -35,6 +36,17 @@ export interface StoredCapture {
 }
 export type CaptureRead = { item_id: string; connection_id: string };
 export type CaptureWrite =
+  | {
+      op: "decision";
+      item_id: string;
+      connection_id: string;
+      candidates: IntakeBatchItem["possible_duplicates"];
+      decision:
+        | { kind: "new" }
+        | { kind: "merge"; literature_id: string }
+        | null;
+      now: string;
+    }
   | {
       op: "file-rejected";
       item_id: string;
@@ -222,7 +234,31 @@ export function writeCapture(
       }
     } else {
       const old = readCapture(db, r);
-      if (r.op === "file-rejected") {
+      if (r.op === "decision") {
+        if (
+          db
+            .prepare("SELECT state FROM intake_batches WHERE batch_id=?")
+            .get(old.batch_id)?.state !== "running" ||
+          old.literature_id !== null
+        )
+          fail("intake-batch-state");
+        const choice = r.decision;
+        if (r.candidates.length && !choice) fail("intake-decision-required");
+        if (
+          choice?.kind === "merge" &&
+          !r.candidates.some((c) => c.literature_id === choice.literature_id)
+        )
+          fail("intake-decision-invalid");
+        db.prepare(
+          "UPDATE intake_items SET possible_duplicates_json=?,decision_json=?,decided_by=?,decided_at=? WHERE item_id=?",
+        ).run(
+          JSON.stringify(r.candidates),
+          choice ? JSON.stringify(choice) : null,
+          choice ? `device:${r.connection_id}` : null,
+          choice ? r.now : null,
+          r.item_id,
+        );
+      } else if (r.op === "file-rejected") {
         const position = Number(
           db
             .prepare(

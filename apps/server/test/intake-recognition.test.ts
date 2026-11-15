@@ -140,7 +140,7 @@ it("does not merge different file hashes just because their temporary titles are
         { format: "file", source: null, scope: "Synthetic" },
         { kind: "local", origin: "cli" },
       );
-      await app.importSessions.receiveFileItem(
+      const item = await app.importSessions.receiveFileItem(
         batch.batch_id,
         "same.pdf",
         null,
@@ -160,6 +160,20 @@ it("does not merge different file hashes just because their temporary titles are
         { timeout: 20000, interval: 30 },
       );
       await app.importSessions.confirm(batch.batch_id);
+      if (text === "Second distinct body") {
+        // The identical incomplete title now requires an explicit duplicate
+        // choice. It must still be possible to keep two different PDFs apart.
+        expect(
+          (await app.importSessions.report(batch.batch_id)).summary.records
+            .pending_decision,
+        ).toBe(1);
+        await app.importSessions.decide(
+          batch.batch_id,
+          item.item_id,
+          { kind: "new" },
+          { kind: "local", origin: "cli" },
+        );
+      }
     }
     expect((await app.library.search({ query: {} })).total_count).toBe(2);
     expect(
