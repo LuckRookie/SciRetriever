@@ -8,7 +8,16 @@ const { resolveLibraryTagIds, tagBackfillPending }: typeof Tags = await import(
 import {
   LITERATURE_STATUSES,
   normalizedTagName,
+  draftSortFields,
 } from "@sciretriever/contracts";
+import type * as DraftFacts from "./draft-facts.js";
+const { PRIMARY_TEXT_LEVEL_SQL, primaryDraftFactSql }: typeof DraftFacts =
+  await import(
+    new URL(
+      import.meta.url.endsWith(".ts") ? "./draft-facts.ts" : "./draft-facts.js",
+      import.meta.url,
+    ).href
+  );
 import type { LibraryFacets, LibraryQuery } from "@sciretriever/contracts";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import type { LibraryPageQuery } from "../../literature/query.js";
@@ -121,6 +130,16 @@ function libraryFilter(
     );
   }
   if (q.recently_opened) add(RECENT_SQL);
+  if (q.text_levels?.length) any(PRIMARY_TEXT_LEVEL_SQL, q.text_levels);
+  for (const [key, field] of [
+    ["has_draft_differences", "differs_segments"],
+    ["has_image_only_pages", "image_only_pages"],
+    ["cited_by_results", "citing_results"],
+    ["has_unfound_citations", "unfound_citations"],
+  ] as const) {
+    if (typeof q[key] === "boolean")
+      add(`${primaryDraftFactSql(field)} ${q[key] ? ">" : "="} 0`);
+  }
   if (ftsQuery !== null) add("literature_search_fts MATCH ?", ftsQuery);
   const base = intakeOrder
     ? "literature_intake li INDEXED BY literature_intake_order CROSS JOIN literatures l ON l.literature_id=li.literature_id"
@@ -191,6 +210,44 @@ export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
   if (counts.total !== counts.unique_count)
     throw new Error("duplicate library search rows");
   const relevance = ftsQuery === null ? "NULL" : "bm25(literature_search_fts)";
+  const metrics = draftSortFields(sort);
+  if (metrics) {
+    const pageArgs = [...args],
+      second = metrics.length === 2;
+    let cursor = "";
+    if (after) {
+      if (after.value === null) {
+        cursor = "WHERE sort_value IS NULL AND literature_id>?";
+        pageArgs.push(after.literature_id);
+      } else if (second) {
+        cursor =
+          "WHERE sort_value IS NULL OR sort_value<? OR (sort_value=? AND (sort_secondary<? OR (sort_secondary=? AND literature_id>?)))";
+        pageArgs.push(
+          after.value,
+          after.value,
+          after.secondary!,
+          after.secondary!,
+          after.literature_id,
+        );
+      } else {
+        cursor =
+          "WHERE sort_value IS NULL OR sort_value<? OR (sort_value=? AND literature_id>?)";
+        pageArgs.push(after.value, after.value, after.literature_id);
+      }
+    }
+    const rows = db
+      .prepare(
+        `WITH matches AS MATERIALIZED (SELECT l.literature_id,${primaryDraftFactSql(metrics[0]!)} AS sort_value${second ? `,${primaryDraftFactSql(metrics[1]!)} AS sort_secondary` : ""},${relevance} AS relevance ${from} ${where}) SELECT literature_id,relevance FROM matches ${cursor} ORDER BY sort_value IS NULL,sort_value DESC,${second ? "sort_secondary DESC," : ""}literature_id ASC LIMIT ?`,
+      )
+      .all(...pageArgs, limit + 1);
+    return {
+      rows,
+      total_count: Number(counts.total),
+      ...(tagIds.length
+        ? { tag_backfill_pending: tagBackfillPending(db, tagIds, q.tags!.mode) }
+        : {}),
+    };
+  }
   const value =
     sort === "opened-desc"
       ? OPENED_SQL

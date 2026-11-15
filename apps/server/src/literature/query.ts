@@ -24,6 +24,7 @@ import {
   type LiteratureReferenceRequest,
   type LiteratureSearchItem,
   type MetaLiteratureId,
+  draftSortFields,
   type ReferenceDetail,
 } from "@sciretriever/contracts";
 import { createHash } from "node:crypto";
@@ -219,11 +220,27 @@ export function queryFingerprint(query: LibraryQuery): string {
     title: contains(query.title),
     venue: contains(query.venue),
     version_roles: unique(query.version_roles),
+    ...(query.text_levels?.length
+      ? { text_levels: unique(query.text_levels) }
+      : {}),
+    ...Object.fromEntries(
+      (
+        [
+          "has_draft_differences",
+          "has_image_only_pages",
+          "cited_by_results",
+          "has_unfound_citations",
+        ] as const
+      )
+        .filter((key) => typeof query[key] === "boolean")
+        .map((key) => [key, query[key]]),
+    ),
   });
 }
 export interface Position {
   readonly literature_id: string;
   readonly value: string | number | null;
+  readonly secondary?: number | null;
 }
 export interface LibraryPageQuery {
   readonly query: LibraryQuery;
@@ -234,6 +251,16 @@ export interface LibraryPageQuery {
 }
 function position(row: SearchSnapshotRow, sort: LibrarySort): Position {
   const l = row.item.literature;
+  const fields = draftSortFields(sort),
+    facts = row.item.draft_facts;
+  if (fields)
+    return {
+      literature_id: l.literature_id,
+      value: facts?.[fields[0]!] ?? null,
+      ...(fields.length === 2
+        ? { secondary: facts?.[fields[1]!] ?? null }
+        : {}),
+    };
   return {
     literature_id: l.literature_id,
     value:
@@ -264,9 +291,24 @@ function compare(a: Position, b: Position, sort: LibrarySort): number {
             ? 1
             : 0;
   if (sort.endsWith("desc")) result = -result;
+  if (
+    !result &&
+    draftSortFields(sort)?.length === 2 &&
+    a.value !== null &&
+    b.value !== null
+  )
+    result = b.secondary! - a.secondary!;
   return result || compareText(a.literature_id, b.literature_id);
 }
 function positionPayload(p: Position, sort: LibrarySort): object {
+  const fields = draftSortFields(sort);
+  if (fields)
+    return {
+      literature_id: p.literature_id,
+      value: p.value,
+      ...(fields.length === 2 ? { secondary: p.secondary } : {}),
+      facts_is_null: p.value === null,
+    };
   if (sort === "opened-desc")
     return {
       literature_id: p.literature_id,
@@ -357,6 +399,39 @@ function decodePosition(
       payload.sort !== sort
     )
       fail();
+    const metrics = draftSortFields(sort);
+    if (metrics) {
+      const p = object(payload.position, [
+        "literature_id",
+        "value",
+        "facts_is_null",
+        ...(metrics.length === 2 ? ["secondary"] : []),
+      ]);
+      if (
+        typeof p.literature_id !== "string" ||
+        !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(
+          p.literature_id,
+        ) ||
+        p.facts_is_null !== (p.value === null) ||
+        (p.value !== null &&
+          (!Number.isSafeInteger(p.value) || Number(p.value) < 0))
+      )
+        fail();
+      if (
+        metrics.length === 2 &&
+        (p.value === null
+          ? p.secondary !== null
+          : !Number.isSafeInteger(p.secondary) || Number(p.secondary) < 0)
+      )
+        fail();
+      return {
+        literature_id: p.literature_id,
+        value: p.value as number | null,
+        ...(metrics.length === 2
+          ? { secondary: p.secondary as number | null }
+          : {}),
+      };
+    }
     const field =
       sort === "opened-desc"
         ? "last_opened_at"
@@ -436,6 +511,23 @@ function matches(row: SearchSnapshotRow, q: LibraryQuery): boolean {
   const any = (wanted: readonly unknown[], actual: readonly unknown[]) =>
     !wanted.length || wanted.some((value) => actual.includes(value));
   return (
+    (!q.text_levels?.length ||
+      (row.item.text_level !== null &&
+        row.item.text_level !== undefined &&
+        q.text_levels.includes(row.item.text_level))) &&
+    (
+      [
+        ["has_draft_differences", "differs_segments"],
+        ["has_image_only_pages", "image_only_pages"],
+        ["cited_by_results", "citing_results"],
+        ["has_unfound_citations", "unfound_citations"],
+      ] as const
+    ).every(
+      ([key, field]) =>
+        typeof q[key] !== "boolean" ||
+        (row.item.draft_facts != null &&
+          row.item.draft_facts[field] > 0 === q[key]),
+    ) &&
     contains(m.title, q.title) &&
     contains(m.venue, q.venue) &&
     contains(m.publisher, q.publisher) &&

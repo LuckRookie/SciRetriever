@@ -37,6 +37,12 @@ const { LibraryStateCache }: typeof StateCache = await import(
   ).href
 );
 const libraryStateCache = new LibraryStateCache();
+const draftFactsModule = await import(
+  new URL(
+    import.meta.url.endsWith(".ts") ? "./draft-facts.ts" : "./draft-facts.js",
+    import.meta.url,
+  ).href
+);
 let cancellation: Int32Array | undefined;
 function queryCheckpoint() {
   if (cancellation && Atomics.load(cancellation, 0))
@@ -787,6 +793,7 @@ function stateEvidence(id: string): Dynamic {
     id,
     data.max_tags,
     data.archive_profile,
+    false,
   );
 }
 function libraryTagBadges(ids: readonly string[]): Map<string, Dynamic[]> {
@@ -807,14 +814,9 @@ function libraryTagBadges(ids: readonly string[]): Map<string, Dynamic[]> {
   }
   return result;
 }
-function primaryDocumentLevels(ids: readonly string[]): Map<string, Dynamic> {
-  const defaults = draftTextModule.runDraftTextRead(db, {
-    kind: "primary-defaults",
-    literature_ids: ids,
-  });
-  if (!Array.isArray(defaults)) return fail();
-  return new Map(
-    defaults.map((row) => [String(row.literature_id), row.text_level]),
+function primaryDocumentTexts(ids: readonly string[]): Map<string, Dynamic> {
+  return draftFactsModule.primaryDefaultTexts(
+    draftFactsModule.readDefaultTextFacts(db, ids),
   );
 }
 function searchItem(
@@ -830,6 +832,7 @@ function searchItem(
     )
     .get(id);
   const state = stateEvidence(id);
+  const defaultTexts = levels ?? primaryDocumentTexts([String(id)]);
   const exhausted = !!db
     .prepare(
       "SELECT 1 FROM automatic_pdf_acquisition_exhaustions WHERE literature_id=?",
@@ -841,8 +844,8 @@ function searchItem(
     tags: libraryTagBadges([id]).get(id) ?? [],
     intake_at: libraryPageModule.intakeAt(db, id),
     ...folderModule.libraryMembership(db, id),
-    text_level:
-      (levels ?? primaryDocumentLevels([String(id)])).get(String(id)) ?? null,
+    text_level: defaultTexts.get(String(id))?.text_level ?? null,
+    draft_facts: defaultTexts.get(String(id))?.draft_facts ?? null,
     long_document: state.long_document ?? null,
     missing_step: state.missing_step,
     needs_manual_pdf: state.status === "UNREVIEWED" && exhausted,
@@ -1085,7 +1088,7 @@ function librarySnapshot(
           relevance: relevance.get(row.literature_id) ?? null,
         }));
     }
-    const textLevels = primaryDocumentLevels(
+    const textLevels = primaryDocumentTexts(
       rows.map((row: Dynamic) => String(row.literature_id)),
     );
     let result;
@@ -1143,7 +1146,10 @@ function librarySnapshot(
             intake_at: libraryPageModule.intakeAt(db, row.literature_id),
             ...folderModule.libraryMembership(db, row.literature_id),
             long_document: longDocuments.get(String(row.literature_id)) ?? null,
-            text_level: textLevels.get(String(row.literature_id)) ?? null,
+            text_level:
+              textLevels.get(String(row.literature_id))?.text_level ?? null,
+            draft_facts:
+              textLevels.get(String(row.literature_id))?.draft_facts ?? null,
             missing_step: __state.missing_step,
             needs_manual_pdf: __state.status === "UNREVIEWED" && hasExhaustion,
           },
@@ -1218,7 +1224,7 @@ function librarySearchPage(request: Dynamic): Dynamic {
       registerLibraryStates();
     }
     const page = libraryPageModule.libraryPageIds(db, request);
-    const textLevels = primaryDocumentLevels(
+    const textLevels = primaryDocumentTexts(
       page.rows.map((row: Dynamic) => String(row.literature_id)),
     );
     return {
@@ -4087,10 +4093,24 @@ function referenceQueryRows(selection: Dynamic): Dynamic {
         where,
     )
     .all(selection.reference_id ?? selection.literature_id);
+  const defaultTexts = primaryDocumentTexts(
+    rows.flatMap((row: Dynamic) => [
+      String(row.source_literature_id),
+      String(row.target_literature_id),
+    ]),
+  );
   const result = [];
   for (const reference of rows) {
-    const source = searchItem(reference.source_literature_id),
-      target = searchItem(reference.target_literature_id);
+    const source = searchItem(
+        reference.source_literature_id,
+        undefined,
+        defaultTexts,
+      ),
+      target = searchItem(
+        reference.target_literature_id,
+        undefined,
+        defaultTexts,
+      );
     if (
       !source ||
       !target ||
@@ -4238,40 +4258,58 @@ function literatureDetailSnapshot(
           "SELECT provenance_id,source_kind,source_name,source_record_id,observed_at,input_sha256,parameters_sha256 FROM provenances WHERE provenance_id=?",
         )
         .get(id);
+    const defaultRows = draftFactsModule.readDefaultTextFacts(db, [String(id)]),
+      assetDefaults = new Map(
+        defaultRows.map((row: Dynamic) => [row.asset_id, row.default_text]),
+      ),
+      primaryTexts = draftFactsModule.primaryDefaultTexts(defaultRows);
     const assets = db
       .prepare(
         "SELECT literature_asset_id,literature_id,asset_id,role,provenance_id,source_url FROM literature_assets WHERE literature_id=? ORDER BY role,literature_asset_id",
       )
       .all(id)
-      .map(({ provenance_id, ...relation }: Dynamic) => ({
-        asset: getAsset(relation.asset_id),
-        literature_asset: {
-          ...relation,
-          provenance: provenance(provenance_id),
-        },
-        ...(() => {
-          const assessment = articleIdentityCurrent(id, relation.asset_id);
-          return assessment
+      .map(({ provenance_id, ...relation }: Dynamic) => {
+        const asset = getAsset(relation.asset_id);
+        return {
+          asset,
+          ...(asset.media_type === "application/pdf"
             ? {
-                article_identity_assessment: assessment,
-                article_identity_status: assessment.status,
+                default_text: assetDefaults.get(String(asset.asset_id)) ?? null,
               }
-            : {};
-        })(),
-      }));
+            : {}),
+          literature_asset: {
+            ...relation,
+            provenance: provenance(provenance_id),
+          },
+          ...(() => {
+            const assessment = articleIdentityCurrent(id, relation.asset_id);
+            return assessment
+              ? {
+                  article_identity_assessment: assessment,
+                  article_identity_status: assessment.status,
+                }
+              : {};
+          })(),
+        };
+      });
     const primary = assets.filter(
       (a: Dynamic) => a.literature_asset.role === "primary-pdf",
     );
     if (primary.length > 1) fail();
     const primary_pdf = primary[0] || null;
-    const other_versions = db
+    const versionRows = db
       .prepare(
         "SELECT literature_id FROM literatures WHERE meta_literature_id=? AND literature_id<>? ORDER BY CASE version_role WHEN 'published' THEN 0 WHEN 'accepted-manuscript' THEN 1 WHEN 'preprint' THEN 2 ELSE 3 END,literature_id",
       )
-      .all(literature.meta_literature_id, id)
-      .map((row: Dynamic) => searchItem(row.literature_id));
+      .all(literature.meta_literature_id, id);
+    const versionTexts = primaryDocumentTexts(
+      versionRows.map((row: Dynamic) => String(row.literature_id)),
+    );
+    const other_versions = versionRows.map((row: Dynamic) =>
+      searchItem(row.literature_id, undefined, versionTexts),
+    );
     const detail = {
-      ...searchItem(id),
+      ...searchItem(id, undefined, primaryTexts),
       intake_batches: intakeModule.intakeMemberships(db, id),
       meta_literature,
       metadata_observations,

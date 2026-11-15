@@ -63,6 +63,7 @@ export interface ArchiveStepReceipt {
   readonly output_tokens: number;
 }
 export interface ArchivePart {
+  readonly draft_facts?: import("./draft-facts.js").DraftFacts | null;
   readonly text_level?: TextLevel | null;
   readonly long_document?: LongDocumentInfo | null;
   readonly format?: "arranged-v2" | "legacy-v1" | "not-built";
@@ -91,6 +92,7 @@ export interface ArchiveIssue {
   readonly resolution: "continue" | "skip" | "cancel" | null;
 }
 export interface ArchiveState {
+  readonly draft_facts?: import("./draft-facts.js").DraftFacts | null;
   readonly text_level?: TextLevel | null;
   readonly long_document?: LongDocumentInfo | null;
   readonly literature_id: string;

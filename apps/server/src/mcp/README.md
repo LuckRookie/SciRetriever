@@ -12,6 +12,8 @@
 
 查询、任务投影、书目导入、提取交付与配置操作复用 `entry/*-operations.ts`。普通配置状态/预览可只读调用；配置发布、凭据变更、probe 与维护工具要求 `--maintenance`。PDF 提交以受控流交给入库公共文件通道，结果保留 receipt 格式；它归入 MCP 当天的补充文件批次。文件读取使用固定 hash 与有界块；`--workbench-url` 显式连接活 Web owner，提供 Browser 协作与服务任务调用。stdio 的书目导入同步完成，不启动其它批次的恢复/过期维护。
 
+`search_library` 接受完整的 LibraryQuery，包括主 PDF 默认文本的等级和初稿事实筛选、四种事实降序及分页；`read_literature` 返回主 PDF 事实与各 PDF 的 `default_text`，`archive_query` 在各部分返回同一默认版本的事实。读取这些计数只查 catalog，不形成初稿或启动校订。
+
 HTTP `/mcp` 每次请求重新验证设备连接，协议 session ID 绑定 connection_id。read 与 operate 不互相隐含；配置、凭据、设备管理、Browser/runtime 控制以及书目/PDF 输入不经此传输。入库输入走相邻的 `workbench/import-http.ts`，`intake_batch_status` 和 `intake_batch_report` 两端共用只读批次服务。HTTP 请求上下文在交 SDK 前移除认证与非协议头；操作身份为 `mcp:device:<connection_id>`。
 
 会话有数量/空闲上限，Web 撤销立即中断连接并取消在途调用，已提交任务仍由原 owner 管理。工作台关闭先排空 MCP，再关闭共享查询和业务服务。

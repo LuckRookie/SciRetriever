@@ -1,4 +1,7 @@
-import { NetworkConfigurationError } from "@sciretriever/contracts";
+import {
+  NetworkConfigurationError,
+  DRAFT_FACT_SORTS,
+} from "@sciretriever/contracts";
 import {
   handleDeviceRequest,
   handleWebDeviceRoute,
@@ -301,6 +304,7 @@ const UI_SORTS = new Set([
   "title-asc",
   "title-desc",
   "relevance",
+  ...DRAFT_FACT_SORTS,
 ]);
 const CONFIGURATION_ROOT_KEYS = [
   "network",

@@ -1,4 +1,12 @@
 import { parseTextLevel, type TextLevel } from "./draft-document.js";
+import {
+  parseDraftFacts,
+  parseLiteratureDefaultText,
+  DRAFT_FACT_SORTS,
+  type DraftFacts,
+  type LiteratureDefaultText,
+} from "./draft-facts.js";
+export * from "./draft-facts.js";
 import { parseNetworkReadiness, type NetworkReadiness } from "./network.js";
 import { parseDocumentReceipt, type ParseDocumentReceipt } from "./document.js";
 export * from "./network.js";
@@ -252,6 +260,11 @@ export const MISSING_STEPS = [
 ] as const;
 export type MissingStep = (typeof MISSING_STEPS)[number];
 export interface LibraryQuery {
+  readonly text_levels?: readonly TextLevel[];
+  readonly has_draft_differences?: boolean | null;
+  readonly has_image_only_pages?: boolean | null;
+  readonly cited_by_results?: boolean | null;
+  readonly has_unfound_citations?: boolean | null;
   readonly folder?: {
     readonly id: string;
     readonly include_descendants: boolean;
@@ -290,6 +303,7 @@ export interface StableFailure {
 }
 
 export type LibrarySort =
+  | (typeof DRAFT_FACT_SORTS)[number]
   | "intake-desc"
   | "opened-desc"
   | "publication-year-desc"
@@ -304,6 +318,7 @@ export interface LibrarySearchRequest {
   readonly cursor: string | null;
 }
 export interface LiteratureSearchItem {
+  readonly draft_facts?: DraftFacts | null;
   readonly text_level?: TextLevel | null;
   readonly long_document?: LongDocumentInfo | null;
   readonly folder_ids?: readonly string[];
@@ -524,6 +539,7 @@ export function parseLibrarySearchRequest(
       "title-asc",
       "title-desc",
       "relevance",
+      ...DRAFT_FACT_SORTS,
     ],
     [],
   );
@@ -553,6 +569,11 @@ export function parseLiteratureSearchItem(
       "tags",
       ...(value &&
       typeof value === "object" &&
+      Object.hasOwn(value, "draft_facts")
+        ? ["draft_facts"]
+        : []),
+      ...(value &&
+      typeof value === "object" &&
       Object.hasOwn(value, "text_level")
         ? ["text_level"]
         : []),
@@ -575,7 +596,19 @@ export function parseLiteratureSearchItem(
       new Date(r.intake_at).toISOString() !== r.intake_at)
   )
     fail(["intake_at"]);
+  if (
+    Object.hasOwn(r, "draft_facts") &&
+    Object.hasOwn(r, "text_level") &&
+    (r.text_level === "draft") !== (r.draft_facts !== null)
+  )
+    fail(["draft_facts"]);
   return Object.freeze({
+    ...(Object.hasOwn(r, "draft_facts")
+      ? {
+          draft_facts:
+            r.draft_facts === null ? null : parseDraftFacts(r.draft_facts),
+        }
+      : {}),
     ...(Object.hasOwn(r, "text_level")
       ? {
           text_level:
@@ -1165,6 +1198,13 @@ export function parseLibraryQuery(value: unknown): LibraryQuery {
       "tags",
       "folder",
       "recently_opened",
+      ...[
+        "text_levels",
+        "has_draft_differences",
+        "has_image_only_pages",
+        "cited_by_results",
+        "has_unfound_citations",
+      ].filter((key) => Object.hasOwn(object(value, []), key)),
     ],
     [],
   );
@@ -1288,6 +1328,37 @@ export function parseLibraryQuery(value: unknown): LibraryQuery {
       ["discovery_run_ids"],
       (item, path) => id<"DiscoveryRunId">(item, path),
     ),
+    ...(() => {
+      const fields: Partial<
+        Pick<
+          LibraryQuery,
+          | "text_levels"
+          | "has_draft_differences"
+          | "has_image_only_pages"
+          | "cited_by_results"
+          | "has_unfound_citations"
+        >
+      > = {};
+      if (Object.hasOwn(record, "text_levels")) {
+        const levels = list(
+          record.text_levels,
+          ["text_levels"],
+          parseTextLevel,
+        );
+        if (levels.length)
+          Object.assign(fields, { text_levels: [...new Set(levels)].sort() });
+      }
+      for (const key of [
+        "has_draft_differences",
+        "has_image_only_pages",
+        "cited_by_results",
+        "has_unfound_citations",
+      ] as const) {
+        if (record[key] === undefined || record[key] === null) continue;
+        Object.assign(fields, { [key]: wireBoolean(record[key]) });
+      }
+      return fields;
+    })(),
   });
 }
 export function parseStableFailure(value: unknown): StableFailure {
@@ -3361,6 +3432,7 @@ export interface LiteratureAsset {
   readonly source_url: string | null;
 }
 export interface LiteratureAssetView {
+  readonly default_text?: LiteratureDefaultText | null;
   /** Advisory parse-stage evidence; never a download acceptance gate. */
   readonly article_identity_status: "unverified" | ArticleIdentityStatus | null;
   readonly article_identity_assessment?: ArticleIdentityAssessment;
@@ -3549,6 +3621,7 @@ export function parseLiteratureAssetView(value: unknown): LiteratureAssetView {
     [
       "asset",
       "literature_asset",
+      ...(Object.hasOwn(raw, "default_text") ? ["default_text"] : []),
       ...(Object.hasOwn(raw, "article_identity_status")
         ? ["article_identity_status"]
         : []),
@@ -3606,6 +3679,17 @@ export function parseLiteratureAssetView(value: unknown): LiteratureAssetView {
   return Object.freeze({
     asset,
     literature_asset,
+    ...(Object.hasOwn(raw, "default_text")
+      ? (() => {
+          if (asset.media_type !== "application/pdf") fail(["default_text"]);
+          return {
+            default_text:
+              raw.default_text === null
+                ? null
+                : parseLiteratureDefaultText(raw.default_text),
+          };
+        })()
+      : {}),
     article_identity_status,
     ...(assessment ? { article_identity_assessment: assessment } : {}),
   });
@@ -3636,6 +3720,11 @@ export async function parseLiteratureDetail(
       "intake_batches",
       ...(value &&
       typeof value === "object" &&
+      Object.hasOwn(value, "draft_facts")
+        ? ["draft_facts"]
+        : []),
+      ...(value &&
+      typeof value === "object" &&
       Object.hasOwn(value, "text_level")
         ? ["text_level"]
         : []),
@@ -3660,6 +3749,7 @@ export async function parseLiteratureDetail(
     [],
   );
   const item = parseLiteratureSearchItem({
+    ...(Object.hasOwn(r, "draft_facts") ? { draft_facts: r.draft_facts } : {}),
     ...(Object.hasOwn(r, "text_level") ? { text_level: r.text_level } : {}),
     intake_at: r.intake_at,
     last_opened_at: r.last_opened_at,

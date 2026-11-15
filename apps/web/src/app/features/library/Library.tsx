@@ -60,6 +60,7 @@ import {
   scopeIds,
   scopeItems,
   SORT_LABELS,
+  LIBRARY_MENU_SORTS,
 } from "../../data/library.js";
 import { useIntakeBatch } from "../../data/intake-batches.js";
 import { AcquireDialog, type AcquireScope } from "./AcquireDialog.js";
@@ -543,9 +544,9 @@ export default function Library() {
             parseLibrarySearchRequest({ query: route.query, sort }).sort,
           )
         }
-        options={Object.entries(SORT_LABELS).map(([value, label]) => ({
+        options={LIBRARY_MENU_SORTS.map((value) => ({
           value,
-          label,
+          label: SORT_LABELS[value],
         }))}
       />
       {(next.data?.pages[0]?.backfillPending ?? 0) > 0 ? (

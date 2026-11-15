@@ -12,6 +12,13 @@ import {
   type ArchiveVersionEvent,
 } from "@sciretriever/contracts";
 import type * as State from "../../literature/state.js";
+import type * as DraftFacts from "./draft-facts.js";
+const { readDefaultTextFacts }: typeof DraftFacts = await import(
+  new URL(
+    import.meta.url.endsWith(".ts") ? "./draft-facts.ts" : "./draft-facts.js",
+    import.meta.url,
+  ).href
+);
 const { deriveCurrentState }: typeof State = await import(
   new URL(
     import.meta.url.endsWith(".ts")
@@ -54,6 +61,7 @@ export function archiveStates(
   db: DatabaseSync,
   id?: string | readonly string[],
   checkpoint: () => void = () => {},
+  includeDraftFacts = false,
 ): Map<string, ArchiveState> {
   checkpoint();
   const args = id ? [typeof id === "string" ? id : JSON.stringify(id)] : [],
@@ -78,6 +86,17 @@ export function archiveStates(
     `SELECT p.*,(SELECT d.schema_version FROM document_versions d WHERE d.document_version_id=p.document_version_id) AS document_schema_version,(SELECT json_group_array(profile) FROM raw_parse_current r WHERE r.source_asset_id=p.asset_id AND r.source_sha256=p.asset_sha256 AND r.raw_parse_id IS NOT NULL) AS profiles_json FROM archive_current_parts p${filter} ORDER BY p.part<>'main', p.asset_id`,
     ...args,
   );
+  const defaults = includeDraftFacts
+    ? new Map(
+        readDefaultTextFacts(
+          db,
+          all.map((row) => String(row.literature_id)),
+        ).map((row) => [
+          `${row.literature_id}:${row.asset_id}`,
+          row.default_text,
+        ]),
+      )
+    : null;
   checkpoint();
   const steps = rows(db, `SELECT * FROM archive_steps${filter}`, ...args);
   checkpoint();
@@ -125,6 +144,14 @@ export function archiveStates(
       return marker ? parseLongDocumentInfo(marker) : null;
     };
     result.set(key, {
+      ...(defaults
+        ? {
+            draft_facts: main
+              ? (defaults.get(`${key}:${String(main.asset_id)}`)?.draft_facts ??
+                null)
+              : null,
+          }
+        : {}),
       text_level: textLevel(main?.document_schema_version),
       long_document: longDocument(main?.asset_id),
       literature_id: key,
@@ -147,6 +174,13 @@ export function archiveStates(
       tag_count: Number(m.tag_count),
       description_version: version(m.description_json),
       parts: material.map((p) => ({
+        ...(defaults
+          ? {
+              draft_facts:
+                defaults.get(`${key}:${String(p.asset_id)}`)?.draft_facts ??
+                null,
+            }
+          : {}),
         text_level: textLevel(p.document_schema_version),
         long_document: longDocument(p.asset_id),
         format: stepRows.some(
@@ -265,8 +299,9 @@ export function archiveState(
   id: string,
   maxTags = 6,
   archiveProfile: "pipeline" | "vlm-engine" = "vlm-engine",
+  includeDraftFacts = true,
 ) {
-  const state = archiveStates(db, id).get(id);
+  const state = archiveStates(db, id, undefined, includeDraftFacts).get(id);
   if (!state) fail("archive-literature-missing");
   return { ...state, ...deriveCurrentState(state, maxTags, archiveProfile) };
 }
@@ -391,6 +426,7 @@ export function runArchiveStorage(
         String(r.literature_id),
         maxTags,
         archiveProfile,
+        false,
       );
       const main = current.parts.find((p) => p.part === "main");
       if (!main || main.asset_id !== r.asset_id) fail("archive-primary-stale");

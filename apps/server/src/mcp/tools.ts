@@ -1,5 +1,9 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { METADATA_FIELDS, type DevicePurpose } from "@sciretriever/contracts";
+import {
+  METADATA_FIELDS,
+  DRAFT_FACT_SORTS,
+  type DevicePurpose,
+} from "@sciretriever/contracts";
 
 const text = { type: "string" };
 const id = {
@@ -590,7 +594,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
             query: {
               type: "object",
               description:
-                "LibraryQuery: text, title, author, author_orcids, identifiers, publication_year_from/to, venue, publisher, publication_forms, article_kinds, languages, keywords, version_roles, statuses, missing_steps, needs_manual_pdf, discovery_run_ids.",
+                "LibraryQuery: text, title, author, author_orcids, identifiers, publication_year_from/to, venue, publisher, publication_forms, article_kinds, languages, keywords, version_roles, statuses, missing_steps, needs_manual_pdf, discovery_run_ids, text_levels, has_draft_differences, has_image_only_pages, cited_by_results, has_unfound_citations. Draft fact filters and sort keys use the primary PDF default only; non-drafts match neither true nor false. Returned draft_facts are catalog facts, not a proofreading action.",
             },
             limit: { type: "integer", minimum: 1, maximum: 100 },
             cursor: nullable(text),
@@ -603,6 +607,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
                 "publication-year-asc",
                 "title-asc",
                 "title-desc",
+                ...DRAFT_FACT_SORTS,
               ],
             },
           },
@@ -613,7 +618,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "read_literature",
-    "Read existing metadata, assets, parse information and current article identity assessment. IDs and hashes are stable references.",
+    "Read existing metadata, assets, parse information and current article identity assessment. draft_facts describes the primary PDF default; each PDF asset's default_text includes its fixed document_version_id, text_level and nullable draft_facts. These catalog facts do not start proofreading. IDs and hashes are stable references.",
     object({ literature_id: id }),
   ),
   tool(

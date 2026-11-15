@@ -23,6 +23,10 @@ import {
   workbenchLogin,
   workbenchTestAccess,
 } from "./workbench-auth-fixture.js";
+import {
+  factId,
+  proofreadFactsFixture,
+} from "./draft-proofread-facts-fixture.js";
 
 async function* stdin(value: unknown) {
   yield Buffer.from(JSON.stringify(value));
@@ -35,6 +39,147 @@ async function connect(host: ReturnType<typeof createMcpServer>) {
   return client;
 }
 describe("machine interfaces over shared maintenance owners", () => {
+  it("returns identical draft facts, filters, ordered cursors, part defaults and archive state over CLI, authenticated Web and MCP", async () => {
+    const e = await proofreadFactsFixture(),
+      query = await createQueryApplication(e.f.e.home),
+      screen = new ProductionWorkbenchSession(null, undefined);
+    let web: Awaited<ReturnType<typeof startWorkbenchHttp>> | undefined,
+      host: ReturnType<typeof createMcpServer> | undefined,
+      client: Client | undefined;
+    try {
+      const b = await e.paper(2, "draft", {
+        differs_segments: 2,
+        differences: 4,
+        image_only_pages: 1,
+      });
+      await e.paper(3, "draft", {
+        differs_segments: 2,
+        differences: 3,
+        image_only_pages: 1,
+      });
+      await e.paper(4, "proofread");
+      const result = e.result(1, [b.vid!]);
+      e.unfound(result, b.vid!, "/value");
+      web = await startWorkbenchHttp({
+        session: screen,
+        access: workbenchTestAccess,
+        assets: new Map([
+          ["/", { contentType: "text/html", body: "synthetic" }],
+        ]),
+        query: { application: query },
+      });
+      host = createMcpServer({
+        home: e.f.e.home,
+        sharedApplications: true,
+        queryFactory: async () => query,
+      });
+      client = await connect(host);
+      const login = await workbenchLogin(web.origin),
+        landing = await fetch(web.origin, { headers: { Cookie: login } }),
+        cookies = `${login}; ${landing.headers.get("set-cookie")!.split(";")[0]!}`,
+        grant = await fetch(web.origin + "/api/clients", {
+          method: "POST",
+          headers: {
+            Cookie: cookies,
+            Origin: web.origin,
+            "Content-Type": "application/json",
+            "X-Workbench-Init": "1",
+          },
+          body: "{}",
+        }),
+        access = (await grant.json()) as { client_id: string; csrf: string };
+      const post = async (path: string, request: unknown) => {
+        const response = await fetch(
+          `${web!.origin}/api/v1/query/${path}?client_id=${access.client_id}`,
+          {
+            method: "POST",
+            headers: {
+              Cookie: cookies,
+              Origin: web!.origin,
+              "Content-Type": "application/json",
+              "X-Workbench-CSRF": access.csrf,
+              "X-SciRetriever-Protocol-Version": "1",
+            },
+            body: JSON.stringify({ protocol_version: 1, request }),
+          },
+        );
+        expect(response.status).toBe(200);
+        return (await response.json()) as Record<string, unknown>;
+      };
+      const call = async (name: string, args: Record<string, unknown>) => {
+        const result = await client!.callTool({ name, arguments: args });
+        expect(result.isError).not.toBe(true);
+        return result.structuredContent;
+      };
+      let cursor: string | null = null;
+      const all: string[] = [];
+      do {
+        const request = {
+            query: { text_levels: ["draft"], has_image_only_pages: true },
+            sort: "draft-differences-desc",
+            limit: 1,
+            cursor,
+          },
+          cli = await runCli(
+            ["literature", "search", "--request", "-", "--json"],
+            { home: e.f.e.home, stdin: stdin(request) },
+          );
+        expect(cli.code).toBe(0);
+        const page = (
+          cli.value as {
+            result: {
+              next_cursor: string | null;
+              items: {
+                literature: { literature_id: string };
+                draft_facts: unknown;
+              }[];
+            };
+          }
+        ).result;
+        expect((await post("search", request)).page).toEqual(page);
+        expect(await call("search_library", request)).toEqual(cli.value);
+        expect(page.items[0]!.draft_facts).toBeTruthy();
+        all.push(...page.items.map((row) => row.literature.literature_id));
+        cursor = page.next_cursor;
+      } while (cursor);
+      expect(all).toEqual([factId(2), factId(3)]);
+      const input = { literature_id: b.lit },
+        cli = await runCli(["literature", "read", "--request", "-", "--json"], {
+          home: e.f.e.home,
+          stdin: stdin(input),
+        });
+      expect(cli.code).toBe(0);
+      expect((await post("read", input)).detail).toEqual(
+        (cli.value as { result: unknown }).result,
+      );
+      expect(await call("read_literature", input)).toEqual(cli.value);
+      expect(cli.value).toMatchObject({
+        result: {
+          draft_facts: { citing_results: 1, unfound_citations: 1 },
+          primary_pdf: {
+            default_text: { document_version_id: b.vid, text_level: "draft" },
+          },
+        },
+      });
+      const state = await runCli(["archive", "status", b.lit, "--json"], {
+        home: e.f.e.home,
+      });
+      expect(state.code).toBe(0);
+      expect(
+        await post("archive", { operation: "status", request: input }),
+      ).toEqual({ protocol_version: 1, result: state.value });
+      expect(
+        await call("archive_query", { operation: "status", request: input }),
+      ).toEqual({ protocol_version: 1, result: state.value });
+    } finally {
+      await client?.close();
+      await host?.close();
+      await web?.close();
+      await screen.close();
+      await query.close();
+      await e.close();
+    }
+  }, 60_000);
   it("previews and starts the same frozen draft task through CLI, authenticated Web and shared MCP", async () => {
     const env = await coreProcessingFixture({ offline: true });
     let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined,

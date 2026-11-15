@@ -20,6 +20,8 @@
 
 `import metadata` 在本进程同步完成自己的书目入库，不恢复或过期其它批次。`import pdf` 直接流式读取显式路径或 stdin，委托公共入库文件通道，归入 CLI 当天的“补充文件”开放批次；保留 receipt 结果，没有 16 MiB 上限。
 
+`literature search --request FILE|-` 接受完整 LibraryQuery 及排序，包括主 PDF 默认初稿的事实筛选和四种降序；查询范围可以直接交给显式任务。`literature read` 的 PDF 资产带默认文本版本与事实，`archive status` 按部分返回同样的事实；读取不启动校订。
+
 [上级目录](../README.md)
 
 `processors` 命令族提供 list/submit/run、结果与集合查询、字段证据、导出、rebuild 和 retain。
