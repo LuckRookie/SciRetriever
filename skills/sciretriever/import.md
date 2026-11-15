@@ -1,89 +1,65 @@
-# 导入
+# 代使用者入库
 
-所有导入都经过一个**导入会话**：建会话 → 交数据 → 预览 → 确认 → 交文件 → 结束。用户在网页“入库 → 导入 → 导入会话”里实时看得到你的会话，也可以在那里确认或取消。
+一次入库使用一个批次：建批次 → 交数据 → 预览 → 确认 → 读进度并交文件 → 读报告。使用者可以在网页“入库”页查看进度。Zotero 导入与单篇网页收藏交给扩展。
 
-字段、格式名、上限与错误码以 `GET <地址>/api/v1/import/instructions` 为准；下面只讲顺序和判断。请求都是 `POST`，正文是 `{"protocol_version":1,"request":{...}}`，回复在 `result` 里。
+先按 [connect.md](connect.md) 取得文献库自己的接口说明。请求文件依照该说明生成；不要从记忆拼字段、格式或限额。下面使用新接口演示顺序，`WORK_DIR` 中的 JSON 文件都是按说明生成的完整请求。
+
+## 范围与建批次
+
+只处理使用者指定的范围；范围不清楚时先问清楚。已有明确授权就继续，使用者要求预览后把关时才在预览后等待。
+
+只交书目时，创建批次设置 `metadata_only = true`：条目里的附件不进待交清单，而计入“不导入的内容”，不会因为没交这些文件而部分完成。需要交 PDF 时保持默认的 `false`。来源身份、数据格式与分段规则查接口说明；不要承诺再次入库必定无重复。
+
+定义一个从文件提交请求的帮助函数，然后创建批次；保存返回的批次编号供后续使用：
 
 ```bash
-ADDR=$(cat ~/.config/sciretriever/address)
-call() {  # call <路径> <request 的 JSON>
-  curl -sS --fail-with-body --config ~/.config/sciretriever/curl.conf \
-    -H 'Content-Type: application/json' \
-    --data-binary "{\"protocol_version\":1,\"request\":$2}" "$ADDR$1"
+ADDR=$(cat "$CONFIG_DIR/address")
+post() {
+  curl -sS --fail-with-body --config "$CONFIG_DIR/curl.conf" \
+    -H 'Content-Type: application/json' --data-binary "@$2" \
+    "$ADDR/api/v1/intake$1"
 }
+post /batches "$WORK_DIR/create.json" > "$WORK_DIR/created.json"
+BID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["result"]["batch"]["batch_id"])' "$WORK_DIR/created.json")
 ```
 
-## 0. 先问清楚
+## 交数据与预览
 
-- 导什么：整个库、某个分类（分组），还是指定的几条；要不要 PDF。
-- 用户要不要在确认前先看预览。要看就在第 3 步后停下。
-
-## 1. 建会话
-
-- 来源有自己的库编号（例如 Zotero 的用户库或群组库）时，填 `library`；同一个来源库以后再导一次就是同步，不会重复入库。
-- 只是一个导出文件、没有库编号时，`library` 填 `null`。会话的来源名就用 `file_name`。
-- `scope` 用一句话写清这次的范围，例如“分类：固态电解质”。
+原始数据按接口说明分段提交，保留分段序号和原文。相同序号、相同内容可重发；内容不同会冲突，不能靠重发来替换。下面只展示第一段，多段时按同一方式继续：
 
 ```bash
-call /api/v1/import/sessions '{"format":"bibtex","library":null,"scope":"分类：固态电解质","file_name":"solid.bib"}'
+post "/batches/$BID/data" "$WORK_DIR/data-0.json"
+post "/batches/$BID/preview" "$WORK_DIR/empty.json"
 ```
 
-记下 `session.session_id`，后面记作 `$SID`。返回 `import-library-busy` 说明同一个来源库已有进行中的会话：先读它的状态，接着用它，或请用户决定是否取消。
+预览是估计，核对书目的新增、已有、补全、冲突与未接纳，待交文件，以及“不导入的内容”。预览里的待交数量不等于本机找不到的数量。使用者要求先看时，在这里停下。
 
-## 2. 交数据
-
-把导出的原始内容发过去。书目格式（BibTeX、RIS、CSL JSON）的 `data` 是整份文本；数据大时分几段，每段带序号 `sequence`，从 0 开始。重发同一序号就是替换那一段。
-
-数据可能很大，先把整个请求写进文件再发，不要放在命令行参数里：
+## 确认后读进度
 
 ```bash
-python3 -c 'import json,sys; json.dump({"protocol_version":1,"request":{"sequence":int(sys.argv[2]),"data":open(sys.argv[1],encoding="utf-8").read()}}, open("/tmp/sciretriever-data.json","w"))' solid.bib 0
-curl -sS --fail-with-body --config ~/.config/sciretriever/curl.conf \
-  -H 'Content-Type: application/json' \
-  --data-binary @/tmp/sciretriever-data.json "$ADDR/api/v1/import/sessions/$SID/data"
+post "/batches/$BID/confirm" "$WORK_DIR/empty.json"
+post "/batches/$BID/status" "$WORK_DIR/empty.json"
 ```
 
-## 3. 预览
+确认立即返回，后台书目入库还在继续。按接口说明轮询状态与进度，直到完成或需要处理文件，不能因一次返回还在运行就再次确认。书目处理中，文件清单会继续增长。入库本身不触发 PDF 获取或解析任务。
+
+## 交文件
 
 ```bash
-call /api/v1/import/sessions/$SID/preview '{}'
+python3 "$SKILL_DIR/scripts/upload_files.py" --config-dir "$CONFIG_DIR" "$BID" "$FILES_DIR"
 ```
 
-预览不写库，是估计。告诉用户：
+`FILES_DIR` 是使用者指定的附件根目录，脚本也支持多个目录。脚本读取当前待交清单：需要字节就上传，已有主 PDF 时只交摘要；不会替换已有主 PDF。优先匹配导出中的相对路径。仅有文件名时，只有候选唯一且大小与清单一致才使用；大小未知、同名歧义或大小不同都会跳过，不能猜一个 PDF 上传。
 
-- 书目：`records` 里的新增（`created`）、已在库（`matched` 与 `enriched`）、冲突、未接纳；
-- 文件：要上传的（`files.upload`）和只需核对的（`files.hash`）。这时文件都还没交，所以 `files.missing` 等于两者之和，不是“找不到”；
-- 不导入的内容（`excluded`）。
+单个文件失败会记录并继续，末尾列出失败或跳过的文件与原因。408、429 有限重试；服务要求等得更久时留待稍后重跑。令牌被撤销时立即停止并提示重新连接。中断后重跑同一命令，按服务端当前清单继续，已接纳的文件不再上传；没有接纳的文件从头传。
 
-用户要把关时在这里停下。
+## 结束与报告
 
-## 4. 确认
+文件齐全时批次自动完成。还有交不了的文件时先汇总给使用者；只有使用者同意留下这些缺失文件时才主动结束。“直接入库”不等于允许丢下文件：
 
 ```bash
-call /api/v1/import/sessions/$SID/confirm '{}'
+post "/batches/$BID/finish" "$WORK_DIR/empty.json"
+post "/batches/$BID/report" "$WORK_DIR/empty.json"
 ```
 
-确认后书目先入库；以后读到的报告才是实际结果。用户说过“你直接导”“直接确认”时可以自己确认；否则等用户在网页或对话里确认。
-
-## 5. 交文件
-
-服务端列出要交的文件。`action` 为 `upload` 的要上传文件内容（这篇还没有 PDF）；为 `hash` 的只报文件的 SHA-256（库里已有 PDF，相同记已有，不同记冲突，不替换）。
-
-文件多时用 skill 随附的脚本 `scripts/upload_files.py`（在 skill 包里；只读了说明、没有 skill 时，先下载 `GET <地址>/api/v1/device-connections/skill` 并解压，脚本在 `sciretriever/scripts/` 下）。脚本它反复读取缺失清单，按文件名（或导出里的相对路径）在你给的文件夹里找文件，逐个上传或报哈希，中断后再运行会从服务端的清单接着做，已交的不会重复。
-
-```bash
-python3 <skill 目录>/scripts/upload_files.py "$SID" <导出文件夹，即 .bib 所在的那个>
-```
-
-找不到的文件脚本会列出来。问用户文件在哪里：用户把文件放进文件夹后，再运行一次脚本即可。
-
-## 6. 结束与报告
-
-文件全部交齐后会话自动完成。有交不了的文件时，先告诉用户缺哪些；**结束会把它们记为未交，即使用户说过“直接导”，也要等用户同意再结束**：
-
-```bash
-call /api/v1/import/sessions/$SID/finish '{}'
-call /api/v1/import/sessions/$SID/report '{}'
-```
-
-把报告里的实际结果告诉用户：书目的新增、补全、已在库、冲突、未接纳；文件的已上传（`uploaded`）、已有（`existing`）、冲突（`conflicts`），以及还没交的（`missing`；会话结束后它们在文件清单里仍是 `pending`，这就是“未交”），逐个说出冲突和未交的文件名。冲突交给用户处理。不结束的会话 7 天没有新文件交上来会自动结束。
+报告才是实际结果：说明书目的新增、补全、已有、冲突、未接纳，以及文件的已上传、已有、冲突与未交。列出冲突和缺失文件，交给使用者决定；过期时间与状态转换查接口说明，不凭本机旧输出判断。

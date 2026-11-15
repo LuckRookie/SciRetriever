@@ -21,11 +21,19 @@ const ORDER = [
 async function files(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
   const found = await Promise.all(
-    entries.map((entry) =>
-      entry.isDirectory()
-        ? files(join(directory, entry.name))
-        : [join(directory, entry.name)],
-    ),
+    entries
+      .filter(
+        (entry) =>
+          !["tests", "__pycache__"].includes(entry.name) &&
+          !/\.py[co]$/u.test(entry.name),
+      )
+      .map((entry) => {
+        if (entry.isSymbolicLink())
+          throw new Error("Skill packages must not contain symbolic links");
+        return entry.isDirectory()
+          ? files(join(directory, entry.name))
+          : [join(directory, entry.name)];
+      }),
   );
   return found.flat();
 }
