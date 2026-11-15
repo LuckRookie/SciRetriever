@@ -116,7 +116,8 @@ export async function readerOperation(page: Page, name: string) {
 }
 /** Run the full-text summary on the open paper through the four-step dialog. */
 export async function runSummaryFromReader(page: Page) {
-  await page.getByRole("button", { name: "运行算子", exact: true }).click();
+  // The reader's top bar keeps it in “更多” (reading-experience 1.3).
+  await readerOperation(page, "运行算子…");
   const dialog = page.getByRole("dialog", { name: "运行算子", exact: true });
   const next = dialog.getByRole("button", { name: "下一步", exact: true });
   await expect.poll(() => next.isEnabled()).toBe(true);

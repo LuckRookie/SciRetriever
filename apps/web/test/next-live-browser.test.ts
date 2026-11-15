@@ -11,6 +11,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { nextAssets, motionOptions } from "./next-workspace-fixture.js";
+import { readerToLibrary } from "./reader-controls.js";
 import { readingAssets } from "./reading-assets-fixture.js";
 import { chromium, type Page } from "playwright";
 import { describe, expect, it } from "vitest";
@@ -424,10 +425,8 @@ describe("live workbench on the installed Cloak runtime", () => {
             )
             .count(),
         ).toBe(0);
-        await desktop
-          .getByLabel("主导航", { exact: true })
-          .getByRole("button", { name: /文献库/ })
-          .click();
+        // The reader page has no site sidebar: the library is in its navigation drawer.
+        await readerToLibrary(desktop);
         await desktop
           .getByRole("searchbox", { name: "搜索文献", exact: true })
           .fill("Synthetic literature");

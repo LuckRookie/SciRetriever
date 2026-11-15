@@ -1443,6 +1443,22 @@
   .react-reader .reader-page-header-action {
     margin-inline-start: var(--space-2);
   }
+  /* The PDF's page number is a text button (spec 1.2); pressed, a field. */
+  .react-reader .reader-page-header-page {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+  .react-reader .reader-page-header-page:hover {
+    color: var(--blue);
+  }
+  .react-reader .reader-page-header-page-field {
+    width: 5em;
+    font: inherit;
+  }
   /* One line under the rule, over the text so the text never moves. */
   .react-reader .reader-page-header-line {
     position: absolute;

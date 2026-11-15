@@ -11,6 +11,13 @@ import { FIXTURE_LITERATURE } from "../../server/src/workbench/synthetic-fixture
 import { nextWorkspace } from "./next-workspace-fixture.js";
 import { missingId } from "./processor-workspace-fixture.js";
 import { syntheticReadingPdf } from "./reading-pdf-fixture.js";
+import {
+  readerMore,
+  readerPageNumber,
+  readerToLibrary,
+  readerType,
+  readerTypeChoice,
+} from "./reader-controls.js";
 
 type Workspace = Awaited<ReturnType<typeof nextWorkspace>>;
 const open = (
@@ -150,10 +157,7 @@ it("continues fixed Unicode Markdown without rebuilding stable blocks and recove
       const output = process.env.SCIRETRIEVER_WEB_REVIEW_OUTPUT;
       await mkdir(output, { recursive: true });
       for (const font of [18, 24]) {
-        await w.page.getByRole("button", { name: /阅读字号/ }).click();
-        await w.page
-          .getByRole("option", { name: `${font} px`, exact: true })
-          .click();
+        await readerType(w.page, `${font} px`);
         for (const theme of ["light", "dark", "green", "warm"]) {
           await w.page.evaluate((theme) => {
             document.documentElement.dataset.theme = theme;
@@ -264,7 +268,7 @@ it("keeps the latest outline target, text settings and reading position across a
     w.page.on("request", (request) => requests.push(request.url()));
     await open(w, "doc");
     await w.page.locator(".reading-article").waitFor();
-    await w.page.getByRole("button", { name: "显示目录", exact: true }).click();
+    await readerMore(w.page, "显示目录");
     let arrived: () => void = () => {};
     const held = new Promise<void>((resolve) => {
       release = resolve;
@@ -305,10 +309,7 @@ it("keeps the latest outline target, text settings and reading position across a
       )
       .toBeLessThan(60);
     await w.page.unrouteAll({ behavior: "wait" });
-    await w.page.getByRole("button", { name: /阅读字号/ }).click();
-    await w.page.getByRole("option", { name: "24 px", exact: true }).click();
-    await w.page.getByRole("button", { name: /阅读行宽/ }).click();
-    await w.page.getByRole("option", { name: "宽", exact: true }).click();
+    await readerType(w.page, "24 px");
     await w.page.evaluate(
       () =>
         new Promise<void>((resolve) =>
@@ -317,8 +318,9 @@ it("keeps the latest outline target, text settings and reading position across a
     );
     const body = w.page.locator(".reader-engine-body");
     const top = await body.evaluate((element) => element.scrollTop);
+    await readerToLibrary(w.page);
+    // Back through its tab: the shell's tabs show beside the library's section button.
     const tabs = w.page.getByRole("navigation", { name: "工作区与阅读标签" });
-    await tabs.getByRole("button", { name: "文献库", exact: true }).click();
     await tabs
       .getByRole("button", {
         name: "Synthetic literature workbench",
@@ -339,12 +341,7 @@ it("keeps the latest outline target, text settings and reading position across a
         { timeout: 20_000 },
       )
       .toBe(true);
-    expect(
-      await w.page.getByRole("button", { name: /阅读字号/ }).textContent(),
-    ).toContain("24 px");
-    expect(
-      await w.page.getByRole("button", { name: /阅读行宽/ }).textContent(),
-    ).toContain("宽");
+    expect(await readerTypeChoice(w.page)).toBe("24 px");
     expect(
       Math.abs((await body.evaluate((element) => element.scrollTop)) - top),
     ).toBeLessThan(80);
@@ -659,26 +656,25 @@ it.each(["no-preference", "reduce"] as const)(
       await ready(w);
       const pdf = w.page.getByRole("tab", { name: "PDF", exact: true });
       await pdf.focus();
-      await pdf.press("ArrowRight");
+      await pdf.press("ArrowLeft");
       await w.page.keyboard.press("Enter");
       await w.page.locator(".reading-article").waitFor();
       expect(
         await w.page
-          .getByRole("tab", { name: "全文", exact: true })
+          .getByRole("tab", { name: "原文", exact: true })
           .getAttribute("aria-selected"),
       ).toBe("true");
+      // Below 760 px “排版” is folded into “更多” (spec 1.3), reached by keys.
       const more = w.page.getByRole("button", { name: "更多", exact: true });
       await more.focus();
       await more.press("Enter");
-      const settings = w.page.getByRole("menuitem", {
-        name: "阅读设置",
-        exact: true,
-      });
-      await settings.focus();
-      await settings.press("Enter");
+      const type = w.page.getByRole("menuitem", { name: "排版", exact: true });
+      await type.focus();
+      await type.press("ArrowRight");
       await w.page
-        .getByRole("dialog", { name: "阅读设置", exact: true })
+        .getByRole("menuitem", { name: "20 px", exact: true })
         .waitFor();
+      await w.page.keyboard.press("Escape");
       await w.page.keyboard.press("Escape");
       await expect
         .poll(() => more.evaluate((el) => el === document.activeElement))
@@ -837,10 +833,7 @@ it("bounds PDF canvases while zooming and bitmaps while scrolling, and releases 
         (window as unknown as { __sciretrieverReaderProbe: Counts })
           .__sciretrieverReaderProbe,
     );
-  const zoomTo = async (option: string) => {
-    await w.page.getByRole("button", { name: "PDF 缩放" }).click();
-    await w.page.getByRole("option", { name: option, exact: true }).click();
-  };
+  const zoomTo = (option: string) => readerType(w.page, option);
   try {
     await open(w, "pdf", missingId);
     await ready(w);
@@ -885,7 +878,8 @@ it("bounds PDF canvases while zooming and bitmaps while scrolling, and releases 
       )!.scrollTop = 6000;
     });
     await ready(w);
-    for (const option of ["150%", "75%", "200%", "适宽"]) await zoomTo(option);
+    for (const option of ["150%", "75%", "200%", "适合宽度"])
+      await zoomTo(option);
     // A window drag: many widths in a row, each stretched at once.
     for (const width of [1400, 1320, 1240, 1180, 1260, 1440])
       await w.page.setViewportSize({ width, height: 900 });
@@ -957,11 +951,7 @@ it("bounds PDF canvases while zooming and bitmaps while scrolling, and releases 
     expect(kept.length).toBeGreaterThan(0);
     expect(kept.length).toBeLessThanOrEqual(40);
     // At the end of the paper the nearest pages are kept: the first ones were evicted.
-    expect(
-      await w.page
-        .getByRole("textbox", { name: "PDF 页码", exact: true })
-        .inputValue(),
-    ).toBe("100");
+    expect(await readerPageNumber(w.page)).toBe(100);
     expect(Math.min(...kept)).toBeGreaterThan(55);
     // No page shows a placeholder where it holds a picture, nor the reverse.
     expect(

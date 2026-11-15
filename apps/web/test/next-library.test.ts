@@ -12,6 +12,7 @@ import { nextWorkspace } from "./next-workspace-fixture.js";
 import { FIXTURE_LITERATURE } from "../../server/src/workbench/synthetic-fixture.js";
 import { missingId } from "./processor-workspace-fixture.js";
 import { syntheticReadingPdf } from "./reading-pdf-fixture.js";
+import { readerToLibrary } from "./reader-controls.js";
 
 it("paginates a 30,000-record library, bounds rendered rows, restores scroll and selection, and explains over-limit actions", async () => {
   const started = Date.now();
@@ -283,10 +284,18 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
 it("opens a paper from its row in the view it has: remembered, else full text, PDF alone, or the bibliography with its panel (spec 6.4, 3.9)", async () => {
   const w = await nextWorkspace({ ready: "body" });
   const openRow = async (title: string) => {
-    await w.page
-      .getByRole("navigation", { name: "工作区与阅读标签" })
-      .getByRole("button", { name: "文献库", exact: true })
-      .click();
+    // The reader page has no site sidebar: the library is in its navigation drawer.
+    if (
+      await w.page
+        .getByRole("navigation", { name: "阅读标签", exact: true })
+        .count()
+    )
+      await readerToLibrary(w.page);
+    else
+      await w.page
+        .getByRole("navigation", { name: "工作区与阅读标签" })
+        .getByRole("button", { name: "文献库", exact: true })
+        .click();
     await w.page
       .getByRole("article", { name: title, exact: true })
       .locator(".paper-open")
@@ -358,7 +367,7 @@ it("opens a PDF without text in the PDF view, and its full text says what is mis
       .first()
       .waitFor();
     expect(new URL(w.page.url()).searchParams.get("reader")).toBe("pdf");
-    await w.page.getByRole("tab", { name: "全文", exact: true }).click();
+    await w.page.getByRole("tab", { name: "原文", exact: true }).click();
     const empty = w.page.locator(".reader-surface .ui-empty");
     await empty
       .getByText("这份资料还没有可读的文本。", { exact: true })

@@ -855,10 +855,24 @@
   .ui-menu-item[data-pressed] {
     background: var(--active);
   }
-  .ui-option[data-selected] {
+  .ui-option[data-selected],
+  .ui-menu-item[data-checked] {
     font-weight: 500;
   }
-  .ui-option[data-selected]::after {
+  /* A menu choice or switch that is on: the same tick as a chosen option. */
+  .ui-menu-item[data-checked] {
+    position: relative;
+    padding-right: calc(var(--space-3) + 20px);
+  }
+  .ui-menu-item > svg:last-child {
+    margin-left: auto;
+  }
+  /* A submenu opens beside its item: the chevron points that way. */
+  .ui-menu-item[aria-haspopup] > svg:last-child {
+    transform: rotate(-90deg);
+  }
+  .ui-option[data-selected]::after,
+  .ui-menu-item[data-checked]::after {
     content: "";
     position: absolute;
     right: calc(var(--space-3) + 2px);
@@ -963,6 +977,9 @@
   .ui-drawer-overlay {
     justify-items: end;
     padding: 0;
+  }
+  .ui-drawer-overlay-start {
+    justify-items: start;
   }
   .ui-drawer {
     width: min(520px, 100%);

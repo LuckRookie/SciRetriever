@@ -75,7 +75,7 @@ it(
       await input.press("Enter");
       await palette.waitFor({ state: "detached" });
       await page
-        .getByRole("navigation", { name: "工作区与阅读标签" })
+        .getByRole("navigation", { name: "阅读标签", exact: true })
         .getByRole("button", { name: "Unparsed source", exact: true })
         .waitFor();
 

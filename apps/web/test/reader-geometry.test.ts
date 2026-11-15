@@ -1,6 +1,9 @@
 /** Spec 8.1 "版面计算": the sheet on the desk at the widths of spec 1.1, either side of each step. */
 import { describe, expect, it } from "vitest";
-import { sheetGeometry } from "../src/app/features/reader/geometry.js";
+import {
+  sheetGeometry,
+  topBarLayout,
+} from "../src/app/features/reader/geometry.js";
 
 describe("sheet on the desk (spec 1.1)", () => {
   // Desk width → tier, margins, where notes go, whether the spine shows (reading size 20 px).
@@ -84,5 +87,30 @@ describe("sheet on the desk (spec 1.1)", () => {
     expect(sheetGeometry(1024, 20).headerIndent).toBe(24);
     expect(sheetGeometry(700, 20).headerIndent).toBe(24);
     expect(sheetGeometry(390, 20).headerIndent).toBe(16);
+  });
+});
+
+/** Spec 8.1 "顶栏收起": either side of 1180, 760 and 640 px (spec 1.3). */
+describe("the top bar folding away (spec 1.3)", () => {
+  const table = [
+    [1440, "all", "buttons", "segmented"],
+    [1180, "all", "buttons", "segmented"],
+    [1179, "current", "buttons", "segmented"],
+    [760, "current", "buttons", "segmented"],
+    [759, "current", "more", "segmented"],
+    [640, "current", "more", "segmented"],
+    [639, "none", "more", "menu"],
+    [390, "none", "more", "menu"],
+  ] as const;
+  for (const [width, tabs, tools, views] of table)
+    it(`${width} px`, () => {
+      expect(topBarLayout(width)).toEqual({ tabs, tools, views });
+    });
+  it("treats an unmeasured bar as the widest", () => {
+    expect(topBarLayout(0)).toEqual({
+      tabs: "all",
+      tools: "buttons",
+      views: "segmented",
+    });
   });
 });

@@ -220,7 +220,7 @@ describe("durable task workbench", () => {
         .getByRole("button", { name: "打开文献", exact: true })
         .click();
       await page
-        .getByRole("navigation", { name: "工作区与阅读标签" })
+        .getByRole("navigation", { name: "阅读标签", exact: true })
         .getByRole("button", {
           name: "Synthetic literature workbench",
           exact: true,

@@ -11,7 +11,6 @@ import {
   type CSSProperties,
 } from "react";
 import { createPortal, flushSync } from "react-dom";
-import { copyText } from "../../../browser-platform.js";
 import type {
   DocumentLinkPreview,
   PdfControls,
@@ -39,19 +38,17 @@ import {
   Icon,
   IconButton,
   Menu,
-  NumberField,
   SearchField,
   SegmentedControl,
   Tabs,
-  Select,
   Skeleton,
   SplitPane,
   TechDetails,
   RichTitle,
+  type MenuOption,
 } from "../../components/index.js";
 import { archiveQuery, rows } from "../../data/archive.js";
 import {
-  paperCitation,
   paperTitle,
   paperTitleParts,
   readLiterature,
@@ -89,7 +86,7 @@ import {
 } from "./engines.js";
 import { createPreparingStore, ReaderPreparing } from "./ReaderPreparing.js";
 import { ReaderPageHeader, type HeaderLine } from "./ReaderPageHeader.js";
-import { sheetGeometry } from "./geometry.js";
+import { sheetGeometry, topBarLayout } from "./geometry.js";
 import { useFullTextTranslation } from "./translation/use-fulltext.js";
 
 export default function Reader() {
@@ -98,7 +95,9 @@ export default function Reader() {
     route = useUrlState();
   const readerActions = useRef(shell);
   readerActions.current = shell;
-  const [showSources, setShowSources] = useState(false);
+  const [showSources, setShowSources] = useState(false),
+    // “标出关键句”: kept per paper; what it marks comes with block 11.
+    [keySentences, setKeySentences] = useState(false);
   const [editorWidth, setEditorWidth] = useState(560);
   const parts = useQuery({
     queryKey: ["document", "parts", route.literature],
@@ -159,7 +158,6 @@ export default function Reader() {
   const [resources, setResources] = useState<readonly ReaderResourceEntry[]>(
     [],
   );
-  const [readingSettings, setReadingSettings] = useState(false);
   const [sideTab, setSideTab] = useState<"info" | "marks" | "translation">(
     "info",
   );
@@ -443,17 +441,14 @@ export default function Reader() {
     if (chosen) engines.view(viewOf(mode));
   }, [engines, mode, chosen]);
   // Spec 1.1: the sheet's geometry follows the desk's width and the reading
-  // size; the current width setting still widens the text column.
-  const columnEm = layoutPosition.fullWidth
-    ? 1000
-    : layoutPosition.wide
-      ? 46
-      : 34;
+  // size; there is no separate width setting (spec 1.3).
+  const columnEm = 34;
   useLayoutEffect(() => {
     const scroller = body.current,
       page = root.current;
     if (!scroller || !page) return;
     const apply = () => {
+      // Without the shell's top bar, the page's own width decides (spec 1.2).
       setNarrowTop(page.clientWidth > 0 && page.clientWidth < 640);
       const desk = scroller.clientWidth;
       if (!desk) return;
@@ -474,7 +469,17 @@ export default function Reader() {
     observer.observe(page);
     return () => observer.disconnect();
   }, [layoutPosition.fontSize, columnEm, layout, detailReady]);
-  // One line under the page header, at most (spec 1.2): a note, else the offer of a new text.
+  // One line under the page header, at most (spec 1.2): a note, else the
+  // offer of a new text, else the way back to a fixed source.
+  const backRef = useRef<() => void>(() => {}),
+    fromWhere =
+      route.parameters.get("returnReader") === "know"
+        ? "返回总结"
+        : route.parameters.has("from")
+          ? route.parameters.get("from") === "ext"
+            ? "返回结果"
+            : "返回检索"
+          : null;
   const headerLine = useMemo(
     (): HeaderLine | null =>
       note
@@ -485,8 +490,14 @@ export default function Reader() {
               text: "有新版本文本。",
               action: { label: "切换", run: update.apply },
             }
-          : null,
-    [note, update],
+          : fromWhere
+            ? {
+                transient: false,
+                text: "正在查看固定来源，阅读不会修改材料。",
+                action: { label: fromWhere, run: () => backRef.current() },
+              }
+            : null,
+    [note, update, fromWhere],
   );
   useLayoutEffect(() => {
     const material = sources.data;
@@ -529,6 +540,24 @@ export default function Reader() {
     };
   }, [engines, reading]);
   useEffect(() => () => engines.destroy(), [engines]);
+  // Spec 1.3 shortcuts, outside text fields: Alt+3 原文, Alt+4 PDF (Alt+1/2
+  // wait for the overview and flow), ⌘F / Ctrl+F find, O the outline.
+  const shortcuts = useRef<(event: KeyboardEvent) => boolean>(() => false);
+  useEffect(() => {
+    const keys = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (
+        target?.closest(
+          "input, textarea, select, [contenteditable='true'], [role='dialog']",
+        )
+      )
+        return;
+      if (shortcuts.current(event)) event.preventDefault();
+    };
+    // Capture: a focused control (a menu's button) must not swallow them.
+    window.addEventListener("keydown", keys, true);
+    return () => window.removeEventListener("keydown", keys, true);
+  }, []);
   // Spec 4.4: Alt+← back to where a jump left, Alt+→ forward again.
   useEffect(() => {
     const keys = (event: KeyboardEvent) => {
@@ -555,6 +584,7 @@ export default function Reader() {
     )
       setSideTab(memory.sideTab);
     setShowSources(memory.sources === true);
+    setKeySentences(memory.keySentences === true);
   }, [catalog, id]);
   const changeLayout = (action: () => void) => {
     const restore = mode === "doc" ? frame.current?.beforeLayout() : undefined;
@@ -588,6 +618,7 @@ export default function Reader() {
     );
   };
   const fromSummary = route.parameters.get("returnReader") === "know";
+  backRef.current = () => back();
   const back = () => {
     const result = route.parameters.get("result");
     if (fromSummary) {
@@ -780,87 +811,332 @@ export default function Reader() {
       ) : null}
     </>
   );
-  const readingControls =
-    (mode === "pdf" || mode === "edit") && pdf ? (
-      <>
-        <IconButton
-          aria-label="上一页"
-          isDisabled={pdf.page <= 1}
-          onPress={() => pdf.go(pdf.page - 1)}
-        >
-          <Icon name="arrow" />
-        </IconButton>
-        <NumberField
-          label="PDF 页码"
-          value={pdf.page}
-          onChange={(value) => pdf.go(value)}
-          minValue={1}
-          maxValue={pdf.total}
-        />
-        <span className="reader-page-count">/ {pdf.total}</span>
-        <IconButton
-          aria-label="下一页"
-          isDisabled={pdf.page >= pdf.total}
-          onPress={() => pdf.go(pdf.page + 1)}
-        >
-          <Icon name="chevron" />
-        </IconButton>
-        <Select
-          label="PDF 缩放"
-          value={String(pdf.zoom)}
-          onChange={(value) =>
-            pdf.zoomTo(value === "fit" ? "fit" : Number(value))
-          }
-          options={[
-            { value: "fit", label: "适宽" },
-            ...[
-              ["0.75", "75%"],
-              ["1", "100%"],
-              ["1.25", "125%"],
-              ["1.5", "150%"],
-              ["2", "200%"],
-            ].map(([value, label]) => ({ value: value!, label: label! })),
-          ]}
-        />
-      </>
-    ) : mode === "doc" || mode === "know" ? (
-      <>
-        <Select
-          label="阅读字号"
-          value={String(layoutPosition.fontSize)}
-          onChange={(value) =>
+  // Spec 1.3: the top bar. The shell holds the navigation button and the
+  // paper tabs; the view, find, type, side panel and “更多” come from here.
+  const barWidth = shell.readerBarWidth,
+    barLayout = topBarLayout(barWidth);
+  const compactBar = barLayout.tools === "more",
+    narrowBar = barLayout.views === "menu";
+  const hasPdf = !!detail.data.primary_pdf || !!sources.data?.material;
+  const views = [
+    { id: "doc", label: "原文" },
+    ...(hasPdf ? [{ id: "pdf", label: "PDF" }] : []),
+  ];
+  // Editing the proofread text is not one of the views: leaving it is choosing one.
+  const viewValue = mode === "pdf" ? "pdf" : mode === "doc" ? "doc" : "";
+  const findDisabled = mode === "results" || (mode !== "know" && !ready);
+  const toggleFind = () => setFindOpen((value) => !value);
+  const toggleOutline = () =>
+    changeLayout(() => {
+      layoutPosition.outline = !layoutPosition.outline;
+    });
+  const toggleInformation = () =>
+    changeLayout(() => {
+      layoutPosition.information = !layoutPosition.information;
+    });
+  const pdfZoom = mode === "pdf" || mode === "edit";
+  // “排版”: the reading size, or the PDF's zoom; then the two switches.
+  const typeItems: MenuOption[] = [
+    ...(pdfZoom
+      ? pdf
+        ? (
+            [
+              ["fit", "适合宽度"],
+              [0.5, "50%"],
+              [0.75, "75%"],
+              [1, "100%"],
+              [1.25, "125%"],
+              [1.5, "150%"],
+              [2, "200%"],
+              [3, "300%"],
+            ] as const
+          ).map(([value, label]) => ({
+            id: `zoom-${value}`,
+            label,
+            checked: pdf.zoom === value,
+            onAction: () => pdf.zoomTo(value),
+          }))
+        : []
+      : [18, 20, 22, 24].map((size) => ({
+          id: `size-${size}`,
+          label: `${size} px`,
+          checked: layoutPosition.fontSize === size,
+          onAction: () =>
             changeLayout(() => {
-              layoutPosition.fontSize = Number(value);
-            })
-          }
-          options={[18, 20, 22, 24].map((value) => ({
-            value: String(value),
-            label: `${value} px`,
-          }))}
+              layoutPosition.fontSize = size;
+            }),
+        }))),
+    {
+      id: "key-sentences",
+      label: "标出关键句",
+      checked: keySentences,
+      divider: true,
+      onAction: () => {
+        setKeySentences(!keySentences);
+        rememberReading(catalog, id, { keySentences: !keySentences });
+      },
+    },
+    ...(mode === "doc"
+      ? [
+          {
+            id: "sources",
+            label: "显示核对依据",
+            checked: showSources,
+            onAction: () => {
+              setShowSources(!showSources);
+              rememberReading(catalog, id, { sources: !showSources });
+            },
+          },
+        ]
+      : []),
+  ];
+  const partItems =
+    mode !== "results" && (parts.data?.length ?? 0) > 1
+      ? parts.data!.map((p, index) => ({
+          id: `part-${p.asset_id}`,
+          label:
+            p.role === "primary-pdf" || p.part === "main"
+              ? "正文"
+              : `补充材料 ${index}`,
+          checked: sources.data?.material?.asset_id === p.asset_id,
+          onAction: () =>
+            navigate(
+              {
+                view: "lib",
+                literature: id,
+                reader: mode,
+                asset: String(p.asset_id),
+                assetHash: String(p.asset_sha256),
+              },
+              { clearSource: true },
+            ),
+        }))
+      : [];
+  const moreItems: MenuOption[] = [
+    // Below 760 px the icon buttons fold in here (spec 1.3).
+    ...(compactBar
+      ? [
+          {
+            id: "find",
+            label: "文档内查找",
+            disabled: findDisabled,
+            onAction: toggleFind,
+          },
+          {
+            id: "type",
+            label: "排版",
+            onAction: () => {},
+            submenu: typeItems,
+          },
+          {
+            id: "information",
+            label: layoutPosition.information ? "收起信息" : "显示信息",
+            onAction: toggleInformation,
+          },
+        ]
+      : []),
+    ...(api.kind === "workspace"
+      ? [
+          {
+            id: "run",
+            label: "运行算子…",
+            divider: compactBar,
+            onAction: () => setRunner(true),
+          },
+        ]
+      : []),
+    ...(sources.data?.material
+      ? [
+          {
+            id: "edit",
+            label: "编辑校订稿",
+            checked: mode === "edit",
+            onAction: () => changeMode(mode === "edit" ? "doc" : "edit"),
+          },
+        ]
+      : []),
+    ...(mode !== "results" && mode !== "edit"
+      ? [
+          {
+            id: "outline",
+            label: layoutPosition.outline ? "收起目录" : "显示目录",
+            shortcut: "O",
+            onAction: toggleOutline,
+          },
+        ]
+      : []),
+    ...marks.toolItems,
+    ...(partItems.length
+      ? [
+          {
+            id: "parts",
+            label: "阅读部分",
+            divider: true,
+            onAction: () => {},
+            submenu: partItems,
+          },
+        ]
+      : []),
+    ...(api.workspace.capabilities.maintenance
+      ? [
+          {
+            id: "acquire",
+            label: "获取 PDF",
+            divider: true,
+            onAction: () => setOperation("acquire"),
+          },
+          {
+            id: "upload",
+            label: "上传 PDF",
+            onAction: () => setOperation("upload"),
+          },
+          {
+            id: "identity",
+            label: "核验文章身份",
+            disabled: !detail.data.primary_pdf,
+            onAction: () => setOperation("identity"),
+          },
+        ]
+      : []),
+    ...(api.kind === "workspace"
+      ? [
+          {
+            id: "bibliography",
+            label: "导出书目",
+            divider: !api.workspace.capabilities.maintenance,
+            onAction: () => setOperation("export"),
+          },
+        ]
+      : []),
+    {
+      id: "pdf",
+      label: "下载已核验的原始 PDF",
+      disabled: !pdfUrl,
+      onAction: () => {
+        const a = document.createElement("a");
+        a.href = pdfUrl;
+        a.download = `${id}.pdf`;
+        a.click();
+      },
+    },
+    {
+      id: "markdown",
+      label: "下载全文 Markdown",
+      disabled: !sources.data?.document,
+      onAction: () => {
+        void downloadMarkdown().catch((error) =>
+          shell.notify(errorMessage(error)),
+        );
+      },
+    },
+    // Temporary until block 09: the results enter from the information panel.
+    {
+      id: "results",
+      label: "加工结果",
+      divider: true,
+      onAction: () => changeMode("results"),
+    },
+  ];
+  shortcuts.current = (event) => {
+    const plain =
+      !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+    if (
+      (event.metaKey || event.ctrlKey) &&
+      !event.altKey &&
+      event.key.toLowerCase() === "f"
+    ) {
+      if (findDisabled) return false;
+      setFindOpen(true);
+      requestAnimationFrame(() =>
+        root.current
+          ?.querySelector<HTMLInputElement>(".reader-find input")
+          ?.focus(),
+      );
+      return true;
+    }
+    if (event.altKey && !event.ctrlKey && !event.metaKey) {
+      // Alt+digit types a symbol on some layouts: read the physical key.
+      const view =
+        event.code === "Digit3"
+          ? "doc"
+          : event.code === "Digit4"
+            ? "pdf"
+            : null;
+      if (!view || !views.some((v) => v.id === view)) return false;
+      if (view !== viewValue) changeMode(view);
+      return true;
+    }
+    if (
+      plain &&
+      event.key.toLowerCase() === "o" &&
+      mode !== "results" &&
+      mode !== "edit"
+    ) {
+      toggleOutline();
+      return true;
+    }
+    return false;
+  };
+  const topBarTools = (
+    <>
+      {narrowBar ? (
+        <Menu
+          label={`视图：${views.find((v) => v.id === viewValue)?.label ?? "加工结果"}`}
+          variant="text"
+          indicator
+          className="reader-view-menu"
+          items={views
+            .filter((v) => v.id !== viewValue)
+            .map((v) => ({
+              id: v.id,
+              label: v.label,
+              onAction: () => changeMode(v.id),
+            }))}
         />
-        <Select
-          label="阅读行宽"
-          value={
-            layoutPosition.fullWidth
-              ? "full"
-              : layoutPosition.wide
-                ? "wide"
-                : "comfortable"
-          }
-          onChange={(value) =>
-            changeLayout(() => {
-              layoutPosition.wide = value === "wide";
-              layoutPosition.fullWidth = value === "full";
-            })
-          }
-          options={[
-            { value: "comfortable", label: "舒适" },
-            { value: "wide", label: "宽" },
-            { value: "full", label: "全宽" },
-          ]}
+      ) : (
+        <SegmentedControl
+          label="阅读视图"
+          value={viewValue}
+          onChange={changeMode}
+          items={views}
         />
-      </>
-    ) : null;
+      )}
+      {compactBar ? null : (
+        <>
+          <IconButton
+            aria-label="文档内查找"
+            isDisabled={findDisabled}
+            aria-expanded={findOpen}
+            onPress={toggleFind}
+          >
+            <Icon name="search" />
+          </IconButton>
+          <Menu
+            label="排版"
+            iconOnly
+            icon={<span className="reader-type-icon">Aa</span>}
+            items={typeItems}
+          />
+          <IconButton
+            aria-label={layoutPosition.information ? "收起信息" : "显示信息"}
+            aria-pressed={layoutPosition.information}
+            onPress={toggleInformation}
+          >
+            <Icon name="book" />
+          </IconButton>
+        </>
+      )}
+      <Menu label="更多" iconOnly items={moreItems} />
+    </>
+  );
+  // Spec 1.2: opened from a fixed source, the line under the page header says
+  // so and offers the way back; without a page header it stays a row.
+  const returnLabel = fromSummary
+    ? "返回总结"
+    : route.parameters.get("from") === "ext"
+      ? "返回结果"
+      : "返回检索";
+  const fixedSource = fromSummary || route.parameters.has("from");
   return (
     <section
       ref={root}
@@ -868,224 +1144,15 @@ export default function Reader() {
       data-layout={layout}
       aria-label="文献阅读器"
     >
-      {mode !== "results" && (parts.data?.length ?? 0) > 1 ? (
-        <Select
-          label="阅读部分"
-          value={sources.data?.material?.asset_id ?? ""}
-          onChange={(asset) => {
-            const part = parts.data!.find((p) => p.asset_id === asset)!;
-            navigate(
-              {
-                view: "lib",
-                literature: id,
-                reader: mode,
-                asset,
-                assetHash: String(part.asset_sha256),
-              },
-              { clearSource: true },
-            );
-          }}
-          options={parts.data!.map((p, index) => ({
-            value: String(p.asset_id),
-            label:
-              p.role === "primary-pdf" || p.part === "main"
-                ? "正文"
-                : `补充材料 ${index}`,
-          }))}
-        />
-      ) : null}
-      <div className="reader-toolbar">
-        <div className="reader-toolbar-start">
-          <SegmentedControl
-            label="阅读视图"
-            value={mode === "edit" ? "doc" : mode === "know" ? "results" : mode}
-            onChange={changeMode}
-            items={[
-              { id: "pdf", label: "PDF" },
-              { id: "doc", label: "全文" },
-              { id: "results", label: "结果" },
-            ]}
-          />
-          {mode !== "results" && mode !== "edit" ? (
-            <IconButton
-              aria-label={layoutPosition.outline ? "收起目录" : "显示目录"}
-              aria-expanded={layoutPosition.outline}
-              onPress={() =>
-                changeLayout(() => {
-                  layoutPosition.outline = !layoutPosition.outline;
-                })
-              }
-            >
-              <Icon name="menu" />
-            </IconButton>
-          ) : null}
-          {marks.tools}
-        </div>
-        <div className="reader-toolbar-context">
-          {mode === "pdf" && api.kind === "workspace" ? (
-            <FullTextControls fullText={fullText} translation={translation} />
-          ) : null}
-          {mode === "doc" || mode === "edit" ? (
-            <SegmentedControl
-              label="全文模式"
-              value={mode}
-              onChange={changeMode}
-              items={[
-                { id: "doc", label: "阅读" },
-                { id: "edit", label: "编辑" },
-              ]}
-            />
-          ) : null}
-          {mode === "know" ? (
-            <Button
-              variant="text"
-              className="reader-back"
-              icon={<Icon name="arrow" />}
-              onPress={() => changeMode("results")}
-            >
-              全部结果
-            </Button>
-          ) : null}
-          {readingControls}
-          {mode === "doc" ? (
-            <Button
-              aria-pressed={showSources}
-              variant="text"
-              onPress={() => {
-                setShowSources(!showSources);
-                rememberReading(catalog, id, { sources: !showSources });
-              }}
-            >
-              显示核对依据
-            </Button>
-          ) : null}
-        </div>
-        <div className="reader-toolbar-end">
-          {api.kind === "workspace" ? (
-            <Button onPress={() => setRunner(true)}>运行算子</Button>
-          ) : null}
-          <IconButton
-            aria-label="文档内查找"
-            isDisabled={mode === "results" || (mode !== "know" && !ready)}
-            aria-expanded={findOpen}
-            onPress={() => setFindOpen((value) => !value)}
-          >
-            <Icon name="search" />
-          </IconButton>
-          <IconButton
-            aria-label={layoutPosition.information ? "收起信息" : "显示信息"}
-            aria-expanded={layoutPosition.information}
-            onPress={() =>
-              changeLayout(() => {
-                layoutPosition.information = !layoutPosition.information;
-              })
-            }
-          >
-            <Icon name="book" />
-          </IconButton>
-          <Menu
-            label="更多"
-            iconOnly
-            items={[
-              {
-                id: "reading-settings",
-                label: "阅读设置",
-                onAction: () => setReadingSettings(true),
-              },
-              {
-                id: "find",
-                label: "文档内查找",
-                disabled: mode === "results" || (mode !== "know" && !ready),
-                onAction: () => setFindOpen((value) => !value),
-              },
-              {
-                id: "information",
-                label: layoutPosition.information ? "收起信息" : "显示信息",
-                onAction: () =>
-                  changeLayout(() => {
-                    layoutPosition.information = !layoutPosition.information;
-                  }),
-              },
-              ...(api.workspace.capabilities.maintenance
-                ? [
-                    {
-                      id: "acquire",
-                      label: "获取 PDF",
-                      onAction: () => setOperation("acquire"),
-                    },
-                    {
-                      id: "upload",
-                      label: "上传 PDF",
-                      onAction: () => setOperation("upload"),
-                    },
-                    {
-                      id: "identity",
-                      label: "核验文章身份",
-                      disabled: !detail.data.primary_pdf,
-                      onAction: () => setOperation("identity"),
-                    },
-                  ]
-                : []),
-              {
-                id: "pdf",
-                label: "下载已核验的原始 PDF",
-                disabled: !pdfUrl,
-                onAction: () => {
-                  const a = document.createElement("a");
-                  a.href = pdfUrl;
-                  a.download = `${id}.pdf`;
-                  a.click();
-                },
-              },
-              {
-                id: "markdown",
-                label: "下载固定全文 Markdown",
-                disabled: !sources.data?.document,
-                onAction: () => {
-                  void downloadMarkdown().catch((error) =>
-                    shell.notify(errorMessage(error)),
-                  );
-                },
-              },
-              ...(api.kind === "workspace"
-                ? [
-                    {
-                      id: "bibliography",
-                      label: "导出书目",
-                      onAction: () => setOperation("export"),
-                    },
-                  ]
-                : []),
-              {
-                id: "copy",
-                label: "复制引用",
-                onAction: () => {
-                  void copyText(paperCitation(detail.data!))
-                    .then(() => shell.notify("引用已复制"))
-                    .catch(() =>
-                      shell.notify(
-                        "浏览器未允许复制，可选择书目信息手动复制。",
-                      ),
-                    );
-                },
-              },
-            ]}
-          />
-        </div>
-      </div>
-      {(fromSummary || route.parameters.has("from")) && (
+      {shell.readerBar ? createPortal(topBarTools, shell.readerBar) : null}
+      {fixedSource && !headerHost ? (
         <div className="reader-return">
           <Button variant="text" icon={<Icon name="arrow" />} onPress={back}>
-            返回
-            {fromSummary
-              ? "总结"
-              : route.parameters.get("from") === "ext"
-                ? "结果"
-                : "检索"}
+            {returnLabel}
           </Button>
           <span>正在查看固定来源，阅读不会修改材料。</span>
         </div>
-      )}
+      ) : null}
       <div className="reader-find" hidden={!findOpen || mode === "results"}>
         <SearchField
           label="文档内查找"
@@ -1164,7 +1231,16 @@ export default function Reader() {
               {marks.active && sideTab === "marks" ? (
                 marks.panel
               ) : marks.active && sideTab === "translation" ? (
-                <TranslationPanel translation={translation} notify={notify} />
+                <>
+                  {/* Spec 1.3: the PDF's side-by-side translation is set here. */}
+                  {mode === "pdf" && api.kind === "workspace" ? (
+                    <FullTextControls
+                      fullText={fullText}
+                      translation={translation}
+                    />
+                  ) : null}
+                  <TranslationPanel translation={translation} notify={notify} />
+                </>
               ) : (
                 <AnimatedPanel preset="panelContent">
                   {information}
@@ -1233,7 +1309,7 @@ export default function Reader() {
                   <ReaderPageHeader
                     kind={shown.kind}
                     paper={detail.data}
-                    narrow={narrowTop}
+                    narrow={barWidth > 0 ? narrowBar : narrowTop}
                     pdf={pdf}
                     back={
                       historyBack
@@ -1358,11 +1434,6 @@ export default function Reader() {
           </div>
         </div>
       </SplitPane>
-      {readingSettings && (
-        <Dialog title="阅读设置" isOpen onOpenChange={setReadingSettings}>
-          {readingControls}
-        </Dialog>
-      )}
       {runner ? (
         <RunOperatorDialog
           fixed={{

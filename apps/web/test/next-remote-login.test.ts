@@ -1,3 +1,4 @@
+import { readerNavigation } from "./reader-controls.js";
 import {
   openSavedViews,
   showAllLibraryStatuses,
@@ -231,6 +232,8 @@ describe("IP-address HTTP login and workspace", () => {
       expect(await page.locator(".textLayer").first().textContent()).toContain(
         "Synthetic",
       );
+      // The reader page's navigation is in its drawer (reading-experience 1.3).
+      await readerNavigation(page);
       await page.getByRole("button", { name: "设置", exact: true }).click();
       await page.getByRole("button", { name: "退出登录", exact: true }).click();
       await page.locator("#access-password").waitFor();

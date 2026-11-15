@@ -1,3 +1,8 @@
+import {
+  readerMore,
+  readerNavigation,
+  readerToLibrary,
+} from "./reader-controls.js";
 import { showAllLibraryStatuses } from "./next-workspace-fixture.js";
 import { FIXTURE_DOI } from "../../server/src/workbench/synthetic-fixture.js";
 import {
@@ -112,10 +117,7 @@ it("keeps parsing separate from document publication and reads existing verified
     await page.getByRole("menuitem", { name: "下载已核验的原始 PDF" }).click();
     expect((await download).suggestedFilename()).toMatch(/\.pdf$/u);
     // Choose this paper in the library, then hand its fixed scope to external delivery.
-    await page
-      .getByRole("button", { name: /^文献库/ })
-      .first()
-      .click();
+    await readerToLibrary(page);
     await page
       .getByRole("checkbox", {
         name: "选择 Synthetic literature workbench",
@@ -185,15 +187,14 @@ it("keeps parsing separate from document publication and reads existing verified
       .toEqual({ status: "completed", failures: [] });
     expect(env.parseCalls).toBe(1);
     expect(env.modelCalls).toBe(0);
-    expect(
-      (
-        await env.app.documentRead.default({
-          literature_id: env.parseRequest.literature_id,
-          asset_id: env.asset.asset_id,
-          asset_sha256: env.asset.sha256,
-        })
-      ).default,
-    ).toBeNull();
+    // Since plan 21 block 04 a parse forms a draft, which becomes the default.
+    const parsedDefault = await env.app.documentRead.default({
+      literature_id: env.parseRequest.literature_id,
+      asset_id: env.asset.asset_id,
+      asset_sha256: env.asset.sha256,
+    });
+    expect(parsedDefault.default).not.toBeNull();
+    expect(parsedDefault.gap).toBeNull();
     expect(
       (await env.app.rawParseStorage!.current(env.asset.asset_id)).filter(
         (s) => s.result,
@@ -231,14 +232,14 @@ it("keeps parsing separate from document publication and reads existing verified
         timeout: 20_000,
       })
       .toContain("全文已加载");
-    await page.getByRole("button", { name: "显示目录", exact: true }).click();
+    await readerMore(page, "显示目录");
     await page.locator(".reader-outline button").first().click();
     expect(await page.locator(".reader-engine-body").textContent()).toContain(
       "A synthetic finding.",
     );
     expect(env.parseCalls).toBe(3);
-    await page
-      .getByLabel("主导航")
+    // The reader page has no site sidebar: snapshots are in its navigation drawer.
+    await (await readerNavigation(page))
       .getByRole("button", { name: "快照", exact: true })
       .click();
     await page
@@ -335,7 +336,7 @@ it("keeps parsing separate from document publication and reads existing verified
         timeout: 20_000,
       })
       .toContain("已核对：PDF 就是这篇文章");
-    await page.getByRole("tab", { name: "结果", exact: true }).click();
+    await readerMore(page, "加工结果");
     await page.getByRole("button", { name: "阅读总结", exact: true }).click();
     await expect
       .poll(() => page.locator(".reader-summary-scroll").textContent())

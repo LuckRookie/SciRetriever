@@ -97,6 +97,7 @@ export type MotionPreset =
   | "popover"
   | "dialog"
   | "drawer"
+  | "drawerStart"
   | "panelContent"
   | "collapse"
   | "toast"
@@ -129,6 +130,11 @@ export const presets: Record<MotionPreset, Variants> = {
     initial: { opacity: 0, x: 8 },
     visible: { opacity: 1, x: 0 },
     exit: { opacity: 0, x: 8 },
+  },
+  drawerStart: {
+    initial: { opacity: 0, x: -8 },
+    visible: { opacity: 1, x: 0 },
+    exit: { opacity: 0, x: -8 },
   },
   panelContent: {
     initial: { opacity: 0, x: 8 },
@@ -211,7 +217,7 @@ export function AnimatedPanel({
     ? 0
     : preset === "highlight"
       ? 0.9
-      : ["dialog", "drawer", "panelContent"].includes(preset)
+      : ["dialog", "drawer", "drawerStart", "panelContent"].includes(preset)
         ? 0.24
         : 0.18;
   return (

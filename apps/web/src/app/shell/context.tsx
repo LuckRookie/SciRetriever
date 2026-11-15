@@ -12,6 +12,13 @@ export interface ShellState {
     title?: string,
   ): void;
   notify(message: string): void;
+  /**
+   * Spec 1.3: on the reader page the shell's top bar holds the navigation
+   * button and the paper tabs; the reader puts its controls into this slot.
+   */
+  readerBar: HTMLElement | null;
+  /** The top bar's width, which decides what it folds away. */
+  readerBarWidth: number;
   reading: ReadingState;
   theme: Theme;
   setTheme(value: Theme): void;

@@ -1,3 +1,4 @@
+import { readerMore, readerType, readerView } from "./reader-controls.js";
 import { expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { parseAsset, sha256 } from "@sciretriever/contracts";
@@ -257,6 +258,8 @@ it("previews undo dependencies before reverting a vocabulary change", async () =
           )?.locked,
       )
       .toBe(true);
+    // The reader page's navigation is in its drawer (spec 1.3).
+    await p.getByRole("button", { name: "打开导航", exact: true }).click();
     await p.getByRole("button", { name: "词表", exact: true }).click();
     await p.getByRole("heading", { name: "标签词表", exact: true }).waitFor();
     await p.getByRole("button", { name: "词表变更日志", exact: true }).click();
@@ -351,7 +354,7 @@ it("locks an edited block, marks its summary stale and locates the fixed PDF reg
       .result.result_id;
     const p = w.page;
     await p.goto(`${w.origin}/?literature=${id}&reader=doc`);
-    await p.getByRole("button", { name: "显示核对依据", exact: true }).click();
+    await readerType(p, "显示核对依据");
     await p
       .getByRole("button", { name: /查看区块来源/ })
       .first()
@@ -482,11 +485,12 @@ it("recovers archive issues and parses a new supplement in the same run, readabl
     ).toBeGreaterThan(0);
     expect(after.issues.filter((i) => i.reason === "needs-parse")).toEqual([]);
     await p.goto(`${w.origin}/?literature=${id}&reader=pdf`);
-    await select(p, "阅读部分", "补充材料 1");
+    await readerMore(p, "阅读部分");
+    await p.getByRole("menuitem", { name: "补充材料 1", exact: true }).click();
     await expect
       .poll(() => new URL(p.url()).searchParams.get("asset"))
       .toBe(asset.asset_id);
-    await p.getByRole("button", { name: /缩放/ }).waitFor();
+    await p.locator(".reader-page-header-page").first().waitFor();
     expect(w.errors).toEqual([]);
   } finally {
     vi.restoreAllMocks();
@@ -560,8 +564,8 @@ it("preserves summary reading position and presents evidence on demand across sc
       el.closest<HTMLElement>(".reading-scroll")!.scrollTop = 900;
     });
     await expect.poll(scroll).toBeGreaterThan(800);
-    await p.getByRole("tab", { name: "全文", exact: true }).click();
-    await p.getByRole("tab", { name: "结果", exact: true }).click();
+    await p.getByRole("tab", { name: "原文", exact: true }).click();
+    await readerMore(p, "加工结果");
     await p.getByRole("button", { name: "阅读总结", exact: true }).click();
     await expect.poll(scroll).toBeGreaterThan(800);
     await summary.getByRole("button", { name: "[1.1]", exact: true }).click();
@@ -619,16 +623,15 @@ it("preserves summary reading position and presents evidence on demand across sc
         .toBe(true);
       await p.keyboard.press("Escape");
     }
-    await p.getByRole("tab", { name: "全文", exact: true }).click();
-    await p.getByRole("button", { name: "显示核对依据", exact: true }).click();
-    await p
-      .getByRole("tablist", { name: "全文模式", exact: true })
-      .getByRole("tab", { name: "编辑", exact: true })
-      .click();
+    await readerView(p, "原文");
+    await readerType(p, "显示核对依据");
+    await readerMore(p, "编辑校订稿");
     const editor = p.getByRole("region", { name: "校订稿编辑", exact: true });
     await editor.getByRole("tab", { name: "预览", exact: true }).click();
     await editor.locator(".katex").first().waitFor();
     await p.setViewportSize({ width: 1440, height: 1000 });
+    // The reader page's navigation is in its drawer (spec 1.3).
+    await p.getByRole("button", { name: "打开导航", exact: true }).click();
     await p.getByRole("button", { name: "词表", exact: true }).click();
     await p.getByRole("button", { name: "Spectroscopy", exact: true }).click();
     await p

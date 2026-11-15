@@ -628,16 +628,17 @@ async function anchorMove(page: Page, change: () => Promise<void>) {
 }
 const within = (move: number | null, limit: number) =>
   move !== null && move <= limit;
-async function pick(page: Page, field: RegExp | string, option: string) {
-  await page.getByRole("button", { name: field }).click();
-  await page.getByRole("option", { name: option, exact: true }).click();
+/** A choice in one of the top bar's menus (reading-experience 1.3), e.g. “排版” → “24 px”. */
+async function pick(page: Page, menu: string, item: string) {
+  await page.getByRole("button", { name: menu, exact: true }).click();
+  await page.getByRole("menuitem", { name: item, exact: true }).click();
 }
-const viewTab = (page: Page, name: "PDF" | "全文") =>
+const viewTab = (page: Page, name: "PDF" | "原文") =>
   page.getByRole("tab", { name, exact: true });
 /** Switch the view with per-frame sampling: blank frames and input-to-paint time. */
 async function sampledSwitch(page: Page, id: string, to: "pdf" | "doc") {
   await page.evaluate((mode) => rs().sample(mode), to);
-  await viewTab(page, to === "pdf" ? "PDF" : "全文").click();
+  await viewTab(page, to === "pdf" ? "PDF" : "原文").click();
   await ready(page, id, to);
   await still(page);
   const [frames, input] = await page.evaluate(
@@ -730,12 +731,8 @@ it("anchor keeping (4.2)", async () => {
     await ready(r.page, id, "doc");
     await scrollReader(r.page, 6000);
     const start = await mark(r.page);
-    const up = await anchorMove(r.page, () =>
-      pick(r.page, /阅读字号/, "24 px"),
-    );
-    const down = await anchorMove(r.page, () =>
-      pick(r.page, /阅读字号/, "20 px"),
-    );
+    const up = await anchorMove(r.page, () => pick(r.page, "排版", "24 px"));
+    const down = await anchorMove(r.page, () => pick(r.page, "排版", "20 px"));
     const after = await topOf(r.page, start);
     const round = start && after !== null ? Math.abs(after - start.top) : null;
     items.push(
@@ -1047,10 +1044,10 @@ it("PDF zoom (5.3)", async () => {
   try {
     await ready(r.page, id, "pdf");
     await scrollReader(r.page, 4000);
-    await r.page.getByRole("button", { name: "PDF 缩放" }).click();
+    await r.page.getByRole("button", { name: "排版", exact: true }).click();
     // The synthetic pages are 612 pt wide: 918 px at 150%.
     await r.page.evaluate(() => rs().sample("pdf", 918));
-    await r.page.getByRole("option", { name: "150%", exact: true }).click();
+    await r.page.getByRole("menuitem", { name: "150%", exact: true }).click();
     await r.page.waitForFunction(() => rs().sharp(918), undefined, {
       timeout: TIMEOUT,
     });
@@ -1250,7 +1247,7 @@ it("no repeated downloads (5.1)", async () => {
     // The tab loop ends on the long document; switch its views ten times.
     for (let n = 0; n < 10; n++) {
       const to = n % 2 ? "pdf" : "doc";
-      await viewTab(r.page, to === "pdf" ? "PDF" : "全文").click();
+      await viewTab(r.page, to === "pdf" ? "PDF" : "原文").click();
       await ready(r.page, papers[1]!, to);
       peakCanvases = Math.max(
         peakCanvases,
@@ -1510,7 +1507,7 @@ it("transitions (6.1)", async () => {
       await r.page.evaluate(() => rs().sample());
       await viewTab(r.page, "PDF").click();
       await ready(r.page, id, "pdf");
-      await viewTab(r.page, "全文").click();
+      await viewTab(r.page, "原文").click();
       await ready(r.page, id, "doc");
       for (const f of await r.page.evaluate(() => rs().stop()))
         for (const a of f.animations) animations.add(a);
@@ -1630,14 +1627,25 @@ it("performance (100-page synthetic text PDF)", async () => {
       readerUrl(id, "pdf"),
     );
     await still(r.page);
+    // The next page through the page number in the page header (spec 1.2):
+    // timed from the Enter that confirms it.
+    const next = Number((await r.page.evaluate(() => rs().anchor()?.key)) ?? 1);
+    await r.page
+      .locator(".reader-view:not([hidden]) .reader-page-header-page")
+      .click();
+    await r.page
+      .getByRole("spinbutton", { name: "PDF 页码", exact: true })
+      .fill(String(next + 1));
     const turn = await r.page.evaluate(async () => {
       const h = rs();
       const current = Number(h.anchor()?.key ?? 1);
-      const button = [
-        ...document.querySelectorAll<HTMLButtonElement>("button"),
-      ].find((b) => b.getAttribute("aria-label") === "下一页")!;
+      const field = document.querySelector<HTMLInputElement>(
+        ".reader-page-header-page-field",
+      )!;
       const start = performance.now();
-      button.click();
+      field.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
       const end = await h.until(
         () =>
           document.querySelector<HTMLElement>(
@@ -1692,7 +1700,7 @@ it("performance (100-page synthetic text PDF)", async () => {
         },
         {
           id: "page",
-          label: "翻页（下一页画出并到达阅读线）",
+          label: "翻页（页眉页码跳到下一页，画出并到达阅读线）",
           criterion: "≤ 500 ms",
           status: verdict(turn !== null && turn <= 500),
           numbers: { ms: ms(turn) },

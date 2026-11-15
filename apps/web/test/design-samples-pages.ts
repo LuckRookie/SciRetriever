@@ -296,6 +296,20 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     ready: ".reader-engine-body img",
   },
   {
+    id: "reader-view-menu",
+    name: "阅读 · 顶栏菜单展开",
+    route: reader("doc"),
+    // Below 640 px the views are one button: its menu open. Wider, “更多” open.
+    interaction: "窄屏点开视图按钮，其余宽度点开“更多”",
+    prepare: async (p) => {
+      await p.locator('.react-reader[data-reading-ready="true"]').waitFor();
+      const views = p.getByRole("button", { name: /^视图：/ });
+      if (await views.isVisible()) await views.click();
+      else await p.getByRole("button", { name: "更多", exact: true }).click();
+    },
+    ready: ".ui-menu",
+  },
+  {
     id: "reader-edit",
     name: "阅读 · 编辑",
     route: reader("edit"),

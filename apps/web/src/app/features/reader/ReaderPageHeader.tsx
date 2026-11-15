@@ -31,12 +31,59 @@ export function paperSource(paper: LiteratureSearchItem): string {
     .join(" · ");
 }
 
-/** What shows and on which text (spec 1.2); the text version comes with plan 21. */
-function viewText(kind: "doc" | "pdf", pdf: PdfControls | null) {
-  if (kind === "doc") return "原文";
-  if (!pdf) return "PDF";
+/**
+ * What shows and on which text (spec 1.2); the text version comes with plan
+ * 21. In the PDF the page number is a text button: pressed, it becomes a
+ * field, and the page typed there is opened.
+ */
+function ViewText({
+  kind,
+  pdf,
+}: {
+  kind: "doc" | "pdf";
+  pdf: PdfControls | null;
+}) {
+  const [editing, setEditing] = useState(false);
+  if (kind === "doc") return <span>原文</span>;
+  if (!pdf) return <span>PDF</span>;
   const zoom = pdf.zoom === "fit" ? "适宽" : `${Math.round(pdf.zoom * 100)}%`;
-  return `PDF · 第 ${pdf.page} / ${pdf.total} 页 · ${zoom}`;
+  const go = (field: HTMLInputElement) => {
+    const page = Math.trunc(Number(field.value));
+    if (page >= 1 && page <= pdf.total) pdf.go(page);
+    setEditing(false);
+  };
+  return (
+    <span>
+      PDF ·{" "}
+      {editing ? (
+        <input
+          className="reader-page-header-page-field"
+          type="number"
+          aria-label="PDF 页码"
+          min={1}
+          max={pdf.total}
+          defaultValue={pdf.page}
+          autoFocus
+          onFocus={(event) => event.currentTarget.select()}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") go(event.currentTarget);
+            else if (event.key === "Escape") setEditing(false);
+          }}
+          onBlur={() => setEditing(false)}
+        />
+      ) : (
+        <button
+          type="button"
+          className="reader-page-header-page"
+          aria-label={`第 ${pdf.page} / ${pdf.total} 页，跳到页`}
+          onClick={() => setEditing(true)}
+        >
+          第 {pdf.page} / {pdf.total} 页
+        </button>
+      )}{" "}
+      · {zoom}
+    </span>
+  );
 }
 
 export interface HeaderLine {
@@ -109,7 +156,7 @@ export function ReaderPageHeader({
             {back.label}
           </button>
         ) : null}
-        <span>{viewText(kind, pdf)}</span>
+        <ViewText kind={kind} pdf={pdf} />
       </span>
       {shown ? (
         <p

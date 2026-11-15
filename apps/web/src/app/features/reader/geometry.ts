@@ -107,3 +107,24 @@ export function sheetGeometry(
     headerIndent: tier === "wide" ? 40 : 24,
   };
 }
+
+/**
+ * Spec 1.3: what the reader's top bar folds away as it narrows. Below 1180
+ * px only the current paper's tab, the others in a menu; below 760 px find,
+ * type and the side panel go into “更多”; below 640 px no tabs, and the
+ * views become one button with a menu. 0 (not measured yet) is the widest.
+ */
+export interface TopBarLayout {
+  tabs: "all" | "current" | "none";
+  /** Find, type and the side panel: their own buttons, or items in “更多”. */
+  tools: "buttons" | "more";
+  views: "segmented" | "menu";
+}
+export function topBarLayout(width: number): TopBarLayout {
+  const w = width > 0 ? width : Number.POSITIVE_INFINITY;
+  return {
+    tabs: w >= 1180 ? "all" : w >= 640 ? "current" : "none",
+    tools: w >= 760 ? "buttons" : "more",
+    views: w >= 640 ? "segmented" : "menu",
+  };
+}

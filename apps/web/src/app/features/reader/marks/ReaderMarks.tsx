@@ -16,10 +16,8 @@ import {
 import {
   Button,
   Dialog,
-  Icon,
-  IconButton,
-  Menu,
   useToast,
+  type MenuOption,
 } from "../../../components/index.js";
 import { copyText } from "../../../../browser-platform.js";
 import {
@@ -394,56 +392,47 @@ export function useReaderMarks({
     (markId: string) => () => surface.current?.anchorRect(markId) ?? null,
     [],
   );
-  const tools: ReactNode = active ? (
-    <div className="mark-tools" role="group" aria-label="阅读工具">
-      <IconButton
-        aria-label="选择（V）"
-        aria-pressed={tool === "select"}
-        onPress={() => setTool("select")}
-      >
-        <Icon name="pointer" />
-      </IconButton>
-      <IconButton
-        aria-label="高亮笔：选中即高亮（H）"
-        aria-pressed={tool === "pen"}
-        onPress={() => setTool(tool === "pen" ? "select" : "pen")}
-      >
-        <Icon name="highlighter" />
-      </IconButton>
-      <Menu
-        label={`高亮笔颜色：${MARK_COLOR_LABELS[pen]}`}
-        iconOnly
-        icon={
-          <i
-            className="mark-dot mark-pen-dot"
-            data-color={pen}
-            aria-hidden="true"
-          />
-        }
-        items={MARK_COLORS.map((color) => ({
-          id: color,
-          label: MARK_COLOR_LABELS[color],
-          // The colour itself names the pen; keys 1–5 still choose it.
-          trailing: (
-            <i className="mark-dot" data-color={color} aria-hidden="true" />
-          ),
-          onAction: () => {
-            setPen(color);
-            setTool("pen");
-          },
-        }))}
-      />
-      {view === "pdf" ? (
-        <IconButton
-          aria-label="框选区域（R，或按住 Alt 拖动）"
-          aria-pressed={tool === "region"}
-          onPress={() => setTool(tool === "region" ? "select" : "region")}
-        >
-          <Icon name="region" />
-        </IconButton>
-      ) : null}
-    </div>
-  ) : null;
+  // Spec 1.3: the marking tools live in the top bar's “更多” menu; the keys
+  // V, H, R and 1–5 still choose them.
+  const toolItems: readonly MenuOption[] = active
+    ? [
+        {
+          id: "mark-pen",
+          label: "高亮笔",
+          shortcut: "H",
+          checked: tool === "pen",
+          divider: true,
+          onAction: () => setTool(tool === "pen" ? "select" : "pen"),
+        },
+        ...(view === "pdf"
+          ? [
+              {
+                id: "mark-region",
+                label: "框选区域",
+                shortcut: "R",
+                checked: tool === "region",
+                onAction: () =>
+                  setTool(tool === "region" ? "select" : "region"),
+              },
+            ]
+          : []),
+        {
+          id: "mark-color",
+          label: "笔颜色",
+          onAction: () => {},
+          submenu: MARK_COLORS.map((color, index) => ({
+            id: `mark-color-${color}`,
+            label: MARK_COLOR_LABELS[color],
+            checked: pen === color,
+            shortcut: String(index + 1),
+            onAction: () => {
+              setPen(color);
+              setTool("pen");
+            },
+          })),
+        },
+      ]
+    : [];
   const panel: ReactNode = active ? (
     <MarksPanel
       marks={store.marks}
@@ -668,7 +657,7 @@ export function useReaderMarks({
     ) : null;
   return {
     attach,
-    tools,
+    toolItems,
     panel,
     overlays,
     rail: railNode,

@@ -1,3 +1,4 @@
+import { readerNavigation } from "./reader-controls.js";
 import { expect, it } from "vitest";
 import type { Page } from "playwright";
 import {
@@ -144,6 +145,8 @@ it("organizes papers into nested folders by dialog and drag, scopes the library,
       .waitFor();
     await rows.first().locator(".paper-open").click();
     await p.locator(".reader-information").waitFor();
+    // The reader page's navigation is in its drawer (reading-experience 1.3).
+    await readerNavigation(p);
     await folders(p)
       .getByRole("button", { name: /^最近阅读/ })
       .click();

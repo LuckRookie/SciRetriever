@@ -246,6 +246,11 @@ it("selects the current Library PDF and validates the raw parsing receipt in Chr
                 failure_source_type: null,
               },
             ],
+            draft: {
+              status: "failed",
+              raw_parse_id: id(805),
+              failure_code: "page-tools-unavailable",
+            },
           },
         }),
       });

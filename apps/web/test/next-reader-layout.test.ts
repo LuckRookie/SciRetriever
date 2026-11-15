@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { readerMore, readerToLibrary, readerType } from "./reader-controls.js";
 import { nextWorkspace } from "./next-workspace-fixture.js";
 
 const TEXT = [
@@ -167,7 +168,7 @@ it("folds article information, lays out figure groups and footnotes, and names u
     // The Markdown carries no layout markers: the body text is the paper's own.
     expect(await article.innerText()).not.toMatch(/mktero|<!--|:::/);
     // An untitled section is listed by its role, marked as such.
-    await w.page.getByRole("button", { name: "显示目录", exact: true }).click();
+    await readerMore(w.page, "显示目录");
     const entry = w.page.locator(".reader-outline-entry[data-untitled]");
     await entry.waitFor();
     expect(await entry.innerText()).toBe("引言");
@@ -326,12 +327,7 @@ it("keeps the block at the reading line in place across font size, information p
       const after = await anchor(before.key);
       moves[name] = Math.abs(after.top - before.top);
     };
-    const font = async (size: number) => {
-      await w.page.getByRole("button", { name: /阅读字号/ }).click();
-      await w.page
-        .getByRole("option", { name: `${size} px`, exact: true })
-        .click();
-    };
+    const font = (size: number) => readerType(w.page, `${size} px`);
     const first = await anchor();
     await measure("font 20 → 24", () => font(24));
     await measure("font 24 → 20", () => font(20));
@@ -415,7 +411,7 @@ it("returns from an outline jump with Alt+← and reopens a paper where it was l
     await w.page.waitForTimeout(400);
     const before = await atLine();
     // Jump far away through the outline.
-    await w.page.getByRole("button", { name: "显示目录", exact: true }).click();
+    await readerMore(w.page, "显示目录");
     await w.page
       .locator(".reader-outline-entry", { hasText: "Conclusion" })
       .click();
@@ -436,7 +432,7 @@ it("returns from an outline jump with Alt+← and reopens a paper where it was l
     await expect.poll(async () => (await atLine()).key).toBe(before.key);
     // Read on a little, then open the paper again: the same block at the same
     // place (the outline is not remembered, so it is closed first).
-    await w.page.getByRole("button", { name: "收起目录", exact: true }).click();
+    await readerMore(w.page, "收起目录");
     await body.evaluate((el) => {
       el.scrollTop += 640;
     });
@@ -523,9 +519,27 @@ it("records the place before the marks list moves the reader", async () => {
     await w.page.getByRole("toolbar", { name: "选中文字" }).waitFor();
     await w.page.keyboard.press("3");
     await w.page.getByRole("tab", { name: "批注 1" }).waitFor();
-    // Read far on, then go to the mark from the list.
-    await body.evaluate((el) => {
+    // Read far on, then go to the mark from the list. The place is the block
+    // at the reading line and where the line falls in it (spec 4.1): put the
+    // line inside a block, not in the space between two.
+    const left = await body.evaluate((el) => {
       el.scrollTop = 6000;
+      const header = el.querySelector<HTMLElement>(
+          ".reader-view:not([hidden]) .reader-page-header",
+        ),
+        below = header?.getClientRects().length ? header.offsetHeight : 0;
+      const line =
+        el.getBoundingClientRect().top +
+        below +
+        (el.clientHeight - below) * 0.28;
+      const block = [
+        ...el.querySelectorAll<HTMLElement>(
+          ".reader-view:not([hidden]) article > section[data-byte-start]",
+        ),
+      ].find((b) => b.getBoundingClientRect().bottom > line);
+      const top = block?.getBoundingClientRect().top ?? line;
+      if (top > line) el.scrollTop += top - line + 6;
+      return el.scrollTop;
     });
     await w.page.waitForTimeout(400);
     await w.page.getByRole("tab", { name: "批注 1" }).click();
@@ -539,8 +553,175 @@ it("records the place before the marks list moves the reader", async () => {
     await expect.poll(() => back.textContent()).toMatch(/^↩ 回到 ¶\d+$/u);
     await back.click();
     await expect
-      .poll(() => body.evaluate((el) => Math.abs(el.scrollTop - 6000)))
+      .poll(() => body.evaluate((el, at) => Math.abs(el.scrollTop - at), left))
       .toBeLessThanOrEqual(2);
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);
+
+it("puts the reader under one top bar: navigation in a drawer, the views, find, type, side panel and “更多” with every operation (spec 1.3)", async () => {
+  const w = await nextWorkspace({ ready: "body" });
+  const menuItems = async (button: string) => {
+    await w.page.getByRole("button", { name: button, exact: true }).click();
+    const names = await w.page
+      .getByRole("menuitem")
+      .evaluateAll((items) =>
+        items.map((item) =>
+          (item.querySelector('[slot="label"]')?.textContent ?? "").trim(),
+        ),
+      );
+    await w.page.keyboard.press("Escape");
+    await w.page.locator(".ui-menu").waitFor({ state: "detached" });
+    return names;
+  };
+  try {
+    await w.page.setViewportSize({ width: 1440, height: 900 });
+    const id = w.env.parseRequest.literature_id;
+    await w.page.goto(`${w.origin}/?literature=${id}&reader=doc`);
+    await w.page.locator('.react-reader[data-reading-ready="true"]').waitFor();
+    // No site sidebar; the navigation button and the paper's tab instead.
+    expect(await w.page.locator("aside.navigation").count()).toBe(0);
+    await w.page
+      .getByRole("navigation", { name: "阅读标签", exact: true })
+      .getByRole("button", {
+        name: "Synthetic literature workbench",
+        exact: true,
+      })
+      .waitFor();
+    // Only what can be used: 原文 and PDF, no overview, flow or question box,
+    // not even disabled (no reading-layer or question capability here).
+    expect(
+      await w.page
+        .getByRole("tablist", { name: "阅读视图" })
+        .getByRole("tab")
+        .allInnerTexts(),
+    ).toEqual(["原文", "PDF"]);
+    expect(await w.page.getByPlaceholder("向这份资料提问").count()).toBe(0);
+    expect(await w.page.getByRole("tab", { name: /概览|脉络/ }).count()).toBe(
+      0,
+    );
+    // The navigation drawer opens from the start edge; Esc or outside closes it.
+    const open = w.page.getByRole("button", { name: "打开导航", exact: true });
+    const drawer = w.page.getByRole("dialog", { name: "导航" });
+    await open.click();
+    await drawer.getByRole("button", { name: /^文献库/ }).waitFor();
+    const box = (await drawer.boundingBox())!;
+    expect(box.x).toBeLessThan(2);
+    await w.page.keyboard.press("Escape");
+    await drawer.waitFor({ state: "detached" });
+    await open.click();
+    await drawer.waitFor();
+    await w.page.mouse.click(1400, 450);
+    await drawer.waitFor({ state: "detached" });
+    // Every operation of the old toolbar has a place (spec 1.3).
+    const more = await menuItems("更多");
+    for (const item of [
+      "运行算子…",
+      "编辑校订稿",
+      "显示目录",
+      "高亮笔",
+      "笔颜色",
+      "获取 PDF",
+      "上传 PDF",
+      "核验文章身份",
+      "导出书目",
+      "下载已核验的原始 PDF",
+      "下载全文 Markdown",
+      "加工结果",
+    ])
+      expect(more, item).toContain(item);
+    expect(more).not.toContain("复制引用");
+    expect(more.some((item) => item.includes("解析"))).toBe(false);
+    expect(more).not.toContain("框选区域");
+    expect(await menuItems("排版")).toEqual([
+      "18 px",
+      "20 px",
+      "22 px",
+      "24 px",
+      "标出关键句",
+      "显示核对依据",
+    ]);
+    // Shortcuts outside text fields: Alt+4 the PDF, Alt+3 back, O the outline, ⌘/Ctrl+F find.
+    await w.page
+      .locator(".reader-engine-body")
+      .click({ position: { x: 5, y: 5 } });
+    await w.page.keyboard.press("Alt+4");
+    await expect
+      .poll(() => new URL(w.page.url()).searchParams.get("reader"))
+      .toBe("pdf");
+    await w.page
+      .locator(
+        '.reader-view[data-view="pdf"]:not([hidden]) .reading-pdf-page[data-rendered="true"]',
+      )
+      .first()
+      .waitFor();
+    expect(await menuItems("更多")).toContain("框选区域");
+    expect((await menuItems("排版")).slice(0, 8)).toEqual([
+      "适合宽度",
+      "50%",
+      "75%",
+      "100%",
+      "125%",
+      "150%",
+      "200%",
+      "300%",
+    ]);
+    await w.page.keyboard.press("Alt+3");
+    await expect
+      .poll(() => new URL(w.page.url()).searchParams.get("reader"))
+      .toBe("doc");
+    await w.page.keyboard.press("o");
+    await w.page.locator(".reader-outline").waitFor();
+    await w.page.keyboard.press("o");
+    await w.page.locator(".reader-outline").waitFor({ state: "detached" });
+    await w.page.keyboard.press("Control+f");
+    await expect
+      .poll(() =>
+        w.page
+          .getByRole("searchbox", { name: "文档内查找", exact: true })
+          .evaluate((el) => el === document.activeElement),
+      )
+      .toBe(true);
+    await w.page
+      .locator(".reader-engine-body")
+      .click({ position: { x: 5, y: 5 } });
+    // Below 760 px find, type and the side panel are in “更多”.
+    await w.page.setViewportSize({ width: 700, height: 900 });
+    await expect
+      .poll(() =>
+        w.page.getByRole("button", { name: "文档内查找", exact: true }).count(),
+      )
+      .toBe(0);
+    const compact = await menuItems("更多");
+    for (const item of ["文档内查找", "排版", "收起信息"])
+      expect(compact.some((name) => name === item || name === "显示信息")).toBe(
+        true,
+      );
+    // Below 640 px: no tabs, the views as one button, the title in the page header.
+    await w.page.setViewportSize({ width: 600, height: 900 });
+    await expect
+      .poll(() =>
+        w.page
+          .getByRole("navigation", { name: "阅读标签", exact: true })
+          .count(),
+      )
+      .toBe(0);
+    await w.page.getByRole("button", { name: "视图：原文" }).click();
+    expect(await w.page.getByRole("menuitem").allInnerTexts()).toEqual(["PDF"]);
+    await w.page.keyboard.press("Escape");
+    await expect
+      .poll(() =>
+        w.page
+          .locator(".reader-view:not([hidden]) .reader-page-header-source")
+          .innerText(),
+      )
+      .toBe("Synthetic literature workbench");
+    // Leaving the reader brings the site sidebar back.
+    await w.page.setViewportSize({ width: 1440, height: 900 });
+    await readerToLibrary(w.page);
+    await w.page.locator("aside.navigation").waitFor();
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();

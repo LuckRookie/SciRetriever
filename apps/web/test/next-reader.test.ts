@@ -8,6 +8,12 @@ import {
   trackReadingResources,
 } from "./reading-pdf-fixture.js";
 import { recordReading } from "./reading-capture-fixture.js";
+import {
+  readerGoToPage,
+  readerPageNumber,
+  readerToLibrary,
+  readerType,
+} from "./reader-controls.js";
 import { missingId } from "./processor-workspace-fixture.js";
 import { expect, it } from "vitest";
 
@@ -72,15 +78,11 @@ it.each(["no-preference", "reduce"] as const)(
             `${String(error)}\n${await w.page.locator("body").innerText()}\n${w.errors.join("\n")}`,
           );
         });
-      expect(
-        await w.page
-          .getByRole("textbox", { name: "PDF 页码", exact: true })
-          .inputValue(),
-      ).toBe("1");
+      expect(await readerPageNumber(w.page)).toBe(1);
       await w.page
         .getByRole("button", { name: "收起信息", exact: true })
         .click();
-      await w.page.getByRole("tab", { name: "全文", exact: true }).click();
+      await w.page.getByRole("tab", { name: "原文", exact: true }).click();
       await w.page.locator(".reader-engine-body .reading-article").waitFor();
       await expect
         .poll(() =>
@@ -134,7 +136,7 @@ it("switches between PDF and full text on one engine: one build, one PDF read an
     await w.page.goto(`${w.origin}/?literature=${id}&reader=pdf`);
     await pdf.first().waitFor();
     for (let n = 0; n < 3; n++) {
-      await w.page.getByRole("tab", { name: "全文", exact: true }).click();
+      await w.page.getByRole("tab", { name: "原文", exact: true }).click();
       await text.first().waitFor();
       await w.page.getByRole("tab", { name: "PDF", exact: true }).click();
       await pdf.first().waitFor();
@@ -161,7 +163,7 @@ it("switches between PDF and full text on one engine: one build, one PDF read an
     expect(counts!.workersStarted).toBe(1);
     // The hidden PDF view keeps at most the three canvases it showed (spec 5.3),
     // so coming back draws at once.
-    await w.page.getByRole("tab", { name: "全文", exact: true }).click();
+    await w.page.getByRole("tab", { name: "原文", exact: true }).click();
     await text.first().waitFor();
     const kept = await w.page.locator(".reading-pdf-page canvas").count();
     expect(kept).toBeGreaterThan(0);
@@ -404,7 +406,7 @@ it("shows the loading skeleton with its steps in order past 300 ms, and none whe
       true,
     );
     // Switching between views that are both ready shows no skeleton at all.
-    await w.page.getByRole("tab", { name: "全文", exact: true }).click();
+    await w.page.getByRole("tab", { name: "原文", exact: true }).click();
     await w.page
       .locator(".reader-surface .ui-empty")
       .getByText("这份资料还没有可读的文本。", { exact: true })
@@ -414,7 +416,7 @@ it("shows the loading skeleton with its steps in order past 300 ms, and none whe
         window as unknown as { preparing: { first: number | null } }
       ).preparing.first = null;
     });
-    for (const name of ["PDF", "全文", "PDF"] as const) {
+    for (const name of ["PDF", "原文", "PDF"] as const) {
       await w.page.getByRole("tab", { name, exact: true }).click();
       await w.page.waitForTimeout(400);
     }
@@ -477,8 +479,7 @@ it("stretches the drawn PDF pages in the first frame of a zoom, then replaces th
       });
       Object.assign(window, { zoomFrames: frames });
     });
-    await w.page.getByRole("button", { name: "PDF 缩放" }).click();
-    await w.page.getByRole("option", { name: "150%", exact: true }).click();
+    await readerType(w.page, "150%");
     const ratio = await w.page.evaluate(() =>
       Math.min(devicePixelRatio || 1, 2),
     );
@@ -552,11 +553,14 @@ it("keeps a 100-page PDF bounded over ten React reader switches and releases its
     const open = async (id: string) => {
       const title =
         id === missingId ? "Unparsed source" : "Synthetic literature workbench";
-      const tabs = w.page.getByRole("navigation", { name: "工作区与阅读标签" });
+      const tabs = w.page.getByRole("navigation", {
+        name: "阅读标签",
+        exact: true,
+      });
       const tab = tabs.getByRole("button", { name: title, exact: true });
       if (await tab.count()) await tab.click();
       else {
-        await tabs.getByRole("button", { name: "文献库", exact: true }).click();
+        if (await tabs.count()) await readerToLibrary(w.page);
         await w.page
           .getByRole("article", { name: title, exact: true })
           .locator(".paper-open")
@@ -587,20 +591,26 @@ it("keeps a 100-page PDF bounded over ten React reader switches and releases its
           );
         });
     };
+    // The zoom in force, as the page header writes it (spec 1.2).
+    const zoomShown = () =>
+      w.page
+        .locator(
+          ".reader-engine:not([hidden]) .reader-view:not([hidden]) .reader-page-header-view",
+        )
+        .innerText();
     let start = Date.now();
     await open(missingId);
     timings.cold = Date.now() - start;
-    const page = w.page.getByRole("textbox", { name: "PDF 页码", exact: true });
-    await page.fill("50");
+    const pageIs = async () => String(await readerPageNumber(w.page));
     start = Date.now();
-    await page.press("Enter");
+    await readerGoToPage(w.page, 50);
     await w.page
       .locator('[data-pdf-page="50"][data-rendered="true"]')
       .waitFor();
     timings.page = Date.now() - start;
-    await w.page.getByRole("button", { name: "PDF 缩放" }).click();
+    await w.page.getByRole("button", { name: "排版", exact: true }).click();
     start = Date.now();
-    await w.page.getByRole("option", { name: "125%", exact: true }).click();
+    await w.page.getByRole("menuitem", { name: "125%", exact: true }).click();
     await expect
       .poll(() => w.page.locator(".textLayer").allTextContents())
       .toContainEqual(expect.stringContaining("page 50"));
@@ -615,25 +625,20 @@ it("keeps a 100-page PDF bounded over ten React reader switches and releases its
     await w.page
       .getByRole("searchbox", { name: "文档内查找", exact: true })
       .press("Enter");
-    await expect.poll(() => page.inputValue()).toBe("89");
+    await expect.poll(pageIs).toBe("89");
     timings.find = Date.now() - start;
-    await page.fill("50");
-    await page.press("Enter");
+    await readerGoToPage(w.page, 50);
     await w.page
       .locator('[data-pdf-page="50"][data-rendered="true"]')
       .waitFor();
     for (let index = 0; index < 10; index++) {
       await open(w.env.parseRequest.literature_id);
-      expect(await page.inputValue()).toBe("1");
-      expect(
-        await w.page.getByRole("button", { name: "PDF 缩放" }).textContent(),
-      ).toContain("适宽");
+      expect(await pageIs()).toBe("1");
+      expect(await zoomShown()).toContain("适宽");
       start = Date.now();
       await open(missingId);
-      await expect.poll(() => page.inputValue()).toBe("50");
-      expect(
-        await w.page.getByRole("button", { name: "PDF 缩放" }).textContent(),
-      ).toContain("125%");
+      await expect.poll(pageIs).toBe("50");
+      expect(await zoomShown()).toContain("125%");
       timings.warm.push(Date.now() - start);
       const counts = await readingResourceCounts(w.page);
       // The current and the previous tab keep their engines (spec 5.1, 5.3).
@@ -746,7 +751,7 @@ it("does not let a late PDF response overwrite a newer full-text view", async ()
       `${w.origin}/?literature=${w.env.parseRequest.literature_id}&reader=pdf`,
     );
     await expect.poll(() => intercepted, { timeout: 20_000 }).toBe(true);
-    await w.page.getByRole("tab", { name: "全文", exact: true }).click();
+    await w.page.getByRole("tab", { name: "原文", exact: true }).click();
     await w.page.locator(".reading-article").waitFor();
     release!();
     await expect

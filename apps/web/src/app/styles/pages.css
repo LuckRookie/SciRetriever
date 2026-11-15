@@ -310,6 +310,51 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* Reading-experience 1.3: the reader page's one top bar, 48 px, white, a
+     hairline below; navigation button, paper tabs, then the reader's controls. */
+  .reader-topbar {
+    box-sizing: border-box;
+    height: 48px;
+    min-height: 48px;
+    padding-block: 0;
+    background: var(--bg);
+    border-bottom-color: var(--line2);
+  }
+  .reader-topbar .paper-tab {
+    min-width: 0;
+    max-width: 232px;
+  }
+  .reader-topbar[data-tabs="current"] .paper-tab {
+    max-width: 300px;
+  }
+  .reader-topbar .paper-tab[data-selected] .ui-icon-button {
+    opacity: 1;
+  }
+  .reader-topbar-others {
+    flex-shrink: 0;
+    color: var(--fg2);
+  }
+  .reader-topbar-tools {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: var(--space-1);
+    margin-inline-start: auto;
+  }
+  .reader-topbar-tools > .ui-segmented {
+    margin-inline-end: var(--space-2);
+  }
+  /* The side panel's button shows it is open, as the marking tools did. */
+  .reader-topbar-tools .ui-icon-button[aria-pressed="true"] {
+    background: var(--sel);
+    color: var(--blue);
+  }
+  .reader-type-icon {
+    font-family: var(--serif);
+    font-size: var(--text-control);
+    font-weight: 600;
+    line-height: 1;
+  }
   .workspace-content {
     flex: 1;
     min-height: 0;

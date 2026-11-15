@@ -19,6 +19,7 @@ import {
   ErrorNotice,
   EmptyState,
   IconButton,
+  Menu,
   Select,
   SplitPane,
   ToastProvider,
@@ -54,6 +55,7 @@ import { recordReadingOpen } from "../data/folders.js";
 import { LibraryFolders, withoutScope } from "../features/library/Folders.js";
 import { createReadingState, closeReadingState } from "../../reading/state.js";
 import { READER_PAINTED, ShellContext } from "./context.js";
+import { topBarLayout } from "../features/reader/geometry.js";
 import { Icon } from "./icon.js";
 import { CommandPalette } from "./CommandPalette.js";
 import { sectionLabels, errorMessage } from "../strings.js";
@@ -260,7 +262,12 @@ function Workspace({ api }: { api: ApiClient }) {
     [tabs, setTabs] = useState<PaperTab[]>([]),
     [mobileNav, setMobileNav] = useState(false),
     [activity, setActivity] = useState(false),
-    [search, setSearch] = useState(false);
+    [search, setSearch] = useState(false),
+    // Spec 1.3: the reader page's top bar, its slot for the reader's controls and its width.
+    [readerNav, setReaderNav] = useState(false),
+    [readerBar, setReaderBar] = useState<HTMLElement | null>(null),
+    [readerBarWidth, setReaderBarWidth] = useState(0),
+    topBar = useRef<HTMLElement>(null);
   const [width, setWidth] = useState(() => {
     const value = preferences.read("sciretriever:panel:navigation:v1");
     return value && /^\d+px$/.test(value)
@@ -538,6 +545,119 @@ function Workspace({ api }: { api: ApiClient }) {
     ) : (
       <Insights />
     );
+  // Navigating closes the reader's navigation drawer.
+  useEffect(() => {
+    setReaderNav(false);
+  }, [route.section, route.literature]);
+  // The reader page shows no site sidebar: one top bar, and navigation in a drawer.
+  const readerPage =
+    !route.error &&
+    !!route.literature &&
+    !["agent", "stats", "web"].includes(route.section) &&
+    !(
+      (api.kind !== "workspace" &&
+        ["disc", "task", "web", "stats"].includes(route.section)) ||
+      (api.kind === "query" && route.section === "set")
+    );
+  const closeTab = (tab: PaperTab) => {
+    setTabs((items) => items.filter((item) => item.id !== tab.id));
+    closeReadingState(reading, tab.id);
+    if (route.literature === tab.id) go(route.section);
+  };
+  const paperTab = (tab: PaperTab) => (
+    <div
+      className="paper-tab"
+      key={tab.id}
+      title={tab.title}
+      data-selected={route.literature === tab.id || undefined}
+    >
+      <Button
+        variant="text"
+        aria-current={route.literature === tab.id ? "page" : false}
+        icon={<Icon name="file" />}
+        onPress={() => showPaper(tab.id, tab.mode, tab.source, tab.title)}
+      >
+        {tab.title}
+      </Button>
+      <IconButton
+        size="inline"
+        variant="text"
+        aria-label={`关闭文献 ${tab.title}`}
+        icon={<Icon name="close" />}
+        onPress={() => closeTab(tab)}
+      />
+    </div>
+  );
+  const content_ = (
+    <main className="workspace-content" ref={content}>
+      <PageBoundary resetKey={`${route.section}:${route.literature ?? ""}`}>
+        {/* The reader stays mounted across papers: it keeps the old
+            picture until the new paper can show (spec 5.1). */}
+        <Suspense
+          key={route.literature ? "reader" : route.section}
+          fallback={
+            <div className="page-recovery" role="status">
+              正在打开…
+            </div>
+          }
+        >
+          {route.error ? <ErrorNotice message={route.error} /> : page}
+        </Suspense>
+      </PageBoundary>
+    </main>
+  );
+  // Below 1180 px only the current paper's tab shows, the others in a menu;
+  // below 640 px no tab shows (spec 1.3).
+  const current = tabs.find((tab) => tab.id === route.literature),
+    others = tabs.filter((tab) => tab.id !== route.literature),
+    barLayout = topBarLayout(readerBarWidth),
+    allTabs = barLayout.tabs === "all",
+    noTabs = barLayout.tabs === "none";
+  useLayoutEffect(() => {
+    const bar = topBar.current;
+    if (!readerPage || !bar) return;
+    const measure = () => setReaderBarWidth(bar.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(bar);
+    return () => observer.disconnect();
+  }, [readerPage]);
+  const readerTopBar = (
+    <header
+      className="workspace-header reader-topbar"
+      ref={topBar}
+      data-tabs={allTabs ? "all" : noTabs ? "none" : "current"}
+    >
+      <IconButton
+        aria-label="打开导航"
+        icon={<Icon name="menu" />}
+        onPress={() => setReaderNav(true)}
+      />
+      {noTabs ? null : (
+        <div
+          className="workspace-tabs reader-topbar-tabs"
+          role="navigation"
+          aria-label="阅读标签"
+        >
+          {allTabs ? tabs.map(paperTab) : current ? paperTab(current) : null}
+          {!allTabs && others.length ? (
+            <Menu
+              label={`另 ${others.length} 篇`}
+              variant="text"
+              className="reader-topbar-others"
+              items={others.map((tab) => ({
+                id: tab.id,
+                label: tab.title,
+                onAction: () =>
+                  showPaper(tab.id, tab.mode, tab.source, tab.title),
+              }))}
+            />
+          ) : null}
+        </div>
+      )}
+      <div className="reader-topbar-tools" ref={setReaderBar} />
+    </header>
+  );
   return (
     <ShellContext.Provider
       value={{
@@ -545,6 +665,8 @@ function Workspace({ api }: { api: ApiClient }) {
         setSelected,
         openPaper,
         notify,
+        readerBar: readerPage ? readerBar : null,
+        readerBarWidth: readerPage ? readerBarWidth : 0,
         reading,
         theme,
         setTheme: (value) => {
@@ -553,111 +675,115 @@ function Workspace({ api }: { api: ApiClient }) {
         },
       }}
     >
-      <div className="application-shell">
-        <SplitPane
-          label="导航栏宽度"
-          width={width}
-          onWidthChange={(value) => {
-            setWidth(value);
-            preferences.write("sciretriever:panel:navigation:v1", `${value}px`);
-          }}
-          min={200}
-          max={420}
-          defaultWidth={244}
-          side={
-            <aside className="navigation" aria-label="主导航">
-              {navigation}
-            </aside>
-          }
-        >
+      {readerPage ? (
+        <div className="application-shell" data-reader-page="">
           <div className="workspace-main">
-            <header className="workspace-header">
-              <span className="mobile-navigation-toggle">
-                <IconButton
-                  aria-label="打开导航"
-                  icon={<Icon name="menu" />}
-                  onPress={() => setMobileNav(true)}
-                />
-              </span>
-              <div
-                className="workspace-tabs"
-                role="navigation"
-                aria-label="工作区与阅读标签"
-              >
-                <Button
-                  variant="text"
-                  aria-current={!route.literature ? "page" : false}
-                  icon={<Icon name={route.section} />}
-                  onPress={() => go(route.section)}
-                >
-                  {sectionLabels[route.section]}
-                </Button>
-                {tabs.map((tab) => (
-                  <div
-                    className="paper-tab"
-                    key={tab.id}
-                    title={tab.title}
-                    data-selected={route.literature === tab.id || undefined}
-                  >
-                    <Button
-                      variant="text"
-                      aria-current={
-                        route.literature === tab.id ? "page" : false
-                      }
-                      icon={<Icon name="file" />}
-                      onPress={() =>
-                        showPaper(tab.id, tab.mode, tab.source, tab.title)
-                      }
-                    >
-                      {tab.title}
-                    </Button>
-                    <IconButton
-                      size="inline"
-                      variant="text"
-                      aria-label={`关闭文献 ${tab.title}`}
-                      icon={<Icon name="close" />}
-                      onPress={() => {
-                        setTabs((items) =>
-                          items.filter((item) => item.id !== tab.id),
-                        );
-                        closeReadingState(reading, tab.id);
-                        if (route.literature === tab.id) go(route.section);
-                      }}
-                    />
-                  </div>
-                ))}
-              </div>
-              {api.kind === "workspace" && (
-                <Button
-                  variant="text"
-                  icon={<Icon name="activity" />}
-                  onPress={() => setActivity(true)}
-                >
-                  {running > 0 ? `活动 · ${running}` : "活动"}
-                </Button>
-              )}
-            </header>
-            <main className="workspace-content" ref={content}>
-              <PageBoundary
-                resetKey={`${route.section}:${route.literature ?? ""}`}
-              >
-                {/* The reader stays mounted across papers: it keeps the old
-                    picture until the new paper can show (spec 5.1). */}
-                <Suspense
-                  key={route.literature ? "reader" : route.section}
-                  fallback={
-                    <div className="page-recovery" role="status">
-                      正在打开…
-                    </div>
-                  }
-                >
-                  {route.error ? <ErrorNotice message={route.error} /> : page}
-                </Suspense>
-              </PageBoundary>
-            </main>
+            {readerTopBar}
+            {content_}
           </div>
-        </SplitPane>
-      </div>
+        </div>
+      ) : (
+        <div className="application-shell">
+          <SplitPane
+            label="导航栏宽度"
+            width={width}
+            onWidthChange={(value) => {
+              setWidth(value);
+              preferences.write(
+                "sciretriever:panel:navigation:v1",
+                `${value}px`,
+              );
+            }}
+            min={200}
+            max={420}
+            defaultWidth={244}
+            side={
+              <aside className="navigation" aria-label="主导航">
+                {navigation}
+              </aside>
+            }
+          >
+            <div className="workspace-main">
+              <header className="workspace-header">
+                <span className="mobile-navigation-toggle">
+                  <IconButton
+                    aria-label="打开导航"
+                    icon={<Icon name="menu" />}
+                    onPress={() => setMobileNav(true)}
+                  />
+                </span>
+                <div
+                  className="workspace-tabs"
+                  role="navigation"
+                  aria-label="工作区与阅读标签"
+                >
+                  <Button
+                    variant="text"
+                    aria-current={!route.literature ? "page" : false}
+                    icon={<Icon name={route.section} />}
+                    onPress={() => go(route.section)}
+                  >
+                    {sectionLabels[route.section]}
+                  </Button>
+                  {tabs.map((tab) => (
+                    <div
+                      className="paper-tab"
+                      key={tab.id}
+                      title={tab.title}
+                      data-selected={route.literature === tab.id || undefined}
+                    >
+                      <Button
+                        variant="text"
+                        aria-current={
+                          route.literature === tab.id ? "page" : false
+                        }
+                        icon={<Icon name="file" />}
+                        onPress={() =>
+                          showPaper(tab.id, tab.mode, tab.source, tab.title)
+                        }
+                      >
+                        {tab.title}
+                      </Button>
+                      <IconButton
+                        size="inline"
+                        variant="text"
+                        aria-label={`关闭文献 ${tab.title}`}
+                        icon={<Icon name="close" />}
+                        onPress={() => {
+                          setTabs((items) =>
+                            items.filter((item) => item.id !== tab.id),
+                          );
+                          closeReadingState(reading, tab.id);
+                          if (route.literature === tab.id) go(route.section);
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+                {api.kind === "workspace" && (
+                  <Button
+                    variant="text"
+                    icon={<Icon name="activity" />}
+                    onPress={() => setActivity(true)}
+                  >
+                    {running > 0 ? `活动 · ${running}` : "活动"}
+                  </Button>
+                )}
+              </header>
+              {content_}
+            </div>
+          </SplitPane>
+        </div>
+      )}
+      <Drawer
+        title="导航"
+        side="start"
+        className="reader-navigation"
+        isOpen={readerPage && readerNav}
+        onOpenChange={setReaderNav}
+      >
+        {navigation}
+      </Drawer>
       <Drawer title="导航" isOpen={mobileNav} onOpenChange={setMobileNav}>
         {navigation}
       </Drawer>

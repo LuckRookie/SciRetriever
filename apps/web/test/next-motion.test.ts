@@ -126,11 +126,9 @@ it.each(["no-preference", "reduce"] as const)(
       expect(panels.canvasInsertions).toBeLessThanOrEqual(40);
       const more = w.page.getByRole("button", { name: "更多", exact: true });
       await more.click();
+      // “排版” sits in “更多” only below 760 px; here “更多” itself opens and closes.
       await w.page
-        .getByRole("menuitem", { name: "阅读设置", exact: true })
-        .click();
-      await w.page
-        .getByRole("dialog", { name: "阅读设置", exact: true })
+        .getByRole("menuitem", { name: "下载已核验的原始 PDF", exact: true })
         .waitFor();
       await w.page.keyboard.press("Escape");
       await expect

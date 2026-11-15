@@ -16,6 +16,7 @@ import {
   Menu as AriaMenu,
   MenuItem,
   MenuTrigger as AriaMenuTrigger,
+  SubmenuTrigger,
   Popover as AriaPopover,
   Tab,
   TabList,
@@ -242,7 +243,12 @@ export function Disclosure({
 export interface MenuOption {
   id: string;
   label: string;
+  /** Not called for an item that opens a submenu. */
   onAction: () => void;
+  /** A choice or switch that is on: a check mark after the label. */
+  checked?: boolean;
+  /** Opens a further menu beside this item instead of acting. */
+  submenu?: readonly MenuOption[];
   disabled?: boolean;
   description?: string;
   shortcut?: string;
@@ -291,35 +297,64 @@ export function Menu({
         </Button>
       )}
       <AriaPopover className="ui-popover" placement="bottom end">
-        <AriaMenu
-          className="ui-menu"
-          aria-label={label}
-          items={items}
-          disabledKeys={items
-            .filter((item) => item.disabled)
-            .map((item) => item.id)}
-        >
-          {(item) => (
-            <MenuItem
-              id={item.id}
-              className="ui-menu-item"
-              data-divider={item.divider || undefined}
-              textValue={item.label}
-              onAction={item.onAction}
-            >
-              <Text slot="label">{item.label}</Text>
-              {item.trailing ??
-                (item.shortcut ? <kbd>{item.shortcut}</kbd> : null)}
-              {item.description ? (
-                <Text slot="description" className="ui-description">
-                  {item.description}
-                </Text>
-              ) : null}
-            </MenuItem>
-          )}
-        </AriaMenu>
+        <MenuItems label={label} items={items} />
       </AriaPopover>
     </AriaMenuTrigger>
+  );
+}
+function MenuItems({
+  label,
+  items,
+}: {
+  label: string;
+  items: readonly MenuOption[];
+}) {
+  return (
+    <AriaMenu
+      className="ui-menu"
+      aria-label={label}
+      items={items}
+      disabledKeys={items
+        .filter((item) => item.disabled)
+        .map((item) => item.id)}
+    >
+      {(item) => {
+        const row = (
+          <MenuItem
+            // Inside a submenu trigger the trigger node carries the item's id.
+            id={item.submenu ? `${item.id}:open` : item.id}
+            className="ui-menu-item"
+            data-divider={item.divider || undefined}
+            data-checked={item.checked || undefined}
+            textValue={item.label}
+            {...(item.submenu ? {} : { onAction: item.onAction })}
+          >
+            <Text slot="label">{item.label}</Text>
+            {item.submenu ? (
+              <Icon name="chevron" />
+            ) : (
+              (item.trailing ??
+              (item.shortcut ? <kbd>{item.shortcut}</kbd> : null))
+            )}
+            {item.description ? (
+              <Text slot="description" className="ui-description">
+                {item.description}
+              </Text>
+            ) : null}
+          </MenuItem>
+        );
+        return item.submenu ? (
+          <SubmenuTrigger>
+            {row}
+            <AriaPopover className="ui-popover" placement="end top">
+              <MenuItems label={item.label} items={item.submenu} />
+            </AriaPopover>
+          </SubmenuTrigger>
+        ) : (
+          row
+        );
+      }}
+    </AriaMenu>
   );
 }
 export { AriaMenuTrigger as MenuTrigger };

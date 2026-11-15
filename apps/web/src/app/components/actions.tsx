@@ -288,10 +288,14 @@ export function Drawer({
   footer,
   isDismissable = true,
   className,
-}: DialogProps) {
+  side = "end",
+}: DialogProps & {
+  /** The edge it slides from: the end (default) or the start, as navigation does. */
+  side?: "start" | "end";
+}) {
   return (
     <ModalOverlay
-      className="ui-overlay ui-drawer-overlay"
+      className={`ui-overlay ui-drawer-overlay${side === "start" ? " ui-drawer-overlay-start" : ""}`}
       isOpen={isOpen}
       onOpenChange={onOpenChange}
       isDismissable={isDismissable}
@@ -299,7 +303,7 @@ export function Drawer({
     >
       <Modal className={`ui-drawer ${className ?? ""}`}>
         <AriaDialog className="ui-dialog">
-          <AnimatedPanel preset="drawer">
+          <AnimatedPanel preset={side === "start" ? "drawerStart" : "drawer"}>
             <header className="ui-dialog-header">
               <Heading slot="title">{title}</Heading>
               <AriaButton
