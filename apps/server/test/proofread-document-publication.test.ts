@@ -23,6 +23,90 @@ async function prepareRaw(
 }
 
 describe("proofread document publication", () => {
+  it("preserves a draft on stale corrected-publication CAS, then promotes the same valid fixed version with the current revision", async () => {
+    const e = await coreProcessingFixture({ offline: true });
+    try {
+      const parsed = await e.app.documentProcessing.parseDocuments({
+        ...e.rawParseRequest,
+        profiles: ["vlm-engine"],
+      });
+      if (parsed.draft.status !== "formed")
+        throw new Error("Synthetic draft missing");
+      const current = await e.app.database.documentDefault(
+        e.parseRequest.literature_id,
+        e.asset.asset_id,
+        e.asset.sha256,
+      );
+      expect(current).toMatchObject({
+        document_version_id: parsed.draft.document_version_id,
+        revision: 1,
+      });
+      const proofread = await e.app.proofreading!.build({
+        asset_id: e.asset.asset_id,
+      });
+      expect(proofread.version.status).toBe("complete");
+      const request = {
+        literature_id: e.parseRequest.literature_id,
+        asset_id: e.asset.asset_id,
+        proofread_id: proofread.version.proofread_id,
+        expected_default_revision: null,
+      };
+      const fixed = await e.app.proofreadDocuments.publish(request);
+      expect(fixed).toMatchObject({
+        published: true,
+        default_updated: false,
+        default_revision: 1,
+        index_status: "unchanged",
+      });
+      expect(
+        await e.app.database.documentVersion(
+          fixed.document.document_version_id,
+        ),
+      ).toMatchObject({ is_default: false, version: { schema_version: 2 } });
+      expect(
+        await e.app.database.documentDefault(
+          request.literature_id,
+          e.asset.asset_id,
+          e.asset.sha256,
+        ),
+      ).toEqual(current);
+      const selected = await e.app.proofreadDocuments.publish({
+        ...request,
+        expected_default_revision: current!.revision,
+      });
+      expect(selected).toMatchObject({
+        published: false,
+        default_updated: true,
+        default_revision: 2,
+        index_status: "scheduled",
+        document: fixed.document,
+      });
+      expect(
+        await e.app.database.documentDefault(
+          request.literature_id,
+          e.asset.asset_id,
+          e.asset.sha256,
+        ),
+      ).toMatchObject({
+        document_version_id: fixed.document.document_version_id,
+        revision: 2,
+      });
+      expect(
+        await e.app.documentRead.describe({
+          document_version_id: fixed.document.document_version_id,
+        }),
+      ).toMatchObject({ text_level: "proofread" });
+      expect(
+        await e.app.documentRead.describe({
+          document_version_id: parsed.draft.document_version_id,
+        }),
+      ).toMatchObject({ text_level: "draft" });
+      expect(e.parseCalls).toBe(1);
+      expect(e.modelCalls).toBe(0);
+    } finally {
+      await e.close();
+    }
+  }, 30_000);
   it("publishes a fixed corrected version, reads page evidence and reopens it without reprocessing", async () => {
     const e = await coreProcessingFixture();
     try {

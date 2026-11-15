@@ -351,12 +351,28 @@ describe("incremental material indexing", () => {
       const proof = await env.app.proofreading!.build({
         asset_id: env.asset.asset_id,
       });
-      await env.app.proofreadDocuments.publish({
+      const current = await env.app.database.documentDefault(
+        env.parseRequest.literature_id,
+        env.asset.asset_id,
+        env.asset.sha256,
+      );
+      const published = await env.app.proofreadDocuments.publish({
         literature_id: env.parseRequest.literature_id,
         asset_id: env.asset.asset_id,
         proofread_id: proof.version.proofread_id,
-        expected_default_revision: null,
+        expected_default_revision: current?.revision ?? null,
       });
+      expect(published.default_updated).toBe(true);
+      // Parsing now schedules an index for the draft as well. Finish the
+      // publication's accepted background work before this test takes explicit
+      // generation ownership and deliberately corrupts/rebuilds the projection.
+      await vi.waitFor(
+        async () =>
+          expect(await env.app.indexRefreshStatus!()).toMatchObject({
+            status: "updated",
+          }),
+        { timeout: 20_000 },
+      );
       await env.index.build();
       const original = rows(env.catalog);
       expect(original.length).toBeGreaterThan(128);

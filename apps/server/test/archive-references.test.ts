@@ -21,14 +21,21 @@ async function preparedReferences() {
     const proof = await e.app.proofreading!.build({
       asset_id: e.asset.asset_id,
     });
-    const document = (
-      await e.app.proofreadDocuments.publish({
-        literature_id: e.rawParseRequest.literature_id,
-        asset_id: e.asset.asset_id,
-        proofread_id: proof.version.proofread_id,
-        expected_default_revision: null,
-      })
-    ).document;
+    // A formed draft already owns the initial default revision; the reference
+    // fixture needs a successful corrected-default publication, not a CAS loss.
+    const current = await e.app.database.documentDefault(
+      e.rawParseRequest.literature_id,
+      e.asset.asset_id,
+      e.asset.sha256,
+    );
+    const published = await e.app.proofreadDocuments.publish({
+      literature_id: e.rawParseRequest.literature_id,
+      asset_id: e.asset.asset_id,
+      proofread_id: proof.version.proofread_id,
+      expected_default_revision: current?.revision ?? null,
+    });
+    expect(published.default_updated).toBe(true);
+    const document = published.document;
     const annotation = await e.app.structureAnnotations!.build({
       document_version_id: document.document_version_id,
       max_prefix_characters: 64,

@@ -305,14 +305,19 @@ it("absorbs a concurrently created vocabulary name across two corrected papers i
         "00000000-0000-4000-9000-000000009997" as typeof source.literature_asset.literature_asset_id,
       asset: source.asset,
     });
-    const doc = (
-      await e.app.proofreadDocuments.publish({
-        literature_id: other,
-        asset_id: e.asset.asset_id,
-        proofread_id: e.doc.schema_version === 2 ? e.doc.proofread_id : null,
-        expected_default_revision: null,
-      })
-    ).document;
+    const currentDefault = await e.app.database.documentDefault(
+      other,
+      e.asset.asset_id,
+      e.asset.sha256,
+    );
+    const published = await e.app.proofreadDocuments.publish({
+      literature_id: other,
+      asset_id: e.asset.asset_id,
+      proofread_id: e.doc.schema_version === 2 ? e.doc.proofread_id : null,
+      expected_default_revision: currentDefault?.revision ?? null,
+    });
+    expect(published.default_updated).toBe(true);
+    const doc = published.document;
     const annotation = await e.app.structureAnnotations!.build({
       document_version_id: doc.document_version_id,
       max_prefix_characters: 128,

@@ -14,14 +14,21 @@ it("uses DSH over corrected front matter, keeps authority bibliography, applies 
     const proof = await e.app.proofreading!.build({
       asset_id: e.asset.asset_id,
     });
-    const doc = (
-      await e.app.proofreadDocuments.publish({
-        literature_id: e.rawParseRequest.literature_id,
-        asset_id: e.asset.asset_id,
-        proofread_id: proof.version.proofread_id,
-        expected_default_revision: null,
-      })
-    ).document;
+    // Parsing now forms a default draft. Publish the valid corrected version
+    // against that current revision instead of deliberately losing its CAS.
+    const current = await e.app.database.documentDefault(
+      e.rawParseRequest.literature_id,
+      e.asset.asset_id,
+      e.asset.sha256,
+    );
+    const published = await e.app.proofreadDocuments.publish({
+      literature_id: e.rawParseRequest.literature_id,
+      asset_id: e.asset.asset_id,
+      proofread_id: proof.version.proofread_id,
+      expected_default_revision: current?.revision ?? null,
+    });
+    expect(published.default_updated).toBe(true);
+    const doc = published.document;
     const annotation = await e.app.structureAnnotations!.build({
       document_version_id: doc.document_version_id,
       max_prefix_characters: 128,
@@ -114,14 +121,19 @@ it("detects required metadata omissions without inventing values", async () => {
     const proof = await e.app.proofreading!.build({
       asset_id: e.asset.asset_id,
     });
-    const doc = (
-      await e.app.proofreadDocuments.publish({
-        literature_id: e.rawParseRequest.literature_id,
-        asset_id: e.asset.asset_id,
-        proofread_id: proof.version.proofread_id,
-        expected_default_revision: null,
-      })
-    ).document;
+    const current = await e.app.database.documentDefault(
+      e.rawParseRequest.literature_id,
+      e.asset.asset_id,
+      e.asset.sha256,
+    );
+    const published = await e.app.proofreadDocuments.publish({
+      literature_id: e.rawParseRequest.literature_id,
+      asset_id: e.asset.asset_id,
+      proofread_id: proof.version.proofread_id,
+      expected_default_revision: current?.revision ?? null,
+    });
+    expect(published.default_updated).toBe(true);
+    const doc = published.document;
     const annotation = await e.app.structureAnnotations!.build({
       document_version_id: doc.document_version_id,
       max_prefix_characters: 128,

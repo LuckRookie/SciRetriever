@@ -1,4 +1,5 @@
 import { coreProcessingFixture } from "./core-processing-fixture.js";
+import { expect } from "vitest";
 import { SqliteDocumentStorage } from "../src/document/storage.js";
 import { SqliteAnnotationStorage } from "../src/storage/structure-annotations.js";
 import { TagService, type TagModel } from "../src/tags/service.js";
@@ -25,14 +26,21 @@ export async function tagFixture(model: TagModel | null = null) {
     const proof = await e.app.proofreading!.build({
       asset_id: e.asset.asset_id,
     });
-    const doc = (
-      await e.app.proofreadDocuments.publish({
-        literature_id: e.rawParseRequest.literature_id,
-        asset_id: e.asset.asset_id,
-        proofread_id: proof.version.proofread_id,
-        expected_default_revision: null,
-      })
-    ).document;
+    // Tags require the corrected default, while parsing may already have
+    // published a draft. Read the current CAS rather than assuming no default.
+    const current = await e.app.database.documentDefault(
+      e.rawParseRequest.literature_id,
+      e.asset.asset_id,
+      e.asset.sha256,
+    );
+    const published = await e.app.proofreadDocuments.publish({
+      literature_id: e.rawParseRequest.literature_id,
+      asset_id: e.asset.asset_id,
+      proofread_id: proof.version.proofread_id,
+      expected_default_revision: current?.revision ?? null,
+    });
+    expect(published.default_updated).toBe(true);
+    const doc = published.document;
     const annotation = await e.app.structureAnnotations!.build({
       document_version_id: doc.document_version_id,
       max_prefix_characters: 128,
