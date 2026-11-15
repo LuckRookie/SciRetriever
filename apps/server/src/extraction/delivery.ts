@@ -551,7 +551,10 @@ export class ExtractionDeliveryService {
             throw mappedWithInput(error, item.input_id, "input");
           });
         if (
-          encode(description.document, 16384) !== encode(item.document, 16384)
+          encode(description.document, 16384) !==
+            encode(item.document, 16384) ||
+          (item.text_level !== undefined &&
+            item.text_level !== description.text_level)
         )
           fail("input-stale", { input_id: item.input_id });
         const capabilities = ["material-file-v1", "document-segment-v1"];

@@ -5,6 +5,7 @@ import {
   requiredPreparationCapabilities,
   type InputManifestItem,
   type ExtractionPreparationResult,
+  type TextLevel,
 } from "@sciretriever/contracts";
 import {
   DocumentReadError,
@@ -76,10 +77,12 @@ export class ExtractionPreparationService {
       check(signal);
       const literatureId = selection.literature_id;
       const detail = await this.literature.detail(literatureId);
-      if (detail.literature.status !== "READY")
-        throw new ExtractionPreparationError("input-not-ready");
       if (selection.asset_id === null)
-        throw new ExtractionPreparationError("input-missing");
+        throw new ExtractionPreparationError(
+          detail.literature.status === "READY"
+            ? "input-missing"
+            : "input-not-ready",
+        );
       let material;
       try {
         const result = await this.documents.materialEvidence(
@@ -137,6 +140,7 @@ export class ExtractionPreparationService {
         }
       }
       let document = null;
+      let textLevel: TextLevel | undefined;
       if (versionId !== null) {
         try {
           const result = await this.documents.describe(
@@ -148,12 +152,10 @@ export class ExtractionPreparationService {
             JSON.stringify(material)
           )
             throw new ExtractionPreparationError("stale-binding");
-          await this.documents.withVerifiedVersion(
+          textLevel = await this.documents.withVerifiedTextVersion(
             versionId,
-            async (version) => {
-              if (version.schema_version !== 2)
-                throw new ExtractionPreparationError("input-unsupported");
-            },
+            async (version) =>
+              version.schema_version === 3 ? "draft" : "proofread",
             signal,
           );
           document = result.document;
@@ -190,11 +192,16 @@ export class ExtractionPreparationService {
           } else throw error;
         }
       } else gaps.push("document-missing");
+      // A readable draft is an explicit preparation input even before archive
+      // readiness. Other not-ready inputs retain the existing refusal.
+      if (detail.literature.status !== "READY" && textLevel !== "draft")
+        throw new ExtractionPreparationError("input-not-ready");
       items.push({
         input_id: selection.input_id,
         literature_id: literatureId,
         material,
         document,
+        ...(textLevel ? { text_level: textLevel } : {}),
         capabilities,
         gaps,
       });

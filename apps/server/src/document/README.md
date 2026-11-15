@@ -19,7 +19,7 @@
 
 `draft-leaves-v1` 的可读性核验使用 `rebuildDraftDocument`，只从固定初稿内容重建，不调用 PDF 页面工具；核验初稿计数、正文、结构和原始解析 ID/hash/part 绑定。初稿证明的文件指纹包含 PDF、全部图片、正文、结构和初稿内容；缓存命中仍比对 SQLite 原始解析声明与版本事实，并计入相同逻辑字节预算。缓存只略过未变化文件的字节重算，不放松单独交付资源时的实际字节核验。`draftDifferences` 再核验所交付的初稿内容字节，按合并片段中叶块的保存顺序组织差异，返回规范 JSON 的 UTF-8 字节分页；游标绑定固定版本、表示 hash、片段与位置，不重算对比。校订稿不提供初稿差异，初稿不提供 corrections。
 
-本模块的公开 describe、outline、segments、slice、resources、resource-bytes 和 evidence 支持初稿。内部 `withVerifiedVersion` 仍只接纳校订稿，包括同一读取范围已缓存初稿的情形；依赖它的检索、加工等读取方不会隐式取得初稿准入。
+本模块的公开 describe、outline、segments、slice、resources、resource-bytes 和 evidence 支持初稿。内部 `withVerifiedTextVersion` 为全文索引、查找、身份核验与外部提取显式开放两级固定文本，使用相同的整篇核验与预算。`withVerifiedVersion` 仍只接纳校订稿，包括同一读取范围已缓存初稿的情形；加工输入与逐值核对不会隐式取得初稿准入。结构注释对初稿返回 `document-unsupported`，不会读取正文或调用模型。
 
 `read.ts` 的内部 `withReadScope` 供知识／结果读取在一次逻辑操作内复用已核验文档；最多保留 16 份、32 MiB 的正文与序列化结构计量，结束即清空。带独立预算计量的检索不走此复用。
 

@@ -2,7 +2,8 @@ import {
   workbenchLogin,
   workbenchTestAccess,
 } from "./workbench-auth-fixture.js";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { coreProcessingFixture } from "./core-processing-fixture.js";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setup, lit, id } from "./content-fixture.js";
@@ -85,6 +86,74 @@ async function fixture() {
     },
   };
 }
+it("projects primary default grades on bounded pages and details without opening full text", async () => {
+  const f = await coreProcessingFixture({ offline: true });
+  try {
+    const empty = parseLiterature({
+      ...FIXTURE_LITERATURE,
+      literature_id: id(701),
+      meta_literature_id: id(702),
+    });
+    await f.app.database.putLiterature(empty);
+    const receipt = await f.app.documentProcessing.parseDocuments({
+      ...f.rawParseRequest,
+      profiles: ["vlm-engine"],
+    });
+    expect(receipt.draft.status).toBe("formed");
+    const reads = vi
+      .spyOn(f.app.files, "withVerified")
+      .mockRejectedValue(
+        new Error("Library projection must not load document bytes"),
+      );
+    const page = await f.app.library.search({
+      query: {},
+      limit: 10,
+      cursor: null,
+      sort: "title-asc",
+    });
+    expect(
+      page.items.find(
+        (item) =>
+          item.literature.literature_id === f.rawParseRequest.literature_id,
+      )?.text_level,
+    ).toBe("draft");
+    expect(
+      page.items.find(
+        (item) => item.literature.literature_id === empty.literature_id,
+      )?.text_level,
+    ).toBeNull();
+    expect(
+      (await f.app.library.detail(f.rawParseRequest.literature_id)).text_level,
+    ).toBe("draft");
+    expect(reads).not.toHaveBeenCalled();
+    reads.mockRestore();
+    const proofread = await f.app.proofreading!.build({
+      asset_id: f.asset.asset_id,
+    });
+    await f.app.proofreadDocuments.publish({
+      literature_id: f.rawParseRequest.literature_id,
+      asset_id: f.asset.asset_id,
+      proofread_id: proofread.version.proofread_id,
+      expected_default_revision: 1,
+    });
+    expect(
+      (await f.app.library.detail(f.rawParseRequest.literature_id)).text_level,
+    ).toBe("proofread");
+    expect(
+      (
+        await f.app.library.search({
+          query: {},
+          limit: 1,
+          cursor: null,
+          sort: "intake-desc",
+        })
+      ).items[0]!.text_level,
+    ).toBe("proofread");
+  } finally {
+    vi.restoreAllMocks();
+    await f.close();
+  }
+}, 30_000);
 it("serves real paginated search, detail and references through the existing authenticated client boundary", async () => {
   const env = await fixture();
   try {

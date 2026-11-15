@@ -304,11 +304,21 @@ describe("formal MCP product adapter", () => {
     });
     const client = await connected(host);
     try {
-      expect(
-        (await client.listTools()).tools.some(
-          (t) => t.name === "submit_processing",
-        ),
-      ).toBe(false);
+      const tools = (await client.listTools()).tools;
+      const document = tools.find(
+        (tool) => tool.name === "document_read",
+      )!.description!;
+      for (const word of [
+        "text_level=draft|proofread",
+        "draft_summary={differs_segments,differences,image_only_pages}",
+        "text-layer-match|text-layer-differs|no-text-layer",
+        "coverage_note",
+        "draft-differences",
+        "every continuation",
+        "HTTP MCP /mcp with purpose read",
+      ])
+        expect(document).toContain(word);
+      expect(tools.some((t) => t.name === "submit_processing")).toBe(false);
       const miss = await client.callTool({
         name: "search_library",
         arguments: { text: "No matching material", limit: 10, cursor: null },

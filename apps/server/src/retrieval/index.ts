@@ -5,11 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import type { LiteratureMetadata } from "@sciretriever/contracts";
 import type {
-  DocumentStructure,
-  LiteratureMetadata,
-} from "@sciretriever/contracts";
-import type { DocumentReadService } from "../document/read.js";
+  DocumentReadService,
+  VerifiedDocumentStructure,
+} from "../document/read.js";
 import type { LiteratureQueryService } from "../literature/query.js";
 import {
   CatalogWriteAdmission,
@@ -89,7 +89,7 @@ interface Unit {
 /** Blank-line blocks preserve complete paragraphs and whole Markdown tables. */
 export async function* contextUnits(
   markdown: Uint8Array,
-  structure: DocumentStructure,
+  structure: VerifiedDocumentStructure,
   signal?: AbortSignal,
 ): AsyncGenerator<Unit> {
   if (structure.schema_version === 2) {
@@ -377,7 +377,7 @@ export class RetrievalIndexService {
       check(signal);
       await this.verifiedMetadata(s);
       const entries: RetrievalEntry[] = [];
-      await this.documents.withVerifiedVersion(
+      await this.documents.withVerifiedTextVersion(
         s.document_version_id!,
         async (version, markdown, structure) => {
           if (version.representation_sha256 !== s.representation_sha256)
@@ -632,7 +632,7 @@ export class RetrievalIndexService {
               let indexingFailure: unknown;
               let failedDuringIndexing = false;
               try {
-                await this.documents.withVerifiedVersion(
+                await this.documents.withVerifiedTextVersion(
                   source.document_version_id,
                   async (version, markdown, structure) => {
                     try {
@@ -752,7 +752,7 @@ export class RetrievalIndexService {
     source: RetrievalSource,
     representation: string,
     markdown: Uint8Array,
-    structure: DocumentStructure,
+    structure: VerifiedDocumentStructure,
     signal?: AbortSignal,
   ): AsyncGenerator<RetrievalEntry> {
     if (representation !== source.representation_sha256)

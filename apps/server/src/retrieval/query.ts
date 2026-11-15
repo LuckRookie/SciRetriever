@@ -4,7 +4,6 @@ import {
   parseMaterialContextBundle,
   parseMaterialContextRequest,
   type DocumentRef,
-  type DocumentStructure,
   type EvidenceRef,
   type MaterialContextBundle,
   type MaterialContextItem,
@@ -14,6 +13,7 @@ import {
 import {
   DocumentReadError,
   type DocumentReadService,
+  type VerifiedDocumentStructure,
 } from "../document/read.js";
 import type { LiteratureQueryService } from "../literature/query.js";
 import { queryTerms } from "../literature/query.js";
@@ -177,7 +177,7 @@ function check(signal?: AbortSignal): void {
 }
 function documentEvidence(
   version: DocumentRef,
-  structure: DocumentStructure,
+  structure: VerifiedDocumentStructure,
   bytes: Uint8Array,
   hit: RetrievalHit,
 ): readonly EvidenceRef[] | null {
@@ -340,7 +340,7 @@ export class MaterialContextService {
         {
           version: DocumentRef;
           markdown: Uint8Array;
-          structure: DocumentStructure;
+          structure: VerifiedDocumentStructure;
         }
       >();
       let localVerifiedBytes = 0;
@@ -374,7 +374,7 @@ export class MaterialContextService {
             throw new MaterialContextError("context-source-integrity");
           let source = documents.get(id);
           if (!source) {
-            source = await this.documents.withVerifiedVersion(
+            source = await this.documents.withVerifiedTextVersion(
               id,
               async (version, markdown, structure) => ({
                 version,
@@ -422,6 +422,7 @@ export class MaterialContextService {
           );
           const item: MaterialContextItem = {
             kind: "source-text",
+            text_level: version.schema_version === 3 ? "draft" : "proofread",
             literature_id: hit.literature_id,
             meta_literature_id: hit.meta_literature_id,
             reference: {

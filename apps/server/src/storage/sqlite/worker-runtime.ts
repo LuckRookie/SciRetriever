@@ -807,7 +807,21 @@ function libraryTagBadges(ids: readonly string[]): Map<string, Dynamic[]> {
   }
   return result;
 }
-function searchItem(id: Dynamic, literature: Dynamic = undefined): Dynamic {
+function primaryDocumentLevels(ids: readonly string[]): Map<string, Dynamic> {
+  const defaults = draftTextModule.runDraftTextRead(db, {
+    kind: "primary-defaults",
+    literature_ids: ids,
+  });
+  if (!Array.isArray(defaults)) return fail();
+  return new Map(
+    defaults.map((row) => [String(row.literature_id), row.text_level]),
+  );
+}
+function searchItem(
+  id: Dynamic,
+  literature: Dynamic = undefined,
+  levels?: ReadonlyMap<string, Dynamic>,
+): Dynamic {
   queryCheckpoint();
   literature = literature ?? getLiterature(id);
   const metadata = db
@@ -827,6 +841,8 @@ function searchItem(id: Dynamic, literature: Dynamic = undefined): Dynamic {
     tags: libraryTagBadges([id]).get(id) ?? [],
     intake_at: libraryPageModule.intakeAt(db, id),
     ...folderModule.libraryMembership(db, id),
+    text_level:
+      (levels ?? primaryDocumentLevels([String(id)])).get(String(id)) ?? null,
     long_document: state.long_document ?? null,
     missing_step: state.missing_step,
     needs_manual_pdf: state.status === "UNREVIEWED" && exhausted,
@@ -1069,6 +1085,9 @@ function librarySnapshot(
           relevance: relevance.get(row.literature_id) ?? null,
         }));
     }
+    const textLevels = primaryDocumentLevels(
+      rows.map((row: Dynamic) => String(row.literature_id)),
+    );
     let result;
     if (literatureIds.length || metaLiteratureIds.length) {
       const ids = rows.map((row: Dynamic) => row.literature_id);
@@ -1124,6 +1143,7 @@ function librarySnapshot(
             intake_at: libraryPageModule.intakeAt(db, row.literature_id),
             ...folderModule.libraryMembership(db, row.literature_id),
             long_document: longDocuments.get(String(row.literature_id)) ?? null,
+            text_level: textLevels.get(String(row.literature_id)) ?? null,
             missing_step: __state.missing_step,
             needs_manual_pdf: __state.status === "UNREVIEWED" && hasExhaustion,
           },
@@ -1134,7 +1154,7 @@ function librarySnapshot(
       });
     } else
       result = rows.map((row: Dynamic) => ({
-        item: searchItem(row.literature_id),
+        item: searchItem(row.literature_id, undefined, textLevels),
         relevance: row.relevance,
         has_pdf_exhaustion: !!db
           .prepare(
@@ -1198,13 +1218,16 @@ function librarySearchPage(request: Dynamic): Dynamic {
       registerLibraryStates();
     }
     const page = libraryPageModule.libraryPageIds(db, request);
+    const textLevels = primaryDocumentLevels(
+      page.rows.map((row: Dynamic) => String(row.literature_id)),
+    );
     return {
       total_count: page.total_count,
       ...(page.tag_backfill_pending === undefined
         ? {}
         : { tag_backfill_pending: page.tag_backfill_pending }),
       rows: page.rows.map((row: Dynamic) => ({
-        item: searchItem(row.literature_id),
+        item: searchItem(row.literature_id, undefined, textLevels),
         relevance: row.relevance,
         has_pdf_exhaustion: !!db
           .prepare(

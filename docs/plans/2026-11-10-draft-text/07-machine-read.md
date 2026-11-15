@@ -2,7 +2,7 @@
 
 类型：计划（结果块）
 负责：文本等级与核对依据在三端读取中的表达，差异的有界读取，以及交给计划 16 的加工读取合同
-状态：In progress（2026-11-15 7.1–7.3 完成；7.4–7.6、7.8 进行中；7.7 暂缓）
+状态：Completed（2026-11-15；7.7 随计划 16 暂缓；须与 04 同次部署）
 
 ## Outcome
 
@@ -50,12 +50,12 @@ Agent 经 HTTP、CLI、MCP 读到同样的结果：
   - 可读性校验调用 03 的 3.3（从初稿内容重建，不跑 PDF 工具）；初稿内容计入校验证明的文件指纹与预算（04 §8.3 verified reader 一段）；
   - `segments` 带 `roles` 读初稿时返回整篇与 `coverage_note`（04 §8.6）。
 - [x] **7.3 差异读取**：按 04 §8.3“差异的有界读取”实现 `draft-differences`：HTTP `POST /api/v1/query/document-draft-differences`、CLI `sciretriever document draft-differences`、MCP `document_read` 的 `draft-differences` 操作，用途 `read`。只读初稿内容中已保存的差异。
-- [ ] **7.4 文献库与建档状态**：按本页文献 ID 批量读取主 PDF 默认文本的等级，不读正文；建档状态的 `parts[]` 逐部分给出。同一次读取的等级与 `document_version_id` 来自同一个只读快照（06 §2.1.7“一致性”）。
-- [ ] **7.5 查找**：
+- [x] **7.4 文献库与建档状态**：按本页文献 ID 批量读取主 PDF 默认文本的等级，不读正文；建档状态的 `parts[]` 逐部分给出。同一次读取的等级与 `document_version_id` 来自同一个只读快照（06 §2.1.7“一致性”）。
+- [x] **7.5 查找**：
   - 全文索引收入全部已接纳的固定文档版本，两级相同（04 §8.10）；索引构建现在只认校订稿的 builder，要按 builder 分派；
   - 命中的 `text_level` 来自命中已核验的固定版本，不来自索引条目；索引条目与游标不变（06 §2.1.7）；
   - 默认文本改变时只经现有刷新机制更新索引，读取不重建。
-- [ ] **7.6 读取方逐个处置**（04 §8.10）
+- [x] **7.6 读取方逐个处置**（04 §8.10）
   - 现有约 30 个文件按“文档版本是 schema 2 的校订稿”取值。用 `rg -n 'schema_version !== 2|schema_version === 2|version\.proofread_id' apps/server/src` 列出全部，每个文件对到 04 §8.10 表中的一行，只放开表中“接受”的读取方，其余照旧拒绝。
   - 表中“接受”的读取方要改的代码，至少包括：`document/read.ts`、`document/annotations.ts`、`retrieval/index.ts`、`parsing/article-identity.ts`、`translation/`、`extraction/prepare.ts`。
   - 表中“不接受”的读取方保持拒绝，返回值按表（`corrections` 与 `document annotate` 返回 `document-unsupported`；标签、元数据、参考文献只读校订稿）。
@@ -69,7 +69,7 @@ Agent 经 HTTP、CLI、MCP 读到同样的结果：
   - `processor-value-checks.ts` 接受初稿的 `basis` 取值；`analysis/value-check.ts` 的文字比对在初稿片段上照常执行。
   - 现行算子执行器仍只读 `READY` 文献（计划 16 改），本块不改执行器。
   - 写一份接口说明交计划 16 的负责人，记入回执。
-- [ ] **7.8 说明文字**：MCP 工具说明与 CLI 帮助写明 `text_level`、`draft_summary`、初稿的 `basis` 与 `draft-differences`。
+- [x] **7.8 说明文字**：MCP 工具说明与 CLI 帮助写明 `text_level`、`draft_summary`、初稿的 `basis` 与 `draft-differences`。
 
 ## 集成与影响
 

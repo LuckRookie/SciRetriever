@@ -1,8 +1,15 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
-import { TranslationInputError } from "@sciretriever/contracts";
+import { afterEach, expect, it, vi } from "vitest";
+import {
+  TranslationInputError,
+  parseRawParse,
+  rawParseIdentity,
+  sha256,
+} from "@sciretriever/contracts";
+import { archiveTextFixture } from "./archive-text-fixture.js";
+import { coreProcessingFixture } from "./core-processing-fixture.js";
 import { DshAgentRuntime } from "../src/agents/dsh/runtime.js";
 import {
   AgentFailure,
@@ -346,6 +353,137 @@ const pageOf = (page_index: number, extra: Record<string, unknown> = {}) => ({
   force: false,
   ...extra,
 });
+
+it("translates the primary default draft by raw block type without assigning roles or falling back to an old corrected source", async () => {
+  let fixture = await archiveTextFixture([
+    { text: "Synthetic title", type: "title" },
+    { text: "Ada Author.", type: "text" },
+    { text: "A synthetic finding.", type: "text" },
+    { text: "[1] Known reference.", type: "reference" },
+  ]);
+  let parses = 0;
+  const f = await coreProcessingFixture({
+    offline: true,
+    rawParser: {
+      identity: async () => ({
+        parser_version: fixture.input.parser_version,
+        model_identity: fixture.input.model_identity,
+        parameters_sha256: fixture.input.parameters_sha256,
+      }),
+      async parseRaw(request, profile) {
+        parses++;
+        const privateBytes = Buffer.from("[]");
+        const input = {
+          ...fixture.input,
+          source_asset_id: request.source_asset_id,
+          source_sha256: request.source_sha256,
+          profile,
+          private_content_list: {
+            sha256: await sha256(privateBytes),
+            byte_size: privateBytes.length,
+            media_type: "application/json",
+          },
+        };
+        return {
+          result: await parseRawParse({
+            ...input,
+            ...(await rawParseIdentity(input)),
+          }),
+          blocks: { artifact: input.blocks!, bytes: fixture.bytes },
+          private_content_list: {
+            artifact: input.private_content_list,
+            bytes: privateBytes,
+          },
+          markdown: { artifact: input.markdown, bytes: fixture.markdown },
+          resources: [],
+        };
+      },
+    },
+  });
+  try {
+    f.setText(fixture.markdown.toString());
+    const lit = f.rawParseRequest.literature_id;
+    await expect(
+      f.app.fullTextTranslation.summary(lit, "zh-Hans"),
+    ).rejects.toMatchObject({ code: "translation-not-archived" });
+    const receipt = await f.app.documentProcessing.parseDocuments({
+      ...f.rawParseRequest,
+      profiles: ["vlm-engine"],
+    });
+    expect(receipt.draft, JSON.stringify(receipt)).toMatchObject({
+      status: "formed",
+    });
+    const pages = vi
+      .spyOn(f.app.archiveText!.pdf, "inspect")
+      .mockRejectedValue(new Error("Synthetic unavailable page tools"));
+    f.setModel((input) => {
+      if (!Array.isArray(input))
+        throw new Error("Synthetic translation batch expected");
+      return {
+        translations: input.map((item: { id: string; text: string }) => ({
+          id: item.id,
+          translation: `译:${item.text}`,
+        })),
+      };
+    });
+    expect(
+      await f.app.fullTextTranslation.summary(lit, "zh-Hans"),
+    ).toMatchObject({ page_count: 1, pages: [{ blocks: 3 }] });
+    const result = await f.app.fullTextTranslation.page({
+      ...pageOf(0),
+      literature_id: lit,
+    });
+    expect(
+      result.blocks.map((block) => [
+        block.source,
+        block.role,
+        block.translation,
+      ]),
+    ).toEqual([
+      ["Synthetic title", "", "译:Synthetic title"],
+      ["Ada Author.", "", "译:Ada Author."],
+      ["A synthetic finding.", "", "译:A synthetic finding."],
+    ]);
+    expect(pages).not.toHaveBeenCalled();
+    expect(parses).toBe(1);
+    expect(f.modelCalls).toBe(1);
+    pages.mockRestore();
+    // Switching the default to a corrected fixed version still works. The
+    // translator must not select an unrelated current proofread instead.
+    const proofread = await f.app.proofreading!.build({
+      asset_id: f.asset.asset_id,
+    });
+    await f.app.proofreadDocuments.publish({
+      literature_id: lit,
+      asset_id: f.asset.asset_id,
+      proofread_id: proofread.version.proofread_id,
+      expected_default_revision: 1,
+    });
+    expect(
+      await f.app.fullTextTranslation.summary(lit, "zh-Hans"),
+    ).toMatchObject({ page_count: 1 });
+    fixture = await archiveTextFixture([
+      { text: "A newly parsed synthetic finding.", type: "text" },
+    ]);
+    f.setText(fixture.markdown.toString());
+    vi.spyOn(f.app.archiveText!.pdf, "inspect").mockRejectedValue(
+      new Error("Synthetic unavailable page tools"),
+    );
+    await f.app.documentProcessing.parseDocuments({
+      ...f.rawParseRequest,
+      profiles: ["vlm-engine"],
+      force: true,
+    });
+    // A failed formation after force reparse removes the default. An old
+    // corrected source is still stored, but must not be translated implicitly.
+    await expect(
+      f.app.fullTextTranslation.summary(lit, "zh-Hans"),
+    ).rejects.toMatchObject({ code: "translation-not-archived" });
+  } finally {
+    vi.restoreAllMocks();
+    await f.close();
+  }
+}, 60_000);
 
 it("translates a page's own blocks in one request, keeps references, authors and figures, and reuses the saved page", async () => {
   const { full, calls, cache } = await fullText();

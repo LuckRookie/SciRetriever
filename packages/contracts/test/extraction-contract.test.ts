@@ -66,6 +66,41 @@ const selection = {
 };
 
 describe("Extraction preparation contracts", () => {
+  it("parses optional document text levels strictly without changing old manifest bytes", async () => {
+    const item = {
+      input_id: "one",
+      literature_id: material.literature_id,
+      material,
+      document,
+      capabilities: ["material-file-v1", "document-segment-v1"] as const,
+      gaps: [],
+    };
+    const old = await createInputManifest([item]);
+    expect(old.items[0]).not.toHaveProperty("text_level");
+    expect(await parseInputManifest(old)).toEqual(old);
+    for (const text_level of ["draft", "proofread"] as const) {
+      const manifest = await createInputManifest([{ ...item, text_level }]);
+      expect((await parseInputManifest(manifest)).items[0]!.text_level).toBe(
+        text_level,
+      );
+      expect(manifest.manifest_sha256).not.toBe(old.manifest_sha256);
+    }
+    for (const text_level of ["raw", null, undefined])
+      await expect(
+        createInputManifest([{ ...item, text_level }] as never),
+      ).rejects.toThrow();
+    await expect(
+      createInputManifest([
+        {
+          ...item,
+          document: null,
+          capabilities: ["material-file-v1"],
+          gaps: ["document-missing"],
+          text_level: "draft",
+        },
+      ]),
+    ).rejects.toThrow();
+  });
   it("rejects duplicate JSON keys, sparse arrays, over-budget values and preserves Unicode code points", () => {
     expect(() => parseStrictJsonValue('[{"a":1,"a":2}]')).toThrow();
     const sparse = Array<number>(2);

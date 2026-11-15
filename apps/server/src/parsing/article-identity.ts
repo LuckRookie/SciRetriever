@@ -66,7 +66,7 @@ export class ArticleIdentityService {
   constructor(
     private readonly documents: Pick<
       DocumentReadService,
-      "withVerifiedVersion"
+      "withVerifiedTextVersion"
     >,
     private readonly library: { detail(id: string): Promise<LiteratureDetail> },
     private readonly agents: DshAgentRuntime,
@@ -125,7 +125,7 @@ export class ArticleIdentityService {
       v.metadata_sha256 === request.metadata_sha256;
     if (!bindingMatches(detail))
       throw new ArticleIdentityError("article-identity-stale");
-    const prepared = await this.documents.withVerifiedVersion(
+    const prepared = await this.documents.withVerifiedTextVersion(
       request.document_version_id,
       async (document, bytes, structure) => {
         if (

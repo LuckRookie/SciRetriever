@@ -57,6 +57,7 @@ import { DshAgentRuntime, type AgentBinding } from "../agents/dsh/runtime.js";
 import { TranslationCache } from "../translation/cache.js";
 import { TranslationService } from "../translation/service.js";
 import { FullTextTranslation } from "../translation/fulltext.js";
+import { fullTextSource } from "../translation/source.js";
 import { OpenAIChatAdapter, OpenAIResponsesAdapter } from "../agents/openai.js";
 import type { AgentTransport } from "../agents/protocol.js";
 import {
@@ -1996,35 +1997,14 @@ async function createApplicationOwned(
       fullTextTranslation: new FullTextTranslation({
         dir: join(home, ".sciretriever", "cache", "fulltext"),
         translation,
-        source: async (literatureId, signal) => {
-          const asset = (await library.detail(literatureId)).primary_pdf?.asset;
-          const storage = archiveText?.storage;
-          if (!asset || !storage) return null;
-          const state = await storage.state(asset.asset_id, signal);
-          if (!state.current) return null;
-          const output = await storage.load(
-            String(state.current.proofread_id),
-            signal,
-          );
-          if (!output) return null;
-          return {
-            page_count: output.bundle.page_count,
-            blocks: output.bundle.leaves.flatMap((l) =>
-              l.destination.kind === "assigned"
-                ? [
-                    {
-                      leaf_id: l.leaf.leaf_id,
-                      type: l.leaf.type,
-                      role: l.destination.target.role,
-                      region: l.leaf.region,
-                      page_index: l.leaf.page_index,
-                      source: l.corrected_text ?? l.leaf.original_text,
-                    },
-                  ]
-                : [],
-            ),
-          };
-        },
+        source: fullTextSource({
+          library,
+          documents: documentRead,
+          drafts: new SqliteDocumentStorage(database, files),
+          corrected: new SqliteArchiveTextStorage(database, files),
+          legacy: new SqliteProofreadStorage(database, files),
+          annotations: new SqliteAnnotationStorage(database, files),
+        }),
       }),
       snapshots: new SnapshotService(database, library),
       archive: new ArchiveService(database, processingTasks, library),

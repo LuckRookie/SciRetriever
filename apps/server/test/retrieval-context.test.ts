@@ -1,5 +1,6 @@
 import { inspectFixtureRetrieval } from "./current-catalog-fixture.js";
 import { correctedDocumentFixture } from "./corrected-document-fixture.js";
+import { coreProcessingFixture } from "./core-processing-fixture.js";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -69,6 +70,120 @@ const request = (
   budget: { max_items: 20, max_bytes: 16_384, token_limit: null },
   continuation: null,
 });
+it("indexes both fixed text grades and derives hit grades from verified versions without changing entries or cursors", async () => {
+  const f = await coreProcessingFixture({ offline: true });
+  let q: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
+  try {
+    f.setText(
+      "# Synthetic result\n\nA synthetic value is known.\n\nAnother synthetic observation.",
+    );
+    const receipt = await f.app.documentProcessing.parseDocuments({
+      ...f.rawParseRequest,
+      profiles: ["vlm-engine"],
+    });
+    if (receipt.draft.status !== "formed")
+      throw new Error("Synthetic draft missing");
+    const draftId = receipt.draft.document_version_id;
+    const proofread = await f.app.proofreading!.build({
+      asset_id: f.asset.asset_id,
+    });
+    const corrected = await f.app.proofreadDocuments.publish({
+      literature_id: f.rawParseRequest.literature_id,
+      asset_id: f.asset.asset_id,
+      proofread_id: proofread.version.proofread_id,
+      expected_default_revision: 1,
+    });
+    const pages = vi
+      .spyOn(f.app.archiveText!.pdf, "inspect")
+      .mockRejectedValue(new Error("Page tools forbidden during index/read"));
+    const built = await f.app.maintenance!.rebuildIndex();
+    q = await createQueryApplication(f.home);
+    const described = await q.documentRead!.describe({
+      document_version_id: draftId,
+    });
+    const selected = {
+      ...request(["document"]),
+      versions: {
+        kind: "explicit",
+        documents: [
+          {
+            literature_id: f.rawParseRequest.literature_id,
+            document_version_id: draftId,
+            representation_sha256: described.document.representation_sha256,
+          },
+          {
+            literature_id: f.rawParseRequest.literature_id,
+            document_version_id: corrected.document.document_version_id,
+            representation_sha256: corrected.document.representation_sha256,
+          },
+        ],
+      },
+    };
+    const both = await q.context!.search(selected);
+    expect(
+      both.items.some(
+        (item) =>
+          item.text_level === "draft" &&
+          item.reference.kind === "document" &&
+          item.reference.document_version_id === draftId &&
+          item.text.includes("synthetic value"),
+      ),
+    ).toBe(true);
+    expect(
+      both.items.some(
+        (item) =>
+          item.text_level === "proofread" &&
+          item.reference.kind === "document" &&
+          item.reference.document_version_id ===
+            corrected.document.document_version_id,
+      ),
+    ).toBe(true);
+    const current = await q.context!.search(request(["document"]));
+    expect(current.items.length).toBeGreaterThan(0);
+    expect(current.items.every((item) => item.text_level === "proofread")).toBe(
+      true,
+    );
+    const small = await q.context!.search({
+      ...selected,
+      budget: { ...selected.budget, max_items: 1 },
+    });
+    expect(small.continuation).not.toBeNull();
+    const envelope = JSON.parse(
+      Buffer.from(small.continuation!, "base64url").toString("utf8"),
+    );
+    expect(Object.keys(JSON.parse(envelope.payload)).sort()).toEqual([
+      "after",
+      "fingerprint",
+      "generation",
+      "revision",
+      "score_rule",
+      "state",
+      "version",
+    ]);
+    const index = new RetrievalStorage(join(f.home, "catalog.sqlite"), true);
+    try {
+      const entries = index.verificationEntries(
+        built.generation_id,
+        f.rawParseRequest.literature_id,
+      );
+      expect(
+        entries
+          .filter((entry) => entry.kind === "document")
+          .every((entry) => !Object.hasOwn(entry, "text_level")),
+      ).toBe(true);
+      expect(index.state().generation?.generation_id).toBe(built.generation_id);
+    } finally {
+      index.close();
+    }
+    expect(pages).not.toHaveBeenCalled();
+    expect(f.parseCalls).toBe(1);
+    expect(f.modelCalls).toBe(0);
+  } finally {
+    vi.restoreAllMocks();
+    await q?.close();
+    await f.close();
+  }
+}, 30_000);
 function recount(bundle: MaterialContextBundle): MaterialContextBundle {
   let result = { ...bundle, usage: { ...bundle.usage, bytes: 0 } };
   for (let i = 0; i < 10; i++) {

@@ -520,12 +520,8 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
       throw new Error("document draft content mismatch");
     return { bytes: built.structure_bytes, structure: built.structure };
   }
-  /** The caller verified the document closure; delivered content bytes are rechecked. */
-  async draftDifferences(
-    v: DraftDocumentRef,
-    segmentId: string,
-    signal?: AbortSignal,
-  ) {
+  /** Approved readers verify the closure first; returned source bytes are rechecked. */
+  async draftContent(v: DraftDocumentRef, signal?: AbortSignal) {
     const snapshot = await this.database.documentVersion(v.document_version_id);
     if (
       !snapshot?.draft_content_artifact_path ||
@@ -538,9 +534,17 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
       MAX_DRAFT_CONTENT_BYTES,
       signal,
     );
-    const content = parseDraftContent(
+    return parseDraftContent(
       JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)),
     );
+  }
+  /** The caller verified the document closure; delivered content bytes are rechecked. */
+  async draftDifferences(
+    v: DraftDocumentRef,
+    segmentId: string,
+    signal?: AbortSignal,
+  ) {
+    const content = await this.draftContent(v, signal);
     const group = content.operations.find(
       (op) => op.kind === "merge" && op.leaf_ids[0] === segmentId,
     );

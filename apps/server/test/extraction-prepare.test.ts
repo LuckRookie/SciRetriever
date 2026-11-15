@@ -1,9 +1,11 @@
 import { processorFixture } from "./processor-fixture.js";
+import { coreProcessingFixture } from "./core-processing-fixture.js";
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   extractionSpecHash,
+  createInputManifest,
   EXTRACTION_SCHEMA_URI,
   parseAsset,
   parseProvenance,
@@ -121,6 +123,99 @@ async function fixture() {
 }
 
 describe("external extraction preparation", () => {
+  it("pins a readable default draft before READY and returns its grade on the manifest, slice and evidence", async () => {
+    const f = await coreProcessingFixture({ offline: true });
+    try {
+      f.setText("# Synthetic draft\n\nA measured synthetic value is 50.\n");
+      const input = {
+        input_id: "draft",
+        literature_id: lit,
+        asset_id: f.asset.asset_id,
+        asset_sha256: f.asset.sha256,
+        document_version_id: null,
+      };
+      await expect(
+        f.app.extractionPreparation.prepare({
+          spec: await spec(),
+          inputs: [input],
+        }),
+      ).rejects.toMatchObject({ code: "input-not-ready" });
+      const parsed = await f.app.documentProcessing.parseDocuments({
+        ...f.rawParseRequest,
+        profiles: ["vlm-engine"],
+      });
+      if (parsed.draft.status !== "formed")
+        throw new Error("Synthetic draft missing");
+      expect((await f.app.library.detail(lit)).literature.status).toBe(
+        "ASSET_READY",
+      );
+      const pages = vi
+        .spyOn(f.app.archiveText!.pdf, "inspect")
+        .mockRejectedValue(new Error("Synthetic pages unavailable"));
+      const prepared = await f.app.extractionPreparation.prepare({
+        spec: await spec({ required_capabilities: ["document-text-v1"] }),
+        inputs: [input],
+      });
+      const manifest = prepared.manifest;
+      expect(manifest.items[0]).toMatchObject({
+        text_level: "draft",
+        document: { document_version_id: parsed.draft.document_version_id },
+        gaps: [],
+      });
+      const forged = await createInputManifest(
+        manifest.items.map((item) => ({ ...item, text_level: "proofread" })),
+      );
+      await expect(
+        f.app.extractionDelivery.create({
+          caller_id: "local.synthetic",
+          spec: prepared.spec,
+          manifest: forged,
+        }),
+      ).rejects.toMatchObject({ code: "input-stale" });
+      expect(
+        await f.app.extractionDelivery.create({
+          caller_id: "local.synthetic",
+          spec: prepared.spec,
+          manifest,
+        }),
+      ).toHaveProperty("operation_id");
+      const segments = await f.app.documentRead.segments({
+        document_version_id: parsed.draft.document_version_id,
+        section_id: null,
+        cursor: null,
+        limit: 100,
+      });
+      const segment = segments.segments.find((s) => s.kind === "text")!;
+      const slice = await f.app.documentRead.slice({
+        document_version_id: parsed.draft.document_version_id,
+        selector: { kind: "segment", segment_id: segment.segment_id },
+        max_bytes: 65536,
+        continuation: null,
+      });
+      expect(slice).toMatchObject({
+        text_level: "draft",
+        text: "A measured synthetic value is 50.",
+        locations: [{ basis: "text-layer-match" }],
+      });
+      expect(
+        await f.app.documentRead.resolveEvidence({
+          evidence: slice.evidence[0]!,
+          max_bytes: 65536,
+          continuation: null,
+        }),
+      ).toMatchObject({
+        text_level: "draft",
+        text: slice.text,
+        location: { basis: "text-layer-match" },
+      });
+      expect(pages).not.toHaveBeenCalled();
+      expect(f.parseCalls).toBe(1);
+      expect(f.modelCalls).toBe(0);
+    } finally {
+      vi.restoreAllMocks();
+      await f.close();
+    }
+  }, 30_000);
   it("binds exact main and supplementary PDFs of a READY literature without new processing", async () => {
     const env = await fixture();
     let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;

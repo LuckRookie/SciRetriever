@@ -24,6 +24,29 @@ async function* input(bytes: Uint8Array): AsyncIterable<Uint8Array> {
 }
 
 describe("TypeScript CLI", () => {
+  it("explains fixed text levels, draft counts, basis and bounded differences in help without opening a library", async () => {
+    const printed: string[] = [];
+    expect(
+      (
+        await runCli(["--help"], {
+          home: "/unopened-synthetic-help",
+          stdout: (text) => printed.push(text),
+          stderr: () => {},
+        })
+      ).code,
+    ).toBe(0);
+    const help = printed.join("");
+    for (const word of [
+      "text_level=draft|proofread",
+      "draft_summary={differs_segments,differences,image_only_pages}",
+      "text-layer-match|text-layer-differs|no-text-layer",
+      "coverage_note",
+      "draft-differences",
+      "collect continuations",
+      "HTTP MCP /mcp with purpose read",
+    ])
+      expect(help).toContain(word);
+  });
   // Reached 2.6 s under Full (36/12) load, too close to the 5 s default.
   it("keeps backup create-if-absent and refuses unsafe target paths", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-cli-backup-"));

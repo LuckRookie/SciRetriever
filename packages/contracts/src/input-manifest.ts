@@ -15,6 +15,7 @@ import {
   EXTRACTION_MAX_JSON_NODES,
   type ExtractionCapability,
 } from "./extraction.js";
+import { parseTextLevel, type TextLevel } from "./draft-document.js";
 
 export interface InputSelection {
   readonly input_id: string;
@@ -28,6 +29,7 @@ export interface InputManifestItem {
   readonly literature_id: string;
   readonly material: DocumentMaterialRef | null;
   readonly document: DocumentReadingRef | null;
+  readonly text_level?: TextLevel;
   readonly capabilities: readonly ExtractionCapability[];
   readonly gaps: readonly (
     | "material-missing"
@@ -170,6 +172,11 @@ function parseItems(value: readonly unknown[]): readonly InputManifestItem[] {
       "document",
       "capabilities",
       "gaps",
+      ...(entry &&
+      typeof entry === "object" &&
+      Object.hasOwn(entry, "text_level")
+        ? ["text_level"]
+        : []),
     ]);
     const literatureId = String(parseLiteratureId(item.literature_id));
     const material =
@@ -188,6 +195,7 @@ function parseItems(value: readonly unknown[]): readonly InputManifestItem[] {
           JSON.stringify(material))
     )
       fail();
+    if (!document && Object.hasOwn(item, "text_level")) fail();
     if (
       !Array.isArray(item.capabilities) ||
       !Array.isArray(item.gaps) ||
@@ -241,6 +249,9 @@ function parseItems(value: readonly unknown[]): readonly InputManifestItem[] {
       literature_id: literatureId,
       material,
       document,
+      ...(Object.hasOwn(item, "text_level")
+        ? { text_level: parseTextLevel(item.text_level) }
+        : {}),
       capabilities: Object.freeze([
         ...item.capabilities,
       ]) as readonly ExtractionCapability[],

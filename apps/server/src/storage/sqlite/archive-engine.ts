@@ -75,7 +75,7 @@ export function archiveStates(
       : " WHERE literature_id IN (SELECT value FROM json_each(?))";
   const parts = rows(
     db,
-    `SELECT p.*,(SELECT json_group_array(profile) FROM raw_parse_current r WHERE r.source_asset_id=p.asset_id AND r.source_sha256=p.asset_sha256 AND r.raw_parse_id IS NOT NULL) AS profiles_json FROM archive_current_parts p${filter} ORDER BY p.part<>'main', p.asset_id`,
+    `SELECT p.*,(SELECT d.schema_version FROM document_versions d WHERE d.document_version_id=p.document_version_id) AS document_schema_version,(SELECT json_group_array(profile) FROM raw_parse_current r WHERE r.source_asset_id=p.asset_id AND r.source_sha256=p.asset_sha256 AND r.raw_parse_id IS NOT NULL) AS profiles_json FROM archive_current_parts p${filter} ORDER BY p.part<>'main', p.asset_id`,
     ...args,
   );
   checkpoint();
@@ -102,6 +102,12 @@ export function archiveStates(
       issues as ({ literature_id: string } & Record<string, unknown>)[],
     );
   const result = new Map<string, ArchiveState>();
+  const textLevel = (schema: unknown) =>
+    schema === 3
+      ? ("draft" as const)
+      : schema === 2
+        ? ("proofread" as const)
+        : null;
   for (const m of all) {
     checkpoint();
     const key = String(m.literature_id),
@@ -119,6 +125,7 @@ export function archiveStates(
       return marker ? parseLongDocumentInfo(marker) : null;
     };
     result.set(key, {
+      text_level: textLevel(main?.document_schema_version),
       long_document: longDocument(main?.asset_id),
       literature_id: key,
       mode: m.mode === "legacy-vlm-markdown" ? m.mode : "full",
@@ -140,6 +147,7 @@ export function archiveStates(
       tag_count: Number(m.tag_count),
       description_version: version(m.description_json),
       parts: material.map((p) => ({
+        text_level: textLevel(p.document_schema_version),
         long_document: longDocument(p.asset_id),
         format: stepRows.some(
           (s) => s.asset_id === p.asset_id && s.step === "arrange",

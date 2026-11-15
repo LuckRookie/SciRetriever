@@ -607,7 +607,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "document_read",
-    "Read figures/reference-texts with {document_version_id,annotation_id,max_bytes,continuation} as a bounded JSON stream. Read parts with {literature_id,offset,limit}; corrections with {document_version_id,segment_id,max_bytes,continuation} returns a bounded resumable JSON UTF-8 stream for human audit. draft-differences uses the same request on a draft version, returning its saved difference list as json-utf8 with text_level and basis; collect all chunks before parsing JSON. Describe optionally returns layout ranges for article information, figure/table groups and page footnotes in UTF-8 bytes. Outline titles are null when the source has no heading. Outline and segments accept annotation_id to pin role interpretation; segments also accepts roles to filter corrected blocks. Read raw parsing status with operation parsing-status and {literature_id, asset_id}. Read existing document data. request follows the named operation's closed document-read contract. Uses bounded pagination; does not parse or download.",
+    "Read existing fixed document versions with text_level=draft|proofread, determined by the version, not the current default. Describe adds draft_summary={differs_segments,differences,image_only_pages} only for drafts. Draft segment/slice/evidence locations carry basis=text-layer-match|text-layer-differs|no-text-layer; corrected versions keep their existing basis. Draft outline roles are null; requesting roles on draft segments returns the whole draft with coverage_note. Read figures/reference-texts with {document_version_id,annotation_id,max_bytes,continuation} as bounded JSON. Read parts with {literature_id,offset,limit}; corrections with {document_version_id,segment_id,max_bytes,continuation} is corrected-only. draft-differences uses that request on a draft and returns its saved differences as json-utf8; collect every continuation before parsing JSON. Describe optionally returns layout ranges in UTF-8 bytes. Outline titles are null without a heading. Corrected outline/segments accept annotation_id to pin roles, and segments accepts roles to filter corrected blocks. Read raw parsing status with parsing-status and {literature_id,asset_id}. request follows the operation's closed document-read contract. Bounded and read-only; never parses, forms a draft or downloads. Devices use this tool over HTTP MCP /mcp with purpose read, not query HTTP routes.",
     object({
       operation: {
         enum: [
@@ -646,7 +646,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "search_context",
-    "Retrieve existing source or mixed knowledge context. request is the MaterialContextRequest or KnowledgeContextRequest contract, including scope/version/budget/continuation. Both kinds can return index-stale coverage with verified items and continuation. Mixed context keeps per-literature index-stale gaps and a material-index-stale summary, and still returns verified processor results. Material receipts include current source_revision and active indexed_revision. An index mutation invalidates old cursors, including mixed pages of processor results, and requires a new query. This read-only tool never refreshes/rebuilds an index or generates content.",
+    "Retrieve existing source or mixed knowledge context. Source-text hits carry text_level=draft|proofread from their verified fixed version. request is the MaterialContextRequest or KnowledgeContextRequest contract, including scope/version/budget/continuation. Both kinds can return index-stale coverage with verified items and continuation. Mixed context keeps per-literature index-stale gaps and a material-index-stale summary, and still returns verified processor results. Material receipts include current source_revision and active indexed_revision. An index mutation invalidates old cursors, including mixed pages of processor results, and requires a new query. This read-only tool never refreshes/rebuilds an index or generates content.",
     object({
       kind: { enum: ["material", "knowledge"] },
       request: { type: "object" },
@@ -674,7 +674,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "prepare_extraction",
-    "Validate caller-owned extraction spec and freeze existing materials. request follows ExtractionPreparationRequest. Does not execute an extraction model or create a delivery operation.",
+    "Validate caller-owned extraction spec and freeze existing materials, including a readable default draft. Manifest document items carry text_level=draft|proofread; read their fixed segments and evidence with document_read for the same level and draft basis. request follows ExtractionPreparationRequest. Does not execute an extraction model or create a delivery operation.",
     object({ request: { type: "object" } }),
   ),
   tool(

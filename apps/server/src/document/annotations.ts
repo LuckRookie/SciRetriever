@@ -165,6 +165,8 @@ export class StructureAnnotationService {
   ) {
     const usage = { calls: 0, input_tokens: 0, output_tokens: 0 };
     const state = await this.storage.state(id, signal);
+    if (state.text_level === "draft")
+      throw new AnnotationError("document-unsupported");
     if (!state.part) throw new AnnotationError("annotation-proofread-required");
     if (edit && edit.expected_manual_revision !== state.manual_revision)
       throw new AnnotationError("annotation-manual-stale");

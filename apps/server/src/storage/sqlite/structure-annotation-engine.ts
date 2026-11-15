@@ -9,11 +9,16 @@ const { structureSatisfied }: typeof StructureRules = await import(
 );
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
-import type { StructureAnnotation, SectionRole } from "@sciretriever/contracts";
+import type {
+  StructureAnnotation,
+  SectionRole,
+  TextLevel,
+} from "@sciretriever/contracts";
 import type { LocatedProofreadArtifact } from "./proofread-engine.js";
 export type AnnotationStorageAction = "get" | "state" | "find" | "publish";
 export interface AnnotationState {
   readonly part: "main" | "supplementary" | null;
+  readonly text_level?: TextLevel | null;
   readonly current: {
     readonly annotation_id: string;
     readonly revision: number;
@@ -62,15 +67,23 @@ function state(db: DatabaseSync, id: string): AnnotationState {
   );
   const binding = one(
     db,
-    "SELECT l.role FROM document_versions d JOIN literature_assets l ON l.literature_id=d.literature_id AND l.asset_id=d.source_asset_id WHERE d.document_version_id=? AND d.schema_version=2 AND l.role IN ('primary-pdf','supplementary-pdf')",
+    "SELECT d.schema_version,l.role FROM document_versions d JOIN literature_assets l ON l.literature_id=d.literature_id AND l.asset_id=d.source_asset_id WHERE d.document_version_id=? AND l.role IN ('primary-pdf','supplementary-pdf')",
     id,
   );
   return {
     part:
-      binding?.role === "primary-pdf"
-        ? "main"
-        : binding?.role === "supplementary-pdf"
-          ? "supplementary"
+      binding?.schema_version !== 2
+        ? null
+        : binding.role === "primary-pdf"
+          ? "main"
+          : binding?.role === "supplementary-pdf"
+            ? "supplementary"
+            : null,
+    text_level:
+      binding?.schema_version === 3
+        ? "draft"
+        : binding?.schema_version === 2
+          ? "proofread"
           : null,
     current: current as AnnotationState["current"],
     manual_revision: Number(

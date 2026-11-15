@@ -275,6 +275,8 @@ export class ArchiveTextPipeline {
   }
   async annotate(document: string, arrangement: string, signal?: AbortSignal) {
     const fixed = await this.storage.database.documentVersion(document);
+    if (fixed?.version.schema_version === 3)
+      throw new ArchiveTextError("document-unsupported");
     if (
       !fixed ||
       fixed.version.schema_version !== 2 ||

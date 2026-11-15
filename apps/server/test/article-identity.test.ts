@@ -10,6 +10,62 @@ import {
 } from "../src/workbench/synthetic-fixture.js";
 
 describe("post-parse article identity", () => {
+  it("assesses a fixed draft and aligns the current label with the default when corrected text replaces it", async () => {
+    const f = await coreProcessingFixture({ offline: true });
+    try {
+      const receipt = await f.app.documentProcessing.parseDocuments({
+        ...f.rawParseRequest,
+        profiles: ["vlm-engine"],
+      });
+      if (receipt.draft.status !== "formed")
+        throw new Error("Synthetic draft missing");
+      const request = await f.identityRequest();
+      expect(request.document_version_id).toBe(
+        receipt.draft.document_version_id,
+      );
+      const first = await f.app.articleIdentity!.assess(request);
+      expect(first.assessment).toMatchObject({
+        status: "match-supported",
+        reason: "identifier-match",
+        document_version_id: receipt.draft.document_version_id,
+        evidence: [{ field: "doi", value: FIXTURE_DOI }],
+      });
+      expect(
+        (await f.app.library.detail(f.rawParseRequest.literature_id))
+          .primary_pdf?.article_identity_status,
+      ).toBe("match-supported");
+      const proofread = await f.app.proofreading!.build({
+        asset_id: f.asset.asset_id,
+      });
+      const published = await f.app.proofreadDocuments.publish({
+        literature_id: f.rawParseRequest.literature_id,
+        asset_id: f.asset.asset_id,
+        proofread_id: proofread.version.proofread_id,
+        expected_default_revision: 1,
+      });
+      expect(
+        (await f.app.library.detail(f.rawParseRequest.literature_id))
+          .primary_pdf?.article_identity_status,
+      ).toBe("unverified");
+      expect(
+        await f.app.articleIdentity!.read(first.assessment.assessment_id),
+      ).toMatchObject({
+        current: false,
+        assessment: { document_version_id: receipt.draft.document_version_id },
+      });
+      const second = await f.app.articleIdentity!.assess(
+        await f.identityRequest(),
+      );
+      expect(second.assessment).toMatchObject({
+        document_version_id: published.document.document_version_id,
+        status: "match-supported",
+      });
+      expect(f.parseCalls).toBe(1);
+      expect(f.modelCalls).toBe(2);
+    } finally {
+      await f.close();
+    }
+  }, 30_000);
   it("supports a title and author without identifiers, retaining history but clearing the label when accepted metadata changes", async () => {
     const env = await coreProcessingFixture();
     try {

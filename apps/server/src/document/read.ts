@@ -39,6 +39,7 @@ const MAX_MATERIAL_BYTES = 256 * 1024 * 1024;
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
 export type { DocumentSelector } from "@sciretriever/contracts";
+export type { VerifiedDocumentStructure } from "./verification-cache.js";
 
 export class DocumentReadError extends Error {
   constructor(
@@ -405,7 +406,23 @@ export class DocumentReadService {
     }
   }
 
-  /** Internal read port for retrieval: one exact closure verification for selected units. */
+  /** Explicit two-level port for readers whose contract accepts drafts. */
+  withVerifiedTextVersion<T>(
+    documentVersionId: string,
+    consume: (
+      version: DocumentRef,
+      markdown: Uint8Array,
+      structure: VerifiedDocumentStructure,
+    ) => Promise<T>,
+    signal?: AbortSignal,
+    reserveVerifiedBytes?: (bytes: number) => void,
+  ): Promise<T> {
+    return this.run(() =>
+      this.version(documentVersionId, signal, consume, reserveVerifiedBytes),
+    );
+  }
+
+  /** Corrected-only port: consumers do not acquire draft admission implicitly. */
   withVerifiedVersion<T>(
     documentVersionId: string,
     consume: (

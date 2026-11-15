@@ -251,6 +251,22 @@ it("reads the known draft, three bases, roles, images and evidence without invok
     expect(pages).not.toHaveBeenCalled();
     expect(raw).not.toHaveBeenCalled();
     expect(publish).not.toHaveBeenCalled();
+    expect(
+      await reader.withVerifiedTextVersion(
+        f.id,
+        async (version, bytes, structure) => ({
+          schema: version.schema_version,
+          text: Buffer.from(bytes).toString("utf8"),
+          bases: structure.segments.flatMap((s) =>
+            "basis" in s ? [s.basis] : [],
+          ),
+        }),
+      ),
+    ).toMatchObject({
+      schema: 3,
+      text: expect.stringContaining("A synthetic value 50 is measured."),
+      bases: expect.arrayContaining(["text-layer-differs"]),
+    });
   } finally {
     vi.restoreAllMocks();
     await f.close();

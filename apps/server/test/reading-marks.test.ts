@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
+import { coreProcessingFixture } from "./core-processing-fixture.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import {
@@ -25,6 +26,86 @@ import {
 } from "../src/workbench/synthetic-fixture.js";
 
 const paper = FIXTURE_LITERATURE.literature_id;
+
+it("keeps a draft text anchor on its fixed version after corrected publication and rejects out-of-range or foreign anchors", async () => {
+  const f = await coreProcessingFixture({ offline: true });
+  try {
+    const parsed = await f.app.documentProcessing.parseDocuments({
+      ...f.rawParseRequest,
+      profiles: ["vlm-engine"],
+    });
+    if (parsed.draft.status !== "formed")
+      throw new Error("Synthetic draft missing");
+    const draftId = parsed.draft.document_version_id;
+    const segments = await f.app.documentRead.segments({
+      document_version_id: draftId,
+      section_id: null,
+      limit: 100,
+      cursor: null,
+    });
+    const segment = segments.segments.find((s) => s.kind === "text")!;
+    const document = {
+      document_version_id: draftId,
+      start_utf8: segment.start_utf8,
+      end_utf8: segment.end_utf8,
+    };
+    const request = {
+      literature_id: paper,
+      kind: "highlight",
+      color: "yellow",
+      quote: "A synthetic finding.",
+      document,
+    };
+    const mark = await f.app.marks.manage({ operation: "create", request });
+    expect(mark.document).toEqual(document);
+    await expect(
+      f.app.marks.manage({
+        operation: "create",
+        request: {
+          ...request,
+          document: { ...document, end_utf8: 10_000_000 },
+        },
+      }),
+    ).rejects.toMatchObject({ code: "mark-anchor-invalid" });
+    const other = "00000000-0000-0000-0000-000000000099";
+    await f.app.database.putLiterature(
+      parseLiterature({
+        ...FIXTURE_LITERATURE,
+        literature_id: other,
+        meta_literature_id: "00000000-0000-0000-0000-000000000098",
+        metadata: {
+          ...FIXTURE_LITERATURE.metadata,
+          title: "Another synthetic paper",
+          identifiers: [],
+        },
+      }),
+    );
+    await expect(
+      f.app.marks.manage({
+        operation: "create",
+        request: { ...request, literature_id: other },
+      }),
+    ).rejects.toMatchObject({ code: "mark-anchor-invalid" });
+    const proofread = await f.app.proofreading!.build({
+      asset_id: f.asset.asset_id,
+    });
+    const published = await f.app.proofreadDocuments.publish({
+      literature_id: paper,
+      asset_id: f.asset.asset_id,
+      proofread_id: proofread.version.proofread_id,
+      expected_default_revision: 1,
+    });
+    expect(published.document.document_version_id).not.toBe(draftId);
+    expect(
+      await f.app.marks.query({
+        operation: "list",
+        request: { literature_id: paper },
+      }),
+    ).toMatchObject({ items: [{ mark_id: mark.mark_id, document }] });
+  } finally {
+    await f.close();
+  }
+}, 30_000);
 
 it(
   "keeps a paper's highlights, regions and notes as user data with the same reads on every interface",

@@ -3,12 +3,102 @@ import { createHash } from "node:crypto";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import { runCli } from "../src/cli/main.js";
-import { it, expect } from "vitest";
+import { it, expect, vi } from "vitest";
 import { coreProcessingFixture } from "./core-processing-fixture.js";
 import { SqliteAnnotationStorage } from "../src/storage/structure-annotations.js";
 import { executeMaintenance } from "../src/entry/maintenance-operations.js";
 import { createQueryApplication } from "../src/bootstrap/application.js";
 import { executeQuery } from "../src/entry/query-operations.js";
+
+it("refuses draft annotation, metadata, tags and references before opening text or invoking a model", async () => {
+  const f = await coreProcessingFixture({ offline: true });
+  try {
+    const parsed = await f.app.documentProcessing.parseDocuments({
+      ...f.rawParseRequest,
+      profiles: ["vlm-engine"],
+    });
+    if (parsed.draft.status !== "formed")
+      throw new Error("Synthetic draft missing");
+    const document_version_id = parsed.draft.document_version_id;
+    const request = {
+      literature_id: f.rawParseRequest.literature_id,
+      document_version_id,
+      annotation_id: "a".repeat(64),
+    };
+    const store = new SqliteAnnotationStorage(f.app.database, f.app.files);
+    expect(await store.state(document_version_id)).toMatchObject({
+      part: null,
+      text_level: "draft",
+      current: null,
+    });
+    const bytes = vi
+      .spyOn(f.app.files, "withVerified")
+      .mockRejectedValue(new Error("Draft must not be consumed"));
+    await expect(
+      executeMaintenance(f.app, "document-annotate", {
+        schema_version: 2,
+        document_version_id,
+        arrangement_id: "b".repeat(64),
+      }),
+    ).rejects.toMatchObject({ code: "document-unsupported" });
+    await expect(
+      f.app.structureAnnotations!.buildRules({ document_version_id }),
+    ).rejects.toMatchObject({ code: "document-unsupported" });
+    await expect(
+      f.app.structureAnnotations!.build({
+        document_version_id,
+        max_prefix_characters: 100,
+      }),
+    ).rejects.toMatchObject({ code: "document-unsupported" });
+    await expect(
+      f.app.archiveMetadata.build({
+        ...request,
+        expected_revision: (await f.app.library.detail(request.literature_id))
+          .metadata_revision,
+      }),
+    ).rejects.toThrow("metadata-default-proofread-required");
+    await expect(f.app.archiveReferences.build(request)).rejects.toMatchObject({
+      code: "archive-reference-default-required",
+    });
+    await expect(f.app.tags.build(request)).rejects.toMatchObject({
+      code: "tag-annotation-invalid",
+    });
+    await expect(
+      executeMaintenance(f.app, "proofread-save", {
+        schema_version: 2,
+        literature_id: request.literature_id,
+        asset_id: f.asset.asset_id,
+        proofread_id: document_version_id,
+        expected_arrangement_id: "b".repeat(64),
+        expected_manual_revision: 0,
+        markdown: "Synthetic edit",
+      }),
+    ).rejects.toMatchObject({ code: "publication-conflict" });
+    await expect(
+      executeMaintenance(f.app, "archive-arrangement-edit", {
+        schema_version: 2,
+        literature_id: request.literature_id,
+        asset_id: f.asset.asset_id,
+        expected_proofread_id: document_version_id,
+        expected_arrangement_id: "b".repeat(64),
+        expected_manual_revision: 0,
+        changes: [
+          {
+            kind: "assign",
+            leaf_id: document_version_id,
+            target: { role: "methods" },
+            presentation: { kind: "content" },
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: "publication-conflict" });
+    expect(bytes).not.toHaveBeenCalled();
+    expect(f.modelCalls).toBe(0);
+  } finally {
+    vi.restoreAllMocks();
+    await f.close();
+  }
+}, 30_000);
 async function prepared(
   model = true,
   text = "# Methods\n\nA synthetic experiment.\n\n# Electronic landscape\n\n🧪αβγ synthetic paragraph.\n\n# References\n\n[1] Example. doi:10.1234/example\n",
