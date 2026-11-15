@@ -173,7 +173,7 @@ Asset 保存 hash/大小/媒体类型与规范相对引用。raw_parses 按资�
   - 新增可空列 `raw_parse_id`、`raw_parse_result_sha256`、`page_layer_sha256`、`draft_method_sha256`，以及初稿内容的 artifact 四列（路径、SHA-256、字节数、媒体类型），只在 3 时必填；
   - CHECK 保证两组列按 `schema_version` 恰好一组非空；`raw_parse_id` 外键指向 `raw_parses`，初稿内容外键指向 `artifact_objects`，都是 `ON DELETE RESTRICT`；
   - 依赖这张表的视图与触发器（文献状态投影、检索来源水位等）随表一起替换，覆盖范围不变。
-- **当前初稿。** `draft_current(part_asset_id PK, part_sha256, document_version_id, revision)` 记录每个部分的当前初稿，形式同 `proofread_current`，按 CAS 更新。默认文本按[文档与证据 8.5](04-document-evidence.md#85-默认文本内容版本与证据)由它和校订稿共同求出。
+- **当前初稿。** `draft_current(part_asset_id PK, part_sha256, document_version_id, revision)` 记录每个部分的当前初稿，形式同 `proofread_current`，按 CAS 更新。默认文本按[文档与证据 8.5](04-document-evidence.md#85-默认文本内容版本与证据)由它和校订稿共同求出。默认文本是初稿时，`archive_current_parts` 视图给出的内容版本输入为 `json_object('text_level','draft','document_version_id',…)`（字段名与顺序固定）；是校订稿时，输入仍是原来的 `{"document_version_id":…,"structure_annotation_id":…}`，逐字节不变。默认关系不由触发器推断：切换当前原始解析、登记或复用初稿、发布校订稿，三个写入口在各自的事务里调用同一个重求函数（优先完整的当前校订稿，其次当前初稿，都没有则删除默认关系）。
 - **版本事实。** `draft_version_facts(document_version_id PK, differs_segments, differences, image_only_pages)`，在登记初稿版本的同一事务写入，之后不改。三个数都能从初稿内容重算；保存它们是为了文献库筛选与排序不读文件（[有意保存与有意推导](#236-有意保存与有意推导)）。
 - **文件。** 初稿内容（含差异记录）、Markdown 与结构都是 create-if-absent 的不可变文件。新分类目录为 `parsed/draft/content` 与 `parsed/draft/markdown`；结构沿用 `parsed/structure`，图片沿用原始解析的资源对象，不复制。catalog 只存引用、hash、字节数与上面的计数。
 - **对原始解析的保护。** 初稿行对 `raw_parse_id` 的外键就是保护，不另建 pin 表，也不往 `raw_parse_pins` 写行（该表仍只记校订稿）。原始解析退役（`retire`）的“仍在使用”判断增加一条：有文档版本引用它时返回 `raw-parse-in-use`，不能靠外键错误报出。
