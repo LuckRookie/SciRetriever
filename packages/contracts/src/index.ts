@@ -1,4 +1,5 @@
 import { parseNetworkReadiness, type NetworkReadiness } from "./network.js";
+import { parseDocumentReceipt, type ParseDocumentReceipt } from "./document.js";
 export * from "./network.js";
 export * from "./device-connections.js";
 export * from "./import-sessions.js";
@@ -642,6 +643,8 @@ export type DatabaseCompletionReportPartition =
 export interface CompletedCompletionTarget {
   readonly target: CompletionTarget;
   readonly literature_id: LiteratureId;
+  /** Present when parsing actually ran; older entries and PDF-only completion omit it. */
+  readonly receipt?: ParseDocumentReceipt;
 }
 /** Stable reasons for a target that was deliberately not executed. */
 export type SkippedCompletionReason =
@@ -1339,13 +1342,33 @@ function parseCompletedCompletionTarget(
   value: unknown,
   path: readonly string[],
 ): CompletedCompletionTarget {
-  const record = exact(value, ["target", "literature_id"], path);
+  const record = object(value, path);
+  const hasReceipt = "receipt" in record;
+  exact(
+    record,
+    ["target", "literature_id", ...(hasReceipt ? ["receipt"] : [])],
+    path,
+  );
+  const literatureId = id<"LiteratureId">(record.literature_id, [
+    ...path,
+    "literature_id",
+  ]);
+  let receipt: ParseDocumentReceipt | undefined;
+  if (hasReceipt) {
+    try {
+      receipt = parseDocumentReceipt(record.receipt);
+    } catch (error) {
+      if (error instanceof ContractValidationError)
+        throw new ContractValidationError([...path, "receipt", ...error.path]);
+      throw error;
+    }
+  }
+  if (receipt && receipt.literature_id !== literatureId)
+    fail([...path, "receipt", "literature_id"]);
   return Object.freeze({
     target: parseCompletionTarget(record.target, [...path, "target"]),
-    literature_id: id<"LiteratureId">(record.literature_id, [
-      ...path,
-      "literature_id",
-    ]),
+    literature_id: literatureId,
+    ...(receipt ? { receipt } : {}),
   });
 }
 function parseSkippedCompletionTarget(

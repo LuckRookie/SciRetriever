@@ -15,6 +15,7 @@ import { renderBlocks } from "../proofread/render.js";
 import type { SqliteWorker } from "./sqlite/worker.js";
 import type { FileStore } from "./files/store.js";
 import { artifactReference } from "./artifact-layout.js";
+import { createLogger } from "../logging/index.js";
 import type {
   ProofreadPublication,
   ProofreadDecisionPublication,
@@ -41,7 +42,19 @@ export class SqliteProofreadStorage {
   constructor(
     private readonly database: SqliteWorker,
     private readonly files: FileStore,
+    private readonly onDefaultChanged?: () => Promise<unknown>,
   ) {}
+  private async defaultChanged(changed: boolean) {
+    if (changed && this.onDefaultChanged) {
+      try {
+        await this.onDefaultChanged();
+      } catch {
+        createLogger("proofread-storage").warn(
+          "Default text changed but index refresh could not be scheduled",
+        );
+      }
+    }
+  }
   /** Indexed metadata only; never loads or reconstructs the source payload. */
   async documentBinding(id: string, signal?: AbortSignal) {
     const rows = await this.database.proofread<{
@@ -451,6 +464,7 @@ export class SqliteProofreadStorage {
         const r = await this.database.proofread<{
           published: boolean;
           revision: number;
+          default_changed: boolean;
         }>(
           "publish",
           {
@@ -462,7 +476,9 @@ export class SqliteProofreadStorage {
           },
           signal,
         );
-        return { ...r, version: existing };
+        const { default_changed, ...receipt } = r;
+        await this.defaultChanged(default_changed);
+        return { ...receipt, version: existing };
       }
       const resources: ProofreadPublication["resources"][number][] = [];
       for (const [kind, name, item] of [
@@ -497,6 +513,7 @@ export class SqliteProofreadStorage {
       const r = await this.database.proofread<{
         published: boolean;
         revision: number;
+        default_changed: boolean;
       }>(
         "publish",
         {
@@ -508,7 +525,9 @@ export class SqliteProofreadStorage {
         },
         signal,
       );
-      return { ...r, version: v };
+      const { default_changed, ...receipt } = r;
+      await this.defaultChanged(default_changed);
+      return { ...receipt, version: v };
     });
   }
   async decide(

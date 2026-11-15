@@ -11,6 +11,7 @@ import {
   type ArtifactRef,
   type Sha256,
 } from "./index.js";
+import { parseDraftOutcome, type DraftOutcome } from "./draft-document.js";
 
 export interface DocumentMaterialRef {
   readonly literature_id: string;
@@ -124,7 +125,7 @@ export type EvidenceRef =
       readonly page_region?: PageRegionLocator;
     };
 
-/** Explicit PDF parsing. It never publishes a readable document or changes defaults. */
+/** Explicit PDF parsing followed by a separate draft publication for the deployment profile. */
 export interface ParseDocumentRequest {
   readonly literature_id: string;
   readonly asset_id: string;
@@ -146,6 +147,7 @@ export interface ParseDocumentReceipt {
   readonly asset_id: string;
   readonly asset_sha256: Sha256;
   readonly profiles: readonly ParseProfileReceipt[];
+  readonly draft: DraftOutcome;
 }
 
 function fail(): never {
@@ -431,6 +433,7 @@ export function parseDocumentReceipt(value: unknown): ParseDocumentReceipt {
     "asset_id",
     "asset_sha256",
     "profiles",
+    "draft",
   ]);
   if (
     !Array.isArray(r.profiles) ||
@@ -479,10 +482,19 @@ export function parseDocumentReceipt(value: unknown): ParseDocumentReceipt {
     });
   });
   if (new Set(profiles.map((p) => p.profile)).size !== profiles.length) fail();
+  const draft = parseDraftOutcome(r.draft);
+  if (
+    draft.status !== "not-formed" &&
+    !profiles.some(
+      (p) => p.status !== "failed" && p.raw_parse_id === draft.raw_parse_id,
+    )
+  )
+    fail();
   return Object.freeze({
     literature_id: parseLiteratureId(r.literature_id),
     asset_id: parseAssetId(r.asset_id),
     asset_sha256: digest(r.asset_sha256),
     profiles: Object.freeze(profiles),
+    draft: Object.freeze(draft),
   });
 }

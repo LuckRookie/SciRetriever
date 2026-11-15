@@ -132,7 +132,13 @@ async function fixture() {
   const e = await archiveFixture({ offline: true, rawParser: parser });
   try {
     e.setText(text);
-    await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
+    // Recreate a historical v3 corrected default without a newer draft.
+    await e.app.rawParsing!.parseAsset(
+      e.asset.asset_id,
+      ["pipeline", "vlm-engine"],
+      undefined,
+      { force: false, expected_sha256: e.asset.sha256 },
+    );
     const pipeline = e.app.archiveText!;
     await pipeline.arrange(e.asset.asset_id, "full");
     await pipeline.proofread(e.asset.asset_id, "full", null);

@@ -18,7 +18,11 @@ describe("durable proofreading and human locks", () => {
         service.build({ asset_id: e.asset.asset_id }),
       ).rejects.toMatchObject({ code: "proofread-input-missing" });
       expect(e.parseCalls).toBe(0);
-      await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
+      const parsed = await e.app.documentProcessing.parseDocuments(
+        e.rawParseRequest,
+      );
+      if (parsed.draft.status !== "formed")
+        throw new Error("Synthetic draft missing");
       const first = await service.build({ asset_id: e.asset.asset_id });
       expect(first).toMatchObject({
         published: true,
@@ -37,7 +41,10 @@ describe("durable proofreading and human locks", () => {
             asset_sha256: e.asset.sha256,
           })
         ).default,
-      ).toBeNull();
+      ).toMatchObject({
+        document_version_id: parsed.draft.document_version_id,
+        revision: 1,
+      });
       await e.reopen();
       const reader = await createQueryApplication(e.home);
       try {

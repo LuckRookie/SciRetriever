@@ -1,5 +1,5 @@
 import type { Application } from "../src/bootstrap/application.js";
-/** Fixture setup follows the three explicit production operations. It is not a product command. */
+/** Prepares raw facts, then explicitly publishes corrected text for tests that require v2 evidence. */
 export function correctedDocumentFixture(app: Application) {
   return {
     async parseDocuments(
@@ -13,15 +13,14 @@ export function correctedDocumentFixture(app: Application) {
       signal?: AbortSignal,
     ) {
       const request = structuredClone(value);
-      await app.documentProcessing.parseDocuments(
+      await app.rawParsing!.parseAsset(
+        request.asset_id,
+        ["pipeline", "vlm-engine"],
+        signal,
         {
-          literature_id: request.literature_id,
-          asset_id: request.asset_id,
-          asset_sha256: request.asset_sha256,
-          profiles: ["pipeline", "vlm-engine"],
+          expected_sha256: request.asset_sha256,
           force: request.mode !== "reuse-current",
         },
-        signal,
       );
       const proofread = await app.proofreading!.build(
         { asset_id: request.asset_id },
@@ -31,12 +30,20 @@ export function correctedDocumentFixture(app: Application) {
         throw new Error(
           `Synthetic proofreading did not complete: ${JSON.stringify(proofread.version.failure)}`,
         );
+      // Raw publication may invalidate the previous default.
+      // Fixture setup publishes against the current revision of this phase;
+      // stale-CAS behavior is exercised directly on the publication service.
+      const current = await app.database.documentDefault(
+        request.literature_id,
+        request.asset_id,
+        request.asset_sha256,
+      );
       const published = await app.proofreadDocuments.publish(
         {
           literature_id: request.literature_id,
           asset_id: request.asset_id,
           proofread_id: proofread.version.proofread_id,
-          expected_default_revision: request.expected_default_revision ?? null,
+          expected_default_revision: current?.revision ?? null,
         },
         signal,
       );

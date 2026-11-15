@@ -4,9 +4,11 @@ import {
   parseDocumentReceipt,
   parseLiteratureDetail,
   type ParseDocumentReceipt,
+  type DraftOutcome,
 } from "@sciretriever/contracts";
 import type { RawParsingService } from "../parsing/raw-service.js";
 import type { SqliteWorker } from "../storage/sqlite/worker.js";
+import type { DraftPublicationService } from "./draft-publication.js";
 
 export type {
   ParseDocumentRequest,
@@ -26,7 +28,7 @@ export class DocumentProcessingError extends Error {
     this.name = "DocumentProcessingError";
   }
 }
-/** The public parsing boundary. Building readable documents belongs to archiving. */
+/** Raw parsing is followed by a separately committed draft; archiving remains explicit. */
 export class DocumentProcessingService {
   private readonly stop = new AbortController();
   private readonly active = new Set<Promise<unknown>>();
@@ -34,6 +36,10 @@ export class DocumentProcessingService {
   constructor(
     private readonly database: SqliteWorker,
     private readonly parsing: RawParsingService | null,
+    private readonly drafts: Pick<
+      DraftPublicationService,
+      "publish"
+    > | null = null,
   ) {}
   async parseDocuments(
     value: unknown,
@@ -83,6 +89,28 @@ export class DocumentProcessingService {
           ...(commit ? { commit } : {}),
         },
       );
+      const selected = outcomes.find(
+        (o) => o.profile === this.parsing!.archiveProfile,
+      );
+      const draft: DraftOutcome = !selected
+        ? { status: "not-formed", reason: "profile-not-requested" }
+        : selected.status === "failed" || !selected.result
+          ? { status: "not-formed", reason: "raw-parse-failed" }
+          : this.drafts
+            ? await this.drafts.publish(
+                {
+                  literature_id: request.literature_id,
+                  asset_id: asset.asset_id,
+                  asset_sha256: asset.sha256,
+                  raw: selected.result,
+                },
+                combined,
+              )
+            : {
+                status: "failed",
+                raw_parse_id: selected.result.raw_parse_id,
+                failure_code: "page-tools-unavailable",
+              };
       return parseDocumentReceipt({
         literature_id: request.literature_id,
         asset_id: asset.asset_id,
@@ -95,6 +123,7 @@ export class DocumentProcessingService {
           failure_code: o.failure_code,
           failure_source_type: o.failure_source_type,
         })),
+        draft,
       });
     })();
     this.active.add(operation);

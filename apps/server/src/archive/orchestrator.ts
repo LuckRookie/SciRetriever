@@ -10,6 +10,7 @@ import {
   type ArchiveStep,
   type ArchiveStepReceipt,
   type LiteratureStatus,
+  type ParseDocumentReceipt,
 } from "@sciretriever/contracts";
 import type { SqliteWorker } from "../storage/sqlite/worker.js";
 import type { ProofreadService } from "../proofread/service.js";
@@ -44,8 +45,8 @@ export interface ArchiveRuntime {
   readonly archiveProfile?: "pipeline" | "vlm-engine";
   /**
    * Parse a part that has no raw parse for the deployment profile yet: Web, CLI
-   * and MCP archiving start with parsing (Owner 2026-10-30). Returns the failure
-   * code, or null once the part is parsed.
+   * and MCP archiving start with parsing. Keeps the complete receipt when
+   * available; only raw profile failures stop the archive chain.
    */
   readonly parse?: (
     input: {
@@ -55,7 +56,10 @@ export interface ArchiveRuntime {
       readonly profile: "pipeline" | "vlm-engine";
     },
     signal?: AbortSignal,
-  ) => Promise<string | null>;
+  ) => Promise<{
+    readonly receipt: ParseDocumentReceipt | null;
+    readonly failure_code: string | null;
+  }>;
 }
 export type ArchiveStatus = ArchiveState & {
   status: LiteratureStatus;
@@ -117,18 +121,23 @@ export class ArchiveOrchestrator {
         // Parsing is the first step; an existing parse for the profile is reused.
         if (parses && !part.raw_profiles.includes(profile)) {
           const started = performance.now(),
-            progress = (status: string, reason: string | null) =>
+            progress = (
+              status: string,
+              reason: string | null,
+              receipt?: ParseDocumentReceipt,
+            ) =>
               this.database.archive("parse", {
                 run_id: runId,
                 literature_id: id,
                 asset_id: part.asset_id,
                 status,
                 reason,
+                ...(receipt ? { receipt } : {}),
                 elapsed_ms:
                   status === "running" ? 0 : performance.now() - started,
               });
           await progress("running", null);
-          const failure = await withActivity(
+          const parsedResult = await withActivity(
             { operation: "archive-parse", literature_id: id },
             () =>
               this.runtime.parse!(
@@ -141,8 +150,13 @@ export class ArchiveOrchestrator {
                 signal,
               ),
           );
+          const failure = parsedResult.failure_code;
+          await progress(
+            failure ? "failed" : "done",
+            failure,
+            parsedResult.receipt ?? undefined,
+          );
           if (signal?.aborted) throw new ArchiveError("archive-cancelled");
-          await progress(failure ? "failed" : "done", failure);
           if (failure) {
             await this.save(
               runId,

@@ -138,7 +138,13 @@ describe("formal MCP product adapter", () => {
           { operation: "parse-documents", request: env.rawParseRequest },
         ],
       });
-      expect((await wait(String(parsed.job_id))).results).toHaveLength(1);
+      const parsedTask = await wait(String(parsed.job_id));
+      expect(parsedTask.results).toHaveLength(1);
+      expect(parsedTask.results).toMatchObject([
+        {
+          result: { draft: { status: "formed", default_text_level: "draft" } },
+        },
+      ]);
       expect(
         (
           await env.app.documentRead.default({
@@ -147,7 +153,7 @@ describe("formal MCP product adapter", () => {
             asset_sha256: env.asset.sha256,
           })
         ).default,
-      ).toBeNull();
+      ).not.toBeNull();
       await env.build(env.parseRequest);
       const parseCalls = env.parseCalls;
       env.setModel((input) => {

@@ -1,6 +1,15 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import type { RawParse, ArtifactRef } from "@sciretriever/contracts";
+import type * as Defaults from "./document-defaults.js";
+const { recomputeAssetDocumentDefaults }: typeof Defaults = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./document-defaults.ts"
+      : "./document-defaults.js",
+    import.meta.url,
+  ).href
+);
 
 export type RawParseStorageAction =
   | "attempt"
@@ -170,7 +179,15 @@ export function runRawParseStorage(
         r.raw_parse_id,
         r.parameters_sha256,
       );
-      return { published: !prior };
+      const defaults = recomputeAssetDocumentDefaults(
+        db,
+        r.source_asset_id,
+        r.source_sha256,
+      );
+      return {
+        published: !prior,
+        default_changed: defaults.some((d) => d.default_changed),
+      };
     }
     if (action === "failure") {
       const p = args as {

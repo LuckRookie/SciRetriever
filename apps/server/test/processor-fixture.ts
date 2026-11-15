@@ -67,13 +67,18 @@ export async function processorFixture(
   }) => {
     const before = e.modelCalls;
     try {
-      await e.app.documentProcessing.parseDocuments({
-        literature_id: request.literature_id,
-        asset_id: request.asset_id,
-        asset_sha256: request.asset_sha256,
+      // These processor tests require corrected evidence only. Prepare raw
+      // facts directly; automatic drafts and their reader rollout have their
+      // own integration tests.
+      await e.app.rawParsing!.parseAsset(
+        request.asset_id,
         profiles,
-        force: true,
-      });
+        undefined,
+        {
+          expected_sha256: request.asset_sha256,
+          force: true,
+        },
+      );
       // Prepare real archive facts without inserting unrelated setup jobs into
       // processor/UI job assertions. Durable archive jobs have their own tests.
       const archive = new ArchiveOrchestrator(e.app.database, {

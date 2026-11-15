@@ -1,20 +1,21 @@
 # 可读文档与证据
 
-提供固定版本的正文、片段、资源与证据读取。文档来源是 complete 校订稿，显式发布为默认全文；原始解析入口不发布全文。建档编排在 archive 模块。
+提供固定版本的正文、片段、资源与证据读取。解析操作先提交原始解析，再独立形成初稿；complete 校订稿仍显式发布为校订文档。对外读取目前只接纳校订稿，初稿的读取接入需与解析后的初稿形成一起部署。建档编排在 archive 模块。
 
 ## 内容入口
 
 - [limits.ts](limits.ts)：发布和读取共享的正文、结构字节上限。
-- [draft-builder.ts](draft-builder.ts)：独立的初稿纯构建器；从调用方给定的 raw reader、PDF 页面检查与固定资产声明形成 Markdown、结构、核对依据、差异与表示身份。只读取输入，不写库、发布或调用模型；尚未接入解析操作。`rebuildDraftDocument` 仅凭固定引用与初稿内容重建，不访问页面工具或原始区块文件。
+- [draft-builder.ts](draft-builder.ts)：独立的初稿纯构建器；从调用方给定的 raw reader、PDF 页面检查与固定资产声明形成 Markdown、结构、核对依据、差异与表示身份。只读取输入，不写库、发布或调用模型。`rebuildDraftDocument` 仅凭固定引用与初稿内容重建，不访问页面工具或原始区块文件。
+- [draft-publication.ts](draft-publication.ts)：核验指定原始解析与固定 PDF，复用逐页校订的页面工具，调用纯构建器，以 create-if-absent 发布不可变内容、正文、结构并沿用原始图片。同事务登记版本、事实、当前指针及默认关系；相同身份复用。每个资产串行，取消保留已提交事实，关闭中断并等在途清理；索引请求失败只记录警告。
 - [proofread-builder.ts](proofread-builder.ts)：历史 complete 校订版本到 v2 结构的确定性构建，保存区块 ID、页码与区域。
-- [service.ts](service.ts)：`document parse` 的 raw 操作边界，不生成 Document，不更新默认全文。
+- [service.ts](service.ts)：`document parse` 的操作边界。本次部署 profile 发布或复用成功后形成初稿；其它 profile 或本次失败不回退旧原始解析。逐 profile 的回执之外返回独立 `draft`，初稿失败不改变解析结果。
 - [read.ts](read.ts)：统一文档与证据读取、部分分页、用于人工核对的有界对照。
 - [proofread-publication.ts](proofread-publication.ts)：完整校订版本到固定文档的显式发布与默认版本 CAS；索引刷新失败单独报告，不撤销有效文档。
 - [location.ts](location.ts)：统一存储页码到公开页码的转换。
 - [storage.ts](storage.ts)：文档存储协作接口。
 - [verification-cache.ts](verification-cache.ts)：有界校验证明、LRU 淘汰与同版本首次核验合并。
 
-初稿的 storage 端口已具备：`storage.ts` 的 `commitDraftVersion` 校验固定初稿内容与产物字节，worker 在同一事务登记版本、资源闭包、计数及当前指针，复检原始解析仍为当前并按 CAS 更新。该端口尚未接入解析或补形成操作，也不自动重求默认文本。`sqlite/document-defaults.ts` 提供独立默认 CAS 的事务内重求函数，供发布流程接入。
+`storage.ts` 的 `commitDraftVersion` 校验固定初稿内容与产物字节，worker 在同一事务登记版本、资源闭包、计数、当前指针与默认关系，复检原始解析仍为当前并按两个独立 CAS（初稿当前、文档默认）更新。`sqlite/document-defaults.ts` 由原始解析当前切换、初稿登记与校订发布各自在自己的事务里调用：有效完整校订稿优先，其次有效当前初稿，两者都没有则删除默认关系。重新解析会先失去旧默认，新的初稿失败时返回 `document-missing`。旧固定版本的字节与证据不变。补形成的维护入口尚未接入。
 
 `draft-leaves-v1` 的可读性核验使用 `rebuildDraftDocument`，只从固定初稿内容重建，不调用 PDF 页面工具；核验初稿计数、正文、结构和原始解析 ID/hash/part 绑定。初稿证明的文件指纹包含 PDF、全部图片、正文、结构和初稿内容；缓存命中仍比对 SQLite 原始解析声明与版本事实，并计入相同逻辑字节预算。缓存只略过未变化文件的字节重算，不放松单独交付资源时的实际字节核验。HTTP/机器读取方的初稿接入另由读取合同完成，既有校订入口保持其等级限制。
 

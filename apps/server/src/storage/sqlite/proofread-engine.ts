@@ -5,6 +5,15 @@ import type {
   ProofreadVersion,
   ProofreadVersionV2,
 } from "@sciretriever/contracts";
+import type * as Defaults from "./document-defaults.js";
+const { recomputeAssetDocumentDefaults }: typeof Defaults = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./document-defaults.ts"
+      : "./document-defaults.js",
+    import.meta.url,
+  ).href
+);
 export type ProofreadStorageAction =
   | "cache-read"
   | "cache-write"
@@ -431,8 +440,14 @@ export function runProofreadStorage(
         db.prepare(
           "INSERT INTO proofread_current(part_asset_id,part_sha256,proofread_id,revision,manual_revision) VALUES(?,?,?,1,?) ON CONFLICT(part_asset_id) DO UPDATE SET part_sha256=excluded.part_sha256,proofread_id=excluded.proofread_id,revision=proofread_current.revision+1,manual_revision=excluded.manual_revision",
         ).run(v.part_asset_id, v.part_sha256, v.proofread_id, manualRevision);
+      const defaults = recomputeAssetDocumentDefaults(
+        db,
+        v.part_asset_id,
+        v.part_sha256,
+      );
       return {
         published: !old,
+        default_changed: defaults.some((d) => d.default_changed),
         revision: Number(
           one(
             db,

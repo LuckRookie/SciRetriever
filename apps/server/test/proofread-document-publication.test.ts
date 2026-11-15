@@ -8,11 +8,25 @@ import { coreProcessingFixture } from "./core-processing-fixture.js";
 import { createQueryApplication } from "../src/bootstrap/application.js";
 import { executeQuery } from "../src/entry/query-operations.js";
 
+// These v2 reader/index tests prepare raw facts directly; automatic draft
+// publication and default fallback are covered by draft-on-parse.test.ts.
+async function prepareRaw(
+  e: Awaited<ReturnType<typeof coreProcessingFixture>>,
+  force = false,
+) {
+  return e.app.rawParsing!.parseAsset(
+    e.asset.asset_id,
+    ["pipeline", "vlm-engine"],
+    undefined,
+    { force, expected_sha256: e.asset.sha256 },
+  );
+}
+
 describe("proofread document publication", () => {
   it("publishes a fixed corrected version, reads page evidence and reopens it without reprocessing", async () => {
     const e = await coreProcessingFixture();
     try {
-      await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
+      await prepareRaw(e);
       const corrected = await e.app.proofreading!.build({
         asset_id: e.asset.asset_id,
       });
@@ -125,7 +139,7 @@ describe("proofread document publication", () => {
 it("keeps a published version after CAS loss, rejects stale raw inputs, and returns fixed draft corrections with bounded continuation", async () => {
   const e = await coreProcessingFixture();
   try {
-    await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
+    await prepareRaw(e);
     const first = await e.app.proofreading!.build({
       asset_id: e.asset.asset_id,
     });
@@ -137,10 +151,7 @@ it("keeps a published version after CAS loss, rejects stale raw inputs, and retu
     };
     const a = await e.app.proofreadDocuments.publish(request);
     e.setText("# Revised\n\nA second synthetic finding.");
-    await e.app.documentProcessing.parseDocuments({
-      ...e.rawParseRequest,
-      force: true,
-    });
+    await prepareRaw(e, true);
     await expect(e.app.proofreadDocuments.publish(request)).rejects.toThrow();
     const next = await e.app.proofreading!.build({
       asset_id: e.asset.asset_id,
@@ -148,11 +159,12 @@ it("keeps a published version after CAS loss, rejects stale raw inputs, and retu
     const b = await e.app.proofreadDocuments.publish({
       ...request,
       proofread_id: next.version.proofread_id,
+      expected_default_revision: a.default_revision,
     });
     expect(b).toMatchObject({
       published: true,
       default_updated: false,
-      default_revision: 1,
+      default_revision: null,
     });
     expect(
       (
@@ -161,8 +173,8 @@ it("keeps a published version after CAS loss, rejects stale raw inputs, and retu
           asset_id: e.asset.asset_id,
           asset_sha256: e.asset.sha256,
         })
-      ).default?.document_version_id,
-    ).toBe(a.document.document_version_id);
+      ).default,
+    ).toBeNull();
     const reader = await createQueryApplication(e.home);
     try {
       expect(
@@ -176,7 +188,7 @@ it("keeps a published version after CAS loss, rejects stale raw inputs, and retu
         parts: [
           {
             role: "main",
-            default: { document_version_id: a.document.document_version_id },
+            default: null,
             proofread: { proofread_id: next.version.proofread_id },
           },
         ],
@@ -216,12 +228,12 @@ it("keeps a published version after CAS loss, rejects stale raw inputs, and retu
     const published = await e.app.proofreadDocuments.publish({
       ...request,
       proofread_id: next.version.proofread_id,
-      expected_default_revision: 1,
+      expected_default_revision: null,
     });
     expect(published).toMatchObject({
       published: false,
       default_updated: true,
-      default_revision: 2,
+      default_revision: 1,
     });
     expect(published.index_status).toBe("scheduled");
     await vi.waitFor(async () =>
@@ -289,11 +301,12 @@ it("lists and reads a supplementary PDF independently from the main default", as
         parameters_sha256: null,
       },
     });
-    await e.app.documentProcessing.parseDocuments({
-      ...e.rawParseRequest,
-      asset_id: asset.asset_id,
-      asset_sha256: asset.sha256,
-    });
+    await e.app.rawParsing!.parseAsset(
+      asset.asset_id,
+      ["pipeline", "vlm-engine"],
+      undefined,
+      { force: false, expected_sha256: asset.sha256 },
+    );
     const p = await e.app.proofreading!.build({ asset_id: asset.asset_id });
     const published = await e.app.proofreadDocuments.publish({
       literature_id: e.rawParseRequest.literature_id,
@@ -355,7 +368,7 @@ it("exposes publication and part reads through CLI/MCP without opening a parser 
   });
   const client = new Client({ name: "fixture", version: "1" });
   try {
-    await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
+    await prepareRaw(e);
     await e.app.archiveText!.arrange(e.asset.asset_id, "full");
     const proofread = await e.app.archiveText!.proofread(
       e.asset.asset_id,
@@ -501,7 +514,7 @@ it("preserves a valid default if index rebuilding fails and refuses work after c
     },
   );
   try {
-    await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
+    await prepareRaw(e);
     const proofread = await e.app.proofreading!.build({
       asset_id: e.asset.asset_id,
     });
@@ -556,7 +569,7 @@ it("counts proofread source verification bytes and does not load drafts or image
         },
       },
     ]);
-    await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
+    await prepareRaw(e);
     const proofread = await e.app.proofreading!.build({
       asset_id: e.asset.asset_id,
     });
@@ -637,7 +650,7 @@ it("reuses an identical corrected representation across proofreading method revi
   );
   const e = await coreProcessingFixture();
   try {
-    await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
+    await prepareRaw(e);
     const first = await e.app.proofreading!.build({
       asset_id: e.asset.asset_id,
     });
@@ -684,10 +697,7 @@ it("reuses an identical corrected representation across proofreading method revi
       document_version_id: published.document.document_version_id,
     });
     e.setText("A genuinely changed corrected body.");
-    await e.app.documentProcessing.parseDocuments({
-      ...e.rawParseRequest,
-      force: true,
-    });
+    await prepareRaw(e, true);
     await e.app.proofreading!.build({ asset_id: e.asset.asset_id });
     expect(
       (await e.app.archive.status(e.rawParseRequest.literature_id)).parts[0]!

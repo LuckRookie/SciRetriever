@@ -88,7 +88,13 @@ async function fixture(arranged = false) {
     );
     let versionId: string;
     if (archived) {
-      await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
+      // This fixture verifies v2 cache behavior, including its index setup.
+      await e.app.rawParsing!.parseAsset(
+        e.asset.asset_id,
+        ["pipeline", "vlm-engine"],
+        undefined,
+        { force: false, expected_sha256: e.asset.sha256 },
+      );
       await archived.submit("cache-arranged");
       versionId = (await e.app.archive.status(e.rawParseRequest.literature_id))
         .parts[0]!.document_version_id!;

@@ -14,8 +14,8 @@ export function documentDefaultFailure(code: string): never {
 }
 
 /**
- * Called inside the owner's write transaction. Publication flows will connect
- * here separately; reads and schema migration never invoke this function.
+ * Called inside the owner's raw, draft or corrected publication transaction.
+ * Reads and schema migration never invoke this function.
  */
 export function recomputeDocumentDefault(
   db: DatabaseSync,
@@ -41,7 +41,7 @@ export function recomputeDocumentDefault(
     documentDefaultFailure("document-source-stale");
   const corrected = db
     .prepare(
-      "SELECT d.document_id,d.document_version_id,2 AS schema_version FROM document_versions d JOIN proofread_current pc ON pc.proofread_id=d.proofread_id AND pc.part_asset_id=d.source_asset_id AND pc.part_sha256=d.source_sha256 JOIN proofread_versions pv ON pv.proofread_id=pc.proofread_id AND pv.content_sha256=d.proofread_content_sha256 AND pv.status='complete' WHERE d.schema_version=2 AND d.literature_id=? AND d.source_asset_id=? AND d.source_sha256=? AND pc.manual_revision=COALESCE((SELECT revision FROM proofread_manual_state WHERE part_asset_id=d.source_asset_id),0) AND NOT EXISTS(SELECT 1 FROM raw_parse_pins pin JOIN raw_parses r ON r.raw_parse_id=pin.raw_parse_id LEFT JOIN raw_parse_current rc ON rc.source_asset_id=r.source_asset_id AND rc.profile=r.profile WHERE pin.proofread_id=pc.proofread_id AND (rc.raw_parse_id IS NULL OR rc.raw_parse_id!=r.raw_parse_id)) ORDER BY (d.document_version_id=?) DESC,(d.document_version_id=?) DESC,d.created_at DESC,d.document_version_id DESC LIMIT 1",
+      "SELECT d.document_id,d.document_version_id,2 AS schema_version FROM document_versions d JOIN proofread_versions source_pv ON source_pv.proofread_id=d.proofread_id AND source_pv.content_sha256=d.proofread_content_sha256 AND source_pv.status='complete' JOIN proofread_current pc ON pc.part_asset_id=d.source_asset_id AND pc.part_sha256=d.source_sha256 JOIN proofread_versions pv ON pv.proofread_id=pc.proofread_id AND pv.content_sha256=d.proofread_content_sha256 AND pv.status='complete' WHERE d.schema_version=2 AND d.literature_id=? AND d.source_asset_id=? AND d.source_sha256=? AND pc.manual_revision=COALESCE((SELECT revision FROM proofread_manual_state WHERE part_asset_id=d.source_asset_id),0) AND NOT EXISTS(SELECT 1 FROM raw_parse_pins pin JOIN raw_parses r ON r.raw_parse_id=pin.raw_parse_id LEFT JOIN raw_parse_current rc ON rc.source_asset_id=r.source_asset_id AND rc.profile=r.profile WHERE pin.proofread_id IN (pc.proofread_id,d.proofread_id) AND (rc.raw_parse_id IS NULL OR rc.raw_parse_id!=r.raw_parse_id)) ORDER BY (d.document_version_id=?) DESC,(d.document_version_id=?) DESC,d.created_at DESC,d.document_version_id DESC LIMIT 1",
     )
     .get(
       literature_id,
@@ -94,4 +94,41 @@ export function recomputeDocumentDefault(
       ? ((candidate.schema_version === 3 ? "draft" : "proofread") as TextLevel)
       : null,
   };
+}
+
+/** A current pointer belongs to an asset; all literature owners are recomputed in this same transaction. */
+export function recomputeAssetDocumentDefaults(
+  db: DatabaseSync,
+  assetId: string,
+  assetSha256: string,
+  requested?: DocumentDefaultRequest,
+) {
+  if (!db.isTransaction)
+    documentDefaultFailure("document-transaction-required");
+  const owners = db
+    .prepare(
+      "SELECT la.literature_id AS literature_id,a.asset_id AS asset_id,a.sha256 AS asset_sha256,dd.revision AS expected_default_revision FROM literature_assets la JOIN assets a ON a.asset_id=la.asset_id LEFT JOIN (document_defaults dd JOIN document_versions d ON d.document_version_id=dd.document_version_id) ON d.literature_id=la.literature_id AND d.source_asset_id=a.asset_id AND d.source_sha256=a.sha256 WHERE a.asset_id=? AND a.sha256=? AND a.media_type='application/pdf' AND la.role IN ('primary-pdf','supplementary-pdf') ORDER BY la.literature_id",
+    )
+    .all(assetId, assetSha256);
+  if (
+    requested &&
+    !owners.some((row) => row.literature_id === requested.literature_id)
+  )
+    documentDefaultFailure("document-source-stale");
+  return owners.map((row) => {
+    const request: DocumentDefaultRequest = {
+      literature_id: String(row.literature_id),
+      asset_id: assetId,
+      asset_sha256: assetSha256,
+      expected_default_revision:
+        row.expected_default_revision === null
+          ? null
+          : Number(row.expected_default_revision),
+      ...(requested?.literature_id === row.literature_id ? requested : {}),
+    };
+    return {
+      literature_id: request.literature_id,
+      ...recomputeDocumentDefault(db, request),
+    };
+  });
 }

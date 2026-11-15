@@ -18,6 +18,7 @@ import { TypeScriptParserArtifactRules } from "../parsing/artifact-rules.js";
 import type { SqliteWorker } from "./sqlite/worker.js";
 import type { FileStore } from "./files/store.js";
 import { artifactReference } from "./artifact-layout.js";
+import { createLogger } from "../logging/index.js";
 import type { RawParsePublication } from "./sqlite/raw-parsing-engine.js";
 
 type Row = Record<string, unknown>;
@@ -46,6 +47,7 @@ export class SqliteRawParseStorage {
   constructor(
     private readonly database: SqliteWorker,
     private readonly files: FileStore,
+    private readonly onDefaultChanged?: () => Promise<unknown>,
   ) {}
   async close() {
     this.closed = true;
@@ -363,10 +365,19 @@ export class SqliteRawParseStorage {
             media_type: "application/json",
           },
         });
-        const reply = await this.database.rawParse<{ published: boolean }>(
-          "publish",
-          { result, manifest, resources: refs },
-        );
+        const reply = await this.database.rawParse<{
+          published: boolean;
+          default_changed: boolean;
+        }>("publish", { result, manifest, resources: refs });
+        if (reply.default_changed && this.onDefaultChanged) {
+          try {
+            await this.onDefaultChanged();
+          } catch {
+            createLogger("raw-parsing-storage").warn(
+              "Default text changed but index refresh could not be scheduled",
+            );
+          }
+        }
         return { result, published: reply.published };
       }, signal);
     });

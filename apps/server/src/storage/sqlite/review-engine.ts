@@ -3,6 +3,7 @@ import {
   PROCESSOR_METHOD_REVISION,
   archivePageCursor,
   parseProcessorOutcomeCounts,
+  parseDocumentReceipt,
 } from "@sciretriever/contracts";
 
 export type ReviewStorageAction =
@@ -45,6 +46,42 @@ function integer(value: unknown, fallback: number, max: number) {
   if (!Number.isSafeInteger(value) || Number(value) < 0 || Number(value) > max)
     throw new Error("review-invalid");
   return Number(value);
+}
+
+/** The step row keeps progress; its latest bound event owns any parse receipt. */
+function taskSteps(
+  db: DatabaseSync,
+  jobId: string,
+  literatureId: string,
+): Record<string, unknown>[] {
+  const rows = db
+    .prepare(
+      "SELECT * FROM task_steps WHERE job_id=? AND literature_id=? ORDER BY updated_at",
+    )
+    .all(jobId, literatureId);
+  if (!rows.some((row) => row.step === "parse")) return rows;
+  const latest = new Map<string, Record<string, unknown>>();
+  for (const row of db
+    .prepare(
+      "SELECT payload_json FROM execution_events WHERE job_id=? AND kind='archive-progress' AND json_extract(payload_json,'$.step')='parse' AND json_extract(payload_json,'$.literature_id')=? ORDER BY sequence DESC",
+    )
+    .all(jobId, literatureId)) {
+    const payload = input(JSON.parse(String(row.payload_json)));
+    const asset = String(payload.asset_id);
+    if (!latest.has(asset)) latest.set(asset, payload);
+  }
+  return rows.map((row) => {
+    const payload =
+      row.step === "parse" ? latest.get(String(row.asset_id)) : undefined;
+    if (!payload || !("receipt" in payload)) return row;
+    const receipt = parseDocumentReceipt(payload.receipt);
+    if (
+      receipt.literature_id !== literatureId ||
+      receipt.asset_id !== row.asset_id
+    )
+      throw new Error("review-invalid");
+    return { ...row, receipt };
+  });
 }
 export function runReviewStorage(
   db: DatabaseSync,
@@ -573,13 +610,7 @@ function taskRun(db: DatabaseSync, r: Record<string, unknown>) {
             subject: JSON.parse(String(subject_json)),
           })),
       );
-      steps.push(
-        ...db
-          .prepare(
-            "SELECT * FROM task_steps WHERE job_id=? AND literature_id=? ORDER BY updated_at",
-          )
-          .all(id, lit.literature_id),
-      );
+      steps.push(...taskSteps(db, id, String(lit.literature_id)));
     }
     const aggregate = synthesis
       ? db
@@ -649,13 +680,19 @@ function taskRun(db: DatabaseSync, r: Record<string, unknown>) {
             })
             // Parsing ran as this task's first step (Owner 2026-10-30); it has no archive_steps row.
             .concat(
-              db
-                .prepare(
-                  "SELECT asset_id,step,status,reason,elapsed_ms FROM task_steps WHERE job_id=? AND literature_id=? AND step='parse'",
+              steps
+                .filter(
+                  (row) =>
+                    row.literature_id === request.literature_id &&
+                    row.step === "parse",
                 )
-                .all(id, request.literature_id)
                 .map((r) => ({
-                  ...r,
+                  asset_id: r.asset_id,
+                  step: r.step,
+                  status: r.status,
+                  reason: r.reason,
+                  elapsed_ms: r.elapsed_ms,
+                  ...(r.receipt ? { receipt: r.receipt } : {}),
                   usage: {
                     calls: 0,
                     compaction_calls: 0,

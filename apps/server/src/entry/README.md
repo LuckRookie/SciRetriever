@@ -17,7 +17,7 @@
 - [library-transfer.ts](library-transfer.ts)：目录所有的原始材料有界读取与书目导出；调用既有文件校验和编码 owner，不接受任意服务器路径。
 - [discovery.ts](discovery.ts)：主题和引用扩展操作。
 - [pdf-acquisition.ts](pdf-acquisition.ts)：单目标 PDF 获取入口。
-- [database-completion.ts](database-completion.ts)：数据库范围冻结与批次补全。
+- [database-completion.ts](database-completion.ts)：数据库范围冻结与批次补全。实际完成解析的 completed 条目保留单篇完整 receipt（含独立 draft 结果）；初稿失败仍按原始解析的成功结果计数。PDF 补全与旧报告没有 receipt 字段时仍合法，报告不落库。
 - [browser-scheduler.ts](browser-scheduler.ts)：浏览器获取调度。
 
 ## 放置边界

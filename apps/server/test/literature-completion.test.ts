@@ -36,7 +36,7 @@ import {
 } from "../src/workbench/synthetic-fixture.js";
 const lit = FIXTURE_LITERATURE.literature_id;
 async function fixture(
-  mode: "retry" | "parser-failure" | "wait-parser" = "retry",
+  mode: "retry" | "parser-failure" | "wait-parser" | "draft-failure" = "retry",
 ) {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-completion-"));
   const owner = new TypeScriptConfigurationOwner(home);
@@ -54,6 +54,27 @@ async function fixture(
   });
   const app = await createApplication(home, {
     configurationOwner: owner,
+    proofreadPages: {
+      method: "synthetic-completion-pages-1",
+      async inspect() {
+        if (mode === "draft-failure")
+          throw new Error("Synthetic page tools unavailable");
+        return [
+          {
+            page: 0,
+            kind: "text-layer",
+            text: "Synthetic source\nThe yield was 67%.",
+            visible_glyphs: 40,
+            hidden_glyphs: 0,
+            unmapped_glyphs: 0,
+            has_graphics: false,
+          },
+        ];
+      },
+      async image() {
+        throw new Error("Completion must not render a page image");
+      },
+    },
 
     agentTransportFactory: () => async () => {
       calls++;
@@ -152,7 +173,17 @@ it("accepts one PDF, publishes the deployment raw profile, reuses it and never i
           asset_sha256: detail.primary_pdf!.asset.sha256,
         })
       ).default,
-    ).toBeNull();
+    ).toMatchObject({
+      document_version_id:
+        result.outcome === "parser_results_ready"
+          ? result.receipt.draft.status === "formed"
+            ? result.receipt.draft.document_version_id
+            : "missing"
+          : "missing",
+    });
+    expect(result).toMatchObject({
+      receipt: { draft: { status: "formed", default_text_level: "draft" } },
+    });
     const again = await e.app.completion!.complete({
       literature_id: lit,
       transfer_ids: ["next"],
@@ -160,7 +191,10 @@ it("accepts one PDF, publishes the deployment raw profile, reuses it and never i
     expect(again).toMatchObject({
       outcome: "parser_results_ready",
       attempts: [],
-      receipt: { profiles: [{ profile: "vlm-engine", status: "reused" }] },
+      receipt: {
+        profiles: [{ profile: "vlm-engine", status: "reused" }],
+        draft: { status: "reused", default_changed: false },
+      },
     });
     expect(e.parses).toBe(1);
     expect(e.calls).toBe(0);
@@ -176,6 +210,26 @@ it("accepts one PDF, publishes the deployment raw profile, reuses it and never i
     await e.close();
   }
 }, 30000);
+it("reports a draft failure in the per-literature completion receipt without counting it as parsing failure", async () => {
+  const e = await fixture("draft-failure");
+  try {
+    const result = await e.app.completion!.complete({
+      literature_id: lit,
+      transfer_ids: ["first"],
+    });
+    expect(result).toMatchObject({
+      outcome: "parser_results_ready",
+      receipt: {
+        profiles: [{ status: "published" }],
+        draft: { status: "failed", failure_code: "page-tools-unavailable" },
+      },
+    });
+    expect(await e.app.completion!.isReady(lit)).toBe(true);
+    expect(e.calls).toBe(0);
+  } finally {
+    await e.close();
+  }
+}, 30_000);
 it("retains a valid PDF and all candidates after parser failure without recording automatic acquisition exhaustion", async () => {
   const e = await fixture("parser-failure");
   try {
@@ -474,6 +528,48 @@ function completionService(
 }
 
 describe("database completion report orchestration", () => {
+  it.each(["retry", "draft-failure"] as const)(
+    "keeps the real per-literature receipt in the completed report (%s)",
+    async (mode) => {
+      const env = await fixture(mode);
+      const service = new DatabaseCompletionService({
+        library: env.app.library,
+        database: env.app.database,
+        writes: env.app.writes,
+        completion: env.app.completion,
+        acquisition: null,
+      });
+      try {
+        const report = await service.run({
+          selector: {
+            kind: "literatures",
+            literature_ids: [parseLiteratureId(lit)],
+          },
+          goal: "PARSER_RESULT_READY",
+          transfer_ids: ["first"],
+        });
+        expect(report.end).toEqual({ kind: "finished" });
+        expect(report.failed).toEqual([]);
+        expect(report.completed).toHaveLength(1);
+        expect(report.completed[0]).toMatchObject({
+          literature_id: lit,
+          receipt: {
+            literature_id: lit,
+            profiles: [{ profile: "vlm-engine", status: "published" }],
+            draft:
+              mode === "retry"
+                ? { status: "formed", default_text_level: "draft" }
+                : { status: "failed", failure_code: "page-tools-unavailable" },
+          },
+        });
+        expect(env.calls).toBe(0);
+        expect(env.parses).toBe(1);
+      } finally {
+        await env.close();
+      }
+    },
+    30_000,
+  );
   it("retries explicit supplied PDFs and excludes its unfinished sibling from broad parsing scopes", async () => {
     const env = await fixture();
     let acquisitions = 0;

@@ -8,8 +8,8 @@
 - [repositories.ts](repositories.ts)：文献等事实仓库。
 - [worker.ts](worker.ts)：Worker 调用边界。
 - [worker-runtime.ts](worker-runtime.ts)：SQLite worker 运行实现。
-- [draft-text-engine.ts](draft-text-engine.ts)：初稿版本、资源闭包、不可变计数与当前指针的同事务登记；按版本读事实、按本页文献批量读主 PDF 默认版本与等级，不读取文件。
-- [document-defaults.ts](document-defaults.ts)：写事务内按独立 CAS 重求默认文本，优先有效完整校订稿，再选有效当前初稿，否则删除默认关系。校订发布可提名刚登记的版本，仍复检有效性与 CAS；没有提名时保留仍有效的默认表示。发布流程接入由调用方完成；当前仅提供 storage 端口，不在读取时重求。
+- [draft-text-engine.ts](draft-text-engine.ts)：初稿版本、资源闭包、不可变计数、当前指针及默认关系的同事务登记；按版本读事实、按本页文献批量读主 PDF 默认版本与等级，不读取文件。
+- [document-defaults.ts](document-defaults.ts)：原始解析当前切换、初稿登记与校订发布事务内按独立 CAS 重求默认文本，优先有效完整校订稿，再选有效当前初稿，否则删除默认关系。校订发布可提名刚登记的版本，仍复检当前校订内容、人工 revision 和原始解析 pin；相同校订内容的等价方法版本可以复用固定表示。没有提名时保留仍有效的默认表示。资产当前指针切换同时重求其全部文献关系；读取不重求。
 - [draft-text-schema-migration.ts](draft-text-schema-migration.ts)：独立离线 16→17；精确匹配冻结 16，原地重建文档父表、子表不改名或重建，核对全部旧表行数及校订行、内容版本、事件和结果过时状态；不形成初稿，不访问 artifact。
 - [library-state-cache.ts](library-state-cache.ts)：基于事务内输入版本的建档状态缓存。
 - [library-state-schema-migration.ts](library-state-schema-migration.ts)：显式离线安装当前按篇失效结构；[library-state-previous-layout.ts](library-state-previous-layout.ts) 只描述工具的精确旧输入，不由 catalog opener 接受。
@@ -41,6 +41,8 @@
 `raw-parsing-engine.ts`、`proofread-engine.ts`、`structure-annotation-engine.ts`、`metadata-field-storage.ts` 和 `archive-reference-engine.ts` 在同一当前结构中分别保存对应 owner 提交的事实。模块拆分不产生独立数据库版本。
 
 `worker-runtime.ts` 的文档版本提交保留校订稿来源、raw pin、人工 revision、产物登记及默认版本 CAS 检查。`source-order-leaves-v4` 允许省略已登记的公式截图，实际引用的图片仍须逐一匹配同一校订稿的 reference、hash、路径和完整 artifact 描述；历史 builder 保留原来的图片数量检查。文档提交失败仅跨 worker 传递 `errors.ts` 中的有限错误码，不透传 SQL 文本、参数或文件路径。
+
+`archive-engine.ts` 将建档第一步的完整解析回执写进既有 archive-progress 事件，与 task_steps 的状态更新同事务提交；校验文献、资产与 hash 绑定，不借用 reason。`review-engine.ts` 的任务步骤和建档步骤按 job、文献、资产取最近的解析事件投影 receipt；旧事件缺字段时省略，不继承较早尝试的回执。schema 和 task_steps 布局不变。
 
 `tag-engine.ts` 实现词表与有序标签的事务端口、名称唯一索引、检索、回溯覆盖和可逆变更。业务变更规则由源码树内的 `tags/` 模块决定，数据库只提交已裁决事实。
 

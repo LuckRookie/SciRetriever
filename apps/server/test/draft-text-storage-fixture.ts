@@ -35,10 +35,16 @@ export async function draftStorageFixture() {
       text = nextText;
       e.setText(text);
     }
-    await e.app.documentProcessing.parseDocuments({
-      ...e.rawParseRequest,
-      force: !!nextText,
-    });
+    // Prepare raw facts only: these tests own the draft publication transaction.
+    await e.app.rawParsing!.parseAsset(
+      e.asset.asset_id,
+      ["pipeline", "vlm-engine"],
+      undefined,
+      {
+        force: !!nextText,
+        expected_sha256: e.asset.sha256,
+      },
+    );
     const raw = (await rawStore.current(e.asset.asset_id)).find(
       (r) => r.profile === "vlm-engine",
     )!.result!;
@@ -117,6 +123,14 @@ export async function draftStorageFixture() {
         expected_current_revision:
           (await e.app.database.draftCurrent(e.asset.asset_id))?.revision ??
           null,
+        expected_default_revision:
+          (
+            await e.app.database.documentDefault(
+              e.rawParseRequest.literature_id,
+              e.asset.asset_id,
+              e.asset.sha256,
+            )
+          )?.revision ?? null,
       },
     };
   };

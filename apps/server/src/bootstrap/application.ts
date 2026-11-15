@@ -202,6 +202,7 @@ import { RawParsingService } from "../parsing/raw-service.js";
 import { pdfPages } from "../proofread/pdf-pages.js";
 import { MupdfPageRenderer, resolveMupdfRuntime } from "../proofread/mupdf.js";
 import type { PdfPages } from "../proofread/contract.js";
+import { DraftPublicationService } from "../document/draft-publication.js";
 import { ProofreadService } from "../proofread/service.js";
 import {
   IndexRefreshService,
@@ -294,6 +295,7 @@ export interface Application {
   readonly rawParsing: RawParsingService | null;
   readonly proofreading: ProofreadService | null;
   readonly proofreadDocuments: ProofreadDocumentService;
+  readonly draftDocuments: DraftPublicationService;
   readonly structureAnnotations: StructureAnnotationService | null;
   readonly rawParseStorage: SqliteRawParseStorage | null;
   readonly literatureArtifacts: LiteratureArtifactService;
@@ -750,6 +752,7 @@ async function createApplicationOwned(
   let browserAgentCapability: BrowserAgentCapability | undefined;
   let rawParsing: RawParsingService | undefined;
   let proofreadDocuments: ProofreadDocumentService | undefined;
+  let draftDocuments: DraftPublicationService | undefined;
   let structureAnnotations: StructureAnnotationService | undefined;
   let proofreading: ProofreadService | undefined;
   let archiveText: ArchiveTextPipeline | undefined;
@@ -860,20 +863,21 @@ async function createApplicationOwned(
         },
         () => completion?.close(),
         () => manualPdf?.close(),
+        () => documentProcessing?.close(),
+        () => draftDocuments?.close(),
+        () => proofreading?.close(),
+        () => proofreadDocuments?.close(),
+        () => rawParsing?.close(),
         () => regionRenderer?.close(),
         () => pageImages?.close(),
 
         () => indexRefresh?.close(),
         () => retrievalIndex?.close(),
         () => indexDatabase?.close(),
-        () => documentProcessing?.close(),
         () => extractionDelivery?.shutdown(),
         () => extractionPreparation?.close(),
         () => documentRead?.close(),
-        () => proofreading?.close(),
         () => structureAnnotations?.close(),
-        () => proofreadDocuments?.close(),
-        () => rawParsing?.close(),
         () => rawParseStorage?.close(),
         () => networkBudget.close(),
         () => agents?.close(),
@@ -1466,8 +1470,16 @@ async function createApplicationOwned(
           options.mineruTransportFactory,
         ) ?? undefined;
     }
+    const scheduleDocumentIndex = async () => {
+      if (!indexRefresh) throw new Error("index-unavailable");
+      return indexRefresh.schedule();
+    };
     {
-      rawParseStorage = new SqliteRawParseStorage(database, files);
+      rawParseStorage = new SqliteRawParseStorage(
+        database,
+        files,
+        scheduleDocumentIndex,
+      );
       if (parsingPorts?.rawParser)
         rawParsing = new RawParsingService(
           {
@@ -1483,7 +1495,11 @@ async function createApplicationOwned(
         );
     }
     if (rawParseStorage) {
-      const proofreadStorage = new SqliteProofreadStorage(database, files);
+      const proofreadStorage = new SqliteProofreadStorage(
+        database,
+        files,
+        scheduleDocumentIndex,
+      );
       const pages =
         options.proofreadPages ??
         pdfPages(
@@ -1511,8 +1527,15 @@ async function createApplicationOwned(
             return pageImages;
           },
         );
+      draftDocuments = new DraftPublicationService(
+        database,
+        files,
+        rawParseStorage,
+        pages,
+        scheduleDocumentIndex,
+      );
       archiveText = new ArchiveTextPipeline(
-        new SqliteArchiveTextStorage(database, files),
+        new SqliteArchiveTextStorage(database, files, scheduleDocumentIndex),
         rawParseStorage,
         pages,
         agents,
@@ -1547,6 +1570,7 @@ async function createApplicationOwned(
     documentProcessing = new DocumentProcessingService(
       database,
       rawParsing ?? null,
+      draftDocuments ?? null,
     );
     documentRead = new DocumentReadService(
       database,
@@ -1717,16 +1741,24 @@ async function createApplicationOwned(
           const result = receipt.profiles.find(
             (p) => p.profile === input.profile,
           );
-          return result && result.status !== "failed"
-            ? null
-            : (result?.failure_code ?? "parse-failed");
+          return {
+            receipt,
+            failure_code:
+              result && result.status !== "failed"
+                ? null
+                : (result?.failure_code ?? "parse-failed"),
+          };
         } catch (error) {
-          return error &&
-            typeof error === "object" &&
-            "code" in error &&
-            typeof error.code === "string"
-            ? error.code
-            : "parse-failed";
+          return {
+            receipt: null,
+            failure_code:
+              error &&
+              typeof error === "object" &&
+              "code" in error &&
+              typeof error.code === "string"
+                ? error.code
+                : "parse-failed",
+          };
         }
       },
       proofread: proofreading!,
@@ -1999,7 +2031,7 @@ async function createApplicationOwned(
       archiveText: archiveText ?? null,
       archiveArrangement: guardRuntimeMethods(
         new ArchiveArrangementAccess(
-          new SqliteArchiveTextStorage(database, files),
+          new SqliteArchiveTextStorage(database, files, scheduleDocumentIndex),
           archiveText,
         ),
         ["edit", "save"],
@@ -2093,6 +2125,7 @@ async function createApplicationOwned(
       rawParsing: rawParsing ?? null,
       proofreading: proofreading ?? null,
       proofreadDocuments,
+      draftDocuments: draftDocuments!,
       structureAnnotations: structureAnnotations ?? null,
       rawParseStorage: rawParseStorage ?? null,
       literatureArtifacts,

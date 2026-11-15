@@ -2,7 +2,7 @@
 
 类型：计划（结果块）
 负责：每个发布原始解析的操作结束时形成初稿、设置默认文本，并在解析回执中报告初稿结果
-状态：Pending
+状态：Completed（2026-11-15；须与 07 同次部署）
 
 ## Outcome
 
@@ -34,25 +34,25 @@
 
 ## Tasks
 
-- [ ] **4.1 初稿发布服务**
+- [x] **4.1 初稿发布服务**
   - 输入：文献、部分资产、调用方指定的原始解析（04 块传本次解析的结果，05 块按 04 §8.11 选择）。
   - 步骤：用本机 PDF 页面工具检查页面（与逐页校订同一个 `PdfPages`）；调用 02 的构建器；以 create-if-absent 发布不可变文件（初稿内容、Markdown、结构；差异记录在初稿内容里，图片沿用原始解析的资源对象，见 07 §2.3.4“文件”）；调用 03 的 3.3 在一个事务里登记版本、事实与当前初稿，并按 04 §8.5 重新求默认文本。
   - 身份相同的初稿已存在时为 `reused`，登记为当前、不重复登记版本（04 §8.2“版本”）。
   - 默认关系的三种写入（04 §8.5）都接到 03 建好的 `recomputeDocumentDefault`（`storage/sqlite/document-defaults.ts`），各在自己的事务里调用：原始解析当前指针切换（`raw-parsing-engine.ts` 的发布事务）、初稿形成或复用、校订稿发布（`proofread-engine.ts`）。03 只建好并测试了这个函数，没有接入。
   - 默认关系改变或删除时请求全文索引刷新，等法同校订稿发布：只等刷新请求持久化，失败不撤销初稿（04 §6.5）。
   - 关闭时等待在途工作结束；失败与取消按 04 §8.2“失败”的表返回，不登记部分产物。
-- [ ] **4.2 接到解析操作的末尾**
+- [x] **4.2 接到解析操作的末尾**
   - `parseDocuments` 在 `parseAsset` 返回后，只在本次发布或复用了部署 profile 的原始解析时形成初稿；其余情形回执为 `not-formed`（04 §8.2“输入”“回执”）。`vlm-engine-markdown-only` 的初稿只经 05 的维护操作形成。
   - 初稿失败只写进回执的初稿结果，不改变逐 profile 的结果，不抛出解析失败。
   - 初稿形成在原始解析提交之后，单独提交；`ParsingCommit` 包装的写入顺序不变。
-- [ ] **4.3 回执合同**
+- [x] **4.3 回执合同**
   - 扩展 `packages/contracts/src/document.ts` 的 `ParseDocumentReceipt` 与解析函数：增加 04 §8.2 的 `draft`（`DraftOutcome`，类型在 02 的 2.1）。
   - 解析函数现在按精确键集解析，所有生产者与消费者要同时更新。
-- [ ] **4.4 各入口**
+- [x] **4.4 各入口**
   - CLI `document parse`、HTTP 解析接口、MCP 的 `parse-documents`、持久任务结果：原样输出新回执。
-  - `complete parser`：逐篇回执使用同一个 `draft` 结果（04 §8.2“回执”末条）；初稿失败不把结果记为 `parsing_failed`。
-  - 建档第一步解析：使用同一个 `draft` 结果，记入该步的 `task_steps`；建档继续进行，不依赖初稿是否成功。
-- [ ] **4.5 组装**
+  - `complete parser`：逐篇回执使用同一个 `draft` 结果（04 §8.2“回执”末条）；初稿失败不把结果记为 `parsing_failed`。汇总报告 `DatabaseCompletionReport.completed[]` 增加可选 `receipt`（与单篇回执同形），中性合同与数据库补全适配一起改（2026-11-15 定）。
+  - 建档第一步解析：使用同一个 `draft` 结果，作为该步的结果记录；建档继续进行，不依赖初稿是否成功。`task_steps` 没有回执列，完整解析回执写进同一事务里已有的 `archive-progress` 事件，步骤读取从事件投影，不改表（2026-11-15 定）。
+- [x] **4.5 组装**
   - `bootstrap/application.ts` 中构造初稿发布服务并交给 `DocumentProcessingService`；没有 PDF 页面工具时初稿结果为 `failed` / `page-tools-unavailable`，解析照常。
 
 ## 集成与影响

@@ -2,16 +2,19 @@ import { processorFixture } from "./processor-fixture.js";
 import {
   EXTRACTION_SCHEMA_URI,
   extractionSpecHash,
+  parseDocumentReceipt,
+  parseDatabaseCompletionReport,
 } from "@sciretriever/contracts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runCli } from "../src/cli/main.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import { createQueryApplication } from "../src/bootstrap/application.js";
 import { TypeScriptConfigurationOwner } from "../src/configuration/owner.js";
 import { startQueryOnlyHttp } from "../src/workbench/http.js";
 import { coreProcessingFixture } from "./core-processing-fixture.js";
+import * as applicationBootstrap from "../src/bootstrap/application.js";
 
 async function* stdin(value: unknown) {
   yield Buffer.from(JSON.stringify(value));
@@ -24,6 +27,189 @@ async function connect(host: ReturnType<typeof createMcpServer>) {
   return client;
 }
 describe("machine interfaces over shared maintenance owners", () => {
+  it.each([false, true])(
+    "prints the complete parser report with its unmodified receipt (draft failure: %s)",
+    async (failDraft) => {
+      const env = await coreProcessingFixture({
+        offline: true,
+        ...(failDraft
+          ? {
+              textLayer: () => {
+                throw new Error("Synthetic page tools unavailable");
+              },
+            }
+          : {}),
+      });
+      const parse = vi.spyOn(env.app.documentProcessing, "parseDocuments");
+      const factory = vi
+        .spyOn(applicationBootstrap, "createApplication")
+        .mockResolvedValueOnce(env.app);
+      try {
+        const cli = await runCli(
+          [
+            "complete",
+            "parser",
+            "--literature-id",
+            env.parseRequest.literature_id,
+            "--json",
+          ],
+          { home: env.home },
+        );
+        expect(cli.code).toBe(0);
+        const report = parseDatabaseCompletionReport(cli.value);
+        expect(report.completed).toHaveLength(1);
+        expect(report.failed).toEqual([]);
+        expect(parse).toHaveBeenCalledOnce();
+        expect(report.completed[0]!.receipt).toEqual(
+          await parse.mock.results[0]!.value,
+        );
+        expect(report.completed[0]!.receipt!.draft.status).toBe(
+          failDraft ? "failed" : "formed",
+        );
+        expect(env.modelCalls).toBe(0);
+      } finally {
+        factory.mockRestore();
+        parse.mockRestore();
+        await env.close();
+      }
+    },
+    30_000,
+  );
+  it("returns the same verified draft receipt through CLI, HTTP, MCP and durable processing results", async () => {
+    const env = await coreProcessingFixture({ offline: true });
+    const input = { ...env.rawParseRequest, profiles: ["vlm-engine"] };
+    try {
+      expect(
+        (await env.app.documentProcessing.parseDocuments(input)).draft.status,
+      ).toBe("formed");
+      // Supply the real graph, with fake external parser/page ports, to the CLI
+      // lifecycle. No processing, publication or serialization is replaced.
+      const factory = vi
+        .spyOn(applicationBootstrap, "createApplication")
+        .mockResolvedValueOnce(env.app);
+      let cli;
+      try {
+        cli = await runCli(
+          [
+            "document",
+            "parse",
+            "--literature-id",
+            input.literature_id,
+            "--asset-id",
+            input.asset_id,
+            "--asset-sha256",
+            input.asset_sha256,
+            "--profiles",
+            "vlm-engine",
+            "--json",
+          ],
+          { home: env.home },
+        );
+      } finally {
+        factory.mockRestore();
+      }
+      expect(cli.code).toBe(0);
+      const expected = parseDocumentReceipt(cli.value);
+      expect(expected.draft).toMatchObject({
+        status: "reused",
+        default_text_level: "draft",
+        default_changed: false,
+      });
+      await env.reopen();
+      const query = await createQueryApplication(env.home);
+      const web = await startQueryOnlyHttp({
+        application: query,
+        maintenance: env.app.maintenance!,
+        assets: new Map([
+          ["/", { contentType: "text/html", body: "synthetic" }],
+        ]),
+      });
+      const host = createMcpServer({
+        home: env.home,
+        maintenance: true,
+        applicationFactory: async () => env.app,
+        queryFactory: () => createQueryApplication(env.home),
+      });
+      const client = await connect(host);
+      try {
+        const landing = await fetch(web.origin);
+        const cookie = landing.headers
+          .getSetCookie()
+          .map((c) => c.split(";")[0]!)
+          .join("; ");
+        const access = await fetch(web.origin + "/api/v1/maintenance/session", {
+          headers: { Cookie: cookie },
+        });
+        const { csrf } = (await access.json()) as { csrf: string };
+        const response = await fetch(
+          web.origin + "/api/v1/maintenance/parse-document",
+          {
+            method: "POST",
+            headers: {
+              Origin: web.origin,
+              Cookie: cookie,
+              "Content-Type": "application/json",
+              "X-Sciretriever-CSRF": csrf,
+              "X-Sciretriever-Protocol-Version": "1",
+            },
+            body: JSON.stringify(input),
+          },
+        );
+        expect(response.status).toBe(200);
+        expect(
+          parseDocumentReceipt(
+            ((await response.json()) as { receipt: unknown }).receipt,
+          ),
+        ).toEqual(expected);
+        const submitted = await client.callTool({
+          name: "submit_processing",
+          arguments: {
+            schema_version: 1,
+            idempotency_key: "draft-receipt-parity",
+            operations: [{ operation: "parse-documents", request: input }],
+          },
+        });
+        expect(submitted.isError).not.toBe(true);
+        const { job_id } = (
+          submitted.structuredContent as { result: { job_id: string } }
+        ).result;
+        await vi.waitFor(
+          async () =>
+            expect(
+              (await env.app.processingTasks!.read(job_id)).job.status,
+            ).toBe("completed"),
+          { timeout: 30_000 },
+        );
+        const read = await client.callTool({
+          name: "read_task",
+          arguments: { job_id },
+        });
+        expect(read.isError).not.toBe(true);
+        const results = (
+          read.structuredContent as {
+            result: { results: { result: unknown }[] };
+          }
+        ).result.results;
+        expect(results).toHaveLength(1);
+        expect(parseDocumentReceipt(results[0]!.result)).toEqual(expected);
+        await host.close();
+        await env.reopen();
+        expect((await env.app.processingTasks!.read(job_id)).results).toEqual(
+          results,
+        );
+        expect(env.modelCalls).toBe(0);
+        expect(env.parseCalls).toBe(1);
+      } finally {
+        await client.close();
+        await host.close();
+        await web.close();
+        await query.close();
+      }
+    } finally {
+      vi.restoreAllMocks();
+      await env.close();
+    }
+  }, 60_000);
   it("imports from MCP, reads through CLI/Web, and exposes saved task scope and policy without implicit execution", async () => {
     const env = await coreProcessingFixture();
     const host = createMcpServer({

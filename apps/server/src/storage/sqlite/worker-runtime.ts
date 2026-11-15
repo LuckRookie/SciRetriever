@@ -167,6 +167,14 @@ const draftTextModule = await import(
     import.meta.url,
   ).href
 );
+const documentDefaultsModule = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./document-defaults.ts"
+      : "./document-defaults.js",
+    import.meta.url,
+  ).href
+);
 const processorModule = await import(
   new URL(
     import.meta.url.endsWith(".ts")
@@ -3794,18 +3802,18 @@ function commitDocumentVersion(p: Dynamic): Dynamic {
     let revision = current?.revision ?? null;
     if (current?.document_version_id === v.document_version_id) updated = true;
     else if ((current?.revision ?? null) === p.expected_default_revision) {
-      if (current) {
-        db.prepare(
-          "UPDATE document_defaults SET document_version_id=?,revision=revision+1 WHERE document_id=? AND revision=?",
-        ).run(v.document_version_id, v.document_id, current.revision);
-        revision = current.revision + 1;
-      } else {
-        db.prepare(
-          "INSERT INTO document_defaults(document_id,document_version_id,revision) VALUES(?,?,1)",
-        ).run(v.document_id, v.document_version_id);
-        revision = 1;
-      }
       updated = true;
+    }
+    if (updated) {
+      const selected = documentDefaultsModule.recomputeDocumentDefault(db, {
+        literature_id: v.source_material_ref.literature_id,
+        asset_id: v.source_material_ref.asset_id,
+        asset_sha256: v.source_material_ref.asset_sha256,
+        expected_default_revision: current?.revision ?? null,
+        preferred_proofread_version_id: v.document_version_id,
+      });
+      updated = selected.document_version_id === v.document_version_id;
+      revision = selected.default_revision;
     }
     return {
       published: !existing,

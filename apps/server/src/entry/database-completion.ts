@@ -20,6 +20,7 @@ import {
   type SkippedCompletionTarget,
   type StableFailure,
   type VersionRole,
+  type ParseDocumentReceipt,
 } from "@sciretriever/contracts";
 import {
   classifyAcquisitionFailure,
@@ -137,6 +138,7 @@ export interface DatabaseCompletionTargetOutcome {
   readonly skipped_literature_ids: readonly LiteratureId[];
   /** An unrecoverable shared-dependency failure stops the remaining schedule. */
   readonly operation_failure: boolean;
+  readonly receipt?: ParseDocumentReceipt;
 }
 
 export interface FrozenCompletionTarget {
@@ -150,6 +152,7 @@ type CandidateOutcome =
   | {
       readonly kind: "completed";
       readonly literature_id: LiteratureId;
+      readonly receipt?: ParseDocumentReceipt;
     }
   | { readonly kind: "exhausted"; readonly literature_id: LiteratureId }
   | { readonly kind: "satisfied"; readonly literature_id: LiteratureId }
@@ -307,6 +310,7 @@ export class DatabaseCompletionTargetRunner {
         skipped_reason: null,
         skipped_literature_ids: [],
         operation_failure: false,
+        ...(outcome.receipt ? { receipt: outcome.receipt } : {}),
       };
     if (outcome.kind === "exhausted")
       return {
@@ -738,7 +742,7 @@ export class DatabaseCompletionTargetRunner {
       };
     }
     if (result.outcome === "parser_results_ready")
-      return { kind: "completed", literature_id: id };
+      return { kind: "completed", literature_id: id, receipt: result.receipt };
     if (result.outcome === "parsing_failed") {
       const storage = result.receipt.profiles.some(
         (p) => p.failure_code === "parser-publication",
@@ -1085,7 +1089,11 @@ export class DatabaseCompletionService {
       const literatureId =
         outcome.literature_id ?? frozen.candidates[0] ?? null;
       if (outcome.partition === "completed")
-        completed.push({ target: frozen.target, literature_id: literatureId! });
+        completed.push({
+          target: frozen.target,
+          literature_id: literatureId!,
+          ...(outcome.receipt ? { receipt: outcome.receipt } : {}),
+        });
       else if (outcome.partition === "failed")
         failed.push({
           target: frozen.target,

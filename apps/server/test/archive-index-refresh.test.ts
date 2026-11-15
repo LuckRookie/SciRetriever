@@ -36,7 +36,14 @@ it.each(["arranged-v2", "legacy-v1"] as const)(
         throw new RetrievalIndexError("index-source-invalid");
       });
     try {
-      await env.app.documentProcessing.parseDocuments(env.rawParseRequest);
+      // Isolate corrected publication's scheduling; draft scheduling has its
+      // own tests and its public index reader is introduced separately.
+      await env.app.rawParsing!.parseAsset(
+        env.asset.asset_id,
+        ["pipeline", "vlm-engine"],
+        undefined,
+        { force: false, expected_sha256: env.asset.sha256 },
+      );
       let publish: () => Promise<{
         index_status: string;
         default_updated: boolean;

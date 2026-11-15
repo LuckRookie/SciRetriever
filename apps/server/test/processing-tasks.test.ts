@@ -10,6 +10,45 @@ import { ProcessingTaskService } from "../src/application/jobs/processing.js";
 import { WriteAdmissionError } from "../src/storage/write-admission.js";
 
 describe("durable product processing tasks", () => {
+  it("persists a failed draft alongside successful raw profiles without failing the processing task", async () => {
+    const env = await coreProcessingFixture({
+      offline: true,
+      textLayer: () => {
+        throw new Error("Synthetic page tools unavailable");
+      },
+    });
+    try {
+      const job = await env.app.processingTasks!.submit({
+        schema_version: 1,
+        idempotency_key: "persist-failed-draft",
+        operations: [
+          { operation: "parse-documents", request: env.rawParseRequest },
+        ],
+      });
+      const done = await env.app.processingTasks!.run(job.job_id);
+      expect(done.job.status).toBe("completed");
+      expect(done.failures).toEqual([]);
+      expect(done.results).toMatchObject([
+        {
+          operation: "parse-documents",
+          result: {
+            profiles: [
+              { profile: "pipeline", status: "published" },
+              { profile: "vlm-engine", status: "published" },
+            ],
+            draft: { status: "failed", failure_code: "page-tools-unavailable" },
+          },
+        },
+      ]);
+      await env.reopen();
+      expect((await env.app.processingTasks!.read(job.job_id)).results).toEqual(
+        done.results,
+      );
+      expect(env.modelCalls).toBe(0);
+    } finally {
+      await env.close();
+    }
+  }, 30_000);
   it("does not misreport a business write conflict after admission as another runtime's ownership", async () => {
     const env = await coreProcessingFixture();
     try {
@@ -194,10 +233,12 @@ describe("durable product processing tasks", () => {
       expect(service.start(background.job_id)).toBe(false);
       release();
       await running;
-      await vi.waitFor(async () =>
-        expect((await service.read(background.job_id)).job.status).toBe(
-          "completed",
-        ),
+      await vi.waitFor(
+        async () =>
+          expect((await service.read(background.job_id)).job.status).toBe(
+            "completed",
+          ),
+        { timeout: 20_000 },
       );
       await service.close();
       expect((await service.read(refused.job_id)).job.status).toBe("queued");

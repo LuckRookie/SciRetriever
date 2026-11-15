@@ -241,6 +241,63 @@ function completionReport(
 }
 
 describe("database completion report contract", () => {
+  it("keeps optional complete parse receipts, validates their binding and accepts older completed entries", () => {
+    const receipt = {
+      literature_id: completionIds.completed,
+      asset_id: completionIds.meta,
+      asset_sha256: "a".repeat(64),
+      profiles: [
+        {
+          profile: "vlm-engine",
+          status: "published",
+          raw_parse_id: completionIds.parserFailed,
+          result_sha256: "b".repeat(64),
+          failure_code: null,
+          failure_source_type: null,
+        },
+      ],
+      draft: {
+        status: "formed",
+        raw_parse_id: completionIds.parserFailed,
+        document_version_id: completionIds.skipped,
+        representation_sha256: "c".repeat(64),
+        default_changed: true,
+        default_text_level: "draft",
+      },
+    };
+    const entry = {
+      target: {
+        kind: "meta-literature",
+        meta_literature_id: "00000000-0000-0000-0000-000000000111",
+      },
+      literature_id: completionIds.completed,
+      receipt,
+    };
+    const parsed = parseDatabaseCompletionReport(
+      completionReport({ completed: [entry] }),
+    );
+    expect(parsed.completed[0]!.receipt).toEqual(receipt);
+    expect(Object.isFrozen(parsed.completed[0]!.receipt!.draft)).toBe(true);
+    expect(
+      parseDatabaseCompletionReport(completionReport()).completed[0],
+    ).not.toHaveProperty("receipt");
+    for (const invalid of [
+      null,
+      undefined,
+      {},
+      { ...receipt, literature_id: completionIds.skipped },
+      { ...receipt, draft: { ...receipt.draft, status: "unknown" } },
+      { ...receipt, extra: true },
+    ])
+      rejects(
+        completionReport({ completed: [{ ...entry, receipt: invalid }] }),
+        parseDatabaseCompletionReport,
+      );
+    rejects(
+      completionReport({ completed: [{ ...entry, receipt, extra: true }] }),
+      parseDatabaseCompletionReport,
+    );
+  });
   it("parses the five mutually exclusive partitions in contract order", () => {
     const report = parseDatabaseCompletionReport(completionReport());
     expect(DATABASE_COMPLETION_REPORT_PARTITIONS).toEqual([

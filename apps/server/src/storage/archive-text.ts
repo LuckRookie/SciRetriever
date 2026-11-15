@@ -11,6 +11,7 @@ import {
 import { KnowledgeStorageError, type SqliteWorker } from "./sqlite/worker.js";
 import type { FileStore } from "./files/store.js";
 import { artifactReference } from "./artifact-layout.js";
+import { createLogger } from "../logging/index.js";
 import type {
   LocatedProofreadArtifact,
   ProofreadPublication,
@@ -106,6 +107,7 @@ export class SqliteArchiveTextStorage {
   constructor(
     readonly database: SqliteWorker,
     readonly files: FileStore,
+    private readonly onDefaultChanged?: () => Promise<unknown>,
   ) {}
   private async bytes(path: string, ref: ArtifactRef, signal?: AbortSignal) {
     return this.files.withVerified(
@@ -274,6 +276,7 @@ export class SqliteArchiveTextStorage {
         const result = await this.database.proofread<{
           published: boolean;
           revision: number;
+          default_changed: boolean;
         }>(
           "publish",
           {
@@ -294,7 +297,17 @@ export class SqliteArchiveTextStorage {
           },
           signal,
         );
-        return { ...result, version: stored };
+        const { default_changed, ...receipt } = result;
+        if (default_changed && this.onDefaultChanged) {
+          try {
+            await this.onDefaultChanged();
+          } catch {
+            createLogger("archive-text-storage").warn(
+              "Default text changed but index refresh could not be scheduled",
+            );
+          }
+        }
+        return { ...receipt, version: stored };
       })
       .catch((error) => {
         if (error instanceof KnowledgeStorageError) {

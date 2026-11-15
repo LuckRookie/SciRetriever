@@ -94,9 +94,25 @@ it("publishes the exact draft, facts and raw image closure atomically, reuses it
     const { e, publication, output } = f;
     const v = output.document;
     expect(v.resources).toHaveLength(1);
+    await expect(
+      f.storage.commitDraftVersion({
+        ...publication,
+        expected_default_revision: 99,
+      }),
+    ).rejects.toMatchObject({ code: "document-default-conflict" });
+    expect(
+      await e.app.database.documentVersion(v.document_version_id),
+    ).toBeNull();
+    expect(
+      await e.app.database.draftVersionFacts(v.document_version_id),
+    ).toBeNull();
+    expect(await e.app.database.draftCurrent(e.asset.asset_id)).toBeNull();
     expect(await f.storage.commitDraftVersion(publication)).toEqual({
       published: true,
       current_revision: 1,
+      default_changed: true,
+      default_text_level: "draft",
+      index_refresh_required: true,
     });
     expect(
       await e.app.database.documentVersion(v.document_version_id),
@@ -111,8 +127,15 @@ it("publishes the exact draft, facts and raw image closure atomically, reuses it
       await f.storage.commitDraftVersion({
         ...publication,
         expected_current_revision: 1,
+        expected_default_revision: 1,
       }),
-    ).toEqual({ published: false, current_revision: 1 });
+    ).toEqual({
+      published: false,
+      current_revision: 1,
+      default_changed: false,
+      default_text_level: "draft",
+      index_refresh_required: false,
+    });
     await expect(
       f.storage.commitDraftVersion(publication),
     ).rejects.toMatchObject({ code: "draft-current-conflict" });
@@ -172,22 +195,25 @@ it("publishes the exact draft, facts and raw image closure atomically, reuses it
     } finally {
       db.close();
     }
-    // No publication-flow/default side effect is connected in block 03.
+    // Draft registration and default selection now commit together.
     expect(
       await e.app.database.documentDefault(
         e.parseRequest.literature_id,
         e.asset.asset_id,
         e.asset.sha256,
       ),
-    ).toBeNull();
+    ).toMatchObject({
+      document_version_id: v.document_version_id,
+      revision: 1,
+    });
     const result = await e.app.database.recomputeDocumentDefault({
       literature_id: e.parseRequest.literature_id,
       asset_id: e.asset.asset_id,
       asset_sha256: e.asset.sha256,
-      expected_default_revision: null,
+      expected_default_revision: 1,
     });
     expect(result).toMatchObject({
-      default_changed: true,
+      default_changed: false,
       text_level: "draft",
       default_revision: 1,
     });
@@ -383,7 +409,7 @@ it("recomputes draft/proofread/missing defaults with the legacy v2 JSON and even
       literature_id: e.parseRequest.literature_id,
       asset_id: e.asset.asset_id,
       asset_sha256: e.asset.sha256,
-      expected_default_revision: null as number | null,
+      expected_default_revision: 1 as number | null,
     };
     await e.app.database.recomputeDocumentDefault(request);
     const readJson = () => {
@@ -405,7 +431,10 @@ it("recomputes draft/proofread/missing defaults with the legacy v2 JSON and even
       }),
     );
     await expect(
-      e.app.database.recomputeDocumentDefault(request),
+      e.app.database.recomputeDocumentDefault({
+        ...request,
+        expected_default_revision: null,
+      }),
     ).rejects.toMatchObject({ code: "document-default-conflict" });
     const corrected = await correctedDocumentFixture(e.app).parseDocuments({
       ...e.parseRequest,

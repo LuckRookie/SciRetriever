@@ -5,6 +5,7 @@ import {
   type LongDocumentInfo,
   canonicalJsonBytes,
   archivePageCursor,
+  parseDocumentReceipt,
   type ArchiveState,
   type ArchiveStepReceipt,
   type ArchiveIssue,
@@ -412,6 +413,18 @@ export function runArchiveStorage(
     // Parsing runs as the first archive step (Owner 2026-10-30). It keeps its own
     // raw-parse attempts; here it only reports task progress, without a step row.
     if (action === "parse") {
+      const receipt =
+        r.receipt === undefined ? undefined : parseDocumentReceipt(r.receipt);
+      if (
+        receipt &&
+        (receipt.literature_id !== r.literature_id ||
+          receipt.asset_id !== r.asset_id ||
+          receipt.asset_sha256 !==
+            db
+              .prepare("SELECT sha256 FROM assets WHERE asset_id=?")
+              .get(String(r.asset_id))?.sha256)
+      )
+        fail("archive-parse-receipt-invalid");
       const now = new Date().toISOString(),
         job = db
           .prepare(
@@ -459,6 +472,7 @@ export function runArchiveStorage(
                 : "stopped",
           status,
           reason: r.reason ?? null,
+          ...(receipt ? { receipt } : {}),
           usage: {
             calls: 0,
             compaction_calls: 0,

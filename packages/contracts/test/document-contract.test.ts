@@ -603,8 +603,59 @@ describe("Document and Evidence boundary parsers", () => {
       asset_id: assetId,
       asset_sha256: hash("a"),
       profiles: [outcome],
+      draft: { status: "not-formed", reason: "profile-not-requested" },
     };
     expect(parseDocumentReceipt(receipt).profiles).toEqual([outcome]);
+    const formed = {
+      status: "formed",
+      raw_parse_id: versionId,
+      document_version_id: versionId,
+      representation_sha256: hash("c"),
+      default_changed: true,
+      default_text_level: "draft",
+    };
+    expect(parseDocumentReceipt({ ...receipt, draft: formed }).draft).toEqual(
+      formed,
+    );
+    expect(
+      parseDocumentReceipt({
+        ...receipt,
+        draft: {
+          ...formed,
+          status: "reused",
+          default_changed: false,
+          default_text_level: "proofread",
+        },
+      }).draft.status,
+    ).toBe("reused");
+    expect(
+      parseDocumentReceipt({
+        ...receipt,
+        draft: {
+          status: "failed",
+          raw_parse_id: versionId,
+          failure_code: "cancelled",
+        },
+      }).draft.status,
+    ).toBe("failed");
+    expect(() =>
+      parseDocumentReceipt({ ...receipt, draft: undefined }),
+    ).toThrow();
+    expect(() =>
+      parseDocumentReceipt({
+        ...receipt,
+        draft: { ...formed, default_text_level: "unknown" },
+      }),
+    ).toThrow();
+    expect(() =>
+      parseDocumentReceipt({
+        ...receipt,
+        draft: { ...formed, raw_parse_id: assetId },
+      }),
+    ).toThrow();
+    expect(() =>
+      parseDocumentReceipt({ ...receipt, draft: { ...formed, extra: true } }),
+    ).toThrow();
     expect(() => parseDocumentReceipt({ ...receipt, document: {} })).toThrow();
     expect(() =>
       parseDocumentReceipt({

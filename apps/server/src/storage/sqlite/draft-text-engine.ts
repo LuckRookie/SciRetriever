@@ -17,7 +17,10 @@ const { createLogger }: typeof Logging = await import(
     import.meta.url,
   ).href
 );
-const { recomputeDocumentDefault }: typeof Defaults = await import(
+const {
+  recomputeDocumentDefault,
+  recomputeAssetDocumentDefaults,
+}: typeof Defaults = await import(
   new URL(
     import.meta.url.endsWith(".ts")
       ? "./document-defaults.ts"
@@ -40,10 +43,14 @@ export interface DraftVersionPublication {
   readonly resource_artifact_paths: Readonly<Record<string, string>>;
   readonly facts: DraftVersionFacts;
   readonly expected_current_revision: number | null;
+  readonly expected_default_revision: number | null;
 }
 export interface DraftVersionCommit {
   readonly published: boolean;
   readonly current_revision: number;
+  readonly default_changed: boolean;
+  readonly default_text_level: TextLevel;
+  readonly index_refresh_required: boolean;
 }
 export interface PrimaryDocumentDefault {
   readonly literature_id: string;
@@ -311,7 +318,26 @@ function commit(
       v.document_version_id,
       revision,
     );
-  return { published: !prior, current_revision: revision };
+  const defaults = recomputeAssetDocumentDefaults(
+    db,
+    material.asset_id,
+    material.asset_sha256,
+    {
+      literature_id: material.literature_id,
+      asset_id: material.asset_id,
+      asset_sha256: material.asset_sha256,
+      expected_default_revision: p.expected_default_revision,
+    },
+  );
+  const own = defaults.find((d) => d.literature_id === material.literature_id);
+  if (!own?.text_level) fail("document-version-invalid");
+  return {
+    published: !prior,
+    current_revision: revision,
+    default_changed: own.default_changed,
+    default_text_level: own.text_level,
+    index_refresh_required: defaults.some((d) => d.default_changed),
+  };
 }
 export function runDraftTextWrite(db: DatabaseSync, request: DraftTextWrite) {
   requireSchema(db);

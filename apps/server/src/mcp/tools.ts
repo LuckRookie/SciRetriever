@@ -35,7 +35,7 @@ const operations = [
           maxItems: 2,
           uniqueItems: true,
           description:
-            "Two raw sources for archiving, not alternative parser backends. Defaults to both.",
+            "Defaults to the deployment profile. An explicit other profile is for inspection only and does not form a draft.",
         },
         force: {
           type: "boolean",
@@ -1115,7 +1115,7 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
   ),
   tool(
     "submit_processing",
-    "Submit explicitly USER-REQUESTED processing of EXISTING fixed materials. Operations are independent frozen targets, not an implicit dependency pipeline. Omit parse-documents profiles to use the deployment profile; another explicit profile is for inspection and does not participate in proofreading. Use result IDs to submit a later stage. Persists an idempotent job, then starts it in this process; returns its ID immediately. Read_task provides results. No implicit discovery or download.",
+    "Submit explicitly USER-REQUESTED processing of EXISTING fixed materials. Operations are independent frozen targets, not an implicit dependency pipeline. Omit parse-documents profiles to use the deployment profile; another explicit profile is for inspection and does not participate in proofreading. Parsing returns per-profile raw outcomes and a separate draft result; draft failure never invalidates a successful raw parse. Use result IDs to submit a later stage. Persists an idempotent job, then starts it in this process; returns its ID immediately. Read_task provides results. No implicit discovery or download.",
     object({
       schema_version: { const: 1 },
       idempotency_key: { type: "string", pattern: "^[A-Za-z0-9._:-]{1,128}$" },

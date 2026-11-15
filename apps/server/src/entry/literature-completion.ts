@@ -216,7 +216,12 @@ export class LiteratureCompletionService {
       signal,
       commit,
     );
-    if (!receipt.profiles.some((p) => p.failure_code === "parser-publication"))
+    // Once raw facts committed, cancellation of their separate draft must be
+    // reported in that receipt rather than replacing the successful parse.
+    if (
+      receipt.draft.status === "not-formed" &&
+      !receipt.profiles.some((p) => p.failure_code === "parser-publication")
+    )
       check();
     return {
       outcome: receipt.profiles.every((p) => p.status !== "failed")
