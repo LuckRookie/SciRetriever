@@ -260,6 +260,7 @@ export const MISSING_STEPS = [
 ] as const;
 export type MissingStep = (typeof MISSING_STEPS)[number];
 export interface LibraryQuery {
+  readonly needs_metadata?: boolean;
   readonly text_levels?: readonly TextLevel[];
   readonly has_draft_differences?: boolean | null;
   readonly has_image_only_pages?: boolean | null;
@@ -318,6 +319,7 @@ export interface LibrarySearchRequest {
   readonly cursor: string | null;
 }
 export interface LiteratureSearchItem {
+  readonly needs_metadata?: boolean;
   readonly draft_facts?: DraftFacts | null;
   readonly text_level?: TextLevel | null;
   readonly long_document?: LongDocumentInfo | null;
@@ -566,6 +568,9 @@ export function parseLiteratureSearchItem(
       ...object(value, []),
     },
     [
+      ...(Object.hasOwn(object(value, []), "needs_metadata")
+        ? ["needs_metadata"]
+        : []),
       "tags",
       ...(value &&
       typeof value === "object" &&
@@ -603,6 +608,9 @@ export function parseLiteratureSearchItem(
   )
     fail(["draft_facts"]);
   return Object.freeze({
+    ...(Object.hasOwn(r, "needs_metadata")
+      ? { needs_metadata: wireBoolean(r.needs_metadata) }
+      : {}),
     ...(Object.hasOwn(r, "draft_facts")
       ? {
           draft_facts:
@@ -1199,6 +1207,7 @@ export function parseLibraryQuery(value: unknown): LibraryQuery {
       "folder",
       "recently_opened",
       ...[
+        "needs_metadata",
         "text_levels",
         "has_draft_differences",
         "has_image_only_pages",
@@ -1218,6 +1227,9 @@ export function parseLibraryQuery(value: unknown): LibraryQuery {
   if ([from, to].some((year) => year !== null && (year < 1 || year > 9999)))
     fail([]);
   return Object.freeze({
+    ...(Object.hasOwn(record, "needs_metadata")
+      ? { needs_metadata: wireBoolean(record.needs_metadata) }
+      : {}),
     text: nullableText(record.text, ["text"]),
     title: nullableText(record.title, ["title"]),
     author: nullableText(record.author, ["author"]),
@@ -3553,7 +3565,9 @@ export function parseMetadataObservation(value: unknown): MetadataObservation {
       fail();
   } else if (
     provenance.source_kind === "user" &&
-    ["import", "web-capture"].includes(provenance.source_name)
+    ["import", "web-capture", "post-parse-recognition"].includes(
+      provenance.source_name,
+    )
   ) {
     if (
       provenance.source_record_id === null ||
@@ -3718,6 +3732,9 @@ export async function parseLiteratureDetail(
       ...object(value, []),
     },
     [
+      ...(Object.hasOwn(object(value, []), "needs_metadata")
+        ? ["needs_metadata"]
+        : []),
       "intake_batches",
       ...(value &&
       typeof value === "object" &&
@@ -3750,6 +3767,9 @@ export async function parseLiteratureDetail(
     [],
   );
   const item = parseLiteratureSearchItem({
+    ...(Object.hasOwn(r, "needs_metadata")
+      ? { needs_metadata: r.needs_metadata }
+      : {}),
     ...(Object.hasOwn(r, "draft_facts") ? { draft_facts: r.draft_facts } : {}),
     ...(Object.hasOwn(r, "text_level") ? { text_level: r.text_level } : {}),
     intake_at: r.intake_at,

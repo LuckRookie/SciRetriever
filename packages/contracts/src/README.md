@@ -6,8 +6,8 @@
 
 - [index.ts](index.ts)：包公开导出与基础合同。
 - [import-sessions.ts](import-sessions.ts)：供现有纯适配器使用的内部类型别名；实际模型与 parser 归 intake.ts，不提供旧 wire 字段。
-- [capture.ts](capture.ts)：单篇网页入库的过渡书目输入、预览、请求 UUID 与文件声明、补全/接纳结果；有标题即可保存，空条目拒绝。web-capture 的用户 provenance 仍由 index 中的封闭 observation 合同校验。
-- [intake-page.ts](intake-page.ts)：原始 WebPageData 的精确键、URL、meta/JSON-LD 数量与 UTF-8 字节上限；保留原始标签值，不在合同层解读页面。`index.ts` 导出的 URL 解析复用已有来源地址校验。
+- [capture.ts](capture.ts)：单篇网页入库的原始页面输入、预览、请求 UUID 与文件声明、补全/接纳结果；PDF 页面在认篇之前返回 literature_id 为 null 的独立待交文件形状，有标题的网页立即保存；空条目由页面适配后的应用边界拒绝。web-capture 的用户 provenance 仍由 index 中的封闭 observation 合同校验。
+- [intake-page.ts](intake-page.ts)：原始 WebPageData 的精确键、URL、meta/JSON-LD 数量与 UTF-8 字节上限；保留原始标签值，不在合同层解读页面；拥有上传文件名、相对路径校验与来源地址脱敏。`index.ts` 导出的 URL 解析复用已有来源地址校验。
 - [intake.ts](intake.ts)：统一批次、条目、来源、分段、纯适配器、报告、文件状态、状态/结果、进度、端点与错误码；source 可为 null，由服务形成一次性来源。也拥有范围词频与 PDF 获取范围/预览合同。
 - [acquisition.ts](acquisition.ts)：当前/待生效来源与有界安全获取轨迹，供配置、任务和浏览器读取。
 - [document.ts](document.ts)：文档合同。
@@ -58,3 +58,5 @@
 `device-connections.ts` 定义设备用途、无敏感值的连接投影与管理输入；连接码解析和一次性交付类型只用于认证边界，不进入普通文献事实或日志。
 
 `intake.ts` 定义统一入库批次、文件与报告、显式路由清单，以及获取 PDF/解析任务的范围计数。`library-counts.ts` 提供两者共用的 FullTextCounts 和关系校验；批次 full_text 按论文，estimates 按版本，LibraryCounts 的后续扩展不在此处提前启用。
+
+`LibraryQuery.needs_metadata` 与文献摘要/详情的同名可选字段用于书目待补；省略时不增加查询序列化字段。`post-parse-recognition` 是封闭的用户来源类型，要求原始解析引用和输入 hash，不接受任意自定义来源。

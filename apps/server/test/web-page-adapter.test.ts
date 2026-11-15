@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
 import {
   decodeWebPage,
@@ -241,7 +242,7 @@ it("counts invalid JSON blocks, ignores unrelated objects, and falls back to the
   ).toBe("A blog post");
 });
 
-it("uses the registered adapter in a real batch and preserves page fields as web-capture provenance", async () => {
+it("uses the adapter at the single-page boundary and preserves page fields as web-capture provenance", async () => {
   const home = await mkdtemp(
       join(tmpdir(), "sciretriever-page-adapter-batch-"),
     ),
@@ -250,26 +251,35 @@ it("uses the registered adapter in a real batch and preserves page fields as web
       metadata: { lookup_ports: [] },
     });
   try {
-    const batch = await app.importSessions.create(
-      { format: "web-page", source: null, scope: "Synthetic page" },
-      { kind: "local", origin: "cli" },
+    const input = page(undefined, [
+      ["citation_title", "Synthetic raw-page title"],
+      ["citation_doi", "10.5555/rawpage"],
+    ]);
+    const pairing = await app.deviceConnections.create({
+      address: "http://127.0.0.1:3001",
+      name: "Synthetic",
+      purposes: ["intake"],
+    });
+    const connection = await app.deviceConnections.exchange(
+      { pairing_code: pairing.connection_code.split(":")[2] },
+      randomUUID(),
     );
-    await app.importSessions.putData(
-      batch.batch_id,
-      0,
-      page(undefined, [
-        ["citation_title", "Synthetic raw-page title"],
-        ["citation_doi", "10.5555/rawpage"],
-      ]),
-    );
-    expect(await app.importSessions.preview(batch.batch_id)).toMatchObject({
-      summary: { records: { created: 1 } },
+    expect(await app.capture.lookup({ page: input })).toMatchObject({
+      found: false,
+      metadata: { title: "Synthetic raw-page title" },
     });
     expect((await app.library.search({ query: {} })).total_count).toBe(0);
-    expect(await app.importSessions.confirm(batch.batch_id)).toMatchObject({
-      state: "finished",
-      result: "completed",
+    const saved = await app.capture.save(connection.connection.connection_id, {
+      request_id: randomUUID(),
+      page: input,
     });
+    expect(saved.disposition).toBe("created");
+    await expect(
+      app.importSessions.create(
+        { format: "web-page", source: null, scope: "Synthetic" },
+        { kind: "local", origin: "cli" },
+      ),
+    ).rejects.toMatchObject({ code: "intake-format-unsupported" });
     const found = (await app.library.search({ query: {} })).items[0]!
         .literature,
       detail = await app.library.detail(found.literature_id);

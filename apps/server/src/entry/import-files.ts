@@ -29,8 +29,24 @@ export class ImportSessionError extends Error {
     super("Intake request rejected", options);
   }
 }
+export function intakeResourceFailure(error: unknown): unknown {
+  let current: unknown = error;
+  for (let i = 0; i < 8 && current && typeof current === "object"; i++) {
+    if ("code" in current && current.code === "ENOSPC")
+      return new ImportSessionError("intake-disk-space", { cause: error });
+    if (current instanceof BrowserDownloadResourceError)
+      return new ImportSessionError(
+        current.code === "browser-download-disk-reserve"
+          ? "intake-disk-space"
+          : "intake-disk-unavailable",
+        { cause: error },
+      );
+    current = "cause" in current ? current.cause : null;
+  }
+  return error;
+}
 /** Abort a waiting source without retaining a whole upload or waiting on an uncooperative iterator. */
-async function* uploadChunks(
+export async function* uploadChunks(
   source: AsyncIterable<Uint8Array>,
   signal: AbortSignal,
 ) {
@@ -234,6 +250,22 @@ export class ImportFileChannel {
           literature_id: file.literature_id,
           transfer_id: transferId,
           metadata_snapshot: baseline.metadata_snapshot,
+          ...(source === "web-capture"
+            ? {
+                source_url: (
+                  await this.database.run<{
+                    ok: boolean;
+                    value: string | null;
+                  }>({
+                    kind: "import_read",
+                    action: {
+                      op: "items-read",
+                      query: { kind: "source-url", file_id: file.file_id },
+                    },
+                  })
+                ).value,
+              }
+            : {}),
         },
         active,
       );
@@ -265,20 +297,7 @@ export class ImportFileChannel {
           { cause: error },
         );
 
-      let current: unknown = error;
-      for (let i = 0; i < 8 && current && typeof current === "object"; i++) {
-        if ("code" in current && current.code === "ENOSPC")
-          throw new ImportSessionError("intake-disk-space", { cause: error });
-        if (current instanceof BrowserDownloadResourceError)
-          throw new ImportSessionError(
-            current.code === "browser-download-disk-reserve"
-              ? "intake-disk-space"
-              : "intake-disk-unavailable",
-            { cause: error },
-          );
-        current = "cause" in current ? current.cause : null;
-      }
-      throw error;
+      throw intakeResourceFailure(error);
     } finally {
       await cleanup();
     }

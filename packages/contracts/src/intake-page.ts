@@ -11,6 +11,50 @@ export const WEB_PAGE_LIMITS = {
   json_ld: 5,
   json_ld_bytes: 64 * 1024,
 } as const;
+export function parseIntakeFileName(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    !value.trim() ||
+    new TextEncoder().encode(value).byteLength > 255 ||
+    /[/\\\p{Cc}\p{Cf}]/u.test(value) ||
+    value === "." ||
+    value === ".."
+  )
+    throw new ContractValidationError();
+  return value;
+}
+export function parseIntakeRelativePath(
+  value: unknown,
+  fileName: string,
+): string | null {
+  if (value === null) return null;
+  if (
+    typeof value !== "string" ||
+    !value ||
+    new TextEncoder().encode(value).byteLength > 1024 ||
+    /[\\\p{Cc}\p{Cf}]/u.test(value) ||
+    /^[a-zA-Z]:/u.test(value)
+  )
+    throw new ContractValidationError();
+  const parts = value.split("/");
+  if (
+    parts.some((p) => !p || p === "." || p === "..") ||
+    parts.at(-1) !== fileName
+  )
+    throw new ContractValidationError();
+  return value;
+}
+/** Persist only an ordinary address; never persist credentials, query strings or fragments. */
+export function intakeSourceUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    url.search = "";
+    url.hash = "";
+    return parsePublicSourceUrl(url.href);
+  } catch {
+    return null;
+  }
+}
 /** Original page values; interpretation belongs to the server adapter. */
 export interface WebPageData {
   readonly url: string;

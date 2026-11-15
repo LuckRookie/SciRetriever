@@ -2,10 +2,14 @@ import {
   ContractValidationError,
   EMPTY_METADATA,
   parseAssetId,
-  parseLiteratureMetadata,
   canonicalJsonBytes,
   type LiteratureMetadata,
 } from "./index.js";
+import {
+  parseWebPageData,
+  intakeSourceUrl,
+  parseIntakeFileName,
+} from "./intake-page.js";
 import {
   importObject,
   parseIntakeData,
@@ -20,34 +24,37 @@ export class IntakeItemEmptyError extends Error {
     super("Intake item empty");
   }
 }
-/** Transitional decoded metadata input, until the raw WebPageData adapter is connected. */
+/** Only original page data crosses the capture boundary. */
 export function parseIntakePagePreview(value: unknown) {
-  const r = importObject(value, ["metadata"]);
-  const fields = importObject(r.metadata, [], Object.keys(EMPTY_METADATA));
-  return {
-    metadata: parseLiteratureMetadata({ ...EMPTY_METADATA, ...fields }),
-  };
+  const r = importObject(value, ["page"]);
+  return { page: parseWebPageData(r.page) };
 }
 export function parseIntakePageSave(value: unknown) {
   const r = importObject(
     value,
-    ["request_id", "metadata"],
-    ["folder_ids", "file"],
+    ["request_id", "page"],
+    ["folder_ids", "file", "duplicate_decision"],
   );
   if (canonicalJsonBytes(r).byteLength > INTAKE_PAGE_MAX_REQUEST_BYTES)
     throw new ContractValidationError();
-  const { metadata } = parseIntakePagePreview({ metadata: r.metadata });
+  const { page } = parseIntakePagePreview({ page: r.page });
   const folderIds = r.folder_ids ?? [];
   if (!Array.isArray(folderIds) || folderIds.length > 100)
     throw new ContractValidationError();
   let file = null;
   if (r.file !== null && r.file !== undefined) {
-    const f = importObject(r.file, ["file_name"], ["size_bytes", "sha256"]);
-    file = parseIntakeData({
+    const { source_url, ...f } = importObject(
+      r.file,
+      ["file_name", "source_url"],
+      ["size_bytes", "sha256"],
+    );
+    if (typeof source_url !== "string") throw new ContractValidationError();
+    parseIntakeFileName(f.file_name);
+    const parsedFile = parseIntakeData({
       records: [
         {
           external_id: "page",
-          metadata,
+          metadata: EMPTY_METADATA,
           files: [
             {
               ...f,
@@ -59,14 +66,31 @@ export function parseIntakePageSave(value: unknown) {
         },
       ],
     }).records[0]!.files[0]!;
+    file = { ...parsedFile, source_url: intakeSourceUrl(source_url) };
   }
-  if (!metadata.title?.trim() && !metadata.identifiers.length && !file)
-    throw new IntakeItemEmptyError();
+  let duplicate_decision:
+    | { kind: "new" }
+    | { kind: "merge"; literature_id: string }
+    | null = null;
+  if (r.duplicate_decision !== undefined) {
+    const d = importObject(r.duplicate_decision, ["kind"], ["literature_id"]);
+    if (d.kind === "new") {
+      importObject(r.duplicate_decision, ["kind"]);
+      duplicate_decision = { kind: "new" };
+    } else if (d.kind === "merge") {
+      importObject(r.duplicate_decision, ["kind", "literature_id"]);
+      duplicate_decision = {
+        kind: "merge",
+        literature_id: parseAssetId(d.literature_id),
+      };
+    } else throw new ContractValidationError();
+  }
   return {
     request_id: parseAssetId(r.request_id),
-    metadata,
+    page,
     folder_ids: [...new Set(folderIds.map(parseAssetId))],
     file,
+    duplicate_decision,
   };
 }
 export interface IntakePageCompletion {
@@ -86,7 +110,12 @@ export interface IntakePageResult {
   readonly disposition: "created" | "enriched" | "matched" | null;
   readonly metadata: IntakePageCompletion;
   readonly missing_folder_ids: readonly string[];
-  readonly file: IntakeFileStatus | null;
+  readonly file: IntakeFileStatus | IntakePendingPageFile | null;
+}
+/** A PDF page has an upload ID before recognition establishes a Literature. */
+export interface IntakePendingPageFile
+  extends Omit<IntakeFileStatus, "literature_id"> {
+  readonly literature_id: null;
 }
 export interface IntakePagePreview {
   readonly found: boolean;

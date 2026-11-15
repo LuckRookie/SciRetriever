@@ -12,7 +12,7 @@
 
 - [import-sessions.ts](import-sessions.ts)：持久入库批次、可独立组装的 ImportSessionReadService、只读预览、逐条接纳检查点与公共文件通道。HTTP 确认先固定 running，再在后台接纳；CLI/stdio 书目包装同步完成。恢复与七天过期维护只由服务组装显式启用，存储失败间隔一分钟重试、连续三次记 failed。补 PDF 按网页/CLI/MCP 与系统时区日期归入开放批次；身份、文件夹与 PDF 发布仍分别调用既有 owner。
 - [manual-pdf.ts](manual-pdf.ts)：旧 PDF 维护入口的 receipt 适配；显式字节和流都委托入库文件通道，不另做发布。旧入口保留已有主 PDF 的冲突响应，新补 PDF 接口用文件状态返回 existing/conflict。
-- [capture.ts](capture.ts)：设备限定的单篇网页入库、只读身份预览、按日开放批次、幂等接纳及已有元数据任务补全；不接收浏览器 Cookie、URL 或自定义 provenance。文件清单统一保存在批次下，[import-files.ts](import-files.ts) 拥有流式接收、哈希重放、磁盘保护、PDF 验收、metadata CAS 与不可变发布。
+- [capture.ts](capture.ts)：设备限定的单篇网页入库、只读身份预览、按日开放批次、幂等接纳及已有元数据任务补全；不接收浏览器 Cookie 或自定义 provenance，页面 URL 只作为原始数据。文件清单统一保存在批次下，[import-files.ts](import-files.ts) 拥有流式接收、哈希重放、磁盘保护、PDF 验收、metadata CAS 与不可变发布。
 - [intake-digest.ts](intake-digest.ts)：入库与单篇收藏共用的规范 JSON hash 和稳定编号格式，保持既有重放键不变。
 - [library-transfer.ts](library-transfer.ts)：目录所有的原始材料有界读取与书目导出；调用既有文件校验和编码 owner，不接受任意服务器路径。
 - [discovery.ts](discovery.ts)：主题和引用扩展操作。
@@ -42,4 +42,6 @@ CLI/MCP/HTTP 只适配请求；供应商协议、材料验收和事实写入仍�
 
 library-facets 返回全部命中的标签、作者关键词、主题词，以及各层覆盖篇数。标签主次均计，只列 active 的直接标注；父标签不累计子标签。返回的作者关键词至多 30 个，按规范化名称精确查询 active 标签别名，并附当前标签 ID/名称；词频、覆盖和别名从同一读取快照产生。HTTP、CLI、MCP 共用此投影。
 
-批次的 `web-page` 格式从原始页面标签形成书目，读出的字段以 `user/web-capture` 来源接纳；原单篇收藏入口的过渡书目请求仍由 `capture.ts` 处理，两者不在 adapter 中发起查询。
+`capture.ts` 只收原始页面，调用网页适配器形成 `user/web-capture` 来源。当前页为 PDF 时先返回文件编号，字节交齐后认篇再接纳；实际下载地址只保留去掉查询串和 fragment 的安全地址。无标识的页面保存后后台认篇，重放读取最终补全结果。
+
+[intake-file-items.ts](intake-file-items.ts) 组织预览前的 PDF 暂存、安全相对路径配对、认篇进度与取消、条目决定及终态清理。书目确认后复用文件通道和 metadata CAS 接纳保留的字节；按 sha256 对应主 PDF 或补充材料，保留冲突。认篇结果存于条目，确认不再查询来源。

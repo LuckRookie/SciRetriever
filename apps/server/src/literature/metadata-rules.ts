@@ -126,6 +126,13 @@ function orderedObservations(
   const users = observations.filter(
     (item) => item.provenance.source_kind === "user",
   );
+  // This source replaces an unrecognized intake placeholder. Keep that choice
+  // when later observations rebuild candidates; explicit manual locks still win.
+  users.sort(
+    (a, b) =>
+      Number(b.provenance.source_name === "post-parse-recognition") -
+      Number(a.provenance.source_name === "post-parse-recognition"),
+  );
   const providers = observations
     .filter((item) => item.provenance.source_kind === "metadata-provider")
     .map((item) => ({

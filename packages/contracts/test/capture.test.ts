@@ -3,12 +3,22 @@ import {
   parseIntakePageSave,
   parseIntakePagePreview,
   parseMetadataObservation,
+  EMPTY_METADATA,
 } from "../src/index.js";
 const request = {
   request_id: "00000000-0000-4000-8000-000000000001",
-  metadata: {
+  page: {
+    url: "https://synthetic.invalid/article",
     title: "Page title",
-    identifiers: [{ namespace: "doi", value: "https://doi.org/10.5555/PAGE" }],
+    meta: [
+      {
+        attribute: "name",
+        key: "citation_doi",
+        content: "https://doi.org/10.5555/PAGE",
+      },
+    ],
+    json_ld: [],
+    is_pdf: false,
   },
 };
 
@@ -24,7 +34,11 @@ it("admits only the declared web-capture user provenance with a record reference
       input_sha256: "a".repeat(64),
       parameters_sha256: null,
     },
-    metadata: parseIntakePageSave(request).metadata,
+    metadata: {
+      ...EMPTY_METADATA,
+      title: "Page title",
+      identifiers: [{ namespace: "doi", value: "10.5555/page" }],
+    },
     source_type: null,
     source_type_mapping_version: null,
     version_role: null,
@@ -51,51 +65,58 @@ it("admits only the declared web-capture user provenance with a record reference
       }),
     ).toThrow();
 });
-it("normalizes page identifiers and fills only neutral metadata defaults", () => {
+it("preserves original page values and fills only request defaults", () => {
   const r = parseIntakePageSave(request);
-  expect(r.metadata.identifiers).toEqual([
-    { namespace: "doi", value: "10.5555/page" },
-  ]);
-  expect(r.metadata.abstract).toBeNull();
+  expect(r.page).toEqual(request.page);
+  expect(r.page.meta[0]!.content).toBe("https://doi.org/10.5555/PAGE");
   expect(r.file).toBeNull();
   expect(r.folder_ids).toEqual([]);
-  expect(
-    parseIntakePagePreview({
-      metadata: {
-        identifiers: [
-          {
-            namespace: "arxiv",
-            value: "https://arxiv.org/pdf/2601.12345v3.pdf",
-          },
-        ],
-      },
-    }).metadata.identifiers,
-  ).toEqual([{ namespace: "arxiv", value: "2601.12345" }]);
-});
-it("accepts title-only pages, rejects empty items, unknown credentials, unknown credentials, arbitrary provenance and unsafe file references", () => {
-  expect(
-    parseIntakePageSave({ ...request, metadata: { title: "No ID" } }).metadata
-      .title,
-  ).toBe("No ID");
-  expect(() => parseIntakePageSave({ ...request, metadata: {} })).toThrowError(
-    expect.objectContaining({ code: "intake-item-empty" }),
+  expect(parseIntakePagePreview({ page: request.page }).page).toEqual(
+    request.page,
   );
+  expect(() =>
+    parseIntakePagePreview({ metadata: { title: "Old decoded input" } }),
+  ).toThrow();
+});
+it("accepts original title-only pages and rejects unknown credentials, decoded metadata, arbitrary provenance and unsafe file references", () => {
+  expect(
+    parseIntakePageSave({
+      ...request,
+      page: { ...request.page, title: "No ID", meta: [] },
+    }).page.title,
+  ).toBe("No ID");
   for (const extra of [
     { token: "synthetic" },
     { provenance: {} },
     { page_url: "https://example.invalid" },
+    { metadata: { title: "Decoded" } },
   ])
     expect(() => parseIntakePageSave({ ...request, ...extra })).toThrow();
   expect(() =>
     parseIntakePageSave({
       ...request,
-      metadata: { ...request.metadata, cookie: "synthetic" },
+      page: { ...request.page, cookie: "synthetic" },
     }),
   ).toThrow();
   expect(() =>
-    parseIntakePageSave({ ...request, file: { file_name: "../paper.pdf" } }),
+    parseIntakePageSave({
+      ...request,
+      file: {
+        file_name: "../paper.pdf",
+        source_url: "https://synthetic.invalid/paper.pdf",
+      },
+    }),
   ).toThrow();
   expect(() =>
     parseIntakePageSave({ ...request, request_id: "arbitrary" }),
   ).toThrow();
+  expect(
+    parseIntakePageSave({
+      ...request,
+      file: {
+        file_name: "paper.pdf",
+        source_url: "https://synthetic.invalid/paper.pdf?download=1#page=2",
+      },
+    }).file!.source_url,
+  ).toBe("https://synthetic.invalid/paper.pdf");
 });

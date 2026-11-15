@@ -152,6 +152,11 @@ import {
   TopicDiscoveryService,
 } from "../entry/discovery.js";
 import { LiteratureCompletionService } from "../entry/literature-completion.js";
+import {
+  IntakeRecognitionService,
+  metadataRecognitionSources,
+} from "../literature/intake-recognition.js";
+import { PostParseRecognitionService } from "../literature/post-parse-recognition.js";
 import { ManualPdfIngestionService } from "../entry/manual-pdf.js";
 import {
   EntryPdfAcquisitionService,
@@ -760,6 +765,7 @@ async function createApplicationOwned(
   let agentTraces: AgentTraceService | undefined;
   let browserAgentCapability: BrowserAgentCapability | undefined;
   let rawParsing: RawParsingService | undefined;
+  let postParseRecognition: PostParseRecognitionService | undefined;
   let proofreadDocuments: ProofreadDocumentService | undefined;
   let draftDocuments: DraftPublicationService | undefined;
   let structureAnnotations: StructureAnnotationService | undefined;
@@ -1488,6 +1494,9 @@ async function createApplicationOwned(
         database,
         files,
         scheduleDocumentIndex,
+        (raw, markdown, signal, blocks) =>
+          postParseRecognition?.afterParse(raw, markdown, signal, blocks) ??
+          Promise.resolve(),
       );
       if (parsingPorts?.rawParser)
         rawParsing = new RawParsingService(
@@ -1863,6 +1872,14 @@ async function createApplicationOwned(
         });
     const identity = new LiteratureIdentityService(database, writes);
     const folders = new FolderService(database);
+    const intakeRecognition =
+      options.importSessions?.recognition ??
+      new IntakeRecognitionService(metadataRecognitionSources(metadata));
+    postParseRecognition = new PostParseRecognitionService(
+      database,
+      identity,
+      intakeRecognition,
+    );
     importSessions = new ImportSessionService(
       database,
       identity,
@@ -1870,7 +1887,7 @@ async function createApplicationOwned(
       files,
       writes,
       artifactRecovery,
-      options.importSessions,
+      { ...options.importSessions, recognition: intakeRecognition },
     );
     if (options.importSessions?.maintain === true)
       void importSessions
@@ -1993,7 +2010,14 @@ async function createApplicationOwned(
               };
             }
           },
-          options.capture,
+          {
+            ...options.capture,
+            recognizePage:
+              options.capture?.recognizePage ??
+              ((literatureId, page, signal) =>
+                postParseRecognition!.page(literatureId, page, signal)),
+          },
+          importSessions,
         )),
         ["save"],
         admission,

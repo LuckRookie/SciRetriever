@@ -891,7 +891,7 @@ function guardRequestBody(request: IncomingMessage, response: ServerResponse) {
       path === "/api/v1/maintenance/ingest-pdf" ||
       path === "/api/maintenance/ingest-pdf" ||
       /^\/api\/v1\/intake\/literatures\/[^/]+\/pdf$/u.test(path!) ||
-      /^\/api\/v1\/intake\/batches\/[^/]+\/(?:data|files\/[^/]+\/bytes)$/u.test(
+      /^\/api\/v1\/intake\/batches\/[^/]+\/(?:data|file-items|files\/[^/]+\/bytes)$/u.test(
         path!,
       ));
   let timer: ReturnType<typeof setTimeout>;

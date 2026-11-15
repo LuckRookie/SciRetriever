@@ -19,7 +19,7 @@ export function captureHttpRoutes(service: CaptureService): DeviceRoute[] {
       connectionId: string | null,
     ) => {
       try {
-        if (operation === "page-save" && !connectionId) {
+        if (!connectionId) {
           res.writeHead(403, {
             "Content-Type": "application/json",
             "Cache-Control": "no-store",
@@ -27,7 +27,7 @@ export function captureHttpRoutes(service: CaptureService): DeviceRoute[] {
           res.end(
             JSON.stringify({
               protocol_version: 1,
-              code: "device-purpose-forbidden",
+              code: "intake-device-required",
             }),
           );
           return;

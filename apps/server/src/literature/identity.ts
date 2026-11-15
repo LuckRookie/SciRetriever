@@ -342,16 +342,20 @@ export class LiteratureIdentityService {
       readonly intake_batch_id?: import("@sciretriever/contracts").IntakeBatchId;
       readonly intake_exclude_ids?: readonly string[];
       readonly target_literature_id?: string;
+      readonly signal?: AbortSignal;
     } = {},
   ): Promise<LiteratureIdentityDecision> {
     const observation = parseMetadataObservation(value);
-    return this.writes.run(() =>
-      this.observeAdmitted(
-        observation,
-        options.intake_batch_id,
-        options.intake_exclude_ids,
-        options.target_literature_id,
-      ),
+    return this.writes.run(
+      () =>
+        this.observeAdmitted(
+          observation,
+          options.intake_batch_id,
+          options.intake_exclude_ids,
+          options.target_literature_id,
+          options.signal,
+        ),
+      options.signal,
     );
   }
 
@@ -458,8 +462,10 @@ export class LiteratureIdentityService {
     intakeBatchId?: import("@sciretriever/contracts").IntakeBatchId,
     excludeIds: readonly string[] = [],
     targetLiteratureId?: string,
+    signal?: AbortSignal,
   ): Promise<LiteratureIdentityDecision> {
     const assessment = await this.assess(observation, targetLiteratureId);
+    signal?.throwIfAborted();
     if ("disposition" in assessment) return assessment;
     const { context, current, currentFact, acceptance } = assessment;
     const publication = current
@@ -489,6 +495,7 @@ export class LiteratureIdentityService {
                   : ("enriched" as const),
           }
         : undefined;
+    signal?.throwIfAborted();
     if (!acceptance.deduplicated)
       await this.database.publishIdentityObservation({
         ...publication,

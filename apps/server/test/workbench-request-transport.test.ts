@@ -1,3 +1,4 @@
+import { syntheticCaptureRequest } from "./intake-page-fixture.js";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
@@ -415,13 +416,17 @@ it("receives slow import data, captured PDF bytes and MCP request bodies through
       ),
     );
     expect(data.status, data.text).toBe(200);
-    const capture = await f.post("/api/v1/intake/pages/save", token, {
-      request_id: randomUUID(),
-      metadata: {
-        identifiers: [{ namespace: "doi", value: "10.5555/slow-capture" }],
-      },
-      file: { file_name: "paper.pdf" },
-    });
+    const capture = await f.post(
+      "/api/v1/intake/pages/save",
+      token,
+      syntheticCaptureRequest({
+        request_id: randomUUID(),
+        metadata: {
+          identifiers: [{ namespace: "doi", value: "10.5555/slow-capture" }],
+        },
+        file: { file_name: "paper.pdf" },
+      }),
+    );
     const pdf = await slow(
       f.server.origin,
       `/api/v1/intake/batches/${capture.batch_id}/files/${capture.file.file_id}/bytes`,
@@ -490,12 +495,16 @@ it("receives slow import data, captured PDF bytes and MCP request bodies through
       client_id: string;
       csrf: string;
     };
-    const manual = await f.post("/api/v1/intake/pages/save", token, {
-      request_id: randomUUID(),
-      metadata: {
-        identifiers: [{ namespace: "doi", value: "10.5555/slow-manual" }],
-      },
-    });
+    const manual = await f.post(
+      "/api/v1/intake/pages/save",
+      token,
+      syntheticCaptureRequest({
+        request_id: randomUUID(),
+        metadata: {
+          identifiers: [{ namespace: "doi", value: "10.5555/slow-manual" }],
+        },
+      }),
+    );
     const result = await slow(
       f.server.origin,
       `/api/v1/maintenance/ingest-pdf?client_id=${grant.client_id}`,

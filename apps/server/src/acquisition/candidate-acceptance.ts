@@ -18,6 +18,7 @@ import { CandidatePublisher } from "./candidate-publication.js";
 import { acceptPdfFile } from "./pdf-acceptance.js";
 
 export interface AcceptCandidateCommand {
+  readonly source_url?: string | null;
   readonly receipt_id: string;
   readonly literature_id: string;
   readonly transfer_id: string;
@@ -45,8 +46,10 @@ export class CandidateAcceptanceError extends Error {
 function validate(command: AcceptCandidateCommand): void {
   if (
     !command ||
-    Object.keys(command).sort().join() !==
-      "literature_id,metadata_snapshot,receipt_id,transfer_id" ||
+    Object.keys(command)
+      .filter((k) => k !== "source_url")
+      .sort()
+      .join() !== "literature_id,metadata_snapshot,receipt_id,transfer_id" ||
     typeof command.literature_id !== "string" ||
     !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(
       command.literature_id,
@@ -96,6 +99,8 @@ export class CandidateAcceptanceService {
     check();
     if (previous) {
       if (
+        (input.source_url !== undefined &&
+          previous.source_url !== input.source_url) ||
         previous.literature_id !== input.literature_id ||
         previous.candidate.transfer_id !== input.transfer_id ||
         previous.metadata_snapshot.revision !==
@@ -163,7 +168,9 @@ export class CandidateAcceptanceService {
         input_sha256: candidate.sha256,
         parameters_sha256: null,
       },
-      source_url: userSupplied ? null : candidate.capture!.source_url,
+      source_url: userSupplied
+        ? (input.source_url ?? null)
+        : candidate.capture!.source_url,
       identity: "unverified",
     });
     check();

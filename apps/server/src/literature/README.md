@@ -23,7 +23,7 @@
 - `metadata-proposals.ts` / `metadata-agent.ts` / `archive-metadata.ts`：建档内部的 DSH 元数据提议；只读固定校订稿的第一页及 front-matter/abstract/keywords，逐字段核对片段和 DOI。无模型时明确失败，不回退到旧两阶段总结。建档编排由相邻的 `archive/` 模块调用。
 
 - [import-adapters.ts](import-adapters.ts)：中性记录、书目格式和网页原始标签的纯适配器登记；decode 只转换输入，不访问时钟、随机数、网络、文件或数据库。[bibliography-attachments.ts](bibliography-attachments.ts) 读取 BibTeX/BibLaTeX file 与 RIS L1，形成首选 PDF 的中性引用、脱敏本机路径并统计未导入附件；CSL JSON 不推断附件。
-- [web-page-adapter.ts](web-page-adapter.ts)：按标签与 JSON-LD 优先序产生中性书目、PDF 地址和无效 JSON 计数；原始 `web-page` 可交给批次的数据入口，PDF 页面返回需要文件的结果，不据页面地址猜书目。
+- [web-page-adapter.ts](web-page-adapter.ts)：按标签与 JSON-LD 优先序产生中性书目、PDF 地址和无效 JSON 计数；单篇收藏接收原始 `WebPageData`，PDF 页面由文件流程处理，不据页面地址猜书目。
 - [file-clues.ts](file-clues.ts)：单个受控 PDF 的只读线索端口，由适配器入口导出；复用基本验收，再用受限 MuPDF 读取文档信息、XMP、首页/必要的第二页和醒目标题，全部操作受 10 秒总时限约束，不查库、不联网、不调用模型。文件条目上传与确认的组装不在此端口中。[import-clues.ts](import-clues.ts) 共用字符串及标识规范化。
 
 书目适配器只收原始文本；bibliography-import 的 bibliographyText 共用 UTF-8/带 BOM UTF-16 的严格字节解码，供本地入口转换文本。只导书目的文件策略由 Entry 的批次选项处理，纯适配器仍返回同样的文件引用与排除计数。
@@ -37,3 +37,5 @@
 `metadata-rules.ts` 将作者声明（declared_keywords）投影为作者关键词，逐字段裁决仍保留人工 > 校订证据 > 来源的优先级及锁。数据库主题词由 provider 顺序合并、忽略大小写去重并限于 8 项；不进入书目导出的作者关键词。`query.ts` 提供批次读取、整个筛选范围的词频，以及按当前排序冻结的 PDF 获取预览；分页搜索与批量范围使用同一 SQL 条件。
 
 `query.ts` 的 parseSelection 复用获取 PDF 的范围选择器，读取有主 PDF 且没有当前部署 profile 原始解析的版本；它只读，不下载、解析或创建任务。批次读取返回按论文的 full_text 及按版本的 acquire_pdf/parse 预估；文献库 LibraryCounts 的扩展另行接入同一计数 owner。
+
+[intake-recognition.ts](intake-recognition.ts) 依次核对标识、标题与作者/年份，只复用配置允许的元数据查询；按 Unicode 码点计算标题相似度，候选不自动接纳。预览不写文献事实。[post-parse-recognition.ts](post-parse-recognition.ts) 在原始解析发布后只处理书目待补文献，保留来源与人工锁；不执行解析或模型。文献查询的 needs_metadata 标记独立于建档状态。

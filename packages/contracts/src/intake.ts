@@ -1031,6 +1031,41 @@ export function parseIntakeData(value: unknown): IntakeData {
 
 /** Implemented intake routes. Later recognition/decision/withdrawal routes register when connected. */
 export const INTAKE_HTTP_ENDPOINTS = [
+  [
+    "POST",
+    "/api/v1/intake/batches/:batch_id/file-items",
+    "file-items",
+    "raw PDF; X-Sciretriever-File-Name; optional X-Sciretriever-Relative-Path",
+    "{item:IntakeBatchItem}",
+  ],
+  [
+    "POST",
+    "/api/v1/intake/batches/:batch_id/preview/cancel",
+    "preview-cancel",
+    "{}",
+    "{batch,recognition}",
+  ],
+  [
+    "POST",
+    "/api/v1/intake/batches/:batch_id/items",
+    "items",
+    "{cursor?:UUID|null,limit?:1..200,needs?:decision|unpaired|null}",
+    "{items:IntakeBatchItem[],next_cursor:string|null}",
+  ],
+  [
+    "POST",
+    "/api/v1/intake/batches/:batch_id/items/:item_id/status",
+    "item-status",
+    "{}",
+    "{item:IntakeBatchItem}",
+  ],
+  [
+    "POST",
+    "/api/v1/intake/batches/:batch_id/items/:item_id/decide",
+    "item-decide",
+    "{decision:IntakeDecision}",
+    "{item:IntakeBatchItem}",
+  ],
   ["POST", "/api/v1/intake/folders", "folders", "{}", "{folders:Folder[]}"],
   [
     "POST",
@@ -1143,14 +1178,14 @@ export const INTAKE_HTTP_ENDPOINTS = [
     "POST",
     "/api/v1/intake/pages/preview",
     "page-preview",
-    "{metadata:Partial<LiteratureMetadata>}",
+    "{page:WebPageData}",
     "IntakePagePreview",
   ],
   [
     "POST",
     "/api/v1/intake/pages/save",
     "page-save",
-    "{request_id,metadata:Partial<LiteratureMetadata>,folder_ids?:UUID[],file?:{file_name,size_bytes?,sha256?}|null}",
+    "{request_id,page:WebPageData,folder_ids?:UUID[],file?:IntakePageFile|null,duplicate_decision?:{kind:merge,literature_id}|{kind:new}}",
     "IntakePageResult",
   ],
 ] as const;
@@ -1168,6 +1203,7 @@ export const INTAKE_ERROR_STATUSES = {
   "intake-file-size-mismatch": 400,
   "intake-upload-cancelled": 400,
   "intake-decision-invalid": 400,
+  "intake-device-required": 403,
   "intake-batch-missing": 404,
   "intake-item-missing": 404,
   "intake-file-missing": 404,
@@ -1200,6 +1236,27 @@ export type IntakeDecision =
   | { readonly kind: "new" }
   | { readonly kind: "candidate"; readonly candidate_id: string }
   | { readonly kind: "unrecognized" | "include" | "exclude" };
+export function parseIntakeDecision(value: unknown): IntakeDecision {
+  const r = importObject(value, ["kind"], ["literature_id", "candidate_id"]);
+  if (r.kind === "merge") {
+    importObject(value, ["kind", "literature_id"]);
+    return { kind: r.kind, literature_id: parseLiteratureId(r.literature_id) };
+  }
+  if (r.kind === "candidate") {
+    importObject(value, ["kind", "candidate_id"]);
+    if (
+      typeof r.candidate_id !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(r.candidate_id)
+    )
+      throw new ContractValidationError();
+    return { kind: r.kind, candidate_id: r.candidate_id };
+  }
+  if (["new", "unrecognized", "include", "exclude"].includes(String(r.kind))) {
+    importObject(value, ["kind"]);
+    return { kind: r.kind as "new" | "unrecognized" | "include" | "exclude" };
+  }
+  throw new ContractValidationError();
+}
 export interface IntakeRecognition {
   readonly state:
     | "pending"

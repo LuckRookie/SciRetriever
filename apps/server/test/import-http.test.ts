@@ -411,7 +411,7 @@ it("shares the exact import handlers between authenticated Web and import-purpos
     });
     expect(docs.status).toBe(200);
     const reference = (await docs.json()).result;
-    expect(reference.endpoints).toHaveLength(20);
+    expect(reference.endpoints).toHaveLength(25);
     expect(reference.endpoints).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -421,7 +421,12 @@ it("shares the exact import handlers between authenticated Web and import-purpos
       ]),
     );
     expect(reference.formats).toContain("records");
-    expect(reference.formats).toContain("web-page");
+    expect(reference.formats).not.toContain("web-page");
+    expect(reference.endpoints).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ operation: "page-save" }),
+      ]),
+    );
     expect(reference.model).toContain("WebPageData");
     expect(JSON.stringify(reference)).not.toMatch(
       /\bsessions?\b|\/api\/v1\/(?:import|capture)/u,

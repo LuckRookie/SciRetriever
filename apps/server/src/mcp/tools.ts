@@ -594,7 +594,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
             query: {
               type: "object",
               description:
-                "LibraryQuery: text, title, author, author_orcids, identifiers, publication_year_from/to, venue, publisher, publication_forms, article_kinds, languages, keywords, version_roles, statuses, missing_steps, needs_manual_pdf, discovery_run_ids, text_levels, has_draft_differences, has_image_only_pages, cited_by_results, has_unfound_citations. Draft fact filters and sort keys use the primary PDF default only; non-drafts match neither true nor false. Returned draft_facts are catalog facts, not a proofreading action.",
+                "LibraryQuery: text, title, author, author_orcids, identifiers, publication_year_from/to, venue, publisher, publication_forms, article_kinds, languages, keywords, version_roles, statuses, missing_steps, needs_manual_pdf, needs_metadata, discovery_run_ids, text_levels, has_draft_differences, has_image_only_pages, cited_by_results, has_unfound_citations. Draft fact filters and sort keys use the primary PDF default only; non-drafts match neither true nor false. Returned draft_facts are catalog facts, not a proofreading action.",
             },
             limit: { type: "integer", minimum: 1, maximum: 100 },
             cursor: nullable(text),

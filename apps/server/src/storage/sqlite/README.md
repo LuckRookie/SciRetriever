@@ -76,3 +76,5 @@ schema 15 增加入库批次、成员与主题词；13 的按篇状态失效提�
 [full-text-counts.ts](full-text-counts.ts) 是全文取得情况的共用只读 SQL 投影：范围先选 Literature，再按 MetaLiterature 去重，是否取得与耗尽检查全部当前版本，不以建档状态排除已有 PDF。intake-engine 将此投影与成员、PDF、书目待补计数合并，在同一只读快照返回 full_text 与两个任务预估；import-engine 不将 full_text 写入 summary_json。library-page 的获取/解析选择共用筛选，解析选择绑定当前主 PDF 的 hash 和部署 profile，不把其它 profile 的结果算成已解析。批次预估复用已有 PDF 分类计数和与任务选择相同的当前解析判定，以聚合 SQL 读取，不为计数展开或排序任务成员，也不保存另一份计数或新增表。当前快照没有 PDF 或耗尽事实时，可直接证明相应计数为零；这些判断不跨请求缓存。
 
 metadata_only 仅存 intake_batches.request_json，不增加列；import-engine 读取工作状态时从此字段投影，旧记录缺省为 false。只导书目的普通元数据接纳、分段检查点和终态沿用同一事务，文件关系不产生。
+
+[intake-items.ts](intake-items.ts) 读写已有条目表的文件暂存引用、配对与认篇工作 JSON、决定和书目待补标记，不增表。SHA-256 对应包括被撤回内容；恢复仅移除所对应文献及其材料、成员与批注的撤回标记。人工保存标题与按标识入库时，标记清除并入元数据发布事务。

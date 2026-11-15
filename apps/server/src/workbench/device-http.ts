@@ -356,7 +356,9 @@ export async function handleDeviceRequest(
     if (request.method === "POST")
       assertRequestContentType(
         request,
-        registered.route.path.endsWith("/bytes") ? "bytes" : "json",
+        /\/(?:bytes|file-items)$/u.test(registered.route.path)
+          ? "bytes"
+          : "json",
       );
     await registered.route.handle(
       request,

@@ -28,7 +28,8 @@ const { parseDocumentCount }: typeof import("./library-page.js") = await import(
 export interface IntakeMember {
   readonly batch_id: IntakeBatchId;
   readonly literature_id: string;
-  readonly disposition: "created" | "enriched" | "matched";
+  readonly disposition: "created" | "enriched" | "matched" | "restored";
+  readonly authoritative?: boolean;
 }
 export type IntakeWrite =
   | {
@@ -56,7 +57,7 @@ export function recordIntakeMember(
   if (batch?.state !== "running")
     throw new Error("intake batch is not running");
   db.prepare(
-    "INSERT INTO intake_batch_members VALUES(?,?,?) ON CONFLICT(batch_id,literature_id) DO UPDATE SET disposition=CASE WHEN disposition='created' OR excluded.disposition='created' THEN 'created' WHEN disposition='enriched' OR excluded.disposition='enriched' THEN 'enriched' ELSE 'matched' END",
+    `INSERT INTO intake_batch_members VALUES(?,?,?) ON CONFLICT(batch_id,literature_id) DO UPDATE SET disposition=${member.authoritative ? "excluded.disposition" : "CASE WHEN disposition='restored' OR excluded.disposition='restored' THEN 'restored' WHEN disposition='created' OR excluded.disposition='created' THEN 'created' WHEN disposition='enriched' OR excluded.disposition='enriched' THEN 'enriched' ELSE 'matched' END"}`,
   ).run(member.batch_id, member.literature_id, member.disposition);
 }
 export function intakeMemberships(db: DatabaseSync, id: string) {

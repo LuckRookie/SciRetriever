@@ -226,6 +226,7 @@ export function queryFingerprint(query: LibraryQuery): string {
     ...Object.fromEntries(
       (
         [
+          "needs_metadata",
           "has_draft_differences",
           "has_image_only_pages",
           "cited_by_results",
@@ -511,6 +512,8 @@ function matches(row: SearchSnapshotRow, q: LibraryQuery): boolean {
   const any = (wanted: readonly unknown[], actual: readonly unknown[]) =>
     !wanted.length || wanted.some((value) => actual.includes(value));
   return (
+    (q.needs_metadata === undefined ||
+      row.item.needs_metadata === q.needs_metadata) &&
     (!q.text_levels?.length ||
       (row.item.text_level !== null &&
         row.item.text_level !== undefined &&

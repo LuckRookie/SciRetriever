@@ -1,3 +1,4 @@
+import { syntheticCaptureRequest } from "./intake-page-fixture.js";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -122,7 +123,12 @@ async function fixture(failing = false) {
         "Content-Type": contentType,
         "X-Sciretriever-Protocol-Version": "1",
       },
-      body: JSON.stringify({ protocol_version: 1, request }),
+      body: JSON.stringify({
+        protocol_version: 1,
+        request: path.startsWith("pages/")
+          ? syntheticCaptureRequest(request)
+          : request,
+      }),
     });
   const call = async (
     token: string,
@@ -439,7 +445,7 @@ it("recovers a committed identity and its original batch classification after th
         return original(command, signal);
       });
     await expect(
-      f.app.capture.save(actor.connection_id, value),
+      f.app.capture.save(actor.connection_id, syntheticCaptureRequest(value)),
     ).rejects.toThrow("Synthetic capture checkpoint interruption");
     spy.mockRestore();
     expect(f.sql("SELECT disposition FROM intake_batch_members")).toEqual([
@@ -560,7 +566,9 @@ it("streams valid unverified PDFs through the shared import channel and never re
         "'",
     );
     expect(receipt).toHaveLength(1);
-    expect(JSON.parse(String(receipt[0]!.intent_json)).source_url).toBeNull();
+    expect(JSON.parse(String(receipt[0]!.intent_json)).source_url).toBe(
+      "https://synthetic.invalid/download/paper.pdf",
+    );
     const repeat = await f.call(actor.token, "pages/save", request());
     expect(
       (
@@ -751,7 +759,19 @@ it("saves a title-only page into the shared open batch and rejects an empty item
     expect(
       (await f.app.library.detail(saved.literature_id)).literature.metadata,
     ).toMatchObject({ title: "A title without identifiers", identifiers: [] });
-    expect(await f.call(actor.token, "pages/save", input)).toEqual(saved);
+    const settled = {
+      ...saved,
+      metadata: {
+        status: "partial",
+        job_id: null,
+        code: "intake-needs-metadata",
+      },
+    };
+    await vi.waitFor(
+      async () =>
+        expect(await f.call(actor.token, "pages/save", input)).toEqual(settled),
+      { timeout: 20000 },
+    );
     expect(f.sql("SELECT * FROM literatures")).toHaveLength(1);
     expect(
       f.sql("SELECT result_json FROM intake_page_requests")[0]!.result_json,

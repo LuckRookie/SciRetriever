@@ -48,6 +48,12 @@ export class SqliteRawParseStorage {
     private readonly database: SqliteWorker,
     private readonly files: FileStore,
     private readonly onDefaultChanged?: () => Promise<unknown>,
+    private readonly onPublished?: (
+      raw: RawParse,
+      markdown: Uint8Array,
+      signal?: AbortSignal,
+      blocks?: Uint8Array,
+    ) => Promise<void>,
   ) {}
   async close() {
     this.closed = true;
@@ -323,7 +329,7 @@ export class SqliteRawParseStorage {
         signal,
         blockReferences,
       );
-      return this.files.withWrite(async () => {
+      const publication = await this.files.withWrite(async () => {
         if (signal?.aborted)
           throw Object.assign(new Error("raw parsing cancelled"), {
             code: "parser-cancelled",
@@ -380,6 +386,19 @@ export class SqliteRawParseStorage {
         }
         return { result, published: reply.published };
       }, signal);
+      try {
+        await this.onPublished?.(
+          result,
+          output.markdown.bytes,
+          signal,
+          output.blocks?.bytes,
+        );
+      } catch {
+        createLogger("raw-parsing-storage").warn(
+          "Post-parse recognition failed; raw parse retained",
+        );
+      }
+      return publication;
     });
   }
   failure(

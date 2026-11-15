@@ -174,6 +174,7 @@ function usage(options: CliOptions): CliResult {
     "  metadata lookup ID[,ID] | sources statistics --request FILE|-\n" +
     "  complete pdf|parser [--literature-id ID] [--transfers ID,...]\n" +
     "  literature search [query options] | show ID | references ID | cited-by ID\n" +
+    "    --needs-metadata | --no-needs-metadata filters the independent bibliographic recognition mark\n" +
     "  import metadata FORMAT SOURCE | import pdf ID SOURCE\n" +
     "  document parse --literature-id ID --asset-id ID --asset-sha256 SHA256 [--profiles pipeline,vlm-engine] [--force] (default: deployment profile)\n" +
     "  export metadata FORMAT OUTPUT | export pdf ID --path PATH\n" +
@@ -453,6 +454,11 @@ function query(
   const noBool = args.includes("--no-needs-manual-pdf");
   return parseLibraryQuery({
     text,
+    ...(args.includes("--needs-metadata")
+      ? { needs_metadata: true }
+      : args.includes("--no-needs-metadata")
+        ? { needs_metadata: false }
+        : {}),
     title: argument(args, "--title"),
     author: argument(args, "--author"),
     author_orcids: argumentsOf(args, "--author-orcid"),

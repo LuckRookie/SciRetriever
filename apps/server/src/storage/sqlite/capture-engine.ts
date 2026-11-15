@@ -5,8 +5,10 @@ import {
   type IntakePageResult as CaptureResult,
   type ImportFileStatus,
   type IntakeBatch,
+  type IntakeExcluded,
 } from "@sciretriever/contracts";
 import type * as Intake from "./intake-engine.js";
+import type { IntakeItemWork } from "./intake-items.js";
 const {
   insertImportBatch,
   insertImportFiles,
@@ -29,10 +31,29 @@ export interface StoredCapture {
   disposition: CaptureResult["disposition"];
   created_at: string;
   result: Omit<CaptureResult, "file"> | null;
-  file: ImportFileStatus | null;
+  file: CaptureResult["file"];
 }
 export type CaptureRead = { item_id: string; connection_id: string };
 export type CaptureWrite =
+  | {
+      op: "file-rejected";
+      item_id: string;
+      connection_id: string;
+      reason: string;
+      result: Omit<CaptureResult, "file">;
+    }
+  | {
+      op: "completion";
+      item_id: string;
+      connection_id: string;
+      completion: CaptureResult["metadata"];
+    }
+  | {
+      op: "pending";
+      item_id: string;
+      connection_id: string;
+      work: IntakeItemWork;
+    }
   | {
       op: "ensure";
       item_id: string;
@@ -53,6 +74,8 @@ export type CaptureWrite =
       disposition: NonNullable<CaptureResult["disposition"]>;
       replay: boolean;
       file: ImportFileStatus | null;
+      source_url?: string | null;
+      excluded?: readonly IntakeExcluded[];
       now: string;
     }
   | {
@@ -74,6 +97,14 @@ export function readCapture(db: DatabaseSync, r: CaptureRead): StoredCapture {
   const file = db
     .prepare("SELECT file_id FROM import_files WHERE item_id=?")
     .get(r.item_id);
+  const item = db
+    .prepare(
+      "SELECT file_name,recognition_json FROM intake_items WHERE item_id=?",
+    )
+    .get(r.item_id);
+  const work: IntakeItemWork | null = item?.recognition_json
+    ? JSON.parse(String(item.recognition_json))
+    : null;
   return {
     item_id: String(row.item_id),
     connection_id: String(row.connection_id),
@@ -81,7 +112,11 @@ export function readCapture(db: DatabaseSync, r: CaptureRead): StoredCapture {
     batch_id: String(row.batch_id),
     literature_id:
       row.literature_id === null ? null : String(row.literature_id),
-    disposition: row.disposition as StoredCapture["disposition"],
+    disposition: ["created", "enriched", "matched"].includes(
+      String(row.disposition),
+    )
+      ? (row.disposition as StoredCapture["disposition"])
+      : null,
     created_at: String(row.created_at),
     result:
       row.result_json === null ? null : JSON.parse(String(row.result_json)),
@@ -91,7 +126,23 @@ export function readCapture(db: DatabaseSync, r: CaptureRead): StoredCapture {
           batch_id: String(row.batch_id),
           file_id: String(file.file_id),
         }) as ImportFileStatus)
-      : null,
+      : work?.page?.is_pdf &&
+          row.literature_id === null &&
+          row.disposition === null
+        ? {
+            file_id: r.item_id,
+            external_id: `${r.item_id}/pdf`,
+            record_external_id: r.item_id,
+            literature_id: null,
+            file_name: String(item!.file_name),
+            size_bytes: work.declared_file?.size_bytes ?? null,
+            expected_sha256: work.declared_file?.sha256 ?? null,
+            action: "upload",
+            status: "pending",
+            sha256: null,
+            reason: null,
+          }
+        : null,
   };
 }
 export function writeCapture(
@@ -171,7 +222,32 @@ export function writeCapture(
       }
     } else {
       const old = readCapture(db, r);
-      if (r.op === "accepted" && old.literature_id === null) {
+      if (r.op === "file-rejected") {
+        const position = Number(
+          db
+            .prepare(
+              "SELECT coalesce(max(record_index),-1)+1 n FROM import_record_results WHERE batch_id=? AND sequence=0",
+            )
+            .get(old.batch_id)!.n,
+        );
+        db.prepare(
+          "UPDATE intake_items SET disposition='conflict' WHERE item_id=? AND literature_id IS NULL",
+        ).run(r.item_id);
+        db.prepare(
+          "INSERT INTO import_record_results(batch_id,sequence,record_index,item_id,external_id,disposition,reason) VALUES(?,0,?,?,?,'conflict',?) ON CONFLICT DO NOTHING",
+        ).run(old.batch_id, position, r.item_id, r.item_id, r.reason);
+        db.prepare(
+          "UPDATE intake_page_requests SET result_json=? WHERE item_id=? AND connection_id=?",
+        ).run(JSON.stringify(r.result), r.item_id, r.connection_id);
+      } else if (r.op === "completion") {
+        db.prepare(
+          "UPDATE intake_page_requests SET result_json=json_set(result_json,'$.metadata',json(?)) WHERE item_id=? AND connection_id=? AND json_extract(result_json,'$.metadata.status')='pending'",
+        ).run(JSON.stringify(r.completion), r.item_id, r.connection_id);
+      } else if (r.op === "pending") {
+        db.prepare(
+          "UPDATE intake_items SET recognition_json=? WHERE item_id=? AND literature_id IS NULL",
+        ).run(JSON.stringify(r.work), r.item_id);
+      } else if (r.op === "accepted" && old.literature_id === null) {
         const member = r.replay
           ? db
               .prepare(
@@ -207,6 +283,31 @@ export function writeCapture(
           meta!,
         );
         if (r.file) insertImportFiles(db, old.batch_id, r.item_id, [r.file]);
+        if (r.file && r.source_url)
+          db.prepare(
+            "UPDATE import_files SET source_url=? WHERE file_id=?",
+          ).run(r.source_url, r.file.file_id);
+        if (r.excluded?.length) {
+          const row = db
+            .prepare(
+              "SELECT summary_json FROM import_sessions WHERE batch_id=?",
+            )
+            .get(old.batch_id);
+          const summary = row?.summary_json
+            ? JSON.parse(String(row.summary_json))
+            : { excluded: [] };
+          summary.excluded ??= [];
+          for (const e of r.excluded) {
+            const found = summary.excluded.find(
+              (v: IntakeExcluded) => v.kind === e.kind,
+            );
+            if (found) found.count += e.count;
+            else summary.excluded.push(e);
+          }
+          db.prepare(
+            "UPDATE import_sessions SET summary_json=? WHERE batch_id=?",
+          ).run(JSON.stringify(summary), old.batch_id);
+        }
         intake.recordIntakeMember(db, {
           batch_id: parseIntakeBatchId(old.batch_id),
           literature_id: r.literature_id,
@@ -217,7 +318,7 @@ export function writeCapture(
         ).run(r.now, old.batch_id);
       } else if (r.op === "result") {
         db.prepare(
-          "UPDATE intake_page_requests SET result_json=coalesce(result_json,?) WHERE item_id=? AND connection_id=?",
+          "UPDATE intake_page_requests SET result_json=CASE WHEN result_json IS NULL OR json_extract(result_json,'$.literature_id') IS NULL THEN ? ELSE result_json END WHERE item_id=? AND connection_id=?",
         ).run(JSON.stringify(r.result), r.item_id, r.connection_id);
       }
     }

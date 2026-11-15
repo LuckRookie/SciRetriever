@@ -5,6 +5,9 @@ import {
   parseIntakeBatchId,
   parseIntakeCreate,
   parseFolderOperation,
+  parseIntakeFileName,
+  parseIntakeRelativePath,
+  type IntakeDecision,
   importInteger,
   IMPORT_LIMITS,
   type ImportAdapter,
@@ -59,12 +62,18 @@ import {
 } from "./import-files.js";
 export { ImportSessionError } from "./import-files.js";
 import { intakeDigest as hash } from "./intake-digest.js";
+import { IntakeFileItems, publicIntakeItem } from "./intake-file-items.js";
+import { IntakeRecognitionService } from "../literature/intake-recognition.js";
+import type { FileClueReader } from "../literature/file-clues.js";
+import type { StoredIntakeItem } from "../storage/sqlite/intake-items.js";
 const intakeId = (value: unknown) => hash(value, "uuid");
 
 export type ImportActor =
   | { readonly kind: "device"; readonly connection_id: string }
   | { readonly kind: "local"; readonly origin: "web" | "cli" | "mcp" };
 export interface ImportSessionOptions {
+  readonly recognition?: IntakeRecognitionService;
+  readonly clueReader?: FileClueReader;
   readonly adapters?: readonly ImportAdapter[];
   readonly now?: () => number;
   readonly availableBytes?: BrowserDownloadResourceOptions["available_bytes"];
@@ -279,6 +288,18 @@ export class ImportSessionService extends ImportSessionReadService {
   private readonly uploads = new Map<string, Set<Promise<unknown>>>();
   private readonly uploadStops = new Map<string, Set<AbortController>>();
   readonly fileChannel: ImportFileChannel;
+  readonly fileItems: IntakeFileItems;
+  private pagePdfHandler?: (
+    s: StoredImportSession,
+    item: StoredIntakeItem,
+    chunks: AsyncIterable<Uint8Array>,
+    signal: AbortSignal,
+  ) => Promise<ImportFileStatus>;
+  setPagePdfHandler(
+    handler: NonNullable<ImportSessionService["pagePdfHandler"]>,
+  ) {
+    this.pagePdfHandler = handler;
+  }
   private readonly logger = createLogger("import-sessions");
   private timer: ReturnType<typeof setInterval> | undefined;
   private maintenance: Promise<void> | undefined;
@@ -309,6 +330,20 @@ export class ImportSessionService extends ImportSessionReadService {
       resources,
       this.now,
     );
+    this.fileItems = new IntakeFileItems(
+      database,
+      files,
+      writes,
+      recovery,
+      resources,
+      options.recognition ??
+        new IntakeRecognitionService({
+          lookup: async () => [],
+          search: async () => [],
+        }),
+      options.clueReader,
+      this.now,
+    );
     if (options.maintain === true) {
       this.timer = setInterval(() => {
         void this.sweep().catch(() =>
@@ -326,7 +361,9 @@ export class ImportSessionService extends ImportSessionReadService {
     return r.value;
   }
   formats(): readonly string[] {
-    return [...this.adapters.keys()];
+    return [...this.adapters.keys()]
+      .filter((f) => f !== "web-page")
+      .concat("file");
   }
   listFolders() {
     return this.tracked(() =>
@@ -344,7 +381,10 @@ export class ImportSessionService extends ImportSessionReadService {
   ) {
     if (r.source?.system === "bibliography-file")
       throw new ImportSessionError("intake-input-invalid");
-    if (!this.adapters.has(r.format))
+    if (
+      r.format === "web-page" ||
+      (!this.adapters.has(r.format) && r.format !== "file")
+    )
       throw new ImportSessionError("intake-format-unsupported");
     if (r.source?.identity === "local" && actor.kind !== "device")
       throw new ImportSessionError("intake-local-identity-required");
@@ -624,7 +664,34 @@ export class ImportSessionService extends ImportSessionReadService {
     };
     for (const id of groups.keys()) visit(id);
     for (const id of references) visit(id);
-    return { parts, groups, summary, decoded };
+    const fileItems = await this.fileItems.prepare(s, decoded);
+    (summary.files as { unpaired: number }).unpaired = fileItems.items.filter(
+      (i) => i.unpaired,
+    ).length;
+    for (const item of fileItems.items)
+      if (item.work?.clues?.reason)
+        addExcluded(summary, item.work.clues.reason);
+    return {
+      parts,
+      sequences: [...decoded.keys()],
+      groups,
+      summary,
+      decoded,
+      fileItems,
+    };
+  }
+  private async assertFileSnapshot(
+    id: string,
+    items: readonly StoredIntakeItem[],
+  ) {
+    const current = (
+      await this.fileItems.read<StoredIntakeItem[]>({
+        kind: "all",
+        batch_id: id,
+      })
+    ).filter((i) => i.origin === "file");
+    if (hash(current) !== hash(items))
+      throw new ImportSessionError("intake-data-changed");
   }
   private mapping(
     library_key: string,
@@ -641,9 +708,13 @@ export class ImportSessionService extends ImportSessionReadService {
   private observation(
     s: StoredImportSession,
     record: ImportRecord,
+    fileSha?: string,
   ): MetadataObservation {
     const content = hash(record),
-      legacy = s.source.identity === "adhoc" && s.format !== "web-page";
+      legacy =
+        s.source.identity === "adhoc" &&
+        s.format !== "web-page" &&
+        fileSha === undefined;
     return parseMetadataObservation({
       observation_id: intakeId([
         s.library_key,
@@ -669,7 +740,7 @@ export class ImportSessionService extends ImportSessionReadService {
           ? null
           : JSON.stringify([s.library_key, record.external_id]),
         observed_at: s.confirmed_at ?? s.created_at,
-        input_sha256: legacy ? null : content,
+        input_sha256: legacy ? null : (fileSha ?? content),
         parameters_sha256: null,
       },
       source_type: record.source_type,
@@ -690,6 +761,7 @@ export class ImportSessionService extends ImportSessionReadService {
     s: StoredImportSession,
     record: ImportRecord,
     mapping: ExternalObjectMapping | null,
+    fileSha?: string,
   ) {
     if (mapping?.content_sha256 === hash(record)) {
       const facts = await this.database.currentFacts(mapping.internal_id);
@@ -709,7 +781,7 @@ export class ImportSessionService extends ImportSessionReadService {
     }
     return {
       ...(await this.identity.preview(
-        this.observation(s, record),
+        this.observation(s, record, fileSha),
         mapping?.internal_id,
       )),
       unchanged: false,
@@ -759,27 +831,80 @@ export class ImportSessionService extends ImportSessionReadService {
         throw new ImportSessionError("intake-batch-state");
       const prepared = await this.prepare(s),
         summary = prepared.summary;
-      for (const part of prepared.parts)
-        for (const item of prepared.decoded.get(part.sequence)!.items) {
+      this.fileItems.start(s, prepared.fileItems.items);
+      for (const sequence of prepared.sequences)
+        for (const item of prepared.decoded.get(sequence)!.items) {
           if (!item.record) {
-            (summary.records as { rejected: number }).rejected++;
+            if (item.reason === "unpaired-file")
+              (summary.records as { pending_decision: number })
+                .pending_decision++;
+            else if (item.reason !== "excluded")
+              (summary.records as { rejected: number }).rejected++;
             continue;
           }
-          const record = item.record,
-            mapping = await this.mapping(
-              s.library_key,
-              "record",
-              record.external_id,
-            ),
-            decision = await this.assessRecord(s, record, mapping);
+          const record = item.record;
+          const retained =
+            sequence === IMPORT_LIMITS.parts
+              ? prepared.fileItems.items.find(
+                  (i) => i.item_id === record.external_id,
+                )
+              : prepared.fileItems.paired.get(record.external_id);
+          let mapping = await this.mapping(
+            s.library_key,
+            "record",
+            record.external_id,
+          );
+          const candidate = retained?.candidate_transfer_id
+            ? await this.fileItems.transfers.recover(
+                retained.candidate_transfer_id,
+              )
+            : null;
+          const owner =
+            candidate &&
+            (s.source.identity === "adhoc" || sequence === IMPORT_LIMITS.parts)
+              ? await this.fileItems.read<{
+                  literature_id: string;
+                  withdrawn: number;
+                  ambiguous?: number;
+                } | null>({ kind: "hash", sha256: candidate.sha256 })
+              : null;
+          if (owner)
+            mapping = {
+              library_key: s.library_key,
+              object_kind: "record",
+              external_id: record.external_id,
+              internal_id: owner.literature_id,
+              content_sha256: null,
+              observation_id: null,
+              state: "settled",
+            };
+          if (owner?.ambiguous) {
+            (summary.records as { conflicts: number }).conflicts++;
+            continue;
+          }
+          const decision = await this.assessRecord(
+            s,
+            record,
+            mapping,
+            sequence === IMPORT_LIMITS.parts ? candidate?.sha256 : undefined,
+          );
           if (decision.disposition === "conflict") {
             (summary.records as { conflicts: number }).conflicts++;
             continue;
           }
-          if (decision.disposition === "created")
+          if (owner?.withdrawn)
+            (summary.records as { restored: number }).restored++;
+          else if (owner) (summary.records as { matched: number }).matched++;
+          else if (decision.disposition === "created")
             (summary.records as { created: number }).created++;
           else (summary.records as { matched: number }).matched++;
-          if (!s.metadata_only && selected(record)) {
+          if (
+            !owner &&
+            retained?.work?.result &&
+            retained.work.result.recognition.state !== "recognized"
+          )
+            (summary.records as { needs_metadata: number }).needs_metadata++;
+          if (!s.metadata_only && selected(record) && !candidate) {
             const facts = decision.literature_id
               ? await this.database.currentFacts(decision.literature_id)
               : null;
@@ -794,6 +919,127 @@ export class ImportSessionService extends ImportSessionReadService {
         batch,
         estimated: true as const,
         summary: { ...summary, full_text: batch.full_text },
+        recognition: this.fileItems.progress(prepared.fileItems.items),
+      };
+    });
+  }
+  receiveFileItem(
+    id: string,
+    fileName: string,
+    relativePath: string | null,
+    chunks: AsyncIterable<Uint8Array>,
+    signal?: AbortSignal,
+    cancelSource?: () => void,
+  ) {
+    const control = new AbortController(),
+      active = AbortSignal.any([
+        control.signal,
+        this.stop.signal,
+        ...(signal ? [signal] : []),
+      ]);
+    const cancel = () => cancelSource?.();
+    active.addEventListener("abort", cancel, { once: true });
+    const stops = this.uploadStops.get(id) ?? new Set<AbortController>();
+    stops.add(control);
+    this.uploadStops.set(id, stops);
+    const pending = this.tracked(async () => {
+      if (this.stopping.has(id))
+        throw new ImportSessionError("intake-batch-state");
+      const name = parseIntakeFileName(fileName),
+        path = parseIntakeRelativePath(relativePath, name);
+      return this.fileItems.receive(
+        await this.stored(id),
+        name,
+        path,
+        chunks,
+        active,
+      );
+    });
+    const uploads = this.uploads.get(id) ?? new Set<Promise<unknown>>();
+    uploads.add(pending);
+    this.uploads.set(id, uploads);
+    const done = () => {
+      active.removeEventListener("abort", cancel);
+      stops.delete(control);
+      uploads.delete(pending);
+      if (!stops.size) this.uploadStops.delete(id);
+      if (!uploads.size) this.uploads.delete(id);
+    };
+    void pending.then(done, done);
+    return pending;
+  }
+  items(
+    id: string,
+    cursor: string | null = null,
+    limit = 50,
+    needs: "decision" | "unpaired" | null = null,
+  ) {
+    return this.tracked(async () => {
+      await this.stored(id);
+      const all = (
+        await this.fileItems.read<StoredIntakeItem[]>({
+          kind: "all",
+          batch_id: id,
+        })
+      )
+        .filter(
+          (i) =>
+            !i.work?.paired_to &&
+            (!cursor || i.item_id > cursor) &&
+            (needs === "decision"
+              ? i.needs_decision
+              : needs === "unpaired"
+                ? i.unpaired
+                : true),
+        )
+        .sort((a, b) => a.item_id.localeCompare(b.item_id));
+      return {
+        items: all.slice(0, limit).map(publicIntakeItem),
+        next_cursor: all.length > limit ? all[limit - 1]!.item_id : null,
+      };
+    });
+  }
+  item(id: string, itemId: string) {
+    return this.tracked(async () =>
+      publicIntakeItem(
+        await this.fileItems.read<StoredIntakeItem>({
+          kind: "one",
+          batch_id: id,
+          item_id: itemId,
+        }),
+      ),
+    );
+  }
+  decide(
+    id: string,
+    itemId: string,
+    decision: IntakeDecision,
+    actor: ImportActor,
+  ) {
+    return this.tracked(async () =>
+      this.fileItems.decide(
+        await this.stored(id),
+        itemId,
+        decision,
+        actor.kind === "device"
+          ? `device:${actor.connection_id}`
+          : actor.origin,
+      ),
+    );
+  }
+  cancelPreview(id: string) {
+    return this.tracked(async () => {
+      const s = await this.stored(id);
+      if (!["collecting", "awaiting-confirmation"].includes(s.state))
+        throw new ImportSessionError("intake-batch-state");
+      await this.fileItems.cancel(s);
+      const items = await this.fileItems.read<StoredIntakeItem[]>({
+        kind: "all",
+        batch_id: id,
+      });
+      return {
+        batch: await this.project(s),
+        recognition: this.fileItems.progress(items),
       };
     });
   }
@@ -810,6 +1056,18 @@ export class ImportSessionService extends ImportSessionReadService {
         throw new ImportSessionError("intake-batch-state");
       if (s.state === "awaiting-confirmation") {
         const ready = await this.prepare(s);
+        if (
+          ready.fileItems.items.some(
+            (i) =>
+              !i.work?.reason &&
+              !i.work?.paired_to &&
+              (!i.unpaired ||
+                i.decision?.kind === "include" ||
+                i.work?.included === true) &&
+              !i.work?.result,
+          )
+        )
+          throw new ImportSessionError("intake-recognition-pending");
         await this.writes.run(async () => {
           const parts = await this.read<ImportPart[]>({
             op: "parts",
@@ -817,6 +1075,7 @@ export class ImportSessionService extends ImportSessionReadService {
           });
           if (hash(parts) !== hash(ready.parts))
             throw new ImportSessionError("intake-data-changed");
+          await this.assertFileSnapshot(id, ready.fileItems.items);
           await this.write({
             op: "begin",
             batch_id: id,
@@ -965,6 +1224,18 @@ export class ImportSessionService extends ImportSessionReadService {
     const prepared =
       this.preparedConfirmations.get(id) ?? (await this.prepare(s));
     this.preparedConfirmations.delete(id);
+    if (
+      prepared.fileItems.items.some(
+        (i) =>
+          !i.work?.reason &&
+          !i.work?.paired_to &&
+          (!i.unpaired ||
+            i.decision?.kind === "include" ||
+            i.work?.included === true) &&
+          !i.work?.result,
+      )
+    )
+      throw new ImportSessionError("intake-recognition-pending");
     await this.writes.run(async () => {
       const current = await this.read<ImportPart[]>({
         op: "parts",
@@ -972,6 +1243,7 @@ export class ImportSessionService extends ImportSessionReadService {
       });
       if (hash(current) !== hash(prepared.parts))
         throw new ImportSessionError("intake-data-changed");
+      await this.assertFileSnapshot(id, prepared.fileItems.items);
       await this.write({
         op: "begin",
         batch_id: id,
@@ -997,8 +1269,8 @@ export class ImportSessionService extends ImportSessionReadService {
           addExcluded(prepared.summary, error.code);
         }
       });
-    for (const part of prepared.parts)
-      for (const item of prepared.decoded.get(part.sequence)!.items) {
+    for (const sequence of prepared.sequences)
+      for (const item of prepared.decoded.get(sequence)!.items) {
         if (this.stop.signal.aborted || this.stopping.has(id))
           return this.project(await this.stored(id));
         await this.writes.run(async () => {
@@ -1007,47 +1279,107 @@ export class ImportSessionService extends ImportSessionReadService {
           const old = await this.read<ImportRecordResult | null>({
             op: "result",
             batch_id: id,
-            sequence: part.sequence,
+            sequence: sequence,
             record_index: item.record_index,
           });
           if (old) return;
           const record = item.record;
           let result: ImportRecordResult = {
-            sequence: part.sequence,
+            sequence: sequence,
             record_index: item.record_index,
             external_id:
               record?.external_id ??
               item.external_id ??
-              `rejected:${part.sequence}:${item.record_index}`,
-            disposition: "rejected",
+              `rejected:${sequence}:${item.record_index}`,
+            disposition:
+              item.reason === "unpaired-file"
+                ? "excluded"
+                : item.reason === "excluded"
+                  ? "excluded"
+                  : "rejected",
             literature_id: null,
             meta_literature_id: null,
             reason: item.reason ?? "malformed-record",
           };
           let mapping: ExternalObjectMapping | null = null;
           const files: ImportFileStatus[] = [];
+          const retained = record
+            ? sequence === IMPORT_LIMITS.parts
+              ? prepared.fileItems.items.find(
+                  (i) => i.item_id === record.external_id,
+                )
+              : prepared.fileItems.paired.get(record.external_id)
+            : undefined;
+          const retainedCandidate = retained?.candidate_transfer_id
+            ? await this.fileItems.transfers.recover(
+                retained.candidate_transfer_id,
+              )
+            : null;
           if (record) {
-            const existing = await this.mapping(
-                s.library_key,
-                "record",
-                record.external_id,
-              ),
-              content = hash(record),
-              observation = this.observation(s, record);
-            const assessment =
-              s.source.identity === "adhoc"
+            let existing = await this.mapping(
+              s.library_key,
+              "record",
+              record.external_id,
+            );
+            const hashOwner =
+              retainedCandidate &&
+              (s.source.identity === "adhoc" ||
+                sequence === IMPORT_LIMITS.parts)
+                ? await this.fileItems.read<{
+                    literature_id: string;
+                    asset_id: string;
+                    role: string;
+                    withdrawn: number;
+                    ambiguous?: number;
+                  } | null>({ kind: "hash", sha256: retainedCandidate.sha256 })
+                : null;
+            if (hashOwner)
+              existing = {
+                library_key: s.library_key,
+                object_kind: "record",
+                external_id: record.external_id,
+                internal_id: hashOwner.literature_id,
+                content_sha256: null,
+                observation_id: null,
+                state: "settled",
+              };
+            const content = hash(record),
+              observation = this.observation(
+                s,
+                record,
+                sequence === IMPORT_LIMITS.parts
+                  ? retainedCandidate?.sha256
+                  : undefined,
+              );
+            const assessment = hashOwner?.ambiguous
+              ? {
+                  disposition: "conflict" as const,
+                  literature_id: null,
+                  reason: "file-identity-conflict",
+                  unchanged: false,
+                }
+              : s.source.identity === "adhoc" && !hashOwner
                 ? {
                     disposition: "created" as const,
                     literature_id: null,
                     reason: null,
                     unchanged: false,
                   }
-                : await this.assessRecord(s, record, existing);
+                : await this.assessRecord(
+                    s,
+                    record,
+                    existing,
+                    sequence === IMPORT_LIMITS.parts
+                      ? retainedCandidate?.sha256
+                      : undefined,
+                  );
             if (assessment.disposition === "conflict")
               result = {
                 ...result,
                 disposition: "conflict",
-                reason: assessment.reason,
+                reason: hashOwner
+                  ? "file-identity-conflict"
+                  : assessment.reason,
               };
             else {
               const replay = await this.database.getObservation(
@@ -1067,7 +1399,9 @@ export class ImportSessionService extends ImportSessionReadService {
                     decision.disposition === "rejected"
                       ? "rejected"
                       : "conflict",
-                  reason: decision.reason,
+                  reason: hashOwner
+                    ? "file-identity-conflict"
+                    : decision.reason,
                 };
               else {
                 // Replay after a process died between the identity commit and this checkpoint.
@@ -1080,16 +1414,57 @@ export class ImportSessionService extends ImportSessionReadService {
                 });
                 result = {
                   ...result,
-                  disposition:
-                    replay && !assessment.unchanged
-                      ? (member?.disposition ?? decision.outcome)
-                      : decision.outcome,
+                  disposition: hashOwner?.withdrawn
+                    ? "restored"
+                    : hashOwner
+                      ? "matched"
+                      : replay && !assessment.unchanged
+                        ? (member?.disposition ?? decision.outcome)
+                        : decision.outcome,
                   literature_id: decision.literature_id,
                   meta_literature_id: decision.meta_literature_id,
-                  reason: null,
+                  reason:
+                    hashOwner?.role !== undefined &&
+                    hashOwner.role !== "primary-pdf"
+                      ? "matched-by-supplementary"
+                      : (retained?.work?.clues?.reason ?? null),
                 };
+                if (hashOwner) {
+                  if (hashOwner.withdrawn)
+                    await this.fileItems.write({
+                      kind: "restore",
+                      literature_id: decision.literature_id,
+                    });
+                  await this.database.writeIntake({
+                    operation: "member",
+                    member: {
+                      batch_id: parseIntakeBatchId(id),
+                      literature_id: decision.literature_id,
+                      disposition: hashOwner.withdrawn ? "restored" : "matched",
+                      authoritative: true,
+                    },
+                  });
+                }
+                const recognized = retained?.work?.result;
+                if (recognized?.observation)
+                  await this.identity.observe(recognized.observation, {
+                    target_literature_id: decision.literature_id,
+                  });
+                if (
+                  recognized &&
+                  decision.outcome === "created" &&
+                  recognized.recognition.state !== "recognized"
+                )
+                  await this.fileItems.write({
+                    kind: "needs",
+                    literature_id: decision.literature_id,
+                    needed: true,
+                    batch_id: id,
+                    now: new Date(this.now()).toISOString(),
+                  });
                 mapping =
-                  s.source.identity === "adhoc"
+                  s.source.identity === "adhoc" ||
+                  sequence === IMPORT_LIMITS.parts
                     ? null
                     : {
                         library_key: s.library_key,
@@ -1147,12 +1522,11 @@ export class ImportSessionService extends ImportSessionReadService {
             op: "result",
             batch_id: id,
             item: result,
-            item_id: intakeId([
-              "intake-item",
-              id,
-              part.sequence,
-              item.record_index,
-            ]),
+            item_id:
+              (sequence === IMPORT_LIMITS.parts
+                ? (record?.external_id ?? item.external_id)
+                : null) ??
+              intakeId(["intake-item", id, sequence, item.record_index]),
             title: record?.metadata.title ?? null,
             mapping,
             files,
@@ -1160,6 +1534,63 @@ export class ImportSessionService extends ImportSessionReadService {
           });
           this.failures.delete(id);
         });
+        const record = item.record;
+        const retained = record
+          ? sequence === IMPORT_LIMITS.parts
+            ? prepared.fileItems.items.find(
+                (i) => i.item_id === record.external_id,
+              )
+            : prepared.fileItems.paired.get(record.external_id)
+          : undefined;
+        if (retained?.candidate_transfer_id && record && selected(record)) {
+          const candidate = await this.fileItems.transfers.recover(
+            retained.candidate_transfer_id,
+          );
+          const result = await this.read<ImportRecordResult | null>({
+            op: "result",
+            batch_id: id,
+            sequence,
+            record_index: item.record_index,
+          });
+          if (candidate && result?.literature_id) {
+            const file = await this.read<ImportFileStatus>({
+              op: "file",
+              batch_id: id,
+              file_id: intakeId([id, selected(record)!.external_id]),
+            });
+            if (file.status === "pending") {
+              if (
+                (file.size_bytes !== null &&
+                  file.size_bytes !== candidate.size_bytes) ||
+                (file.expected_sha256 !== null &&
+                  file.expected_sha256 !== candidate.sha256)
+              )
+                await this.settleFile(id, file, candidate.sha256, null, false);
+              else {
+                const owner = await this.fileItems.read<{
+                  literature_id: string;
+                  asset_id: string;
+                  role: string;
+                } | null>({ kind: "hash", sha256: candidate.sha256 });
+                if (owner?.literature_id === result.literature_id)
+                  await this.settleFile(
+                    id,
+                    file,
+                    candidate.sha256,
+                    { asset_id: owner.asset_id, sha256: candidate.sha256 },
+                    false,
+                  );
+                else if (file.action === "hash")
+                  await this.reportHash(id, file.file_id, candidate.sha256);
+                else
+                  await this.fileItems.transfers.withCandidate(
+                    candidate,
+                    (input) => this.upload(id, file.file_id, input.chunks()),
+                  );
+              }
+            }
+          }
+        }
       }
     const current = await this.stored(id);
     if (
@@ -1336,6 +1767,7 @@ export class ImportSessionService extends ImportSessionReadService {
       await this.write({ op: "retire-parts", batch_id: id });
       await this.recovery.complete(ticket);
     });
+    await this.fileItems.cleanup(id);
   }
   private async finishIfComplete(id: string) {
     const s = await this.stored(id);
@@ -1365,6 +1797,7 @@ export class ImportSessionService extends ImportSessionReadService {
   private async terminate(id: string, state: "finished" | "cancelled") {
     this.stopping.add(id);
     this.preparedConfirmations.delete(id);
+    await this.fileItems.cancel(await this.stored(id));
     const retry = this.retries.get(id);
     if (retry) {
       clearTimeout(retry);
@@ -1434,6 +1867,28 @@ export class ImportSessionService extends ImportSessionReadService {
     await this.finishIfComplete(id);
     return result;
   }
+  settleRetainedHash(id: string, fileId: string, sha256: string) {
+    return this.tracked(async () => {
+      const file = await this.read<ImportFileStatus>({
+        op: "file",
+        batch_id: id,
+        file_id: fileId,
+      });
+      const owner = await this.fileItems.read<{
+        literature_id: string;
+        asset_id: string;
+      } | null>({ kind: "hash", sha256 });
+      if (!owner || owner.literature_id !== file.literature_id)
+        throw new ImportSessionError("intake-file-conflict");
+      return this.settleFile(
+        id,
+        file,
+        sha256,
+        { asset_id: owner.asset_id, sha256 },
+        false,
+      );
+    });
+  }
   reportHash(id: string, fileId: string, sha256: string) {
     return this.tracked(async () => {
       const file = await this.read<ImportFileStatus>({
@@ -1473,11 +1928,40 @@ export class ImportSessionService extends ImportSessionReadService {
     const operation = this.tracked(async () => {
       if (this.stopping.has(id))
         throw new ImportSessionError("intake-batch-state");
-      const file = await this.read<ImportFileStatus>({
-        op: "file",
-        batch_id: id,
-        file_id: fileId,
-      });
+      let file: ImportFileStatus;
+      try {
+        file = await this.read<ImportFileStatus>({
+          op: "file",
+          batch_id: id,
+          file_id: fileId,
+        });
+      } catch (error) {
+        if (
+          !(error instanceof ImportSessionError) ||
+          error.code !== "intake-file-missing" ||
+          !this.pagePdfHandler
+        )
+          throw error;
+        let item: StoredIntakeItem;
+        try {
+          item = await this.fileItems.read<StoredIntakeItem>({
+            kind: "one",
+            batch_id: id,
+            item_id: fileId,
+          });
+        } catch (itemError) {
+          if (
+            itemError instanceof ImportSessionError &&
+            itemError.code === "intake-item-missing"
+          )
+            throw error;
+          throw itemError;
+        }
+        if (item.origin !== "page" || !item.work?.page?.is_pdf) throw error;
+        if (item.disposition !== null)
+          throw new ImportSessionError("intake-file-conflict");
+        return this.pagePdfHandler(await this.stored(id), item, chunks, active);
+      }
       return this.fileChannel.upload(
         id,
         file,
@@ -1751,6 +2235,7 @@ export class ImportSessionService extends ImportSessionReadService {
     if (this.timer) clearInterval(this.timer);
     for (const retry of this.retries.values()) clearTimeout(retry);
     this.retries.clear();
+    await this.fileItems.close();
     await super.close();
     this.failures.clear();
     this.preparedConfirmations.clear();

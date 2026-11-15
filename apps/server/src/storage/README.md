@@ -34,3 +34,5 @@
 `structure-annotations.ts` 保存与验证固定文档的结构注释，文件保存 JSON 字节，catalog 保存版本关系和人工角色审计；识别规则与业务决定属于 Document，存储不判断章节语义。
 
 `archive-text.ts` 保存 schema 2 文本清单、页处置与人工锁的不可变 artifact，复用校订表与 raw pin；发布在同一事务内检查 current/manual/raw 身份。发布及加载共用配对校验：长文档的三种比较依据只允许位于 unreviewed 页的保留叶块，人工锁仍用 manual；历史文本与页记录保持可读。`proofread.ts` 继续解码历史版本与共享页缓存。
+
+`raw-parsing.ts` 在原始解析提交并释放字节写入锁后调用可选的认篇钩子，交给文献 owner 使用原有解析文字与区块。钩子失败保留已提交解析；索引刷新机制不变。

@@ -130,6 +130,11 @@ function libraryFilter(
     );
   }
   if (q.recently_opened) add(RECENT_SQL);
+  if (typeof q.needs_metadata === "boolean")
+    add(
+      `EXISTS(SELECT 1 FROM literature_needs_metadata n WHERE n.literature_id=l.literature_id) = ?`,
+      Number(q.needs_metadata),
+    );
   if (q.text_levels?.length) any(PRIMARY_TEXT_LEVEL_SQL, q.text_levels);
   for (const [key, field] of [
     ["has_draft_differences", "differs_segments"],

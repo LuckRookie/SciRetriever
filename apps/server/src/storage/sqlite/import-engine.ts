@@ -18,6 +18,16 @@ const { readIntakeBatch }: typeof import("./intake-engine.js") = await import(
   ).href
 );
 import type { RetiredArtifact } from "../files/reclamation.js";
+import type { IntakeItemRead, IntakeItemWrite } from "./intake-items.js";
+const { readIntakeItem, writeIntakeItem }: typeof import("./intake-items.js") =
+  await import(
+    new URL(
+      import.meta.url.endsWith(".ts")
+        ? "./intake-items.ts"
+        : "./intake-items.js",
+      import.meta.url,
+    ).href
+  );
 
 type Row = Record<string, SQLOutputValue>;
 function summaryJson(summary: unknown): string {
@@ -65,6 +75,7 @@ export interface ImportPart extends RetiredArtifact {
   readonly record_count: number;
 }
 export type ImportRead =
+  | { op: "items-read"; query: IntakeItemRead }
   | {
       op: "report-snapshot";
       batch_id: string;
@@ -103,6 +114,7 @@ export type ImportRead =
   | { op: "folder"; folder_id: string | null; parent_id: string | null }
   | { op: "intake-member"; batch_id: string; literature_id: string };
 export type ImportWrite =
+  | { op: "items-write"; action: IntakeItemWrite }
   | {
       op: "create";
       batch: IntakeBatch;
@@ -309,6 +321,7 @@ export function readImportStorage(
   r: ImportRead,
   profile = "vlm-engine",
 ): unknown {
+  if (r.op === "items-read") return readIntakeItem(db, r.query);
   if (r.op === "report-snapshot") {
     const batch = readIntakeBatch(db, r.batch_id, profile);
     if (batch.kind !== "import" || batch.source === null)
@@ -358,7 +371,7 @@ export function readImportStorage(
   if (r.op === "cleanup")
     return db
       .prepare(
-        "WITH owners AS MATERIALIZED (SELECT DISTINCT batch_id FROM import_parts) SELECT s.batch_id FROM owners JOIN intake_batches s USING(batch_id) WHERE s.state IN ('finished','cancelled','withdrawn')",
+        "WITH owners AS MATERIALIZED (SELECT DISTINCT batch_id FROM import_parts UNION SELECT DISTINCT batch_id FROM intake_items WHERE candidate_transfer_id IS NOT NULL OR json_extract(recognition_json,'$.retiring_transfer_id') IS NOT NULL UNION SELECT DISTINCT json_extract(record_json,'$.capture.session_id') FROM execution_candidates WHERE transfer_id LIKE 'intake-%' AND json_extract(record_json,'$.source_name')='import') SELECT s.batch_id FROM owners JOIN intake_batches s USING(batch_id) WHERE s.state IN ('finished','cancelled','withdrawn')",
       )
       .all()
       .map((r) => str(r.batch_id));
@@ -438,7 +451,7 @@ export function readImportStorage(
   if (r.op === "aggregate") {
     const records = db
       .prepare(
-        "SELECT count(CASE WHEN disposition='created' THEN 1 END) created,count(CASE WHEN disposition='enriched' THEN 1 END) enriched,count(CASE WHEN disposition='matched' THEN 1 END) matched,count(CASE WHEN disposition='conflict' THEN 1 END) conflicts,count(CASE WHEN disposition='rejected' THEN 1 END) rejected,count(CASE WHEN disposition='restored' THEN 1 END) restored,count(CASE WHEN disposition='pending-decision' THEN 1 END) pending_decision,0 possible_duplicates,0 needs_metadata FROM import_record_results WHERE batch_id=?",
+        "SELECT count(CASE WHEN disposition='created' THEN 1 END) created,count(CASE WHEN disposition='enriched' THEN 1 END) enriched,count(CASE WHEN disposition='matched' THEN 1 END) matched,count(CASE WHEN disposition='conflict' THEN 1 END) conflicts,count(CASE WHEN disposition='rejected' THEN 1 END) rejected,count(CASE WHEN disposition='restored' THEN 1 END) restored,count(CASE WHEN disposition='pending-decision' THEN 1 END) pending_decision,0 possible_duplicates,(SELECT count(DISTINCT i.literature_id) FROM import_record_results i JOIN literature_needs_metadata n USING(literature_id) WHERE i.batch_id=import_record_results.batch_id) needs_metadata FROM import_record_results WHERE batch_id=?",
       )
       .get(r.batch_id);
     const files = db
@@ -446,7 +459,14 @@ export function readImportStorage(
         "SELECT count(CASE WHEN status='pending' AND NOT EXISTS(SELECT 1 FROM literature_assets a WHERE a.literature_id=f.literature_id AND a.role='primary-pdf') THEN 1 END) upload,count(CASE WHEN status='pending' AND EXISTS(SELECT 1 FROM literature_assets a WHERE a.literature_id=f.literature_id AND a.role='primary-pdf') THEN 1 END) hash,count(CASE WHEN status='uploaded' THEN 1 END) uploaded,count(CASE WHEN status='existing' THEN 1 END) existing,count(CASE WHEN status='conflict' THEN 1 END) conflicts,count(CASE WHEN status='pending' THEN 1 END) missing,0 unpaired FROM import_files f WHERE batch_id=?",
       )
       .get(r.batch_id);
-    return { records, files };
+    const unpaired = Number(
+      db
+        .prepare(
+          "SELECT count(*) n FROM intake_items WHERE batch_id=? AND unpaired=1",
+        )
+        .get(r.batch_id)!.n,
+    );
+    return { records, files: { ...files, unpaired } };
   }
   if (r.op === "result") {
     const v = db
@@ -570,7 +590,8 @@ export function writeImportStorage(
   db.exec("BEGIN IMMEDIATE");
   try {
     let value: unknown = true;
-    if (r.op === "create") {
+    if (r.op === "items-write") value = writeIntakeItem(db, r.action);
+    else if (r.op === "create") {
       insertImportBatch(db, r, intakeWrite);
     } else if (r.op === "mapping") map(db, r.mapping);
     else if (r.op === "part") {
@@ -609,9 +630,9 @@ export function writeImportStorage(
       const count = Number(
         db
           .prepare(
-            "SELECT coalesce(sum(record_count),0) n FROM import_parts WHERE batch_id=?",
+            "SELECT (SELECT coalesce(sum(record_count),0) FROM import_parts WHERE batch_id=?)+(SELECT count(*) FROM intake_items WHERE batch_id=? AND origin='file' AND json_extract(recognition_json,'$.paired_to') IS NULL) n",
           )
-          .get(r.batch_id)!.n,
+          .get(r.batch_id, r.batch_id)!.n,
       );
       const bytes = Number(
         db
@@ -803,6 +824,9 @@ export function writeImportStorage(
         i.reason,
       );
       if (r.mapping) map(db, r.mapping);
+      db.prepare(
+        "UPDATE intake_items SET disposition=?,literature_id=?,needs_decision=CASE WHEN ?='pending-decision' THEN needs_decision ELSE 0 END WHERE item_id=?",
+      ).run(i.disposition, i.literature_id, i.disposition, r.item_id);
       insertImportFiles(db, r.batch_id, r.item_id, r.files);
       db.prepare(
         "UPDATE import_sessions SET storage_failures=0,updated_at=? WHERE batch_id=?",

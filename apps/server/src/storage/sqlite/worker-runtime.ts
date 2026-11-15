@@ -849,6 +849,9 @@ function searchItem(
     long_document: state.long_document ?? null,
     missing_step: state.missing_step,
     needs_manual_pdf: state.status === "UNREVIEWED" && exhausted,
+    needs_metadata: !!db
+      .prepare("SELECT 1 FROM literature_needs_metadata WHERE literature_id=?")
+      .get(id),
   };
 }
 // The durable exhaustion fact is exactly one LiteratureId: a candidate, route, failure reason, provider, configuration hash or attempt count can never be persisted beside it. Only a business owner that observed every current automatic acquisition route end normally may set it; the API itself never decides that.
@@ -1152,6 +1155,11 @@ function librarySnapshot(
               textLevels.get(String(row.literature_id))?.draft_facts ?? null,
             missing_step: __state.missing_step,
             needs_manual_pdf: __state.status === "UNREVIEWED" && hasExhaustion,
+            needs_metadata: !!db
+              .prepare(
+                "SELECT 1 FROM literature_needs_metadata WHERE literature_id=?",
+              )
+              .get(row.literature_id),
           },
           relevance: row.relevance,
           has_pdf_exhaustion: hasExhaustion,
@@ -2038,6 +2046,28 @@ function publishIdentityObservation(p: Dynamic): Dynamic {
       ).run(literatureId);
     }
     if (p.intake_member) intakeModule.recordIntakeMember(db, p.intake_member);
+    if (p.observation) {
+      const observation = p.observation.observation;
+      const manualTitle =
+        observation.provenance.source_name === "manual-metadata" &&
+        p.literatures.some((item: Dynamic) =>
+          item.field_states.some(
+            (state: Dynamic) =>
+              state.field === "title" &&
+              state.evidence.observation_id === observation.observation_id &&
+              state.locked,
+          ),
+        );
+      if (
+        manualTitle ||
+        (observation.metadata.identifiers.length &&
+          (p.intake_member ||
+            observation.provenance.source_name === "post-parse-recognition"))
+      )
+        db.prepare(
+          "DELETE FROM literature_needs_metadata WHERE literature_id=?",
+        ).run(p.observation.literature_id);
+    }
     return true;
   });
 }

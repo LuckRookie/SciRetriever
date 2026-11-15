@@ -11,6 +11,9 @@ import {
   parseAssetId,
   parseLiteratureId,
   parseStrictJsonObject,
+  parseIntakeDecision,
+  parseIntakeFileName,
+  parseIntakeRelativePath,
   type DeviceConnection,
 } from "@sciretriever/contracts";
 import {
@@ -18,6 +21,7 @@ import {
   type ImportActor,
   type ImportSessionService,
 } from "../entry/import-sessions.js";
+import { CaptureError } from "../entry/capture.js";
 import { catalogCorruption } from "../storage/sqlite/errors.js";
 import {
   assertRequestContentType,
@@ -78,7 +82,10 @@ export function importInterface(formats: readonly string[]) {
     ),
     semantics: [
       "records is a public format for neutral items. When a source has a dedicated adapter, send its original data instead of rewriting it into records.",
-      `web-page data is original WebPageData. Its server adapter interprets bibliographic tags and supported JSON-LD, counts invalid JSON blocks and returns file-required for a PDF page. Limits: ${WEB_PAGE_LIMITS.meta} meta tags, ${WEB_PAGE_LIMITS.json_ld} JSON-LD blocks, ${WEB_PAGE_LIMITS.json_ld_bytes} UTF-8 bytes per block, ${WEB_PAGE_LIMITS.bytes} canonical JSON bytes in total.`,
+      `Single-page capture accepts {page:WebPageData}, never decoded metadata or web-page data segments. The server interprets tags and JSON-LD. Limits: ${WEB_PAGE_LIMITS.meta} meta tags, ${WEB_PAGE_LIMITS.json_ld} JSON-LD blocks, ${WEB_PAGE_LIMITS.json_ld_bytes} UTF-8 bytes per block, ${WEB_PAGE_LIMITS.bytes} canonical JSON bytes in total. Both page operations require an intake device; Web receives intake-device-required.`,
+      "Create format=file for standalone PDFs and send file-items before preview. X-Sciretriever-File-Name is percent-encoded UTF-8; optional X-Sciretriever-Relative-Path is a safe relative path used only for pairing. Pairing takes the longest unique path suffix, then a unique filename with equal size when declared. Unpaired files default to exclusion; decide include explicitly to import one.",
+      "Preview starts or resumes cancellable recognition and returns recognition progress. Confirmation rejects intake-recognition-pending while work is unfinished. Item decisions may choose a recognition candidate or unrecognized; no choice uses the fallback title and needs_metadata. Recognition never calls a model and does not validate article identity.",
+      "For a PDF page, save returns a pending file with literature_id=null; upload to its returned file_id, which remains stable after recognition. file.source_url is the actual downloaded URL; only its normalized http(s) address without credentials, query or fragment is persisted. Title-only pages save immediately and recognize in the background; retrying the same request reads its completion.",
       "Preview is read-only and estimated; confirm decides again and checkpoints each record.",
       "Batch confirmation returns running with progress immediately; the service resumes checkpoints and expires batches. Local CLI/stdio bibliography imports finish synchronously without recovering unrelated batches.",
       "The literature PDF supplement endpoint is Web-only, requires the percent-encoded UTF-8 X-Sciretriever-File-Name header and returns {batch_id,file}; devices are not granted this route. It shares the streaming file channel and a per-entry daily open batch.",
@@ -123,7 +130,7 @@ export function importHttpFailure(res: ServerResponse, error: unknown) {
     return;
   }
   const candidate =
-    error instanceof ImportSessionError
+    error instanceof ImportSessionError || error instanceof CaptureError
       ? error.code
       : error instanceof ContractValidationError
         ? "intake-input-invalid"
@@ -261,7 +268,11 @@ export function importHttpRoutes(
             : parseAssetId(parameters.batch_id);
         if (id !== null) await service.requireOwner(id, actor);
         let result: unknown;
-        if (operation === "bytes" || operation === "supplement") {
+        if (
+          operation === "bytes" ||
+          operation === "supplement" ||
+          operation === "file-items"
+        ) {
           const stop = new AbortController();
           if (actor.kind === "device") {
             if (!devices) throw new DeviceConnectionError("device-unavailable");
@@ -289,7 +300,7 @@ export function importHttpRoutes(
               throw error;
             }
           }
-          if (operation === "supplement") {
+          if (operation === "supplement" || operation === "file-items") {
             const header = req.headers["x-sciretriever-file-name"];
             let name: string;
             try {
@@ -299,25 +310,50 @@ export function importHttpRoutes(
             } catch {
               throw new ContractValidationError();
             }
-            if (
-              !name.trim() ||
-              Buffer.byteLength(name) > 255 ||
-              /[/\\\p{Cc}\p{Cf}]/u.test(name) ||
-              name === "." ||
-              name === ".."
-            )
-              throw new ContractValidationError();
-            result = await importHttpBytes(req, res, (chunks, signal, cancel) =>
-              service.supplementPdf(
-                parseLiteratureId(parameters.literature_id),
-                chunks,
-                "web",
-                signal,
-                cancel,
-                undefined,
-                { file_name: name },
-              ),
-            );
+            parseIntakeFileName(name);
+            if (operation === "file-items") {
+              const raw = req.headers["x-sciretriever-relative-path"];
+              let relative: string | null = null;
+              try {
+                if (raw !== undefined) {
+                  if (typeof raw !== "string") throw new Error("Invalid path");
+                  relative = decodeURIComponent(raw);
+                }
+              } catch {
+                throw new ContractValidationError();
+              }
+              parseIntakeRelativePath(relative, name);
+              result = {
+                item: await importHttpBytes(
+                  req,
+                  res,
+                  (chunks, signal, cancel) =>
+                    service.receiveFileItem(
+                      id!,
+                      name,
+                      relative,
+                      chunks,
+                      signal,
+                      cancel,
+                    ),
+                  stop.signal,
+                ),
+              };
+            } else
+              result = await importHttpBytes(
+                req,
+                res,
+                (chunks, signal, cancel) =>
+                  service.supplementPdf(
+                    parseLiteratureId(parameters.literature_id),
+                    chunks,
+                    "web",
+                    signal,
+                    cancel,
+                    undefined,
+                    { file_name: name },
+                  ),
+              );
           } else
             result = {
               file: await importHttpBytes(
@@ -378,6 +414,43 @@ export function importHttpRoutes(
           } else if (operation === "report") {
             const p = page(request, "report");
             result = await service.report(id!, p.cursor, p.limit);
+          } else if (operation === "items") {
+            const r = importObject(request, [], ["cursor", "limit", "needs"]);
+            if (
+              r.needs !== undefined &&
+              r.needs !== null &&
+              r.needs !== "decision" &&
+              r.needs !== "unpaired"
+            )
+              throw new ContractValidationError();
+            const p = page(
+              { cursor: r.cursor ?? null, limit: r.limit ?? 50 },
+              "file",
+            );
+            result = await service.items(
+              id!,
+              p.cursor,
+              p.limit,
+              (r.needs ?? null) as "decision" | "unpaired" | null,
+            );
+          } else if (operation === "item-status") {
+            importObject(request, []);
+            result = {
+              item: await service.item(id!, parseAssetId(parameters.item_id)),
+            };
+          } else if (operation === "item-decide") {
+            const r = importObject(request, ["decision"]);
+            result = {
+              item: await service.decide(
+                id!,
+                parseAssetId(parameters.item_id),
+                parseIntakeDecision(r.decision),
+                actor,
+              ),
+            };
+          } else if (operation === "preview-cancel") {
+            importObject(request, []);
+            result = await service.cancelPreview(id!);
           } else {
             importObject(request, []);
             if (operation === "status")
