@@ -1,5 +1,4 @@
 import { coreProcessingFixture } from "./core-processing-fixture.js";
-import { expect } from "vitest";
 import { SqliteDocumentStorage } from "../src/document/storage.js";
 import { SqliteAnnotationStorage } from "../src/storage/structure-annotations.js";
 import { TagService, type TagModel } from "../src/tags/service.js";
@@ -39,7 +38,8 @@ export async function tagFixture(model: TagModel | null = null) {
       proofread_id: proof.version.proofread_id,
       expected_default_revision: current?.revision ?? null,
     });
-    expect(published.default_updated).toBe(true);
+    if (!published.default_updated)
+      throw new Error("tag fixture: the corrected default was not selected");
     const doc = published.document;
     const annotation = await e.app.structureAnnotations!.build({
       document_version_id: doc.document_version_id,
