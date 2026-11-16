@@ -1439,6 +1439,51 @@
     display: grid;
     gap: var(--space-2);
   }
+  /* Withdrawal (page specs “批次页” 7): what goes, what stays and why. */
+  .intake-withdraw,
+  .intake-withdraw-keep {
+    display: grid;
+    gap: var(--space-2);
+  }
+  .intake-withdraw p,
+  .intake-withdraw-keep p {
+    margin: 0;
+  }
+  .intake-withdraw-change {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-3);
+  }
+  .intake-withdraw-keep > ul {
+    margin: 0;
+    padding-left: var(--space-4);
+    color: var(--fg2);
+  }
+  .intake-withdraw-items {
+    display: grid;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .intake-withdraw-items > li {
+    display: grid;
+    gap: 2px;
+  }
+  .intake-withdraw-title {
+    font-family: var(--serif);
+    overflow-wrap: anywhere;
+  }
+  .intake-withdrawn {
+    justify-self: stretch;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    background: var(--t-gray-bg);
+  }
   .intake-batch-next,
   .intake-batch-actions {
     display: flex;

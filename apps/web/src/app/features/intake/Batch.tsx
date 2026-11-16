@@ -55,6 +55,12 @@ import { errorMessage, localTime } from "../../strings.js";
 import { BatchBadge, Counts, PartsBar } from "./batch-parts.js";
 import { unrecognized } from "./Dropzone.js";
 import { ParseDialog } from "./ParseDialog.js";
+import {
+  WithdrawalReport,
+  WithdrawDialog,
+  Withdrawn,
+  withdrawalReports,
+} from "./Withdrawal.js";
 
 const batchKey = (id: string) => ["library", "intake-batches", "page", id];
 /** PDF folders chosen on this page, kept until the page is reloaded. */
@@ -461,7 +467,8 @@ export function BatchPage({ id }: { id: string }) {
     },
   });
   const [acquire, setAcquire] = useState(false),
-    [parse, setParse] = useState(false);
+    [parse, setParse] = useState(false),
+    [withdrawing, setWithdrawing] = useState(false);
   const { upload, start } = useUploader(api, id, refresh);
   const folder = folders.get(id);
   useEffect(() => {
@@ -523,6 +530,8 @@ export function BatchPage({ id }: { id: string }) {
   const followUp =
     state === "running" || state === "finished" || state === "cancelled";
   const left = unrecognized.get(id) ?? [];
+  // A withdrawal or restoration done on this page shows its report.
+  const known = withdrawalReports.get(id);
   return (
     <section className="intake-batch" aria-label="入库批次">
       {back}
@@ -587,6 +596,23 @@ export function BatchPage({ id }: { id: string }) {
                   label: "在文献库查看",
                   onAction: () => openBatch(batch.batch_id),
                 },
+                // Only an ended batch can be withdrawn; a withdrawn one is
+                // restored from the line at the top instead.
+                ...(state === "withdrawn"
+                  ? []
+                  : [
+                      {
+                        id: "withdraw",
+                        label: "撤回这一批",
+                        ...(state === "finished" || state === "cancelled"
+                          ? {}
+                          : {
+                              disabled: true,
+                              description: "入库结束后才能撤回",
+                            }),
+                        onAction: () => setWithdrawing(true),
+                      },
+                    ]),
               ]}
             />
           </span>
@@ -604,6 +630,10 @@ export function BatchPage({ id }: { id: string }) {
           <ErrorNotice message={errorMessage(rename.error)} />
         ) : null}
       </header>
+      {withdrawn ? <Withdrawn batch={batch} /> : null}
+      {!withdrawn && known?.kind === "restored" ? (
+        <WithdrawalReport report={known.report} kind="restored" />
+      ) : null}
       {left.length ? (
         <ul className="intake-drop-unknown" aria-label="没有识别的文件">
           {left.map((file, index) => (
@@ -976,6 +1006,9 @@ export function BatchPage({ id }: { id: string }) {
       ) : null}
       {parse ? (
         <ParseDialog batch={batch} onClose={() => setParse(false)} />
+      ) : null}
+      {withdrawing ? (
+        <WithdrawDialog batch={batch} onClose={() => setWithdrawing(false)} />
       ) : null}
     </section>
   );
