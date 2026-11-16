@@ -16,7 +16,10 @@ import { createLogger } from "../src/logging/index.js";
 import { traceSummary } from "../src/application/agent-traces.js";
 import {
   parseDeviceConnectionCode,
+  parseDeviceConnection,
   type DevicePurpose,
+  type DeviceKind,
+  type DevicePairingReceipt,
   type DeviceExchangeReceipt,
   SCREENCAST_PROTOCOL,
 } from "@sciretriever/contracts";
@@ -24,7 +27,7 @@ import { createApplication } from "../src/bootstrap/application.js";
 import { initializeCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
 import { DeviceConnectionService } from "../src/workbench/device-connections.js";
 import { runDeviceStorage } from "../src/storage/sqlite/device-connection-engine.js";
-import { DEVICE_CONNECTION_SCHEMA } from "../src/storage/sqlite/schema.js";
+import { SCHEMA_MANIFEST } from "../src/storage/sqlite/schema.js";
 import {
   DeviceRouteRegistry,
   type DeviceRoute,
@@ -38,10 +41,16 @@ import {
   workbenchTestAccess,
 } from "./workbench-auth-fixture.js";
 
-it("allows thirty exchanges per peer without a global bucket and evicts the oldest of 256 buckets", () => {
+function deviceDatabase() {
   const db = new DatabaseSync(":memory:");
+  for (const sql of SCHEMA_MANIFEST)
+    if (/^CREATE (?:TABLE|INDEX) device_/u.test(sql)) db.exec(sql);
+  return db;
+}
+
+it("allows thirty exchanges per peer without a global bucket and evicts the oldest of 256 buckets", () => {
+  const db = deviceDatabase();
   try {
-    for (const sql of DEVICE_CONNECTION_SCHEMA) db.exec(sql);
     const base = Date.parse("2026-11-15T00:00:00Z");
     const exchange = (peer: string, ms: number) =>
       runDeviceStorage(db, {
@@ -92,13 +101,12 @@ it("allows thirty exchanges per peer without a global bucket and evicts the olde
 });
 
 it("coalesces last_used_at writes for five minutes while checking revocation on every authentication", () => {
-  const db = new DatabaseSync(":memory:");
+  const db = deviceDatabase();
   try {
-    for (const sql of DEVICE_CONNECTION_SCHEMA) db.exec(sql);
     const base = Date.parse("2026-11-15T00:00:00Z"),
       token = "a".repeat(64);
     db.prepare(
-      "INSERT INTO device_connections VALUES(?,?,?,?,?,?,NULL,NULL)",
+      "INSERT INTO device_connections(connection_id,name,purposes_json,token_sha256,created_at,paired_at) VALUES(?,?,?,?,?,?)",
     ).run(
       "synthetic",
       "Synthetic",
@@ -223,21 +231,24 @@ async function fixture() {
         ...extra,
       },
     );
-  const create = async (purposes: readonly DevicePurpose[] = ["intake"]) => {
+  const create = async (
+    purposes: readonly DevicePurpose[] = ["intake"],
+    kind?: DeviceKind,
+  ) => {
     const response = await web("/api/v1/device-connections/pairings", {
       address: server.origin,
       name: "Fixture desktop",
       purposes,
+      ...(kind === undefined ? {} : { kind }),
     });
     expect(response.status).toBe(200);
-    return (await response.json()).result as {
-      connection_code: string;
-      connection: { connection_id: string };
-      expires_at: string;
-    };
+    return (await response.json()).result as DevicePairingReceipt;
   };
-  const pair = async (purposes: readonly DevicePurpose[] = ["intake"]) => {
-    const pairing = await create(purposes);
+  const pair = async (
+    purposes: readonly DevicePurpose[] = ["intake"],
+    kind?: DeviceKind,
+  ) => {
+    const pairing = await create(purposes, kind);
     const parsed = parseDeviceConnectionCode(pairing.connection_code);
     const response = await send(
       "/api/v1/device-connections/exchange",
@@ -494,6 +505,75 @@ it("isolates every purpose, accepts non-Web Origin only for registered device ro
     await f.close();
   }
 }, 30000);
+
+it("persists connection kinds without changing purpose admission or allowing later kind changes", async () => {
+  const f = await fixture();
+  try {
+    const expected = new Map<string, DeviceKind>();
+    for (const kind of [undefined, null, "extension", "agent"] as const) {
+      for (const purpose of ["intake", "read", "operate"] as const) {
+        const paired = await f.pair([purpose], kind),
+          wanted = kind ?? null;
+        const connection = parseDeviceConnection(paired.connection);
+        expect(connection.kind).toBe(wanted);
+        expect(paired.pairing.connection.kind).toBe(wanted);
+        expected.set(connection.connection_id, wanted);
+        expect(
+          (await f.service.requireActive(connection.connection_id)).connection
+            .kind,
+        ).toBe(wanted);
+        for (const target of ["intake", "read", "operate"] as const) {
+          const result = await f.send(
+            "/api/v1/intake/test-" + target + "/kind",
+            {},
+            { Authorization: "Bearer " + paired.token },
+          );
+          expect(result.status).toBe(target === purpose ? 200 : 403);
+        }
+        const renamed = await f.web("/api/v1/device-connections/rename", {
+          connection_id: connection.connection_id,
+          name: "Renamed",
+        });
+        expect(renamed.status).toBe(200);
+        expect(
+          parseDeviceConnection((await renamed.json()).result.connection),
+        ).toMatchObject({ kind: wanted, name: "Renamed" });
+        const invalid = await f.web("/api/v1/device-connections/rename", {
+          connection_id: connection.connection_id,
+          name: "Changed kind",
+          kind: wanted === "agent" ? "extension" : "agent",
+        });
+        expect(invalid.status).toBe(400);
+        const revoked = await f.service.revoke({
+          connection_id: connection.connection_id,
+        });
+        expect(revoked.connection.kind).toBe(wanted);
+        await expect(
+          f.service.authenticate(paired.token),
+        ).rejects.toMatchObject({ code: "device-revoked" });
+      }
+    }
+    const list = await f.web("/api/v1/device-connections", { cursor: null });
+    expect(list.status).toBe(200);
+    const publicRows = (await list.json()).result.items.map(
+      parseDeviceConnection,
+    ) as ReturnType<typeof parseDeviceConnection>[];
+    expect(
+      new Map(publicRows.map((row) => [row.connection_id, row.kind])),
+    ).toEqual(expected);
+    const reopened = await f.reopen();
+    expect(
+      new Map(
+        (await reopened.list({ cursor: null })).items.map((row) => [
+          row.connection_id,
+          row.kind,
+        ]),
+      ),
+    ).toEqual(expected);
+  } finally {
+    await f.close();
+  }
+}, 60000);
 
 it("never grants Web, configuration, credentials or management powers even with a valid Web cookie; refuses URL tokens", async () => {
   const f = await fixture();

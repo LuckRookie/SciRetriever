@@ -61,6 +61,7 @@ export class DeviceConnectionService {
       connection_id: randomUUID(),
       name: r.name,
       purposes: r.purposes,
+      kind: r.kind,
       created_at: new Date(now).toISOString(),
       paired_at: null,
       last_used_at: null,

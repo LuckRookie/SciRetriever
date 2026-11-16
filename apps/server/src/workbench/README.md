@@ -54,7 +54,7 @@ HTTP 关闭先取消并排空正在处理的请求；生产组装随后停止 du
 
 实时观看由 `screencast-relay.ts` 管理认证 WebSocket、二进制帧与有限背压，`screencast-port.ts` 定义进程内会话端口；`session.ts` 拥有控制权与活动页重绑定。`synthetic-screencast.ts` 提供明确注入的离线合成源，不是生产截图回退。
 
-`device-connections.ts` 拥有一次性配对、仅派生值持久化和设备认证；`device-http.ts` 在 Web 会话之前分流设备请求，统一按登记的用途准入，拒绝令牌进入 Web/配置/管理路径。设备管理继续经过原 Web client/CSRF；提交撤销后通知同进程协议连接立即失效。设备与通过原 client/同源准入的登录 Web 用户共用安装后的 agent-access 只读下载，缺失有明确错误；不在认证层生成 skill 内容。业务接口登记在源码树内的 `bootstrap/device-routes.ts`。`/mcp` 由相邻的 `mcp/http.ts` 处理 GET/POST/DELETE，工具级用途由共用 MCP server 再核对；工作台关闭先释放该 registry 的协议连接。
+`device-connections.ts` 拥有一次性配对、仅派生值持久化和设备认证；创建时保存只用于显示的 `kind`（extension、agent 或 null，旧创建请求省略时为 null），之后不提供修改入口。`device-http.ts` 在 Web 会话之前分流设备请求，统一按登记的用途准入，拒绝令牌进入 Web/配置/管理路径。设备管理继续经过原 Web client/CSRF；提交撤销后通知同进程协议连接立即失效。设备与通过原 client/同源准入的登录 Web 用户共用安装后的 agent-access 只读下载，缺失有明确错误；不在认证层生成 skill 内容。业务接口登记在源码树内的 `bootstrap/device-routes.ts`。`/mcp` 由相邻的 `mcp/http.ts` 处理 GET/POST/DELETE，工具级用途由共用 MCP server 再核对；工作台关闭先释放该 registry 的协议连接。
 
 `POST /api/v1/query/document-draft-differences` 返回固定初稿片段中已保存差异的有界 JSON UTF-8 分片，经原 Web 登录、Cookie、client、Origin 与 CSRF 准入后读取。这条查询路径不登记于设备路由表，设备令牌直接访问被拒绝；设备通过 HTTP MCP 的 `document_read` / `draft-differences` 读取，要求 read 用途，operate 和 intake 不能代替。文档与证据的 JSON 读取结果按固定版本给出 text_level，初稿 describe 另带 draft_summary。
 

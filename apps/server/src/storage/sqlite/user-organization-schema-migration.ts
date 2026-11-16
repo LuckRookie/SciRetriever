@@ -12,6 +12,7 @@ import {
   SCHEMA_MANIFEST,
   SCHEMA_FINGERPRINT,
   USER_ORGANIZATION_SCHEMA_V18,
+  DEVICE_KIND_COLUMN_V18,
 } from "./schema.js";
 import {
   EXECUTION_SCHEMA_VERSION,
@@ -25,7 +26,7 @@ function refuse(): never {
     code: "user-organization-schema-migration-refused",
   });
 }
-/** Explicit offline 17 -> 18. No data backfill, artifact reads or runtime migration. */
+/** Explicit offline 17 -> 18, including a nullable display kind for existing devices. */
 export async function migrateUserOrganizationSchema(path: string) {
   await schemaTargetPath(path);
   if (!(await schemaTargetFile(path))) refuse();
@@ -67,6 +68,9 @@ export async function migrateUserOrganizationSchema(path: string) {
         refuse();
       const before = offlineTableCounts(db, refuse);
       for (const sql of USER_ORGANIZATION_SCHEMA_V18) db.exec(sql);
+      db.exec(
+        `ALTER TABLE device_connections ADD COLUMN ${DEVICE_KIND_COLUMN_V18}`,
+      );
       db.exec(
         "CREATE TEMP TABLE organization_identity AS SELECT * FROM schema_identity;DROP TABLE schema_identity",
       );

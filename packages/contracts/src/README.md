@@ -5,6 +5,7 @@
 ## 内容入口
 
 - [index.ts](index.ts)：包公开导出与基础合同。
+- [device-connections.ts](device-connections.ts)：设备连接、配对请求与精确键解析；可省略的显示类型在创建请求中规范为 null，读取结果始终带 nullable `kind`，用途集合独立校验。
 - [folders.ts](folders.ts) / [filters.ts](filters.ts)：分组与保存筛选的操作、版本 1 导出格式和精确键解析；分组的机器结果按成员分页，下载文件按文件夹嵌套成员。
 - [literature-summary.ts](literature-summary.ts)：文献公开批量读取的最小书目投影，只含稳定 ID、已有标识、题名与年份。
 - [import-sessions.ts](import-sessions.ts)：供现有纯适配器使用的内部类型别名；实际模型与 parser 归 intake.ts，不提供旧 wire 字段。

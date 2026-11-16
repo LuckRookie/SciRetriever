@@ -184,6 +184,41 @@ it("pins frozen 16 and verifies the frozen 17 and exact current 18 manifest and 
     db.close();
   }
 });
+it("adds a nullable, closed display kind only to current 18 devices", () => {
+  const frozen = SCHEMA_MANIFEST_V17.find((sql) =>
+    sql.startsWith("CREATE TABLE device_connections("),
+  )!;
+  expect(frozen).not.toContain("kind TEXT");
+  const db = new DatabaseSync(":memory:");
+  try {
+    initializeCurrentCatalog(db);
+    expect(
+      db
+        .prepare("PRAGMA table_info(device_connections)")
+        .all()
+        .find((row) => row.name === "kind"),
+    ).toMatchObject({ type: "TEXT", notnull: 0, dflt_value: null });
+    const insert = db.prepare(
+      "INSERT INTO device_connections(connection_id,name,purposes_json,created_at,kind) VALUES(?,'Synthetic','[\"read\"]','2026-11-17T00:00:00Z',?)",
+    );
+    for (const [n, kind] of [null, "extension", "agent"].entries())
+      insert.run("valid-" + n, kind);
+    db.exec(
+      "INSERT INTO device_connections(connection_id,name,purposes_json,created_at) VALUES('omitted','Synthetic','[\"read\"]','2026-11-17T00:00:00Z')",
+    );
+    expect(
+      db
+        .prepare(
+          "SELECT kind FROM device_connections WHERE connection_id='omitted'",
+        )
+        .get(),
+    ).toEqual({ kind: null });
+    for (const kind of ["browser", "", "Extension", 1])
+      expect(() => insert.run("invalid", kind)).toThrow(/CHECK/u);
+  } finally {
+    db.close();
+  }
+});
 async function fixture(run: (root: string, catalog: string) => Promise<void>) {
   const root = await mkdtemp(join(tmpdir(), "sciretriever-current-catalog-"));
   try {

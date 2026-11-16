@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { DeviceConnection } from "@sciretriever/contracts";
+import { deviceKind, type DeviceConnection } from "@sciretriever/contracts";
 
 export type DeviceStorageCommand =
   | {
@@ -26,6 +26,7 @@ function safe(row: Row): DeviceConnection {
     connection_id: String(row.connection_id),
     name: String(row.name),
     purposes: JSON.parse(String(row.purposes_json)),
+    kind: deviceKind(row.kind),
     created_at: String(row.created_at),
     paired_at: row.paired_at === null ? null : String(row.paired_at),
     last_used_at: row.last_used_at === null ? null : String(row.last_used_at),
@@ -63,8 +64,14 @@ export function runDeviceStorage(db: DatabaseSync, r: DeviceStorageCommand) {
     if (r.kind === "create") {
       const d = r.connection;
       db.prepare(
-        "INSERT INTO device_connections VALUES(?,?,?,NULL,?,NULL,NULL,NULL)",
-      ).run(d.connection_id, d.name, JSON.stringify(d.purposes), d.created_at);
+        "INSERT INTO device_connections(connection_id,name,purposes_json,kind,token_sha256,created_at,paired_at,last_used_at,revoked_at) VALUES(?,?,?,?,NULL,?,NULL,NULL,NULL)",
+      ).run(
+        d.connection_id,
+        d.name,
+        JSON.stringify(d.purposes),
+        d.kind,
+        d.created_at,
+      );
       db.prepare("INSERT INTO device_pairings VALUES(?,?,?,NULL)").run(
         r.code_sha256,
         d.connection_id,

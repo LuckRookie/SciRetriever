@@ -38,6 +38,15 @@ it("migrates populated exact 17 preserving all old logical rows, artifacts, FTS,
       expect.arrayContaining([2, 3]),
     );
     expect(f.rows.reading_marks!.some((r) => r.deleted_at !== null)).toBe(true);
+    expect(f.rows.device_connections).toHaveLength(2);
+    expect(
+      f.rows.device_connections!.some(
+        (row) =>
+          row.paired_at !== null &&
+          row.revoked_at !== null &&
+          row.last_used_at !== null,
+      ),
+    ).toBe(true);
     const result = await migrateUserOrganizationSchema(f.path);
     expect(result).toMatchObject({
       from_version: 17,
@@ -54,7 +63,13 @@ it("migrates populated exact 17 preserving all old logical rows, artifacts, FTS,
       verifyOfflineLayout(db, SCHEMA_MANIFEST);
       const after = organizationRows(db),
         before = structuredClone(f.rows);
-      // The schema identity is the only changed old row.
+      // Preserve every original device field, adding only the nullable kind.
+      before.device_connections = before.device_connections!.map((row) => ({
+        ...row,
+        kind: null,
+      }));
+      expect(after.device_connections).toEqual(before.device_connections);
+      // Other old rows only change their schema identity.
       expect(after.schema_identity![0]).toMatchObject({
         ...before.schema_identity![0],
         schema_version: 18,
@@ -109,7 +124,11 @@ it(
   "runs the built offline script only with an explicit absolute catalog path",
   async () =>
     fixture(async (path) => {
-      emptyUserOrganizationInput(path).close();
+      const input = emptyUserOrganizationInput(path);
+      input.exec(
+        "INSERT INTO device_connections VALUES('legacy','Synthetic legacy','[\"read\"]',NULL,'2026-11-17T00:00:00Z',NULL,NULL,NULL)",
+      );
+      input.close();
       const script = fileURLToPath(
         new URL(
           "../../../scripts/migrate-user-organization-v18.mjs",
@@ -133,6 +152,13 @@ it(
       const db = new DatabaseSync(path, { readOnly: true });
       try {
         verifyOfflineLayout(db, SCHEMA_MANIFEST);
+        expect(
+          db
+            .prepare(
+              "SELECT kind FROM device_connections WHERE connection_id='legacy'",
+            )
+            .get(),
+        ).toEqual({ kind: null });
       } finally {
         db.close();
       }
@@ -206,6 +232,7 @@ it.each([
 
 it.each([
   "second table",
+  "device kind",
   "identity",
   "already rolled back",
   "rollback throws",
@@ -222,9 +249,11 @@ it.each([
         .mockImplementation(function (this: DatabaseSync, sql: string) {
           if (
             sql.startsWith(
-              mode === "identity"
-                ? "CREATE TABLE schema_identity("
-                : "CREATE TABLE reading_mark_places(",
+              mode === "device kind"
+                ? "ALTER TABLE device_connections ADD COLUMN "
+                : mode === "identity"
+                  ? "CREATE TABLE schema_identity("
+                  : "CREATE TABLE reading_mark_places(",
             )
           ) {
             if (mode === "already rolled back") original.call(this, "ROLLBACK");

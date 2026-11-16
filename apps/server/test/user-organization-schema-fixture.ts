@@ -9,6 +9,7 @@ import {
 import { CURRENT_CATALOG_CONFIG } from "../src/storage/sqlite/catalog-layout.js";
 import { verifyOfflineLayout } from "../src/storage/sqlite/archive-schema-migration.js";
 import { processorFixture } from "./processor-fixture.js";
+import { parseDeviceConnectionCode } from "@sciretriever/contracts";
 
 export function emptyUserOrganizationInput(path: string) {
   const db = new DatabaseSync(path);
@@ -121,6 +122,31 @@ export async function userOrganizationFixture() {
           request: { mark_id: mark.mark_id },
         });
     }
+    // Current owners create both display kinds; the frozen-17 projection below
+    // copies only its original columns, reproducing real pre-kind connections.
+    await env.app.deviceConnections.create({
+      address: "http://127.0.0.1:4199",
+      name: "Synthetic pending",
+      purposes: ["intake"],
+      kind: "extension",
+    });
+    const device = await env.app.deviceConnections.create({
+      address: "http://127.0.0.1:4199",
+      name: "Synthetic revoked",
+      purposes: ["read"],
+      kind: "agent",
+    });
+    const exchanged = await env.app.deviceConnections.exchange(
+      {
+        pairing_code: parseDeviceConnectionCode(device.connection_code)
+          .pairing_code,
+      },
+      "synthetic-peer",
+    );
+    await env.app.deviceConnections.authenticate(exchanged.token);
+    await env.app.deviceConnections.revoke({
+      connection_id: device.connection.connection_id,
+    });
     await env.app.maintenance!.refreshIndex!();
     await env.app.close();
     const path = join(env.home, "frozen-v17.sqlite"),

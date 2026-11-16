@@ -1,15 +1,24 @@
-import { ContractValidationError } from "./index.js";
+import { ContractValidationError, parseUtcTimestamp } from "./index.js";
 
 export const DEVICE_PURPOSES = ["intake", "read", "operate"] as const;
 export type DevicePurpose = (typeof DEVICE_PURPOSES)[number];
+export type DeviceKind = "extension" | "agent" | null;
 export interface DeviceConnection {
   readonly connection_id: string;
   readonly name: string;
   readonly purposes: readonly DevicePurpose[];
+  /** Display only; admission depends on purposes, never on kind. */
+  readonly kind: DeviceKind;
   readonly created_at: string;
   readonly paired_at: string | null;
   readonly last_used_at: string | null;
   readonly revoked_at: string | null;
+}
+export interface DevicePairingRequest {
+  readonly address: string;
+  readonly name: string;
+  readonly purposes: readonly DevicePurpose[];
+  readonly kind?: DeviceKind;
 }
 export interface DevicePairingReceipt {
   readonly connection: DeviceConnection;
@@ -82,6 +91,34 @@ export function deviceConnectionId(value: unknown): string {
     throw new ContractValidationError();
   return value;
 }
+export function deviceKind(value: unknown): DeviceKind {
+  if (value !== null && value !== "extension" && value !== "agent")
+    throw new ContractValidationError();
+  return value;
+}
+export function parseDeviceConnection(value: unknown): DeviceConnection {
+  const r = deviceRecord(value, [
+    "connection_id",
+    "name",
+    "purposes",
+    "kind",
+    "created_at",
+    "paired_at",
+    "last_used_at",
+    "revoked_at",
+  ]);
+  return {
+    connection_id: deviceConnectionId(r.connection_id),
+    name: deviceName(r.name),
+    purposes: devicePurposes(r.purposes),
+    kind: deviceKind(r.kind),
+    created_at: parseUtcTimestamp(r.created_at),
+    paired_at: r.paired_at === null ? null : parseUtcTimestamp(r.paired_at),
+    last_used_at:
+      r.last_used_at === null ? null : parseUtcTimestamp(r.last_used_at),
+    revoked_at: r.revoked_at === null ? null : parseUtcTimestamp(r.revoked_at),
+  };
+}
 /** Explicit port, IPv4/localhost HTTP; no forwarded origin or arbitrary URL. */
 export function deviceAddress(value: unknown): string {
   if (
@@ -107,12 +144,22 @@ export function deviceAddress(value: unknown): string {
     throw new ContractValidationError();
   return `http://${host}:${Number(value.match(/:(\d+)\/?$/u)![1])}`;
 }
-export function parseDevicePairingRequest(value: unknown) {
-  const r = deviceRecord(value, ["address", "name", "purposes"]);
+export function parseDevicePairingRequest(
+  value: unknown,
+): Required<DevicePairingRequest> {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new ContractValidationError();
+  const r = deviceRecord({ kind: null, ...value }, [
+    "address",
+    "name",
+    "purposes",
+    "kind",
+  ]);
   return {
     address: deviceAddress(r.address),
     name: deviceName(r.name),
     purposes: devicePurposes(r.purposes),
+    kind: deviceKind(r.kind),
   };
 }
 export function parseDeviceRenameRequest(value: unknown) {

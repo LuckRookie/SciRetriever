@@ -598,7 +598,10 @@ export const SCHEMA_FINGERPRINT_V17 = createHash("sha256")
   .update(JSON.stringify(SCHEMA_MANIFEST_V17))
   .digest("hex");
 
-/** User organization only: no library-state or retrieval revision triggers. */
+/** Display-only connection kind; frozen V16/V17 definitions above stay unchanged. */
+export const DEVICE_KIND_COLUMN_V18 =
+  "kind TEXT CHECK(kind IS NULL OR kind IN ('extension','agent'))";
+/** No library-state or retrieval revision triggers. */
 export const USER_ORGANIZATION_SCHEMA_V18 = [
   "CREATE TABLE saved_filters(filter_id TEXT NOT NULL PRIMARY KEY,name TEXT NOT NULL COLLATE BINARY UNIQUE CHECK(length(trim(name))>0),query_json TEXT NOT NULL CHECK(json_valid(query_json)),sort TEXT NOT NULL CHECK(length(trim(sort))>0),created_at TEXT NOT NULL,updated_at TEXT NOT NULL) STRICT",
   "CREATE TABLE reading_mark_places(mark_id TEXT NOT NULL,target_kind TEXT NOT NULL CHECK(target_kind IN ('pdf','document')),target_id TEXT NOT NULL CHECK(target_kind<>'pdf' OR (length(target_id)=64 AND target_id=lower(target_id) AND target_id NOT GLOB '*[^0-9a-f]*')),pdf_page INTEGER CHECK(pdf_page IS NULL OR pdf_page>=1),pdf_rects_json TEXT CHECK(pdf_rects_json IS NULL OR json_valid(pdf_rects_json)),document_start_utf8 INTEGER,document_end_utf8 INTEGER,similarity REAL NOT NULL CHECK(similarity BETWEEN 0.7 AND 1.0),method TEXT NOT NULL CHECK(length(trim(method))>0),located_at TEXT NOT NULL,PRIMARY KEY(mark_id,target_kind,target_id),FOREIGN KEY(mark_id) REFERENCES reading_marks(mark_id) ON DELETE CASCADE,CHECK((target_kind='pdf' AND pdf_page IS NOT NULL AND pdf_rects_json IS NOT NULL AND document_start_utf8 IS NULL AND document_end_utf8 IS NULL) OR (target_kind='document' AND pdf_page IS NULL AND pdf_rects_json IS NULL AND document_start_utf8 IS NOT NULL AND document_end_utf8 IS NOT NULL AND document_start_utf8>=0 AND document_end_utf8>document_start_utf8))) STRICT",
@@ -609,6 +612,9 @@ export const SCHEMA_MANIFEST = [
       "CHECK(schema_version=17)",
       "CHECK(schema_version=18)",
     );
+    // Match SQLite ADD COLUMN's stored SQL exactly, including its comma-space.
+    if (next.startsWith("CREATE TABLE device_connections("))
+      return next.replace(/\) STRICT$/u, `, ${DEVICE_KIND_COLUMN_V18}) STRICT`);
     return next.startsWith("CREATE VIEW processor_result_currentness ")
       ? next.replace(
           "'text-evidence-hierarchical-v2'",
