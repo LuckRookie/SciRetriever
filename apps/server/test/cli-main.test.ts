@@ -44,6 +44,9 @@ describe("TypeScript CLI", () => {
       "draft-differences",
       "collect continuations",
       "HTTP MCP /mcp with purpose read",
+      "folders list|delete-preview|create|rename|move|delete|add|remove --request FILE",
+      "literature open ID",
+      "marks list|export|create|update|delete|restore --request FILE",
     ])
       expect(help).toContain(word);
   });

@@ -200,6 +200,8 @@ function usage(options: CliOptions): CliResult {
     "  jobs runtime --workbench-url URL --request FILE|- [--maintenance] # operate in the Web owner\n" +
     "  archive build IDS [--mode full|legacy-vlm-markdown] [--from-step STEP]; archive status|resume ID; archive issues|stats|events; archive resolve --request FILE\n" +
     "  tags list|search|show|changes|consolidate|backfill; tags edit|undo --request FILE; literature tags ID / set|lock --request FILE\n" +
+    "  folders list|delete-preview|create|rename|move|delete|add|remove --request FILE  # list and manage folders and paper membership\n" +
+    "  literature open ID  # record a paper's latest opening time\n" +
     "  marks list|export|create|update|delete|restore --request FILE  # reading highlights, regions and notes of one paper\n" +
     "  storage schema-inspect|schema-init --catalog PATH\n" +
     "  maintenance rebuild-index\n" +

@@ -2,7 +2,7 @@
 
 类型：计划（结果块）
 负责：CLI `--help` 列出已实现的 `folders` 与 `literature open` 命令
-状态：Pending
+状态：Completed（2026-11-16）
 
 来源：原计划 22 的 02（任务 2.1、2.2 改为 6.1、6.2）。
 
@@ -24,8 +24,8 @@
 
 ## Tasks
 
-- [ ] **6.1 帮助文字**：按规格第 7 节的命令表，在帮助里加上 `folders` 与 `literature open` 两行，各附一句说明。
-- [ ] **6.2 测试**：在 `apps/server/test/cli-main.test.ts` 中断言帮助输出包含这两个命令。
+- [x] **6.1 帮助文字**：按规格第 7 节的命令表，在帮助里加上 `folders` 与 `literature open` 两行，各附一句说明。
+- [x] **6.2 测试**：在 `apps/server/test/cli-main.test.ts` 中断言帮助输出包含这两个命令。
 
 ## 集成与影响
 
@@ -38,7 +38,7 @@
 
 ## 证据
 
-提交号；定向测试结果。
+2026-11-16，后端实施者实现，总设计师审查、复跑 `cli-main.test.ts` 13 项通过后提交。证据在 `sandbox/reports/2026-11-16-plan25-06/`。
 
 ## 退出条件
 
