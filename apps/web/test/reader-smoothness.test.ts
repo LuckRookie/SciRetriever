@@ -769,7 +769,7 @@ it("anchor keeping (4.2)", async () => {
         (n: number) =>
           r.page
             .getByRole("button", {
-              name: n ? "显示信息" : "收起信息",
+              name: n ? "收起信息" : "显示信息",
               exact: true,
             })
             .click(),
@@ -899,7 +899,7 @@ it("anchor keeping (4.2)", async () => {
         (n: number) =>
           pdf.page
             .getByRole("button", {
-              name: n ? "显示信息" : "收起信息",
+              name: n ? "收起信息" : "显示信息",
               exact: true,
             })
             .click(),
@@ -1506,8 +1506,9 @@ it("transitions (6.1)", async () => {
           for (const a of f.animations) animations.add(a);
         return settled;
       };
-      const close = await panel("收起信息");
+      // The side panel starts closed (spec 1.4): open it, then close it.
       const open = await panel("显示信息");
+      const close = await panel("收起信息");
       await r.page.evaluate(() => rs().sample());
       await viewTab(r.page, "PDF").click();
       await ready(r.page, id, "pdf");

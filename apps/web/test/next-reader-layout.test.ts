@@ -1078,3 +1078,31 @@ it("draws the spine 8 px beside the sheet, keeps it there with the panel docked,
     await w.close();
   }
 }, 120000);
+
+it("fills the height below the top bar with the reading area at every width (spec 1.1, 1.4)", async () => {
+  const w = await nextWorkspace({ ready: "body" });
+  try {
+    const id = w.env.parseRequest.literature_id;
+    for (const [width, height] of [
+      [390, 844],
+      [1024, 768],
+    ] as const)
+      for (const view of ["doc", "pdf"] as const) {
+        await w.page.setViewportSize({ width, height });
+        await w.page.goto(`${w.origin}/?literature=${id}&reader=${view}`);
+        await w.page
+          .locator('.react-reader[data-reading-ready="true"]')
+          .waitFor();
+        const bottom = await w.page
+          .locator(".reader-engine-body")
+          .evaluate((el) => el.getBoundingClientRect().bottom);
+        expect(
+          Math.abs(bottom - height),
+          `${view} ${width}`,
+        ).toBeLessThanOrEqual(1);
+      }
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);

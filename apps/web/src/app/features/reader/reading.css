@@ -887,33 +887,30 @@
       justify-content: flex-start;
     }
   }
+  /* Narrow, only the proofread editor stacks below the PDF; the side panel
+     floats over the desk (spec 1.4), so the reading area keeps its height. */
   @media (max-width: 900px) {
-    .react-reader {
+    .react-reader.reader-editing {
       overflow: auto;
     }
-    .react-reader > .ui-split-pane {
+    .react-reader.reader-editing > .ui-split-pane {
       display: flex;
       flex-direction: column;
       overflow: visible;
     }
-    .react-reader > .ui-split-pane > .ui-split-main {
+    .react-reader.reader-editing > .ui-split-pane > .ui-split-main {
       order: 0;
       min-height: 65vh;
       height: 65vh;
       flex-shrink: 0;
     }
-    .react-reader > .ui-split-pane > .ui-split-side {
+    .react-reader.reader-editing > .ui-split-pane > .ui-split-side {
       order: 1;
       max-height: none;
       overflow: visible;
     }
     .react-reader .ui-split-handle {
       display: none;
-    }
-    .reader-information {
-      height: auto;
-      border-left: 0;
-      border-top: 1px solid var(--line);
     }
     .reader-outline {
       position: absolute;
