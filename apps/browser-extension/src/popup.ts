@@ -18,6 +18,7 @@ import {
 } from "./capture.js";
 
 const app = document.getElementById("app")!;
+const more = document.getElementById("more")!;
 const footer = document.getElementById("footer")!;
 
 interface Connection {
@@ -50,7 +51,30 @@ function show(...children: (Node | string | null)[]) {
 const message = (text: string) => (error: unknown) =>
   error instanceof CaptureError ? error.message : text;
 
+/**
+ * The popup's two items (page specs “浏览器扩展弹窗”): collecting this page
+ * is the body; importing from Zotero is the row below it, shown once
+ * connected. Until the import is built (plan 25, 16.4) the row is there but
+ * cannot be used, and says so.
+ */
+function zoteroRow(connection: Connection | null) {
+  if (!connection) return more.replaceChildren();
+  const row = h(
+    "button",
+    {
+      type: "button",
+      class: "more-row",
+      disabled: true,
+      "aria-describedby": "zotero-note",
+    },
+    h("span", {}, "从 Zotero 导入"),
+    h("span", { class: "note", id: "zotero-note" }, "尚未开放"),
+    h("span", { class: "chevron", "aria-hidden": "true" }, "›"),
+  );
+  more.replaceChildren(row);
+}
 function setFooter(connection: Connection | null) {
+  zoteroRow(connection);
   footer.replaceChildren(
     ...(connection
       ? [

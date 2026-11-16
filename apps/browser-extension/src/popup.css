@@ -150,6 +150,34 @@ select:focus-visible {
   background: var(--pending-bg);
   color: var(--pending);
 }
+/* The popup's second item: importing from Zotero, one row below the body. */
+#more:empty {
+  display: none;
+}
+.more-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 16px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  text-align: left;
+}
+.more-row > :first-child {
+  flex: 1;
+}
+.more-row .chevron {
+  color: var(--fg2);
+  font-size: 16px;
+}
+.more-row:disabled {
+  opacity: 1;
+  color: var(--fg2);
+}
 footer {
   display: flex;
   align-items: center;
