@@ -16,6 +16,7 @@ import {
 import {
   emptyUserOrganizationInput,
   organizationRows,
+  seedLegacyIntakeObjects,
   userOrganizationFixture,
 } from "./user-organization-schema-fixture.js";
 
@@ -39,6 +40,17 @@ it("migrates populated exact 17 preserving all old logical rows, artifacts, FTS,
     );
     expect(f.rows.reading_marks!.some((r) => r.deleted_at !== null)).toBe(true);
     expect(f.rows.device_connections).toHaveLength(2);
+    // Four explicit old-kind rows plus the fixture's original PDF relation.
+    expect(f.rows.intake_batch_objects).toHaveLength(5);
+    expect(
+      f.rows.intake_batch_objects!.map((row) => row.object_kind).sort(),
+    ).toEqual([
+      "folder",
+      "folder-member",
+      "literature-asset",
+      "literature-asset",
+      "mark",
+    ]);
     expect(
       f.rows.device_connections!.some(
         (row) =>
@@ -69,6 +81,28 @@ it("migrates populated exact 17 preserving all old logical rows, artifacts, FTS,
         kind: null,
       }));
       expect(after.device_connections).toEqual(before.device_connections);
+      expect(after.intake_batch_objects).toEqual(before.intake_batch_objects);
+      expect(
+        db.prepare("PRAGMA foreign_key_list(intake_batch_objects)").all(),
+      ).toMatchObject([
+        {
+          table: "intake_batches",
+          from: "batch_id",
+          to: "batch_id",
+          on_delete: "CASCADE",
+        },
+      ]);
+      expect(
+        db
+          .prepare(
+            "SELECT sql FROM sqlite_master WHERE name='intake_batch_objects_batch'",
+          )
+          .get()!.sql,
+      ).toBe(
+        SCHEMA_MANIFEST_V17.find((sql) =>
+          sql.startsWith("CREATE INDEX intake_batch_objects_batch "),
+        ),
+      );
       // Other old rows only change their schema identity.
       expect(after.schema_identity![0]).toMatchObject({
         ...before.schema_identity![0],
@@ -233,6 +267,8 @@ it.each([
 it.each([
   "second table",
   "device kind",
+  "intake objects",
+  "intake objects copy",
   "identity",
   "already rolled back",
   "rollback throws",
@@ -240,7 +276,9 @@ it.each([
   "preserves the original error on %s and can rerun exact 17",
   async (mode) =>
     fixture(async (path) => {
-      emptyUserOrganizationInput(path).close();
+      const input = emptyUserOrganizationInput(path);
+      seedLegacyIntakeObjects(input);
+      input.close();
       const bytes = await readFile(path),
         original = DatabaseSync.prototype.exec,
         failure = new Error("Synthetic original migration failure");
@@ -253,7 +291,11 @@ it.each([
                 ? "ALTER TABLE device_connections ADD COLUMN "
                 : mode === "identity"
                   ? "CREATE TABLE schema_identity("
-                  : "CREATE TABLE reading_mark_places(",
+                  : mode === "intake objects"
+                    ? "CREATE TABLE intake_batch_objects("
+                    : mode === "intake objects copy"
+                      ? "INSERT INTO intake_batch_objects("
+                      : "CREATE TABLE reading_mark_places(",
             )
           ) {
             if (mode === "already rolled back") original.call(this, "ROLLBACK");
@@ -279,6 +321,33 @@ it.each([
     }),
   30000,
 );
+
+it("rejects a changed registration row even with unchanged counts and restores the exact 17 input", async () =>
+  fixture(async (path) => {
+    const input = emptyUserOrganizationInput(path);
+    seedLegacyIntakeObjects(input);
+    input.close();
+    const bytes = await readFile(path),
+      original = DatabaseSync.prototype.exec;
+    const spy = vi
+      .spyOn(DatabaseSync.prototype, "exec")
+      .mockImplementation(function (this: DatabaseSync, sql: string) {
+        original.call(this, sql);
+        if (sql.startsWith("INSERT INTO intake_batch_objects("))
+          this.prepare(
+            "UPDATE intake_batch_objects SET object_id='changed' WHERE object_kind='mark'",
+          ).run();
+      });
+    try {
+      await expect(migrateUserOrganizationSchema(path)).rejects.toMatchObject({
+        code: "user-organization-schema-migration-refused",
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await readFile(path)).toEqual(bytes);
+    expect((await migrateUserOrganizationSchema(path)).to_version).toBe(18);
+  }));
 
 it("enforces both new table constraints and cascades places on mark retention cleanup and paper deletion", async () => {
   const f = await userOrganizationFixture();

@@ -203,7 +203,7 @@ it("requires Web login, client, Origin and CSRF for all five routes; every devic
       protocol_version: 1,
       result: {
         batch: { batch_id: b.id },
-        withdrawal: { remove: { literatures: 2 }, registered: false },
+        withdrawal: { remove: { literatures: 2 }, registered: true },
       },
     });
     const withdrawn = await post(paths[1]!, headers, suffix);

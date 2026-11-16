@@ -184,6 +184,56 @@ it("pins frozen 16 and verifies the frozen 17 and exact current 18 manifest and 
     db.close();
   }
 });
+it("adds literature ownership only to current 18 while preserving the registration index and cascading batch FK", () => {
+  const frozen = SCHEMA_MANIFEST_V17.find((sql) =>
+    sql.startsWith("CREATE TABLE intake_batch_objects("),
+  )!;
+  expect(SCHEMA_MANIFEST_V16).toContain(frozen);
+  expect(frozen).toContain(
+    "object_kind IN ('folder','folder-member','literature-asset','mark')",
+  );
+  const db = new DatabaseSync(":memory:");
+  try {
+    initializeCurrentCatalog(db);
+    db.exec("PRAGMA foreign_keys=ON");
+    db.exec(
+      "INSERT INTO intake_batches(batch_id,kind,default_label,origin,created_at,state,initiated_by,request_json) VALUES('batch','import','Synthetic','web','2026-11-17T00:00:00Z','running','local:web','{}')",
+    );
+    const insert = db.prepare(
+      "INSERT INTO intake_batch_objects VALUES(?,?,'batch')",
+    );
+    for (const kind of [
+      "literature",
+      "folder",
+      "folder-member",
+      "literature-asset",
+      "mark",
+    ])
+      insert.run(kind, kind);
+    for (const kind of ["paper", "Literature", "", "other"])
+      expect(() => insert.run(kind, kind)).toThrow(/CHECK/u);
+    expect(() =>
+      db.exec(
+        "INSERT INTO intake_batch_objects VALUES('literature','missing','absent')",
+      ),
+    ).toThrow(/FOREIGN KEY/u);
+    expect(
+      db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE name='intake_batch_objects_batch'",
+        )
+        .get()!.sql,
+    ).toBe(
+      SCHEMA_MANIFEST_V17.find((sql) =>
+        sql.startsWith("CREATE INDEX intake_batch_objects_batch "),
+      ),
+    );
+    db.exec("DELETE FROM intake_batches WHERE batch_id='batch'");
+    expect(db.prepare("SELECT * FROM intake_batch_objects").all()).toEqual([]);
+  } finally {
+    db.close();
+  }
+});
 it("adds a nullable, closed display kind only to current 18 devices", () => {
   const frozen = SCHEMA_MANIFEST_V17.find((sql) =>
     sql.startsWith("CREATE TABLE device_connections("),

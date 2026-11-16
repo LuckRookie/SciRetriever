@@ -12,7 +12,7 @@
 - [draft-text-engine.ts](draft-text-engine.ts)：初稿版本、资源闭包、不可变计数、当前指针及默认关系的同事务登记；按版本读事实、按本页文献批量读主 PDF 默认版本与等级。补形成候选共用文献库筛选和排序，在同一只读快照返回 PDF 部分、当前部署/历史 Markdown raw、指定 raw 的既有初稿 ID 和当前初稿方法；不读取正文或其它文件，业务跳过、limit 与任务冻结由应用层决定。
 - [document-defaults.ts](document-defaults.ts)：原始解析当前切换、初稿登记与校订发布事务内按独立 CAS 重求默认文本，优先有效完整校订稿，再选有效当前初稿，否则删除默认关系。校订发布可提名刚登记的版本，仍复检当前校订内容、人工 revision 和原始解析 pin；相同校订内容的等价方法版本可以复用固定表示。没有提名时保留仍有效的默认表示。资产当前指针切换同时重求其全部文献关系；读取不重求。
 - [draft-text-schema-migration.ts](draft-text-schema-migration.ts)：独立离线 16→17；精确匹配冻结 16，原地重建文档父表、子表不改名或重建，核对全部旧表行数及校订行、内容版本、事件和结果过时状态；不形成初稿，不访问 artifact。
-- [user-organization-schema-migration.ts](user-organization-schema-migration.ts)：独立离线 17→18，精确匹配冻结 V17，一次增加筛选与批注定位缓存两表，以及设备连接的 nullable `kind` 列，旧连接为 null；失败回滚并保留原异常。
+- [user-organization-schema-migration.ts](user-organization-schema-migration.ts)：独立离线 17→18，精确匹配冻结 V17，一次增加筛选与批注定位缓存两表，以及设备连接的 nullable `kind` 列（旧连接为 null）；原地重建批次对象登记表以接受 literature，逐行保留原登记、索引和外键；失败回滚并保留原异常。
 - [library-state-cache.ts](library-state-cache.ts)：基于事务内输入版本的建档状态缓存。
 - [library-state-schema-migration.ts](library-state-schema-migration.ts)：显式离线安装当前按篇失效结构；[library-state-previous-layout.ts](library-state-previous-layout.ts) 只描述工具的精确旧输入，不由 catalog opener 接受。
 - [intake-engine.ts](intake-engine.ts)：入库批次及按文献去重的成员写入、改名与当前 PDF 状态读取；成员与 identity 发布共用事务。
@@ -88,6 +88,6 @@ metadata_only 仅存 intake_batches.request_json，不增加列；import-engine 
 
 `marks-engine.ts` 在 `reading_mark_places` 按批注与目标替换位置，读取仅给当前定位方法，随批注物理清除级联；定位不改 `reading_marks` 原锚点或文献状态。`place` 的 PDF 校验先只读检查，再带页数进入写事务重判；原 `create`/`update` 锚点规则保持。
 
-[intake-objects.ts](intake-objects.ts) 在文件夹、成员、资产关系与批注的创建事务中登记批次归属，文献归属沿用批次 created 成员。[intake-withdrawal-engine.ts](intake-withdrawal-engine.ts) 在单个事务中重判八种保留原因、检查忙碌任务、撤回或恢复并保存报告。撤回记录读回与恢复预估复用已有记录和剩余标记；与批次状态在同一个只读快照返回，恢复执行重新读取剩余标记。旧批次没有登记时，有任何文件夹成员或批注都保留；不推断历史归属。共享文件字节与来源事实保留。
+[intake-objects.ts](intake-objects.ts) 在文献、文件夹、成员、资产关系与批注的创建事务中登记批次归属；文献登记与 created 成员在同一事务完成，保留条目的延迟决定沿用原保留校验进入身份发布事务。[intake-withdrawal-engine.ts](intake-withdrawal-engine.ts) 在单个事务中重判八种保留原因、检查忙碌任务、撤回或恢复并保存报告。撤回记录读回与恢复预估复用已有记录和剩余标记；与批次状态在同一个只读快照返回，恢复执行重新读取剩余标记。旧批次没有登记时，有任何文件夹成员或批注都保留；不推断历史归属。共享文件字节与来源事实保留。
 
 [intake-visibility.ts](intake-visibility.ts) 为文献库、词频、全文检索与 Context、引用两端、发现原因、任务范围、文件夹与批注提供读取排除条件；MetaLiterature 代表只在读投影中重选。身份、sha256 和外部对应读取完整事实，命中后在成员写入事务恢复原文献及其原撤回关系，分类 restored，原批次报告保持不变。撤回服务只接网页登录的五条入库 HTTP 路由，无设备用途、CLI 或 MCP 操作。

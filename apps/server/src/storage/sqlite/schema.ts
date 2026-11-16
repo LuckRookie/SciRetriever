@@ -615,6 +615,12 @@ export const SCHEMA_MANIFEST = [
     // Match SQLite ADD COLUMN's stored SQL exactly, including its comma-space.
     if (next.startsWith("CREATE TABLE device_connections("))
       return next.replace(/\) STRICT$/u, `, ${DEVICE_KIND_COLUMN_V18}) STRICT`);
+    // New literature ownership is recorded from V18 onward; V16/V17 stay frozen.
+    if (next.startsWith("CREATE TABLE intake_batch_objects("))
+      return next.replace(
+        "object_kind IN ('folder',",
+        "object_kind IN ('literature','folder',",
+      );
     return next.startsWith("CREATE VIEW processor_result_currentness ")
       ? next.replace(
           "'text-evidence-hierarchical-v2'",

@@ -17,6 +17,7 @@ import type {
   IdentityReadRequest,
   SqliteWorker,
 } from "../storage/sqlite/worker.js";
+import type { IntakeMember } from "../storage/sqlite/intake-engine.js";
 import type { CatalogWriteAdmission } from "../storage/write-admission.js";
 import {
   fallbackIdentityKey,
@@ -340,6 +341,7 @@ export class LiteratureIdentityService {
     value: unknown,
     options: {
       readonly intake_batch_id?: import("@sciretriever/contracts").IntakeBatchId;
+      readonly intake_resolution?: IntakeMember["resolution"];
       readonly intake_exclude_ids?: readonly string[];
       readonly target_literature_id?: string;
       readonly signal?: AbortSignal;
@@ -354,6 +356,7 @@ export class LiteratureIdentityService {
           options.intake_exclude_ids,
           options.target_literature_id,
           options.signal,
+          options.intake_resolution,
         ),
       options.signal,
     );
@@ -465,6 +468,7 @@ export class LiteratureIdentityService {
     excludeIds: readonly string[] = [],
     targetLiteratureId?: string,
     signal?: AbortSignal,
+    intakeResolution?: IntakeMember["resolution"],
   ): Promise<LiteratureIdentityDecision> {
     const assessment = await this.assess(observation, targetLiteratureId);
     signal?.throwIfAborted();
@@ -489,6 +493,7 @@ export class LiteratureIdentityService {
         ? {
             batch_id: intakeBatchId,
             literature_id: publication.result.literature_id,
+            ...(intakeResolution ? { resolution: intakeResolution } : {}),
             disposition:
               current === null
                 ? ("created" as const)

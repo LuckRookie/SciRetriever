@@ -32,6 +32,22 @@ export function emptyUserOrganizationInput(path: string) {
   return db;
 }
 
+/** Every kind legal in frozen 17, including an encoded composite object ID. */
+export function seedLegacyIntakeObjects(db: DatabaseSync) {
+  const batch = "00000000-0000-4000-8000-000000000018";
+  db.prepare(
+    "INSERT INTO intake_batches(batch_id,kind,default_label,origin,created_at,finished_at,state,result,initiated_by,request_json) VALUES(?,'import','Synthetic ownership','web','2026-11-17T00:00:00Z','2026-11-17T00:00:01Z','finished','completed','local:web','{}')",
+  ).run(batch);
+  const insert = db.prepare("INSERT INTO intake_batch_objects VALUES(?,?,?)");
+  for (const [kind, id] of [
+    ["folder", "folder-original"],
+    ["mark", "mark-original"],
+    ["folder-member", JSON.stringify(["folder-original", "paper-original"])],
+    ["literature-asset", "asset-relation-original"],
+  ])
+    insert.run(kind!, id!, batch);
+}
+
 /** All logical rows, including virtual FTS rowids, but never FTS shadow internals. */
 export function organizationRows(db: DatabaseSync) {
   return Object.fromEntries(
@@ -176,10 +192,16 @@ export async function userOrganizationFixture() {
         const list =
           (sql.startsWith("CREATE VIRTUAL TABLE ") ? "rowid," : "") +
           columns.join(",");
+        // V18 ownership may include literature, which frozen 17 cannot store.
+        const where =
+          table === "intake_batch_objects"
+            ? " WHERE object_kind<>'literature'"
+            : "";
         db.exec(
-          `INSERT INTO ${table}(${list}) SELECT ${list} FROM fixture_source.${table}`,
+          `INSERT INTO ${table}(${list}) SELECT ${list} FROM fixture_source.${table}${where}`,
         );
       }
+      seedLegacyIntakeObjects(db);
       for (const sql of SCHEMA_MANIFEST_V17)
         if (sql.startsWith("CREATE TRIGGER ")) db.exec(sql);
       verifyOfflineLayout(db, SCHEMA_MANIFEST_V17);

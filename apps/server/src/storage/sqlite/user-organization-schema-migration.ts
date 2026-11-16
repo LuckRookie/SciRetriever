@@ -26,7 +26,7 @@ function refuse(): never {
     code: "user-organization-schema-migration-refused",
   });
 }
-/** Explicit offline 17 -> 18, including a nullable display kind for existing devices. */
+/** Explicit offline 17 -> 18, including device kind and literature intake ownership. */
 export async function migrateUserOrganizationSchema(path: string) {
   await schemaTargetPath(path);
   if (!(await schemaTargetFile(path))) refuse();
@@ -71,6 +71,38 @@ export async function migrateUserOrganizationSchema(path: string) {
       db.exec(
         `ALTER TABLE device_connections ADD COLUMN ${DEVICE_KIND_COLUMN_V18}`,
       );
+      // This child table has no incoming FKs. Rebuild it in place without
+      // changing its rows, batch FK or index; only the kind CHECK expands.
+      db.exec(
+        "CREATE TEMP TABLE organization_intake_objects AS SELECT object_kind,object_id,batch_id FROM intake_batch_objects;DROP TABLE intake_batch_objects",
+      );
+      db.exec(
+        SCHEMA_MANIFEST.find((sql) =>
+          sql.startsWith("CREATE TABLE intake_batch_objects("),
+        )!,
+      );
+      db.exec(
+        "INSERT INTO intake_batch_objects(object_kind,object_id,batch_id) SELECT object_kind,object_id,batch_id FROM organization_intake_objects",
+      );
+      db.exec(
+        SCHEMA_MANIFEST.find((sql) =>
+          sql.startsWith("CREATE INDEX intake_batch_objects_batch "),
+        )!,
+      );
+      if (
+        db
+          .prepare(
+            "SELECT * FROM organization_intake_objects EXCEPT SELECT * FROM intake_batch_objects",
+          )
+          .get() ||
+        db
+          .prepare(
+            "SELECT * FROM intake_batch_objects EXCEPT SELECT * FROM organization_intake_objects",
+          )
+          .get()
+      )
+        refuse();
+      db.exec("DROP TABLE organization_intake_objects");
       db.exec(
         "CREATE TEMP TABLE organization_identity AS SELECT * FROM schema_identity;DROP TABLE schema_identity",
       );

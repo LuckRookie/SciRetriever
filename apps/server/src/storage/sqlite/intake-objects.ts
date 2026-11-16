@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 export type IntakeObjectKind =
+  | "literature"
   | "folder"
   | "folder-member"
   | "literature-asset"

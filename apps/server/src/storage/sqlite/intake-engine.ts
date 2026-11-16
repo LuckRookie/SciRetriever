@@ -1,4 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
+const { recordIntakeObject }: typeof import("./intake-objects.js") =
+  await import(
+    new URL(
+      import.meta.url.endsWith(".ts")
+        ? "./intake-objects.ts"
+        : "./intake-objects.js",
+      import.meta.url,
+    ).href
+  );
 const {
   restoreWithdrawnLiterature,
 }: typeof import("./intake-withdrawal-engine.js") = await import(
@@ -40,6 +49,8 @@ export interface IntakeMember {
   readonly literature_id: string;
   readonly disposition: "created" | "enriched" | "matched" | "restored";
   readonly authoritative?: boolean;
+  /** A decided retained item uses the existing finished-batch admission check. */
+  readonly resolution?: { readonly item_id: string; readonly now: string };
 }
 export type IntakeWrite =
   | {
@@ -61,6 +72,15 @@ export function recordIntakeMember(
   db: DatabaseSync,
   member: IntakeMember,
 ): void {
+  if (member.resolution) {
+    recordResolvedIntakeMember(
+      db,
+      member,
+      member.resolution.item_id,
+      member.resolution.now,
+    );
+    return;
+  }
   const batch = db
     .prepare("SELECT state FROM intake_batches WHERE batch_id=?")
     .get(member.batch_id);
@@ -90,6 +110,8 @@ function insertIntakeMember(db: DatabaseSync, member: IntakeMember): void {
   db.prepare(
     `INSERT INTO intake_batch_members VALUES(?,?,?) ON CONFLICT(batch_id,literature_id) DO UPDATE SET disposition=${member.authoritative ? "excluded.disposition" : "CASE WHEN disposition='restored' OR excluded.disposition='restored' THEN 'restored' WHEN disposition='created' OR excluded.disposition='created' THEN 'created' WHEN disposition='enriched' OR excluded.disposition='enriched' THEN 'enriched' ELSE 'matched' END"}`,
   ).run(member.batch_id, member.literature_id, member.disposition);
+  if (member.disposition === "created")
+    recordIntakeObject(db, member.batch_id, "literature", member.literature_id);
 }
 export function intakeMemberships(db: DatabaseSync, id: string) {
   return db

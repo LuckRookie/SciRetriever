@@ -932,8 +932,16 @@ export class ImportSessionService extends ImportSessionReadService {
     observation: MetadataObservation,
     mapping: ExternalObjectMapping | null,
     unchanged: boolean,
-    resolving = false,
+    resolving?: StoredIntakeItem,
   ): Promise<LiteratureIdentityDecision> {
+    // Carry the same retained-item guard into identity publication, so a new
+    // literature, its member and ownership commit together even after confirm.
+    const resolution = resolving
+      ? {
+          item_id: resolving.item_id,
+          now: new Date(this.now()).toISOString(),
+        }
+      : undefined;
     if (unchanged) {
       const facts = await this.database.currentFacts(mapping!.internal_id);
       const withdrawn = await this.database.literatureWithdrawn(
@@ -947,6 +955,7 @@ export class ImportSessionService extends ImportSessionReadService {
           batch_id: parseIntakeBatchId(s.batch_id!),
           literature_id: mapping!.internal_id,
           disposition: withdrawn ? "restored" : "matched",
+          ...(resolution ? { resolution } : {}),
         },
       });
       return {
@@ -959,9 +968,8 @@ export class ImportSessionService extends ImportSessionReadService {
     }
     try {
       return await this.identity.observe(observation, {
-        ...(!resolving
-          ? { intake_batch_id: parseIntakeBatchId(s.batch_id!) }
-          : {}),
+        intake_batch_id: parseIntakeBatchId(s.batch_id!),
+        ...(resolution ? { intake_resolution: resolution } : {}),
         ...(mapping ? { target_literature_id: mapping.internal_id } : {}),
       });
     } catch (error) {
@@ -1775,7 +1783,7 @@ export class ImportSessionService extends ImportSessionReadService {
             observation,
             existing,
             assessment.unchanged,
-            !!resolving,
+            resolving,
           );
           if (decision.disposition !== "accepted")
             result = {

@@ -24,6 +24,226 @@ import {
   withdrawalRecord as record,
 } from "./intake-withdrawal-fixture.js";
 
+it("registers a bibliography-only Web batch and withdraws its new literature without files or folders", async () => {
+  const f = await withdrawalFixture();
+  try {
+    const imported = await f.app.importSessions.importBibliography(
+      Buffer.from(
+        "@article{b,title={Synthetic registration probe},doi={10.5555/probe-b}}",
+      ),
+      "bibtex",
+      "probe.bib",
+      "web",
+    );
+    expect(imported.items).toHaveLength(1);
+    expect(imported.items[0]!.disposition).toBe("created");
+    const id = imported.items[0]!.literature_id!,
+      batch = imported.intake_batch_id!;
+    expect(
+      f.rows("SELECT * FROM intake_batch_members WHERE batch_id=?", batch),
+    ).toEqual([{ batch_id: batch, literature_id: id, disposition: "created" }]);
+    expect(
+      f.rows("SELECT * FROM intake_batch_objects WHERE batch_id=?", batch),
+    ).toEqual([{ object_kind: "literature", object_id: id, batch_id: batch }]);
+    for (const table of ["folders", "reading_marks", "literature_assets"])
+      expect(f.rows(`SELECT * FROM ${table}`)).toEqual([]);
+    const service = new IntakeWithdrawalService(f.app.database),
+      before = catalogRows(f.db);
+    const preview = await service.preview(batch);
+    expect(preview).toEqual({
+      registered: true,
+      remove: {
+        literatures: 1,
+        file_relations: 0,
+        folders: 0,
+        folder_members: 0,
+        marks: 0,
+      },
+      keep: { literatures: 0, by_reason: {} },
+      kept_items: [],
+    });
+    expect(catalogRows(f.db)).toEqual(before);
+    expect(await service.withdraw(batch)).toEqual({
+      ...preview,
+      at: expect.any(String),
+      by: "web",
+    });
+    expect(await f.app.database.getLiterature(id)).toBeNull();
+    expect(
+      f.rows("SELECT literature_id FROM literatures WHERE literature_id=?", id),
+    ).toEqual([{ literature_id: id }]);
+    expect(f.rows("PRAGMA foreign_key_check")).toEqual([]);
+  } finally {
+    await f.close();
+  }
+});
+
+it("rolls back new literature, source facts and membership when its ownership registration fails, then permits retry", async () => {
+  const f = await withdrawalFixture();
+  try {
+    const batch = await startIntake(
+      f.app.database,
+      "topic",
+      "Synthetic atomic registration",
+      {},
+      "web",
+    );
+    const observation = parseMetadataObservation({
+      observation_id: randomUUID(),
+      source_type: null,
+      source_type_mapping_version: null,
+      provenance: {
+        provenance_id: randomUUID(),
+        source_kind: "metadata-provider",
+        source_name: "synthetic-registration",
+        source_record_id: "atomic",
+        observed_at: new Date().toISOString(),
+        input_sha256: "f".repeat(64),
+        parameters_sha256: null,
+      },
+      metadata: record("atomic-registration").metadata,
+      version_role: "published",
+      version_links: [],
+      asset_hints: [],
+      declared_keywords: [],
+      reference_texts: [],
+      reference_count: null,
+      cited_by_count: null,
+    });
+    await f.transaction(() =>
+      f.db.exec(
+        "CREATE TRIGGER synthetic_literature_registration_failure BEFORE INSERT ON intake_batch_objects WHEN NEW.object_kind='literature' BEGIN SELECT RAISE(ABORT,'injected literature registration failure'); END",
+      ),
+    );
+    const before = catalogRows(f.db);
+    await expect(
+      f.app.identity.observe(observation, { intake_batch_id: batch }),
+    ).rejects.toThrow();
+    expect(catalogRows(f.db)).toEqual(before);
+    await f.transaction(() =>
+      f.db.exec("DROP TRIGGER synthetic_literature_registration_failure"),
+    );
+    const accepted = await f.app.identity.observe(observation, {
+      intake_batch_id: batch,
+    });
+    if (accepted.disposition !== "accepted")
+      throw new Error("Synthetic identity refused");
+    expect(
+      f.rows("SELECT * FROM intake_batch_objects WHERE batch_id=?", batch),
+    ).toEqual([
+      {
+        object_kind: "literature",
+        object_id: accepted.literature_id,
+        batch_id: batch,
+      },
+    ]);
+    expect(
+      f.rows(
+        "SELECT literature_id,disposition FROM intake_batch_members WHERE batch_id=?",
+        batch,
+      ),
+    ).toEqual([
+      { literature_id: accepted.literature_id, disposition: "created" },
+    ]);
+    expect(f.rows("PRAGMA foreign_key_check")).toEqual([]);
+  } finally {
+    await f.close();
+  }
+});
+
+it("keeps retained new-decision ownership atomic and permits retry after registration fails", async () => {
+  const f = await withdrawalFixture();
+  try {
+    const base = record("duplicate-original", false);
+    const input = {
+      ...base,
+      metadata: {
+        ...base.metadata,
+        title: "Synthetic duplicate registration paper",
+        authors: [],
+        publication_year: null,
+        publication_date: null,
+      },
+    };
+    await f.batch([input]);
+    const b = await f.app.importSessions.create(
+      { format: "records", source: null, scope: "Synthetic retained decision" },
+      { kind: "local", origin: "web" },
+    );
+    await f.app.importSessions.putData(b.batch_id, 0, {
+      records: [{ ...input, external_id: "duplicate-new" }],
+    });
+    await f.app.importSessions.confirm(b.batch_id);
+    const item = (await f.app.importSessions.items(b.batch_id)).items[0]!;
+    expect(item.disposition).toBe("pending-decision");
+    expect((await f.app.importSessions.status(b.batch_id)).state).toBe(
+      "finished",
+    );
+    expect(
+      f.rows("SELECT * FROM intake_batch_objects WHERE batch_id=?", b.batch_id),
+    ).toEqual([]);
+    await f.transaction(() =>
+      f.db.exec(
+        "CREATE TRIGGER synthetic_late_registration_failure BEFORE INSERT ON intake_batch_objects WHEN NEW.object_kind='literature' BEGIN SELECT RAISE(ABORT,'injected late registration failure'); END",
+      ),
+    );
+    const tables = [
+      "literatures",
+      "meta_literatures",
+      "provenances",
+      "metadata_observations",
+      "intake_batch_members",
+      "intake_batch_objects",
+    ];
+    const before = Object.fromEntries(
+      tables.map((table) => [
+        table,
+        f.rows(`SELECT * FROM ${table} ORDER BY rowid`),
+      ]),
+    );
+    await expect(
+      f.app.importSessions.decide(
+        b.batch_id,
+        item.item_id,
+        { kind: "new" },
+        { kind: "local", origin: "web" },
+      ),
+    ).rejects.toThrow();
+    for (const table of tables)
+      expect(f.rows(`SELECT * FROM ${table} ORDER BY rowid`), table).toEqual(
+        before[table],
+      );
+    await f.transaction(() =>
+      f.db.exec("DROP TRIGGER synthetic_late_registration_failure"),
+    );
+    const result = await f.app.importSessions.decide(
+      b.batch_id,
+      item.item_id,
+      { kind: "new" },
+      { kind: "local", origin: "web" },
+    );
+    expect(result.disposition).toBe("created");
+    const published = (await f.app.importSessions.report(b.batch_id)).items[0]!;
+    expect(published.disposition).toBe("created");
+    expect(published.literature_id).not.toBeNull();
+    expect(
+      f.rows("SELECT * FROM intake_batch_objects WHERE batch_id=?", b.batch_id),
+    ).toEqual([
+      {
+        object_kind: "literature",
+        object_id: published.literature_id,
+        batch_id: b.batch_id,
+      },
+    ]);
+    expect(
+      (await new IntakeWithdrawalService(f.app.database).preview(b.batch_id))
+        .registered,
+    ).toBe(true);
+  } finally {
+    await f.close();
+  }
+});
+
 it.each(["finished", "cancelled"] as const)(
   "withdraws and restores a %s batch without deleting facts or immutable shared files",
   async (prior) => {
@@ -214,6 +434,7 @@ it("registers imported folders, members and PDF relations in their owner transac
     await f.app.importSessions.upload(b.batch_id, file.file_id, chunks());
     await f.app.importSessions.finish(b.batch_id);
     for (const [kind, sql] of [
+      ["literature", "SELECT literature_id AS id FROM literatures"],
       ["folder", "SELECT folder_id AS id FROM folders"],
       [
         "folder-member",
@@ -735,6 +956,12 @@ it.each(["import-first", "user-first"])(
         record("legacy-clean"),
         record("legacy-note"),
       ]);
+      // Reproduce data from before ownership registration, rather than a new batch.
+      await f.transaction(() => {
+        f.db
+          .prepare("DELETE FROM intake_batch_objects WHERE batch_id=?")
+          .run(b.id);
+      });
       const [folderLit, clean, note] = b.report.items.map(
         (i) => i.literature_id!,
       );
@@ -802,6 +1029,12 @@ it("forks one legacy baseline into both creator orders and retains both as folde
   const f = await withdrawalFixture();
   try {
     const b = await f.batch([record("same-legacy-baseline")]);
+    // Fork an actual pre-registration state; current intake now records literature.
+    await f.transaction(() => {
+      f.db
+        .prepare("DELETE FROM intake_batch_objects WHERE batch_id=?")
+        .run(b.id);
+    });
     const id = b.report.items[0]!.literature_id!,
       folder = await f.folder("Same legacy group");
     const snapshots: ReturnType<typeof catalogRows>[] = [],
