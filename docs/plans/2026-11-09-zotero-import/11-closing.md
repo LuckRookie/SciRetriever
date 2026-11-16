@@ -33,10 +33,10 @@ ADR 0063 之后：里程碑改为 M1–M4（见计划 README）。HTTP 版 MCP �
 
 ## Tasks
 
-- [ ] **11.1 迁移演练（G-lib）**
+- [x] **11.1 迁移演练（G-lib）**（2026-11-16，与计划 21 一起演练，见 11.2）
   - 动作：在 16 冻结之后，在正式库的只读副本上运行 `scripts/migrate-import-v16.mjs`，记录耗时与核对结果。
   - 输出：副本与回执放在 `sandbox/runs/`、`sandbox/reports/`，不提交。
-- [ ] **11.2 M1 部署（G-deploy、G-migrate）**
+- [x] **11.2 M1 部署（G-deploy、G-migrate）**（2026-11-16：Owner 授权副本演练与正式部署。副本演练（`sandbox/reports/2026-11-16-rehearsal/round-2/`）：迁移 15→16→17 通过；补形成试跑 73 篇中形成 3、失败 70（历史 `vlm-engine-markdown-only` 原始解析，`needs-parse`）。正式部署（`sandbox/reports/2026-11-16-deploy-17-production-2/`）：4174 从 `40ebc498` 换到 `b94bf47f`，停服、一致性备份（`backup-schema15.sqlite`）、离线迁移 15→16（19.6 s）→17（20.4 s）、启动、就绪（33 s）全部通过，正式库为 schema 17。正式库上补形成初稿尚未执行（另行授权）。）
   - 动作：
     - 跑一次全量；失败时先分清是本计划引起的，还是原有的不稳定；
     - 按现有的重部署流程执行：候选构建、预演、预检无运行中任务、停服、备份、离线迁移、启动、就绪；
