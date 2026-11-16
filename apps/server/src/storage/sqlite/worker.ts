@@ -1465,10 +1465,14 @@ export class SqliteWorker {
       now?: string;
       actor?: string;
       mark_id?: string;
+      check_only?: boolean;
+      page_count?: number;
     },
     signal?: AbortSignal,
   ): Promise<unknown> {
-    const read = ["list", "export"].includes(value.operation);
+    const read =
+      ["list", "export"].includes(value.operation) ||
+      (value.operation === "place" && value.check_only === true);
     if (!read && (this.readOnly || !this.admission))
       throw new MarkError("mark-write-unavailable");
     const copy = structuredClone(value),

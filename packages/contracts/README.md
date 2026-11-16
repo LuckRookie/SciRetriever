@@ -31,3 +31,5 @@ SHA-256 优先使用 Web Crypto；普通 HTTP 浏览器缺少 SubtleCrypto 时�
 - `src/processors.ts`：冻结加工输入、规范、记录/文本/旧知识引用、覆盖与集合合同；ProcessingTaskRequest v2 承载批量处理器快照。
 
 - `src/filters.ts`：保存筛选的操作、名称规则、规范 LibraryQuery/LibrarySort 与逐项导入回执；字段按精确键集解析。
+
+- `src/marks.ts`：`MarkOperation.place` 使用 PDF 或文档目标、相似度和方法版本；`ReadingMark.places` 保存当前方法的定位记录，JSON 导出与列表同形。

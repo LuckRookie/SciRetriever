@@ -2046,7 +2046,25 @@ async function createApplicationOwned(
         ],
         admission,
       ),
-      marks: new MarkService(database, (id) => library.detail(id)),
+      marks: new MarkService(
+        database,
+        (id) => library.detail(id),
+        async (asset, signal) => {
+          const accepted = await literatureArtifacts.withArtifact(
+            asset,
+            async (chunks) => {
+              const bytes: Uint8Array[] = [];
+              for await (const chunk of chunks) {
+                signal?.throwIfAborted();
+                bytes.push(chunk);
+              }
+              return acceptPdf(Buffer.concat(bytes), 20000, signal);
+            },
+            { maxBytes: 256 * 1024 * 1024, ...(signal ? { signal } : {}) },
+          );
+          return accepted.page_count;
+        },
+      ),
       translation,
       fullTextTranslation: new FullTextTranslation({
         dir: join(home, ".sciretriever", "cache", "fulltext"),
@@ -2521,7 +2539,7 @@ export async function createQueryApplication(
       ),
       folders: new FolderService(database),
       filters: new FilterService(database),
-      marks: new MarkService(database, (id) => literature.detail(id)),
+      marks: new MarkService(database, (id) => literature.detail(id), null),
       snapshots: new SnapshotService(database, literature),
       archive: new ArchiveReader(database),
       archiveArrangement: new ArchiveArrangementAccess(

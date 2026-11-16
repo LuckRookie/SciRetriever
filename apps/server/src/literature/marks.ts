@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
   marksMarkdown,
+  parseAsset,
+  type Asset,
   parseMarkOperation,
   parseReadingMark,
   type LiteratureDetail,
@@ -10,8 +12,11 @@ import type { SqliteWorker } from "../storage/sqlite/worker.js";
 import { activityContext } from "../logging/activity.js";
 
 export class MarkError extends Error {
-  constructor(readonly code: string) {
-    super(code);
+  constructor(
+    readonly code: string,
+    options?: ErrorOptions,
+  ) {
+    super(code, options);
   }
 }
 type Detail = (id: string) => Promise<LiteratureDetail>;
@@ -39,6 +44,9 @@ export class MarkService {
   constructor(
     private readonly database: SqliteWorker,
     private readonly detail: Detail,
+    private readonly pageCount:
+      | ((asset: Asset, signal?: AbortSignal) => Promise<number>)
+      | null,
   ) {}
   async query(value: unknown, signal?: AbortSignal) {
     const command = parseMarkOperation(value);
@@ -67,10 +75,26 @@ export class MarkService {
     const command = parseMarkOperation(value);
     if (command.operation === "list" || command.operation === "export")
       throw new MarkError("mark-write-operation-invalid");
+    let page_count: number | undefined;
+    if (command.operation === "place" && "pdf" in command.request.target) {
+      const asset = parseAsset(
+        await this.database.marks({ ...command, check_only: true }, signal),
+      );
+      if (!this.pageCount) throw new MarkError("mark-write-unavailable");
+      try {
+        page_count = await this.pageCount(asset, signal);
+      } catch (error) {
+        throw new MarkError(
+          signal?.aborted ? "mark-cancelled" : "mark-anchor-invalid",
+          { cause: error },
+        );
+      }
+    }
     return parseReadingMark(
       await this.database.marks(
         {
           ...command,
+          ...(page_count === undefined ? {} : { page_count }),
           actor: activityContext().actor,
           now: new Date().toISOString(),
           ...(command.operation === "create" ? { mark_id: randomUUID() } : {}),

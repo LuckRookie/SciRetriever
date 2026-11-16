@@ -18,6 +18,7 @@ export function operationScope(value: unknown): Record<string, unknown> {
     "snapshot_id",
     "folder_id",
     "filter_id",
+    "mark_id",
     "parent_id",
     "tag_id",
     "expected_revision",

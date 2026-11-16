@@ -2,7 +2,7 @@
 
 类型：计划（结果块）
 负责：批注在另一版 PDF 或另一文档版本上找到的位置的记录、校验与读取
-状态：Pending
+状态：Completed（2026-11-16）
 
 来源：原计划 22 的 05（任务 5.1–5.4 改为 8.1–8.4）。
 
@@ -27,10 +27,10 @@
 
 ## Tasks
 
-- [ ] **8.1 合同**：`place` 的请求 `{mark_id, target, similarity, method}` 与解析；`ReadingMark` 的读取结果增加 `places`（09 §9.4“记录”）。
-- [ ] **8.2 存储与校验**：写入与替换 `reading_mark_places`；目标属于这篇文献且与批注同一部分（09 §9.4“只在同一部分里找”，原 PDF 已不属于这篇文献时按主 PDF）；范围校验同 5.2；不改写批注自己的锚点；一个事务内完成，记操作记录。
-- [ ] **8.3 列表与导出**：`list` 只给出当前方法版本的 `places`；`export` 的 JSON 同 `list`，Markdown 不变；JSON 仍能被 `parseReadingMark` 逐条解析（规格第 8 节）。
-- [ ] **8.4 三端**：CLI `marks place --request FILE`、MCP `marks_manage` 的 `place`、HTTP `POST /api/v1/maintenance/marks`；设备用途 `operate`。
+- [x] **8.1 合同**：`place` 的请求 `{mark_id, target, similarity, method}` 与解析；`ReadingMark` 的读取结果增加 `places`（09 §9.4“记录”）。
+- [x] **8.2 存储与校验**：写入与替换 `reading_mark_places`；目标属于这篇文献且与批注同一部分（09 §9.4“只在同一部分里找”，原 PDF 已不属于这篇文献时按主 PDF）；范围校验同 5.2；不改写批注自己的锚点；一个事务内完成，记操作记录。
+- [x] **8.3 列表与导出**：`list` 只给出当前方法版本的 `places`；`export` 的 JSON 同 `list`，Markdown 不变；JSON 仍能被 `parseReadingMark` 逐条解析（规格第 8 节）。
+- [x] **8.4 三端**：CLI `marks place --request FILE`、MCP `marks_manage` 的 `place`、HTTP `POST /api/v1/maintenance/marks`；设备用途 `operate`。
 
 ## 集成与影响
 
@@ -51,7 +51,8 @@
 
 ## 证据
 
-提交号；定向测试结果。
+- 2026-11-16，后端实施者实现，总设计师审查后提交。`ReadingMark.places` 为必带字段；PDF 目标先只读核验资产与页数，写事务内重判归属、部分与范围；原锚点与更新时间不变。
+- 后端实施者串行运行 8 个文件 84 项通过（`sandbox/reports/2026-11-16-plan25-08/`）；Web 乐观对象补 `places: []`（前端实施者）。总设计师复跑 `pnpm quick` 通过，`reading-marks`、`mcp-stdio`、`mcp-http` 15 项通过（`review/`）。
 
 ## 退出条件
 

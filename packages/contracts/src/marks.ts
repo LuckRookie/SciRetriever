@@ -4,7 +4,7 @@ import {
   parseLiteratureId,
   parseUtcTimestamp,
 } from "./index.js";
-import { tagInteger, tagRecord } from "./tags.js";
+import { tagInteger, tagRecord, tagText } from "./tags.js";
 
 /**
  * Reading marks (ADR 0046): a person's highlights, region captures and notes
@@ -48,6 +48,16 @@ export interface MarkDocumentAnchor {
   readonly start_utf8: number;
   readonly end_utf8: number;
 }
+export const MARK_LOCATE_METHOD = "mark-locate-v1";
+export type MarkTarget =
+  | { readonly pdf: MarkPdfAnchor }
+  | { readonly document: MarkDocumentAnchor };
+export interface MarkPlace {
+  readonly target: MarkTarget;
+  readonly similarity: number;
+  readonly method: string;
+  readonly located_at: string;
+}
 export interface ReadingMark {
   readonly mark_id: string;
   readonly literature_id: string;
@@ -63,6 +73,7 @@ export interface ReadingMark {
   readonly created_at: string;
   readonly updated_at: string;
   readonly deleted_at: string | null;
+  readonly places: readonly MarkPlace[];
 }
 export interface MarkContent {
   readonly color: MarkColor;
@@ -97,7 +108,16 @@ export type MarkOperation =
         document?: MarkDocumentAnchor;
       };
     }
-  | { operation: "delete" | "restore"; request: { mark_id: string } };
+  | { operation: "delete" | "restore"; request: { mark_id: string } }
+  | {
+      operation: "place";
+      request: {
+        mark_id: string;
+        target: MarkTarget;
+        similarity: number;
+        method: string;
+      };
+    };
 
 function fail(): never {
   throw new ContractValidationError();
@@ -180,6 +200,33 @@ export function parseMarkDocumentAnchor(value: unknown): MarkDocumentAnchor {
     end_utf8: end,
   });
 }
+export function parseMarkTarget(value: unknown): MarkTarget {
+  if (!value || typeof value !== "object" || Array.isArray(value)) fail();
+  if ("pdf" in value)
+    return { pdf: parseMarkPdfAnchor(tagRecord(value, ["pdf"]).pdf) };
+  return {
+    document: parseMarkDocumentAnchor(tagRecord(value, ["document"]).document),
+  };
+}
+function similarity(value: unknown): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < 0.7 ||
+    value > 1
+  )
+    fail();
+  return value;
+}
+export function parseMarkPlace(value: unknown): MarkPlace {
+  const r = tagRecord(value, ["target", "similarity", "method", "located_at"]);
+  return Object.freeze({
+    target: parseMarkTarget(r.target),
+    similarity: similarity(r.similarity),
+    method: tagText(r.method),
+    located_at: parseUtcTimestamp(r.located_at),
+  });
+}
 /** `#标签` words in a note, in order of first use. */
 export function markTags(note: string): string[] {
   return [
@@ -218,6 +265,18 @@ export function parseMarkOperation(value: unknown): MarkOperation {
   if (op === "delete" || op === "restore") {
     tagRecord(r, ["mark_id"]);
     return { operation: op, request: { mark_id: parseMarkId(r.mark_id) } };
+  }
+  if (op === "place") {
+    tagRecord(r, ["mark_id", "target", "similarity", "method"]);
+    return {
+      operation: op,
+      request: {
+        mark_id: parseMarkId(r.mark_id),
+        target: parseMarkTarget(r.target),
+        similarity: similarity(r.similarity),
+        method: tagText(r.method),
+      },
+    };
   }
   if (op === "create") {
     optional(r, [
@@ -292,7 +351,9 @@ export function parseReadingMark(value: unknown): ReadingMark {
     "created_at",
     "updated_at",
     "deleted_at",
+    "places",
   ]);
+  if (!Array.isArray(r.places)) fail();
   const note = text(r.note, MARK_LIMITS.note);
   if (
     !Array.isArray(r.tags) ||
@@ -314,6 +375,7 @@ export function parseReadingMark(value: unknown): ReadingMark {
     created_at: parseUtcTimestamp(r.created_at),
     updated_at: parseUtcTimestamp(r.updated_at),
     deleted_at: r.deleted_at === null ? null : parseUtcTimestamp(r.deleted_at),
+    places: Object.freeze(r.places.map(parseMarkPlace)),
   });
 }
 export interface MarkExportPaper {

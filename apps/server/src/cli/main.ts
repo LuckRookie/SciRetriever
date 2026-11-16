@@ -203,7 +203,7 @@ function usage(options: CliOptions): CliResult {
     "  filters list|create|rename|update|delete|import --request FILE  # save and manage library query conditions\n" +
     "  folders list|delete-preview|create|rename|move|delete|add|remove --request FILE  # list and manage folders and paper membership\n" +
     "  literature open ID  # record a paper's latest opening time\n" +
-    "  marks list|export|create|update|delete|restore --request FILE  # reading highlights, regions and notes of one paper\n" +
+    "  marks list|export|create|update|delete|restore|place --request FILE  # reading highlights, regions and notes of one paper\n" +
     "  storage schema-inspect|schema-init --catalog PATH\n" +
     "  maintenance rebuild-index\n" +
     "  maintenance refresh-index\n" +

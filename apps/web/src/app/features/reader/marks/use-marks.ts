@@ -150,6 +150,8 @@ export function useMarks(
         created_at: now,
         updated_at: now,
         deleted_at: null,
+        // A new mark has no place recorded on another PDF or version yet.
+        places: [],
       };
       write.mutate({ operation: "create", mark });
       return mark;

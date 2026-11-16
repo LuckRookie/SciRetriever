@@ -905,9 +905,9 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
   ),
   tool(
     "marks_manage",
-    "Explicit reading-mark create, update, delete or restore. create request {literature_id, kind: highlight|region, color: yellow|blue|green|red|purple, note?, quote?, quote_prefix?, quote_suffix?, pdf?: {sha256, page, rects: [[x,y,w,h]]}, document?: {document_version_id, start_utf8, end_utf8}}; a highlight needs its quote, a region needs pdf. update {mark_id, color?, note?, pdf?, document?}; delete and restore {mark_id}. Deleted marks stay restorable for 30 days. See MarkOperation contract.",
+    "Explicit reading-mark create, update, delete, restore or place. create request {literature_id, kind: highlight|region, color: yellow|blue|green|red|purple, note?, quote?, quote_prefix?, quote_suffix?, pdf?: {sha256, page, rects: [[x,y,w,h]]}, document?: {document_version_id, start_utf8, end_utf8}}; a highlight needs its quote, a region needs pdf. update {mark_id, color?, note?, pdf?, document?}; delete and restore {mark_id}. place {mark_id,target:{pdf:{sha256,page,rects}}|{document:{document_version_id,start_utf8,end_utf8}},similarity:0.7..1,method:mark-locate-v1} saves a location on the same part without changing original anchors. list/JSON export include places from the current method. Deleted marks stay restorable for 30 days. See MarkOperation contract.",
     object({
-      operation: { enum: ["create", "update", "delete", "restore"] },
+      operation: { enum: ["create", "update", "delete", "restore", "place"] },
       request: { type: "object" },
     }),
     false,
