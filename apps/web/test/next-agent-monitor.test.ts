@@ -213,7 +213,7 @@ it(
       ).toBe(0);
       expect(
         await w.page
-          .getByRole("button", { name: "文档内查找", exact: true })
+          .getByRole("button", { name: "查找…", exact: true })
           .isDisabled(),
       ).toBe(true);
       await w.page.setViewportSize({ width: 390, height: 844 });

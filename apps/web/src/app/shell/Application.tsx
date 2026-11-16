@@ -35,6 +35,7 @@ import {
 import {
   useUrlState,
   navigate,
+  navigationAllowed,
   sourceParameterKeys,
   type ReaderMode,
   type Section,
@@ -58,6 +59,29 @@ import { READER_PAINTED, ShellContext } from "./context.js";
 import { topBarLayout } from "../features/reader/geometry.js";
 import { Icon } from "./icon.js";
 import { CommandPalette } from "./CommandPalette.js";
+import {
+  currentAfterClose,
+  cycleTab,
+  keepUnsaved,
+  loadTabs,
+  recordClose,
+  reopenTabs,
+  saveTabs,
+  tabsToClose,
+  unsavedPapers,
+  usedOrder,
+  type CloseKind,
+  type ClosedTabs,
+  type PaperTab,
+} from "./paper-tabs.js";
+import {
+  ContextMenu,
+  type ContextMenuRequest,
+} from "../features/reader/input/ContextMenu.js";
+import {
+  commandItem,
+  type ReaderCommand,
+} from "../features/reader/input/commands.js";
 import { sectionLabels, errorMessage } from "../strings.js";
 import { warmInterfaceFonts } from "../styles/warm-fonts.js";
 
@@ -246,20 +270,16 @@ export function Application() {
     </PageBoundary>
   );
 }
-interface PaperTab {
-  id: string;
-  title: string;
-  /** Unset until the reader has picked the view (spec 6.4). */
-  mode: ReaderMode | undefined;
-  source: Record<string, string>;
-}
 function Workspace({ api }: { api: ApiClient }) {
   const notify = useToast();
   const route = useUrlState(),
     [theme, setTheme] = useState<Theme>(readTheme),
     [selected, setSelected] = useState<ReadonlySet<string>>(new Set()),
     [reading] = useState(createReadingState),
-    [tabs, setTabs] = useState<PaperTab[]>([]),
+    // Spec 1.8.3: after a reload the open tabs come back from session storage.
+    [tabs, setTabs] = useState<PaperTab[]>(loadTabs),
+    [closed, setClosed] = useState<ClosedTabs[]>([]),
+    [tabMenu, setTabMenu] = useState<ContextMenuRequest | null>(null),
     [mobileNav, setMobileNav] = useState(false),
     [activity, setActivity] = useState(false),
     [search, setSearch] = useState(false),
@@ -600,17 +620,148 @@ function Workspace({ api }: { api: ApiClient }) {
       window.removeEventListener("pointermove", move);
     };
   }, [readerPage, readerFocus]);
-  const closeTab = (tab: PaperTab) => {
-    setTabs((items) => items.filter((item) => item.id !== tab.id));
-    closeReadingState(reading, tab.id);
-    if (route.literature === tab.id) go(route.section);
+  useEffect(() => saveTabs(tabs), [tabs]);
+  // The order tabs were used in, for the one that follows a close (spec 1.8.3).
+  const used = useRef<string[]>([]);
+  useEffect(() => {
+    if (route.literature)
+      used.current = usedOrder(used.current, route.literature);
+  }, [route.literature]);
+  const tabsNow = useRef(tabs);
+  tabsNow.current = tabs;
+  /** Shows `next`, or the page the reader was entered from when none is left. */
+  const showAfterClose = (next: string | null, force = false) => {
+    const tab = tabsNow.current.find((item) => item.id === next);
+    if (tab) {
+      navigate(
+        { literature: tab.id, reader: tab.mode ?? null, ...tab.source },
+        { clearSource: true, force },
+      );
+    } else
+      navigate(
+        { view: route.section, literature: null, results: null },
+        { clearSource: true, force },
+      );
   };
+  /**
+   * Spec 1.8.3: closing never asks; a batch leaves tabs with unsaved
+   * proofread edits open and says so, and offers to undo; closing the
+   * current tab shows the one last used. Every close is recorded.
+   */
+  const closeTabs = async (kind: CloseKind, on: string) => {
+    const all = tabsNow.current;
+    const { closing: ids, kept } = keepUnsaved(
+      kind,
+      tabsToClose(all, kind, on),
+      unsavedPapers,
+    );
+    if (!ids.length) return;
+    const closing = new Set(ids),
+      current = route.literature ?? null;
+    // A single unsaved tab asks the editor's own question first.
+    let force = false;
+    if (current && closing.has(current) && kind === "one") {
+      if (!(await navigationAllowed())) return;
+      force = true;
+    }
+    const next =
+      kind === "others"
+        ? on
+        : currentAfterClose(all, used.current, closing, current);
+    const record: ClosedTabs = {
+      tabs: all.flatMap((tab, index) =>
+        closing.has(tab.id) ? [{ tab, index }] : [],
+      ),
+      current,
+    };
+    setClosed((records) => recordClose(records, record));
+    setTabs((items) => items.filter((item) => !closing.has(item.id)));
+    used.current = used.current.filter((id) => !closing.has(id));
+    for (const id of ids) closeReadingState(reading, id);
+    if (current !== next || (current && closing.has(current)))
+      showAfterClose(next, force);
+    if (ids.length > 1 || kept.length)
+      notify({
+        message:
+          `已关闭 ${ids.length} 篇文献` +
+          (kept.length ? `；${kept.length} 篇有未保存的修改，未关闭` : ""),
+        action: { label: "撤销", onPress: () => reopen(record) },
+        replace: "reader-tabs-closed",
+      });
+  };
+  /** Opens the tabs of the last close again, in their places (spec 1.8.3). */
+  const reopen = (which?: ClosedTabs) => {
+    const record = which ?? closed.at(-1);
+    if (!record) return;
+    setClosed((records) => records.filter((item) => item !== record));
+    setTabs((items) => reopenTabs(items, record));
+    const back =
+      record.current && record.tabs.some(({ tab }) => tab.id === record.current)
+        ? record.current
+        : (record.tabs.at(-1)?.tab.id ?? null);
+    const tab = record.tabs.find((item) => item.tab.id === back)?.tab;
+    if (tab)
+      navigate(
+        { literature: tab.id, reader: tab.mode ?? null, ...tab.source },
+        { clearSource: true },
+      );
+  };
+  const cycle = (step: 1 | -1) => {
+    const next = cycleTab(tabsNow.current, route.literature ?? null, step);
+    const tab = tabs.find((item) => item.id === next);
+    if (tab && tab.id !== route.literature)
+      showPaper(tab.id, tab.mode, tab.source, tab.title);
+  };
+  /** The tab's own menu (spec 1.8.3), for the tab right-clicked. */
+  const tabCommands = (on: string): ReaderCommand[] => {
+    const at = tabs.findIndex((tab) => tab.id === on);
+    return [
+      { id: "tab-close", label: "关闭", run: () => void closeTabs("one", on) },
+      {
+        id: "tab-close-others",
+        enabled: tabs.length > 1,
+        run: () => void closeTabs("others", on),
+      },
+      {
+        id: "tab-close-right",
+        enabled: at >= 0 && at < tabs.length - 1,
+        run: () => void closeTabs("right", on),
+      },
+      { id: "tab-close-all", run: () => void closeTabs("all", on) },
+      { id: "tab-reopen", enabled: closed.length > 0, run: () => reopen() },
+    ];
+  };
+  const openTabMenu = (on: string, x: number, y: number, keyboard: boolean) =>
+    setTabMenu({
+      x,
+      y,
+      keyboard,
+      label: "标签页",
+      items: tabCommands(on).map((command, index) =>
+        commandItem(command, index === 4 ? { divider: true } : {}),
+      ),
+    });
   const paperTab = (tab: PaperTab) => (
     <div
       className="paper-tab"
       key={tab.id}
       title={tab.title}
       data-selected={route.literature === tab.id || undefined}
+      data-paper-tab={tab.id}
+      // Spec 1.8.3: the middle button closes a tab, with no autoscroll.
+      onMouseDown={(event) => {
+        if (event.button === 1) event.preventDefault();
+      }}
+      onAuxClick={(event) => {
+        if (event.button !== 1) return;
+        event.preventDefault();
+        void closeTabs("one", tab.id);
+      }}
+      onContextMenu={(event) => {
+        if (event.shiftKey) return;
+        event.preventDefault();
+        openTabMenu(tab.id, event.clientX, event.clientY, false);
+      }}
     >
       <Button
         variant="text"
@@ -625,7 +776,7 @@ function Workspace({ api }: { api: ApiClient }) {
         variant="text"
         aria-label={`关闭文献 ${tab.title}`}
         icon={<Icon name="close" />}
-        onPress={() => closeTab(tab)}
+        onPress={() => void closeTabs("one", tab.id)}
       />
     </div>
   );
@@ -686,17 +837,44 @@ function Workspace({ api }: { api: ApiClient }) {
               label={`另 ${others.length} 篇`}
               variant="text"
               className="reader-topbar-others"
-              items={others.map((tab) => ({
-                id: tab.id,
-                label: tab.title,
-                onAction: () =>
-                  showPaper(tab.id, tab.mode, tab.source, tab.title),
-              }))}
+              items={[
+                ...others.map((tab) => ({
+                  id: tab.id,
+                  label: tab.title,
+                  onAction: () =>
+                    showPaper(tab.id, tab.mode, tab.source, tab.title),
+                })),
+                // Spec 1.3: the batch closes end the menu.
+                ...(current
+                  ? tabCommands(current.id)
+                      .filter(
+                        (command) =>
+                          command.id === "tab-close-others" ||
+                          command.id === "tab-close-all",
+                      )
+                      .map((command, index) =>
+                        commandItem(command, {
+                          id: `${command.id}-menu`,
+                          divider: index === 0,
+                        }),
+                      )
+                  : []),
+              ]}
             />
           ) : null}
         </div>
       )}
       <div className="reader-topbar-tools" ref={setReaderBar} />
+      <ContextMenu
+        request={tabMenu}
+        onClose={() => setTabMenu(null)}
+        onRetarget={(event, element) => {
+          const on =
+            element?.closest<HTMLElement>("[data-paper-tab]")?.dataset.paperTab;
+          if (on) openTabMenu(on, event.clientX, event.clientY, false);
+          else setTabMenu(null);
+        }}
+      />
     </header>
   );
   return (
@@ -711,6 +889,16 @@ function Workspace({ api }: { api: ApiClient }) {
         readerFocus: readerPage && readerFocus,
         setReaderFocus,
         reading,
+        tabs: {
+          list: tabs,
+          current: route.literature ?? null,
+          close: (kind, on) =>
+            void closeTabs(kind, on ?? route.literature ?? ""),
+          reopen: () => reopen(),
+          canReopen: closed.length > 0,
+          cycle,
+          openMenu: openTabMenu,
+        },
         theme,
         setTheme: (value) => {
           setTheme(value);

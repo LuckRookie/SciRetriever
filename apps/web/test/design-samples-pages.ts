@@ -1,4 +1,5 @@
 import type { Page } from "playwright";
+import { readerType } from "./reader-controls.js";
 import type { DesignSampleIds } from "./design-samples-fixture.js";
 import { doubtfulDraft, doubtfulFacts } from "./draft-doubts.js";
 
@@ -358,19 +359,14 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     name: "阅读 · PDF 页列（50%）",
     route: reader("pdf"),
     // Spec 3.5: zoomed, the page column and the spine centred on the desk.
-    interaction: "排版选 50%",
+    interaction: "排版缩小到 50%",
     prepare: async (p) => {
       await p
         .locator('.reading-pdf-page[data-rendered="true"]')
         .first()
         .waitFor();
-      const type = p.getByRole("button", { name: "排版", exact: true });
-      if (await type.isVisible()) await type.click();
-      else {
-        await p.getByRole("button", { name: "更多", exact: true }).click();
-        await p.getByRole("menuitem", { name: "排版", exact: true }).click();
-      }
-      await p.getByRole("menuitem", { name: "50%", exact: true }).click();
+      // Spec 1.8.1: 实际大小 (100%), then 缩小 by tens to 50%.
+      await readerType(p, "50%");
       await p.locator(".ui-menu").waitFor({ state: "detached" });
       await p.waitForTimeout(600);
     },

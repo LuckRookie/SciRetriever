@@ -334,20 +334,18 @@ it("keeps the latest outline target, text settings and reading position across a
       .poll(
         () =>
           w.page
-            .getByRole("button", { name: "文档内查找", exact: true })
+            .getByRole("button", { name: "查找…", exact: true })
             .isEnabled(),
         { timeout: 20_000 },
       )
       .toBe(true);
-    expect(await readerTypeChoice(w.page)).toBe("24 px");
+    expect(await readerTypeChoice(w.page)).toBe("比例 120%");
     expect(
       Math.abs((await body.evaluate((element) => element.scrollTop)) - top),
     ).toBeLessThan(80);
-    await w.page
-      .getByRole("button", { name: "文档内查找", exact: true })
-      .click();
+    await w.page.getByRole("button", { name: "查找…", exact: true }).click();
     const search = w.page.getByRole("searchbox", {
-      name: "文档内查找",
+      name: "查找…",
       exact: true,
     });
     await search.fill("Paragraph 300");
@@ -384,14 +382,12 @@ it("explains scan-only PDFs and refuses bytes whose immutable hash changed", asy
   try {
     await open(w, "pdf", missingId);
     await ready(w);
+    await w.page.getByRole("button", { name: "查找…", exact: true }).click();
     await w.page
-      .getByRole("button", { name: "文档内查找", exact: true })
-      .click();
-    await w.page
-      .getByRole("searchbox", { name: "文档内查找", exact: true })
+      .getByRole("searchbox", { name: "查找…", exact: true })
       .fill("observation");
     await w.page
-      .getByRole("searchbox", { name: "文档内查找", exact: true })
+      .getByRole("searchbox", { name: "查找…", exact: true })
       .press("Enter");
     await expect
       .poll(() => w.page.locator(".reader-find").innerText())
@@ -516,9 +512,7 @@ it("discards a late automatic text continuation after the reader closes", async 
     await (await initialOutline).finished();
     await expect
       .poll(() =>
-        w.page
-          .getByRole("button", { name: "文档内查找", exact: true })
-          .isEnabled(),
+        w.page.getByRole("button", { name: "查找…", exact: true }).isEnabled(),
       )
       .toBe(true);
     await w.page.locator(".reader-engine-body").evaluate((el) => {
@@ -672,7 +666,7 @@ it.each(["no-preference", "reduce"] as const)(
       await type.focus();
       await type.press("ArrowRight");
       await w.page
-        .getByRole("menuitem", { name: "20 px", exact: true })
+        .getByRole("menuitem", { name: "放大", exact: true })
         .waitFor();
       await w.page.keyboard.press("Escape");
       await w.page.keyboard.press("Escape");

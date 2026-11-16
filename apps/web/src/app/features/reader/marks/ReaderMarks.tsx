@@ -14,12 +14,7 @@ import {
   type ReadingMark,
   type TextLevel,
 } from "@sciretriever/contracts";
-import {
-  Button,
-  Dialog,
-  useToast,
-  type MenuOption,
-} from "../../../components/index.js";
+import { Button, Dialog, useToast } from "../../../components/index.js";
 import { copyText } from "../../../../browser-platform.js";
 import {
   createDocumentMarkSurface,
@@ -39,6 +34,7 @@ import { useApi } from "../../../data/query.js";
 import { TranslationPopover } from "../translation/TranslationViews.js";
 import type { ReaderTranslation } from "../translation/use-translation.js";
 import "./marks.css";
+import type { ReaderCommand } from "../input/commands.js";
 
 const PEN_KEY = "sciretriever:marks:pen:v1";
 type Bar = { kind: "selection" } | { kind: "mark"; id: string } | null;
@@ -144,7 +140,8 @@ export function useReaderMarks({
     [rail, setRail] = useState<{ id: string; color: MarkColor; at: number }[]>(
       [],
     ),
-    [exported, setExported] = useState<string | null>(null);
+    [exported, setExported] = useState<string | null>(null),
+    [menuOpen, setMenuOpen] = useState(false);
   const draft = useRef<SelectionDraft | null>(null);
   const latest = useRef({ marks: store.marks, tool, pen, store, translation });
   latest.current = { marks: store.marks, tool, pen, store, translation };
@@ -347,114 +344,59 @@ export function useReaderMarks({
     [current, open, placed.all, view],
   );
 
-  // Shortcuts work while the reader shows a material and no text field has focus.
-  useEffect(() => {
-    if (!active) return;
-    const key = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (
-        target?.closest(
-          "input, textarea, select, [contenteditable='true'], [role='dialog']",
-        )
-      )
-        return;
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
-      const k = event.key.toLowerCase();
-      const digit = /^[1-5]$/u.test(k) ? MARK_COLORS[Number(k) - 1]! : null;
-      if (event.key === "Escape") {
-        if (bar || note || translation?.popupOpen) {
-          setBar(null);
-          setNote(null);
-          translation?.dismiss();
-          surface.current?.preview(null);
-          if (bar?.kind === "selection") surface.current?.clearSelection();
-        }
-        return;
-      }
-      if (bar?.kind === "selection") {
-        if (digit) {
-          event.preventDefault();
-          highlight(digit);
-          return;
-        }
-        if (k === "n") {
-          event.preventDefault();
-          const mark = highlight(latest.current.pen, true);
-          if (mark) setNote(mark.mark_id);
-          return;
-        }
-        if (k === "c" && draft.current) {
-          event.preventDefault();
-          cite(draft.current.quote, draft.current.pdf?.page ?? null);
-          surface.current?.clearSelection();
-          setBar(null);
-          return;
-        }
-      }
-      if (bar?.kind === "mark") {
-        if (digit) {
-          event.preventDefault();
-          latest.current.store.update(bar.id, { color: digit });
-          setPen(digit);
-          return;
-        }
-        if (k === "n") {
-          event.preventDefault();
-          setNote(bar.id);
-          setBar(null);
-          return;
-        }
-        if (event.key === "Backspace" || event.key === "Delete") {
-          event.preventDefault();
-          remove(bar.id);
-          return;
-        }
-      }
-      if (k === "[" || k === "]") {
-        event.preventDefault();
-        step(k === "]" ? 1 : -1);
-      } else if (k === "v") setTool("select");
-      else if (k === "h") setTool("pen");
-      else if (k === "r" && view === "pdf") setTool("region");
-    };
-    addEventListener("keydown", key);
-    return () => removeEventListener("keydown", key);
-  }, [active, bar, note, highlight, cite, remove, step, view, translation]);
-
-  const barMark = bar?.kind === "mark" ? find(bar.id) : undefined;
-  const noteMark = note ? find(note) : undefined;
-  const anchorFor = useCallback(
-    (markId: string) => () => surface.current?.anchorRect(markId) ?? null,
-    [],
-  );
-  // Spec 1.3: the marking tools live in the top bar's “更多” menu; the keys
-  // V, H, R and 1–5 still choose them.
-  const toolItems: readonly MenuOption[] = active
+  /**
+   * Reading-experience 1.8: the marking operations, for the reader's table.
+   * The keys reach them only outside text fields; N, C and the digits act on
+   * a selection or a chosen mark, and let the key go otherwise.
+   */
+  const colorOf = (event?: KeyboardEvent) =>
+    event && /^[1-5]$/u.test(event.key)
+      ? MARK_COLORS[Number(event.key) - 1]!
+      : null;
+  const noteOnSelection = () => {
+    const mark = highlight(latest.current.pen, true);
+    if (mark) setNote(mark.mark_id);
+  };
+  const citeSelection = () => {
+    if (!draft.current) return;
+    cite(draft.current.quote, draft.current.pdf?.page ?? null);
+    surface.current?.clearSelection();
+    setBar(null);
+  };
+  const citeMark = (markId: string) => {
+    const mark = find(markId);
+    if (mark) cite(mark.quote, mark.pdf?.page ?? null);
+  };
+  const recolor = (markId: string, color: MarkColor) => {
+    latest.current.store.update(markId, { color });
+    setPen(color);
+  };
+  const commands: ReaderCommand[] = active
     ? [
         {
-          id: "mark-pen",
-          label: "高亮笔",
-          shortcut: "H",
+          id: "tool-select",
+          checked: tool === "select",
+          run: () => setTool("select"),
+        },
+        {
+          id: "tool-pen",
           checked: tool === "pen",
-          divider: true,
-          onAction: () => setTool(tool === "pen" ? "select" : "pen"),
+          // The key chooses it; the menu item switches it on and off.
+          run: (event) => setTool(event || tool !== "pen" ? "pen" : "select"),
         },
         ...(view === "pdf"
           ? [
               {
-                id: "mark-region",
-                label: "框选区域",
-                shortcut: "R",
+                id: "tool-region" as const,
                 checked: tool === "region",
-                onAction: () =>
-                  setTool(tool === "region" ? "select" : "region"),
+                run: (event?: KeyboardEvent) =>
+                  setTool(event || tool !== "region" ? "region" : "select"),
               },
             ]
           : []),
         {
           id: "mark-color",
           label: "笔颜色",
-          onAction: () => {},
           submenu: MARK_COLORS.map((color, index) => ({
             id: `mark-color-${color}`,
             label: MARK_COLOR_LABELS[color],
@@ -465,9 +407,89 @@ export function useReaderMarks({
               setTool("pen");
             },
           })),
+          run: (event) => {
+            const color = colorOf(event);
+            if (!color) return false;
+            if (bar?.kind === "selection") highlight(color);
+            else if (bar?.kind === "mark") recolor(bar.id, color);
+            else return false;
+          },
+        },
+        {
+          id: "note",
+          enabled: !!bar,
+          run: () => {
+            if (bar?.kind === "selection") noteOnSelection();
+            else if (bar?.kind === "mark") {
+              setNote(bar.id);
+              setBar(null);
+            } else return false;
+          },
+        },
+        {
+          id: "cite",
+          enabled: !!bar,
+          run: () => {
+            if (bar?.kind === "selection" && draft.current) citeSelection();
+            else if (bar?.kind === "mark") citeMark(bar.id);
+            else return false;
+          },
+        },
+        { id: "mark-previous", run: () => step(-1) },
+        { id: "mark-next", run: () => step(1) },
+        {
+          id: "mark-delete",
+          enabled: bar?.kind === "mark",
+          run: () => {
+            if (bar?.kind !== "mark") return false;
+            remove(bar.id);
+          },
         },
       ]
     : [];
+  /** Esc (spec 1.8.6): the note, the selection bar and the translation popup first. */
+  const escape = () => {
+    if (!(bar || note || translation?.popupOpen)) return false;
+    setBar(null);
+    setNote(null);
+    translation?.dismiss();
+    surface.current?.preview(null);
+    if (bar?.kind === "selection") surface.current?.clearSelection();
+    return true;
+  };
+  /** What the context menu needs from the marks (spec 1.8.2). */
+  const menu = {
+    selection: () => draft.current,
+    markAt: (event: MouseEvent) => surface.current?.markAt(event) ?? null,
+    /** A right-click on a mark chooses it. */
+    choose: (markId: string) => {
+      setCurrent(markId);
+      setNote(null);
+      setBar({ kind: "mark", id: markId });
+    },
+    mark: find,
+    highlight: (color: MarkColor) => highlight(color),
+    noteOnSelection,
+    citeSelection,
+    citeMark,
+    /** Any quote, as “复制为引用” writes it (with page and DOI). */
+    cite,
+    note: (markId: string) => {
+      setNote(markId);
+      setBar(null);
+    },
+    recolor,
+    remove,
+    /** The bars hide while a context menu is open over them. */
+    setMenuOpen: setMenuOpen,
+    escape,
+  };
+  const barMark = bar?.kind === "mark" ? find(bar.id) : undefined;
+  const noteMark = note ? find(note) : undefined;
+  const anchorFor = useCallback(
+    (markId: string) => () => surface.current?.anchorRect(markId) ?? null,
+    [],
+  );
   const panel: ReactNode = active ? (
     <MarksPanel
       marks={store.marks}
@@ -509,7 +531,7 @@ export function useReaderMarks({
   ) : null;
   const overlays: ReactNode = active ? (
     <>
-      {bar?.kind === "selection" && draft.current ? (
+      {bar?.kind === "selection" && draft.current && !menuOpen ? (
         <MarkBar
           label="选中文字"
           anchor={() => draft.current?.anchor ?? null}
@@ -562,6 +584,7 @@ export function useReaderMarks({
       ) : null}
       {bar?.kind === "selection" &&
       draft.current &&
+      !menuOpen &&
       translation?.settings.popup &&
       translation.popupOpen &&
       translation.current ? (
@@ -572,7 +595,7 @@ export function useReaderMarks({
           notify={notify}
         />
       ) : null}
-      {barMark ? (
+      {barMark && !menuOpen ? (
         <MarkBar
           label="批注"
           anchor={anchorFor(barMark.mark_id)}
@@ -693,7 +716,9 @@ export function useReaderMarks({
     ) : null;
   return {
     attach,
-    toolItems,
+    commands,
+    escape,
+    menu,
     panel,
     overlays,
     rail: railNode,

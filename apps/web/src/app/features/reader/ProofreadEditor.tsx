@@ -18,6 +18,7 @@ import { registerNavigationGuard } from "../../data/url.js";
 import { errorMessage } from "../../strings.js";
 import { markdown } from "../../../reading/markdown.js";
 import { readProofreadText, type EditorText } from "./proofread-text.js";
+import { unsavedPapers } from "../../shell/paper-tabs.js";
 import {
   DroppedLeaves,
   readDroppedLeaves,
@@ -64,6 +65,8 @@ export function ProofreadEditor({
   }, [data.data, draft]);
   useEffect(() => {
     if (!dirty) return;
+    // A batch close of tabs leaves this one open (reading-experience 1.8.3).
+    unsavedPapers.add(id);
     const unregister = registerNavigationGuard(
       () =>
         new Promise((resolve) => {
@@ -77,10 +80,11 @@ export function ProofreadEditor({
     };
     window.addEventListener("beforeunload", unload);
     return () => {
+      unsavedPapers.delete(id);
       unregister();
       window.removeEventListener("beforeunload", unload);
     };
-  }, [dirty]);
+  }, [dirty, id]);
   useEffect(
     () => () => {
       decision.current?.(false);

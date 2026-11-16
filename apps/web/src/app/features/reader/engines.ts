@@ -1,3 +1,4 @@
+import { pdfZoom } from "./input/scale.js";
 import {
   type TextLevel,
   parsePageRegion,
@@ -60,7 +61,7 @@ export interface ViewUi {
   outline: ReaderOutlineEntry[];
   outlineNote: string;
   readingOffset: number | null;
-  nextMatch: (() => void) | null;
+  nextMatch: ((step?: 1 | -1) => void) | null;
   issue: ReaderIssue | null;
   /** The material has nothing to read (spec 3.9): no text, or no PDF. */
   empty: "text" | "pdf" | null;
@@ -244,6 +245,8 @@ interface ReaderEngine {
   /** Spec 4.4: back and forward through this paper's jumps; false when there is none. */
   back(): boolean;
   forward(): boolean;
+  /** Whether this paper's jump history has a place to go back to. */
+  canBack(): boolean;
   destroy(): void;
 }
 
@@ -383,6 +386,7 @@ export function createReaderEngines(b: ReaderBindings) {
       pending?.prepare(next);
     },
     back: () => current?.back() ?? false,
+    canBack: () => current?.canBack() ?? false,
     forward: () => current?.forward() ?? false,
     /** A closed tab releases its engines. */
     close(literatureId: string) {
@@ -557,7 +561,8 @@ function build(
       ) {
         position.anchorPage = memory.pdf.page;
         position.anchorRatio = memory.pdf.ratio;
-        position.zoom = memory.pdf.zoom;
+        // Out of range or unreadable: 适合宽度 (spec 4.5).
+        position.zoom = pdfZoom(memory.pdf.zoom);
         remembered = "same";
       }
     }
@@ -696,7 +701,8 @@ function build(
           controller.signal.aborted ||
           (previous?.page === value.page &&
             previous.total === value.total &&
-            previous.zoom === value.zoom)
+            previous.zoom === value.zoom &&
+            previous.scale === value.scale)
         )
           return;
         update(view, { pdf: value });
@@ -1026,6 +1032,7 @@ function build(
       switchTo(next, kind);
     },
     back: () => travel(past, future),
+    canBack: () => past.length > 0,
     forward: () => travel(future, past),
     show(kind) {
       cancelDeferred();

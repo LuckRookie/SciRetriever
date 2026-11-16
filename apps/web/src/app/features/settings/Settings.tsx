@@ -1,5 +1,12 @@
 import { probeReason } from "../../strings.js";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { parseConfigurationReadiness } from "@sciretriever/contracts";
 import {
@@ -26,6 +33,8 @@ import { useUrlState, registerNavigationGuard } from "../../data/url.js";
 import { preferences, type Theme } from "../../data/preferences.js";
 import { useShell } from "../../shell/context.js";
 import { useMotionPreference } from "../../motion/index.js";
+import { readingFont } from "../reader/input/reading-font.js";
+import { TEXT_SCALE } from "../reader/input/scale.js";
 import { record, type JsonRecord } from "../../data/wire.js";
 import { copyText, randomId } from "../../../browser-platform.js";
 import { errorMessage } from "../../strings.js";
@@ -1250,8 +1259,13 @@ export default function Settings() {
 function Appearance() {
   const shell = useShell(),
     motion = useMotionPreference();
-  const [font, setFont] = useState(
-      preferences.read("sciretriever:reading:font:v1") ?? "20",
+  // The same one value as the reader's scale (reading-experience 4.5).
+  const font = String(
+      useSyncExternalStore(
+        readingFont.subscribe,
+        readingFont.get,
+        readingFont.get,
+      ),
     ),
     [width, setWidth] = useState(
       preferences.read("sciretriever:reading:width:v1") ?? "comfortable",
@@ -1280,11 +1294,11 @@ function Appearance() {
           <Select
             label="默认阅读字号"
             value={font}
-            onChange={(value) => {
-              setFont(value);
-              preferences.write("sciretriever:reading:font:v1", value);
-            }}
-            options={[18, 20, 22, 24].map((value) => ({
+            onChange={(value) => readingFont.set(Number(value), "now")}
+            options={Array.from(
+              { length: TEXT_SCALE.max - TEXT_SCALE.min + 1 },
+              (_, index) => TEXT_SCALE.min + index,
+            ).map((value) => ({
               value: String(value),
               label: `${value} px`,
             }))}

@@ -54,6 +54,8 @@ export interface MarkSurface {
   setTool(tool: MarkTool): void;
   preview(color: MarkColor | null): void;
   reveal(id: string): boolean;
+  /** The mark under the pointer of this event, if any (the context menu's target). */
+  markAt(event: MouseEvent): string | null;
   anchorRect(id: string): DOMRect | null;
   clearSelection(): void;
   /** Where each placed mark sits along the scroll height, 0-1. */
@@ -523,6 +525,7 @@ export function createPdfMarkSurface(
         return el;
       });
     },
+    markAt: (event) => hitTest(event),
     reveal(id) {
       const m = marks.find((x) => x.mark_id === id);
       if (!m || !onPage(m)) return false;
@@ -854,6 +857,7 @@ export function createDocumentMarkSurface(
       highlight.priority = 2;
       registry.set(`mark-preview-${color}`, highlight);
     },
+    markAt: (event) => hitTest(event),
     reveal(id) {
       const range = ranges.get(id);
       if (!range) return false;

@@ -1507,6 +1507,15 @@
     font-weight: 500;
     font-variant-numeric: tabular-nums;
   }
+  /* The reading scale fades out 1.5 s after it is back at 100% (spec 1.2). */
+  .react-reader .reader-page-header-scale {
+    opacity: 0;
+    transition: opacity var(--dur-2) var(--ease-out);
+  }
+  .react-reader .reader-page-header-scale[data-shown] {
+    opacity: 1;
+    transition: none;
+  }
   .react-reader .reader-page-header-back,
   .react-reader .reader-page-header-action {
     padding: 0;

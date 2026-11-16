@@ -42,21 +42,46 @@ function ViewText({
   kind,
   pdf,
   level,
+  scaleText,
+  pageEdit,
 }: {
   kind: "doc" | "pdf";
   pdf: PdfControls | null;
   level: TextLevel | null;
+  scaleText: string | null;
+  pageEdit: number;
 }) {
   const [editing, setEditing] = useState(false);
+  // `G` and “跳到页码…” put the focus in the page field (spec 1.8.4).
+  useEffect(() => {
+    if (pageEdit) setEditing(true);
+  }, [pageEdit]);
+  // The reading scale while it is not 100%, or just changed (spec 1.2).
+  const [lastScale, setLastScale] = useState(scaleText);
+  if (scaleText && scaleText !== lastScale) setLastScale(scaleText);
   if (kind === "doc")
     return (
       <span>
         原文
         {level ? ` · ${level === "draft" ? "初稿" : "校订稿"}` : ""}
+        {scaleText || lastScale ? (
+          <span
+            className="reader-page-header-scale"
+            data-shown={scaleText ? true : undefined}
+            aria-hidden={!scaleText}
+            // Faded out, it leaves no gap at the header's right end.
+            onTransitionEnd={() => {
+              if (!scaleText) setLastScale(null);
+            }}
+          >
+            {` · ${scaleText ?? lastScale}`}
+          </span>
+        ) : null}
       </span>
     );
   if (!pdf) return <span>PDF</span>;
-  const zoom = pdf.zoom === "fit" ? "适宽" : `${Math.round(pdf.zoom * 100)}%`;
+  const zoom =
+    pdf.zoom === "fit" ? "适合宽度" : `${Math.round(pdf.zoom * 100)}%`;
   const go = (field: HTMLInputElement) => {
     const page = Math.trunc(Number(field.value));
     if (page >= 1 && page <= pdf.total) pdf.go(page);
@@ -117,6 +142,8 @@ export function ReaderPageHeader({
   back,
   line,
   scroller,
+  scaleText = null,
+  pageEdit = 0,
 }: {
   kind: "doc" | "pdf";
   /** The full text's level, once read (reading-experience 1.2, 3.4). */
@@ -128,6 +155,10 @@ export function ReaderPageHeader({
   back: { label: string; go(): void } | null;
   line: HeaderLine | null;
   scroller: HTMLElement | null;
+  /** The full text's reading scale (“110%”) when it shows (spec 1.2). */
+  scaleText?: string | null;
+  /** Bumped to put the focus in the PDF's page field. */
+  pageEdit?: number;
 }) {
   const [faded, setFaded] = useState<HeaderLine | null>(null);
   useEffect(() => {
@@ -169,7 +200,13 @@ export function ReaderPageHeader({
             {back.label}
           </button>
         ) : null}
-        <ViewText kind={kind} pdf={pdf} level={level} />
+        <ViewText
+          kind={kind}
+          pdf={pdf}
+          level={level}
+          scaleText={scaleText}
+          pageEdit={pageEdit}
+        />
       </span>
       {shown ? (
         <p

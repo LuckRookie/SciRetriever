@@ -64,7 +64,7 @@ it("keeps the reader through a minute of background refresh and offers a new tex
       el.scrollTop = 1500;
     });
     const find = w.page.getByRole("button", {
-      name: "文档内查找",
+      name: "查找…",
       exact: true,
     });
     await find.focus();

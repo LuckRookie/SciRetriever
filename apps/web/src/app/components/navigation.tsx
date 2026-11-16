@@ -13,8 +13,10 @@ import {
   Disclosure as AriaDisclosure,
   DisclosurePanel,
   Heading,
+  Header,
   Menu as AriaMenu,
   MenuItem,
+  MenuSection,
   MenuTrigger as AriaMenuTrigger,
   SubmenuTrigger,
   Popover as AriaPopover,
@@ -256,6 +258,13 @@ export interface MenuOption {
   trailing?: ReactNode;
   /** Start a new group of items with a hairline above this one. */
   divider?: boolean;
+  /** The menu stays open after it acts, so it can be pressed again (“放大”). */
+  keepOpen?: boolean;
+  /**
+   * A group title: plain caption text that cannot be chosen; the items after
+   * it, up to the next title or hairline, are its group (design core “菜单”).
+   */
+  heading?: boolean;
 }
 export function Menu({
   label,
@@ -302,58 +311,85 @@ export function Menu({
     </AriaMenuTrigger>
   );
 }
-function MenuItems({
+export function MenuItems({
   label,
   items,
+  autoFocus,
 }: {
   label: string;
   items: readonly MenuOption[];
+  autoFocus?: boolean | "first";
 }) {
+  const row = (item: MenuOption) => {
+    const content = (
+      <MenuItem
+        key={item.submenu ? `${item.id}:open` : item.id}
+        // Inside a submenu trigger the trigger node carries the item's id.
+        id={item.submenu ? `${item.id}:open` : item.id}
+        className="ui-menu-item"
+        data-divider={item.divider || undefined}
+        data-checked={item.checked || undefined}
+        textValue={item.label}
+        isDisabled={!!item.disabled}
+        {...(item.keepOpen ? { shouldCloseOnSelect: false } : {})}
+        {...(item.submenu ? {} : { onAction: item.onAction })}
+      >
+        <Text slot="label">{item.label}</Text>
+        {item.submenu ? (
+          <Icon name="chevron" />
+        ) : (
+          (item.trailing ?? (item.shortcut ? <kbd>{item.shortcut}</kbd> : null))
+        )}
+        {item.description ? (
+          <Text slot="description" className="ui-description">
+            {item.description}
+          </Text>
+        ) : null}
+      </MenuItem>
+    );
+    return item.submenu ? (
+      <SubmenuTrigger key={item.id}>
+        {content}
+        <AriaPopover className="ui-popover" placement="end top">
+          <MenuItems label={item.label} items={item.submenu} />
+        </AriaPopover>
+      </SubmenuTrigger>
+    ) : (
+      content
+    );
+  };
+  // A title gathers the items after it, up to the next title or hairline.
+  const children: ReactNode[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]!;
+    if (!item.heading) {
+      children.push(row(item));
+      continue;
+    }
+    const first = children.length === 0,
+      group: MenuOption[] = [];
+    while (
+      i + 1 < items.length &&
+      !items[i + 1]!.heading &&
+      !items[i + 1]!.divider
+    )
+      group.push(items[++i]!);
+    children.push(
+      <MenuSection key={item.id} id={item.id} className="ui-menu-section">
+        <Header className="ui-menu-heading" data-divider={!first || undefined}>
+          {item.label}
+        </Header>
+        {group.map(row)}
+      </MenuSection>,
+    );
+  }
   return (
     <AriaMenu
       className="ui-menu"
       aria-label={label}
-      items={items}
-      disabledKeys={items
-        .filter((item) => item.disabled)
-        .map((item) => item.id)}
+      {...(autoFocus !== undefined ? { autoFocus } : {})}
     >
-      {(item) => {
-        const row = (
-          <MenuItem
-            // Inside a submenu trigger the trigger node carries the item's id.
-            id={item.submenu ? `${item.id}:open` : item.id}
-            className="ui-menu-item"
-            data-divider={item.divider || undefined}
-            data-checked={item.checked || undefined}
-            textValue={item.label}
-            {...(item.submenu ? {} : { onAction: item.onAction })}
-          >
-            <Text slot="label">{item.label}</Text>
-            {item.submenu ? (
-              <Icon name="chevron" />
-            ) : (
-              (item.trailing ??
-              (item.shortcut ? <kbd>{item.shortcut}</kbd> : null))
-            )}
-            {item.description ? (
-              <Text slot="description" className="ui-description">
-                {item.description}
-              </Text>
-            ) : null}
-          </MenuItem>
-        );
-        return item.submenu ? (
-          <SubmenuTrigger>
-            {row}
-            <AriaPopover className="ui-popover" placement="end top">
-              <MenuItems label={item.label} items={item.submenu} />
-            </AriaPopover>
-          </SubmenuTrigger>
-        ) : (
-          row
-        );
-      }}
+      {children}
     </AriaMenu>
   );
 }

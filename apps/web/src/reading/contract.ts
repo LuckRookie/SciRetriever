@@ -18,6 +18,10 @@ export interface PdfControls {
   readonly page: number;
   readonly total: number;
   readonly zoom: ReadingPosition["zoom"];
+  /** The zoom drawn now, also at 适合宽度 (1 is 100%). */
+  readonly scale: number;
+  /** The zoom as it is at this moment, between reports. */
+  now(): { zoom: ReadingPosition["zoom"]; scale: number };
   go(page: number): void;
   zoomTo(zoom: ReadingPosition["zoom"]): void;
 }
@@ -142,6 +146,12 @@ export interface ReaderFrame {
   follow?: (anchor: ReadingAnchor, jumped?: boolean) => void | Promise<void>;
   /** A follow asked before the engine set `follow`; the engine takes it over. */
   queuedFollow?: { anchor: ReadingAnchor; done: () => void };
+  /**
+   * Set by the engine (reading-experience 4.2, 1.8.1): the point under
+   * (x, y) stays there through the size changes that follow, until released
+   * (null); then the reading anchor is measured again at the reading line.
+   */
+  holdPoint?: (point: { x: number; y: number } | null) => void;
   /** Called before the engine jumps (outline, link), to record where the reader was. */
   beforeJump?: () => void;
   /** The anchor moved (the reader scrolled or a change was absorbed). */
@@ -178,7 +188,8 @@ export interface ReaderFrame {
   /** The full text's first visible block moved to this UTF-8 offset. */
   onPosition?: (offset: number) => void;
   onOutlineEmpty?: (message: string) => void;
-  onFindNext?: (next: (() => void) | null) => void;
+  /** The way to the next match (1) or the one before (−1), once there are matches. */
+  onFindNext?: (next: ((step?: 1 | -1) => void) | null) => void;
   /**
    * A problem said in the reader's error notice: `message` for people;
    * `retained` what still shows; `detail` the internal cause, for the

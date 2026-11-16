@@ -48,7 +48,10 @@ export function sheetGeometry(
   const em = (n: number) => n * fontSize,
     widest = em(columnEm),
     narrowest = em(Math.min(MIN_COLUMN_EM, columnEm));
-  const fit = (room: number) => Math.max(Math.min(widest, room), narrowest);
+  // Never wider than the room: at a large reading size (up to 32 px, spec
+  // 1.8.1) the column narrows rather than run off the desk.
+  const fit = (room: number) =>
+    Math.max(0, Math.min(Math.max(Math.min(widest, room), narrowest), room));
   if (desk < 640) {
     const marginLeft = 24,
       marginRight = 16;

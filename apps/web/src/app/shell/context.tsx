@@ -2,6 +2,7 @@ import { createContext, useContext } from "react";
 import type { ReaderMode } from "../data/url.js";
 import type { ReadingState } from "../../reading/state.js";
 import type { Theme } from "../data/preferences.js";
+import type { CloseKind, PaperTab } from "./paper-tabs.js";
 export interface ShellState {
   selected: ReadonlySet<string>;
   setSelected(value: ReadonlySet<string>): void;
@@ -23,6 +24,17 @@ export interface ShellState {
   readerFocus: boolean;
   setReaderFocus(value: boolean): void;
   reading: ReadingState;
+  /** The paper tabs (reading-experience 1.8.3), for the reader's keys and menus. */
+  tabs: {
+    list: readonly PaperTab[];
+    current: string | null;
+    /** Closes from tab `on` (the current one when absent). */
+    close(kind: CloseKind, on?: string): void;
+    reopen(): void;
+    canReopen: boolean;
+    cycle(step: 1 | -1): void;
+    openMenu(on: string, x: number, y: number, keyboard: boolean): void;
+  };
   theme: Theme;
   setTheme(value: Theme): void;
 }

@@ -614,22 +614,20 @@ it("keeps a 100-page PDF bounded over ten React reader switches and releases its
       .locator('[data-pdf-page="50"][data-rendered="true"]')
       .waitFor();
     timings.page = Date.now() - start;
-    await w.page.getByRole("button", { name: "排版", exact: true }).click();
     start = Date.now();
-    await w.page.getByRole("menuitem", { name: "125%", exact: true }).click();
+    // Spec 1.8.1: 实际大小, then 放大 by tens to 130%.
+    await readerType(w.page, "130%");
     await expect
       .poll(() => w.page.locator(".textLayer").allTextContents())
       .toContainEqual(expect.stringContaining("page 50"));
     timings.zoom = Date.now() - start;
+    await w.page.getByRole("button", { name: "查找…", exact: true }).click();
     await w.page
-      .getByRole("button", { name: "文档内查找", exact: true })
-      .click();
-    await w.page
-      .getByRole("searchbox", { name: "文档内查找", exact: true })
+      .getByRole("searchbox", { name: "查找…", exact: true })
       .fill("page 89");
     start = Date.now();
     await w.page
-      .getByRole("searchbox", { name: "文档内查找", exact: true })
+      .getByRole("searchbox", { name: "查找…", exact: true })
       .press("Enter");
     await expect.poll(pageIs).toBe("89");
     timings.find = Date.now() - start;
@@ -640,11 +638,11 @@ it("keeps a 100-page PDF bounded over ten React reader switches and releases its
     for (let index = 0; index < 10; index++) {
       await open(w.env.parseRequest.literature_id);
       expect(await pageIs()).toBe("1");
-      expect(await zoomShown()).toContain("适宽");
+      expect(await zoomShown()).toContain("适合宽度");
       start = Date.now();
       await open(missingId);
       await expect.poll(pageIs).toBe("50");
-      expect(await zoomShown()).toContain("125%");
+      expect(await zoomShown()).toContain("130%");
       timings.warm.push(Date.now() - start);
       const counts = await readingResourceCounts(w.page);
       // The current and the previous tab keep their engines (spec 5.1, 5.3).

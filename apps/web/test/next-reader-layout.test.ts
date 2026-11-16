@@ -626,7 +626,7 @@ it("puts the reader under one top bar: navigation in a drawer, the views, find, 
       "运行算子…",
       "编辑校订稿",
       "显示目录",
-      "专注模式",
+      "进入专注模式",
       "高亮笔",
       "笔颜色",
       "获取 PDF",
@@ -641,11 +641,11 @@ it("puts the reader under one top bar: navigation in a drawer, the views, find, 
     expect(more).not.toContain("复制引用");
     expect(more.some((item) => item.includes("解析"))).toBe(false);
     expect(more).not.toContain("框选区域");
+    // Spec 1.3: the scale group (放大, 缩小, 恢复默认), then the two switches.
     expect(await menuItems("排版")).toEqual([
-      "18 px",
-      "20 px",
-      "22 px",
-      "24 px",
+      "放大",
+      "缩小",
+      "恢复默认",
       "标出关键句",
       "显示核对依据",
     ]);
@@ -664,15 +664,12 @@ it("puts the reader under one top bar: navigation in a drawer, the views, find, 
       .first()
       .waitFor();
     expect(await menuItems("更多")).toContain("框选区域");
-    expect((await menuItems("排版")).slice(0, 8)).toEqual([
+    // Spec 1.3: the PDF's scale group, with “实际大小”.
+    expect((await menuItems("排版")).slice(0, 4)).toEqual([
+      "放大",
+      "缩小",
       "适合宽度",
-      "50%",
-      "75%",
-      "100%",
-      "125%",
-      "150%",
-      "200%",
-      "300%",
+      "实际大小",
     ]);
     await w.page.keyboard.press("Alt+3");
     await expect
@@ -686,7 +683,7 @@ it("puts the reader under one top bar: navigation in a drawer, the views, find, 
     await expect
       .poll(() =>
         w.page
-          .getByRole("searchbox", { name: "文档内查找", exact: true })
+          .getByRole("searchbox", { name: "查找…", exact: true })
           .evaluate((el) => el === document.activeElement),
       )
       .toBe(true);
@@ -697,11 +694,12 @@ it("puts the reader under one top bar: navigation in a drawer, the views, find, 
     await w.page.setViewportSize({ width: 700, height: 900 });
     await expect
       .poll(() =>
-        w.page.getByRole("button", { name: "文档内查找", exact: true }).count(),
+        w.page.getByRole("button", { name: "查找…", exact: true }).count(),
       )
       .toBe(0);
     const compact = await menuItems("更多");
-    for (const item of ["文档内查找", "排版", "收起信息"])
+    // The same name as everywhere else (spec 1.8): “查找…”.
+    for (const item of ["查找…", "排版", "收起信息"])
       expect(compact.some((name) => name === item || name === "显示信息")).toBe(
         true,
       );
@@ -826,7 +824,7 @@ it("lays the PDF on the sheet's desk, one sheet per page, and folds the top bar 
       .toBe("visible");
     await w.page.locator(".reader-information").waitFor();
     // “更多 → 专注模式” enters it too; F leaves it.
-    await readerMore(w.page, "专注模式");
+    await readerMore(w.page, "进入专注模式");
     await expect
       .poll(() => bar.evaluate((el) => getComputedStyle(el).visibility))
       .toBe("hidden");

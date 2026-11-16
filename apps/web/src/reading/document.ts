@@ -302,6 +302,28 @@ export async function renderDocument(
   const blockAt = (offset: number) =>
     rendered[search((b) => Number(b.dataset.byteEnd) > offset)]?.element ??
     blocks().at(-1);
+  /** A point held in place while the reading size changes (spec 4.2). */
+  let held: { el: HTMLElement; ratio: number; y: number } | null = null;
+  frame.holdPoint = (point) => {
+    if (!point) {
+      if (!held) return;
+      held = null;
+      capture();
+      return;
+    }
+    let at = Math.min(
+      rendered.length - 1,
+      search((b) => b.getBoundingClientRect().bottom > point.y),
+    );
+    while (at < rendered.length - 1 && folded(rendered[at]!.element)) at++;
+    const el = rendered[at]?.element;
+    if (!el) return;
+    held = {
+      el,
+      ratio: anchorRatio(el.getBoundingClientRect(), point.y),
+      y: point.y,
+    };
+  };
   /** The anchor block (spec 4.1) and its top on screen, as last measured. */
   let kept: { el: HTMLElement; top: number; area: number } | null = null;
   const capture = (closing = false) => {
@@ -342,6 +364,13 @@ export async function renderDocument(
    * before paint. Not left to the browser's `overflow-anchor`.
    */
   const keep = () => {
+    if (held && !hidden && !restoring && held.el.isConnected) {
+      // A change of reading size keeps the point under the pointer (spec 1.8.1).
+      const box = held.el.getBoundingClientRect();
+      const delta = box.top + held.ratio * box.height - held.y;
+      if (Math.abs(delta) >= 0.5) frame.body.scrollTop += delta;
+      return;
+    }
     if (!kept || hidden || restoring || !kept.el.isConnected) return;
     const delta = kept.el.getBoundingClientRect().top - kept.top;
     if (Math.abs(delta) >= 0.5) frame.body.scrollTop += delta;
@@ -1020,15 +1049,16 @@ export async function renderDocument(
     for (const b of blocks())
       b.classList.toggle("reading-match", matches.includes(b));
     frame.findStatus.textContent = `${finished ? "全文" : "已加载范围"}：${matches.length} 个匹配段落${finished ? "" : "；可继续加载后查找"}`;
-    let index = 0;
-    const jump = () => {
-      const block = matches[index++ % matches.length];
+    let index = -1;
+    const jump = (step: 1 | -1 = 1) => {
+      index = (index + step + matches.length) % matches.length;
+      const block = matches[index];
       if (block) go(Number(block.dataset.byteStart), 0, true);
     };
     if (matches.length) {
       jump();
       if (frame.onFindNext) frame.onFindNext(jump);
-      else frame.findStatus.append(button("下一处命中", jump));
+      else frame.findStatus.append(button("下一处命中", () => jump()));
     }
   };
 }

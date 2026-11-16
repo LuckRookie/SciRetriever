@@ -916,6 +916,75 @@
     margin-left: auto;
     color: var(--fg2);
   }
+  /* The context menu (reading-experience 1.8.2): as wide as its content,
+     200–320 px; it hangs from a point that takes no room. */
+  .ui-context-menu {
+    min-width: 200px;
+    max-width: min(320px, calc(100vw - 16px));
+    display: flex;
+    flex-direction: column;
+  }
+  /* Where neither way fits, the menu scrolls inside its height. */
+  .ui-context-menu > .ui-menu {
+    max-height: none;
+    min-height: 0;
+    flex: 1 1 auto;
+  }
+  .ui-context-menu-point {
+    position: fixed;
+    width: 0;
+    height: 0;
+    padding: 0;
+    border: 0;
+    opacity: 0;
+    pointer-events: none;
+  }
+  /* “键盘快捷键”: each operation on a row, its keys at the right. */
+  .reader-shortcuts .reader-shortcuts-group + .reader-shortcuts-group {
+    margin-top: var(--space-4);
+  }
+  .reader-shortcuts h3 {
+    margin: 0 0 var(--space-2);
+    font-size: var(--text-secondary);
+    font-weight: 600;
+  }
+  .reader-shortcuts dl {
+    margin: 0;
+  }
+  .reader-shortcuts dl > div {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: var(--space-4);
+    padding: 4px 0;
+  }
+  .reader-shortcuts dd {
+    margin: 0;
+    color: var(--fg2);
+    text-align: right;
+  }
+  .reader-shortcuts kbd {
+    font-family: inherit;
+  }
+  /* A group's title (design core “菜单”): caption text, not a choice. */
+  .ui-menu-heading {
+    padding: 6px var(--space-3) 2px;
+    font-size: var(--text-caption);
+    line-height: var(--lh-control);
+    color: var(--fg2);
+    position: relative;
+  }
+  .ui-menu-heading[data-divider] {
+    margin-top: 9px;
+  }
+  .ui-menu-heading[data-divider]::before {
+    content: "";
+    position: absolute;
+    top: -5px;
+    left: var(--space-3);
+    right: var(--space-3);
+    border-top: 1px solid var(--line);
+  }
   .ui-popover-content {
     padding: var(--space-3);
     outline: none;
@@ -1554,5 +1623,19 @@
   }
   .ui-data-table th[data-numeric] .ui-button {
     margin-left: auto;
+  }
+}
+@layer components {
+  /* Text for screen readers only, such as the reading scale's announcement. */
+  .ui-visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
   }
 }

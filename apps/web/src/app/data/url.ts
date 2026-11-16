@@ -209,9 +209,18 @@ function subscribe(listener: () => void) {
     listeners.delete(listener);
   };
 }
+/** Whether leaving now is allowed; an unsaved editor asks its own question. */
+export function navigationAllowed(): Promise<boolean> {
+  return guards.size ? checkGuards() : Promise.resolve(true);
+}
 export function navigate(
   parameters: Record<string, string | null>,
-  options: { replace?: boolean; clearSource?: boolean } = {},
+  options: {
+    replace?: boolean;
+    clearSource?: boolean;
+    /** The guards were already asked (`navigationAllowed`). */
+    force?: boolean;
+  } = {},
 ) {
   initializeNavigation();
   const url = new URL(committedUrl ?? location.href);
@@ -234,7 +243,7 @@ export function navigate(
     window.dispatchEvent(new Event(eventName));
   };
   const sequence = ++navigationSequence;
-  if (!guards.size) commit();
+  if (!guards.size || options.force) commit();
   else
     void checkGuards().then((allowed) => {
       if (allowed && sequence === navigationSequence) commit();

@@ -25,6 +25,7 @@ import { loginWorkbenchPage } from "../../server/test/workbench-auth-fixture.js"
 import { designSamplePageCleanup } from "./design-samples-browser.js";
 import { designSamplesAssets } from "./design-samples-assets.js";
 import { startDesignSamples } from "./design-samples-fixture.js";
+import { readerType } from "./reader-controls.js";
 
 type CheckId =
   | "anchor"
@@ -733,8 +734,9 @@ it("anchor keeping (4.2)", async () => {
     await ready(r.page, id, "doc");
     await scrollReader(r.page, 6000);
     const start = await mark(r.page);
-    const up = await anchorMove(r.page, () => pick(r.page, "排版", "24 px"));
-    const down = await anchorMove(r.page, () => pick(r.page, "排版", "20 px"));
+    // Spec 1.8.1: the reading size in steps of 1 px, as “排版” takes them.
+    const up = await anchorMove(r.page, () => readerType(r.page, "24 px"));
+    const down = await anchorMove(r.page, () => readerType(r.page, "20 px"));
     const after = await topOf(r.page, start);
     const round = start && after !== null ? Math.abs(after - start.top) : null;
     items.push(
@@ -777,9 +779,7 @@ it("anchor keeping (4.2)", async () => {
         "打开、关闭查找栏",
         // The same button opens and closes the find bar.
         () =>
-          r.page
-            .getByRole("button", { name: "文档内查找", exact: true })
-            .click(),
+          r.page.getByRole("button", { name: "查找…", exact: true }).click(),
       ],
       [
         "resize",
@@ -1047,10 +1047,12 @@ it("PDF zoom (5.3)", async () => {
     await ready(r.page, id, "pdf");
     await scrollReader(r.page, 4000);
     await r.page.getByRole("button", { name: "排版", exact: true }).click();
-    // The synthetic pages are 612 pt wide: 918 px at 150%.
-    await r.page.evaluate(() => rs().sample("pdf", 918));
-    await r.page.getByRole("menuitem", { name: "150%", exact: true }).click();
-    await r.page.waitForFunction(() => rs().sharp(918), undefined, {
+    // The synthetic pages are 612 pt wide: 612 px at 实际大小 (100%), one change of zoom.
+    await r.page.evaluate(() => rs().sample("pdf", 612));
+    await r.page
+      .getByRole("menuitem", { name: "实际大小", exact: true })
+      .click();
+    await r.page.waitForFunction(() => rs().sharp(612), undefined, {
       timeout: TIMEOUT,
     });
     await still(r.page);
@@ -1133,7 +1135,7 @@ it("no blank frames (6.2)", async () => {
   const zoom = shared.zoom as ReturnType<typeof frameSummary> | undefined;
   items.push({
     id: "zoom",
-    label: "PDF 缩放 适宽 → 150%",
+    label: "PDF 缩放 适合宽度 → 实际大小",
     criterion: "0 个无画面帧；可见页不退回占位（5.3：任何时候都不先清空画面）",
     status: verdict(
       zoom
@@ -1657,11 +1659,9 @@ it("performance (100-page synthetic text PDF)", async () => {
       );
       return end === null ? null : end - start;
     });
-    await r.page
-      .getByRole("button", { name: "文档内查找", exact: true })
-      .click();
+    await r.page.getByRole("button", { name: "查找…", exact: true }).click();
     const search = r.page.getByRole("searchbox", {
-      name: "文档内查找",
+      name: "查找…",
       exact: true,
     });
     await search.fill("page 60");
@@ -1709,7 +1709,7 @@ it("performance (100-page synthetic text PDF)", async () => {
         },
         {
           id: "zoom",
-          label: "缩放（适宽 → 150%，可见页清晰）",
+          label: "缩放（适合宽度 → 实际大小，可见页清晰）",
           criterion: "≤ 500 ms",
           status: verdict(zoom !== null && zoom <= 500),
           numbers: { ms: zoom },

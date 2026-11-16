@@ -13,8 +13,7 @@ export async function readerMore(page: Page, item: string | RegExp) {
     )
     .click();
 }
-/** “排版”: a reading size ("24 px") or a PDF zoom ("150%", "适合宽度"). */
-export async function readerType(page: Page, item: string) {
+async function openType(page: Page) {
   const type = page.getByRole("button", { name: "排版", exact: true });
   // The reader's controls are in the top bar once “更多” is.
   await page.getByRole("button", { name: "更多", exact: true }).waitFor();
@@ -24,15 +23,43 @@ export async function readerType(page: Page, item: string) {
     await page.getByRole("button", { name: "更多", exact: true }).click();
     await page.getByRole("menuitem", { name: "排版", exact: true }).click();
   }
-  await page.getByRole("menuitem", { name: item, exact: true }).click();
 }
-/** The checked “排版” item: the reading size or the PDF zoom in force. */
+/** The scale group's title in “排版”: “比例 110%”, “比例 适合宽度”. */
+const scaleTitle = (page: Page) =>
+  page.locator(".ui-popover .ui-menu-heading").first().innerText();
+/**
+ * “排版”: an item by name, or a reading scale reached the way a person does
+ * (reading-experience 1.3, 1.8.1): a reading size ("24 px", 20 px is 100%)
+ * or a PDF zoom ("150%") by pressing 放大 or 缩小 until the group's title
+ * says it; the menu stays open meanwhile.
+ */
+export async function readerType(page: Page, item: string) {
+  await openType(page);
+  const px = /^(\d+) px$/u.exec(item),
+    percent = /^(\d+)%$/u.exec(item);
+  if (!px && !percent) {
+    await page.getByRole("menuitem", { name: item, exact: true }).click();
+    return;
+  }
+  const wanted = px ? Number(px[1]) * 5 : Number(percent![1]);
+  // From 适合宽度 the steps start at 100%.
+  if ((await scaleTitle(page)).includes("适合宽度")) {
+    await page.getByRole("menuitem", { name: "实际大小" }).click();
+    await openType(page);
+  }
+  for (let i = 0; i < 60; i++) {
+    const now = Number(/(\d+)%/u.exec(await scaleTitle(page))?.[1]);
+    if (now === wanted) break;
+    await page
+      .getByRole("menuitem", { name: now < wanted ? "放大" : "缩小" })
+      .click();
+  }
+  await page.keyboard.press("Escape");
+}
+/** The scale in force, as the title of “排版”'s scale group says it. */
 export async function readerTypeChoice(page: Page) {
-  await page.getByRole("button", { name: "排版", exact: true }).click();
-  const value = await page
-    .locator(".ui-menu-item[data-checked]")
-    .first()
-    .innerText();
+  await openType(page);
+  const value = await scaleTitle(page);
   await page.keyboard.press("Escape");
   return value.trim();
 }

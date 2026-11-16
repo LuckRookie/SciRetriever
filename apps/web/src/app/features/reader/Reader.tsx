@@ -8,6 +8,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
 } from "react";
 import { createPortal, flushSync } from "react-dom";
@@ -92,6 +93,18 @@ import { createPreparingStore, ReaderPreparing } from "./ReaderPreparing.js";
 import { ReaderPageHeader, type HeaderLine } from "./ReaderPageHeader.js";
 import { pageColumn, sheetGeometry, topBarLayout } from "./geometry.js";
 import { useFullTextTranslation } from "./translation/use-fulltext.js";
+import { readingFont } from "./input/reading-font.js";
+import { useReadingScale } from "./input/use-reading-scale.js";
+import { useReaderInput } from "./input/use-reader-input.js";
+import {
+  commandItem,
+  commandTable,
+  type CommandId,
+  type CommandTable,
+  type ReaderCommand,
+} from "./input/commands.js";
+import { TEXT_SCALE, textPercent } from "./input/scale.js";
+import { readingArea, readingLine } from "../../../reading/anchor.js";
 
 export default function Reader() {
   const api = useApi(),
@@ -143,7 +156,9 @@ export default function Reader() {
     [outline, setOutline] = useState<ReaderOutlineEntry[]>([]),
     [outlineNote, setOutlineNote] = useState(""),
     [readingOffset, setReadingOffset] = useState<number | null>(null),
-    [nextMatch, setNextMatch] = useState<(() => void) | null>(null),
+    [nextMatch, setNextMatch] = useState<((step?: 1 | -1) => void) | null>(
+      null,
+    ),
     [issue, setIssue] = useState<ReaderIssue | null>(null),
     [empty, setEmpty] = useState<ViewUi["empty"]>(null),
     [textLevel, setTextLevel] = useState<ViewUi["textLevel"]>(null),
@@ -295,22 +310,24 @@ export default function Reader() {
     const existed = shell.reading.entries.has(JSON.stringify(key));
     const value = readingPosition(shell.reading, key, id);
     if (!existed) {
-      const font = Number(preferences.read("sciretriever:reading:font:v1"));
       const width = preferences.read("sciretriever:reading:width:v1");
-      if ([18, 20, 22, 24].includes(font)) value.fontSize = font;
       value.wide = width === "wide";
       value.fullWidth = width === "full";
-      // This paper's own font size and panel, as last left in this browser (spec 4.5).
+      // This paper's own panel, as last left in this browser (spec 4.5).
       const memory = recallReading(api.workspace.catalog, id);
-      if (memory.fontSize && [18, 20, 22, 24].includes(memory.fontSize))
-        value.fontSize = memory.fontSize;
       if (typeof memory.information === "boolean")
         value.information = memory.information;
     }
     return value;
   }, [shell.reading, api.workspace.catalog, id]);
-  const fontSizeRef = useRef(layoutPosition.fontSize);
-  fontSizeRef.current = layoutPosition.fontSize;
+  // Spec 4.5: one reading size in this browser, shared by every paper.
+  const fontSize = useSyncExternalStore(
+    readingFont.subscribe,
+    readingFont.get,
+    readingFont.get,
+  );
+  const fontSizeRef = useRef(fontSize);
+  fontSizeRef.current = fontSize;
   const refresh = () => retry((value) => value + 1);
   const notify = (message: string) => readerActions.current.notify(message);
   const translation = useReaderTranslation(
@@ -461,17 +478,19 @@ export default function Reader() {
   // Spec 1.1: the sheet's geometry follows the desk's width and the reading
   // size; there is no separate width setting (spec 1.3).
   const columnEm = 34;
+  /** Lays the sheet out for a reading size at once, in this frame (spec 1.8.1). */
+  const geometry = useRef<(size: number) => void>(() => {});
   useLayoutEffect(() => {
     const scroller = body.current,
       page = root.current;
     if (!scroller || !page) return;
-    const apply = () => {
+    const apply = (size = fontSizeRef.current) => {
       // Without the shell's top bar, the page's own width decides (spec 1.2).
       setNarrowTop(page.clientWidth > 0 && page.clientWidth < 640);
       const desk = scroller.clientWidth;
       if (!desk) return;
       // On the surface: the scroll area and the skeleton over it share it.
-      const g = sheetGeometry(desk, layoutPosition.fontSize, columnEm),
+      const g = sheetGeometry(desk, size, columnEm),
         surface = scroller.parentElement ?? scroller,
         style = surface.style;
       style.setProperty("--sheet-width", `${g.sheet}px`);
@@ -484,12 +503,13 @@ export default function Reader() {
       surface.dataset.sheet = g.tier;
       scroller.dataset.notes = g.notes;
     };
+    geometry.current = apply;
     apply();
-    const observer = new ResizeObserver(apply);
+    const observer = new ResizeObserver(() => apply());
     observer.observe(scroller);
     observer.observe(page);
     return () => observer.disconnect();
-  }, [layoutPosition.fontSize, columnEm, layout, detailReady]);
+  }, [fontSize, columnEm, layout, detailReady]);
   /**
    * Spec 6.1: the side panel slides in from the right (--dur-3, --ease-out)
    * and out (--dur-2, --ease-in), and the sheet moves to its new place on
@@ -521,8 +541,7 @@ export default function Reader() {
     layoutPosition,
   };
   useLayoutEffect(() => {
-    const { reduced, mode, informationWidth, pdf, layoutPosition } =
-      panelInputs.current;
+    const { reduced, mode, informationWidth, pdf } = panelInputs.current;
     const before = panelBefore.current;
     panelBefore.current = panelShown;
     const scroller = body.current;
@@ -546,8 +565,8 @@ export default function Reader() {
       );
     const left = (width: number) =>
       pages && pdf && pdf.zoom !== "fit" && zoomed > 0
-        ? pageColumn(width, layoutPosition.fontSize, zoomed).left
-        : sheetGeometry(width, layoutPosition.fontSize).left;
+        ? pageColumn(width, fontSizeRef.current, zoomed).left
+        : sheetGeometry(width, fontSizeRef.current).left;
     const shift = left(was) - left(desk);
     const engine = scroller.querySelector<HTMLElement>(
       ".reader-engine:not([hidden])",
@@ -663,40 +682,38 @@ export default function Reader() {
     };
   }, [engines, reading]);
   useEffect(() => () => engines.destroy(), [engines]);
-  // Spec 1.3 shortcuts, outside text fields: Alt+3 原文, Alt+4 PDF (Alt+1/2
-  // wait for the overview and flow), ⌘F / Ctrl+F find, O the outline.
-  const shortcuts = useRef<(event: KeyboardEvent) => boolean>(() => false);
-  useEffect(() => {
-    const keys = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (
-        target?.closest(
-          "input, textarea, select, [contenteditable='true'], [role='dialog']",
-        )
-      )
-        return;
-      if (shortcuts.current(event)) event.preventDefault();
-    };
-    // Capture: a focused control (a menu's button) must not swallow them.
-    window.addEventListener("keydown", keys, true);
-    return () => window.removeEventListener("keydown", keys, true);
-  }, []);
-  // Spec 4.4: Alt+← back to where a jump left, Alt+→ forward again.
-  useEffect(() => {
-    const keys = (event: KeyboardEvent) => {
-      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey)
-        return;
-      const handled =
-        event.key === "ArrowLeft"
-          ? engines.back()
-          : event.key === "ArrowRight"
-            ? engines.forward()
-            : false;
-      if (handled) event.preventDefault();
-    };
-    window.addEventListener("keydown", keys);
-    return () => window.removeEventListener("keydown", keys);
-  }, [engines]);
+  // Reading-experience 1.8: the reading scale, the keys and the context menu.
+  const [desk, setDesk] = useState<HTMLElement | null>(null);
+  /** A reading size at once, in this frame: the text and the sheet (spec 1.8.1). */
+  const applyFont = (size: number) => {
+    fontSizeRef.current = size;
+    for (const element of [
+      body.current,
+      root.current?.querySelector<HTMLElement>(".reader-summary-scroll"),
+    ])
+      element?.style.setProperty("--reading-font-size", `${size}px`);
+    geometry.current(size);
+  };
+  const scale = useReadingScale({
+    view:
+      mode === "doc" ? "doc" : mode === "pdf" || mode === "edit" ? "pdf" : null,
+    desk,
+    frame: frame.current,
+    pdf,
+    applyFont,
+    readingLine: () =>
+      body.current
+        ? readingLine(readingArea(body.current, headerHost ?? undefined))
+        : null,
+  });
+  const input = useReaderInput();
+  const table = useRef<CommandTable>(new Map());
+  const [pageEdit, setPageEdit] = useState(0);
+  // The term last looked for: Enter again goes on to the next match (spec 1.8.5).
+  const findAsked = useRef("");
+  // A tab or view switch closes the context menu without acting (spec 1.8.2).
+  const closeMenu = input.closeMenu;
+  useEffect(() => closeMenu(), [id, mode]); // eslint-disable-line react-hooks/exhaustive-deps
   // The side panel tab and the evidence switch are kept per paper (spec 4.5).
   useLayoutEffect(() => {
     const memory = recallReading(catalog, id);
@@ -715,7 +732,6 @@ export default function Reader() {
     setLayout((value) => value + 1);
     if (restore) requestAnimationFrame(restore);
     rememberReading(api.workspace.catalog, id, {
-      fontSize: layoutPosition.fontSize,
       information: layoutPosition.information,
     });
   };
@@ -884,7 +900,7 @@ export default function Reader() {
             ? topBarLayout(shell.readerBarWidth).views === "menu"
             : narrowTop
         }
-        fontSize={layoutPosition.fontSize}
+        fontSize={fontSize}
       />
     ) : null;
   const invalidMetadata =
@@ -979,37 +995,187 @@ export default function Reader() {
     shell.setReaderFocus(!focus);
   };
   const pdfZoom = mode === "pdf" || mode === "edit";
-  // “排版”: the reading size, or the PDF's zoom; then the two switches.
+  const scalable = mode === "doc" || (pdfZoom && !!pdf);
+  const tabs = shell.tabs;
+  const views3 = views.some((v) => v.id === "doc"),
+    views4 = views.some((v) => v.id === "pdf");
+  const viewKind: "doc" | "pdf" | null =
+    mode === "doc" ? "doc" : pdfZoom ? "pdf" : null;
+  const scrollable = mode === "doc" || pdfZoom;
+  // A fixed source is read, never marked (spec 1.8.2 “资料可以批注时”).
+  const canMark = marks.active && !fromSummary && !route.parameters.has("from");
+  /** Opens the find bar, with a short selection in one block as the term (spec 1.8.5). */
+  const openFind = () => {
+    if (findDisabled) return;
+    const selection = getSelection(),
+      text = selection && !selection.isCollapsed ? selection.toString() : "";
+    const node = selection?.rangeCount
+      ? selection.getRangeAt(0).commonAncestorContainer
+      : null;
+    const inReader = !!(
+      node instanceof Element ? node : node?.parentElement
+    )?.closest(".reader-surface");
+    setFindOpen(true);
+    if (
+      inReader &&
+      text.trim() &&
+      [...text].length <= 80 &&
+      !/\n/u.test(text.trim())
+    )
+      findText(text.trim());
+    requestAnimationFrame(() =>
+      root.current
+        ?.querySelector<HTMLInputElement>(".reader-find input")
+        ?.focus(),
+    );
+  };
+  /** Looks for `text` at once, as typed in the find bar and submitted. */
+  const findText = (text: string) => {
+    setFindOpen(true);
+    setSearch(text);
+    position.query = text;
+    findAsked.current = text;
+    if (mode !== "know" && mode !== "results")
+      void Promise.resolve(frame.current?.onFind(text)).catch((error) =>
+        shell.notify(errorMessage(error)),
+      );
+  };
+  /**
+   * Reading-experience 1.8: the reader's operations, each once. The menus,
+   * the context menus, the keys and the shortcut list all read this table;
+   * what this paper or deployment lacks is not in it.
+   */
+  const commandList: (ReaderCommand | null | false)[] = [
+    views3 && {
+      id: "view-doc",
+      run: () => void (viewValue !== "doc" && changeMode("doc")),
+    },
+    views4 && {
+      id: "view-pdf",
+      run: () => void (viewValue !== "pdf" && changeMode("pdf")),
+    },
+    scalable && {
+      id: "zoom-in",
+      enabled: scale.can(1),
+      keepOpen: true,
+      run: () => void scale.step(1),
+    },
+    scalable && {
+      id: "zoom-out",
+      enabled: scale.can(-1),
+      keepOpen: true,
+      run: () => void scale.step(-1),
+    },
+    scalable && {
+      id: "zoom-reset",
+      label: pdfZoom ? "适合宽度" : "恢复默认",
+      ...(pdfZoom ? { checked: pdf?.zoom === "fit" } : {}),
+      run: () => void scale.reset(),
+    },
+    pdfZoom && !!pdf && { id: "zoom-actual", run: () => void scale.actual() },
+    mode !== "results" &&
+      mode !== "edit" && {
+        id: "outline",
+        label: layoutPosition.outline ? "收起目录" : "显示目录",
+        run: toggleOutline,
+      },
+    {
+      id: "focus",
+      label: focus ? "退出专注模式" : "进入专注模式",
+      run: toggleFocus,
+    },
+    ...(scrollable
+      ? ([
+          { id: "page-down", run: (e) => input.scroll.page(1, !!e?.repeat) },
+          { id: "page-up", run: (e) => input.scroll.page(-1, !!e?.repeat) },
+          { id: "line-down", run: (e) => input.scroll.line(1, !!e?.repeat) },
+          { id: "line-up", run: (e) => input.scroll.line(-1, !!e?.repeat) },
+          ...(pdfZoom
+            ? ([
+                {
+                  id: "line-right",
+                  run: (e) => input.scroll.side(1, !!e?.repeat),
+                },
+                {
+                  id: "line-left",
+                  run: (e) => input.scroll.side(-1, !!e?.repeat),
+                },
+              ] as ReaderCommand[])
+            : []),
+          { id: "start", run: () => input.scroll.edge(false) },
+          { id: "end", run: () => input.scroll.edge(true) },
+          {
+            id: "next-part",
+            label: pdfZoom ? "下一页" : "下一节",
+            run: () => input.scroll.part(1),
+          },
+          {
+            id: "previous-part",
+            label: pdfZoom ? "上一页" : "上一节",
+            run: () => input.scroll.part(-1),
+          },
+        ] as ReaderCommand[])
+      : []),
+    pdfZoom &&
+      !!pdf && { id: "go-page", run: () => setPageEdit((value) => value + 1) },
+    // Alt+← asks the engine each time: its history changes without a render.
+    { id: "back", run: () => engines.back() },
+    { id: "forward", run: () => engines.forward() },
+    { id: "find", enabled: !findDisabled, run: openFind },
+    // F3 and Ctrl+G are the reader's only while the find bar has a term (spec 1.8.5).
+    findOpen &&
+      !!search &&
+      !!nextMatch && { id: "find-next", run: () => nextMatch(1) },
+    findOpen &&
+      !!search &&
+      !!nextMatch && { id: "find-previous", run: () => nextMatch(-1) },
+    ...marks.commands.filter(
+      (command) =>
+        canMark ||
+        !["tool-pen", "tool-region", "mark-color", "note"].includes(command.id),
+    ),
+    tabs.list.length > 0 && { id: "tab-close", run: () => tabs.close("one") },
+    {
+      id: "tab-reopen",
+      enabled: tabs.canReopen,
+      run: () => tabs.reopen(),
+    },
+    tabs.list.length > 0 && { id: "tab-next", run: () => tabs.cycle(1) },
+    tabs.list.length > 0 && { id: "tab-previous", run: () => tabs.cycle(-1) },
+    tabs.list.length > 0 && {
+      id: "tab-close-others",
+      enabled: tabs.list.length > 1,
+      run: () => tabs.close("others"),
+    },
+    tabs.list.length > 0 && {
+      id: "tab-close-all",
+      run: () => tabs.close("all"),
+    },
+    { id: "context-menu", run: () => input.openByKeyboard(tabs) },
+    { id: "shortcuts", run: () => input.openShortcuts() },
+  ];
+  const commands = commandTable(commandList);
+  table.current = commands;
+  const item = (id: CommandId, more: Partial<MenuOption> = {}) => {
+    const command = commands.get(id);
+    return command ? [commandItem(command, more)] : [];
+  };
+  // “排版” (spec 1.3): the scale group under its title, then the two switches.
   const typeItems: MenuOption[] = [
-    ...(pdfZoom
-      ? pdf
-        ? (
-            [
-              ["fit", "适合宽度"],
-              [0.5, "50%"],
-              [0.75, "75%"],
-              [1, "100%"],
-              [1.25, "125%"],
-              [1.5, "150%"],
-              [2, "200%"],
-              [3, "300%"],
-            ] as const
-          ).map(([value, label]) => ({
-            id: `zoom-${value}`,
-            label,
-            checked: pdf.zoom === value,
-            onAction: () => pdf.zoomTo(value),
-          }))
-        : []
-      : [18, 20, 22, 24].map((size) => ({
-          id: `size-${size}`,
-          label: `${size} px`,
-          checked: layoutPosition.fontSize === size,
-          onAction: () =>
-            changeLayout(() => {
-              layoutPosition.fontSize = size;
-            }),
-        }))),
+    ...(scalable
+      ? [
+          {
+            id: "scale-title",
+            label: `比例 ${pdfZoom ? scale.percent() : textPercent(fontSize)}`,
+            heading: true,
+            onAction: () => {},
+          },
+          ...item("zoom-in"),
+          ...item("zoom-out"),
+          ...item("zoom-reset"),
+          ...item("zoom-actual"),
+        ]
+      : []),
     {
       id: "key-sentences",
       label: "标出关键句",
@@ -1060,12 +1226,7 @@ export default function Reader() {
     // Below 760 px the icon buttons fold in here (spec 1.3).
     ...(compactBar
       ? [
-          {
-            id: "find",
-            label: "文档内查找",
-            disabled: findDisabled,
-            onAction: toggleFind,
-          },
+          ...item("find"),
           {
             id: "type",
             label: "排版",
@@ -1101,24 +1262,12 @@ export default function Reader() {
           },
         ]
       : []),
-    ...(mode !== "results" && mode !== "edit"
-      ? [
-          {
-            id: "outline",
-            label: layoutPosition.outline ? "收起目录" : "显示目录",
-            shortcut: "O",
-            onAction: toggleOutline,
-          },
-        ]
-      : []),
-    {
-      id: "focus",
-      label: "专注模式",
-      checked: focus,
-      shortcut: "F",
-      onAction: toggleFocus,
-    },
-    ...marks.toolItems,
+    ...item("outline"),
+    ...item("focus"),
+    // The marking tools (spec 1.3); the keys V, H, R and 1–5 still choose them.
+    ...item("tool-pen", { divider: true }),
+    ...item("tool-region"),
+    ...item("mark-color"),
     ...(partItems.length
       ? [
           {
@@ -1189,62 +1338,54 @@ export default function Reader() {
       divider: true,
       onAction: () => changeMode("results"),
     },
+    ...item("shortcuts", { divider: true }),
   ];
-  shortcuts.current = (event) => {
-    const plain =
-      !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
-    if (
-      (event.metaKey || event.ctrlKey) &&
-      !event.altKey &&
-      event.key.toLowerCase() === "f"
-    ) {
-      if (findDisabled) return false;
-      setFindOpen(true);
-      requestAnimationFrame(() =>
-        root.current
-          ?.querySelector<HTMLInputElement>(".reader-find input")
-          ?.focus(),
-      );
-      return true;
-    }
-    if (event.altKey && !event.ctrlKey && !event.metaKey) {
-      // Alt+digit types a symbol on some layouts: read the physical key.
-      const view =
-        event.code === "Digit3"
-          ? "doc"
-          : event.code === "Digit4"
-            ? "pdf"
-            : null;
-      if (!view || !views.some((v) => v.id === view)) return false;
-      if (view !== viewValue) changeMode(view);
-      return true;
-    }
-    if (
-      plain &&
-      event.key.toLowerCase() === "o" &&
-      mode !== "results" &&
-      mode !== "edit"
-    ) {
-      toggleOutline();
-      return true;
-    }
-    if (plain && event.key.toLowerCase() === "f") {
-      toggleFocus();
-      return true;
-    }
-    // Esc leaves focus mode, unless a menu or popover is the one to close.
-    if (
-      plain &&
-      event.key === "Escape" &&
-      focus &&
-      !document.querySelector(".ui-menu, .ui-popover, [role='dialog']")
-    ) {
-      panelInput.current = performance.now();
-      shell.setReaderFocus(false);
-      return true;
-    }
-    return false;
-  };
+  input.bind({
+    table,
+    body: body.current,
+    desk,
+    header: headerHost,
+    view: viewKind,
+    frame,
+    pdf,
+    marks: canMark || marks.active ? marks.menu : null,
+    abilities: {
+      canMark,
+      canTranslate: api.kind === "workspace",
+      otherView:
+        viewKind === "doc" ? views4 : views3 && !!sources.data?.document,
+    },
+    canGoBack: () => engines.canBack(),
+    back: () => engines.back(),
+    forward: () => engines.forward(),
+    // Spec 1.8.6, after the marks' layers: the picture, the outline, focus mode.
+    escape: () => {
+      if (documentLink) return (void setDocumentLink(null), true);
+      if (doubt) return (void setDoubt(null), true);
+      if (zoomImage) return (void setZoomImage(null), true);
+      if (layoutPosition.outline && mode !== "results" && mode !== "edit") {
+        toggleOutline();
+        return true;
+      }
+      if (focus) {
+        panelInput.current = performance.now();
+        shell.setReaderFocus(false);
+        return true;
+      }
+      return false;
+    },
+    notify,
+    cite: (quote, page) => marks.menu.cite(quote, page),
+    translate: (text, page) => {
+      if (!translation.settings.auto) void translation.translate(text, page);
+      setSideTab("translation");
+      if (!informationShown) toggleInformation();
+    },
+    find: findText,
+    zoomImage: (src, alt) => setZoomImage({ src, alt }),
+    otherView: () => changeMode(viewKind === "doc" ? "pdf" : "doc"),
+    animate: () => !reduced,
+  });
   const topBarTools = (
     <>
       {narrowBar ? (
@@ -1272,7 +1413,7 @@ export default function Reader() {
       {compactBar ? null : (
         <>
           <IconButton
-            aria-label="文档内查找"
+            aria-label="查找…"
             isDisabled={findDisabled}
             aria-expanded={findOpen}
             onPress={toggleFind}
@@ -1322,24 +1463,53 @@ export default function Reader() {
           <span>正在查看固定来源，阅读不会修改材料。</span>
         </div>
       ) : null}
-      <div className="reader-find" hidden={!findOpen || mode === "results"}>
+      <div
+        className="reader-find"
+        hidden={!findOpen || mode === "results"}
+        // Spec 1.8.5: Enter goes on, Shift+Enter back; Esc closes the bar and
+        // leaves the place at the current match.
+        onKeyDownCapture={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            setFindOpen(false);
+            // Keys go back to the reading area: they need no click (spec 1.8.4).
+            (event.target as HTMLElement).blur();
+            return;
+          }
+          if (event.key !== "Enter" || !nextMatch) return;
+          const field = event.target as HTMLInputElement;
+          if (event.shiftKey) {
+            event.preventDefault();
+            nextMatch(-1);
+          } else if (field.value === findAsked.current) {
+            event.preventDefault();
+            nextMatch(1);
+          }
+        }}
+      >
         <SearchField
-          label="文档内查找"
+          label="查找…"
           value={search}
           onChange={(value) => {
             setSearch(value);
             position.query = value;
           }}
-          onSubmit={(value) => {
-            if (mode !== "know" && mode !== "results")
-              void Promise.resolve(frame.current?.onFind(value)).catch(
-                (error) => shell.notify(errorMessage(error)),
-              );
-          }}
+          onSubmit={findText}
         />
         <span ref={findStatus} role="status" />
-        {nextMatch && <Button onPress={nextMatch}>下一处命中</Button>}
+        {nextMatch && (
+          <>
+            <Button onPress={() => nextMatch(-1)}>上一处命中</Button>
+            <Button onPress={() => nextMatch(1)}>下一处命中</Button>
+          </>
+        )}
       </div>
+      <span className="ui-visually-hidden" role="status">
+        {scale.spoken}
+      </span>
+      {input.contextMenu}
+      {input.shortcutsDialog}
       <SplitPane
         label={mode === "edit" ? "校订稿编辑区宽度" : "文献信息栏宽度"}
         edge="left"
@@ -1440,7 +1610,11 @@ export default function Reader() {
               }
             />
           )}
-          <div className="reader-surface">
+          <div
+            className="reader-surface"
+            ref={setDesk}
+            onContextMenu={input.onContextMenu}
+          >
             {sources.error && mode !== "know" && mode !== "results" ? (
               <ErrorNotice
                 message={errorMessage(sources.error)}
@@ -1472,7 +1646,7 @@ export default function Reader() {
               }
               style={
                 {
-                  "--reading-font-size": `${layoutPosition.fontSize}px`,
+                  "--reading-font-size": `${fontSize}px`,
                 } as CSSProperties
               }
             />
@@ -1495,6 +1669,13 @@ export default function Reader() {
                     }
                     line={headerLine}
                     scroller={body.current}
+                    scaleText={
+                      shown.kind === "doc" &&
+                      (fontSize !== TEXT_SCALE.base || scale.recent)
+                        ? textPercent(fontSize)
+                        : null
+                    }
+                    pageEdit={pageEdit}
                   />,
                   headerHost,
                 )
@@ -1578,7 +1759,7 @@ export default function Reader() {
                 className={`reading-scroll reader-summary-scroll ${layoutPosition.fullWidth ? "reading-full" : layoutPosition.wide ? "reading-wide" : ""}`}
                 style={
                   {
-                    "--reading-font-size": `${layoutPosition.fontSize}px`,
+                    "--reading-font-size": `${fontSize}px`,
                   } as CSSProperties
                 }
               >

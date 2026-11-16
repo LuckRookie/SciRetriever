@@ -209,6 +209,37 @@ export async function renderPdf(
     p?.removeAttribute("data-rendered");
     if (p && !bitmaps.has(n)) delete p.dataset.picture;
   };
+  /** A point held in place while the zoom changes (spec 4.2). */
+  let held: {
+    el: HTMLElement;
+    ratioX: number;
+    ratioY: number;
+    x: number;
+    y: number;
+  } | null = null;
+  frame.holdPoint = (point) => {
+    if (!point) {
+      if (!held) return;
+      held = null;
+      capture();
+      return;
+    }
+    const boxes = placeholders.map((p) => p.getBoundingClientRect()),
+      at = anchorIndex(boxes, point.y);
+    if (at < 0) return;
+    const box = boxes[at]!;
+    held = {
+      el: placeholders[at]!,
+      ratioY: anchorRatio(box, point.y),
+      // Within the page's width; outside it the page column stays centred.
+      ratioX: Math.max(
+        0,
+        Math.min(1, (point.x - box.left) / Math.max(1, box.width)),
+      ),
+      x: point.x,
+      y: point.y,
+    };
+  };
   const capture = () => {
     if (
       closed ||
@@ -256,6 +287,15 @@ export async function renderPdf(
   }
   /** Spec 4.2: after a change of size, the anchor page goes back to where it was, before paint. */
   function keep() {
+    if (held && !hidden && !closed && held.el.isConnected) {
+      // The point under the pointer stays under it, across and along (spec 1.8.1).
+      const box = held.el.getBoundingClientRect();
+      const dy = box.top + held.ratioY * box.height - held.y,
+        dx = box.left + held.ratioX * box.width - held.x;
+      if (Math.abs(dy) >= 0.5) frame.body.scrollTop += dy;
+      if (Math.abs(dx) >= 0.5) frame.body.scrollLeft += dx;
+      return;
+    }
     if (!kept || hidden || closed || !kept.el.isConnected) return;
     const delta = kept.el.getBoundingClientRect().top - kept.top;
     if (Math.abs(delta) >= 0.5) frame.body.scrollTop += delta;
@@ -338,6 +378,8 @@ export async function renderPdf(
       page: state.page,
       total: pdf.numPages,
       zoom: state.zoom,
+      scale,
+      now: () => ({ zoom: state.zoom, scale }),
       go,
       zoomTo: (value) => {
         capture();
@@ -952,9 +994,10 @@ export async function renderPdf(
       for (const [n, entry] of rendered) highlight(entry.text, n);
       status();
       if (frame.onFindNext) frame.onFindNext(next);
-      else frame.findStatus.append(button("下一处命中", next));
+      else frame.findStatus.append(button("下一处命中", () => next()));
     };
-    const next = () => show((current + 1) % hits.length);
+    const next = (step: 1 | -1 = 1) =>
+      show((current + step + hits.length) % hits.length);
     frame.onFind = async (text) => {
       const revision = ++searchRevision,
         found: { page: number; index: number }[] = [],
