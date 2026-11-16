@@ -17,8 +17,8 @@
 
 ## 真相源
 
-- 规格：[文档与证据第 8 节](../../architecture/technical/04-document-evidence.md#8-目标接口尚未实现两级文本)，以及它引用的 6.2、6.3、6.5。规格写“应当怎样”，本计划不重复。
-- 相关目标：[用户整理 9.2 初稿上的批注](../../architecture/technical/09-user-organization.md#92-初稿上的批注)；[知识加工 8.4 算子合同](../../architecture/technical/05-knowledge-processing.md#84-算子合同)中的“文本等级”。
+- 规格：[文档与证据第 8 节](../../architecture/technical/04-document-evidence.md#8-两级文本)，以及它引用的 6.2、6.3、6.5。规格写“应当怎样”，本计划不重复。
+- 相关目标：[用户整理 5.4 文本变化时（含初稿上的批注）](../../architecture/technical/09-user-organization.md#54-文本变化时)；[知识加工 8.4 算子合同](../../architecture/technical/05-knowledge-processing.md#84-算子合同)中的“文本等级”。
 - 依据的决定：ADR 0060，以及 [ADR 0037](../../architecture/decisions/0037-literature-archive-and-proofread-text.md)、[ADR 0047](../../architecture/decisions/0047-single-pass-page-proofread.md)、[ADR 0054](../../architecture/decisions/0054-rule-preprocessing-and-source-order-layout.md)、[ADR 0055](../../architecture/decisions/0055-long-document-simplified-archive.md)、[ADR 0052](../../architecture/decisions/0052-intake-batches-and-explicit-scope.md)。
 - 需求：[读1、读3](../../architecture/requirements.md#32-读人和-agent-都能读到每篇文献的全文)、可2、规1、规2；产品定位见 [ADR 0059](../../architecture/decisions/0059-general-literature-knowledge-base.md)。
 - 验证规则：[HARNESS 5.4](../../../HARNESS.md#54-typescript-开发验证) 与[第 6 节](../../../HARNESS.md#6-测试验证与语义审查)。

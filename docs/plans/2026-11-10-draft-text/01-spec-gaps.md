@@ -79,7 +79,7 @@
     - 查找命中的 `text_level` 字段；
     - `LibraryQuery` 的新筛选字段与 `LibrarySort` 的新排序键（疑点数、是否含扫描页、是否被结果引用、“找不到”的引用数，以及按文本等级筛选）；
     - 筛选与排序作用于哪个部分。04 §8.4 的文献行显示主 PDF，§8.7 的事实按部分给出；建议筛选只看主 PDF，要写明。
-  - 已回答：[06 §2.1.7](../../architecture/technical/06-retrieval-context.md#217-目标接口尚未实现文本等级与选择校订范围的事实)；describe 的字段见 [04 §8.4](../../architecture/technical/04-document-evidence.md#84-文本等级的标注)。
+  - 已回答：[06 §2.1.7](../../architecture/technical/06-retrieval-context.md#217-文本等级与选择校订范围的事实)；describe 的字段见 [04 §8.4](../../architecture/technical/04-document-evidence.md#84-文本等级的标注)。
 - [x] **1.11 四项事实的来源**（04 §8.7）
   - “是否被加工结果引用”：写明是否计入过时的结果（规格写“未过时”），以及只计读了该初稿内容版本的结果。
   - “找不到”的引用数：逐值核对的结果现在只在结果文件里，catalog 没有可查询的投影（`analysis/value-check.ts` 产生，`processor_record_projection` 不含核对状态）。写明由结果发布时写入的投影提供，归哪个模块写。

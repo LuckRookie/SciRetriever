@@ -11,7 +11,7 @@
 - 两个导出都只读，不写库；设备用途 `read`。批注仍按单篇导出（规格 5.6）。
 - 分组导出不依赖保存的筛选，可以先于 03 交付。
 
-规格：[用户整理 9.6](../../architecture/technical/09-user-organization.md#96-分组与筛选的导出)（两个导出、规模、入口）；Web 的菜单项见[页面规格“文献库”](../../architecture/web/page-specs.md#文献库)。
+规格：[用户整理 9.5](../../architecture/technical/09-user-organization.md#95-分组与筛选的导出)（两个导出、规模、入口）；Web 的菜单项见[页面规格“文献库”](../../architecture/web/page-specs.md#文献库)。
 
 ## 进入条件
 

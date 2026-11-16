@@ -165,7 +165,7 @@ MetaLiterature 成员关系只由 `literatures.meta_literature_id` 保存；不�
 
 Asset 保存 hash/大小/媒体类型与规范相对引用。raw_parses 按资产/profile 保存原始解析版本，raw_parse_current 是明确的当前指针。proofread_versions 保存校订版本，manual decisions 不被自动覆盖。complete 校订稿显式发布 DocumentVersion v2；原始解析不直接成为默认全文。内容均在 FileStore，SQLite 不保存大型 BLOB。
 
-**目标（尚未实现）：初稿的存储。** 按 [ADR 0060](../decisions/0060-two-level-full-text.md) 与[文档与证据 8.2、8.3](04-document-evidence.md#83-初稿的结构与核对依据)，初稿是 DocumentVersion 的一级。目标 schema 17 这样保存它：
+**初稿的存储。** 按 [ADR 0060](../decisions/0060-two-level-full-text.md) 与[文档与证据 8.2、8.3](04-document-evidence.md#83-初稿的结构与核对依据)，初稿是 DocumentVersion 的一级。schema 17 这样保存它：
 
 - **版本行。** 初稿与校订稿放在同一张 `document_versions` 表里，不另建表。现有的默认关系、资源闭包表以及加工结果、提取回执、身份核验对文档版本的外键因此直接覆盖初稿。表要重建：
   - `schema_version` 取 2 或 3；
@@ -418,7 +418,7 @@ v1 文献事实与 v2 job/attempt/event/candidate/receipt 运行事实使用显�
 
 ### 4.1 当前 schema 与显式转换
 
-`storage/sqlite/schema.ts` 是唯一当前结构定义，内部标识 13 与精确指纹共同验证。启动不自动升级旧库。状态投影 12 → 13 的专用离线迁移增加失效提示及索引、替换触发器和身份，并核对完整布局、完整性、全部旧表行数及外键，不改文献资产或重建正文；已运行的任务须先停止。旧 11 → 12 建档转换仍固定到 12，再显式执行状态投影转换；历史布局只作为这些离线工具的精确输入，不被运行时接受。操作步骤归[初始化与恢复指南](../../guides/upgrade.md#状态投影-schema-13)。`initializeCatalogSchema` 仅创建空目标；未知/旧结构拒绝。转换不恢复运行时 schema-v\* 兼容或逐级自动迁移。
+`storage/sqlite/schema.ts` 是唯一当前结构定义，内部标识 17 与精确指纹共同验证。启动不自动升级旧库。15 → 16（统一入库，`scripts/migrate-import-v16.mjs`）与 16 → 17（两级文本，`scripts/migrate-draft-text-v17.mjs`）各有专用离线迁移：精确输入布局，拒绝运行中的任务与建档，事务内重建并核对完整布局、完整性、外键与全部旧表行数，失败时库保持原布局、可以重跑；16 → 17 原地重建 `document_versions`，校订稿行、内容版本与加工结果的过时状态不变，不形成初稿（补形成见[文档与证据 8.11](04-document-evidence.md#811-补形成初稿的维护操作)）。状态投影 12 → 13 的专用离线迁移增加失效提示及索引、替换触发器和身份，并核对完整布局、完整性、全部旧表行数及外键，不改文献资产或重建正文；已运行的任务须先停止。旧 11 → 12 建档转换仍固定到 12，再显式执行状态投影转换；历史布局只作为这些离线工具的精确输入，不被运行时接受。操作步骤归[初始化与恢复指南](../../guides/upgrade.md#状态投影-schema-13)。`initializeCatalogSchema` 仅创建空目标；未知/旧结构拒绝。转换不恢复运行时 schema-v\* 兼容或逐级自动迁移。
 
 Owner 已授权在转换副本删除旧总结、旧知识、旧算子结果和 markdown-utf8-v1 文档；VLM Markdown 经验证登记为原始解析，共享 PDF/图片不能删除。未知事实、外部回执引用等超出删除范围的依赖必须拒绝并报告。切换仍须单独确认，并先处理备份后的源库增量。
 
@@ -428,12 +428,12 @@ Literature 拥有元数据与引用；Parsing 拥有原始结果；Proofread 拥
 
 内容与描述版本事件在同一事务发布。单篇算子只因所读部分的内容变化过时；描述变化不会让其失效。快照不可变，多篇结果依赖固定成员和版本。原始解析被校订稿引用、校订稿被文档引用、文档被结果/外部回执引用时受保护，不能凭“可重建”清理。
 
-**目标（尚未实现）：两级文本的写入所有权。**
+**两级文本的写入所有权。**
 
 - Document 拥有初稿版本、当前初稿指针与初稿版本事实（[2.3.4](#234-asset原始解析与校订稿)）。形成初稿的写入由 Parsing 的解析操作或 Document 的补形成维护操作发起，经 Document 的发布 Port 提交；默认关系仍由 Document 按独立 CAS 更新。
 - 被有效结果引用的初稿版本与校订稿一样受保护：`processor_result_documents` 等外键已覆盖。初稿版本引用的原始解析同样不能退役。
 - “找不到”的引用投影：`processor_unfound_citations(result_id, record_id, pointer, document_version_id, PRIMARY KEY(result_id, record_id, pointer, document_version_id))`。每行是一个用时核对为 `not-found` 的值，以及它的来源所引用的初稿版本。
-  - 写入方是 Analysis，在发布结果的同一事务内写入，结果删除时级联删除；Storage 只执行写入与约束。
+  - 写入方是 Analysis，在发布结果的同一事务内写入，结果删除时级联删除；Storage 只执行写入与约束。表已在 schema 17 建好，写入随加工读取初稿（计划 16）接入，在此之前为空。
   - 只为引用初稿版本（`schema_version` 3）的来源写行。schema 17 之前不存在初稿，所以没有已发布结果需要回填。
   - 它是可重建投影：内容由结果文件确定，可从结果文件重建，不是第二份事实。
   - `processor_result_documents` 在 schema 17 增加按 `document_version_id` 的索引，两项聚合（[文档与证据 8.7](04-document-evidence.md#87-选择校订范围的事实)）都按版本查索引，不扫描全部结果。
@@ -495,7 +495,7 @@ Analysis 的 `processor_result_summaries` 保存已发布结果用量/覆盖摘�
 
 第二轮库组织新增 `snapshot_labels`（显示名与不可变快照 hash 分离）、`folders`、`folder_members`、`reading_history`。已有 `processor_result_summaries` 增加 `method_revision`，`processor_result_currentness` 只读投影将旧方法标为过时；旧统计无法代表当前三计数时返回 null，不迁移、不当作零。所有 DDL 仍在 schema.ts。schema 13 换为按文献增量更新的文献状态投影；schema 14 新增 `reading_marks`（阅读批注，ADR 0046），由 `scripts/migrate-reading-marks-v14.mjs` 从 13 显式升级。已有正式库需要授权后在副本显式更新，启动不会自动加表。
 
-**目标（尚未实现）：用户整理的两张表。** 按[用户整理 9.1、9.5](09-user-organization.md#9-尚未实现)，下一次 schema 升级增加：
+**目标（尚未实现）：用户整理的两张表。** 按[用户整理 9.1、9.4](09-user-organization.md#9-尚未实现)，下一次 schema 升级增加：
 
 | 表                  | 字段与约束                                                                                                                                                                                                                                                                                                                                                                         |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

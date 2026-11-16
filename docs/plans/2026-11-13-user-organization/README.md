@@ -29,7 +29,7 @@
 
 ## 真相源
 
-- 规格：[用户整理技术篇](../../architecture/technical/09-user-organization.md)，尤其[第 4 节](../../architecture/technical/09-user-organization.md#4-保存的筛选)、[5.3](../../architecture/technical/09-user-organization.md#53-两种材料之间对位)、[5.4](../../architecture/technical/09-user-organization.md#54-文本变化时)、[第 7 节](../../architecture/technical/09-user-organization.md#7-三个入口)、[9.1](../../architecture/technical/09-user-organization.md#91-保存的筛选进入文献库)、[9.5](../../architecture/technical/09-user-organization.md#95-材料换版本时重新定位并记录)、[9.6](../../architecture/technical/09-user-organization.md#96-分组与筛选的导出)。规则以规格为准，本计划不重复。
+- 规格：[用户整理技术篇](../../architecture/technical/09-user-organization.md)，尤其[第 4 节](../../architecture/technical/09-user-organization.md#4-保存的筛选)、[5.3](../../architecture/technical/09-user-organization.md#53-两种材料之间对位)、[5.4](../../architecture/technical/09-user-organization.md#54-文本变化时)、[第 7 节](../../architecture/technical/09-user-organization.md#7-三个入口)、[9.1](../../architecture/technical/09-user-organization.md#91-保存的筛选进入文献库)、[9.4](../../architecture/technical/09-user-organization.md#94-材料换版本时重新定位并记录)、[9.5](../../architecture/technical/09-user-organization.md#95-分组与筛选的导出)。规则以规格为准，本计划不重复。
 - 决定：[ADR 0046](../../architecture/decisions/0046-reading-marks.md)（批注）、[ADR 0059](../../architecture/decisions/0059-general-literature-knowledge-base.md) 第 4 节（模块⑨）、[ADR 0032](../../architecture/decisions/0032-library-centered-web-workspace.md) 第 6 节（保存的是条件）。
 - 阅读页：[阅读体验](../../architecture/web/reading-experience.md)第 1.4 节（批注标签页）、第 2.5 节（标记）、第 4.3 节（视图之间共用一个位置）、第 5.2 节（后台刷新）。页面区域：[页面规格](../../architecture/web/page-specs.md)的“文献库”“阅读页”。
 - 存储与迁移：[存储技术篇](../../architecture/technical/07-versioned-storage.md)第 4.1、7 节。
@@ -37,7 +37,7 @@
 
 ## 仍需验证的前提
 
-- 规格第 9 节原来只有方向，01 已把操作名、表结构、导入、重新定位的记录与导出写进规格：用户整理 [9.1](../../architecture/technical/09-user-organization.md#91-保存的筛选进入文献库)、[9.5](../../architecture/technical/09-user-organization.md#95-材料换版本时重新定位并记录)、[9.6](../../architecture/technical/09-user-organization.md#96-分组与筛选的导出)，存储技术篇第 7 节的两张表，页面规格“文献库”的菜单项。规格 5.4 与 ADR 0046 第 5 条的矛盾按 ADR 收口：5.4 第三条注明是当前实现。
+- 规格第 9 节原来只有方向，01 已把操作名、表结构、导入、重新定位的记录与导出写进规格：用户整理 [9.1](../../architecture/technical/09-user-organization.md#91-保存的筛选进入文献库)、[9.4](../../architecture/technical/09-user-organization.md#94-材料换版本时重新定位并记录)、[9.5](../../architecture/technical/09-user-organization.md#95-分组与筛选的导出)，存储技术篇第 7 节的两张表，页面规格“文献库”的菜单项。规格 5.4 与 ADR 0046 第 5 条的矛盾按 ADR 收口：5.4 第三条注明是当前实现。
 - 现有批注表每条只有一个 PDF 锚点和一个全文锚点，`update` 会覆盖原锚点（`apps/server/src/storage/sqlite/marks-engine.ts`）。所以重新定位的结果另存在新表 `reading_mark_places`，批注表本身不变。
 - 现有浏览器里的保存筛选：只要有一项不合法，整份列表按空处理（`Library.tsx` 的 `loadViews`）。导入改为逐项判断（规格 9.1），04 不能复用这个读法。
 

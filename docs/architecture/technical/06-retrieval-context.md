@@ -125,7 +125,7 @@ CONTENT_READY
 
 `LibraryQuery` 不加入 Collection、Provider 私有字段、observation 内容筛选、citation count 范围、URL/OA/license、普通失败/history、Report/log/attempt、Parser/LLM identity、文件路径、sort、pagination、cursor、include flag 或 raw SQL/FTS 字段。`QuerySelector` 只复用这个查询条件，不复用列表请求的排序、limit 或 cursor。
 
-按文本等级和选择校订范围的事实筛选，是目标合同，见 [2.1.7](#217-目标接口尚未实现文本等级与选择校订范围的事实)。
+按文本等级和选择校订范围的事实筛选，见 [2.1.7](#217-文本等级与选择校订范围的事实)。
 
 **被撤回的文献**（目标，尚未实现，计划 20 的 17 块）：任何 `LibraryQuery` 的结果、`total_count`、计数（2.1.8）、词频、引用关系的两端、发现原因与 `QuerySelector` 的展开都排除被撤回的文献，详情按不存在处理；字段不变，调用方不能选择包含它们。撤回的规则见[文献与材料 6.4.11](03-literature-materials.md#6411-撤回)。
 
@@ -168,7 +168,7 @@ LibrarySearchPage
 
 列表不嵌入 MetadataObservations、资产、ParserResult、LiteratureContent、Reference/Support、Discovery cause 或 artifact 字节。`LibrarySearchPage` 是一次读取结果，不另套 Entry Report。
 
-条目的 `text_level`、`draft_facts` 与按它们排序的键是目标合同，见 [2.1.7](#217-目标接口尚未实现文本等级与选择校订范围的事实)。条目与 `LiteratureDetail` 另增加 `needs_metadata: bool`（目标，尚未实现，见[文献与材料 8.4](03-literature-materials.md#84-书目待补目标尚未实现)）。
+条目的 `text_level`、`draft_facts` 与按它们排序的键见 [2.1.7](#217-文本等级与选择校订范围的事实)。条目与 `LiteratureDetail` 另增加 `needs_metadata: bool`（目标，尚未实现，见[文献与材料 8.4](03-literature-materials.md#84-书目待补目标尚未实现)）。
 
 #### 2.1.3 LiteratureDetail
 
@@ -230,7 +230,7 @@ LiteratureDetail
 
 Detail 可以返回 `LiteratureContent.sections/references` 等已结构化文本，但不嵌入 PDF、Parser Markdown、Parser resources 或规范 LiteratureContent Markdown 的完整 artifact 字节。调用方通过稳定 `Asset`/`ArtifactRef` 使用独立 artifact read 操作取得字节。ProviderRelationObservation 全部待扩展边、完整 Reference/Support、DiscoveryRun 历史、Report/log/failure、Network/Parser/LLM 运行现场和机器绝对路径都不进入 Detail；它们在确有读取需求时使用各自独立查询。
 
-各部分默认文本的等级（`LiteratureAssetView.default_text`）是目标合同，见 [2.1.7](#217-目标接口尚未实现文本等级与选择校订范围的事实)。
+各部分默认文本的等级（`LiteratureAssetView.default_text`）见 [2.1.7](#217-文本等级与选择校订范围的事实)。
 
 `LibraryQuery`、`LibrarySearchRequest`、`LiteratureSearchItem`、`LibrarySearchPage`、`LiteratureAssetView`、`LiteratureDetail`、`LiteratureReferenceRequest`、`LiteratureReferenceItem`、`LiteratureReferencePage` 和 `ReferenceDetail` 都是 query-side TypeScript contract，不是可持久化业务主体。Storage 只能从当前权威行和 artifact 引用组装它们，不能为这些投影建立第二份可修改事实。
 
@@ -382,9 +382,9 @@ AcquirePdfCounts
   - 成员在创建任务时固定，之后入库的文献不加入。任务保存 `scope: {selector, counts}`，任务列表、详情和运行记录返回同一份；旧任务为 `None`。
 - 补形成初稿的维护操作复用 `AcquirePdfSelector`，计数与跳过规则另行规定，见[文档与证据 8.11](04-document-evidence.md#811-补形成初稿的维护操作)（目标，尚未实现）。
 
-#### 2.1.7 目标接口（尚未实现）：文本等级与选择校订范围的事实
+#### 2.1.7 文本等级与选择校订范围的事实
 
-本节按 [ADR 0060](../decisions/0060-two-level-full-text.md) 规定查询读取中的文本等级，以及 [文档与证据 8.7](04-document-evidence.md#87-选择校订范围的事实) 的四项事实怎样筛选和排序。取值的含义归文档与证据第 8 节；本节只规定字段、位置与查询语义。本节尚未实现，上文的现行合同不变。
+本节按 [ADR 0060](../decisions/0060-two-level-full-text.md) 规定查询读取中的文本等级，以及 [文档与证据 8.7](04-document-evidence.md#87-选择校订范围的事实) 的四项事实怎样筛选和排序。取值的含义归文档与证据第 8 节；本节只规定字段、位置与查询语义。`citing_results` 与 `unfound_citations` 在加工能读取初稿（计划 16）之前恒为 0。
 
 **共用类型。**
 
@@ -734,7 +734,7 @@ Context 是临时读取结果，不持久化成 KnowledgeArtifact。若用户要
 
 `retrieval-context.ts` 定义 `MaterialContextRequest/MaterialContextBundle`，固定查询、范围、类型、版本、字节预算与续读位置。当前无 tokenizer；请求与使用方式见[读取指南](../../guides/library-query.md#上下文检索)。
 
-材料投影使用当前 schema 的 `retrieval_*` 表，保留元数据和全部已接纳固定文档版本，默认文档与显式历史版本仍分别筛选。没有新增表、schema 版本或自动迁移。索引是可重建投影，不成为正文或元数据的事实来源。初稿进入索引、命中带 `text_level` 是目标合同，见 [2.1.7](#217-目标接口尚未实现文本等级与选择校订范围的事实)。
+材料投影使用当前 schema 的 `retrieval_*` 表，保留元数据和全部已接纳固定文档版本，默认文档与显式历史版本仍分别筛选。没有新增表、schema 版本或自动迁移。索引是可重建投影，不成为正文或元数据的事实来源。初稿进入索引、命中带 `text_level` 见 [2.1.7](#217-文本等级与选择校订范围的事实)。
 
 **读取**：`active()` 只读单例指针和 ready generation 的标量计数；不逐项重数 entries/FTS。冷连接和外部 `data_version` 变化后的重连只核对 schema identity、固定数量的 retrieval DDL 与触发器、active 是否存在且 ready、已知损坏标记和 source revision。查询不运行 PRAGMA integrity_check/foreign_key_check、FTS integrity-check、整份哈希或来源指纹扫描。普通打开、Web 初始化探针、显式目录库核验与真实损坏错误的规则归[存储技术篇](07-versioned-storage.md#5-存储完整性验证)。显式 `storage retrieval-inspect` 仍保留完整检查，不由搜索触发。
 

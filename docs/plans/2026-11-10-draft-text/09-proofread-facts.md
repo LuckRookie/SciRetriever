@@ -12,7 +12,7 @@
 - 结果发布时写入 `processor_unfound_citations` 投影。
 - 发起建档前的用量估算沿用现有 `usage-estimate`（04 §6.7）。
 
-规格：[04 §8.7](../../architecture/technical/04-document-evidence.md#87-选择校订范围的事实)（事实与计数口径）；[06 §2.1.7](../../architecture/technical/06-retrieval-context.md#217-目标接口尚未实现文本等级与选择校订范围的事实)（字段、位置、筛选、排序、cursor）；[07 §4.2](../../architecture/technical/07-versioned-storage.md#42-数据与写入所有权)（投影的结构与写入方）。
+规格：[04 §8.7](../../architecture/technical/04-document-evidence.md#87-选择校订范围的事实)（事实与计数口径）；[06 §2.1.7](../../architecture/technical/06-retrieval-context.md#217-文本等级与选择校订范围的事实)（字段、位置、筛选、排序、cursor）；[07 §4.2](../../architecture/technical/07-versioned-storage.md#42-数据与写入所有权)（投影的结构与写入方）。
 
 ## 进入条件
 

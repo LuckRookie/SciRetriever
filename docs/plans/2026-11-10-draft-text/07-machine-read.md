@@ -19,7 +19,7 @@ Agent 经 HTTP、CLI、MCP 读到同样的结果：
 
 计划 16 拿到一个读取合同：取每个部分的默认文本及其等级与内容版本；按角色读初稿时得到整篇与覆盖说明；“只用校订稿”时初稿部分记为缺失；原始解析不进入。
 
-规格：[04 §8.3](../../architecture/technical/04-document-evidence.md#83-初稿的结构与核对依据)（核对依据的取值、差异的有界读取）、[§8.4](../../architecture/technical/04-document-evidence.md#84-文本等级的标注)、[§8.6](../../architecture/technical/04-document-evidence.md#86-加工读取)、[§8.10](../../architecture/technical/04-document-evidence.md#810-各读取方对初稿的处理)、[§3.4](../../architecture/technical/04-document-evidence.md#34-版本绑定的有界读取)；[06 §2.1.7](../../architecture/technical/06-retrieval-context.md#217-目标接口尚未实现文本等级与选择校订范围的事实)。
+规格：[04 §8.3](../../architecture/technical/04-document-evidence.md#83-初稿的结构与核对依据)（核对依据的取值、差异的有界读取）、[§8.4](../../architecture/technical/04-document-evidence.md#84-文本等级的标注)、[§8.6](../../architecture/technical/04-document-evidence.md#86-加工读取)、[§8.10](../../architecture/technical/04-document-evidence.md#810-各读取方对初稿的处理)、[§3.4](../../architecture/technical/04-document-evidence.md#34-版本绑定的有界读取)；[06 §2.1.7](../../architecture/technical/06-retrieval-context.md#217-文本等级与选择校订范围的事实)。
 
 ## 进入条件
 

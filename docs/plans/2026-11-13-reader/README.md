@@ -18,7 +18,7 @@
 - 视觉规则与令牌：[设计内核](../../architecture/web/design-core.md)，含其中“阅读页”一节。页面区域：[页面规格 · 阅读页](../../architecture/web/page-specs.md#阅读页)。
 - 设计审阅的方法：[Web 设计](../../architecture/web/README.md)“设计原型”一节：组件画廊与设计样例库。
 - 加工结果的格式：[知识加工 8.16](../../architecture/technical/05-knowledge-processing.md#816-阅读层概览与脉络) 与它引用的 8.2、8.7、8.12；分句与出处角标：[文档与证据 3.5](../../architecture/technical/04-document-evidence.md#35-分句与出处角标目标尚未实现)。
-- 批注：[ADR 0046](../../architecture/decisions/0046-reading-marks.md) 与[使用者组织第 5 节](../../architecture/technical/09-user-organization.md#5-批注与笔记)。文本等级：[ADR 0060](../../architecture/decisions/0060-two-level-full-text.md) 与[文档与证据第 8 节](../../architecture/technical/04-document-evidence.md#8-目标接口尚未实现两级文本)。
+- 批注：[ADR 0046](../../architecture/decisions/0046-reading-marks.md) 与[使用者组织第 5 节](../../architecture/technical/09-user-organization.md#5-批注与笔记)。文本等级：[ADR 0060](../../architecture/decisions/0060-two-level-full-text.md) 与[文档与证据第 8 节](../../architecture/technical/04-document-evidence.md#8-两级文本)。
 - 验证规则：[HARNESS 5.4](../../../HARNESS.md#54-typescript-开发验证) 与[第 6 节](../../../HARNESS.md#6-测试验证与语义审查)。
 - 效果图：`sandbox/cases/2026-11-12-reader-mockups/`（不入库）只作样子的参考。效果图与规格不一致时以规格为准。
 

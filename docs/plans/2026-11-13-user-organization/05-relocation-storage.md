@@ -11,7 +11,7 @@
 - 写入校验：目标必须是这篇文献、同一部分的 PDF 或文档版本，范围不超出；已删除的批注不能写入。
 - `list` 的每条批注带 `places`（当前方法版本下的），`export` 的 JSON 同 `list`；三个入口结果相同。
 
-规格：[用户整理 9.5](../../architecture/technical/09-user-organization.md#95-材料换版本时重新定位并记录)“只在同一部分里找”“记录”，校验同 [5.2](../../architecture/technical/09-user-organization.md#52-锚点)；表 `reading_mark_places` 见[存储技术篇第 7 节](../../architecture/technical/07-versioned-storage.md#7-运行审查存储)。
+规格：[用户整理 9.4](../../architecture/technical/09-user-organization.md#94-材料换版本时重新定位并记录)“只在同一部分里找”“记录”，校验同 [5.2](../../architecture/technical/09-user-organization.md#52-锚点)；表 `reading_mark_places` 见[存储技术篇第 7 节](../../architecture/technical/07-versioned-storage.md#7-运行审查存储)。
 
 ## 进入条件
 

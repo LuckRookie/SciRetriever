@@ -19,7 +19,7 @@
 - 部分没有默认文本（例如重新解析后初稿失败）时，按现有“尚无已发布全文”处理（04 §8.5）。
 - 打开、阅读、筛选都不发起加工。
 
-规格：[04 §8.4](../../architecture/technical/04-document-evidence.md#84-文本等级的标注) 规定显示什么，[§8.10](../../architecture/technical/04-document-evidence.md#810-各读取方对初稿的处理) 规定哪些功能在初稿上可用；字段见 [06 §2.1.7](../../architecture/technical/06-retrieval-context.md#217-目标接口尚未实现文本等级与选择校订范围的事实)；**排布归[页面规格](../../architecture/web/page-specs.md)**，视觉规则归[设计内核](../../architecture/web/design-core.md)。用户整理一侧见 [09 §9.2](../../architecture/technical/09-user-organization.md#92-初稿上的批注)。
+规格：[04 §8.4](../../architecture/technical/04-document-evidence.md#84-文本等级的标注) 规定显示什么，[§8.10](../../architecture/technical/04-document-evidence.md#810-各读取方对初稿的处理) 规定哪些功能在初稿上可用；字段见 [06 §2.1.7](../../architecture/technical/06-retrieval-context.md#217-文本等级与选择校订范围的事实)；**排布归[页面规格](../../architecture/web/page-specs.md)**，视觉规则归[设计内核](../../architecture/web/design-core.md)。用户整理一侧见 [09 §5.4](../../architecture/technical/09-user-organization.md#54-文本变化时)。
 
 ## 进入条件
 
