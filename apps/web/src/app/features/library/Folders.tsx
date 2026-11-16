@@ -22,10 +22,12 @@ import { navigate, useUrlState } from "../../data/url.js";
 import { preferences } from "../../data/preferences.js";
 import { emptyQuery, readLibraryCounts } from "../../data/library.js";
 import {
+  exportFolders,
   listFolders,
   manageFolder,
   previewFolderDeletion,
 } from "../../data/folders.js";
+import { download } from "./OperationDialog.js";
 import { useShell } from "../../shell/context.js";
 import { errorMessage } from "../../strings.js";
 import { archiveQuery } from "../../data/archive.js";
@@ -415,6 +417,13 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
       })}
     </ul>
   );
+  // User organization 9.5: the whole tree and its members, written by the
+  // service; a failure says so and nothing is saved.
+  const exporting = useMutation({
+    mutationFn: () => exportFolders(api),
+    onSuccess: (blob) => download(blob, "sciretriever-folders.json"),
+    onError: (error) => shell.notify(`没有导出分组。${errorMessage(error)}`),
+  });
   const recent = route.section === "lib" && route.query.recently_opened;
   const needsAction = route.section === "archive" && !route.literature;
   return (
@@ -506,6 +515,22 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
           })}
         </div>
       ) : null}
+      <div className="folder-heading">
+        <span className="navigation-group-name">文件夹</span>
+        <Menu
+          iconOnly
+          className="folder-menu"
+          label="文件夹一组的操作"
+          items={[
+            {
+              id: "export",
+              label: exporting.isPending ? "正在导出分组…" : "导出分组",
+              disabled: exporting.isPending,
+              onAction: () => exporting.mutate(),
+            },
+          ]}
+        />
+      </div>
       {folders.isError ? (
         <Button variant="text" onPress={() => void folders.refetch()}>
           文件夹读取失败，重试

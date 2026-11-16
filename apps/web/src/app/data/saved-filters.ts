@@ -1,4 +1,5 @@
 import {
+  parseFiltersExportFile,
   parseSavedFilter,
   type FilterInput,
   type FilterImportItem,
@@ -52,6 +53,25 @@ export async function updateFilter(
   );
   if (saved.filter_id !== filter_id) throw new Error("更新筛选的回执无效");
   return saved;
+}
+/**
+ * The saved filters as one file (user organization 9.5), as the service
+ * returns it in one reply; checked against the format before it is saved.
+ */
+export async function exportFilters(
+  api: ApiClient,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  const file = await archiveQuery(
+    api,
+    "filters",
+    { operation: "export", request: {} },
+    signal,
+  );
+  parseFiltersExportFile(file);
+  return new Blob([`${JSON.stringify(file, null, 2)}\n`], {
+    type: "application/json",
+  });
 }
 export async function deleteFilter(api: ApiClient, filter_id: string) {
   const r = record(

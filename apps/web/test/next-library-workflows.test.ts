@@ -1,11 +1,15 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import {
   libraryStatus,
   openSavedViews,
   showAllLibraryStatuses,
 } from "./next-workspace-fixture.js";
-import { parseLiteratureId } from "@sciretriever/contracts";
+import {
+  parseFiltersExportFile,
+  parseLiteratureId,
+} from "@sciretriever/contracts";
 import { expect, it } from "vitest";
 import type { Page } from "playwright";
 import { nextWorkspace } from "./next-workspace-fixture.js";
@@ -207,6 +211,77 @@ it("keeps saved filters in the catalog: the menu applies, saves and deletes thro
     await expect
       .poll(async () => (await list()).map((f) => f.name))
       .not.toContain("Newest");
+    // “导出筛选” (user organization 9.5): every saved filter as one file, as
+    // the service gives it; nothing is written.
+    const sent: string[] = [];
+    const watch = (request: { url(): string; method(): string }) =>
+      sent.push(`${request.method()} ${new URL(request.url()).pathname}`);
+    const db = new DatabaseSync(join(w.env.home, "catalog.sqlite"), {
+      readOnly: true,
+    });
+    const committed = () =>
+      db.prepare("PRAGMA data_version").get()!.data_version;
+    try {
+      const version = committed(),
+        saved = JSON.stringify(await list());
+      views = await openSavedViews(page);
+      page.on("request", watch);
+      const downloading = page.waitForEvent("download");
+      await views
+        .getByRole("menuitem", { name: "导出筛选", exact: true })
+        .click();
+      const file = await downloading;
+      page.off("request", watch);
+      expect(file.suggestedFilename()).toBe("sciretriever-filters.json");
+      const exported = parseFiltersExportFile(
+        JSON.parse(await readFile((await file.path())!, "utf8")),
+      );
+      const direct = parseFiltersExportFile(
+        await app.filters.query({ operation: "export", request: {} }),
+      );
+      expect({ ...exported, exported_at: "" }).toEqual({
+        ...direct,
+        exported_at: "",
+      });
+      expect(exported.filters.map((f) => f.name)).toEqual(
+        (await list()).map((f) => f.name),
+      );
+      expect(sent).toEqual(["POST /api/v1/query/filters"]);
+      expect(JSON.stringify(await list())).toBe(saved);
+      expect(committed()).toBe(version);
+    } finally {
+      page.off("request", watch);
+      db.close();
+    }
+    // A failed export says so, and nothing is saved.
+    const filtersRoute = (url: URL) => url.pathname === "/api/v1/query/filters";
+    await page.route(filtersRoute, (route) =>
+      (route.request().postDataJSON() as { request?: { operation?: string } })
+        ?.request?.operation === "export"
+        ? route.fulfill({
+            status: 503,
+            contentType: "application/json",
+            body: JSON.stringify({
+              protocol_version: 1,
+              code: "query-unavailable",
+            }),
+          })
+        : route.continue(),
+    );
+    let downloads = 0;
+    const counted = () => downloads++;
+    page.on("download", counted);
+    views = await openSavedViews(page);
+    await views
+      .getByRole("menuitem", { name: "导出筛选", exact: true })
+      .click();
+    await page
+      .locator(".ui-toast")
+      .filter({ hasText: "没有导出筛选。" })
+      .waitFor();
+    page.off("download", counted);
+    expect(downloads).toBe(0);
+    await page.unroute(filtersRoute);
     // This browser's old filters: offered for import, item by item.
 
     const key = `sciretriever:react:sciretriever:library-views:v1:${catalog ?? "unbound"}`;

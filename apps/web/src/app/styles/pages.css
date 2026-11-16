@@ -180,7 +180,8 @@
     font-family: var(--serif);
     color: var(--fg2);
   }
-  .navigation-content .folder-row > .ui-button {
+  .navigation-content .folder-row > .ui-button,
+  .navigation-content .folder-heading > .ui-button {
     width: auto;
   }
   .navigation-content .folder-row > .folder-open {
@@ -216,11 +217,14 @@
     opacity: 0;
     transition: opacity var(--dur-out) var(--ease-out);
   }
-  .folder-row:hover .folder-menu {
+  .folder-row:hover .folder-menu,
+  .folder-heading:hover .folder-menu {
     transition-duration: 0ms;
   }
   .folder-row:hover .folder-menu,
   .folder-row:focus-within .folder-menu,
+  .folder-heading:hover .folder-menu,
+  .folder-heading:focus-within .folder-menu,
   .folder-menu[aria-expanded="true"] {
     opacity: 1;
   }
@@ -228,6 +232,17 @@
     .folder-menu {
       opacity: 1;
     }
+  }
+  /* The folders group's title row; its menu holds the group's actions. */
+  .folder-heading {
+    display: flex;
+    align-items: center;
+    margin-top: var(--space-2);
+  }
+  .folder-heading > .navigation-group-name {
+    flex: 1;
+    min-width: 0;
+    padding-bottom: 0;
   }
   .navigation .ui-button.folder-create {
     color: var(--fg3);

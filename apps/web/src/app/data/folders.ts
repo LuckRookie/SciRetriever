@@ -5,7 +5,7 @@ import {
   parseReadingOpen,
   parseUtcTimestamp,
 } from "@sciretriever/contracts";
-import type { ApiClient } from "./api.js";
+import { ApiError, type ApiClient } from "./api.js";
 import { archiveQuery, archiveWrite } from "./archive.js";
 import { record } from "./wire.js";
 export async function listFolders(api: ApiClient, signal?: AbortSignal) {
@@ -20,6 +20,33 @@ export async function listFolders(api: ApiClient, signal?: AbortSignal) {
   );
   if (!Array.isArray(r.items)) throw new Error("文件夹列表回执无效");
   return { items: r.items.map(parseFolderNode) };
+}
+/**
+ * The whole folder tree and its members as one file (user organization 9.5):
+ * the service writes it from one read-only snapshot and streams it; the page
+ * only takes the bytes to save, nothing is built or written here.
+ */
+export async function exportFolders(api: ApiClient): Promise<Blob> {
+  const response = await api.fetch("/api/v1/query/folders-export", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Sciretriever-Protocol-Version": "1",
+    },
+    body: JSON.stringify({ protocol_version: 1, request: {} }),
+  });
+  if (!response.ok) {
+    // The service's own failure when it sent one; its status otherwise.
+    const failure = await api.json(response).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    throw failure instanceof ApiError
+      ? failure
+      : new Error(`服务没有给出文件（HTTP ${response.status}）。`);
+  }
+  // A stream cut short rejects here, so a partial file is never saved.
+  return response.blob();
 }
 export async function previewFolderDeletion(
   api: ApiClient,

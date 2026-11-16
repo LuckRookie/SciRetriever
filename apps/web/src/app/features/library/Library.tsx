@@ -69,7 +69,7 @@ import { useShell } from "../../shell/context.js";
 import { archiveQuery, useArchiveAction, rows } from "../../data/archive.js";
 import { record } from "../../data/wire.js";
 import { archiveReason, errorMessage, statusLabels } from "../../strings.js";
-import { OperationDialog } from "./OperationDialog.js";
+import { OperationDialog, download } from "./OperationDialog.js";
 import {
   SELECTION_GROUPS,
   groupSelection,
@@ -88,6 +88,7 @@ import {
   browserFilters,
   createFilter,
   deleteFilter,
+  exportFilters,
   importFilters,
   listFilters,
   markBrowserFilters,
@@ -623,6 +624,19 @@ export default function Library() {
                 },
               ]
             : []),
+          {
+            // User organization 9.5: every saved filter as one file.
+            id: "export",
+            label: "导出筛选",
+            divider: true,
+            onAction: () => {
+              void exportFilters(api)
+                .then((blob) => download(blob, "sciretriever-filters.json"))
+                .catch((error: unknown) =>
+                  shell.notify(`没有导出筛选。${errorMessage(error)}`),
+                );
+            },
+          },
           // User organization 9.1: while this browser has filters not yet
           // imported, the menu ends with the way to bring them over.
           ...(pendingImport.length

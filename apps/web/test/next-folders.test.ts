@@ -1,3 +1,7 @@
+import { readFile } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
+import { join } from "node:path";
+import { parseFoldersExportFile } from "@sciretriever/contracts";
 import { readerNavigation, readerPanel } from "./reader-controls.js";
 import { expect, it } from "vitest";
 import type { Page } from "playwright";
@@ -53,6 +57,7 @@ it("organizes papers into nested folders by dialog and drag, scopes the library,
 
     // Selection bar: add the first paper through the dialog.
     const first = (await rows.first().getAttribute("aria-label"))!;
+    const firstId = (await rows.first().getAttribute("data-literature-id"))!;
     await rows.first().focus();
     await p.keyboard.press("Space");
     await p
@@ -92,6 +97,7 @@ it("organizes papers into nested folders by dialog and drag, scopes the library,
 
     // Drag: select the second paper, then drag it onto the nested folder.
     const second = (await rows.nth(1).getAttribute("aria-label"))!;
+    const secondId = (await rows.nth(1).getAttribute("data-literature-id"))!;
     await rows.nth(1).focus();
     await p.keyboard.press("Space");
     const toast = p.locator(".ui-toast");
@@ -116,6 +122,73 @@ it("organizes papers into nested folders by dialog and drag, scopes the library,
       .poll(() => folderRow(p, "表面界面").textContent())
       .toContain("2");
 
+    // “导出分组” (user organization 9.5): the service writes the whole tree
+    // and its members; the page only starts the download and writes nothing.
+    const sent: string[] = [];
+    const watch = (request: { url(): string; method(): string }) =>
+      sent.push(`${request.method()} ${new URL(request.url()).pathname}`);
+    const catalog = new DatabaseSync(join(w.env.home, "catalog.sqlite"), {
+      readOnly: true,
+    });
+    const committed = () =>
+      catalog.prepare("PRAGMA data_version").get()!.data_version;
+    try {
+      const version = committed();
+      p.on("request", watch);
+      const downloading = p.waitForEvent("download");
+      await folders(p)
+        .getByRole("button", { name: "文件夹一组的操作", exact: true })
+        .click();
+      await p.getByRole("menuitem", { name: "导出分组", exact: true }).click();
+      const file = await downloading;
+      p.off("request", watch);
+      expect(file.suggestedFilename()).toBe("sciretriever-folders.json");
+      const exported = parseFoldersExportFile(
+        JSON.parse(await readFile((await file.path())!, "utf8")),
+      );
+      const surface = exported.folders.find((f) => f.name === "表面界面")!,
+        carbon = exported.folders.find((f) => f.name === "碳链")!;
+      expect(exported.folders).toHaveLength(2);
+      expect(carbon.parent_id).toBe(surface.folder_id);
+      // Members under their own folder: the first paper here, the second in
+      // the subfolder.
+      expect(surface.members.map((m) => m.literature_id)).toEqual([firstId]);
+      expect(carbon.members.map((m) => m.literature_id)).toEqual([secondId]);
+      expect(
+        sent.filter((r) => r.startsWith("POST /api/v1/query/folders-export")),
+      ).toHaveLength(1);
+      expect(sent.filter((r) => r.includes("/api/v1/maintenance/"))).toEqual(
+        [],
+      );
+      expect(committed()).toBe(version);
+    } finally {
+      p.off("request", watch);
+      catalog.close();
+    }
+    // A failed export says so, and nothing is saved.
+    await p.route(
+      (url) => url.pathname === "/api/v1/query/folders-export",
+      (route) =>
+        route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({
+            protocol_version: 1,
+            code: "query-unavailable",
+          }),
+        }),
+      { times: 1 },
+    );
+    let saved = 0;
+    const count = () => saved++;
+    p.on("download", count);
+    await folders(p)
+      .getByRole("button", { name: "文件夹一组的操作", exact: true })
+      .click();
+    await p.getByRole("menuitem", { name: "导出分组", exact: true }).click();
+    await toast.filter({ hasText: "没有导出分组。" }).waitFor();
+    p.off("download", count);
+    expect(saved).toBe(0);
     // A parent folder includes its subfolders unless "only this level" is on.
     await folders(p)
       .getByRole("button", { name: /^表面界面/ })
