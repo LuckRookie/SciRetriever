@@ -46,6 +46,28 @@ node scripts/migrate-library-state-v13.mjs /absolute/path/to/offline-copy.sqlite
 
 12 → 13 工具只安装按篇状态失效提示与索引，不读个人配置、不调用模型、不改文献资产。它校验精确旧布局、SQLite 完整性与外键，事务内更新结构，核对所有旧表行数不变、新提示表为空；有运行中任务、未知结构或重复执行时拒绝。核对回执后再按前述步骤安排正式切换，不能只改版本号，也不能让旧程序继续写入新库。布局定义与派生状态规则见[存储技术合同](../architecture/technical/07-versioned-storage.md#41-当前-schema-与显式转换)。
 
+## 统一入库与两级文本 schema 16、17
+
+当前程序只打开精确匹配的 17 布局。schema 15 的库依次运行两个离线迁移；先停止服务与 queued/running 任务、保存一致性备份，并在独立副本演练，构建服务端后对绝对路径运行：
+
+```sh
+# 输入须是精确匹配的 schema 15。
+node scripts/migrate-import-v16.mjs /absolute/path/to/offline-copy.sqlite
+# 输入须是精确匹配的 schema 16。
+node scripts/migrate-draft-text-v17.mjs /absolute/path/to/offline-copy.sqlite
+```
+
+两个工具都不读个人配置、不调用模型、不改文献资产。它们校验精确旧布局、SQLite 完整性与外键，事务内更新结构，核对全部旧表行数不变；有运行中任务、未知结构或重复执行时拒绝，失败时库保持原布局、可以重跑并保留原始错误。16 → 17 原地重建文档版本表，校订稿、内容版本、加工结果的过时状态与全文索引不变，新表为空，不形成初稿。
+
+迁移后，已有原始解析的文献还没有初稿。用补形成维护操作显式形成，先预览再提交，可以取消，重新发起即续做：
+
+```sh
+sciretriever form-drafts preview --request request.json
+sciretriever form-drafts start --request request.json
+```
+
+请求的范围用文献库筛选写明（[文档与证据 8.11](../architecture/technical/04-document-evidence.md#811-补形成初稿的维护操作)）；它不解析、不调用模型。
+
 ## Web 守护的首次切换与程序升级
 
 “应用配置”只重建当前程序的运行时，不构建程序、不替换文件、不迁移数据库。升级程序仍需正常停止旧服务、保全一致性备份、核对副本与资源后再启动；不要运行中覆盖父子程序文件。

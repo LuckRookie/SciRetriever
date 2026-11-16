@@ -33,6 +33,12 @@ sciretriever document parsing-status --request request.json --json
 }
 ```
 
+## 解析之后的初稿
+
+每次解析发布或复用部署 profile 的原始解析后，程序接着形成初稿：不调用模型，不联网，单独提交，失败不改变解析结果。解析回执的 `draft` 写出结果（`formed`、`reused`、`failed` 带原因、`not-formed`），CLI、HTTP、MCP 与持久任务相同。没有有效校订稿时，初稿就是默认文本，可以阅读、查找和读取证据；建档发布校订稿后默认文本换成校订稿。规则见[文档与证据 8.2](../architecture/technical/04-document-evidence.md#82-初稿的形成)。
+
+已有原始解析、还没有初稿的文献，用补形成维护操作显式形成（`sciretriever form-drafts preview|start --request FILE`，HTTP 与 MCP 同名）。初稿与 PDF 文字层的差异已在形成时保存，用 `sciretriever document draft-differences --request FILE` 分段读取（MCP 为 `document_read` 的 `draft-differences`）；校订稿上返回 `document-unsupported`。
+
 ## 校订服务
 
 新建档先整理，再只对保留叶块逐页校订。每页独立会话，对照页面图核抄录，不总结、不润色；无法确定时保留初稿和原因。没有保留叶块的页无需空提交。流程、停止保护与人工编辑见[文献建档指南](literature-archive.md#校订全文与单步处理)；模型绑定与旧配置诊断见[配置手册](configuration.md)。

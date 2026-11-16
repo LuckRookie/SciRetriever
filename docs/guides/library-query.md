@@ -69,6 +69,10 @@ await reader.close();
 
 `extractionPreparation.prepare({spec,inputs})` 只读准备调用方规范及输入，不创建提取任务。显式候选交付与长期保留是维护操作，规范与请求见[知识加工合同](../architecture/technical/05-knowledge-processing.md#4-调用方规范与提取交付)和[Agent 接口](agent-interface.md)。读取不能为补齐材料调用维护。
 
+## 文本等级与校订范围
+
+文献库条目带主 PDF 默认文本的 `text_level`；默认文本是初稿时另有 `draft_facts`（差异片段数、差异条数、扫描页数、被结果引用数、找不到的引用数）。`LibraryQuery` 可按 `text_levels`、`has_draft_differences`、`has_image_only_pages`、`cited_by_results`、`has_unfound_citations` 筛选，`LibrarySort` 增加 `draft-differences-desc`、`image-only-pages-desc`、`citing-results-desc`、`unfound-citations-desc`。没有值的文献排在最后。后两项事实在加工能读取初稿之前恒为 0。筛选结果可以作为建档或补形成初稿的范围。语义见[查询技术篇 2.1.7](../architecture/technical/06-retrieval-context.md#217-文本等级与选择校订范围的事实)。
+
 ## CLI 查询与导出
 
 `literature search/show/references/cited-by` 和 `export metadata/pdf/content` 使用查询组装。未初始化或不可用库返回明确错误；需要新增事实时另行导入或维护。导出按显式目标写出副本，不修改库内原件。查询结果、任务完成标志与模型科学质量是不同事实。

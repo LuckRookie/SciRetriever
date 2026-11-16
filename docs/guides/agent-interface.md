@@ -75,6 +75,10 @@ Browser 获取在一篇文章内保留模型工具历史、人工指导和真实
 
 新查询/维护入口返回同一领域结果；协议外壳可能不同，例如 Web 对缺失知识返回 HTTP 404，而机器读取可以返回 null。CLI 退出码 2 表示输入非法，3 表示业务失败，4 表示配置失败，130 表示取消；不以原始异常回显请求或密钥。
 
+## 文本等级与核对依据
+
+文档读取（describe、outline、segments、slice、resources、evidence）、文献库条目、建档状态与查找命中都带 `text_level`（`draft` 或 `proofread`），取自所读的固定版本。初稿的 describe 另有 `draft_summary`，片段位置的 `basis` 是初稿的三种取值；按章节角色读初稿时返回整篇并带 `coverage_note`。初稿与文字层的差异经 `document_read` 的 `draft-differences` 分段读取，收齐后再解析。设备连接经 HTTP 版 MCP 读取，用途为 `read`。字段见[文档与证据 8.4](../architecture/technical/04-document-evidence.md#84-文本等级的标注)与[查询技术篇 2.1.7](../architecture/technical/06-retrieval-context.md#217-文本等级与选择校订范围的事实)。
+
 ## 材料传输与导出
 
 MCP 请求 JSON 上限为 1 MiB + 4096 字节，领域合同自己的限制仍然有效；结构化结果上限为 4 MiB，以覆盖合法的单个知识/综合产物。过大的批量结果返回 `response-budget`，须缩小分页或 ID 范围，不会静默截断。Browser 图像使用独立 image 内容块，最大原始字节为 4 MiB，不重复塞入文本结果。

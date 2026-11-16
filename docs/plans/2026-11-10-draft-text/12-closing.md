@@ -22,7 +22,7 @@
 
 ## Tasks
 
-- [ ] **12.1 规格改为现状**
+- [x] **12.1 规格改为现状**（2026-11-16，`349d98fc`；8.6 加工读取与“找不到”投影的写入随计划 16 保留为未实现）
   - [技术文档 04](../../architecture/technical/04-document-evidence.md)：
     - 开头的现状段（“初稿还不是可读的文本……”）改写；
     - 3.1 表中“当前实现只有校订稿”删除；
@@ -35,7 +35,7 @@
   - [技术文档 09](../../architecture/technical/09-user-organization.md) 9.2：已实现的部分移到第 5 节。
   - [技术文档 05](../../architecture/technical/05-knowledge-processing.md)：本计划不改加工规则；只核对它对 04 的链接仍然有效。
   - 页面规格：10.1 已改；核对与实现一致。
-- [ ] **12.2 指南同步**（只写已实现、可复现的行为）
+- [x] **12.2 指南同步**（2026-11-16：解析与校订、建档、Agent 调用、文献库查询、初始化与恢复、Web 指南各补一节）（只写已实现、可复现的行为）
   - [PDF 解析与校订](../../guides/document-processing.md)：解析后形成初稿、回执的初稿结果、补形成操作、差异读取。
   - [文献建档](../../guides/literature-archive.md)：建档与初稿的关系，长文档未校订页的核对依据。
   - [Agent 调用](../../guides/agent-interface.md)：describe、文献库、查找、证据中的 `text_level` 与 `basis`。

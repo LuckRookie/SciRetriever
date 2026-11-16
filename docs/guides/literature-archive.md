@@ -84,6 +84,10 @@ MCP 对应 `archive_query`（status/issues/stats/events）与 `archive_manage`�
 
 `proofread save --request FILE|-`（MCP `proofread_save`）采用 schema 2，输入 literature_id、asset_id、proofread_id、expected_arrangement_id、expected_manual_revision、完整 markdown。全文最多 8 MiB。能唯一映射的修改保存为叶块 correct 并锁定；结构边界不唯一或新增无来源文字返回 typed mapping conflict，请在段落内修改。保存本身不调用模型，能重渲染时返回新固定文档，失败不撤销已保存决定。旧 page_starts_utf8 和任意插块写法不作为新合同别名。
 
+## 建档与初稿
+
+文献解析后已有初稿，建档在它之后形成校订稿；校订稿发布后成为默认文本，初稿仍按版本 ID 可读，依据初稿的结果按内容版本标为过时。初稿不接受人工改字，改字在建档后的校订稿上进行。长文档按简化流程建档时，未逐页校订页上的片段带初稿的三种核对依据（与文字层一致、有差异、没有文字层），重试校订过的页照旧；见[文档与证据 8.3](../architecture/technical/04-document-evidence.md#83-初稿的结构与核对依据)。
+
 ## 预计消耗与迁移
 
 建档不设调用/token 上限。`usage estimate` 的 kind=archive、request={selector} 返回 ArchiveUsageEstimateV2：页数、六步的预计 calls/input/output、历史样本数与未知原因。只有匹配的新流程成功历史参与估算；无历史为未知，仍可显式发起。运行停止保护为同错 3 次、连续 8 次实际调用无进展；具体规则见[文档与证据](../architecture/technical/04-document-evidence.md#64-停止保护与受控上下文)。
