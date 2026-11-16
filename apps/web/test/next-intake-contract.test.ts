@@ -107,6 +107,8 @@ it(
       await again.getByText(/^(已在库|补全) 1$/u).waitFor();
       expect(await again.getByText("新增 0").count()).toBe(1);
       await again.getByRole("button", { name: "返回入库" }).click();
+      // Topic discovery is under “检索”, beside citation expansion.
+      await page.getByRole("tab", { name: "检索", exact: true }).click();
       await page.getByRole("tab", { name: "主题发现", exact: true }).click();
       await page
         .getByRole("textbox", { name: "主题或检索式", exact: true })

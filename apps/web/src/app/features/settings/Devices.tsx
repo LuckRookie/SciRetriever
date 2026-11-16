@@ -10,7 +10,7 @@ import {
   TextField,
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
-import { ApiError } from "../../data/api.js";
+import { ApiError, type ApiClient } from "../../data/api.js";
 import {
   agentBrief,
   DEVICE_DEFAULTS,
@@ -49,10 +49,36 @@ const DOWNLOADS = {
     missing: "skill 包尚未构建",
   },
 } as const;
-type Download = keyof typeof DOWNLOADS;
+export type Download = keyof typeof DOWNLOADS;
+/**
+ * A package the library builds, saved as a file. Resolves to what to say
+ * beside its button: empty once saved, or why it was not.
+ */
+export async function downloadPackage(
+  api: ApiClient,
+  kind: Download,
+): Promise<string> {
+  const { path, file, missing } = DOWNLOADS[kind];
+  try {
+    const response = await api.fetch(path);
+    if (!response.ok) await api.json(response);
+    const url = URL.createObjectURL(await response.blob()),
+      link = document.createElement("a");
+    link.href = url;
+    link.download = file;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return "";
+  } catch (error) {
+    return error instanceof ApiError &&
+      error.code === "device-artifact-unavailable"
+      ? missing
+      : errorMessage(error);
+  }
+}
 
 /** Every connection, following the owner's cursor until the last page. */
-function useDevices() {
+export function useDevices() {
   const api = useApi();
   return useQuery({
     queryKey: devicesKey,
@@ -100,27 +126,9 @@ export function DeviceConnections() {
   });
   /** A package the library builds; a missing build says so instead of failing. */
   const download = async (kind: Download) => {
-    const { path, file, missing } = DOWNLOADS[kind];
     setNotes((current) => ({ ...current, [kind]: "" }));
-    try {
-      const response = await api.fetch(path);
-      if (!response.ok) await api.json(response);
-      const url = URL.createObjectURL(await response.blob()),
-        link = document.createElement("a");
-      link.href = url;
-      link.download = file;
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch (error) {
-      setNotes((current) => ({
-        ...current,
-        [kind]:
-          error instanceof ApiError &&
-          error.code === "device-artifact-unavailable"
-            ? missing
-            : errorMessage(error),
-      }));
-    }
+    const note = await downloadPackage(api, kind);
+    setNotes((current) => ({ ...current, [kind]: note }));
   };
   return (
     <>
@@ -269,6 +277,8 @@ function ConnectDialog({
         await api.call("/api/v1/device-connections/pairings", {
           address: libraryAddress(),
           name: name.trim(),
+          // Which button made it: shown as “扩展” or “Agent”, never admission.
+          kind,
           purposes: DEVICE_PURPOSES.filter((purpose) =>
             purposes.includes(purpose),
           ),

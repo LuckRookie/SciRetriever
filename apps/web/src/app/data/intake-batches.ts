@@ -12,6 +12,11 @@ import type { ApiClient } from "./api.js";
 import { archiveWrite } from "./archive.js";
 import { useApi } from "./query.js";
 
+const OPEN_STATES = new Set<IntakeBatch["state"]>([
+  "collecting",
+  "awaiting-confirmation",
+  "running",
+]);
 // Batches live under the library key: any material change refreshes their PDF counts.
 const batchKey = ["library", "intake-batches"] as const;
 
@@ -79,7 +84,10 @@ export function useRecentBatches(limit = 5) {
     enabled: api.kind === "workspace" && api.workspace.readiness === "ready",
   });
 }
-/** Every batch, newest first, a page at a time; refreshed while one runs or a submission is open. */
+/**
+ * Every batch, newest first, a page at a time; refreshed every 3 s while one
+ * is collecting, awaiting confirmation or running, or a submission is open.
+ */
 export function useIntakeBatches(submitting = false) {
   const api = useApi();
   return useInfiniteQuery({
@@ -91,7 +99,7 @@ export function useIntakeBatches(submitting = false) {
     refetchInterval: (query) =>
       submitting ||
       query.state.data?.pages.some((page) =>
-        page.items.some((batch) => batch.state === "running"),
+        page.items.some((batch) => OPEN_STATES.has(batch.state)),
       )
         ? 3000
         : false,
@@ -107,16 +115,3 @@ export function useIntakeBatch(batchId: string | null) {
     staleTime: 60_000,
   });
 }
-
-export const BATCH_KINDS: Record<IntakeBatch["kind"], string> = {
-  topic: "主题发现",
-  citation: "引用扩展",
-  import: "导入",
-  legacy: "早期入库",
-};
-export const BATCH_ORIGINS: Record<IntakeBatch["origin"], string> = {
-  web: "Web",
-  cli: "CLI",
-  mcp: "MCP",
-  migration: "迁移",
-};

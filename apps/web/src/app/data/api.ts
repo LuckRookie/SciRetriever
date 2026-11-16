@@ -302,11 +302,14 @@ export class ApiClient {
     path: string,
     body: Blob,
     signal?: AbortSignal,
+    /** Route headers, such as the file's name for a file item. */
+    extra: Record<string, string> = {},
   ): Promise<JsonRecord> {
     const value = await this.json(
       await this.fetch(path, {
         method: "POST",
         headers: {
+          ...extra,
           "Content-Type": "application/octet-stream",
           "X-Sciretriever-Protocol-Version": "1",
         },

@@ -27,7 +27,7 @@ import {
   manageFolder,
   previewFolderDeletion,
 } from "../../data/folders.js";
-import { download } from "./OperationDialog.js";
+import { download } from "../../data/download.js";
 import { useShell } from "../../shell/context.js";
 import { errorMessage } from "../../strings.js";
 import { archiveQuery } from "../../data/archive.js";

@@ -11,6 +11,13 @@ it("keeps discovery and import explicit and uploads a selected PDF without hidde
   });
   try {
     await captureFeature(w.page, "react-intake");
+    // Four ways in, by where papers come from (page specs “入库”).
+    expect(
+      await w.page
+        .getByRole("tablist", { name: "入库方式" })
+        .getByRole("tab")
+        .allTextContents(),
+    ).toEqual(["检索", "文件", "Zotero", "网页"]);
     const discoveries: unknown[] = [];
     let release!: () => void;
     const held = new Promise<void>((resolve) => {
@@ -84,7 +91,7 @@ it("keeps discovery and import explicit and uploads a selected PDF without hidde
       seed_literature_id: w.env.parseRequest.literature_id,
       direction: "references",
     });
-    // Bibliography import goes through an import session and its report.
+    // An export file goes through its batch and the batch's report.
     const imported = await importExport(w.page, {
       name: "fixture.bib",
       content: "@article{fixture,title={Synthetic bibliography}}",
@@ -144,8 +151,7 @@ it("records each import as a batch, narrows it by its keywords and gets PDFs for
     const record = page.locator(".intake-record", {
       hasText: "batch-fixture.bib",
     });
-    await expect.poll(() => record.textContent()).toContain("命中 3");
-    expect(await record.textContent()).toContain("新增 3");
+    await expect.poll(() => record.textContent()).toContain("新增 3");
     expect(await record.textContent()).toContain("待获取 3");
     await page.reload();
     await record.waitFor();
@@ -203,3 +209,71 @@ it("records each import as a batch, narrows it by its keywords and gets PDFs for
     await w.close();
   }
 }, 120000);
+
+it("says how to connect the extension until one is connected, then where Zotero and web pages come in (page specs “入库”)", async () => {
+  const w = await nextWorkspace({ path: "/?view=disc", ready: ".intake-form" });
+  try {
+    const page = w.page;
+    await page.getByRole("tab", { name: "Zotero", exact: true }).click();
+    const panel = page.getByRole("tabpanel");
+    await panel.getByText("没有连接扩展").waitFor();
+    const steps = panel.locator(".intake-extension-steps > li");
+    expect(await steps.count()).toBe(3);
+    await steps
+      .nth(0)
+      .getByRole("button", { name: "下载扩展安装包", exact: true })
+      .click();
+    await steps.nth(0).getByText("扩展安装包尚未构建").waitFor();
+    await steps
+      .nth(1)
+      .getByRole("button", { name: "复制扩展页面地址", exact: true })
+      .waitFor();
+    await steps
+      .nth(2)
+      .getByRole("button", { name: "前往设备连接", exact: true })
+      .waitFor();
+    await page.getByRole("tab", { name: "网页", exact: true }).click();
+    await panel
+      .getByText(
+        "在出版社或预印本的文献页面上，点浏览器工具栏里的扩展按钮即可收藏。",
+      )
+      .waitFor();
+    await panel.getByText("没有连接扩展").waitFor();
+    // Paired connections: an Agent, and one made before kinds existed, are
+    // not the extension; the extension is.
+    const pair = async (name: string, kind?: "extension" | "agent") => {
+      const { connection_code } = await w.env.app.deviceConnections.create({
+        address: w.origin,
+        name,
+        purposes: ["intake"],
+        ...(kind ? { kind } : {}),
+      });
+      await fetch(`${w.origin}/api/v1/device-connections/exchange`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pairing_code: connection_code.split(":")[2] }),
+      });
+    };
+    await pair("办公室笔记本", "agent");
+    await pair("旧连接");
+    await page.reload();
+    await page.getByRole("tab", { name: "Zotero", exact: true }).click();
+    await panel.getByText("没有连接扩展").waitFor();
+    await pair("Chrome 扩展", "extension");
+    await page.reload();
+    await page.getByRole("tab", { name: "Zotero", exact: true }).click();
+    await panel.getByText("已连接扩展 · Chrome 扩展").waitFor();
+    await panel
+      .getByText(
+        "在扩展里选择要导入的库和分组。导入开始后，这里的入库记录会出现这一批。",
+      )
+      .waitFor();
+    expect(await steps.count()).toBe(0);
+    // 网页 says the same.
+    await page.getByRole("tab", { name: "网页", exact: true }).click();
+    await panel.getByText("已连接扩展 · Chrome 扩展").waitFor();
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 60000);

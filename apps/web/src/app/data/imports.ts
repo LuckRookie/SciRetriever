@@ -1,6 +1,8 @@
 import {
   parseIntakeBatch,
   type IntakeBatch,
+  type IntakeBatchItem,
+  type IntakeDecision,
   type IntakeBatchResult,
   type IntakeBatchState,
   type IntakeFileStatus,
@@ -20,7 +22,7 @@ export const BATCH_STATES: Record<IntakeBatchState, string> = {
   collecting: "收集中",
   "awaiting-confirmation": "待确认",
   running: "入库中",
-  finished: "完成",
+  finished: "已结束",
   cancelled: "已取消",
   withdrawn: "已撤回",
 };
@@ -28,7 +30,7 @@ export const BATCH_RESULTS: Record<IntakeBatchResult, string> = {
   completed: "完成",
   partial: "部分完成",
   failed: "失败",
-  interrupted: "已中断",
+  interrupted: "中断",
 };
 /** A finished batch names its result; the others their state. */
 export const batchStateText = (batch: IntakeBatch) =>
@@ -39,13 +41,6 @@ export const isActive = (batch: IntakeBatch) =>
   batch.state === "collecting" ||
   batch.state === "awaiting-confirmation" ||
   batch.state === "running";
-export const isConfirmable = (batch: IntakeBatch) =>
-  batch.state === "collecting" || batch.state === "awaiting-confirmation";
-/** Bibliography is in; only the files the source referred to are still owed. */
-export const metadataDone = (batch: IntakeBatch) =>
-  batch.state === "running" && batch.progress?.phase !== "metadata";
-export const pendingFiles = (batch: IntakeBatch) =>
-  batch.progress?.files.pending ?? 0;
 
 export type IntakeDisposition = IntakeItemResult["disposition"];
 export type IntakeFileState = IntakeFileStatus["status"];
@@ -165,7 +160,11 @@ const SYSTEMS: Record<string, string> = {
 };
 const systemName = (system: string) => SYSTEMS[system] ?? system;
 
-/** Who started the batch; a device shows by its connection name. */
+/**
+ * Who started the batch (page specs “入库记录”): the Web, CLI or MCP, or a
+ * device by its kind and connection name — “设备” for one made before
+ * connections had a kind.
+ */
 export function initiator(
   batch: IntakeBatch,
   devices: readonly DeviceConnection[] = [],
@@ -175,7 +174,14 @@ export function initiator(
     const device = devices.find(
       (item) => item.connection_id === by.slice("device:".length),
     );
-    return device ? `Agent · ${device.name}` : "设备连接";
+    if (!device) return "设备连接";
+    const kind =
+      device.kind === "extension"
+        ? "扩展"
+        : device.kind === "agent"
+          ? "Agent"
+          : "设备";
+    return `${kind} · ${device.name}`;
   }
   return (
     { "local:web": "网页", "local:cli": "CLI", "local:mcp": "MCP" }[by] ??
@@ -258,3 +264,145 @@ const EXCLUDED: Record<string, string> = {
   "linked-file": "链接文件",
 };
 export const excludedName = (kind: string) => EXCLUDED[kind] ?? kind;
+
+/** File recognition during preview (literature materials 6.4.6). */
+export interface Recognition {
+  state: "running" | "cancelled" | "done" | "idle";
+  recognized: number;
+  total: number;
+}
+export function readRecognition(value: unknown): Recognition | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as JsonRecord;
+  const state = ["running", "cancelled", "done", "idle"].includes(
+    text(item.state),
+  )
+    ? (item.state as Recognition["state"])
+    : "idle";
+  return {
+    state,
+    recognized: count(item.recognized),
+    total: count(item.total),
+  };
+}
+const list = (value: unknown) => (Array.isArray(value) ? value : []);
+const nullable = (value: unknown) => (typeof value === "string" ? value : null);
+const year = (value: unknown) =>
+  typeof value === "number" && Number.isInteger(value) ? value : null;
+/** One item of a batch, as its decisions need it (literature materials 6.4.10). */
+export function readItem(value: unknown): IntakeBatchItem {
+  const item = record(value, "intake item");
+  const recognition =
+    item.recognition && typeof item.recognition === "object"
+      ? (item.recognition as JsonRecord)
+      : null;
+  return {
+    item_id: text(item.item_id),
+    origin:
+      item.origin === "file" || item.origin === "page" ? item.origin : "data",
+    sequence: typeof item.sequence === "number" ? item.sequence : null,
+    record_index:
+      typeof item.record_index === "number" ? item.record_index : null,
+    external_id: nullable(item.external_id),
+    title: nullable(item.title),
+    file_name: nullable(item.file_name),
+    recognition: recognition
+      ? {
+          state: ([
+            "pending",
+            "recognized",
+            "candidates",
+            "unrecognized",
+            "cancelled",
+          ].includes(text(recognition.state))
+            ? recognition.state
+            : "pending") as NonNullable<
+            IntakeBatchItem["recognition"]
+          >["state"],
+          step: null,
+          literature_id: null,
+          candidates: list(recognition.candidates).map((entry) => {
+            const c = record(entry, "candidate");
+            return {
+              candidate_id: text(c.candidate_id),
+              title: nullable(c.title),
+              authors: list(c.authors) as never,
+              publication_year: year(c.publication_year),
+              identifiers: list(c.identifiers) as never,
+              source_name: text(c.source_name),
+              similarity: count(c.similarity),
+            };
+          }),
+        }
+      : null,
+    possible_duplicates: list(item.possible_duplicates).map((entry) => {
+      const d = record(entry, "possible duplicate");
+      return {
+        literature_id: text(d.literature_id) as never,
+        title: nullable(d.title),
+        first_author: nullable(d.first_author),
+        publication_year: year(d.publication_year),
+        similarity: count(d.similarity),
+      };
+    }),
+    unpaired: item.unpaired === true,
+    needs_decision: item.needs_decision === true,
+    decision:
+      item.decision && typeof item.decision === "object"
+        ? (item.decision as IntakeDecision)
+        : null,
+    disposition: Object.hasOwn(DISPOSITIONS, text(item.disposition))
+      ? (item.disposition as IntakeDisposition)
+      : null,
+    decided_by: nullable(item.decided_by),
+    decided_at: nullable(item.decided_at),
+  };
+}
+/** The three kinds of item a person decides (page specs “批次页” 3). */
+export type DecisionKind = "duplicate" | "candidate" | "unpaired";
+export function decisionKind(item: IntakeBatchItem): DecisionKind | null {
+  if (item.unpaired) return "unpaired";
+  if (item.recognition?.state === "candidates") return "candidate";
+  if (item.possible_duplicates.length) return "duplicate";
+  return null;
+}
+export const DECISION_GROUPS: Record<DecisionKind, string> = {
+  duplicate: "可能重复",
+  candidate: "可能是这一篇",
+  unpaired: "未配对的文件",
+};
+/** “Title · first author · year”, leaving out what is missing. */
+export const candidateText = (c: {
+  title: string | null;
+  first_author?: string | null;
+  authors?: readonly unknown[];
+  publication_year: number | null;
+}) =>
+  [
+    c.title ?? "无标题",
+    c.first_author ?? authorName(c.authors?.[0]),
+    c.publication_year ? String(c.publication_year) : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+function authorName(author: unknown): string {
+  if (!author || typeof author !== "object") return "";
+  const a = author as JsonRecord;
+  return text(a.display_name) || text(a.family_name);
+}
+export const PHASES: Record<
+  NonNullable<IntakeBatch["progress"]>["phase"],
+  string
+> = {
+  metadata: "书目入库",
+  files: "等待文件",
+  closing: "收尾",
+};
+/** “全文已取得 n / 总数 m，未取得 k（其中自动途径已试完 j）”, j left out at 0. */
+export function fullTextLine(counts: IntakeBatch["full_text"]): string {
+  return `全文已取得 ${counts.obtained.toLocaleString()} / 总数 ${counts.total.toLocaleString()}，未取得 ${counts.missing.toLocaleString()}${
+    counts.exhausted
+      ? `（其中自动途径已试完 ${counts.exhausted.toLocaleString()}）`
+      : ""
+  }`;
+}

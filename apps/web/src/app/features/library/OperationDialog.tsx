@@ -16,15 +16,11 @@ import { useShell } from "../../shell/context.js";
 import { randomId } from "../../../browser-platform.js";
 import { AcquireDialog } from "./AcquireDialog.js";
 import { errorMessage } from "../../strings.js";
+import { download } from "../../data/download.js";
 
-export function download(blob: Blob, name: string) {
-  const url = URL.createObjectURL(blob),
-    anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = name;
-  anchor.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
+// Kept here for the pages that open this dialog; the helper lives in data so
+// the sidebar can save a file without loading the dialog and its styles.
+export { download };
 const labels: Record<string, string> = {
   analyze: "生成总结",
   archive: "建立文献档案",

@@ -14,7 +14,6 @@ export const PURPOSE_DESCRIPTIONS: Record<DevicePurpose, string> = {
   operate:
     "经 MCP 发起获取、加工等任务，包括会联网、会花费的获取、解析与模型调用。",
 };
-export type DeviceKind = "extension" | "agent";
 export const DEVICE_DEFAULTS: Record<
   DeviceKind,
   { name: string; purposes: DevicePurpose[] }
@@ -23,9 +22,12 @@ export const DEVICE_DEFAULTS: Record<
   agent: { name: "Agent", purposes: ["intake", "read"] },
 };
 
+export type DeviceKind = "extension" | "agent";
 export interface DeviceConnection {
   connection_id: string;
   name: string;
+  /** Which dialog made it; null for connections made before kinds existed. */
+  kind: DeviceKind | null;
   purposes: DevicePurpose[];
   created_at: string;
   paired_at: string | null;
@@ -49,6 +51,7 @@ export function readDevice(value: unknown): DeviceConnection {
   return {
     connection_id: item.connection_id,
     name: item.name,
+    kind: item.kind === "extension" || item.kind === "agent" ? item.kind : null,
     purposes: (Array.isArray(item.purposes) ? item.purposes : []).filter(
       (purpose): purpose is DevicePurpose =>
         (DEVICE_PURPOSES as readonly unknown[]).includes(purpose),

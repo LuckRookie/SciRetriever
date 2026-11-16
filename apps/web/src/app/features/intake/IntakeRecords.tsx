@@ -1,8 +1,7 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { IntakeBatch } from "@sciretriever/contracts";
 import {
-  Badge,
   Button,
   EmptyState,
   ErrorNotice,
@@ -10,34 +9,19 @@ import {
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
 import {
-  BATCH_KINDS,
-  BATCH_ORIGINS,
   renameIntakeBatch,
   useIntakeBatches,
 } from "../../data/intake-batches.js";
-import { emptyQuery } from "../../data/library.js";
+import { initiator } from "../../data/imports.js";
+import type { DeviceConnection } from "../../data/devices.js";
 import { openBatch } from "../library/Folders.js";
 import { navigate } from "../../data/url.js";
-import { AcquireDialog, type AcquireScope } from "../library/AcquireDialog.js";
+import { useDevices } from "../settings/Devices.js";
 import { errorMessage, localTime } from "../../strings.js";
+import { BatchBadge, Counts, PartsBar } from "./batch-parts.js";
 
-/** Only what needs attention is badged: running, or finished other than complete. */
-function statusOf(
-  batch: IntakeBatch,
-): { badge: "running" | "partial" | "failed"; label: string } | null {
-  if (batch.state === "running") return { badge: "running", label: "进行中" };
-  if (batch.state !== "finished") return null;
-  return batch.result === "partial"
-    ? { badge: "partial", label: "部分完成" }
-    : batch.result === "interrupted"
-      ? { badge: "partial", label: "已中断" }
-      : batch.result === "failed"
-        ? { badge: "failed", label: "失败" }
-        : null;
-}
-
-/** What the person asked for, in a few words: years, sources, file. */
-function requestText(batch: IntakeBatch) {
+/** What the batch covered, in a few words: years, direction, file, sources. */
+export function requestText(batch: IntakeBatch) {
   const r = batch.request;
   const years =
     r.year_from || r.year_to ? `${r.year_from ?? ""}–${r.year_to ?? ""}` : "";
@@ -48,11 +32,34 @@ function requestText(batch: IntakeBatch) {
     r.providers?.length ? r.providers.join("、") : "",
   ].filter(Boolean);
 }
-function timeText(batch: IntakeBatch) {
+export function timeText(batch: IntakeBatch) {
   if (batch.kind !== "legacy") return localTime(batch.created_at);
   return `${localTime(batch.created_at).slice(0, 10)} 起`;
 }
+/** Who started it; the batch formed from earlier papers names that instead. */
+export function startedBy(
+  batch: IntakeBatch,
+  devices: readonly DeviceConnection[],
+) {
+  return batch.kind === "legacy"
+    ? "迁移前已有，没有逐次记录"
+    : initiator(batch, devices);
+}
+/** “新增 · 已在库 · 恢复 · 冲突 · 可能重复 · 未接纳”, zeros left out. */
+export const recordCounts = (c: IntakeBatch["counts"]) =>
+  [
+    ["新增", c.created],
+    ["已在库", c.matched + c.enriched],
+    ["恢复", c.restored],
+    ["冲突", c.conflicts],
+    ["可能重复", c.possible_duplicates],
+    ["未接纳", c.rejected],
+  ] as const;
 
+/**
+ * Every intake batch, one kind of row whoever started it (page specs “入库
+ * 记录”), newest first a page at a time; refreshed while one is open.
+ */
 export function IntakeRecords({
   highlight,
   submitting = false,
@@ -61,8 +68,25 @@ export function IntakeRecords({
   submitting?: boolean;
 }) {
   const batches = useIntakeBatches(submitting);
-  const [acquire, setAcquire] = useState<AcquireScope | null>(null);
+  const connections = useDevices(),
+    devices = connections.data ?? [];
   const items = batches.data?.pages.flatMap((page) => page.items) ?? [];
+  // A batch from a connection made since the list was read reads it again,
+  // once per such connection.
+  const asked = useRef(new Set<string>());
+  const unknown = items
+    .map((batch) => batch.initiated_by)
+    .filter(
+      (by) =>
+        by.startsWith("device:") &&
+        !asked.current.has(by) &&
+        !devices.some((d) => `device:${d.connection_id}` === by),
+    );
+  useEffect(() => {
+    if (!connections.data || !unknown.length) return;
+    for (const by of unknown) asked.current.add(by);
+    void connections.refetch();
+  }, [connections, unknown]);
   return (
     <section className="intake-records" aria-labelledby="intake-records-title">
       <h2 id="intake-records-title">入库记录</h2>
@@ -79,25 +103,15 @@ export function IntakeRecords({
             <Record
               key={batch.batch_id}
               batch={batch}
+              devices={devices}
               open={batch.batch_id === highlight}
-              onAcquire={() =>
-                setAcquire({
-                  kind: "query",
-                  query: {
-                    ...emptyQuery(),
-                    intake_batch_ids: [batch.batch_id],
-                  },
-                  sort: "intake-desc",
-                  label: `入库批次：${batch.label}`,
-                })
-              }
             />
           ))}
         </ol>
       ) : (
         <EmptyState
           title="还没有入库记录"
-          description="用上方的主题发现、引用扩展或导入带进文献后，每一次都会在这里留下一条记录。"
+          description="用上方的检索、文件、Zotero 或网页带进文献后，每一批都会在这里留下一条记录。"
         />
       )}
       {batches.hasNextPage ? (
@@ -109,21 +123,18 @@ export function IntakeRecords({
           加载更早的记录
         </Button>
       ) : null}
-      {acquire ? (
-        <AcquireDialog scope={acquire} onClose={() => setAcquire(null)} />
-      ) : null}
     </section>
   );
 }
 
 function Record({
   batch,
+  devices,
   open,
-  onAcquire,
 }: {
   batch: IntakeBatch;
+  devices: readonly DeviceConnection[];
   open: boolean;
-  onAcquire: () => void;
 }) {
   const api = useApi(),
     queries = useQueryClient();
@@ -139,11 +150,9 @@ function Record({
       });
     },
   });
-  const c = batch.counts,
-    pdf = batch.pdf;
-  const status = statusOf(batch);
+  const pdf = batch.pdf,
+    hits = batch.counts.hits;
   const legacy = batch.kind === "legacy";
-  const share = (n: number) => (c.hits ? `${(n / c.hits) * 100}%` : "0%");
   return (
     <li className="intake-record" data-open={open || undefined}>
       <div className="intake-record-main">
@@ -189,15 +198,15 @@ function Record({
           </form>
         ) : (
           <div className="intake-record-title">
-            {batch.label !== BATCH_KINDS[batch.kind] ? (
-              <span className="intake-record-kind">
-                {BATCH_KINDS[batch.kind]}
-              </span>
-            ) : null}
-            <span className="intake-record-name">{batch.label}</span>
-            {status ? (
-              <Badge status={status.badge}>{status.label}</Badge>
-            ) : null}
+            {/* The name is the row's title and opens the batch. */}
+            <button
+              type="button"
+              className="intake-record-name"
+              aria-label={`打开批次：${batch.label}`}
+              onClick={() => navigate({ session: batch.batch_id })}
+            >
+              {batch.label}
+            </button>
             {!legacy ? (
               <Button
                 variant="text"
@@ -217,49 +226,33 @@ function Record({
         <div className="intake-record-meta">
           {[
             timeText(batch),
-            legacy ? "迁移前已有，没有逐次记录" : BATCH_ORIGINS[batch.origin],
+            startedBy(batch, devices),
             ...requestText(batch),
           ].join(" · ")}
         </div>
-        <div className="intake-record-counts">
-          <span>
-            命中 <b>{c.hits.toLocaleString()}</b>
-          </span>
-          {legacy ? null : (
-            <>
-              <span>新增 {c.created.toLocaleString()}</span>
-              {c.enriched ? (
-                <span>补充 {c.enriched.toLocaleString()}</span>
-              ) : null}
-              <span>已在库 {c.matched.toLocaleString()}</span>
-              {c.rejected ? (
-                <span className="quiet">
-                  未接纳 {c.rejected.toLocaleString()} 条
-                </span>
-              ) : null}
-              {batch.source_failures ? (
-                <span className="quiet">
-                  {batch.source_failures} 个来源未完整返回
-                </span>
-              ) : null}
-            </>
-          )}
-        </div>
+      </div>
+      <div className="intake-record-state">
+        <BatchBadge batch={batch} />
       </div>
       <div className="intake-record-side">
-        <div
-          className="intake-record-bar"
-          role="img"
-          aria-label={`有 PDF ${pdf.has_pdf} 篇，无法获取 ${pdf.unavailable} 篇，待获取 ${pdf.pending} 篇`}
-        >
-          <i data-part="has" style={{ width: share(pdf.has_pdf) }} />
-          <i
-            data-part="unavailable"
-            style={{ width: share(pdf.unavailable) }}
-          />
+        <div className="intake-record-counts">
+          <Counts items={recordCounts(batch.counts)} />
+          {batch.source_failures ? (
+            <span className="quiet">
+              {batch.source_failures} 个来源未完整返回
+            </span>
+          ) : null}
         </div>
+        <PartsBar
+          total={hits}
+          label={`有 PDF ${pdf.has_pdf} 篇，无法获取 ${pdf.unavailable} 篇，待获取 ${pdf.pending} 篇`}
+          parts={[
+            { part: "has", value: pdf.has_pdf },
+            { part: "unavailable", value: pdf.unavailable },
+          ]}
+        />
         <span className="intake-record-pdf">
-          {pdf.pending === 0 && pdf.unavailable === 0 && c.hits > 0
+          {pdf.pending === 0 && pdf.unavailable === 0 && hits > 0
             ? "全部有 PDF"
             : [
                 `有 PDF ${pdf.has_pdf.toLocaleString()}`,
@@ -271,22 +264,9 @@ function Record({
                 .filter(Boolean)
                 .join(" · ")}
         </span>
-        <div className="intake-record-actions">
-          <Button onPress={() => openBatch(batch.batch_id)}>
-            在文献库查看
-          </Button>
-          {/* Only a batch formed from submitted data has an import report. */}
-          {batch.kind === "import" && batch.request.format ? (
-            <Button onPress={() => navigate({ session: batch.batch_id })}>
-              导入报告
-            </Button>
-          ) : null}
-          {pdf.pending > 0 && batch.state !== "running" ? (
-            <Button variant="primary" onPress={onAcquire}>
-              获取 PDF <span>{pdf.pending.toLocaleString()}</span>
-            </Button>
-          ) : null}
-        </div>
+        <Button size="compact" onPress={() => openBatch(batch.batch_id)}>
+          在文献库查看
+        </Button>
       </div>
     </li>
   );

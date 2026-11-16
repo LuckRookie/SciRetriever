@@ -19,9 +19,19 @@ it("hands a connection code over once, shows the device once it pairs, and renam
     expect(await purpose("操作").isChecked()).toBe(false);
     expect(await dialog.getByRole("checkbox").count()).toBe(3);
     await dialog.getByRole("textbox", { name: "名称" }).fill("办公室笔记本");
+    // The dialog says which kind of device it connects.
+    const pairing = page.waitForRequest(
+      (r) =>
+        new URL(r.url()).pathname === "/api/v1/device-connections/pairings",
+    );
     await dialog
       .getByRole("button", { name: "生成连接码", exact: true })
       .click();
+    expect((await pairing).postDataJSON().request).toMatchObject({
+      name: "办公室笔记本",
+      kind: "agent",
+      purposes: ["intake", "read"],
+    });
     const code = (await dialog
       .locator(".settings-device-code code")
       .textContent())!;
@@ -96,12 +106,21 @@ it("preselects intake for the browser extension and requires at least one purpos
       .click();
     const dialog = page.getByRole("dialog", { name: "连接浏览器扩展" });
     const intake = dialog.getByRole("checkbox", { name: "入库", exact: true });
+    // The extension takes papers in only: reading and operating stay off.
+    expect(await dialog.getByRole("checkbox").count()).toBe(3);
     expect(await intake.isChecked()).toBe(true);
+    expect(
+      await dialog
+        .getByRole("checkbox", { name: "读取", exact: true })
+        .isChecked(),
+    ).toBe(false);
     expect(
       await dialog
         .getByRole("checkbox", { name: "操作", exact: true })
         .isChecked(),
     ).toBe(false);
+    // Operating says it can start networked, paid tasks.
+    await dialog.getByText(/会联网、会花费/u).waitFor();
     await dialog.getByText("入库", { exact: true }).click();
     expect(await intake.isChecked()).toBe(false);
     expect(

@@ -1,285 +1,73 @@
 import "../processing/processing.css";
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  Button,
-  Definition,
-  Definitions,
-  Badge,
-  EmptyState,
-  ErrorNotice,
-  NumberField,
-  ListRow,
-  PageHeader,
-  Select,
-  Tabs,
-  TechDetails,
-  TextField,
-} from "../../components/index.js";
+import { EmptyState, PageHeader, Tabs } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
-import type { ApiClient } from "../../data/api.js";
-import type { JsonRecord } from "../../data/wire.js";
-import { readIntakeReport, type IntakeReport } from "../../data/intake.js";
-import { IntakeRecords } from "./IntakeRecords.js";
-import { ImportBatches, ImportBatchPage, ImportForm } from "./Import.js";
 import { useUrlState } from "../../data/url.js";
-import { errorMessage } from "../../strings.js";
-const reports = new WeakMap<
-  ApiClient,
-  { name: string; report: IntakeReport }[]
->();
+import { IntakeRecords } from "./IntakeRecords.js";
+import { BatchPage } from "./Batch.js";
+import { Discovery } from "./Discovery.js";
+import { Dropzone } from "./Dropzone.js";
+import { WebIntake, ZoteroIntake } from "./Extension.js";
+
+/**
+ * The intake page (page specs “入库”): four ways papers come in — 检索,
+ * 文件, Zotero and 网页 — above every batch they formed. A batch opens on
+ * this page, its id in the address.
+ */
 export default function Intake() {
   const api = useApi(),
-    queries = useQueryClient(),
-    session = useUrlState().parameters.get("session");
-  const [mode, setMode] = useState("topic"),
-    [query, setQuery] = useState(""),
-    [limit, setLimit] = useState(200),
-    [from, setFrom] = useState(""),
-    [to, setTo] = useState(""),
-    [seed, setSeed] = useState(""),
-    [direction, setDirection] = useState("references"),
-    [history, setHistory] = useState(() => reports.get(api) ?? []);
-  const mutation = useMutation({
-    mutationFn: async () => {
-      if (mode === "topic" && !query.trim())
-        throw new Error("请填写研究主题或检索式。");
-      if (mode === "cite" && !seed.trim())
-        throw new Error("请填写种子文献 ID。");
-      const response: JsonRecord = await api.request(
-        "/api/discovery",
-        mode === "cite"
-          ? {
-              kind: "citation",
-              seed_literature_id: seed.trim(),
-              direction,
-              scan_limit: limit,
-            }
-          : {
-              query: query.trim(),
-              scan_limit: limit,
-              year_from: from ? Number(from) : null,
-              year_to: to ? Number(to) : null,
-            },
-      );
-      return readIntakeReport(response.report);
-    },
-    onSuccess: (report) => {
-      const next = [
-        {
-          name: mode === "cite" ? "引用扩展" : "主题发现",
-          report,
-        },
-        ...history,
-      ].slice(0, 1);
-      reports.set(api, next);
-      setHistory(next);
-      void queries.invalidateQueries({ queryKey: ["library"] });
-    },
-  });
+    batch = useUrlState().parameters.get("session");
+  const [tab, setTab] = useState("search"),
+    [run, setRun] = useState<{ running: boolean; batch: string | null }>({
+      running: false,
+      batch: null,
+    });
   if (api.kind !== "workspace")
     return (
       <EmptyState
         title="此入口不提供发现与入库"
-        description="请从完整工作台启动发现或导入。"
+        description="请从完整工作台启动发现或入库。"
       />
     );
   return (
     <section className="feature-page intake-page">
       <PageHeader title="入库" />
-      {session ? (
-        <ImportBatchPage id={session} />
+      {batch ? (
+        <BatchPage id={batch} />
       ) : (
         <>
           <Tabs
             label="入库方式"
-            value={mode}
+            value={tab}
             onChange={(value) => {
-              if (!mutation.isPending) {
-                setMode(value);
-                mutation.reset();
-              }
+              // A discovery still waiting keeps its tab until it returns.
+              if (!run.running) setTab(value);
             }}
             items={[
-              { id: "topic", label: "主题发现" },
-              { id: "cite", label: "引用扩展" },
-              { id: "import", label: "导入" },
+              { id: "search", label: "检索" },
+              { id: "files", label: "文件" },
+              { id: "zotero", label: "Zotero" },
+              { id: "web", label: "网页" },
             ]}
           >
-            {mode === "import" ? (
-              <>
-                <ImportForm />
-                <ImportBatches />
-              </>
+            {tab === "search" ? (
+              <Discovery
+                onRun={(running, made) =>
+                  setRun((current) => ({
+                    running,
+                    batch: made ?? current.batch,
+                  }))
+                }
+              />
+            ) : tab === "files" ? (
+              <Dropzone />
+            ) : tab === "zotero" ? (
+              <ZoteroIntake />
             ) : (
-              <div className="intake-form">
-                <Definitions>
-                  {mode === "topic" ? (
-                    <>
-                      <Definition
-                        term="主题或检索式"
-                        description="按已配置的文献来源查找，只接纳元数据。"
-                      >
-                        <TextField
-                          label="主题或检索式"
-                          width="long"
-                          value={query}
-                          onChange={setQuery}
-                          isRequired
-                          maxLength={8192}
-                        />
-                      </Definition>
-                      <Definition
-                        term="逐来源扫描上限"
-                        description="1–10,000 条"
-                      >
-                        <NumberField
-                          label="逐来源扫描上限"
-                          value={limit}
-                          onChange={setLimit}
-                          minValue={1}
-                          maxValue={10000}
-                        />
-                      </Definition>
-                      <Definition term="出版年份" description="可只填一端。">
-                        <div className="intake-range">
-                          <NumberField
-                            label="年份起"
-                            value={from ? Number(from) : Number.NaN}
-                            onChange={(value) =>
-                              setFrom(
-                                Number.isFinite(value) ? String(value) : "",
-                              )
-                            }
-                            minValue={1}
-                            maxValue={9999}
-                            placeholder="例如 2020"
-                            formatOptions={{ useGrouping: false }}
-                          />
-                          <span aria-hidden="true">–</span>
-                          <NumberField
-                            label="年份止"
-                            value={to ? Number(to) : Number.NaN}
-                            onChange={(value) =>
-                              setTo(Number.isFinite(value) ? String(value) : "")
-                            }
-                            minValue={1}
-                            maxValue={9999}
-                            placeholder="例如 2026"
-                            formatOptions={{ useGrouping: false }}
-                          />
-                        </div>
-                      </Definition>
-                    </>
-                  ) : mode === "cite" ? (
-                    <>
-                      <Definition
-                        term="种子文献 ID"
-                        description="从这篇文献出发扩展。"
-                      >
-                        <TextField
-                          label="种子文献 ID"
-                          value={seed}
-                          onChange={setSeed}
-                          isRequired
-                        />
-                      </Definition>
-                      <Definition term="方向">
-                        <Select
-                          label="方向"
-                          value={direction}
-                          onChange={setDirection}
-                          options={[
-                            { value: "references", label: "参考文献" },
-                            { value: "cited-by", label: "被引文献" },
-                          ]}
-                        />
-                      </Definition>
-                      <Definition term="扫描上限" description="1–10,000 条">
-                        <NumberField
-                          label="扫描上限"
-                          value={limit}
-                          onChange={setLimit}
-                          minValue={1}
-                          maxValue={10000}
-                        />
-                      </Definition>
-                    </>
-                  ) : null}
-                </Definitions>
-                <Button
-                  variant="primary"
-                  isDisabled={mutation.isPending}
-                  confirm={{
-                    title: "确认发现文献",
-                    description:
-                      "将通过已配置的文献来源查找并接纳元数据，不会自动获取 PDF。",
-                    scope: `每来源最多 ${limit} 条`,
-                    service: "已配置的文献来源",
-                  }}
-                  // Discovery can take minutes; the dialog closes at once and the
-                  // batch's progress shows in the records below.
-                  onPress={() => {
-                    mutation.mutate();
-                  }}
-                >
-                  {mutation.isPending ? "正在发现…" : "开始发现"}
-                </Button>
-                {mutation.isPending ? (
-                  <p role="status">
-                    正在查找，进度见下方入库记录；完成前请不要关闭本页。
-                  </p>
-                ) : null}
-                {mutation.isError ? (
-                  <ErrorNotice
-                    message={errorMessage(mutation.error)}
-                    retained="表单已保留，尚未确认的结果请重试核对。"
-                  />
-                ) : null}
-                {mutation.isSuccess ? (
-                  <p role="status">
-                    操作已结束，结果见下方入库记录；未自动启动 PDF 获取。
-                  </p>
-                ) : null}
-              </div>
+              <WebIntake />
             )}
           </Tabs>
-          {history[0] ? (
-            <section className="intake-history" aria-label="刚才的提交">
-              <div className="intake-report">
-                <ListRow
-                  title={history[0].name}
-                  badge={
-                    <Badge status={history[0].report.status}>
-                      {history[0].report.label}
-                    </Badge>
-                  }
-                  bibliography={history[0].report.summary}
-                />
-                {history[0].report.notices.length ? (
-                  <ul aria-label="运行提示">
-                    {history[0].report.notices.map((notice, i) => (
-                      <li key={i}>{notice}</li>
-                    ))}
-                  </ul>
-                ) : null}
-                <TechDetails
-                  copyText={JSON.stringify(history[0].report.raw, null, 2)}
-                  title="运行明细"
-                >
-                  <pre>{JSON.stringify(history[0].report.raw, null, 2)}</pre>
-                </TechDetails>
-              </div>
-            </section>
-          ) : null}
-          <IntakeRecords
-            submitting={mutation.isPending}
-            highlight={
-              typeof history[0]?.report.raw.intake_batch_id === "string"
-                ? history[0].report.raw.intake_batch_id
-                : null
-            }
-          />
+          <IntakeRecords submitting={run.running} highlight={run.batch} />
         </>
       )}
     </section>

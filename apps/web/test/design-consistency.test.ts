@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { expect, it } from "vitest";
 import { componentFixture } from "./component-fixture.js";
 import { writeDesignAudit } from "./design-audit-fixture.js";
+import { nextAssets } from "./next-workspace-fixture.js";
 it("uses bounded control metrics and four themes without inline style sheets or narrow-screen overflow", async () => {
   const env = await componentFixture();
   try {
@@ -61,3 +62,21 @@ it("keeps design variables in CSS and avoids geometry transitions", async () => 
       expect(match[1]).not.toMatch(/\b(?:all|width|height|left|top)\b/u);
   }
 });
+it("names the style layers in order in the built main stylesheet, so page styles rank above components", async () => {
+  const assets = await nextAssets();
+  const html = String(assets.get("/")!.body);
+  const sheets = [
+    ...html.matchAll(/<link[^>]+rel="stylesheet"[^>]+href="([^"]+)"/gu),
+  ]
+    .map((m) => m[1]!)
+    .filter((href) => /^\/assets\/index-[^/]+\.css$/u.test(href));
+  expect(sheets).toHaveLength(1);
+  const css = String(assets.get(sheets[0]!)!.body);
+  // Layers rank by first appearance. The minifier drops the order statement
+  // of `tokens.css`, so the order is what the stylesheet itself first names.
+  const named: string[] = [];
+  for (const m of css.matchAll(/@layer\s*([^{;]+)[{;]/gu))
+    for (const name of m[1]!.split(",").map((part) => part.trim()))
+      if (name && !named.includes(name)) named.push(name);
+  expect(named).toEqual(["tokens", "base", "components", "pages"]);
+}, 120000);

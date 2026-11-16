@@ -1236,71 +1236,229 @@
     padding-bottom: 8px;
   }
 
-  /* Import sessions: a list of every source's sessions, and one session's page. */
-  .intake-import-sessions {
-    max-width: 960px;
-    padding-bottom: var(--space-6);
-  }
-  .intake-import-sessions > h2 {
-    margin: 0 0 var(--space-2);
-  }
-  .intake-import-session {
-    max-width: 960px;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
+  /* Intake page (page specs “入库”): the four ways in, then the records. */
+  .intake-discovery {
+    display: grid;
     gap: var(--space-3);
-    padding-bottom: var(--space-6);
+    justify-items: start;
   }
-  .intake-import-session > * {
-    max-width: 100%;
+  .intake-discovery > .intake-form,
+  .intake-discovery > .intake-history {
+    justify-self: stretch;
   }
-  .intake-import-session > .ui-definitions,
-  .intake-import-session > .ui-table-wrap,
-  .intake-import-upload {
-    align-self: stretch;
+  .intake-drop {
+    display: grid;
+    gap: var(--space-2);
+    max-width: 960px;
+    padding-bottom: var(--space-5);
   }
-  .intake-import-header {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: var(--space-3);
+  .intake-dropzone {
+    display: grid;
+    gap: var(--space-1);
+    padding: var(--space-5) var(--space-4);
+    border: 1px dashed var(--line2);
+    border-radius: var(--radius-md);
+    background: var(--surface-sunken);
+    text-align: center;
   }
-  .intake-import-header h2,
-  .intake-import-session h3 {
+  .intake-dropzone[data-over] {
+    border-color: var(--focus);
+    background: var(--sel);
+  }
+  .intake-dropzone p {
     margin: 0;
   }
-  .intake-import-session h3 {
-    padding-top: var(--space-2);
-    font-size: var(--text-interface);
-    font-weight: 600;
-  }
-  .intake-import-session > .ui-description {
-    margin: 0;
-  }
-  .intake-import-counts {
+  .intake-dropzone-lead {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--space-1) var(--space-4);
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+  }
+  .intake-drop-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .intake-drop-export {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: var(--space-2) var(--space-3);
+  }
+  .intake-drop-export > span {
+    padding-bottom: 8px;
+  }
+  .intake-drop p {
+    margin: 0;
+  }
+  .intake-drop-unknown {
+    margin: 0;
+    padding-left: var(--space-4);
     color: var(--fg2);
   }
-  .intake-import-counts strong {
-    color: var(--fg);
-    font-weight: 600;
+  .intake-drop-unknown > .ui-description {
+    list-style: none;
+    margin-left: calc(-1 * var(--space-4));
+  }
+  .intake-extension {
+    display: grid;
+    gap: var(--space-2);
+    max-width: 720px;
+    padding-bottom: var(--space-5);
+  }
+  .intake-extension p {
+    margin: 0;
+  }
+  .intake-extension-state {
+    color: var(--fg2);
+  }
+  .intake-extension-steps {
+    display: grid;
+    gap: var(--space-2);
+    margin: 0;
+    padding-left: var(--space-5);
+  }
+  .intake-extension-steps > li > * + * {
+    margin-left: var(--space-2);
+  }
+  .intake-counts {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-3);
+    color: var(--fg2);
     font-variant-numeric: tabular-nums;
   }
-  .intake-import-upload {
+  .intake-counts b {
+    color: var(--fg);
+    font-weight: 600;
+  }
+  .intake-bar {
+    display: flex;
+    width: 160px;
+    height: 6px;
+    overflow: hidden;
+    border-radius: var(--radius-sm);
+    background: var(--t-gray-bg);
+  }
+  .intake-bar > i[data-part="has"] {
+    background: var(--t-green);
+  }
+  .intake-bar > i[data-part="existing"] {
+    background: var(--t-blue);
+  }
+  .intake-bar > i[data-part="unavailable"] {
+    background: var(--t-red);
+  }
+
+  /* One batch (page specs “批次页”): its parts top to bottom. */
+  .intake-batch {
+    max-width: 960px;
+    display: grid;
+    gap: var(--space-4);
+    justify-items: start;
+    padding-bottom: var(--space-6);
+  }
+  .intake-batch > * {
+    max-width: 100%;
+  }
+  .intake-batch-header,
+  .intake-batch-part {
+    justify-self: stretch;
     display: grid;
     gap: var(--space-2);
   }
-  .intake-import-upload p {
+  .intake-batch-header p,
+  .intake-batch-part p {
     margin: 0;
   }
-  .intake-import-actions {
+  .intake-batch-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+  }
+  .intake-batch-title h2 {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+  .intake-batch-state {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-left: auto;
+  }
+  .intake-batch-part h3 {
+    margin: 0;
+    font-size: var(--text-interface);
+    font-weight: 600;
+  }
+  .intake-batch-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .intake-decision-group h4 {
+    margin: 0 0 var(--space-1);
+    color: var(--fg2);
+    font-size: var(--text-secondary);
+    font-weight: 500;
+  }
+  .intake-decision-group ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .intake-decision {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(8em, auto);
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+    padding: var(--space-2) 0;
+    border-top: 1px solid var(--line);
+  }
+  .intake-decision-name {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-family: var(--serif);
+  }
+  .intake-decision-actions {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
-    padding-top: var(--space-2);
+  }
+  .intake-decision-chosen {
+    color: var(--fg3);
+    font-size: var(--text-secondary);
+    text-align: right;
+  }
+  .intake-batch-upload {
+    display: grid;
+    gap: var(--space-2);
+  }
+  .intake-batch-next,
+  .intake-batch-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+  }
+  .intake-batch-actions:empty {
+    display: none;
+  }
+  @media (max-width: 700px) {
+    .intake-decision {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .intake-decision-chosen {
+      text-align: left;
+    }
+    .intake-batch-state {
+      margin-left: 0;
+    }
   }
 
   /* Intake records: what came in, and how far its PDFs have got. */
@@ -1318,7 +1476,7 @@
   }
   .intake-record {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto auto;
     gap: var(--space-2) var(--space-5);
     padding: var(--space-3) 0;
     border-top: 1px solid var(--line);
@@ -1337,17 +1495,28 @@
   }
   .intake-record-title {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     flex-wrap: wrap;
     gap: var(--space-2);
   }
-  .intake-record-kind {
-    color: var(--fg3);
-    font-size: var(--text-caption);
-  }
+  /* The name opens the batch; it reads as the row's title, not a button. */
   .intake-record-name {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--fg);
     font-weight: 600;
+    text-align: left;
     overflow-wrap: anywhere;
+    cursor: pointer;
+  }
+  .intake-record-name:hover {
+    text-decoration: underline;
+  }
+  .intake-record-name:focus-visible {
+    border-radius: var(--radius-sm);
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
   }
   .intake-record-edit {
     opacity: 0;
@@ -1392,28 +1561,11 @@
     align-content: start;
     gap: var(--space-1);
   }
-  .intake-record-bar {
-    display: flex;
-    width: 160px;
-    height: 6px;
-    overflow: hidden;
-    border-radius: 3px;
-    background: var(--t-gray-bg);
-  }
-  .intake-record-bar > i[data-part="has"] {
-    background: var(--t-green);
-  }
-  .intake-record-bar > i[data-part="unavailable"] {
-    background: var(--t-red);
+  .intake-record-state {
+    padding-top: 2px;
   }
   .intake-record-pdf {
     font-variant-numeric: tabular-nums;
-  }
-  .intake-record-actions {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: var(--space-2);
   }
   @media (max-width: 700px) {
     .intake-record {
@@ -1421,9 +1573,6 @@
     }
     .intake-record-side {
       justify-items: start;
-    }
-    .intake-record-actions {
-      justify-content: flex-start;
     }
   }
 
