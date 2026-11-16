@@ -29,11 +29,11 @@
   - SQL（建议新文件，与 `folder-engine.ts` 并列）；
   - `schema.ts` 中本计划编号的清单；新迁移模块与脚本 `scripts/migrate-<主题>-v18.mjs`（命名沿用现有 `migrate-<主题>-v<编号>.mjs`）。
 - 触达：CLI（`apps/server/src/cli/main.ts`）、MCP 工具（`apps/server/src/mcp/tools.ts`，按设备用途列出）、HTTP（`apps/server/src/workbench/http.ts` 的 query 与 maintenance 路由）、写入的操作记录（规格 6.4）；所有检查当前 schema 编号的位置（`rg -n '\[1[6-9]\]\.includes' apps/server/src`）。
-- 不改：文件夹与批注的现有行为；文献库查询本身；Web（09 块）；前一个编号的清单与迁移脚本。
+- 不改：文件夹与批注的现有行为；文献库查询本身；Web（09 块）；前一个编号的清单（冻结为 `SCHEMA_MANIFEST_V17` 与它的指纹）以及 16→17 迁移的 DDL、算法、回执与脚本。16→17 迁移的目标改为绑定冻结的 V17 清单，这是唯一允许的改动（总设计师 2026-11-16 核定）。
 
 ## Tasks
 
-- [ ] **7.1 DDL 清单与测试数据**
+- [x] **7.1 DDL 清单与测试数据**（2026-11-16：后端实施者交 `sandbox/reports/2026-11-16-plan25-07/DDL.md`，总设计师核对通过；时间列、旧迁移边界与名称错误码三处疑点已写进存储第 7 节、用户整理 9.1 与本块）
   - 按存储技术篇第 7 节写出 `saved_filters` 与 `reading_mark_places` 的 DDL，记入本块回执，交总设计师核对后再写进 `schema.ts`。
   - 准备合成的前一编号的库：含文件夹、批注、最近阅读与已有的全部结果表，供 7.6 使用。
 - [ ] **7.2 schema 清单**：保留前一编号的清单与指纹作为迁移的精确输入；`SCHEMA_MANIFEST` 与 `SCHEMA_VERSION` 改为本计划的编号。两张新表都不进入 `LIBRARY_STATE_INPUT_TABLES`，不推进检索 source revision（规格 6.1、存储技术篇第 7 节）。
