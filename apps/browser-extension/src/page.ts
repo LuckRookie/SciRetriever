@@ -1,142 +1,64 @@
-/** What the extension reads from the current page when the user opens it. */
-export interface PageReading {
+/**
+ * The page's original data as the library takes it (`WebPageData`, product
+ * interface 2.4.2; literature and materials 6.4.5): the address, the title,
+ * every `meta` with a `name` or `property`, the schema.org JSON-LD text and
+ * whether the page is itself a PDF. Nothing is interpreted here: the
+ * library's `web-page` adapter reads the bibliography and the PDF address.
+ */
+export interface WebPageData {
   url: string;
-  is_pdf: boolean;
-  doi: string | null;
-  arxiv: string | null;
   title: string | null;
-  authors: string[];
-  date: string | null;
-  journal: string | null;
-  publisher: string | null;
-  volume: string | null;
-  issue: string | null;
-  first_page: string | null;
-  last_page: string | null;
-  abstract: string | null;
-  language: string | null;
-  keywords: string[];
-  pdf_url: string | null;
+  meta: { attribute: "name" | "property"; key: string; content: string }[];
+  json_ld: string[];
+  is_pdf: boolean;
 }
 
 /**
- * Reads identifiers and bibliographic tags (`citation_*`, Dublin Core,
- * `prism.*`) and the DOI or arXiv number in the address. It is injected into
- * the page with `chrome.scripting.executeScript`, so everything it uses is
- * declared inside it.
+ * Collects the page's data within the contract's limits: at most 500 `meta`,
+ * at most 5 JSON-LD blocks of 64 KiB each, 512 KiB in all. It is injected
+ * into the page with `chrome.scripting.executeScript`, so everything it uses
+ * is declared inside it.
  */
-export function readPage(): PageReading {
-  const tags = new Map<string, string[]>();
-  for (const meta of document.querySelectorAll("meta[name], meta[property]")) {
-    const name = (
-      meta.getAttribute("name") ??
-      meta.getAttribute("property") ??
-      ""
-    ).toLowerCase();
-    const content = (meta.getAttribute("content") ?? "")
-      .replace(/\s+/gu, " ")
-      .trim();
-    if (!name || !content) continue;
-    tags.set(name, [...(tags.get(name) ?? []), content]);
-  }
-  const all = (...names: string[]) =>
-    names.flatMap((name) => tags.get(name) ?? []);
-  const first = (...names: string[]) => all(...names)[0] ?? null;
-  const decode = (text: string) => {
-    try {
-      return decodeURIComponent(text);
-    } catch {
-      return text;
-    }
-  };
-  const doiOf = (text: string | null) => {
-    if (!text) return null;
-    const match = /\b(10\.\d{4,9}\/[^\s"'<>]+)/u.exec(decode(text));
-    if (!match?.[1]) return null;
-    return match[1]
-      .replace(/[.,;:)\]}]+$/u, "")
-      .replace(/\/(?:full|abstract|pdf|epdf|html)$/iu, "")
-      .replace(/\.pdf$/iu, "")
-      .toLowerCase();
-  };
-  const arxivPattern =
-    /(?:arxiv\.org\/(?:abs|pdf)\/|arxiv:\s*)((?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[a-z]{2})?\/\d{7})(?:v\d+)?)/iu;
-  const arxivOf = (text: string | null) => {
-    if (!text) return null;
-    const match = arxivPattern.exec(decode(text));
-    return match?.[1] ? match[1].replace(/\.pdf$/iu, "") : null;
-  };
-  const url = location.href;
-  const is_pdf =
-    document.contentType === "application/pdf" ||
-    /\.pdf(?:$|[?#])/iu.test(location.pathname);
-  let doi = null as string | null;
-  for (const value of all(
-    "citation_doi",
-    "prism.doi",
-    "dc.identifier",
-    "dc.identifier.doi",
-    "bepress_citation_doi",
+export function readPage(): WebPageData {
+  const META = 500,
+    BLOCKS = 5,
+    BLOCK_BYTES = 64 * 1024,
+    TOTAL_BYTES = 512 * 1024;
+  const bytes = (value: unknown) =>
+    new TextEncoder().encode(JSON.stringify(value)).byteLength;
+  const meta: WebPageData["meta"] = [];
+  for (const element of document.querySelectorAll(
+    "meta[name], meta[property]",
   )) {
-    doi = doiOf(value);
-    if (doi) break;
+    if (meta.length >= META) break;
+    const name = element.getAttribute("name");
+    const attribute = name !== null ? "name" : "property";
+    const key = name ?? element.getAttribute("property") ?? "";
+    const content = element.getAttribute("content");
+    if (!key || content === null) continue;
+    meta.push({ attribute, key, content });
   }
-  doi ??= doiOf(url);
-  let arxiv =
-    arxivOf(url) ??
-    arxivOf(
-      first("citation_arxiv_id") && `arXiv:${first("citation_arxiv_id")}`,
-    );
-  // A DataCite arXiv DOI names the preprint itself.
-  const arxivDoi = doi ? /^10\.48550\/arxiv\.(.+)$/u.exec(doi) : null;
-  if (arxivDoi?.[1]) arxiv ??= arxivDoi[1];
-  const absolute = (value: string | null) => {
-    if (!value) return null;
-    try {
-      const resolved = new URL(value, location.href);
-      return resolved.protocol === "https:" || resolved.protocol === "http:"
-        ? resolved.href
-        : null;
-    } catch {
-      return null;
-    }
+  const json_ld: string[] = [];
+  for (const script of document.querySelectorAll(
+    'script[type="application/ld+json"]',
+  )) {
+    if (json_ld.length >= BLOCKS) break;
+    const text = script.textContent ?? "";
+    // A block over the limit is left out whole: a cut one is not JSON.
+    if (text.trim() && new TextEncoder().encode(text).byteLength <= BLOCK_BYTES)
+      json_ld.push(text);
+  }
+  const page: WebPageData = {
+    url: location.href,
+    title: document.title || null,
+    meta,
+    json_ld,
+    is_pdf:
+      document.contentType === "application/pdf" ||
+      /\.pdf(?:$|[?#])/iu.test(location.pathname),
   };
-  const pdf_url = is_pdf
-    ? url
-    : (absolute(first("citation_pdf_url")) ??
-      (arxiv && /(^|\.)arxiv\.org$/u.test(location.hostname)
-        ? `https://arxiv.org/pdf/${arxiv}`
-        : null));
-  return {
-    url,
-    is_pdf,
-    doi,
-    arxiv,
-    title: first("citation_title", "dc.title", "og:title"),
-    authors: all("citation_author", "dc.creator"),
-    date: first(
-      "citation_publication_date",
-      "citation_date",
-      "citation_online_date",
-      "prism.publicationdate",
-      "dc.date",
-    ),
-    journal: first(
-      "citation_journal_title",
-      "prism.publicationname",
-      "citation_conference_title",
-    ),
-    publisher: first("citation_publisher", "dc.publisher"),
-    volume: first("citation_volume", "prism.volume"),
-    issue: first("citation_issue", "prism.number"),
-    first_page: first("citation_firstpage", "prism.startingpage"),
-    last_page: first("citation_lastpage", "prism.endingpage"),
-    abstract: first("citation_abstract", "dc.description"),
-    language: first("citation_language", "dc.language"),
-    keywords: all("citation_keywords")
-      .flatMap((value) => value.split(/[;,]/u))
-      .map((value) => value.trim())
-      .filter(Boolean),
-    pdf_url,
-  };
+  // Within 512 KiB: the JSON-LD goes first, from the last block, then `meta`.
+  while (bytes(page) > TOTAL_BYTES && page.json_ld.length) page.json_ld.pop();
+  while (bytes(page) > TOTAL_BYTES && page.meta.length) page.meta.pop();
+  return page;
 }

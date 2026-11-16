@@ -1,18 +1,19 @@
-import { readPage, type PageReading } from "./page.js";
+import { readPage, type WebPageData } from "./page.js";
 import {
   CaptureError,
-  identifiersOf,
+  folderTree,
   LibraryClient,
   manualIdentifier,
-  metadataOf,
   normalizeAddress,
   originPattern,
   parseConnectionCode,
   pdfName,
   sha256,
+  withIdentifier,
   type CaptureResult,
+  type DuplicateDecision,
   type FileStatus,
-  type Identifier,
+  type Folder,
   type Lookup,
 } from "./capture.js";
 
@@ -210,7 +211,7 @@ function unreachable(connection: Connection, error: unknown) {
   );
 }
 
-async function readCurrentPage(): Promise<PageReading | null> {
+async function readCurrentPage(): Promise<WebPageData | null> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (tab?.id === undefined) return null;
   try {
@@ -230,8 +231,9 @@ async function start() {
   if (!connection) return connect();
   setFooter(connection);
   show(h("p", { class: "note", role: "status" }, "正在读取页面…"));
-  const reading = await readCurrentPage();
-  if (!reading) {
+  // The page is read once, as it is; the library reads its bibliography.
+  const page = await readCurrentPage();
+  if (!page) {
     show(
       h("h1", {}, "读不了这个页面"),
       h(
@@ -242,14 +244,10 @@ async function start() {
     );
     return;
   }
-  const identifiers = identifiersOf(reading);
-  // A title is enough to collect; only a page with neither asks for an identifier.
-  if (!identifiers.length && !reading.title?.trim())
-    return askIdentifier(connection, reading);
-  await lookup(connection, reading, identifiers);
+  await lookup(connection, page);
 }
 
-function askIdentifier(connection: Connection, reading: PageReading) {
+function askIdentifier(connection: Connection, page: WebPageData) {
   const input = h("input", {
     id: "identifier",
     type: "text",
@@ -272,7 +270,7 @@ function askIdentifier(connection: Connection, reading: PageReading) {
             status.textContent = "没认出 DOI 或 arXiv 号，请检查。";
             return;
           }
-          await lookup(connection, reading, [identifier]);
+          await lookup(connection, withIdentifier(page, identifier));
         },
         "primary",
       ),
@@ -284,26 +282,51 @@ function askIdentifier(connection: Connection, reading: PageReading) {
 
 const badge = (text: string, tone: "done" | "pending") =>
   h("span", { class: "badge", "data-tone": tone }, text);
-const authorsLine = (reading: PageReading) => {
-  const names = reading.authors.slice(0, 3).join(", ");
-  const more = reading.authors.length > 3 ? " 等" : "";
-  const year = /^\d{4}/u.exec(reading.date ?? "")?.[0];
-  return [names + more, year].filter(Boolean).join(" · ");
+const authorsLine = (metadata: Lookup["metadata"]) => {
+  const names = metadata.authors
+    .slice(0, 3)
+    .map((author) => author.display_name)
+    .join(", ");
+  const more = metadata.authors.length > 3 ? " 等" : "";
+  return [names + more, metadata.publication_year?.toString()]
+    .filter(Boolean)
+    .join(" · ");
 };
 
-async function lookup(
-  connection: Connection,
-  reading: PageReading,
-  identifiers: Identifier[],
-) {
+/** “文件夹”: not filed by default, the tree indented by level. */
+function folderSelect(folders: Folder[]) {
+  return h(
+    "select",
+    { id: "folder" },
+    h("option", { value: "" }, "不放进文件夹"),
+    ...folderTree(folders).map(({ folder, depth }) =>
+      h(
+        "option",
+        { value: folder.folder_id },
+        `${"\u3000".repeat(depth)}${folder.name}`,
+      ),
+    ),
+  );
+}
+
+async function lookup(connection: Connection, page: WebPageData) {
   const client = new LibraryClient(connection.address, connection.token);
   show(h("p", { class: "note", role: "status" }, "正在查询文献库…"));
   let found: Lookup;
+  let folders: Folder[] = [];
   try {
-    found = await client.lookup(metadataOf(reading, identifiers));
+    [found, folders] = await Promise.all([
+      client.lookup(page),
+      // The folder list is a convenience: without it the page goes unfiled.
+      client.folders().catch(() => []),
+    ]);
   } catch (error) {
     return unreachable(connection, error);
   }
+  const identifiers = found.metadata.identifiers;
+  // A title is enough to collect; only a page with neither asks for an identifier.
+  if (!found.found && !identifiers.length && !found.metadata.title?.trim())
+    return askIdentifier(connection, page);
   const ids = identifiers.length
     ? identifiers.map((id) =>
         h("li", {}, `${id.namespace === "doi" ? "DOI" : "arXiv"} ${id.value}`),
@@ -315,15 +338,15 @@ async function lookup(
         found.has_pdf ? "已在库 · 已有 PDF" : "已在库 · 还没有 PDF",
         "done",
       ),
-      h("h1", {}, found.library_title ?? reading.title ?? "（无标题）"),
+      h("h1", {}, found.library_title ?? found.metadata.title ?? "（无标题）"),
       h("ul", { class: "identifiers" }, ...ids),
-      !found.has_pdf && reading.pdf_url
+      !found.has_pdf && found.pdf_url
         ? h(
             "div",
             { class: "actions" },
             button(
               "补上 PDF",
-              () => save(client, reading, identifiers, [], true),
+              () => save(client, page, found, [], true, undefined),
               "primary",
             ),
           )
@@ -336,39 +359,98 @@ async function lookup(
     type: "checkbox",
     checked: true,
   });
+  const folder = folderSelect(folders);
+  let decision: DuplicateDecision | undefined;
+  const collect = button(
+    "收藏",
+    () =>
+      save(
+        client,
+        page,
+        found,
+        folder.value ? [folder.value] : [],
+        !!found.pdf_url && withPdf.checked,
+        decision,
+      ),
+    "primary",
+  );
+  // Literature and materials 6.4.8: the paper may already be in the library;
+  // nothing is collected until the user chooses.
+  const candidates = found.possible_duplicates;
+  const choices: HTMLButtonElement[] = [];
+  const choose = (next: DuplicateDecision, chosen: HTMLButtonElement) => {
+    decision = next;
+    for (const choice of choices)
+      choice.setAttribute("aria-pressed", String(choice === chosen));
+    collect.disabled = false;
+    collect.textContent =
+      next.kind === "merge" ? "并入并收藏" : "作为新文献收藏";
+  };
+  let duplicates: HTMLElement | null = null;
+  if (candidates.length) {
+    collect.disabled = true;
+    const rows = candidates.map((candidate) => {
+      const merge: HTMLButtonElement = button(
+        "并入这一篇",
+        () =>
+          choose(
+            { kind: "merge", literature_id: candidate.literature_id },
+            merge,
+          ),
+        "text",
+      );
+      choices.push(merge);
+      return h(
+        "li",
+        {},
+        h(
+          "span",
+          {},
+          [
+            candidate.title,
+            candidate.first_author,
+            candidate.publication_year?.toString(),
+          ]
+            .filter(Boolean)
+            .join(" · "),
+        ),
+        merge,
+      );
+    });
+    const asNew: HTMLButtonElement = button(
+      "作为新文献收藏",
+      () => choose({ kind: "new" }, asNew),
+      "text",
+    );
+    choices.push(asNew);
+    duplicates = h(
+      "section",
+      { class: "duplicates", "aria-label": "库里可能已有这篇" },
+      h("h2", {}, "库里可能已有这篇"),
+      h("ul", {}, ...rows),
+      asNew,
+    );
+  }
   show(
-    h("h1", {}, reading.title ?? "（页面上没有标题）"),
-    reading.authors.length || reading.date
-      ? h("p", { class: "byline" }, authorsLine(reading))
+    h("h1", {}, found.metadata.title ?? page.title ?? "（页面上没有标题）"),
+    found.metadata.authors.length || found.metadata.publication_year
+      ? h("p", { class: "byline" }, authorsLine(found.metadata))
       : null,
     h("ul", { class: "identifiers" }, ...ids),
-    // The intake interface has no folder listing yet; collected papers go unfiled.
-    reading.pdf_url
+    h("label", { for: "folder" }, "文件夹"),
+    folder,
+    found.pdf_url
       ? h("label", { class: "check" }, withPdf, "连同 PDF")
       : h("p", { class: "note" }, "页面上没有找到 PDF，只收藏书目。"),
-    h(
-      "div",
-      { class: "actions" },
-      button(
-        "收藏",
-        () =>
-          save(
-            client,
-            reading,
-            identifiers,
-            [],
-            !!reading.pdf_url && withPdf.checked,
-          ),
-        "primary",
-      ),
-    ),
+    duplicates,
+    h("div", { class: "actions" }, collect),
   );
 }
 
 /** Downloads with the browser's own network and sign-in; nothing of it goes to the library. */
 async function downloadPdf(
   url: string,
-): Promise<{ bytes: ArrayBuffer } | { failure: string }> {
+): Promise<{ bytes: ArrayBuffer; source_url: string } | { failure: string }> {
   const origin = originPattern(url);
   if (!(await chrome.permissions.request({ origins: [origin] })))
     return { failure: `没有访问 ${new URL(url).host} 的权限` };
@@ -381,7 +463,7 @@ async function downloadPdf(
     const bytes = await response.arrayBuffer();
     const head = new TextDecoder().decode(new Uint8Array(bytes.slice(0, 5)));
     return head === "%PDF-"
-      ? { bytes }
+      ? { bytes, source_url: response.url || url }
       : { failure: "下载到的不是 PDF，可能需要先登录或没有全文权限" };
   } catch {
     return { failure: "网络请求失败" };
@@ -397,20 +479,27 @@ const FILE_RESULTS: Record<FileStatus["status"], string> = {
 
 async function save(
   client: LibraryClient,
-  reading: PageReading,
-  identifiers: Identifier[],
+  page: WebPageData,
+  preview: Lookup,
   folder_ids: string[],
   withPdf: boolean,
+  decision: DuplicateDecision | undefined,
 ) {
+  const title = preview.metadata.title ?? page.title;
   const status = h("p", { class: "note", role: "status" }, "正在收藏…");
-  show(h("h1", {}, reading.title ?? "收藏"), status);
-  let pdf: { bytes: ArrayBuffer; sha256: string } | null = null,
+  show(h("h1", {}, title ?? "收藏"), status);
+  let pdf: { bytes: ArrayBuffer; sha256: string; source_url: string } | null =
+      null,
     pdfFailure: string | null = null;
-  if (withPdf && reading.pdf_url) {
+  if (withPdf && preview.pdf_url) {
     status.textContent = "正在下载 PDF…";
-    const downloaded = await downloadPdf(reading.pdf_url);
+    const downloaded = await downloadPdf(preview.pdf_url);
     if ("bytes" in downloaded)
-      pdf = { bytes: downloaded.bytes, sha256: await sha256(downloaded.bytes) };
+      pdf = {
+        bytes: downloaded.bytes,
+        sha256: await sha256(downloaded.bytes),
+        source_url: downloaded.source_url,
+      };
     else pdfFailure = downloaded.failure;
   }
   let result: CaptureResult;
@@ -418,15 +507,17 @@ async function save(
     status.textContent = "正在收藏…";
     result = await client.save({
       request_id: crypto.randomUUID(),
-      metadata: metadataOf(reading, identifiers),
+      page,
       folder_ids,
       file: pdf
         ? {
-            file_name: pdfName(reading.pdf_url!, identifiers),
+            file_name: pdfName(pdf.source_url, preview.metadata.identifiers),
             size_bytes: pdf.bytes.byteLength,
             sha256: pdf.sha256,
+            source_url: pdf.source_url,
           }
         : null,
+      ...(decision ? { duplicate_decision: decision } : {}),
     });
   } catch (error) {
     status.textContent = message("收藏失败。")(error);
@@ -447,6 +538,12 @@ async function save(
       pdfFailure = message("PDF 上传失败。")(error);
     }
   }
+  const merged =
+    decision?.kind === "merge"
+      ? preview.possible_duplicates.find(
+          (candidate) => candidate.literature_id === decision.literature_id,
+        )
+      : undefined;
   // The library forms one batch per device and day.
   const day = new Date().toLocaleDateString("en-CA");
   show(
@@ -454,8 +551,9 @@ async function save(
       result.disposition === "created" ? "已收藏" : "已在库，已补充",
       "done",
     ),
-    h("h1", {}, reading.title ?? "已收藏"),
+    h("h1", {}, title ?? "已收藏"),
     h("p", {}, `已收进“网页收藏 ${day}”。`),
+    merged ? h("p", {}, `已并入库里的《${merged.title}》`) : null,
     h(
       "p",
       { class: "note" },

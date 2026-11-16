@@ -1,4 +1,4 @@
-import type { PageReading } from "./page.js";
+import type { WebPageData } from "./page.js";
 
 /** `sr-connect1:<encoded address>:<pairing code>`, as the settings page hands it over. */
 export function parseConnectionCode(code: string): {
@@ -50,16 +50,6 @@ export interface Identifier {
   namespace: "doi" | "arxiv";
   value: string;
 }
-export function identifiersOf(
-  reading: Pick<PageReading, "doi" | "arxiv">,
-): Identifier[] {
-  return [
-    ...(reading.doi ? [{ namespace: "doi" as const, value: reading.doi }] : []),
-    ...(reading.arxiv
-      ? [{ namespace: "arxiv" as const, value: reading.arxiv }]
-      : []),
-  ];
-}
 /** A DOI or arXiv number the user typed when the page had none. */
 export function manualIdentifier(text: string): Identifier | null {
   const value = text.trim();
@@ -71,72 +61,66 @@ export function manualIdentifier(text: string): Identifier | null {
     )?.[1];
   return arxiv ? { namespace: "arxiv", value: arxiv } : null;
 }
-
-const dateOf = (value: string | null) => {
-  const match = value
-    ? /^(\d{4})(?:[-/.](\d{1,2})(?:[-/.](\d{1,2}))?)?/u.exec(value.trim())
-    : null;
-  if (!match?.[1]) return { date: null, year: null };
-  const [, year, month, day] = match;
-  const two = (part: string) => part.padStart(2, "0");
+/**
+ * The page with the identifier the user typed, as the tag a publisher would
+ * have put there (`citation_doi`, `citation_arxiv_id`); the library reads it
+ * like any other.
+ */
+export function withIdentifier(
+  page: WebPageData,
+  identifier: Identifier,
+): WebPageData {
   return {
-    date:
-      month && Number(month) >= 1 && Number(month) <= 12
-        ? day && Number(day) >= 1 && Number(day) <= 31
-          ? `${year}-${two(month)}-${two(day)}`
-          : `${year}-${two(month)}`
-        : year,
-    year: Number(year),
-  };
-};
-
-/** Page fields as neutral metadata for the `web-capture` source record. */
-export function metadataOf(
-  reading: PageReading,
-  identifiers: Identifier[],
-): Record<string, unknown> {
-  const { date, year } = dateOf(reading.date);
-  const pages = reading.first_page
-    ? reading.last_page && reading.last_page !== reading.first_page
-      ? `${reading.first_page}-${reading.last_page}`
-      : reading.first_page
-    : null;
-  const language =
-    reading.language &&
-    /^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/iu.test(reading.language)
-      ? reading.language.toLowerCase()
-      : null;
-  return {
-    title: reading.title,
-    authors: [...new Set(reading.authors)].slice(0, 500).map((name) => ({
-      kind: "unknown",
-      display_name: name,
-      given_name: null,
-      family_name: null,
-      orcid: null,
-      affiliations: [],
-    })),
-    abstract: reading.abstract,
-    publication_date: date,
-    publication_year: year,
-    language,
-    venue: reading.journal,
-    publisher: reading.publisher,
-    volume: reading.volume,
-    issue: reading.issue,
-    pages,
-    identifiers,
-    keywords: [...new Set(reading.keywords)].slice(0, 100),
+    ...page,
+    meta: [
+      {
+        attribute: "name",
+        key:
+          identifier.namespace === "doi" ? "citation_doi" : "citation_arxiv_id",
+        content: identifier.value,
+      },
+      ...page.meta.slice(0, 499),
+    ],
   };
 }
 
-/** The library's preview of a page (`/api/v1/intake/pages/preview`); nothing is written. */
+/** A paper in the library the page may be (literature and materials 6.4.8). */
+export interface PossibleDuplicate {
+  literature_id: string;
+  title: string;
+  first_author: string | null;
+  publication_year: number | null;
+  similarity: number;
+}
+/**
+ * The library's preview of a page (`/api/v1/intake/pages/preview`): what it
+ * read from the page, whether it holds the paper, and the papers it may be.
+ * Nothing is written.
+ */
 export interface Lookup {
   found: boolean;
   literature_id: string | null;
   library_title: string | null;
+  metadata: {
+    title: string | null;
+    authors: { display_name: string }[];
+    publication_year: number | null;
+    identifiers: Identifier[];
+  };
   has_pdf: boolean;
   pdf_url: string | null;
+  possible_duplicates: PossibleDuplicate[];
+}
+export type DuplicateDecision =
+  | { kind: "merge"; literature_id: string }
+  | { kind: "new" };
+/** The PDF the extension downloaded, as the save reports it. */
+export interface PageFile {
+  file_name: string;
+  size_bytes: number;
+  sha256: string;
+  /** Where it actually came from, after redirects. */
+  source_url: string;
 }
 export interface Folder {
   folder_id: string;
@@ -175,6 +159,8 @@ const MESSAGES: Record<string, string> = {
   "intake-pdf-invalid": "下载到的文件不是可读的 PDF。",
   "intake-disk-space": "文献库所在磁盘空间不足。",
   "intake-request-too-large": "页面上的书目信息太长，没能保存。",
+  "intake-decision-required":
+    "库里可能已有这篇，请先选择并入哪一篇，或作为新文献收藏。",
 };
 
 /**
@@ -246,17 +232,23 @@ export class LibraryClient {
       throw new CaptureError("文献库没有给出令牌。", "invalid-reply");
     return result.token;
   }
-  /** The library's view of this page's bibliography: in the library or not, with or without a PDF. */
-  async lookup(metadata: Record<string, unknown>): Promise<Lookup> {
+  /** The library reads the page: in the library or not, with or without a PDF, and what it may be. */
+  async lookup(page: WebPageData): Promise<Lookup> {
     return (await this.call("/api/v1/intake/pages/preview", {
-      metadata,
+      page,
     })) as unknown as Lookup;
+  }
+  /** The folder tree to file the page into (`/api/v1/intake/folders`). */
+  async folders(): Promise<Folder[]> {
+    const result = await this.call("/api/v1/intake/folders", {});
+    return (Array.isArray(result.items) ? result.items : []) as Folder[];
   }
   async save(request: {
     request_id: string;
-    metadata: Record<string, unknown>;
+    page: WebPageData;
     folder_ids: string[];
-    file: { file_name: string; size_bytes: number; sha256: string } | null;
+    file: PageFile | null;
+    duplicate_decision?: DuplicateDecision;
   }): Promise<CaptureResult> {
     return (await this.call(
       "/api/v1/intake/pages/save",

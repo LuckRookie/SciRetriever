@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { chromium, type Browser } from "playwright";
-import { readPage, type PageReading } from "../src/page.js";
+import { readPage, type WebPageData } from "../src/page.js";
 
 let browser: Browser;
 beforeAll(async () => {
@@ -11,7 +11,7 @@ afterAll(async () => {
 });
 
 /** Serves `html` at `url` and reads it the way the popup injects the reader. */
-async function read(url: string, html: string): Promise<PageReading> {
+async function read(url: string, html: string): Promise<WebPageData> {
   const page = await browser.newPage();
   try {
     await page.route("**/*", (route) =>
@@ -24,82 +24,88 @@ async function read(url: string, html: string): Promise<PageReading> {
   }
 }
 
-it("reads Highwire, Dublin Core and PRISM tags, resolving the PDF address", async () => {
-  const reading = await read(
-    "https://journal.test/article/abc",
-    `<html><head>
+it("hands over the page as it is: address, title, every name and property meta, JSON-LD text", async () => {
+  const ld =
+    '{"@context":"https://schema.org","@type":"ScholarlyArticle","headline":"Argyrodite"}';
+  const page = await read(
+    "https://journal.test/article/abc?ref=list",
+    `<html><head><title>Argyrodite | Journal</title>
       <meta name="citation_title" content="Argyrodite  electrolyte one">
       <meta name="citation_author" content="Smith, Alice">
       <meta name="citation_author" content="Lee, Bo">
       <meta name="citation_doi" content="doi:10.5555/ABC.1">
-      <meta name="citation_publication_date" content="2021/03/15">
-      <meta name="citation_journal_title" content="Journal of Synthetic Results">
-      <meta name="citation_volume" content="12"><meta name="citation_issue" content="3">
-      <meta name="citation_firstpage" content="101"><meta name="citation_lastpage" content="110">
-      <meta name="citation_keywords" content="Argyrodite; Interface">
-      <meta name="dc.publisher" content="Synthetic Press">
+      <meta property="og:title" content="Argyrodite (og)">
+      <meta name="DC.Publisher" content="Synthetic Press">
       <meta name="citation_pdf_url" content="/article/abc/pdf">
+      <meta charset="utf-8"><meta http-equiv="refresh" content="999">
+      <script type="application/ld+json">${ld}</script>
+      <script type="application/ld+json">{not json</script>
     </head><body></body></html>`,
   );
-  expect(reading).toMatchObject({
-    doi: "10.5555/abc.1",
-    arxiv: null,
-    title: "Argyrodite electrolyte one",
-    authors: ["Smith, Alice", "Lee, Bo"],
-    date: "2021/03/15",
-    journal: "Journal of Synthetic Results",
-    publisher: "Synthetic Press",
-    volume: "12",
-    issue: "3",
-    first_page: "101",
-    last_page: "110",
-    keywords: ["Argyrodite", "Interface"],
-    pdf_url: "https://journal.test/article/abc/pdf",
+  // Nothing is read into fields: no DOI, no PDF address, no cleaning.
+  expect(page).toEqual({
+    url: "https://journal.test/article/abc?ref=list",
+    title: "Argyrodite | Journal",
+    meta: [
+      {
+        attribute: "name",
+        key: "citation_title",
+        content: "Argyrodite  electrolyte one",
+      },
+      { attribute: "name", key: "citation_author", content: "Smith, Alice" },
+      { attribute: "name", key: "citation_author", content: "Lee, Bo" },
+      { attribute: "name", key: "citation_doi", content: "doi:10.5555/ABC.1" },
+      { attribute: "property", key: "og:title", content: "Argyrodite (og)" },
+      { attribute: "name", key: "DC.Publisher", content: "Synthetic Press" },
+      {
+        attribute: "name",
+        key: "citation_pdf_url",
+        content: "/article/abc/pdf",
+      },
+    ],
+    // Invalid JSON-LD is handed over too: the library leaves it out and counts it.
+    json_ld: [ld, "{not json"],
     is_pdf: false,
   });
 });
 
-it("takes the DOI from the address when the page has no tags", async () => {
-  const reading = await read(
-    "https://publisher.test/doi/full/10.5555/xyz.42",
-    "<html><head><title>x</title></head></html>",
-  );
-  expect(reading).toMatchObject({ doi: "10.5555/xyz.42", pdf_url: null });
-});
-
-it("reads an arXiv number and offers its PDF", async () => {
-  const reading = await read(
-    "https://arxiv.org/abs/2401.01234v2",
-    '<html><head><meta name="citation_title" content="A preprint"></head></html>',
-  );
-  expect(reading).toMatchObject({
-    arxiv: "2401.01234v2",
-    doi: null,
-    pdf_url: "https://arxiv.org/pdf/2401.01234v2",
-  });
-});
-
-it("treats an address ending in .pdf as the PDF itself", async () => {
-  const reading = await read(
+it("says when the page is itself a PDF, and has no title when there is none", async () => {
+  const page = await read(
     "https://repository.test/files/10.5555/pdfpage.pdf",
     "<html></html>",
   );
-  expect(reading).toMatchObject({
+  expect(page).toEqual({
+    url: "https://repository.test/files/10.5555/pdfpage.pdf",
+    title: null,
+    meta: [],
+    json_ld: [],
     is_pdf: true,
-    doi: "10.5555/pdfpage",
-    pdf_url: "https://repository.test/files/10.5555/pdfpage.pdf",
   });
 });
 
-it("finds nothing on a page without identifiers", async () => {
-  const reading = await read(
-    "https://blog.test/post",
-    '<html><head><meta property="og:title" content="A blog post"></head></html>',
+it("keeps within the contract: 500 meta, 5 JSON-LD blocks of 64 KiB, 512 KiB in all", async () => {
+  const metas = Array.from(
+    { length: 520 },
+    (_, i) => `<meta name="k${i}" content="v${i}">`,
+  ).join("");
+  const big = `{"@type":"Article","text":"${"x".repeat(70 * 1024)}"}`;
+  const blocks = [big, ...Array.from({ length: 6 }, (_, i) => `{"n":${i}}`)]
+    .map((text) => `<script type="application/ld+json">${text}</script>`)
+    .join("");
+  const page = await read(
+    "https://journal.test/limits",
+    `<html><head>${metas}${blocks}</head></html>`,
   );
-  expect(reading).toMatchObject({
-    doi: null,
-    arxiv: null,
-    title: "A blog post",
-    pdf_url: null,
+  expect(page.meta).toHaveLength(500);
+  expect(page.meta.at(-1)).toEqual({
+    attribute: "name",
+    key: "k499",
+    content: "v499",
   });
+  // The block over 64 KiB is left out whole, then the first five are kept.
+  expect(page.json_ld).toEqual(
+    Array.from({ length: 5 }, (_, i) => `{"n":${i}}`),
+  );
+  const total = new TextEncoder().encode(JSON.stringify(page)).byteLength;
+  expect(total).toBeLessThanOrEqual(512 * 1024);
 });

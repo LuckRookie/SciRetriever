@@ -42,6 +42,7 @@ body {
 }
 main {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
   padding: 16px 16px 12px;
 }
@@ -167,4 +168,48 @@ footer span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* Literature and materials 6.4.8: the papers this page may be; one is chosen
+   before anything is collected. */
+.duplicates {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--sunken);
+}
+.duplicates h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.duplicates ul {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.duplicates li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+}
+.duplicates li span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.duplicates button {
+  flex-shrink: 0;
+  justify-self: start;
+  padding: 0 6px;
+}
+.duplicates button[aria-pressed="true"] {
+  border-color: var(--accent);
+  font-weight: 600;
 }
