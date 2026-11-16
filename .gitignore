@@ -15,6 +15,7 @@ node_modules/
 logs
 *.db
 *.html
+!/apps/browser-extension/src/popup.html
 !/apps/web/entry/index.html
 !/apps/web/entry/auth.html
 !/apps/web/entry/sample.html
@@ -28,6 +29,8 @@ page_1.json
 !/apps/web/public/core-js-LICENSE.txt
 !/apps/web/src/app/styles/fonts/source-sans-3-OFL.txt
 !/apps/web/src/app/styles/fonts/source-serif-4-OFL.txt
+!/apps/web/src/app/styles/fonts/noto-sans-sc-OFL.txt
+!/apps/web/src/app/styles/fonts/noto-serif-sc-OFL.txt
 
 work/*
 
