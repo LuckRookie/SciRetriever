@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import {
-  SCHEMA_MANIFEST,
+  SCHEMA_MANIFEST_V17 as SCHEMA_MANIFEST,
   SCHEMA_MANIFEST_V16,
   SCHEMA_FINGERPRINT_V16,
 } from "../src/storage/sqlite/schema.js";
@@ -15,6 +15,7 @@ import { verifyOfflineLayout } from "../src/storage/sqlite/archive-schema-migrat
 import { migrateDraftTextSchema } from "../src/storage/sqlite/draft-text-schema-migration.js";
 import { CURRENT_CATALOG_CONFIG } from "../src/storage/sqlite/catalog-layout.js";
 import { inspectCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
+import { migrateUserOrganizationSchema } from "../src/storage/sqlite/user-organization-schema-migration.js";
 import { draftMigrationFixture } from "./draft-text-schema-fixture.js";
 
 it("prepares a synthetic frozen-v16 input with long corrected text, processing, marks and full-text rows", async () => {
@@ -205,6 +206,10 @@ it("migrates a populated exact 16 without rewriting corrected documents, content
     } finally {
       output.close();
     }
+    await expect(inspectCatalogSchema(f.path)).rejects.toMatchObject({
+      reason: "catalog-layout-not-current",
+    });
+    await migrateUserOrganizationSchema(f.path);
     await copyFile(f.path, join(f.env.home, "catalog.sqlite"));
     await f.env.reopen();
     expect(
@@ -214,7 +219,7 @@ it("migrates a populated exact 16 without rewriting corrected documents, content
         })
       ).document,
     ).toEqual(f.document);
-    expect((await inspectCatalogSchema(f.path)).schema_version).toBe(17);
+    expect((await inspectCatalogSchema(f.path)).schema_version).toBe(18);
     await expect(migrateDraftTextSchema(f.path)).rejects.toMatchObject({
       code: "draft-text-schema-migration-refused",
     });

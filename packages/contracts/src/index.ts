@@ -3831,6 +3831,7 @@ export * from "./library-counts.js";
 export * from "./actor.js";
 
 export * from "./folders.js";
+export * from "./filters.js";
 export * from "./marks.js";
 
 export * from "./agent-conversation.js";

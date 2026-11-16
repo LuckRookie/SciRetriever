@@ -1,3 +1,4 @@
+import { FilterError } from "../../literature/filters.js";
 import { FolderError } from "../../literature/folders.js";
 import { MarkError } from "../../literature/marks.js";
 import {
@@ -342,6 +343,7 @@ export type SqliteCommand =
       readonly request: import("../../literature/query.js").PdfSelectionRequest;
     }
   | { readonly kind: "folders"; readonly value: unknown }
+  | { readonly kind: "filters"; readonly value: unknown }
   | { readonly kind: "marks"; readonly value: unknown }
   | {
       readonly kind: "snapshot";
@@ -898,7 +900,8 @@ export interface ExecutionRuntimeInspection {
     | 14
     | 15
     | 16
-    | 17;
+    | 17
+    | 18;
   readonly catalog_fingerprint: string;
   readonly version: number | null;
   readonly fingerprint: string | null;
@@ -1505,6 +1508,33 @@ export class SqliteWorker {
         }>({ kind: "folders", value: copy });
         if (!reply.ok)
           throw new FolderError(reply.code ?? "folder-storage-failed");
+        return reply.value;
+      };
+    return read ? send() : this.admission!.run(send, signal);
+  }
+  async filters(
+    value: {
+      operation: string;
+      request: unknown;
+      now?: string;
+      import_ids?: readonly string[];
+      filter_id?: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    const read = ["list"].includes(value.operation);
+    if (!read && (this.readOnly || !this.admission))
+      throw new FilterError("filter-write-unavailable");
+    const copy = structuredClone(value),
+      send = async () => {
+        if (signal?.aborted) throw new FilterError("filter-cancelled");
+        const reply = await this.send<{
+          ok: boolean;
+          value?: unknown;
+          code?: string;
+        }>({ kind: "filters", value: copy });
+        if (!reply.ok)
+          throw new FilterError(reply.code ?? "filter-storage-failed");
         return reply.value;
       };
     return read ? send() : this.admission!.run(send, signal);

@@ -200,6 +200,7 @@ function usage(options: CliOptions): CliResult {
     "  jobs runtime --workbench-url URL --request FILE|- [--maintenance] # operate in the Web owner\n" +
     "  archive build IDS [--mode full|legacy-vlm-markdown] [--from-step STEP]; archive status|resume ID; archive issues|stats|events; archive resolve --request FILE\n" +
     "  tags list|search|show|changes|consolidate|backfill; tags edit|undo --request FILE; literature tags ID / set|lock --request FILE\n" +
+    "  filters list|create|rename|update|delete|import --request FILE  # save and manage library query conditions\n" +
     "  folders list|delete-preview|create|rename|move|delete|add|remove --request FILE  # list and manage folders and paper membership\n" +
     "  literature open ID  # record a paper's latest opening time\n" +
     "  marks list|export|create|update|delete|restore --request FILE  # reading highlights, regions and notes of one paper\n" +
@@ -749,6 +750,34 @@ async function execute(
     return output(
       await withApplication(options, (app) =>
         executeMaintenance(app, "folders", envelope, options.signal),
+      ),
+      options,
+    );
+  }
+  if (group === "filters") {
+    const file = argument(args, "--request");
+    const request = file
+      ? parseStrictJsonValue(await inputBytes(file, options, 262144))
+      : command === "list"
+        ? {}
+        : invalidInput();
+    const envelope = { operation: command, request };
+    if (command === "list") {
+      const q = await applicationBootstrap.createQueryApplication(
+        configurationHome(options),
+      );
+      try {
+        return output(
+          await executeQuery(q, "filters", envelope, options.signal),
+          options,
+        );
+      } finally {
+        await q.close();
+      }
+    }
+    return output(
+      await withApplication(options, (app) =>
+        executeMaintenance(app, "filters", envelope, options.signal),
       ),
       options,
     );

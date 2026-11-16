@@ -69,6 +69,7 @@ import { ProcessorArchiveSource } from "../analysis/processor-archive.js";
 import { ProcessorExternalRetention } from "../analysis/processor-external.js";
 import { createProcessorRegistry } from "../analysis/processor-registry.js";
 import { ProcessorService } from "../analysis/processor.js";
+import { FilterService } from "../literature/filters.js";
 import { FolderService } from "../literature/folders.js";
 import { MarkService } from "../literature/marks.js";
 import { SnapshotService } from "../analysis/snapshots.js";
@@ -252,6 +253,7 @@ export interface Application {
   readonly archiveText: ArchiveTextPipeline | null;
   readonly snapshots: SnapshotService;
   readonly folders: FolderService;
+  readonly filters: FilterService;
   readonly marks: MarkService;
   /** Reader translation (ADR 0049); its cache lives outside the catalog. */
   readonly translation: TranslationService;
@@ -404,6 +406,7 @@ export interface QueryApplication {
   ) => Promise<unknown>;
   readonly archiveProfile?: "pipeline" | "vlm-engine";
   readonly folders?: Pick<FolderService, "query">;
+  readonly filters?: Pick<FilterService, "query">;
   readonly marks?: Pick<MarkService, "query">;
   readonly snapshots?: Pick<
     SnapshotService,
@@ -1872,6 +1875,7 @@ async function createApplicationOwned(
         });
     const identity = new LiteratureIdentityService(database, writes);
     const folders = new FolderService(database);
+    const filters = new FilterService(database);
     const intakeRecognition =
       options.importSessions?.recognition ??
       new IntakeRecognitionService(metadataRecognitionSources(metadata));
@@ -2025,6 +2029,7 @@ async function createApplicationOwned(
       ),
       restartAdmission: admission,
       folders,
+      filters,
       importSessions: guardRuntimeMethods(
         importSessions,
         [
@@ -2515,6 +2520,7 @@ export async function createQueryApplication(
         new SqliteAnnotationStorage(database, files),
       ),
       folders: new FolderService(database),
+      filters: new FilterService(database),
       marks: new MarkService(database, (id) => literature.detail(id)),
       snapshots: new SnapshotService(database, literature),
       archive: new ArchiveReader(database),

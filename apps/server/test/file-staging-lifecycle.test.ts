@@ -78,7 +78,7 @@ describe("staged file lifecycle", () => {
         workspace: {
           artifact_root: root,
           catalog_path: join(home, "catalog.sqlite"),
-          schema_version: 17,
+          schema_version: 18,
           configuration_revision: null,
           runtime_capabilities: null,
           capabilities: {

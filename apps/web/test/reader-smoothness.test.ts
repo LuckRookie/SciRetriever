@@ -632,10 +632,6 @@ async function anchorMove(page: Page, change: () => Promise<void>) {
 const within = (move: number | null, limit: number) =>
   move !== null && move <= limit;
 /** A choice in one of the top bar's menus (reading-experience 1.3), e.g. “排版” → “24 px”. */
-async function pick(page: Page, menu: string, item: string) {
-  await page.getByRole("button", { name: menu, exact: true }).click();
-  await page.getByRole("menuitem", { name: item, exact: true }).click();
-}
 const viewTab = (page: Page, name: "PDF" | "原文") =>
   page.getByRole("tab", { name, exact: true });
 /** Switch the view with per-frame sampling: blank frames and input-to-paint time. */

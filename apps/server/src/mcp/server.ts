@@ -268,6 +268,7 @@ export function createMcpServer(options: McpOptions = {}) {
       snapshot_create: "snapshots",
       snapshot_rename: "snapshot-rename",
       folders_manage: "folders",
+      filters_manage: "filters",
       marks_manage: "marks",
       reading_open: "reading-open",
       archive_manage: "archive",
@@ -305,6 +306,7 @@ export function createMcpServer(options: McpOptions = {}) {
           ? { kind: "citation", ...args }
           : [
                 "folders_manage",
+                "filters_manage",
                 "marks_manage",
                 "tags_manage",
                 "archive_manage",
@@ -408,6 +410,8 @@ export function createMcpServer(options: McpOptions = {}) {
     const q = await reading();
     if (name === "reading_status")
       return executeQuery(q, "reading-status", args, signal);
+    if (name === "filters_query")
+      return executeQuery(q, "filters", args, signal);
     if (name === "folders_query")
       return executeQuery(q, "folders", args, signal);
     if (name === "marks_query") return executeQuery(q, "marks", args, signal);

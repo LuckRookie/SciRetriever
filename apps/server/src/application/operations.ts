@@ -17,6 +17,7 @@ export function operationScope(value: unknown): Record<string, unknown> {
     "collection_id",
     "snapshot_id",
     "folder_id",
+    "filter_id",
     "parent_id",
     "tag_id",
     "expected_revision",
@@ -36,7 +37,17 @@ export function operationScope(value: unknown): Record<string, unknown> {
           (typeof item === "number" && Number.isSafeInteger(item)))
       )
         out[key] = item;
-      else if (["request", "job", "task"].includes(key))
+      else if (key === "items" && Array.isArray(item)) {
+        const filters = item.flatMap((entry: unknown) => {
+          if (!entry || typeof entry !== "object" || !("filter" in entry))
+            return [];
+          const scope = operationScope(entry.filter);
+          return typeof scope.filter_id === "string"
+            ? [{ filter_id: scope.filter_id }]
+            : [];
+        });
+        if (filters.length) out.items = filters;
+      } else if (["request", "job", "task"].includes(key))
         out[key] = operationScope(item);
     }
   return out;

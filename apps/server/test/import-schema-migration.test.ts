@@ -13,6 +13,7 @@ import {
 import { CURRENT_CATALOG_CONFIG } from "../src/storage/sqlite/catalog-layout.js";
 import { migrateImportSchema } from "../src/storage/sqlite/import-schema-migration.js";
 import { migrateDraftTextSchema } from "../src/storage/sqlite/draft-text-schema-migration.js";
+import { migrateUserOrganizationSchema } from "../src/storage/sqlite/user-organization-schema-migration.js";
 import { inspectCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
 import {
   createApplication,
@@ -226,6 +227,7 @@ it("migrates exact schema 15 to 16 atomically, preserves all facts and enables d
       reason: "catalog-layout-not-current",
     });
     await migrateDraftTextSchema(path);
+    await migrateUserOrganizationSchema(path);
     expect((await inspectCatalogSchema(path)).schema_version).toBe(
       SCHEMA_VERSION,
     );

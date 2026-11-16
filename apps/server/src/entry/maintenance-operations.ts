@@ -103,6 +103,7 @@ export const MAINTENANCE_OPERATIONS = [
   "snapshots",
   "snapshot-rename",
   "folders",
+  "filters",
   "marks",
   "reading-open",
   "archive",
@@ -193,6 +194,7 @@ async function performMaintenance(
   if (operation === "proofread-save")
     return app.archiveArrangement.save(input, activityContext().actor, signal);
   if (operation === "folders") return app.folders.manage(input, signal);
+  if (operation === "filters") return app.filters.manage(input, signal);
   if (operation === "marks") return app.marks.manage(input, signal);
   if (operation === "reading-open") return app.folders.opened(input, signal);
   if (operation === "snapshot-rename")

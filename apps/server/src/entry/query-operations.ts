@@ -1,5 +1,6 @@
 import { ArchiveContractObsoleteError } from "@sciretriever/contracts";
 import { ArchiveTextError } from "../archive/text-source.js";
+import { FilterError } from "../literature/filters.js";
 import { FolderError } from "../literature/folders.js";
 import { presentActors } from "../logging/actor-label.js";
 import {
@@ -91,6 +92,7 @@ export const QUERY_OPERATIONS = [
   "library-search",
   "library-counts",
   "folders",
+  "filters",
   "marks",
   "literature-read",
   "artifact-chunk",
@@ -194,6 +196,10 @@ async function readQuery(
       },
       signal,
     );
+  }
+  if (operation === "filters") {
+    if (!q.filters) unavailable();
+    return q.filters.query(value, signal);
   }
   if (operation === "folders") {
     if (!q.folders) unavailable();
@@ -687,6 +693,7 @@ export function isQueryFailure(
     error instanceof ProductOperationError ||
     error instanceof SnapshotError ||
     error instanceof FolderError ||
+    error instanceof FilterError ||
     error instanceof ArchiveError ||
     error instanceof ArchiveTextError ||
     error instanceof ArchiveContractObsoleteError ||

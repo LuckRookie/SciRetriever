@@ -1,6 +1,6 @@
 # SQLite catalog 与事务
 
-保存单一当前 catalog schema、业务事实仓库和专用 SQL worker。
+保存单一当前 catalog schema（18）、业务事实仓库和专用 SQL worker。
 
 ## 内容入口
 
@@ -11,6 +11,7 @@
 - [draft-text-engine.ts](draft-text-engine.ts)：初稿版本、资源闭包、不可变计数、当前指针及默认关系的同事务登记；按版本读事实、按本页文献批量读主 PDF 默认版本与等级。补形成候选共用文献库筛选和排序，在同一只读快照返回 PDF 部分、当前部署/历史 Markdown raw、指定 raw 的既有初稿 ID 和当前初稿方法；不读取正文或其它文件，业务跳过、limit 与任务冻结由应用层决定。
 - [document-defaults.ts](document-defaults.ts)：原始解析当前切换、初稿登记与校订发布事务内按独立 CAS 重求默认文本，优先有效完整校订稿，再选有效当前初稿，否则删除默认关系。校订发布可提名刚登记的版本，仍复检当前校订内容、人工 revision 和原始解析 pin；相同校订内容的等价方法版本可以复用固定表示。没有提名时保留仍有效的默认表示。资产当前指针切换同时重求其全部文献关系；读取不重求。
 - [draft-text-schema-migration.ts](draft-text-schema-migration.ts)：独立离线 16→17；精确匹配冻结 16，原地重建文档父表、子表不改名或重建，核对全部旧表行数及校订行、内容版本、事件和结果过时状态；不形成初稿，不访问 artifact。
+- [user-organization-schema-migration.ts](user-organization-schema-migration.ts)：独立离线 17→18，精确匹配冻结 V17，一次增加筛选与批注定位缓存两表；失败回滚并保留原异常。
 - [library-state-cache.ts](library-state-cache.ts)：基于事务内输入版本的建档状态缓存。
 - [library-state-schema-migration.ts](library-state-schema-migration.ts)：显式离线安装当前按篇失效结构；[library-state-previous-layout.ts](library-state-previous-layout.ts) 只描述工具的精确旧输入，不由 catalog opener 接受。
 - [intake-engine.ts](intake-engine.ts)：入库批次及按文献去重的成员写入、改名与当前 PDF 状态读取；成员与 identity 发布共用事务。
@@ -18,6 +19,7 @@
 - [intake-schema-migration.ts](intake-schema-migration.ts)：显式离线 14 → 15，旧运行回填、早期批次、主题词映射及确定性元数据/索引投影；[intake-metadata-migration.ts](intake-metadata-migration.ts) 复用元数据裁决与读取。
 - [openalex-top-concepts-cleanup.ts](openalex-top-concepts-cleanup.ts)：显式离线删除旧 OpenAlex 观测中 19 个顶层大类，并复用关键词层重投影，仅更新受影响文献与 Library FTS；不改 schema，不由启动或查询调用。检索 source revision 正常推进，后续刷新追赶。
 - [library-page.ts](library-page.ts)：LibraryQuery 的只读 SQL 筛选、计数和游标分页，完整文献只装载当前页；不修改业务事实或 catalog schema。
+- [filter-engine.ts](filter-engine.ts)：保存筛选的只读列表与原子写入；不改文献状态或检索 revision。
 - [draft-facts.ts](draft-facts.ts)：在查询的只读快照中按页批量读取各 PDF 的默认版本及初稿事实；引用数与“找不到”计数沿固定版本索引聚合，只排除内容过时的结果，不打开结果文件。列表筛选与排序仅使用主 PDF，补充部分只在详情和建档状态返回。
 - [retrieval-engine.ts](retrieval-engine.ts)：材料检索持久化。
 - [processor-engine.ts](processor-engine.ts)：算子结果、集合与固定引用的持久化。
@@ -65,7 +67,7 @@ schema 15 增加入库批次、成员与主题词；13 的按篇状态失效提�
 
 只读 worker 的 query preflight 仅核对固定布局/版本，不执行逐表健康扫描；检索命令直接交给 `retrieval-engine.ts` 的独立连接，不顺带初始化普通写入连接。`active/search` 只作轻量检查，完整验证由显式索引维护承担。增量修改使用现有 building generation 暂存，按篇 CAS 接纳；未接纳的暂存不参与搜索。完整哈希证书的全零保留值表示失效，维护确认损坏的专用标记使查询直接拒绝，原始事实和 schema 不因此改变。
 
-`schema.ts` 中冻结的 13、14、15、16 manifest 仅供相应离线迁移证明输入/输出，普通 opener 只接纳当前 17。14 → 15 修正规范化的来源关键词子表，保留 Provider 原始响应的 provenance hash；全部文献更新关键词投影、metadata revision/hash 和 Library FTS，再生成新的 active 检索代，复用未改变的文档证据。若输入索引原本落后，保留落后水位，由既有后台刷新追赶；已知损坏或文档存在而索引缺失时先拒绝，须在旧版本完成显式重建后重试。
+`schema.ts` 中冻结的 13、14、15、16、17 manifest 仅供相应离线迁移证明输入/输出，普通 opener 只接纳当前 18。14 → 15 修正规范化的来源关键词子表，保留 Provider 原始响应的 provenance hash；全部文献更新关键词投影、metadata revision/hash 和 Library FTS，再生成新的 active 检索代，复用未改变的文档证据。若输入索引原本落后，保留落后水位，由既有后台刷新追赶；已知损坏或文档存在而索引缺失时先拒绝，须在旧版本完成显式重建后重试。
 
 `device-connection-engine.ts` 保存设备认证派生值、配对消费、撤销和有界限流计数；check 只按已认证的连接 ID 重读有效性，不能代替令牌认证；不记录认证原值，不改变文献/索引水位。[import-engine.ts](import-engine.ts) 保存通用导入库、外部编号对应、会话、原始分段引用、去重键、逐条结果与文件状态；书目事实仍由身份 owner 提交，文件夹和 PDF 不另建写入 owner。冻结 schema 16 由 `import-schema-migration.ts` 显式离线从精确 15 转换，设备与导入表共用 `IMPORT_SCHEMA_V16`，不回填历史虚构来源；16 布局已冻结。旧 14→15 迁移固定旧输出，打开路径仍只接纳当前布局。
 

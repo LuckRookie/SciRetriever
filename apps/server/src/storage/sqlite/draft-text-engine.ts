@@ -108,7 +108,7 @@ function requireSchema(db: DatabaseSync) {
   if (
     db
       .prepare("SELECT schema_version FROM schema_identity WHERE singleton=1")
-      .get()?.schema_version !== 17
+      .get()?.schema_version !== 18
   )
     fail("catalog-current-required");
 }

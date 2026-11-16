@@ -13,6 +13,7 @@ import {
 import { migrateIntakeSchema } from "../src/storage/sqlite/intake-schema-migration.js";
 import { migrateImportSchema } from "../src/storage/sqlite/import-schema-migration.js";
 import { migrateDraftTextSchema } from "../src/storage/sqlite/draft-text-schema-migration.js";
+import { migrateUserOrganizationSchema } from "../src/storage/sqlite/user-organization-schema-migration.js";
 import { inspectCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
 import { createQueryApplication } from "../src/bootstrap/application.js";
 import { parseIntakeBatchPage } from "@sciretriever/contracts";
@@ -139,7 +140,8 @@ it("migrates 14 to 15 with legacy and discovery cohorts, correct keyword layers,
     check.close();
     // Historical tools keep their own targets; current openers need the final step.
     expect((await migrateImportSchema(path)).to_version).toBe(16);
-    expect((await migrateDraftTextSchema(path)).to_version).toBe(
+    expect((await migrateDraftTextSchema(path)).to_version).toBe(17);
+    expect((await migrateUserOrganizationSchema(path)).to_version).toBe(
       SCHEMA_VERSION,
     );
     const app = await createQueryApplication(home);

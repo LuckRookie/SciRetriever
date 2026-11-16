@@ -558,6 +558,11 @@ export const QUERY_TOOLS: readonly Tool[] = [
     object({}),
   ),
   tool(
+    "filters_query",
+    "List saved LibraryQuery conditions and sort keys with missing_folder_id. operation list request {}. Reading does not apply or change them.",
+    object({ operation: { enum: ["list"] }, request: { type: "object" } }),
+  ),
+  tool(
     "folders_query",
     "Read folder tree and distinct direct/descendant counts, or preview deletion. operation list request {}; delete-preview request {folder_id}. Does not write.",
     object({
@@ -878,6 +883,15 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
     false,
   ),
 
+  tool(
+    "filters_manage",
+    "Save library conditions: create {name,query,sort}; rename {filter_id,name}; update {filter_id,query,sort}; delete {filter_id}; import {items:[{name,query,sort}]}. Names are normalized, unique and at most 128 UTF-16 units; at most 200 filters. Import reports each item and is idempotent. See FilterOperation.",
+    object({
+      operation: { enum: ["create", "rename", "update", "delete", "import"] },
+      request: { type: "object" },
+    }),
+    false,
+  ),
   tool(
     "folders_manage",
     "Explicit folder create, rename, move, delete, add or remove. Deleting a subtree only removes membership, never papers. Member batches allow at most 1000 IDs. See FolderOperation contract.",

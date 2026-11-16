@@ -55,7 +55,7 @@ export class DocumentProcessingService {
     const operation = (async () => {
       if (combined.aborted)
         throw new DocumentProcessingError("document-cancelled");
-      if (![17].includes(Number((await this.database.schema()).schema_version)))
+      if (![18].includes(Number((await this.database.schema()).schema_version)))
         throw new DocumentProcessingError("catalog-v12-required");
       const facts = await this.database.currentFacts(request.literature_id);
       const asset = await this.database.getAsset(request.asset_id);

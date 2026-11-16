@@ -25,3 +25,5 @@ HTTP `/mcp` 每次请求重新验证设备连接，协议 session ID 绑定 conn
 [上级目录](../README.md)
 
 `processor_query` 提供纯读取；`submit_processor`、`rebuild_processor_index`、`retain_extraction` 只在 maintenance 模式暴露。共享行为在 `entry/processor-operations.ts` 和 Application，任务控制复用既有工具。
+
+`filters_query` 只读列出保存的筛选，`filters_manage` 管理与导入筛选；HTTP MCP 分别要求 `read`、`operate`，不登记直接 HTTP 设备查询或维护路由。

@@ -18,9 +18,12 @@ import {
 import { initializeCurrentCatalog } from "../src/storage/sqlite/catalog-layout.js";
 import {
   SCHEMA_VERSION,
+  LIBRARY_STATE_INPUT_TABLES,
   SCHEMA_FINGERPRINT,
   SCHEMA_MANIFEST,
   SCHEMA_MANIFEST_V16,
+  SCHEMA_MANIFEST_V17,
+  SCHEMA_FINGERPRINT_V17,
   SCHEMA_FINGERPRINT_V16,
 } from "../src/storage/sqlite/schema.js";
 import { SqliteWorker } from "../src/storage/sqlite/worker.js";
@@ -29,8 +32,17 @@ const digest = async (path: string) =>
   createHash("sha256")
     .update(await readFile(path))
     .digest("hex");
-it("pins frozen 16 and verifies the exact current 17 manifest and version-specific column checks", () => {
-  expect(SCHEMA_VERSION).toBe(17);
+it("pins frozen 16 and verifies the frozen 17 and exact current 18 manifest and version-specific column checks", () => {
+  expect(SCHEMA_VERSION).toBe(18);
+  expect(SCHEMA_FINGERPRINT_V17).toBe(
+    "b8c82c83c57f6f4826e9ed8fdb4080942b1acc863b10581a45221abc3441de91",
+  );
+  expect(
+    createHash("sha256")
+      .update(JSON.stringify(SCHEMA_MANIFEST_V17))
+      .digest("hex"),
+  ).toBe(SCHEMA_FINGERPRINT_V17);
+  expect(SCHEMA_MANIFEST).toHaveLength(SCHEMA_MANIFEST_V17.length + 2);
   expect(SCHEMA_MANIFEST_V16).toHaveLength(378);
   expect(SCHEMA_FINGERPRINT_V16).toBe(
     "8545637a22c2341066427f71195eec5465e4c906f3dabd2c2cbad2a4c512f0f8",
@@ -38,6 +50,15 @@ it("pins frozen 16 and verifies the exact current 17 manifest and version-specif
   expect(
     createHash("sha256").update(JSON.stringify(SCHEMA_MANIFEST)).digest("hex"),
   ).toBe(SCHEMA_FINGERPRINT);
+  for (const name of ["saved_filters", "reading_mark_places"]) {
+    expect(LIBRARY_STATE_INPUT_TABLES as readonly string[]).not.toContain(name);
+    expect(
+      SCHEMA_MANIFEST.some(
+        (sql) =>
+          sql.startsWith("CREATE TRIGGER ") && sql.includes(` ON ${name} `),
+      ),
+    ).toBe(false);
+  }
   const db = new DatabaseSync(":memory:");
   try {
     initializeCurrentCatalog(db);
@@ -194,6 +215,8 @@ it("initializes all current owners once and keeps absent inspection read-only", 
         "structure_annotations",
         "literature_metadata_field_states",
         "archive_reference_text_supports",
+        "saved_filters",
+        "reading_mark_places",
         "tags",
         "execution_jobs",
       ])

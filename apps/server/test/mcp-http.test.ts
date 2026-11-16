@@ -215,6 +215,63 @@ it("keeps draft preview in read and creation in operate without registering eith
     await f.close();
   }
 }, 60_000);
+it("separates saved filter read/operate tools and refuses direct device query/maintenance HTTP", async () => {
+  const f = await fixture();
+  try {
+    for (const purposes of [
+      ["read"],
+      ["operate"],
+      ["read", "operate"],
+    ] as DevicePurpose[][]) {
+      const paired = await f.token(purposes),
+        remote = await f.connect(paired.token);
+      const names = (await remote.client.listTools()).tools.map((t) => t.name);
+      expect(names.includes("filters_query")).toBe(purposes.includes("read"));
+      expect(names.includes("filters_manage")).toBe(
+        purposes.includes("operate"),
+      );
+      for (const [name, args, purpose] of [
+        ["filters_query", { operation: "list", request: {} }, "read"],
+        [
+          "filters_manage",
+          {
+            operation: "import",
+            request: {
+              items: [{ name: "Synthetic", query: {}, sort: "title-asc" }],
+            },
+          },
+          "operate",
+        ],
+      ] as const) {
+        const result = await remote.client.callTool({ name, arguments: args });
+        expect(result.isError === true).toBe(!purposes.includes(purpose));
+        if (!purposes.includes(purpose))
+          expect(structured(result)).toMatchObject({
+            result: { failure: { code: "device-purpose-forbidden" } },
+          });
+      }
+      for (const path of [
+        "/api/v1/query/filters",
+        "/api/v1/maintenance/filters",
+      ]) {
+        const denied = await fetch(f.http.origin + path, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${paired.token}`,
+            "Content-Type": "application/json",
+          },
+          body: "{}",
+        });
+        expect(denied.status).toBe(403);
+        expect(await denied.json()).toMatchObject({
+          code: "device-purpose-forbidden",
+        });
+      }
+    }
+  } finally {
+    await f.close();
+  }
+}, 60000);
 it("uses the official HTTP client, lists independent read/operate tools and matches the shared stdio implementation", async () => {
   const f = await fixture();
   const stdio = createMcpServer({

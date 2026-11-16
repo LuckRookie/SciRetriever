@@ -359,7 +359,7 @@ export function runProcessorStorage(
   schema: readonly string[],
 ): unknown {
   if (
-    ![17].includes(
+    ![18].includes(
       Number(
         one(db, "SELECT schema_version FROM schema_identity WHERE singleton=1")
           ?.schema_version,

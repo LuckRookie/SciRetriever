@@ -89,6 +89,14 @@ const folderModule = await import(
     import.meta.url,
   ).href
 );
+const filterModule = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./filter-engine.ts"
+      : "./filter-engine.js",
+    import.meta.url,
+  ).href
+);
 const marksModule = await import(
   new URL(
     import.meta.url.endsWith(".ts") ? "./marks-engine.ts" : "./marks-engine.js",
@@ -4861,6 +4869,23 @@ port.on("message", (message: WorkerMessage) => {
               error && typeof error === "object" && "code" in error
                 ? error.code
                 : "folder-storage-failed",
+          };
+        }
+        break;
+      case "filters":
+        try {
+          value = {
+            ok: true,
+            value: filterModule.runFilterStorage(db, message.command.value),
+          };
+        } catch (error) {
+          throwCatalogCorruption(error);
+          value = {
+            ok: false,
+            code:
+              error && typeof error === "object" && "code" in error
+                ? error.code
+                : "filter-storage-failed",
           };
         }
         break;

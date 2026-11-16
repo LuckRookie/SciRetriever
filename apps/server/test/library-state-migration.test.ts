@@ -1,5 +1,6 @@
 import { migrateImportSchema } from "../src/storage/sqlite/import-schema-migration.js";
 import { migrateDraftTextSchema } from "../src/storage/sqlite/draft-text-schema-migration.js";
+import { migrateUserOrganizationSchema } from "../src/storage/sqlite/user-organization-schema-migration.js";
 import { migrateIntakeSchema } from "../src/storage/sqlite/intake-schema-migration.js";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
@@ -84,9 +85,10 @@ it("migrates the exact 12 layout to 13 offline, preserves every old table count 
     await migrateIntakeSchema(path);
     await migrateImportSchema(path);
     await migrateDraftTextSchema(path);
+    await migrateUserOrganizationSchema(path);
     expect(await inspectCatalogSchema(path)).toMatchObject({
       status: "ready",
-      schema_version: 17,
+      schema_version: 18,
     });
     await expect(migrateReadingMarksSchema(path)).rejects.toMatchObject({
       code: "reading-marks-schema-migration-refused",

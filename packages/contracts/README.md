@@ -29,3 +29,5 @@ SHA-256 优先使用 Web Crypto；普通 HTTP 浏览器缺少 SubtleCrypto 时�
 [上级目录](../README.md) · [项目 README](../../README.md)
 
 - `src/processors.ts`：冻结加工输入、规范、记录/文本/旧知识引用、覆盖与集合合同；ProcessingTaskRequest v2 承载批量处理器快照。
+
+- `src/filters.ts`：保存筛选的操作、名称规则、规范 LibraryQuery/LibrarySort 与逐项导入回执；字段按精确键集解析。
