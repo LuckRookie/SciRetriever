@@ -1609,9 +1609,14 @@ IntakeWithdrawalReport             # 撤回或整批恢复之后
   keep、kept_items（字段同上）
   at: str
   by: str                          # 固定为 "web"
+
+IntakeRestorePreview               # 整批恢复之前，不写库
+  restore: {literatures: int, file_relations: int, folders: int, folder_members: int, marks: int}   # 仍处于撤回状态、将恢复的
+  already_restored: {literatures: int}                                                             # 已被后来的入库恢复、不计的
 ```
 
 - `/withdraw` 执行时重新判定，以报告为准。
+- 已撤回批次的撤回记录（撤回时的报告与时间 `at`）可以随时用 `/withdrawal` 读回；批次不是 `withdrawn` 时返回 null。整批恢复之前用 `/restore/preview` 读出将恢复的数量；`/restore` 执行时重新判定，以报告为准。
 - 标记在一个写入事务中完成：
   - 写入 `intake_withdrawn_objects`；
   - 删除被撤回文献的全文检索行，并推进检索 source revision；

@@ -277,7 +277,9 @@ Web 管理均为 POST，要求登录 Cookie、工作台 Cookie、client_id、同
 | POST `/literatures/:literature_id/pdf`          | 原始 PDF 字节；只接受网页登录与本机包装，不登记设备用途                                                                                                    | `{batch_id,file}`                                      |
 | POST `/batches/:batch_id/withdrawal/preview`    | `{}`；只接受网页登录                                                                                                                                       | `{batch,withdrawal:IntakeWithdrawalPreview}`           |
 | POST `/batches/:batch_id/withdraw`              | `{}`；只接受网页登录                                                                                                                                       | `{batch,withdrawal:IntakeWithdrawalReport}`            |
+| POST `/batches/:batch_id/withdrawal`            | `{}`；只接受网页登录，不写库；读取已撤回批次的撤回记录                                                                                                     | `{batch,withdrawal:IntakeWithdrawalReport\|null}`      |
 | POST `/batches/:batch_id/restore`               | `{}`；只接受网页登录，恢复已撤回的整批                                                                                                                     | `{batch,restoration:IntakeWithdrawalReport}`           |
+| POST `/batches/:batch_id/restore/preview`       | `{}`；只接受网页登录，不写库                                                                                                                               | `{batch,restore:IntakeRestorePreview}`                 |
 
 - 撤回的预估、撤回与整批恢复只接受网页登录，不登记任何设备用途，HTTP 版 MCP 也不提供；规则与 `IntakeWithdrawalPreview`、`IntakeWithdrawalReport` 的字段见[文献与材料 6.4.11](03-literature-materials.md#6411-撤回)。
 - `source` 必填但可为 null，表示来源没有库编号（导出文件、网页、单独的文件）；返回的 `batch.source` 始终为对象。传了 global/local 对象时沿用原验证，调用方不能自行指定 adhoc 身份或命名空间。
