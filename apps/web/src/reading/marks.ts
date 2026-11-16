@@ -38,6 +38,8 @@ export interface RegionDraft {
 export interface MarkSurfaceEvents {
   hot(id: string | null): void;
   activate(id: string, anchor: DOMRect, viaMarker: boolean): void;
+  /** A PDF note marker hovered (spec 3.5): show its note, or stop (null). */
+  peek?(id: string | null, anchor: DOMRect | null): void;
   selection(draft: SelectionDraft | null): void;
   region(draft: RegionDraft): void;
   /** A mark found its place on this material; React saves the second anchor. */
@@ -54,6 +56,8 @@ export interface MarkSurface {
   setTool(tool: MarkTool): void;
   preview(color: MarkColor | null): void;
   reveal(id: string): boolean;
+  /** The full-text block a mark starts in (its note goes below it, spec 2.5). */
+  blockOf?(id: string): HTMLElement | null;
   /** The mark under the pointer of this event, if any (the context menu's target). */
   markAt(event: MouseEvent): string | null;
   anchorRect(id: string): DOMRect | null;
@@ -169,6 +173,9 @@ export function createPdfMarkSurface(
   sha256: string,
   events: MarkSurfaceEvents,
 ): MarkSurface {
+  let peekTimer: ReturnType<typeof setTimeout> | undefined,
+    peekShown = false,
+    peekShownAt = -Infinity;
   let marks: readonly ReadingMark[] = [],
     hot: string | null = null,
     tool: MarkTool = "select",
@@ -244,6 +251,23 @@ export function createPdfMarkSurface(
         marker.setAttribute("aria-label", `打开笔记 ${note}`);
         if (m.mark_id === hot) marker.dataset.hot = "";
         marker.style.top = `${(first[1] / view.height) * 100}%`;
+        // Spec 3.5: resting on the dot shows the note too, with the hint's
+        // timing (design core): 500 ms, at once right after another.
+        marker.onpointerenter = () => {
+          clearTimeout(peekTimer);
+          const show = () => {
+            peekShown = true;
+            events.peek?.(m.mark_id, marker.getBoundingClientRect());
+          };
+          if (performance.now() - peekShownAt < 1000) show();
+          else peekTimer = setTimeout(show, 500);
+        };
+        marker.onpointerleave = () => {
+          clearTimeout(peekTimer);
+          if (peekShown) peekShownAt = performance.now();
+          peekShown = false;
+          events.peek?.(null, null);
+        };
         over.append(marker);
       }
     }
@@ -643,7 +667,9 @@ export function createDocumentMarkSurface(
     { content: string; index: ReturnType<typeof indexText> }
   >();
   const skip = (node: Text) =>
-    !!node.parentElement?.closest(".reading-block-source");
+    !!node.parentElement?.closest(
+      ".reading-block-source, .reading-margin-note",
+    );
   const paintHighlights = () => {
     if (!registry) return;
     for (const c of COLORS) {
@@ -856,6 +882,11 @@ export function createDocumentMarkSurface(
       const highlight = new Highlight(selection.getRangeAt(0).cloneRange());
       highlight.priority = 2;
       registry.set(`mark-preview-${color}`, highlight);
+    },
+    blockOf: (id) => {
+      const node = ranges.get(id)?.startContainer;
+      const el = node instanceof Element ? node : node?.parentElement;
+      return el?.closest<HTMLElement>("section[data-byte-start]") ?? null;
     },
     markAt: (event) => hitTest(event),
     reveal(id) {

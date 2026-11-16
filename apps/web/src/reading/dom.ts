@@ -24,7 +24,7 @@ export function escape(value: unknown): string {
 }
 /** Resource paths remain machine-readable; pending images never expose them as body text. */
 export function imagePlaceholder(reference: string, label: string): string {
-  return `<span class="reading-resource" data-resource="${escape(reference)}" data-resource-label="${escape(label)}">图片待加载</span>`;
+  return `<span class="reading-resource" data-origin="machine" data-resource="${escape(reference)}" data-resource-label="${escape(label)}">图片待加载</span>`;
 }
 /** Native controls are only used by the framework-neutral fallback host. */
 export function button(

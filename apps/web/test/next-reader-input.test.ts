@@ -527,3 +527,105 @@ it("shows the spine on the full text and the PDF, and its hint (plan 25 block 03
     await w.close();
   }
 }, 180_000);
+
+it("sets the full text and marks per spec 2 (plan 25 block 04 screenshots)", async (context) => {
+  const output = process.env.SCIRETRIEVER_WEB_TYPE_OUTPUT;
+  if (!output) return context.skip();
+  await mkdir(output, { recursive: true });
+  const w = await nextWorkspace({
+    ready: "body",
+    setup: async (env) =>
+      env.setText(
+        [
+          "# 1 Introduction",
+          "Energetic salts were measured at 1.86 g cm and R1 = 0.036 for NX-7.",
+          "含能盐的密度为 1.86 g cm，晶体结构 R1 = 0.036，样品记为 NX-7。热分解温度高于 250 °C。",
+          "## 1.1 Scope",
+          "Table 1 Densities of the salts.",
+          "<table><tr><th>Salt</th><th>Density</th></tr><tr><td>A</td><td>1.86</td></tr><tr><td>B</td><td>1.91</td></tr></table>",
+          "# 2 Methods",
+          ...Array.from(
+            { length: 12 },
+            (_, i) =>
+              `Paragraph ${i}: a reported measurement with conditions and evidence, long enough to wrap.`,
+          ),
+        ].join("\n\n") + "\n",
+      ),
+  });
+  try {
+    const id = w.env.parseRequest.literature_id;
+    let marked = false;
+    for (const theme of ["light", "dark"]) {
+      for (const width of (
+        process.env.SCIRETRIEVER_WEB_TYPE_WIDTHS ?? "1440,1024,390"
+      )
+        .split(",")
+        .map(Number)) {
+        await w.page.setViewportSize({ width, height: 900 });
+        await w.page.goto(`${w.origin}/?literature=${id}&reader=doc`);
+        await w.page.evaluate((theme) => {
+          document.documentElement.dataset.theme = theme;
+        }, theme);
+        await w.page
+          .locator('.react-reader[data-reading-ready="true"]')
+          .waitFor();
+        if (theme === "light" && !marked) {
+          marked = true;
+          // A mark with a note on the Latin paragraph.
+          await w.page.evaluate(() => {
+            const block = [
+              ...document.querySelectorAll<HTMLElement>(
+                ".reader-view:not([hidden]) article > section[data-byte-start]",
+              ),
+            ].find((b) => (b.textContent ?? "").includes("Energetic salts"))!;
+            const walker = document.createTreeWalker(
+              block,
+              NodeFilter.SHOW_TEXT,
+            );
+            let text = walker.nextNode() as Text | null;
+            while (text && !text.data.includes("Energetic"))
+              text = walker.nextNode() as Text | null;
+            const at = text!.data.indexOf("Energetic");
+            const range = document.createRange();
+            range.setStart(text!, at);
+            range.setEnd(text!, at + 15);
+            getSelection()!.removeAllRanges();
+            getSelection()!.addRange(range);
+            block.dispatchEvent(
+              new PointerEvent("pointerdown", { bubbles: true }),
+            );
+            block.dispatchEvent(
+              new PointerEvent("pointerup", { bubbles: true }),
+            );
+          });
+          await w.page.getByRole("toolbar", { name: "选中文字" }).waitFor();
+          await w.page.keyboard.press("n");
+          const field = w.page.getByRole("textbox", { name: "笔记" });
+          await field.fill("Density at room temperature?");
+          await field.press("Control+Enter");
+        }
+        await w.page.waitForTimeout(600);
+        await w.page.screenshot({
+          path: join(output, `type-doc-${width}-${theme}.png`),
+        });
+        // The theme as a person chose it, so the page keeps it on loading.
+        await w.page.evaluate((theme) => {
+          localStorage.setItem(
+            "sciretriever:react:sciretriever:theme:v1",
+            theme,
+          );
+        }, theme);
+        await w.page.goto(`${w.origin}/?literature=${id}&reader=pdf`);
+        await w.page
+          .locator('[data-pdf-page="1"][data-rendered="true"]')
+          .waitFor();
+        await w.page.waitForTimeout(400);
+        await w.page.screenshot({
+          path: join(output, `type-pdf-${width}-${theme}.png`),
+        });
+      }
+    }
+  } finally {
+    await w.close();
+  }
+}, 300_000);

@@ -155,7 +155,9 @@ export function ReaderSpine({
         view === "doc"
           ? body.querySelector<HTMLElement>(`${VIEW}[data-view="doc"]`)
           : body.querySelector<HTMLElement>(`${VIEW} .reading-pdf-pages`);
-      if (!surface || !sheet) return setBox(null);
+      // Below 640 px of desk there is no spine (spec 1.1).
+      if (!surface || !sheet || body.dataset.sheet === "full")
+        return setBox(null);
       const desk = body.getBoundingClientRect(),
         place = surface.getBoundingClientRect(),
         rect = sheet.getBoundingClientRect();

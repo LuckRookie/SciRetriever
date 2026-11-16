@@ -27,6 +27,7 @@ import {
 import { preferences } from "../../../data/preferences.js";
 import { MarkBar, MarkBarButton, NotePopover } from "./MarkOverlays.js";
 import { MarksPanel } from "./MarksPanel.js";
+import { MarginNotes } from "./MarginNotes.js";
 import { useMarks } from "./use-marks.js";
 import { useQueries } from "@tanstack/react-query";
 import { readDocument } from "../../../../reading/transport.js";
@@ -127,7 +128,7 @@ export function useReaderMarks({
       const saved = preferences.read(PEN_KEY);
       return (MARK_COLORS as readonly string[]).includes(saved ?? "")
         ? (saved as MarkColor)
-        : "yellow";
+        : "blue"; // Spec 2.5: the default pen is blue.
     }),
     [hot, setHot] = useState<string | null>(null),
     [current, setCurrent] = useState<string | null>(null),
@@ -138,7 +139,9 @@ export function useReaderMarks({
       near: ReadonlySet<string>;
     }>({ all: new Set(), near: new Set() }),
     [exported, setExported] = useState<string | null>(null),
-    [menuOpen, setMenuOpen] = useState(false);
+    [menuOpen, setMenuOpen] = useState(false),
+    // A PDF note dot hovered: its note shown read-only (spec 3.5).
+    [peek, setPeek] = useState<{ id: string; anchor: DOMRect } | null>(null);
   const draft = useRef<SelectionDraft | null>(null);
   const latest = useRef({ marks: store.marks, tool, pen, store, translation });
   latest.current = { marks: store.marks, tool, pen, store, translation };
@@ -185,6 +188,8 @@ export function useReaderMarks({
   const events = useMemo<MarkSurfaceEvents>(
     () => ({
       hot: setHot,
+      peek: (markId, anchor) =>
+        setPeek(markId && anchor ? { id: markId, anchor } : null),
       activate(markId, _anchor, viaMarker) {
         setCurrent(markId);
         if (viaMarker && find(markId)?.note.trim()) {
@@ -517,8 +522,41 @@ export function useReaderMarks({
       }}
     />
   ) : null;
+  const peeked = peek ? find(peek.id) : undefined;
   const overlays: ReactNode = active ? (
     <>
+      {peeked && peek && !note ? (
+        <div
+          className="mark-note-peek"
+          role="tooltip"
+          data-origin="machine"
+          style={{
+            top: peek.anchor.bottom + 6,
+            left: Math.max(8, peek.anchor.right - 280),
+          }}
+        >
+          {peeked.note}
+        </div>
+      ) : null}
+      {view === "doc" ? (
+        <MarginNotes
+          body={body.current}
+          marks={store.marks}
+          placed={placed.all}
+          anchorRect={(markId) => surface.current?.anchorRect(markId) ?? null}
+          blockOf={(markId) => surface.current?.blockOf?.(markId) ?? null}
+          onOpen={(markId) => {
+            setCurrent(markId);
+            setBar(null);
+            setNote(markId);
+          }}
+          onHover={(markId) => {
+            setHot(markId);
+            surface.current?.setHot(markId);
+          }}
+          revision={0}
+        />
+      ) : null}
       {bar?.kind === "selection" && draft.current && !menuOpen ? (
         <MarkBar
           label="选中文字"

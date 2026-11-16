@@ -119,6 +119,7 @@ export async function renderDocument(
   if (frame.documentTitle) {
     const title = document.createElement("h1");
     title.className = "reading-document-title";
+    title.dataset.origin = "author";
     appendTitle(title, titleParts(frame.documentTitle));
     article.append(title);
   }
@@ -129,6 +130,7 @@ export async function renderDocument(
   if (level === "draft" || described.long_document) {
     const note = document.createElement("p");
     note.className = "reading-long-document";
+    note.dataset.origin = "machine";
     note.setAttribute("role", "note");
     note.textContent =
       level === "draft"
@@ -276,6 +278,45 @@ export async function renderDocument(
     end: number,
   ) => r.start_utf8 < end && r.end_utf8 > start;
   /** Presentation from the structure's byte ranges; the Markdown carries no markers. */
+  /**
+   * Reading-experience 2.2–2.4, presentation only (the text is unchanged):
+   * a heading's own number apart, “表 1”/“图 2” set bold, numbers in tables
+   * to the right, paragraphs without Chinese set as Latin, values with
+   * their units kept on one line, and the author's text marked as such.
+   */
+  const typeset = (el: HTMLElement) => {
+    el.dataset.origin = "author";
+    for (const heading of el.querySelectorAll(
+      ":scope > :is(h1, h2, h3, h4, h5, h6)",
+    ))
+      wrapLead(
+        heading,
+        /^\s*((?:\d+(?:\.\d+)*\.?|[IVX]+\.)\s+)/u,
+        "reading-heading-number",
+        true,
+      );
+    if (el.classList.contains("reading-figure-caption"))
+      for (const p of el.querySelectorAll("p"))
+        wrapLead(
+          p,
+          /^\s*((?:表|图|Table|Fig\.?|Figure|Scheme)\s*[S]?\d+[a-z]?[.:：]?)/iu,
+          "reading-caption-label",
+        );
+    for (const cell of el.querySelectorAll("td"))
+      if (
+        /^[\s\d.,±+\-−–%()×eE^]*\d[\s\d.,±+\-−–%()×eE^]*$/u.test(
+          cell.textContent ?? "",
+        )
+      )
+        cell.dataset.numeric = "";
+    for (const p of el.querySelectorAll<HTMLElement>(":scope > p"))
+      if (
+        !/[\u3400-\u9fff]/u.test(p.textContent ?? "") &&
+        /[A-Za-z]/u.test(p.textContent ?? "")
+      )
+        p.dataset.script = "latin";
+    keepUnits(el);
+  };
   const decorate = (el: HTMLElement, start: number, end: number) => {
     if (!layout) return;
     if (layout.article_info.some((r) => overlaps(r, start, end)))
@@ -644,6 +685,10 @@ export async function renderDocument(
       el.dataset.byteEnd = String(block.end);
       el.innerHTML = html;
       decorate(el, block.start, block.end);
+      typeset(el);
+      // Spec 3.4: a paragraph's number in the left margin, as “↩ 回到 ¶n” counts.
+      if (el.firstElementChild?.tagName === "P" && !el.classList.length)
+        el.dataset.paragraph = String(index + 1);
       const segment = segments.find(
         (s) => s.start_utf8 < block.end && s.end_utf8 > block.start,
       );
@@ -693,6 +738,7 @@ export async function renderDocument(
         const differs = segment.basis === "text-layer-differs";
         const mark = document.createElement(differs ? "button" : "span");
         mark.className = "reading-doubt";
+        mark.dataset.origin = "machine";
         mark.textContent = differs ? "疑点" : "无文字层";
         if (mark instanceof HTMLButtonElement) {
           mark.type = "button";
@@ -983,6 +1029,21 @@ export async function renderDocument(
     );
     bound(page);
     for (const section of page.sections) {
+      // Spec 2.3: the abstract between two rules (its blocks, first and last).
+      if (section.role === "abstract") {
+        const inside = rendered
+          .map((r) => r.element)
+          .filter((el) => {
+            const at = Number(el.dataset.byteStart);
+            return at >= section.start_utf8 && at < section.end_utf8;
+          });
+        inside.forEach((el, i) => {
+          el.dataset.abstract =
+            [i === 0 ? "first" : "", i === inside.length - 1 ? "last" : ""]
+              .join(" ")
+              .trim() || "middle";
+        });
+      }
       const activate = async () => {
         frame.beforeJump?.();
         const revision = ++jumpRevision;
@@ -1042,27 +1103,136 @@ export async function renderDocument(
   }
   continuationObserver.observe(tail);
   void prefetch();
+  /**
+   * Spec 2.5: find marks only the matching words (CSS highlights, so the
+   * text is untouched): every match --hl, the current one --hl-current.
+   */
+  const findRegistry =
+    typeof CSS !== "undefined" && "highlights" in CSS ? CSS.highlights : null;
   frame.onFind = (query) => {
     frame.onFindNext?.(null);
-    const matches = blocks().filter((b) =>
-      b.textContent?.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
-    );
-    for (const b of blocks())
-      b.classList.toggle("reading-match", matches.includes(b));
-    frame.onFindHits?.(
-      query ? matches.map((b) => Number(b.dataset.byteStart)) : [],
-    );
-    frame.findStatus.textContent = `${finished ? "全文" : "已加载范围"}：${matches.length} 个匹配段落${finished ? "" : "；可继续加载后查找"}`;
+    const needle = query.toLocaleLowerCase();
+    const hits: { block: HTMLElement; range: Range }[] = [];
+    if (needle)
+      for (const block of blocks()) {
+        // The block's text, with where each text node starts in it.
+        const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT, {
+          acceptNode: (node) =>
+            node.parentElement?.closest(
+              ".reading-block-source, .reading-doubt, .katex-mathml, .reading-margin-note",
+            )
+              ? NodeFilter.FILTER_REJECT
+              : NodeFilter.FILTER_ACCEPT,
+        });
+        const nodes: { node: Text; at: number }[] = [];
+        let content = "";
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+          nodes.push({ node: n as Text, at: content.length });
+          content += n.textContent ?? "";
+        }
+        const haystack = content.toLocaleLowerCase();
+        const point = (offset: number) => {
+          let i = nodes.length - 1;
+          while (i > 0 && nodes[i]!.at > offset) i--;
+          return { node: nodes[i]!.node, offset: offset - nodes[i]!.at };
+        };
+        for (
+          let at = haystack.indexOf(needle);
+          at >= 0 && nodes.length;
+          at = haystack.indexOf(needle, at + needle.length)
+        ) {
+          const range = document.createRange(),
+            start = point(at),
+            end = point(at + needle.length);
+          range.setStart(start.node, start.offset);
+          range.setEnd(end.node, end.offset);
+          hits.push({ block, range });
+        }
+      }
+    findRegistry?.delete("find-current");
+    if (hits.length)
+      findRegistry?.set("find-hit", new Highlight(...hits.map((h) => h.range)));
+    else findRegistry?.delete("find-hit");
+    const blocksHit = [...new Set(hits.map((h) => h.block))];
+    frame.onFindHits?.(blocksHit.map((b) => Number(b.dataset.byteStart)));
     let index = -1;
-    const jump = (step: 1 | -1 = 1) => {
-      index = (index + step + matches.length) % matches.length;
-      const block = matches[index];
-      if (block) go(Number(block.dataset.byteStart), 0, true);
+    const status = () => {
+      frame.findStatus.textContent = `${finished ? "全文" : "已加载范围"}：${
+        hits.length
+          ? `第 ${index + 1} / ${hits.length} 处 · ${blocksHit.length} 段`
+          : "没有匹配"
+      }${finished ? "" : "；可继续加载后查找"}`;
     };
-    if (matches.length) {
+    status();
+    const jump = (step: 1 | -1 = 1) => {
+      index = (index + step + hits.length) % hits.length;
+      const hit = hits[index];
+      if (!hit) return;
+      findRegistry?.set("find-current", new Highlight(hit.range));
+      status();
+      go(Number(hit.block.dataset.byteStart), 0, true);
+    };
+    if (hits.length) {
       jump();
       if (frame.onFindNext) frame.onFindNext(jump);
       else frame.findStatus.append(button("下一处命中", () => jump()));
     }
   };
+}
+
+/** Wraps the leading text `pattern` matches in a span (no text changes). */
+function wrapLead(
+  el: Element,
+  pattern: RegExp,
+  className: string,
+  dropSpace = false,
+) {
+  const first = el.firstChild;
+  if (!first || first.nodeType !== Node.TEXT_NODE) return;
+  const match = pattern.exec(first.textContent ?? "");
+  if (!match?.[1]) return;
+  const lead = match[0];
+  const text = first as Text;
+  const rest = text.splitText(lead.length);
+  const span = document.createElement("span");
+  span.className = className;
+  span.textContent = dropSpace ? lead.trimEnd() : lead;
+  if (dropSpace)
+    rest.textContent = lead.slice(span.textContent.length) + rest.textContent;
+  text.replaceWith(span);
+}
+/**
+ * Spec 2.2: a value and its unit (“1.86 g·cm⁻³”), an equation (“R₁ =
+ * 0.036”) and a code (“NX-7”) never break; wrapped, not rewritten.
+ */
+const UNBREAKABLE =
+  /\d[\d.,]*(?:\s?[×x]\s?10[⁻⁰-⁹]+)?\s(?:[µμ]?[A-Za-z°%Å]{1,4}(?:[·/][A-Za-z]{1,4})?[⁻⁰-⁹]*|°C|%)(?![A-Za-z])|[A-Za-z][A-Za-z₀-₉]{0,3}\s?=\s?[−-]?\d[\d.,]*|\b[A-Z]{1,5}-\d{1,4}\b/gu;
+function keepUnits(root: Element) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) =>
+      node.parentElement?.closest(".katex, code, pre, .reading-nobr, a")
+        ? NodeFilter.FILTER_REJECT
+        : NodeFilter.FILTER_ACCEPT,
+  });
+  const nodes: Text[] = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode())
+    nodes.push(node as Text);
+  for (const node of nodes) {
+    const text = node.textContent ?? "";
+    UNBREAKABLE.lastIndex = 0;
+    const matches = [...text.matchAll(UNBREAKABLE)];
+    if (!matches.length) continue;
+    const fragment = document.createDocumentFragment();
+    let at = 0;
+    for (const m of matches) {
+      if (m.index > at) fragment.append(text.slice(at, m.index));
+      const span = document.createElement("span");
+      span.className = "reading-nobr";
+      span.textContent = m[0];
+      fragment.append(span);
+      at = m.index + m[0].length;
+    }
+    if (at < text.length) fragment.append(text.slice(at));
+    node.replaceWith(fragment);
+  }
 }

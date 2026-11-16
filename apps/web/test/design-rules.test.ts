@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { chromium, type Browser, type Page } from "playwright";
 import { startDesignSamples } from "./design-samples-fixture.js";
@@ -46,7 +46,7 @@ function collectViolations(): Violation[] {
   // Literature content keeps its own relative sizes and fonts.
   const content =
     // The loading skeleton's title is the paper's own title, set as its text will be.
-    ".reading-pdf-page, .reading-article, .reader-preparing-title, .reading-markdown, .katex, .proofread-source, .agent-raw, pre, code, .ui-tech-details, svg";
+    ".reading-pdf-page, .reader-view[data-view='doc'], .reader-preparing-title, .reading-markdown, .katex, .proofread-source, .agent-raw, pre, code, .ui-tech-details, svg";
   const sizes = new Set([13, 14, 15, 16, 17, 18, 20, 22, 24, 26, 28]);
   const families = ['"IBM Plex Sans"', '"Source Serif 4"', "SFMono-Regular"];
   const out: Violation[] = [];
@@ -153,6 +153,58 @@ function collectViolations(): Violation[] {
 }
 
 /**
+ * Runs in the page: the full text's sheet (reading-experience 2.1, 2.4). Its
+ * sizes are multiples of the reading size from spec 2.1's table, or the
+ * margin's fixed sizes; the author's words are serif, the rest sans-serif.
+ */
+function collectReadingViolations(): Violation[] {
+  const sheet = document.querySelector<HTMLElement>(
+    ".reader-engine:not([hidden]) .reader-view:not([hidden])[data-view='doc']",
+  );
+  const article = sheet?.querySelector<HTMLElement>(".reading-article");
+  if (!sheet || !article) return [];
+  const base = parseFloat(getComputedStyle(article).fontSize);
+  // Spec 2.1: title 1.8, headings 1.5, 1.2, 1.05, abstract title 1.15, text 1,
+  // Latin text 0.975, table and footnote 0.8, captions 0.775 (a Latin caption
+  // or table paragraph multiplies by 0.975).
+  const factors = [1.8, 1.5, 1.2, 1.15, 1.05, 1, 0.975, 0.8, 0.775];
+  const allowed = [
+    ...factors.flatMap((f) => [f * base, f * 0.975 * base]),
+    // Fixed, not scaled: margin notes, margin numbers, the page header and its line.
+    11,
+    11.5,
+    12,
+    12.5,
+    13,
+  ];
+  const out: Violation[] = [];
+  for (const el of sheet.querySelectorAll("*")) {
+    if (el.closest(".katex, pre, code, svg, .reading-block-source")) continue;
+    const ownText = [...el.childNodes].some(
+      (n) => n.nodeType === Node.TEXT_NODE && n.textContent!.trim(),
+    );
+    const box = el.getBoundingClientRect();
+    if (!ownText || !box.width || !box.height) continue;
+    const style = getComputedStyle(el);
+    const size = parseFloat(style.fontSize);
+    if (!allowed.some((a) => Math.abs(a - size) <= 0.51))
+      out.push({
+        rule: "reading-scale",
+        detail: `${size.toFixed(1)}px at ${base}px ${el.tagName.toLowerCase()}.${[...el.classList].join(".")}`,
+      });
+    const author =
+      el.closest("[data-origin]")?.getAttribute("data-origin") === "author";
+    const serif = style.fontFamily.startsWith('"Source Serif 4"');
+    if (author !== serif)
+      out.push({
+        rule: author ? "author-serif" : "machine-sans",
+        detail: `${style.fontFamily.split(",")[0]} ${el.tagName.toLowerCase()}.${[...el.classList].join(".")} "${(el.textContent ?? "").trim().slice(0, 30)}"`,
+      });
+  }
+  return out;
+}
+
+/**
  * Known page-level violations scheduled in plan 14 block 05. Each entry must be
  * removed in the same change that fixes it; new violations fail the test.
  */
@@ -160,6 +212,16 @@ const pending: string[] = [];
 
 async function violations(page: Page, entryId: string) {
   const found = await page.evaluate(collectViolations);
+  // The full text at reading sizes 16, 20 and 32 px (design core “检查”).
+  for (const size of [16, 20, 32]) {
+    await page.evaluate((size) => {
+      for (const el of document.querySelectorAll<HTMLElement>(
+        ".reader-engine-body",
+      ))
+        el.style.setProperty("--reading-font-size", `${size}px`);
+    }, size);
+    found.push(...(await page.evaluate(collectReadingViolations)));
+  }
   // One line per distinct problem keeps the report readable.
   return [...new Set(found.map((v) => `${entryId} ${v.rule} ${v.detail}`))];
 }
@@ -204,3 +266,42 @@ it(
     expect([...report].sort()).toEqual([...pending].sort());
   },
 );
+
+it("keeps --reader-check-fail readable on the sheet in both themes (spec 8.2 排版)", async () => {
+  const tokens = await readFile(
+    new URL("../src/app/styles/tokens.css", import.meta.url),
+    "utf8",
+  );
+  const block = (selector: string) => {
+    const at = tokens.indexOf(selector);
+    return tokens.slice(at, tokens.indexOf("}", at));
+  };
+  const value = (css: string, name: string): string | undefined =>
+    new RegExp(`${name}:\\s*([^;]+);`, "u").exec(css)?.[1]?.trim();
+  const hex = (color: string) => {
+    const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/iu.exec(color);
+    if (!m) throw new Error(`not a hex colour: ${color}`);
+    const digits =
+      m[1]!.length === 3 ? [...m[1]!].map((d) => d + d).join("") : m[1]!;
+    return [0, 2, 4].map((i) => parseInt(digits.slice(i, i + 2), 16));
+  };
+  const lum = (rgb: number[]) =>
+    rgb
+      .map((v) => v / 255)
+      .map((s) => (s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4))
+      .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i]!, 0);
+  const light = block(":root"),
+    dark = block('[data-theme="dark"]');
+  for (const theme of [light, dark]) {
+    const fail =
+      value(theme, "--reader-check-fail") ??
+      value(light, "--reader-check-fail")!;
+    let sheet =
+      value(theme, "--reader-sheet") ?? value(light, "--reader-sheet")!;
+    if (sheet.startsWith("var("))
+      sheet =
+        value(theme, sheet.slice(4, -1)) ?? value(light, sheet.slice(4, -1))!;
+    const [a, b] = [lum(hex(fail)), lum(hex(sheet))].sort((x, y) => y - x);
+    expect((a! + 0.05) / (b! + 0.05)).toBeGreaterThanOrEqual(4.5);
+  }
+});

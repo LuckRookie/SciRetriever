@@ -93,6 +93,14 @@ it(
       await expect
         .poll(() => page.locator(".mark-tag").first().textContent())
         .toBe("#图表");
+      // Spec 3.5: resting on the dot shows the note; leaving hides it.
+      await page.mouse.move(5, 5);
+      await page.locator(".mark-note").first().hover();
+      const peek = page.locator(".mark-note-peek");
+      await peek.waitFor();
+      expect(await peek.innerText()).toContain("复现时核对坐标");
+      await page.mouse.move(5, 5);
+      await peek.waitFor({ state: "detached" });
 
       // The same marks are readable without the Web, and export as Markdown.
       const saved = (await w.env.app.marks.query({
@@ -117,3 +125,109 @@ it(
     }
   },
 );
+
+it("draws a full-text mark as its colour's pen line, its note in the right margin with a leader, below the paragraph when narrow (spec 2.5)", async () => {
+  const w = await nextWorkspace({
+    ready: "body",
+    setup: async (env) =>
+      env.setText(
+        Array.from(
+          { length: 60 },
+          (_, i) =>
+            `Paragraph ${i}: a reported measurement with conditions and evidence.\n\n`,
+        ).join(""),
+      ),
+  });
+  try {
+    const page = w.page;
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(
+      `${w.origin}/?literature=${w.env.parseRequest.literature_id}&reader=doc`,
+    );
+    await page
+      .locator(".reader-engine-body section[data-byte-start]")
+      .nth(10)
+      .waitFor();
+    await page.evaluate(() => {
+      const block = [
+        ...document.querySelectorAll<HTMLElement>(
+          ".reader-view:not([hidden]) article > section[data-byte-start]",
+        ),
+      ].find((b) => (b.textContent ?? "").includes("Paragraph 3:"))!;
+      const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+      let text = walker.nextNode() as Text | null;
+      while (text && !text.data.includes("Paragraph 3:"))
+        text = walker.nextNode() as Text | null;
+      const range = document.createRange();
+      const at = text!.data.indexOf("Paragraph 3:");
+      range.setStart(text!, at);
+      range.setEnd(text!, at + 20);
+      getSelection()!.removeAllRanges();
+      getSelection()!.addRange(range);
+      block.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      block.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+    });
+    await page.getByRole("toolbar", { name: "选中文字" }).waitFor();
+    // N: a mark in the pen's colour (blue by default) and its note.
+    await page.keyboard.press("n");
+    const field = page.getByRole("textbox", { name: "笔记" });
+    await field.fill("Check the conditions.");
+    await field.press("Control+Enter");
+    // The pen line: an underline in --t-blue, never a fill.
+    const rule = await page.evaluate(() => {
+      for (const sheet of document.styleSheets)
+        for (const r of sheet.cssRules) {
+          const inner = r instanceof CSSLayerBlockRule ? [...r.cssRules] : [r];
+          for (const x of inner)
+            if (
+              x instanceof CSSStyleRule &&
+              x.selectorText.includes("::highlight(mark-blue)") &&
+              x.style.textDecorationColor.startsWith("var(")
+            )
+              return {
+                color: x.style.textDecorationColor,
+                fill: x.style.backgroundColor,
+              };
+        }
+      return null;
+    });
+    expect(rule).toEqual({ color: "var(--t-blue)", fill: "" });
+    expect(await page.evaluate(() => CSS.highlights.has("mark-blue"))).toBe(
+      true,
+    );
+    // The note in the right margin, its leader from the marked line.
+    const note = page.locator(".reading-margin-notes .reading-margin-note");
+    await note.waitFor();
+    expect(await note.innerText()).toContain("Check the conditions.");
+    const geometry = await page.evaluate(() => {
+      const sheet = document.querySelector<HTMLElement>(
+        ".reader-view:not([hidden])[data-view='doc']",
+      )!;
+      const article = sheet
+        .querySelector(".reading-article")!
+        .getBoundingClientRect();
+      const n = sheet
+        .querySelector(".reading-margin-note-place")!
+        .getBoundingClientRect();
+      const path = sheet
+        .querySelector(".reading-margin-leaders path")!
+        .getAttribute("d")!;
+      return {
+        column: article.right,
+        note: n.left,
+        path,
+        top: sheet.getBoundingClientRect().top,
+      };
+    });
+    expect(geometry.note).toBeGreaterThan(geometry.column);
+    expect(geometry.path).toMatch(/^M [\d.]+ [\d.]+ H/u);
+    // Narrow: below its paragraph, in the column.
+    await page.setViewportSize({ width: 760, height: 900 });
+    await page
+      .locator("section[data-byte-start] .reading-margin-note-below")
+      .waitFor();
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 120000);

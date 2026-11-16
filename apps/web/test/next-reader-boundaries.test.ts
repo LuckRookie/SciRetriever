@@ -356,9 +356,14 @@ it("keeps the latest outline target, text settings and reading position across a
     expect(
       await w.page.locator(".reader-find [role=status]").textContent(),
     ).toContain("已加载范围");
-    expect(await w.page.locator(".reading-match").textContent()).toContain(
-      "Paragraph 300",
-    );
+    // Only the words are marked (spec 2.5): the match's own text.
+    expect(
+      await w.page.evaluate(() =>
+        [...(CSS.highlights.get("find-hit") ?? [])].map((range) =>
+          (range as Range).toString(),
+        ),
+      ),
+    ).toContain("Paragraph 300");
     expect(requests.every((url) => new URL(url).origin === w.origin)).toBe(
       true,
     );

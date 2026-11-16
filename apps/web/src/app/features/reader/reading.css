@@ -327,7 +327,7 @@
   .react-reader .reading-article {
     font-family: var(--serif);
     font-size: var(--reading-font-size, 20px);
-    line-height: 1.75;
+    line-height: 1.85;
     max-width: min(100%, 36em);
     margin: 0 auto;
     color: var(--fg);
@@ -345,45 +345,6 @@
   }
   .react-reader .reading-wide .reading-article {
     max-width: min(100%, 46em);
-  }
-  /* Each heading level a step apart: title, section, subsection, then two quieter levels. */
-  .react-reader .reading-article :is(h1, h2, h3, h4, h5, h6) {
-    font-weight: 600;
-    text-wrap: balance;
-  }
-  .react-reader .reading-article h1 {
-    font-size: 1.6em;
-    line-height: 1.3;
-    margin: 0 0 1em;
-  }
-  .react-reader .reading-article section + section h1 {
-    font-size: 1.4em;
-    line-height: 1.35;
-    margin: 2em 0 0.6em;
-  }
-  .react-reader .reading-article h2 {
-    font-size: 1.4em;
-    line-height: 1.35;
-    margin: 2em 0 0.6em;
-  }
-  .react-reader .reading-article h3 {
-    font-size: 1.2em;
-    line-height: 1.4;
-    margin: 1.6em 0 0.5em;
-  }
-  .react-reader .reading-article h4 {
-    font-size: 1.05em;
-    line-height: 1.5;
-    margin: 1.4em 0 0.4em;
-  }
-  .react-reader .reading-article :is(h5, h6) {
-    font-size: 1em;
-    line-height: 1.5;
-    margin: 1.2em 0 0.4em;
-    color: var(--fg2);
-  }
-  .react-reader .reading-article p {
-    margin: 0 0 1em;
   }
   .react-reader .reading-article ul,
   .react-reader .reading-article ol {
@@ -416,42 +377,21 @@
   .react-reader .katex-display > .katex {
     font-size: 1.1em;
   }
-  /* Tables use rules between rows only; numbers line up. */
-  .react-reader .reading-table table {
-    border-collapse: collapse;
-    width: 100%;
-    font-size: 0.85em;
-    line-height: 1.5;
-    font-variant-numeric: tabular-nums;
-  }
-  .react-reader .reading-table :is(th, td) {
-    border-bottom: 1px solid var(--line);
-    padding: 0.5em 0.75em;
-    text-align: left;
-    vertical-align: top;
-  }
-  .react-reader .reading-table th {
-    border-bottom-color: var(--line2);
-    color: var(--fg2);
-    font-weight: 600;
-    background: var(--bg);
-    position: sticky;
-    top: 0;
-  }
   .react-reader .reading-article pre {
     white-space: pre-wrap;
     font-size: 0.85em;
   }
+  /* Until its picture arrives the placeholder says so: interface text. */
   .react-reader .reading-resource {
     display: block;
     margin: 1.5em 0;
-    font-size: 0.85em;
+    font: 400 var(--text-caption) / 1.5 var(--sans);
     color: var(--fg2);
   }
   /* Until its picture arrives, a resource shows as a tinted placeholder. */
   .react-reader .reading-resource:not(:has(img)) {
     padding: var(--space-3);
-    background: var(--side);
+    background: var(--reader-skeleton);
   }
   /* ADR 0054: presentation from the structure's byte ranges. */
   .react-reader .reading-article-info-toggle {
@@ -520,27 +460,9 @@
     border-left: 3px solid var(--line2);
     background: var(--side);
     font-family: var(--sans);
-    font-size: var(--text-interface);
+    font-size: var(--text-caption);
     line-height: 1.5;
     color: var(--fg2);
-  }
-  .react-reader .reading-figure-caption {
-    font-size: 0.88em;
-    line-height: 1.55;
-    color: var(--fg2);
-  }
-  .react-reader .reading-figure-caption p {
-    margin: 0.4em 0 1.2em;
-  }
-  .react-reader .reading-footnote {
-    font-size: 0.85em;
-    line-height: 1.55;
-    color: var(--fg2);
-    border-left: 2px solid var(--line2);
-    padding-left: 0.9em;
-  }
-  .react-reader .reading-footnote p {
-    margin: 0.4em 0;
   }
   .react-reader .reading-resource img {
     display: block;
@@ -599,9 +521,6 @@
     position: absolute;
     inset: 0;
     z-index: 1;
-  }
-  .react-reader .reading-match {
-    background: var(--mark);
   }
   /* The text layer is invisible; a translucent tint lets the rendered page show through. */
   .react-reader .textLayer mark.pdf-search-hit {
@@ -1807,5 +1726,160 @@
     background: var(--surface-raised);
     box-shadow: var(--shadow-pop);
     overflow: hidden;
+  }
+}
+
+/* Reading-experience 2.1–2.4: the full text set as a journal sets it. Every
+   size is a multiple of the reading size (the em of .reading-article). */
+@layer pages {
+  .react-reader .reading-article p {
+    margin: 0 0 0.5em;
+    text-indent: 2em;
+    text-align: justify;
+    line-break: strict;
+    text-autospace: normal;
+    text-spacing-trim: trim-start;
+  }
+  /* A paragraph without Chinese: 0.975 em, 1.7, left, unindented, hyphenated. */
+  .react-reader .reading-article p[data-script="latin"] {
+    margin: 0.9em 0 0;
+    font-size: 0.975em;
+    line-height: 1.7;
+    text-indent: 0;
+    text-align: left;
+    hyphens: auto;
+  }
+  .react-reader .reading-article :is(li, td, th, figcaption) p,
+  .react-reader
+    .reading-article
+    :is(.reading-figure-caption, .reading-footnote, .reading-article-info)
+    p {
+    text-indent: 0;
+  }
+  /* Units that never break: a value and its unit, an equation, a code. */
+  .react-reader .reading-article .reading-nobr {
+    white-space: nowrap;
+  }
+  .react-reader .reading-article :is(h1, h2, h3, h4, h5, h6) {
+    font-weight: 600;
+    text-wrap: balance;
+  }
+  .react-reader .reading-article .reading-document-title {
+    margin: 0 0 0.7em;
+    font-size: 1.8em;
+    line-height: 1.3;
+  }
+  .react-reader .reading-article section h1 {
+    margin: 2.8em 0 0.9em;
+    font-size: 1.5em;
+    line-height: 1.35;
+  }
+  .react-reader .reading-article section h2 {
+    margin: 1.9em 0 0.7em;
+    font-size: 1.2em;
+    line-height: 1.4;
+  }
+  .react-reader .reading-article section :is(h3, h4, h5, h6) {
+    margin: 1.4em 0 0.5em;
+    font-size: 1.05em;
+    line-height: 1.4;
+  }
+  /* The author's number: --fg3, 500, half an em before the title. */
+  .react-reader .reading-article .reading-heading-number {
+    margin-right: 0.5em;
+    color: var(--fg3);
+    font-weight: 500;
+  }
+  /* The abstract between two --line3 rules. */
+  .react-reader .reading-article section[data-abstract~="first"] {
+    padding-top: 0.6em;
+    border-top: 1px solid var(--line3);
+  }
+  .react-reader .reading-article section[data-abstract~="last"] {
+    padding-bottom: 0.6em;
+    border-bottom: 1px solid var(--line3);
+  }
+  .react-reader .reading-article section[data-abstract] :is(h1, h2, h3, h4) {
+    margin: 0 0 0.5em;
+    font-size: 1.15em;
+    line-height: 1.35;
+  }
+  /* Three-line tables: no verticals, numbers at the right. */
+  .react-reader .reading-table table {
+    width: 100%;
+    border-collapse: collapse;
+    border-top: 1.5px solid var(--fg3);
+    border-bottom: 1.5px solid var(--fg3);
+    font-size: 0.8em;
+    line-height: 1.5;
+    font-variant-numeric: tabular-nums;
+  }
+  .react-reader .reading-table :is(th, td) {
+    padding: 0.35em 0.75em;
+    border: 0;
+    text-align: left;
+    vertical-align: top;
+  }
+  .react-reader .reading-table thead tr:last-child :is(th, td),
+  .react-reader .reading-table tr:first-child:has(th) th {
+    border-bottom: 1px solid var(--line3);
+  }
+  .react-reader .reading-table th {
+    font-weight: 600;
+    color: var(--fg);
+  }
+  .react-reader .reading-table [data-numeric] {
+    text-align: right;
+  }
+  .react-reader .reading-figure-caption {
+    font-size: 0.775em;
+    line-height: 1.6;
+    color: var(--fg);
+  }
+  .react-reader .reading-figure-caption p {
+    margin: 0.4em 0 1.2em;
+  }
+  .react-reader .reading-article .reading-caption-label {
+    font-weight: 600;
+  }
+  .react-reader .reading-footnote {
+    padding-left: 0.9em;
+    border-left: 1px solid var(--line2);
+    font-size: 0.8em;
+    line-height: 1.55;
+    color: var(--fg);
+  }
+  .react-reader .reading-footnote p {
+    margin: 0.4em 0;
+  }
+  /* Spec 2.4: what a machine wrote is sans-serif. */
+  .react-reader [data-origin="machine"] {
+    font-family: var(--sans);
+  }
+  /* Spec 1.1, 4.8: the paragraph's number in the left margin, “¶n”. */
+  .react-reader
+    .reader-view[data-view="doc"]
+    .reading-article
+    section[data-paragraph] {
+    position: relative;
+  }
+  .react-reader
+    .reader-view[data-view="doc"]
+    .reading-article
+    section[data-paragraph]::before {
+    content: "¶" attr(data-paragraph);
+    position: absolute;
+    top: 0.45em;
+    right: calc(100% + 14px);
+    color: var(--fg3);
+    font: 400 12px / 1.45 var(--sans);
+    font-variant-numeric: tabular-nums;
+  }
+  /* The find bar's matches: only the words (spec 2.5). */
+  ::highlight(find-hit) {
+    background-color: var(--hl);
+  }
+  ::highlight(find-current) {
+    background-color: var(--hl-current);
   }
 }

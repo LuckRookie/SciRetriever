@@ -75,19 +75,32 @@
   .react-reader .reading-pdf-page > .mark-over {
     z-index: 2;
   }
+  /* Spec 2.5, 3.5: on the PDF page too, a reader's mark is a 1.5 px line
+     in its colour's label ink; the fill is left to evidence and find. */
   .mark-highlight {
+    --mark-ink: var(--t-blue);
     position: absolute;
-    border-radius: 2px;
-    background: rgb(var(--mark-c) / 0.42);
-    mix-blend-mode: multiply;
+    border-bottom: 1.5px solid var(--mark-ink);
+    border-radius: 0;
+    background: transparent;
     transition: background-color var(--dur-out) var(--ease-out);
   }
-  .mark-highlight[data-hot] {
-    background: rgb(var(--mark-c) / 0.66);
-    transition-duration: 0ms;
+  .mark-highlight[data-color="yellow"] {
+    --mark-ink: var(--t-yellow);
   }
+  .mark-highlight[data-color="green"] {
+    --mark-ink: var(--t-green);
+  }
+  .mark-highlight[data-color="red"] {
+    --mark-ink: var(--t-red);
+  }
+  .mark-highlight[data-color="purple"] {
+    --mark-ink: var(--t-purple);
+  }
+  .mark-highlight[data-hot],
   .mark-highlight[data-preview] {
-    background: rgb(var(--mark-c) / 0.5);
+    background: var(--sel);
+    transition-duration: 0ms;
   }
   /* The one flourish: a new highlight is drawn left to right, like a stroke. */
   .mark-highlight[data-sweep] {
@@ -98,19 +111,17 @@
       clip-path: inset(0 100% 0 0 round 2px);
     }
   }
+  /* A region: a 1.5 px ink-blue frame, no fill. */
   .mark-region {
     position: absolute;
-    border: 1.5px solid rgb(var(--mark-c) / 0.95);
-    border-radius: 3px;
-    background: rgb(var(--mark-c) / 0.07);
-    transition:
-      background-color var(--dur-out) var(--ease-out),
-      box-shadow var(--dur-out) var(--ease-out);
+    border: 1.5px solid var(--blue);
+    border-radius: 0;
+    background: transparent;
+    transition: box-shadow var(--dur-out) var(--ease-out);
     animation: mark-region-in var(--dur-2) var(--ease-out);
   }
   .mark-region[data-hot] {
-    background: rgb(var(--mark-c) / 0.15);
-    box-shadow: 0 0 0 3px rgb(var(--mark-c) / 0.25);
+    box-shadow: 0 0 0 3px var(--sel);
     transition-duration: 0ms;
   }
   @keyframes mark-region-in {
@@ -119,29 +130,23 @@
       transform: scale(0.985);
     }
   }
+  /* A note on the PDF: a 16 px ink-blue numbered dot inside the page's
+     right edge; its note opens over it (spec 3.5). */
   .mark-note {
     position: absolute;
-    width: 22px;
-    height: 22px;
-    margin-top: -2px;
+    right: 6px;
+    width: 16px;
+    height: 16px;
     padding: 0;
     border: 0;
-    border-radius: 50% 50% 50% 3px;
-    background: rgb(var(--mark-c));
-    color: #1d1d1b;
-    font: 600 var(--text-caption) / 22px var(--sans);
+    border-radius: 50%;
+    background: var(--blue);
+    color: var(--bg);
+    font: 600 10.5px / 16px var(--sans);
     text-align: center;
     cursor: pointer;
     pointer-events: auto;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
     transition: transform var(--dur-2) var(--ease-press);
-  }
-  .mark-note[data-side="left"] {
-    left: 4px;
-    border-radius: 50% 50% 3px 50%;
-  }
-  .mark-note[data-side="right"] {
-    right: 4px;
   }
   .mark-note:hover,
   .mark-note[data-hot] {
@@ -196,43 +201,43 @@
   }
 
   /* Full text: CSS highlights, so the article's DOM is never changed. */
-  ::highlight(mark-yellow) {
-    background-color: rgb(247 203 45 / 0.45);
-  }
-  ::highlight(mark-blue) {
-    background-color: rgb(84 178 212 / 0.36);
-  }
-  ::highlight(mark-green) {
-    background-color: rgb(104 190 128 / 0.38);
-  }
-  ::highlight(mark-red) {
-    background-color: rgb(238 122 108 / 0.36);
-  }
+  /* Spec 2.5: a reader's mark is a 1.5 px line in its colour's label ink,
+     5 px below the baseline, never a fill; an approximate place is dashed. */
+  ::highlight(mark-yellow),
+  ::highlight(mark-blue),
+  ::highlight(mark-green),
+  ::highlight(mark-red),
   ::highlight(mark-purple) {
-    background-color: rgb(166 134 222 / 0.36);
+    text-decoration: underline solid 1.5px;
+    text-underline-offset: 5px;
   }
   ::highlight(mark-near-yellow),
   ::highlight(mark-near-blue),
   ::highlight(mark-near-green),
   ::highlight(mark-near-red),
   ::highlight(mark-near-purple) {
-    text-decoration: underline dotted 1.5px;
-    text-underline-offset: 0.2em;
+    text-decoration: underline dashed 1.5px;
+    text-underline-offset: 5px;
   }
+  ::highlight(mark-yellow),
   ::highlight(mark-near-yellow) {
-    text-decoration-color: rgb(200 160 20);
+    text-decoration-color: var(--t-yellow);
   }
+  ::highlight(mark-blue),
   ::highlight(mark-near-blue) {
-    text-decoration-color: rgb(54 148 182);
+    text-decoration-color: var(--t-blue);
   }
+  ::highlight(mark-green),
   ::highlight(mark-near-green) {
-    text-decoration-color: rgb(74 160 98);
+    text-decoration-color: var(--t-green);
   }
+  ::highlight(mark-red),
   ::highlight(mark-near-red) {
-    text-decoration-color: rgb(208 92 78);
+    text-decoration-color: var(--t-red);
   }
+  ::highlight(mark-purple),
   ::highlight(mark-near-purple) {
-    text-decoration-color: rgb(136 104 192);
+    text-decoration-color: var(--t-purple);
   }
   ::highlight(mark-hot) {
     background-color: rgb(55 53 47 / 0.1);
@@ -657,5 +662,114 @@
     background: var(--surface-sunken);
     font: var(--text-caption) / 1.6 var(--mono);
     white-space: pre-wrap;
+  }
+}
+
+@layer pages {
+  /* The right margin's notes (spec 2.5): ink-blue small sans-serif, a 1 px
+     --reader-pen-soft leader from the column's edge to each. */
+  .react-reader .reader-view[data-view="doc"] {
+    position: relative;
+  }
+  .react-reader .reading-margin-notes {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+  .react-reader .reading-margin-leaders {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    fill: none;
+    stroke: var(--reader-pen-soft);
+    stroke-width: 1px;
+  }
+  .react-reader .reading-margin-note-place {
+    position: absolute;
+    pointer-events: auto;
+  }
+  .react-reader .reading-margin-note {
+    display: block;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--blue);
+    font: 400 12.5px / 1.55 var(--sans);
+    text-align: left;
+    cursor: pointer;
+  }
+  .react-reader .reading-margin-note-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--fg3);
+    font-size: 11px;
+  }
+  .react-reader .reading-margin-note-swatch {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    background: var(--t-blue-bg);
+  }
+  .react-reader
+    .reading-margin-note[data-color="yellow"]
+    .reading-margin-note-swatch {
+    background: var(--t-yellow-bg);
+  }
+  .react-reader
+    .reading-margin-note[data-color="green"]
+    .reading-margin-note-swatch {
+    background: var(--t-green-bg);
+  }
+  .react-reader
+    .reading-margin-note[data-color="red"]
+    .reading-margin-note-swatch {
+    background: var(--t-red-bg);
+  }
+  .react-reader
+    .reading-margin-note[data-color="purple"]
+    .reading-margin-note-swatch {
+    background: var(--t-purple-bg);
+  }
+  .react-reader .reading-margin-note-text {
+    display: block;
+    white-space: pre-wrap;
+  }
+  /* Pushed more than 120 px away: the first line only, open on hover. */
+  .react-reader .reading-margin-note[data-folded] .reading-margin-note-text {
+    display: none;
+  }
+  .react-reader
+    .reading-margin-note[data-folded]:is(:hover, :focus-visible)
+    .reading-margin-note-text {
+    display: block;
+  }
+  /* The narrow tiers: a block in the column below its paragraph. */
+  .react-reader .reading-margin-note-below {
+    margin: 0.5em 0;
+    padding: 8px 12px;
+    border-left: 2px solid var(--blue);
+  }
+}
+
+@layer pages {
+  /* A PDF note dot hovered: its note, read-only, under the dot. */
+  .mark-note-peek {
+    position: fixed;
+    z-index: 30;
+    width: 280px;
+    max-height: 240px;
+    overflow: auto;
+    padding: var(--space-2) var(--space-3);
+    border-radius: 6px;
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-pop);
+    color: var(--blue);
+    font: 400 12.5px / 1.55 var(--sans);
+    white-space: pre-wrap;
+    pointer-events: none;
   }
 }
