@@ -181,7 +181,7 @@ Web 管理均为 POST，要求登录 Cookie、工作台 Cookie、client_id、同
 | `/api/v1/device-connections/rename`   | `{connection_id,name}`         | `{connection}`                              |
 | `/api/v1/device-connections/revoke`   | `{connection_id}`              | `{connection}`，幂等                        |
 
-- `DeviceConnection` 只含 UUID connection_id、1–120 字符的 name、purposes、created_at，以及 nullable 的 paired_at/last_used_at/revoked_at。
+- `DeviceConnection` 只含 UUID connection_id、1–120 字符的 name、purposes、`kind`、created_at，以及 nullable 的 paired_at/last_used_at/revoked_at。`kind` 为 `"extension"`、`"agent"` 或 null：建立连接时由网页按使用者点的按钮（“连接浏览器扩展”或“连接 Agent”）写入，之后不变；schema 18 之前建立的连接为 null，界面写“设备”。`kind` 只用于显示，不参与准入；准入只看用途。（目标，尚未实现：计划 25 的 12 块，总设计师 2026-11-17 补。）
 - 列表不返回 token、配对码或其派生值，包含未配对与已撤销项。
 - 用途变更需要重新连接。
 - 管理不走记录请求/响应的通用 operation wrapper。

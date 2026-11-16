@@ -508,11 +508,11 @@ Analysis 的 `processor_result_summaries` 保存已发布结果用量/覆盖摘�
 
 按 ADR 0058，Web transport 认证 owner 提交设备连接事实，Storage 仅保存派生值与生命周期。单一 schema 16 在原 15 上增加：
 
-| 表                     | 字段与约束                                                                                                                                                                |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| device_connections     | connection_id TEXT PK；name 非空、最多 120；purposes_json 合法 JSON；token_sha256 nullable UNIQUE，非空时 64 字符；created_at、nullable paired_at/last_used_at/revoked_at |
-| device_pairings        | code_sha256 TEXT PK（64 字符）；connection_id UNIQUE FK→device_connections，ON DELETE CASCADE；expires_at、nullable used_at                                               |
-| device_exchange_limits | bucket TEXT PK；window_start INTEGER；attempts 正整数                                                                                                                     |
+| 表                     | 字段与约束                                                                                                                                                                                                                                                |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| device_connections     | connection_id TEXT PK；name 非空、最多 120；purposes_json 合法 JSON；kind TEXT nullable，非空时为 extension 或 agent（schema 18 加入，旧行为 null）；token_sha256 nullable UNIQUE，非空时 64 字符；created_at、nullable paired_at/last_used_at/revoked_at |
+| device_pairings        | code_sha256 TEXT PK（64 字符）；connection_id UNIQUE FK→device_connections，ON DELETE CASCADE；expires_at、nullable used_at                                                                                                                               |
+| device_exchange_limits | bucket TEXT PK；window_start INTEGER；attempts 正整数                                                                                                                                                                                                     |
 
 令牌和配对码各为 32 个随机字节（256 位），catalog 只保存 SHA-256，不保存原值；原值不跨 SQLite worker 边界，不写 artifact。用途由认证 owner 的封闭列表校验，目标值为 `intake`、`read`、`operate`（[产品接口 2.4.1](01-product-interface.md#241-设备连接与按用途准入)），旧值 `capture`、`import` 不再接受，也不转换；令牌派生值可为空以表示尚未配对。配对成功在同一事务中标记 used_at 并安装 token 派生值，失败/限流计数也提交以阻止重试绕过。每次认证直接核对已撤销状态。目标（尚未实现，计划 20 的 14 块）：最近使用时间合并写入，同一个连接距上次写入不足 5 分钟时只读核对；交换限流表只保存 socket peer 地址的 hash，不再有全局桶，每个地址每 60 秒 30 次；表最多 256 行，满时淘汰 `window_start` 最早的一行，不因表满而拒绝。它们不推进文献状态或检索 source revision。
 
