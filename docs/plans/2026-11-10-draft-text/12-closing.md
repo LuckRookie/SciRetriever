@@ -44,7 +44,7 @@
   - [Web 指南](../../guides/web-workbench.md)：10.7 已写则核对。
   - 按[文档影响映射](../../development/documentation-map.md)检查其余影响。
 - [x] **12.3 收尾全量**（2026-11-16：`pnpm full` quick 全过；测试 3265 项中 8 项失败，4 项单独重跑通过（负载偶发：command-palette、jobs-parity、motion、intake-runtime），4 项为测试未跟上 04/08/09 的行为，已修夹具与期望（产品代码未改），复跑通过；证据 `sandbox/reports/2026-11-16-full*`）：`pnpm full` 一次。失败逐个单文件复跑定向修复，修完只复跑这些文件；与本计划无关、HEAD 上同样失败的记为后续事项（HARNESS 第 6 节）。
-- [ ] **12.4 部署**（2026-11-16：Owner 授权副本演练与正式部署。副本演练（`sandbox/reports/2026-11-16-rehearsal/round-2/`）：迁移 15→16→17 通过；补形成试跑 73 篇中形成 3、失败 70（历史 `vlm-engine-markdown-only` 原始解析，`needs-parse`）。正式部署（`sandbox/reports/2026-11-16-deploy-17-production-2/`）：4174 从 `40ebc498` 换到 `b94bf47f`，停服、一致性备份（`backup-schema15.sqlite`）、离线迁移 15→16（19.6 s）→17（20.4 s）、启动、就绪（33 s）全部通过，正式库为 schema 17。正式库上补形成初稿尚未执行（另行授权）。）（G4，每一步分开授权）
+- [x] **12.4 部署**（2026-11-16：Owner 授权副本演练与正式部署。副本演练（`sandbox/reports/2026-11-16-rehearsal/round-2/`）：迁移 15→16→17 通过；补形成试跑 73 篇中形成 3、失败 70（历史 `vlm-engine-markdown-only` 原始解析，`needs-parse`）。正式部署（`sandbox/reports/2026-11-16-deploy-17-production-2/`）：4174 从 `40ebc498` 换到 `b94bf47f`，停服、一致性备份（`backup-schema15.sqlite`）、离线迁移 15→16（19.6 s）→17（20.4 s）、启动、就绪（33 s）全部通过，正式库为 schema 17。Owner 授权补形成后，对演练中能形成的 3 篇执行：首次因部署脚本未接页面工具而 3 篇 `page-tools-unavailable`（只留下失败记录）；脚本改为显式核验并注入页面工具（`--page-runtime`）后重跑，3 篇形成初稿，302 页，27.4 s，索引刷新 16.9 s、就绪（`backfill-run-1794800741908`）。其余 70 篇为历史 `vlm-engine-markdown-only` 原始解析，需要重新解析才能形成初稿，由 Owner 另行决定。）（G4，每一步分开授权）
   1. 部署 4174：候选构建、预演、预检无运行中任务、停服、备份。04 与 07 必须在同一版本中上线。
   2. 正式库离线迁移：先确认正式库的 schema。若还是 15，先按计划 20 迁到 16，再运行 `scripts/migrate-draft-text-v17.mjs`。迁移前后核对行数、内容版本事件为零、加工结果过时状态不变。启动并确认就绪。
   3. 补形成初稿：Owner 选定范围（例如全部有原始解析的文献），先看预览，再提交 05 的维护操作；记录篇数、失败原因与耗时；确认全文索引刷新完成。
