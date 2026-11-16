@@ -1,8 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
   parseFolderOperation,
   parseFolderNode,
   parseReadingOpen,
+  parseFolderExportRequest,
+  type FolderExportNode,
 } from "@sciretriever/contracts";
 export const FOLDER_DESCENDANTS_SQL =
   "WITH RECURSIVE descendants(id) AS (SELECT folder_id FROM folders WHERE folder_id=? UNION SELECT f.folder_id FROM folders f JOIN descendants d ON f.parent_id=d.id) SELECT id FROM descendants";
@@ -81,6 +83,66 @@ export function libraryMembership(db: DatabaseSync, id: string) {
         .get(id)?.last_opened_at ?? null,
   };
 }
+export interface FolderExportStoragePage {
+  readonly folders: readonly FolderExportNode[] | null;
+  readonly members: readonly { folder_id: string; literature_id: string }[];
+  readonly more: boolean;
+}
+function readExport(db: DatabaseSync, value: unknown): FolderExportStoragePage {
+  const r = value as {
+    request: unknown;
+    export_after?: readonly [string, string] | null;
+    export_folder_id?: string;
+    export_tree_only?: boolean;
+    export_include_tree?: boolean;
+  };
+  const request = parseFolderExportRequest(r.request),
+    own = !db.isTransaction;
+  if (own) db.exec("BEGIN");
+  try {
+    const folders = r.export_include_tree
+      ? (db
+          .prepare(
+            "SELECT folder_id,name,parent_id,position FROM folders ORDER BY folder_id",
+          )
+          .all() as unknown as FolderExportNode[])
+      : null;
+    const where: string[] = [],
+      args: SQLInputValue[] = [];
+    if (r.export_folder_id !== undefined) {
+      where.push("folder_id=?");
+      args.push(r.export_folder_id);
+    }
+    if (r.export_after) {
+      if (r.export_folder_id !== undefined) {
+        where.push("literature_id>?");
+        args.push(r.export_after[1]);
+      } else {
+        where.push("(folder_id,literature_id)>(?,?)");
+        args.push(...r.export_after);
+      }
+    }
+    const members = r.export_tree_only
+      ? []
+      : (db
+          .prepare(
+            "SELECT folder_id,literature_id FROM folder_members" +
+              (where.length ? " WHERE " + where.join(" AND ") : "") +
+              " ORDER BY folder_id,literature_id LIMIT ?",
+          )
+          .all(...args, request.limit + 1) as unknown as {
+          folder_id: string;
+          literature_id: string;
+        }[]);
+    const more = members.length > request.limit;
+    if (more) members.pop();
+    if (own) db.exec("COMMIT");
+    return { folders, members, more };
+  } catch (error) {
+    if (own && db.isTransaction) db.exec("ROLLBACK");
+    throw error;
+  }
+}
 export function runFolderStorage(db: DatabaseSync, value: unknown): unknown {
   const r = value as {
     operation: string;
@@ -89,6 +151,7 @@ export function runFolderStorage(db: DatabaseSync, value: unknown): unknown {
     actor?: string;
     folder_id?: string;
   };
+  if (r.operation === "export") return readExport(db, value);
   const write = !["list", "delete-preview"].includes(r.operation);
   db.exec(write ? "BEGIN IMMEDIATE" : "BEGIN");
   try {
@@ -112,6 +175,7 @@ export function runFolderStorage(db: DatabaseSync, value: unknown): unknown {
         operation: r.operation,
         request: r.request,
       });
+      if (op.operation === "export") fail("folder-read-operation-invalid");
       const req = op.request;
       if (op.operation === "list")
         result = {

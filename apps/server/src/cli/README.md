@@ -25,3 +25,5 @@
 [上级目录](../README.md)
 
 `processors` 命令族提供 list/submit/run、结果与集合查询、字段证据、导出、rebuild 和 retain。
+
+`folders export --request FILE|-` 只读分页导出分组，文件内为 `{cursor, limit}`，首次 cursor 为 null，limit 为 1–1,000；跟随 `next_cursor` 收齐成员。`filters export` 一次返回保存筛选的名称、条件和排序；两者都不创建操作记录或修改阅读历史。

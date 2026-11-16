@@ -405,7 +405,7 @@ export interface QueryApplication {
     value: unknown,
   ) => Promise<unknown>;
   readonly archiveProfile?: "pipeline" | "vlm-engine";
-  readonly folders?: Pick<FolderService, "query">;
+  readonly folders?: Pick<FolderService, "query" | "withExportFile">;
   readonly filters?: Pick<FilterService, "query">;
   readonly marks?: Pick<MarkService, "query">;
   readonly snapshots?: Pick<

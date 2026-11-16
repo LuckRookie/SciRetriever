@@ -3854,3 +3854,5 @@ export * from "./translation.js";
 export * from "./document-layout.js";
 export * from "./draft-document.js";
 export * from "./intake-page.js";
+
+export * from "./literature-summary.js";

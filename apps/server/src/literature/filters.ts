@@ -2,6 +2,9 @@ import { randomUUID } from "node:crypto";
 import {
   ContractValidationError,
   parseFilterOperation,
+  parseSavedFilter,
+  parseFiltersExportFile,
+  FILTERS_EXPORT_FORMAT,
 } from "@sciretriever/contracts";
 import type { SqliteWorker } from "../storage/sqlite/worker.js";
 
@@ -10,7 +13,7 @@ export class FilterError extends Error {
     super(code);
   }
 }
-/** Saved conditions only; export is delivered separately with library exports. */
+/** Saved conditions only, with a bounded, read-only whole-file export. */
 export class FilterService {
   constructor(private readonly database: SqliteWorker) {}
   query(value: unknown, signal?: AbortSignal): Promise<unknown> {
@@ -20,7 +23,28 @@ export class FilterService {
         : null;
     if (!["list", "export"].includes(String(operation)))
       throw new FilterError("filter-read-operation-invalid");
-    return this.database.filters(parseFilterOperation(value), signal);
+    const command = parseFilterOperation(value);
+    if (command.operation === "export") return this.exportFile(command, signal);
+    return this.database.filters(command, signal);
+  }
+  private async exportFile(
+    command: Extract<
+      ReturnType<typeof parseFilterOperation>,
+      { operation: "export" }
+    >,
+    signal?: AbortSignal,
+  ) {
+    const listed = (await this.database.filters(command, signal)) as {
+      items: readonly unknown[];
+    };
+    return parseFiltersExportFile({
+      format: FILTERS_EXPORT_FORMAT,
+      version: 1,
+      exported_at: new Date().toISOString(),
+      filters: listed.items
+        .map(parseSavedFilter)
+        .map(({ name, query, sort }) => ({ name, query, sort })),
+    });
   }
   manage(value: unknown, signal?: AbortSignal): Promise<unknown> {
     const operation =

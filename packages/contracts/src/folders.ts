@@ -3,6 +3,8 @@ import {
   parseAssetId,
   parseLiteratureId,
   parseUtcTimestamp,
+  parseLiteratureBibliographySummary,
+  type LiteratureBibliographySummary,
 } from "./index.js";
 import { tagRecord, tagInteger } from "./tags.js";
 
@@ -18,6 +20,7 @@ export interface FolderNode {
 }
 export type FolderOperation =
   | { operation: "list"; request: Record<string, never> }
+  | { operation: "export"; request: FolderExportRequest }
   | { operation: "delete-preview"; request: { folder_id: string } }
   | {
       operation: "create";
@@ -68,6 +71,8 @@ export function parseFolderOperation(value: unknown): FolderOperation {
       operation: op,
       request: tagRecord(e.request, []) as Record<string, never>,
     };
+  if (op === "export")
+    return { operation: op, request: parseFolderExportRequest(e.request) };
   if (op === "delete" || op === "delete-preview") {
     const r = tagRecord(e.request, ["folder_id"]);
     return { operation: op, request: { folder_id: parseAssetId(r.folder_id) } };
@@ -173,4 +178,155 @@ export function parseFolderImpact(value: unknown): FolderImpact {
 export function parseReadingOpen(value: unknown) {
   const r = tagRecord(value, ["literature_id"]);
   return { literature_id: parseLiteratureId(r.literature_id) };
+}
+
+export const FOLDERS_EXPORT_FORMAT = "sciretriever-folders";
+export interface FolderExportRequest {
+  readonly cursor: string | null;
+  readonly limit: number;
+}
+export interface FolderExportNode {
+  readonly folder_id: string;
+  readonly name: string;
+  readonly parent_id: string | null;
+  readonly position: number;
+}
+export interface FolderExportMember extends LiteratureBibliographySummary {
+  readonly folder_id: string;
+}
+export interface FolderExportPage {
+  readonly format: typeof FOLDERS_EXPORT_FORMAT;
+  readonly version: 1;
+  readonly exported_at: string;
+  readonly folders: readonly FolderExportNode[] | null;
+  readonly members: readonly FolderExportMember[];
+  readonly next_cursor: string | null;
+}
+export interface FoldersExportFile {
+  readonly format: typeof FOLDERS_EXPORT_FORMAT;
+  readonly version: 1;
+  readonly exported_at: string;
+  readonly folders: readonly (FolderExportNode & {
+    readonly members: readonly LiteratureBibliographySummary[];
+  })[];
+}
+function cursor(value: unknown): string | null {
+  if (value === null) return null;
+  if (typeof value !== "string" || !value.length || value.length > 8192) fail();
+  return value;
+}
+export function parseFolderExportRequest(value: unknown): FolderExportRequest {
+  const r = tagRecord(value, ["cursor", "limit"]),
+    limit = tagInteger(r.limit, 1);
+  if (limit > 1000) fail();
+  return { cursor: cursor(r.cursor), limit };
+}
+export function parseFolderExportNode(value: unknown): FolderExportNode {
+  const r = tagRecord(value, ["folder_id", "name", "parent_id", "position"]);
+  return {
+    folder_id: parseAssetId(r.folder_id),
+    name: name(r.name),
+    parent_id: r.parent_id === null ? null : parseAssetId(r.parent_id),
+    position: tagInteger(r.position),
+  };
+}
+export function parseFolderExportMember(value: unknown): FolderExportMember {
+  const r = tagRecord(value, [
+    "folder_id",
+    "literature_id",
+    "identifiers",
+    "title",
+    "year",
+  ]);
+  const { folder_id, ...summary } = r;
+  const parsed = parseLiteratureBibliographySummary(summary);
+  if (
+    parsed.identifiers.some(
+      (id) => !["doi", "arxiv", "pmid", "pmcid"].includes(id.namespace),
+    )
+  )
+    fail();
+  return { folder_id: parseAssetId(folder_id), ...parsed };
+}
+function header(
+  r: Record<string, unknown>,
+): Pick<FolderExportPage, "format" | "version" | "exported_at"> {
+  if (r.format !== FOLDERS_EXPORT_FORMAT || r.version !== 1) fail();
+  return {
+    format: FOLDERS_EXPORT_FORMAT,
+    version: 1 as const,
+    exported_at: parseUtcTimestamp(r.exported_at),
+  };
+}
+export function parseFolderExportPage(value: unknown): FolderExportPage {
+  const r = tagRecord(value, [
+    "format",
+    "version",
+    "exported_at",
+    "folders",
+    "members",
+    "next_cursor",
+  ]);
+  if (
+    (r.folders !== null && !Array.isArray(r.folders)) ||
+    !Array.isArray(r.members) ||
+    r.members.length > 1000
+  )
+    fail();
+  return {
+    ...header(r),
+    folders:
+      r.folders === null
+        ? null
+        : (r.folders as unknown[]).map(parseFolderExportNode),
+    members: r.members.map(parseFolderExportMember),
+    next_cursor: cursor(r.next_cursor),
+  };
+}
+export function parseFoldersExportFile(value: unknown): FoldersExportFile {
+  const r = tagRecord(value, ["format", "version", "exported_at", "folders"]);
+  if (!Array.isArray(r.folders)) fail();
+  const folders = r.folders.map((value) => {
+    const row = tagRecord(value, [
+      "folder_id",
+      "name",
+      "parent_id",
+      "position",
+      "members",
+    ]);
+    const { members, ...node } = row;
+    if (!Array.isArray(members)) fail();
+    const folder = parseFolderExportNode(node);
+    return {
+      ...folder,
+      members: members.map((member) => {
+        const item = tagRecord(member, [
+          "literature_id",
+          "identifiers",
+          "title",
+          "year",
+        ]);
+        const { folder_id: _, ...summary } = parseFolderExportMember({
+          folder_id: folder.folder_id,
+          ...item,
+        });
+        void _;
+        return summary;
+      }),
+    };
+  });
+  const parents = new Map(
+    folders.map((folder) => [folder.folder_id, folder.parent_id]),
+  );
+  if (parents.size !== folders.length) fail();
+  for (const folder of folders) {
+    const seen = new Set<string>();
+    let id: string | null = folder.folder_id;
+    while (id !== null) {
+      if (seen.has(id) || !parents.has(id)) fail();
+      seen.add(id);
+      id = parents.get(id)!;
+    }
+  }
+  return { ...header(r), folders };
 }

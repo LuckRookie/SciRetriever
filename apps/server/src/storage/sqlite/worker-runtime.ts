@@ -81,6 +81,14 @@ const captureModule = await import(
     import.meta.url,
   ).href
 );
+const bibliographyModule = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./literature-bibliographies.ts"
+      : "./literature-bibliographies.js",
+    import.meta.url,
+  ).href
+);
 const folderModule = await import(
   new URL(
     import.meta.url.endsWith(".ts")
@@ -4763,10 +4771,11 @@ port.on("message", (message: WorkerMessage) => {
       return;
     }
     if (!db) initialize();
-    else {
+    else if (!db.isTransaction) {
       // FTS5 may retain an obsolete index view on a long-lived SQLite
       // connection after another connection commits. Refresh only between
-      // commands; initialize repeats the original read-only/schema gate.
+      // transactions; a multi-command read snapshot must keep its connection.
+      // initialize repeats the original read-only/schema gate.
       const current = Number(
         db.prepare("PRAGMA data_version").get().data_version,
       );
@@ -5502,6 +5511,19 @@ port.on("message", (message: WorkerMessage) => {
           message.command.literature,
           message.command.metadataSha256,
           message.command.fallbackIdentitySha256,
+        );
+        break;
+      case "begin_read_snapshot":
+        if (!data.read_only || db.isTransaction) fail();
+        db.exec("BEGIN");
+        db.prepare("SELECT singleton FROM schema_identity").get();
+        value = true;
+        break;
+      case "literature_bibliographies":
+        if (message.command.ids.length > 1000) fail();
+        value = bibliographyModule.readLiteratureBibliographies(
+          db,
+          message.command.ids,
         );
         break;
       case "get_literature":

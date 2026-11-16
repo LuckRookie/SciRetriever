@@ -2,7 +2,7 @@
 
 类型：计划（结果块）
 负责：文件夹树、成员与保存的筛选整体导出为 JSON
-状态：Pending
+状态：In progress（11.1–11.4 完成；11.5 前端；11.6 待 G-lib）
 
 来源：原计划 22 的 07（任务 7.1–7.6 改为 11.1–11.6）。
 
@@ -31,10 +31,10 @@
 
 ## Tasks
 
-- [ ] **11.1 分组导出的合同**：`FolderOperation` 的 `export {cursor, limit}`（`limit` 1–1,000），第一页带完整文件夹树，每页一批带 `folder_id` 的成员，按 `(folder_id, literature_id)` 排序，`next_cursor`；文件格式名与版本；解析函数。`FolderService.query` 接受 `export`。
-- [ ] **11.2 分组导出的实现**：成员的 `identifiers` 只列已有的四种，`title`、`year` 缺失为 null；一篇文献在几个文件夹里就各出现一次。CLI `folders export --request FILE`、MCP `folders_query` 的 `export`，用途 `read`。
-- [ ] **11.3 Web 下载的服务端**：`POST /api/v1/query/folders-export` 在一个只读快照里流式写出整份文件，成员嵌在各自的文件夹下；响应为 `application/json` 附件；不把整份文件先放进内存。
-- [ ] **11.4 筛选导出**：`FilterOperation` 的 `export`，一次返回；CLI `filters export`、MCP `filters_query` 的 `export`、HTTP `POST /api/v1/query/filters`。
+- [x] **11.1 分组导出的合同**：`FolderOperation` 的 `export {cursor, limit}`（`limit` 1–1,000），第一页带完整文件夹树，每页一批带 `folder_id` 的成员，按 `(folder_id, literature_id)` 排序，`next_cursor`；文件格式名与版本；解析函数。`FolderService.query` 接受 `export`。
+- [x] **11.2 分组导出的实现**：成员的 `identifiers` 只列已有的四种，`title`、`year` 缺失为 null；一篇文献在几个文件夹里就各出现一次。CLI `folders export --request FILE`、MCP `folders_query` 的 `export`，用途 `read`。
+- [x] **11.3 Web 下载的服务端**：`POST /api/v1/query/folders-export` 在一个只读快照里流式写出整份文件，成员嵌在各自的文件夹下；响应为 `application/json` 附件；不把整份文件先放进内存。
+- [x] **11.4 筛选导出**：`FilterOperation` 的 `export`，一次返回；CLI `filters export`、MCP `filters_query` 的 `export`、HTTP `POST /api/v1/query/filters`。
 - [ ] **11.5 Web 入口**（前端实施者）：侧栏“文件夹”一组的菜单“导出分组”；“筛选”菜单“导出筛选”（在 09 之后）。
 - [ ] **11.6 正式库只读副本核对**（G-lib，可选）：在副本上导出一次，记录大小与耗时，抽查几篇成员的标识。
 
@@ -56,7 +56,7 @@
 
 ## 证据
 
-提交号；定向测试结果；11.6 的大小与耗时（G-lib 之后）。
+- 2026-11-17，11.1–11.4 由后端实施者实现，总设计师审查后提交。文献的书目经文献模块新增的公开批量读取取得；Web 下载在一个只读快照里每批 128 项流式写出。合成大库 500 → 10,000 成员时输出增至 20 倍，堆与 ArrayBuffer 峰值增量 4.79 → 5.10 MB。后端实施者串行运行 16 个文件 92 项通过；总设计师复跑 `pnpm quick` 通过，`user-organization-export` 与 `saved-filters` 12 项通过（`sandbox/reports/2026-11-17-plan25-11/`）。
 
 ## 退出条件
 

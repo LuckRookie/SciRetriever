@@ -19,6 +19,7 @@ export interface SavedFilter {
 }
 export type FilterOperation =
   | { operation: "list"; request: Record<string, never> }
+  | { operation: "export"; request: Record<string, never> }
   | { operation: "create"; request: FilterInput }
   | { operation: "rename"; request: { filter_id: string; name: string } }
   | {
@@ -70,7 +71,7 @@ export function parseFilterImportInput(value: unknown): FilterInput {
 export function parseFilterOperation(value: unknown): FilterOperation {
   const e = tagRecord(value, ["operation", "request"]);
   const operation = e.operation;
-  if (operation === "list")
+  if (operation === "list" || operation === "export")
     return {
       operation,
       request: tagRecord(e.request, []) as Record<string, never>,
@@ -137,5 +138,35 @@ export function parseSavedFilter(value: unknown): SavedFilter {
       r.missing_folder_id === null ? null : parseAssetId(r.missing_folder_id),
     created_at: parseUtcTimestamp(r.created_at),
     updated_at: parseUtcTimestamp(r.updated_at),
+  };
+}
+
+export const FILTERS_EXPORT_FORMAT = "sciretriever-filters";
+export interface FiltersExportFile {
+  readonly format: typeof FILTERS_EXPORT_FORMAT;
+  readonly version: 1;
+  readonly exported_at: string;
+  readonly filters: readonly FilterInput[];
+}
+export function parseFiltersExportFile(value: unknown): FiltersExportFile {
+  const r = tagRecord(value, ["format", "version", "exported_at", "filters"]);
+  if (
+    r.format !== FILTERS_EXPORT_FORMAT ||
+    r.version !== 1 ||
+    !Array.isArray(r.filters) ||
+    r.filters.length > 200
+  )
+    throw new ContractValidationError();
+  return {
+    format: FILTERS_EXPORT_FORMAT,
+    version: 1,
+    exported_at: parseUtcTimestamp(r.exported_at),
+    filters: r.filters.map((value) => {
+      const item = tagRecord(value, ["name", "query", "sort"]);
+      return {
+        name: parseFilterName(item.name),
+        ...condition(item.query, item.sort),
+      };
+    }),
   };
 }

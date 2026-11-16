@@ -6,6 +6,8 @@ import {
 } from "@sciretriever/contracts";
 import {
   canonicalJsonBytes,
+  parseLiteratureBibliographySummary,
+  type LiteratureBibliographySummary,
   LITERATURE_STATUSES,
   type LibraryCounts,
   parseLibraryQuery,
@@ -54,6 +56,10 @@ export interface ParseDocumentSelection {
   readonly items: PdfSelection["items"];
 }
 export interface LibraryQueryRepository {
+  literatureBibliographies?(
+    ids: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<readonly unknown[]>;
   intakeBatches?(
     value: unknown,
   ): Promise<
@@ -639,6 +645,25 @@ export async function verifyLiteratureDetailSnapshot(
 }
 export class LiteratureQueryService {
   constructor(private readonly repository: LibraryQueryRepository) {}
+  /** Public current identifiers/title/year read, sharing the repository's snapshot. */
+  async bibliographies(
+    values: readonly unknown[],
+    signal?: AbortSignal,
+  ): Promise<readonly LiteratureBibliographySummary[]> {
+    if (!this.repository.literatureBibliographies || values.length > 1000)
+      fail();
+    const ids = [...new Set(values.map((value) => parseLiteratureId(value)))];
+    const rows = (
+      await this.repository.literatureBibliographies(ids, signal)
+    ).map(parseLiteratureBibliographySummary);
+    if (
+      rows.length !== ids.length ||
+      new Set(rows.map((row) => row.literature_id)).size !== ids.length ||
+      rows.some((row) => !ids.includes(row.literature_id))
+    )
+      throw new LiteratureNotFoundError();
+    return rows;
+  }
   intakeBatches(value: unknown) {
     if (!this.repository.intakeBatches) throw new LiteratureQueryError();
     return this.repository.intakeBatches(parseIntakeBatchQuery(value));

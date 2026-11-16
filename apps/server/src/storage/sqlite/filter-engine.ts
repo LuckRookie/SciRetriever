@@ -71,10 +71,14 @@ export function runFilterStorage(db: DatabaseSync, value: unknown): unknown {
     operation: r.operation,
     request: r.request,
   });
-  db.exec(op.operation === "list" ? "BEGIN" : "BEGIN IMMEDIATE");
+  db.exec(
+    op.operation === "list" || op.operation === "export"
+      ? "BEGIN"
+      : "BEGIN IMMEDIATE",
+  );
   try {
     let result: unknown;
-    if (op.operation === "list") {
+    if (op.operation === "list" || op.operation === "export") {
       result = {
         items: db
           .prepare("SELECT * FROM saved_filters ORDER BY name COLLATE BINARY")

@@ -660,6 +660,11 @@ export type SqliteCommand =
       readonly fallbackIdentitySha256: string | null;
     }
   | { readonly kind: "get_literature"; readonly literatureId: string }
+  | { readonly kind: "begin_read_snapshot" }
+  | {
+      readonly kind: "literature_bibliographies";
+      readonly ids: readonly string[];
+    }
   | {
       readonly kind: "find_literature_by_identifiers";
       readonly identifiers: readonly Identifier[];
@@ -1172,6 +1177,7 @@ export class SqliteWorker {
 
   private initialized = false;
   private readonly readOnly: boolean;
+  private readonly snapshotReader: () => SqliteWorker;
   private readonly executionRuntime: ExecutionRuntimeOwner;
 
   constructor(
@@ -1189,6 +1195,8 @@ export class SqliteWorker {
     )
       throw new SqliteWorkerError();
     this.readOnly = options.readOnly ?? false;
+    this.snapshotReader = () =>
+      new SqliteWorker(path, undefined, { ...options, readOnly: true });
     this.executionRuntime = new ExecutionRuntimeOwner(() =>
       path === ":memory:"
         ? Promise.resolve({ release: async () => {} })
@@ -1284,6 +1292,8 @@ export class SqliteWorker {
       "execution_get_budget",
       "execution_list_interventions",
       "get_literature",
+      "begin_read_snapshot",
+      "literature_bibliographies",
       "list_literature",
       "find_literature_by_identifiers",
       "identity_read",
@@ -1496,10 +1506,14 @@ export class SqliteWorker {
       now?: string;
       actor?: string;
       folder_id?: string;
+      export_after?: readonly [string, string] | null;
+      export_folder_id?: string;
+      export_tree_only?: boolean;
+      export_include_tree?: boolean;
     },
     signal?: AbortSignal,
   ): Promise<unknown> {
-    const read = ["list", "delete-preview"].includes(value.operation);
+    const read = ["list", "delete-preview", "export"].includes(value.operation);
     if (!read && (this.readOnly || !this.admission))
       throw new FolderError("folder-write-unavailable");
     const copy = structuredClone(value),
@@ -1526,7 +1540,7 @@ export class SqliteWorker {
     },
     signal?: AbortSignal,
   ): Promise<unknown> {
-    const read = ["list"].includes(value.operation);
+    const read = ["list", "export"].includes(value.operation);
     if (!read && (this.readOnly || !this.admission))
       throw new FilterError("filter-write-unavailable");
     const copy = structuredClone(value),
@@ -1542,6 +1556,28 @@ export class SqliteWorker {
         return reply.value;
       };
     return read ? send() : this.admission!.run(send, signal);
+  }
+  /** An isolated file-backed read transaction; closing releases it on success or abort. */
+  async withReadSnapshot<T>(
+    consume: (reader: SqliteWorker) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    signal?.throwIfAborted();
+    if (this.closed || this.failed) throw new SqliteWorkerError();
+    const reader = this.snapshotReader();
+    try {
+      await reader.run({ kind: "begin_read_snapshot" }, signal);
+      return await consume(reader);
+    } finally {
+      await reader.close();
+    }
+  }
+  literatureBibliographies(
+    ids: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<readonly unknown[]> {
+    if (ids.length > 1000) throw new SqliteWorkerError();
+    return this.run({ kind: "literature_bibliographies", ids }, signal);
   }
   async snapshot<T>(
     action: import("./snapshot-engine.js").SnapshotStorageAction,

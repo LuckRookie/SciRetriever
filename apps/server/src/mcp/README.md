@@ -26,6 +26,6 @@ HTTP `/mcp` 每次请求重新验证设备连接，协议 session ID 绑定 conn
 
 `processor_query` 提供纯读取；`submit_processor`、`rebuild_processor_index`、`retain_extraction` 只在 maintenance 模式暴露。共享行为在 `entry/processor-operations.ts` 和 Application，任务控制复用既有工具。
 
-`filters_query` 只读列出保存的筛选，`filters_manage` 管理与导入筛选；HTTP MCP 分别要求 `read`、`operate`，不登记直接 HTTP 设备查询或维护路由。
+`filters_query` 只读列出或导出保存的筛选，`filters_manage` 管理与导入筛选；HTTP MCP 分别要求 `read`、`operate`，不登记直接 HTTP 设备查询或维护路由。`folders_query` 的 `export` 按 `{cursor, limit}` 读取树与成员，第一页带完整树，成员按文件夹和文献 ID 排序，每页最多 1,000 项；同样要求 `read`。
 
 `marks_manage` 的 `place` 记录同部分材料上的位置（`target`、`similarity`、`method`），HTTP MCP 要求 `operate`；`marks_query` 的列表和 JSON 导出包含当前方法的 `places`。原锚点和 Markdown 导出保持。

@@ -3158,6 +3158,44 @@ function createQueryHttpHandler(
       return;
     }
     switch (url.pathname) {
+      case "/api/v1/query/folders-export": {
+        if (!application.folders) {
+          json(response, 503, {
+            protocol_version: 1,
+            code: "query-unavailable",
+          });
+          return;
+        }
+        const stop = new AbortController();
+        const abort = () => stop.abort();
+        const signal = AbortSignal.any([stop.signal, stopUploads.signal]);
+        response.once("close", abort);
+        streams.add(response);
+        try {
+          await application.folders.withExportFile(
+            command.request,
+            async (chunks) => {
+              response.writeHead(200, {
+                "Content-Type": "application/json",
+                "Content-Disposition":
+                  'attachment; filename="sciretriever-folders.json"',
+                "X-Sciretriever-Protocol-Version": "1",
+              });
+              for await (const chunk of chunks) {
+                signal.throwIfAborted();
+                if (!response.write(chunk))
+                  await once(response, "drain", { signal });
+              }
+            },
+            signal,
+          );
+          response.end();
+        } finally {
+          streams.delete(response);
+          response.off("close", abort);
+        }
+        return;
+      }
       case "/api/v1/query/extraction-prepare":
       case "/api/v1/query/context": {
         const operation =
@@ -3523,6 +3561,7 @@ function createQueryHttpHandler(
         }
         const route = (request.url ?? "").split("?")[0]!;
         if (
+          route === "/api/v1/query/folders-export" ||
           ARCHIVE_HTTP_READS.some((n) => route === `/api/v1/query/${n}`) ||
           ARCHIVE_HTTP_WRITES.some((n) => route === `/api/v1/maintenance/${n}`)
         ) {

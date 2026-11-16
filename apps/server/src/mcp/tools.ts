@@ -559,14 +559,17 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "filters_query",
-    "List saved LibraryQuery conditions and sort keys with missing_folder_id. operation list request {}. Reading does not apply or change them.",
-    object({ operation: { enum: ["list"] }, request: { type: "object" } }),
+    "List saved LibraryQuery conditions and sort keys with missing_folder_id, or export all conditions as sciretriever-filters version 1. operation list|export request {}. Export contains name, query and sort, at most 200 items. Reading does not apply or change them.",
+    object({
+      operation: { enum: ["list", "export"] },
+      request: { type: "object" },
+    }),
   ),
   tool(
     "folders_query",
-    "Read folder tree and distinct direct/descendant counts, or preview deletion. operation list request {}; delete-preview request {folder_id}. Does not write.",
+    "Read folder tree and distinct direct/descendant counts, preview deletion, or export sciretriever-folders version 1. list request {}; delete-preview request {folder_id}; export request {cursor:null for first page, limit:1..1000}. Export's first page includes the complete tree; members carry folder_id, literature_id, existing DOI/arXiv/PMID/PMCID identifiers, title and year. Follow next_cursor until null; members are ordered by (folder_id,literature_id), later pages may see committed changes. Does not write.",
     object({
-      operation: { enum: ["list", "delete-preview"] },
+      operation: { enum: ["list", "delete-preview", "export"] },
       request: { type: "object" },
     }),
   ),
