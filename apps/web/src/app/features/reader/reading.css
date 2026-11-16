@@ -1704,3 +1704,108 @@
     text-underline-offset: 3px;
   }
 }
+
+@layer pages {
+  /* The spine (reading-experience 1.5): beside the sheet, 16 px wide. */
+  .react-reader .reader-spine {
+    position: absolute;
+    z-index: 4;
+    width: 16px;
+    border-radius: 2px;
+    background: var(--reader-sheet);
+    box-shadow: var(--shadow-1);
+  }
+  .react-reader .reader-spine-part {
+    position: absolute;
+    left: 4px;
+    right: 4px;
+    background: var(--reader-spine-a);
+    cursor: pointer;
+  }
+  .react-reader .reader-spine-part[data-alt] {
+    background: var(--reader-spine-b);
+  }
+  .react-reader .reader-spine-part[data-hover] {
+    background: var(--fg2);
+  }
+  /* What shows: a 1.5 px ink-blue frame over half the selection's tint. */
+  .react-reader .reader-spine-window {
+    position: absolute;
+    left: 0;
+    right: 0;
+    box-sizing: border-box;
+    border: 1.5px solid var(--blue);
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--sel) 50%, transparent);
+    cursor: grab;
+    touch-action: none;
+  }
+  .react-reader .reader-spine-tick {
+    position: absolute;
+    z-index: 1;
+    left: -3px;
+    right: -3px;
+    height: 3px;
+    background: var(--blue);
+  }
+  .react-reader .reader-spine-tick[data-kind="find"] {
+    background: var(--reader-tick-evidence);
+  }
+  .react-reader .reader-spine-tip {
+    position: absolute;
+    z-index: 2;
+    max-width: 220px;
+    padding: var(--space-1) var(--space-2);
+    overflow: hidden;
+    transform: translateY(-50%);
+    border-radius: 6px;
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-pop);
+    color: var(--fg);
+    font-size: var(--text-caption);
+    line-height: var(--lh-control);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+  .react-reader .reader-spine-tip[data-side="right"] {
+    left: calc(100% + 8px);
+  }
+  .react-reader .reader-spine-tip[data-side="left"] {
+    right: calc(100% + 8px);
+  }
+  /* The small triangle pointing at the spine. */
+  .react-reader .reader-spine-tip::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    width: 8px;
+    height: 8px;
+    background: inherit;
+    transform: translateY(-50%) rotate(45deg);
+  }
+  .react-reader .reader-spine-tip[data-side="right"]::before {
+    left: -4px;
+  }
+  .react-reader .reader-spine-tip[data-side="left"]::before {
+    right: -4px;
+  }
+  /* The outline (spec 1.6): a floating panel by the spine, 300 px wide. */
+  .react-reader .reader-outline-place {
+    position: absolute;
+    z-index: 6;
+    width: 300px;
+    max-width: calc(100% - 16px);
+    max-height: calc(100% - 16px);
+  }
+  .react-reader .reader-outline-place > .reader-outline {
+    position: absolute;
+    inset: 0;
+    width: auto;
+    border: 0;
+    border-radius: var(--radius-lg);
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-pop);
+    overflow: hidden;
+  }
+}

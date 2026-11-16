@@ -438,8 +438,8 @@ it("returns from an outline jump with Alt+← and reopens a paper where it was l
     await back.click();
     await expect.poll(async () => (await atLine()).key).toBe(before.key);
     // Read on a little, then open the paper again: the same block at the same
-    // place (the outline is not remembered, so it is closed first).
-    await readerMore(w.page, "收起目录");
+    // place. Choosing an entry already closed the outline (spec 1.6).
+    expect(await w.page.locator(".reader-outline").count()).toBe(0);
     await body.evaluate((el) => {
       el.scrollTop += 640;
     });
@@ -977,6 +977,102 @@ it("opens the side panel closed by default, docked from a 1440 px window and flo
     await panel
       .getByRole("button", { name: "翻译当前所在的节", exact: true })
       .waitFor();
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 120000);
+
+it("draws the spine 8 px beside the sheet, keeps it there with the panel docked, opens its hint inside the window, and the outline beside it (spec 1.5, 1.6)", async () => {
+  const w = await nextWorkspace({
+    ready: "body",
+    setup: async (env) =>
+      env.setText(
+        ["# Introduction", "# Methods", "# Results", "# Discussion"]
+          .map(
+            (heading, h) =>
+              `${heading}\n\n` +
+              Array.from(
+                { length: 30 },
+                (_, i) =>
+                  `Paragraph ${h}.${i}: measured values with their conditions.\n\n`,
+              ).join(""),
+          )
+          .join(""),
+      ),
+  });
+  try {
+    const id = w.env.parseRequest.literature_id;
+    const spine = w.page.locator(".reader-spine");
+    const gap = () =>
+      w.page.evaluate(() => {
+        const sheet = document
+          .querySelector(".reader-view:not([hidden])[data-view='doc']")!
+          .getBoundingClientRect();
+        const s = document
+          .querySelector(".reader-spine")!
+          .getBoundingClientRect();
+        return { gap: s.left - sheet.right, width: s.width };
+      });
+    await w.page.setViewportSize({ width: 1600, height: 900 });
+    await w.page.goto(`${w.origin}/?literature=${id}&reader=doc`);
+    await w.page.locator('.react-reader[data-reading-ready="true"]').waitFor();
+    await spine.waitFor();
+    expect(await gap()).toEqual({ gap: 8, width: 16 });
+    // One part per top-level heading of the outline; the window frames what shows.
+    await w.page.keyboard.press("o");
+    const tops = await w.page
+      .locator('.reader-outline-row[data-depth="0"]')
+      .count();
+    await w.page.keyboard.press("o");
+    expect(tops).toBeGreaterThanOrEqual(4);
+    await expect
+      .poll(() => w.page.locator(".reader-spine-part").count())
+      .toBe(tops);
+    await w.page.locator(".reader-spine-window").waitFor();
+    // Docked side panel: the spine stays beside the sheet.
+    await readerPanel(w.page);
+    await w.page.waitForTimeout(400);
+    expect((await gap()).gap).toBe(8);
+    await w.page.getByRole("button", { name: "收起信息", exact: true }).click();
+    // A part pressed goes to its section, and the way back appears.
+    await w.page.locator(".reader-spine-part").nth(2).click();
+    await w.page
+      .locator(".reader-view:not([hidden]) .reader-page-header-back")
+      .waitFor();
+    // Narrow window: the hint opens to the left of the spine, fully visible.
+    await w.page.setViewportSize({ width: 700, height: 900 });
+    await w.page.waitForTimeout(300);
+    await w.page.locator(".reader-spine-part").nth(1).hover();
+    const tip = w.page.locator(".reader-spine-tip");
+    await tip.waitFor();
+    expect(await tip.getAttribute("data-side")).toBe("left");
+    const box = (await tip.boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(700);
+    expect(await tip.innerText()).toBe("Methods");
+    // The outline opens beside the spine; choosing an entry closes it; Esc too.
+    await w.page.setViewportSize({ width: 1600, height: 900 });
+    await w.page.mouse.move(10, 400);
+    await w.page.keyboard.press("o");
+    const outline = w.page.locator(".reader-outline");
+    await outline.waitFor();
+    const place = (await outline.boundingBox())!,
+      spineBox = (await spine.boundingBox())!;
+    expect(Math.round(place.width)).toBe(300);
+    // Beside it, 8 px away, on whichever side has the room (as the hint).
+    expect([
+      Math.round(place.x - (spineBox.x + spineBox.width)),
+      Math.round(spineBox.x - (place.x + place.width)),
+    ]).toContain(8);
+    await outline
+      .locator(".reader-outline-entry", { hasText: "Results" })
+      .click();
+    await outline.waitFor({ state: "detached" });
+    await w.page.keyboard.press("o");
+    await outline.waitFor();
+    await w.page.keyboard.press("Escape");
+    await outline.waitFor({ state: "detached" });
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();

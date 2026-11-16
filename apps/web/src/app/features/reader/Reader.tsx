@@ -78,6 +78,7 @@ import { useReaderTranslation } from "./translation/use-translation.js";
 import { type FullTextLayer } from "./translation/fulltext-layer.js";
 import { FullTextControls } from "./translation/FullTextControls.js";
 import { ReaderOutline } from "./ReaderOutline.js";
+import { ReaderSpine } from "./ReaderSpine.js";
 import { DraftDoubt } from "./DraftDoubt.js";
 import {
   createReaderEngines,
@@ -168,6 +169,7 @@ export default function Reader() {
       null,
     ),
     [issue, setIssue] = useState<ReaderIssue | null>(null),
+    [findHits, setFindHits] = useState<readonly number[]>([]),
     [empty, setEmpty] = useState<ViewUi["empty"]>(null),
     [textLevel, setTextLevel] = useState<ViewUi["textLevel"]>(null),
     [ready, setReady] = useState(false),
@@ -422,6 +424,7 @@ export default function Reader() {
         outlineNote: setOutlineNote,
         readingOffset: setReadingOffset,
         nextMatch: (value) => setNextMatch(() => value),
+        findHits: setFindHits,
         issue: setIssue,
         empty: setEmpty,
         textLevel: setTextLevel,
@@ -1662,24 +1665,6 @@ export default function Reader() {
         }
       >
         <div className="reader-center">
-          {mode !== "edit" && mode !== "results" && layoutPosition.outline && (
-            <ReaderOutline
-              entries={outline}
-              position={readingOffset}
-              onDismiss={() =>
-                changeLayout(() => {
-                  layoutPosition.outline = false;
-                })
-              }
-              empty={
-                <p className="reader-outline-note">
-                  {mode === "know"
-                    ? "总结按条目呈现，点击短证据编号核对原文。"
-                    : outlineNote || "暂无可靠章节目录。"}
-                </p>
-              }
-            />
-          )}
           <div
             className="reader-surface"
             ref={setDesk}
@@ -1720,7 +1705,43 @@ export default function Reader() {
                 } as CSSProperties
               }
             />
-            {marks.rail}
+            {/* Spec 1.5, 1.6: the spine beside the sheet; the outline opens by it. */}
+            <ReaderSpine
+              body={mode === "doc" || mode === "pdf" ? body.current : null}
+              header={headerHost}
+              view={mode === "doc" ? "doc" : mode === "pdf" ? "pdf" : null}
+              outline={outline}
+              pdf={pdf}
+              marks={marks.active ? marks.list : []}
+              version={sources.data?.document?.document_version_id ?? null}
+              sha256={sources.data?.material?.asset_sha256 ?? null}
+              finds={findOpen ? findHits : []}
+              onHover={marks.hover}
+              onOpenMark={marks.open}
+              beforeJump={() => frame.current?.beforeJump?.()}
+              outlinePanel={
+                mode !== "edit" &&
+                mode !== "results" &&
+                layoutPosition.outline ? (
+                  <ReaderOutline
+                    entries={outline}
+                    position={readingOffset}
+                    onDismiss={() =>
+                      changeLayout(() => {
+                        layoutPosition.outline = false;
+                      })
+                    }
+                    empty={
+                      <p className="reader-outline-note">
+                        {mode === "know"
+                          ? "总结按条目呈现，点击短证据编号核对原文。"
+                          : outlineNote || "暂无可靠章节目录。"}
+                      </p>
+                    }
+                  />
+                ) : null
+              }
+            />
             {headerHost &&
             shown?.id === id &&
             detail.data &&

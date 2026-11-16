@@ -999,6 +999,7 @@ export async function renderDocument(
           role: section.role ?? null,
           level: section.level,
           start: section.start_utf8,
+          end: section.end_utf8,
           activate,
         });
       else
@@ -1048,6 +1049,9 @@ export async function renderDocument(
     );
     for (const b of blocks())
       b.classList.toggle("reading-match", matches.includes(b));
+    frame.onFindHits?.(
+      query ? matches.map((b) => Number(b.dataset.byteStart)) : [],
+    );
     frame.findStatus.textContent = `${finished ? "全文" : "已加载范围"}：${matches.length} 个匹配段落${finished ? "" : "；可继续加载后查找"}`;
     let index = -1;
     const jump = (step: 1 | -1 = 1) => {

@@ -40,6 +40,8 @@ export interface ReaderOutlineEntry {
   readonly level: number;
   /** UTF-8 offset where the section starts in the full text, for following the reading position. */
   readonly start?: number;
+  /** UTF-8 offset where the section ends (the spine's part lengths, spec 1.5). */
+  readonly end?: number;
   activate(): void | Promise<void>;
 }
 export interface DocumentLinkPreview {
@@ -188,6 +190,8 @@ export interface ReaderFrame {
   /** The full text's first visible block moved to this UTF-8 offset. */
   onPosition?: (offset: number) => void;
   onOutlineEmpty?: (message: string) => void;
+  /** Where the matches are, for the spine (spec 1.5): byte starts, or PDF pages. */
+  onFindHits?: (units: readonly number[]) => void;
   /** The way to the next match (1) or the one before (−1), once there are matches. */
   onFindNext?: (next: ((step?: 1 | -1) => void) | null) => void;
   /**

@@ -62,6 +62,8 @@ export interface ViewUi {
   outlineNote: string;
   readingOffset: number | null;
   nextMatch: ((step?: 1 | -1) => void) | null;
+  /** Where the find bar's matches are (spec 1.5): byte starts, or pages. */
+  findHits: readonly number[];
   issue: ReaderIssue | null;
   /** The material has nothing to read (spec 3.9): no text, or no PDF. */
   empty: "text" | "pdf" | null;
@@ -128,6 +130,7 @@ export const emptyUi = (): ViewUi => ({
   outlineNote: "",
   readingOffset: null,
   nextMatch: null,
+  findHits: [],
   issue: null,
   empty: null,
   textLevel: null,
@@ -721,6 +724,9 @@ function build(
           if (!controller.signal.aborted && shows(view))
             b.set.readingOffset(view.ui.readingOffset);
         });
+      },
+      onFindHits: (value) => {
+        if (!controller.signal.aborted) update(view, { findHits: value });
       },
       onFindNext: (value) => {
         if (!controller.signal.aborted) update(view, { nextMatch: value });

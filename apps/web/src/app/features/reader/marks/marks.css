@@ -8,8 +8,7 @@
     .mark-dot,
     .mark-swatch,
     .mark-card,
-    .mark-note-popover,
-    .mark-rail button
+    .mark-note-popover
   ) {
     --mark-c: 247 203 45;
   }
@@ -21,8 +20,7 @@
     .mark-dot,
     .mark-swatch,
     .mark-card,
-    .mark-note-popover,
-    .mark-rail button
+    .mark-note-popover
   )[data-color="blue"] {
     --mark-c: 84 178 212;
   }
@@ -34,8 +32,7 @@
     .mark-dot,
     .mark-swatch,
     .mark-card,
-    .mark-note-popover,
-    .mark-rail button
+    .mark-note-popover
   )[data-color="green"] {
     --mark-c: 104 190 128;
   }
@@ -47,8 +44,7 @@
     .mark-dot,
     .mark-swatch,
     .mark-card,
-    .mark-note-popover,
-    .mark-rail button
+    .mark-note-popover
   )[data-color="red"] {
     --mark-c: 238 122 108;
   }
@@ -60,8 +56,7 @@
     .mark-dot,
     .mark-swatch,
     .mark-card,
-    .mark-note-popover,
-    .mark-rail button
+    .mark-note-popover
   )[data-color="purple"] {
     --mark-c: 166 134 222;
   }
@@ -265,34 +260,6 @@
   .reader-surface {
     position: relative;
   }
-  .mark-rail {
-    position: absolute;
-    z-index: 3;
-    top: var(--space-1);
-    right: 2px;
-    bottom: var(--space-1);
-    width: 8px;
-    pointer-events: none;
-  }
-  .mark-rail button {
-    position: absolute;
-    left: 0;
-    width: 8px;
-    height: 4px;
-    padding: 0;
-    border: 0;
-    border-radius: 2px;
-    background: rgb(var(--mark-c));
-    cursor: pointer;
-    pointer-events: auto;
-    transition: transform var(--dur-out) var(--ease-out);
-  }
-  .mark-rail button:hover,
-  .mark-rail button[data-hot] {
-    transform: scale(1.6, 1.5);
-    transition-duration: 0ms;
-  }
-
   /* Tools in the reader toolbar. */
   .mark-tools {
     display: inline-flex;

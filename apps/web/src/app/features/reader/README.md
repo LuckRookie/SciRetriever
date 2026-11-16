@@ -26,3 +26,5 @@ PDF.js、连续 Markdown/KaTeX 与字节校验保留在 [reading](../../../readi
 键盘与鼠标（阅读体验第 1.8 节）在 `input/`：`commands.ts` 是操作登记表（名称、快捷键、作用范围），“更多”“排版”、右键菜单、按键处理与快捷键一览都从它读；`scale.ts` 是阅读比例的换算（滚轮、捏合、PDF 的整十对齐），`use-reading-scale.ts` 把 Ctrl+滚轮与捏合挂在案头上，经引擎的 `holdPoint` 保持指针下的点；`context-menu.ts` 判定右键目标并组成三段，`ContextMenu.tsx` 在一个点上打开菜单；`use-reader-input.tsx` 处理按键、键盘滚动、Esc 的层次、鼠标侧键与右键菜单的对象操作；`reading-font.ts` 存本机的阅读字号。标签页的关闭、关闭记录与会话存储在 `shell/paper-tabs.ts`。
 
 右侧面板（阅读体验第 1.4 节）默认收起；窗口不小于 1440 px 时停靠在案头右侧（`SplitPane`，宽 352 px，把手仍可调），更窄时浮在案头之上，不移动纸页。四个标签页：信息（`ReaderInformation`，原信息栏的各项，“档案”改名“材料”）、批注（`MarksPanel`）、关联（`ReaderRelations`，库内概况的被引用与引用两行）、翻译（`TranslationPanel`，原文视图可翻译当前所在的节）。打开状态与当前标签页按资料记住。
+
+书脊（阅读体验第 1.5 节）是 `ReaderSpine.tsx`，画在纸页右边缘外 8 px，高度等于纸页的可见部分，取代原来只在 PDF 上出现的批注刻度条。`spine.ts` 是纯函数：章节段按一级标题（摘要单列）和文档大纲给出的 UTF-8 字节数分段，PDF 按页数；视窗按屏幕上首尾可见块的字节换算；批注与查找命中的刻度相距不足 3 px 时合并。目录（第 1.6 节）是从书脊旁弹出的浮层，选中一项或按 Esc 即关闭。

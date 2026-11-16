@@ -1030,6 +1030,7 @@ export async function renderPdf(
       }
       if (closed || revision !== searchRevision) return;
       hits = found;
+      frame.onFindHits?.([...new Set(found.map((hit) => hit.page))]);
       if (hits.length) show(0);
       else {
         frame.findStatus.textContent = hasText

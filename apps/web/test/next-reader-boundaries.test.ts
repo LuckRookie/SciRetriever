@@ -285,6 +285,8 @@ it("keeps the latest outline target, text settings and reading position across a
       .getByRole("button", { name: "Section 150", exact: true })
       .click();
     await started;
+    // Choosing an entry closed the outline (spec 1.6): open it again.
+    await readerMore(w.page, "显示目录");
     await w.page
       .locator(".reader-outline")
       .getByRole("button", { name: "Section 300", exact: true })

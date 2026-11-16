@@ -137,9 +137,6 @@ export function useReaderMarks({
       all: ReadonlySet<string>;
       near: ReadonlySet<string>;
     }>({ all: new Set(), near: new Set() }),
-    [rail, setRail] = useState<{ id: string; color: MarkColor; at: number }[]>(
-      [],
-    ),
     [exported, setExported] = useState<string | null>(null),
     [menuOpen, setMenuOpen] = useState(false);
   const draft = useRef<SelectionDraft | null>(null);
@@ -149,13 +146,7 @@ export function useReaderMarks({
     setPenState(color);
     preferences.write(PEN_KEY, color);
   };
-  const railFrame = useRef(0);
-  const refreshRail = useCallback(() => {
-    cancelAnimationFrame(railFrame.current);
-    railFrame.current = requestAnimationFrame(() =>
-      setRail(surface.current?.positions() ?? []),
-    );
-  }, []);
+
   const find = (markId: string) =>
     latest.current.marks.find((m) => m.mark_id === markId);
 
@@ -264,24 +255,21 @@ export function useReaderMarks({
         ...created,
         pdfPage(pageView) {
           created.pdfPage(pageView);
-          refreshRail();
         },
         destroy() {
           created.destroy();
           if (surface.current === created) surface.current = null;
           setBar(null);
           setNote(null);
-          setRail([]);
         },
       };
       return wrapped;
     },
-    [events, refreshRail],
+    [events],
   );
   useEffect(() => {
     surface.current?.setMarks(store.marks);
-    refreshRail();
-  }, [store.marks, refreshRail]);
+  }, [store.marks]);
   useEffect(() => {
     surface.current?.setHot(hot);
   }, [hot]);
@@ -690,30 +678,6 @@ export function useReaderMarks({
       </Dialog>
     </>
   ) : null;
-  const railNode: ReactNode =
-    active && view === "pdf" && rail.length ? (
-      <div className="mark-rail" aria-hidden="true">
-        {rail.map((tick) => (
-          <button
-            key={tick.id}
-            type="button"
-            tabIndex={-1}
-            data-color={tick.color}
-            data-hot={hot === tick.id || undefined}
-            style={{ top: `${Math.min(99.4, tick.at * 100)}%` }}
-            onPointerEnter={() => {
-              setHot(tick.id);
-              surface.current?.setHot(tick.id);
-            }}
-            onPointerLeave={() => {
-              setHot(null);
-              surface.current?.setHot(null);
-            }}
-            onClick={() => open(tick.id)}
-          />
-        ))}
-      </div>
-    ) : null;
   return {
     attach,
     commands,
@@ -721,7 +685,11 @@ export function useReaderMarks({
     menu,
     panel,
     overlays,
-    rail: railNode,
+    /** A spine tick hovered (reading-experience 1.5): its mark lights up. */
+    hover: (markId: string | null) => {
+      setHot(markId);
+      surface.current?.setHot(markId);
+    },
     count: store.marks.length,
     active,
     /** For the translated pages: the marks to tint and how to show one in the original. */

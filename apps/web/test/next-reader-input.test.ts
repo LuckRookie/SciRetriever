@@ -476,3 +476,54 @@ it("shows the side panel's four tabs, docked at 1440 and floating at 1024 (plan 
     await w.close();
   }
 }, 180_000);
+
+it("shows the spine on the full text and the PDF, and its hint (plan 25 block 03 screenshots)", async (context) => {
+  const output = process.env.SCIRETRIEVER_WEB_SPINE_OUTPUT;
+  if (!output) return context.skip();
+  await mkdir(output, { recursive: true });
+  const w = await nextWorkspace({
+    ready: "body",
+    setup: async (env) =>
+      env.setText(
+        ["# Introduction", "# Methods", "# Results", "# Discussion"]
+          .map(
+            (heading, h) =>
+              `${heading}\n\n` +
+              Array.from(
+                { length: 30 },
+                (_, i) =>
+                  `Paragraph ${h}.${i}: a reported measurement with conditions and evidence.\n\n`,
+              ).join(""),
+          )
+          .join(""),
+      ),
+  });
+  try {
+    await w.page.setViewportSize({ width: 1440, height: 900 });
+    const id = w.env.parseRequest.literature_id;
+    await w.page.goto(`${w.origin}/?literature=${id}&reader=doc`);
+    await w.page.locator('.react-reader[data-reading-ready="true"]').waitFor();
+    await w.page.locator(".reader-spine-window").waitFor();
+    await w.page.locator(".reader-engine-body").evaluate((el) => {
+      el.scrollTop = 1600;
+    });
+    await w.page.waitForTimeout(400);
+    await w.page.screenshot({ path: join(output, "spine-doc-1440.png") });
+    await w.page.locator(".reader-spine-part").nth(2).hover();
+    await w.page.locator(".reader-spine-tip").waitFor();
+    await w.page.screenshot({ path: join(output, "spine-hover-1440.png") });
+    await w.page.mouse.move(10, 400);
+    await w.page.keyboard.press("o");
+    await w.page.locator(".reader-outline").waitFor();
+    await w.page.waitForTimeout(300);
+    await w.page.screenshot({ path: join(output, "spine-outline-1440.png") });
+    await w.page.keyboard.press("Escape");
+    await w.page.goto(`${w.origin}/?literature=${id}&reader=pdf`);
+    await w.page.locator('[data-pdf-page="1"][data-rendered="true"]').waitFor();
+    await w.page.locator(".reader-spine").waitFor();
+    await w.page.waitForTimeout(400);
+    await w.page.screenshot({ path: join(output, "spine-pdf-1440.png") });
+  } finally {
+    await w.close();
+  }
+}, 180_000);
