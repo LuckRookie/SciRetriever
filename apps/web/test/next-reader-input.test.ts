@@ -8,6 +8,7 @@ import { join } from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { nextWorkspace } from "./next-workspace-fixture.js";
+import { readerPanel } from "./reader-controls.js";
 
 const TEXT = Array.from(
   { length: 300 },
@@ -440,3 +441,38 @@ it("shows the context menus, the shortcut list and the scale in the page header 
     await w.close();
   }
 }, 300_000);
+
+it("shows the side panel's four tabs, docked at 1440 and floating at 1024 (plan 25 block 02 screenshots)", async (context) => {
+  const output = process.env.SCIRETRIEVER_WEB_PANEL_OUTPUT;
+  if (!output) return context.skip();
+  await mkdir(output, { recursive: true });
+  const w = await nextWorkspace({
+    ready: "body",
+    setup: async (env) => env.setText(TEXT),
+  });
+  try {
+    for (const width of [1440, 1024]) {
+      await w.page.setViewportSize({ width, height: 900 });
+      await w.page.goto(
+        `${w.origin}/?literature=${w.env.parseRequest.literature_id}&reader=doc`,
+      );
+      await w.page
+        .locator('.react-reader[data-reading-ready="true"]')
+        .waitFor();
+      for (const [tab, name] of [
+        ["信息", "info"],
+        ["批注", "marks"],
+        ["关联", "relations"],
+        ["翻译", "translation"],
+      ] as const) {
+        await readerPanel(w.page, tab);
+        await w.page.waitForTimeout(400);
+        await w.page.screenshot({
+          path: join(output, `panel-${name}-${width}.png`),
+        });
+      }
+    }
+  } finally {
+    await w.close();
+  }
+}, 180_000);

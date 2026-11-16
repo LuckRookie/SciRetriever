@@ -12,6 +12,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { nextAssets } from "../../web/test/next-workspace-fixture.js";
+import {
+  readerNavigation,
+  readerPanel,
+  readerToLibrary,
+} from "../../web/test/reader-controls.js";
 import { readingAssets } from "../../web/test/reading-assets-fixture.js";
 import { chromium, type Browser } from "playwright";
 import {
@@ -479,19 +484,17 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         "run",
       );
       await ui.reload();
+      await readerPanel(ui);
       await ui.locator(".reader-information .reader-fields").first().waitFor();
-      await ui
-        .getByLabel("主导航")
-        .getByRole("button", { name: /^文献库/ })
-        .click();
+      await readerToLibrary(ui);
       await ui
         .locator(
           `[data-literature-id="${SECOND_LITERATURE.literature_id}"] .paper-open`,
         )
         .click();
+      await readerPanel(ui);
       await ui.locator(".reader-information .reader-fields").first().waitFor();
-      await ui
-        .getByLabel("主导航")
+      await (await readerNavigation(ui))
         .getByRole("button", { name: "浏览器", exact: true })
         .click();
       expect(completionRun).not.toHaveBeenCalled();

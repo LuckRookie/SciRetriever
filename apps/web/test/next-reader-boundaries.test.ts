@@ -18,6 +18,7 @@ import {
   readerToLibrary,
   readerType,
   readerTypeChoice,
+  readerPanel,
 } from "./reader-controls.js";
 
 type Workspace = Awaited<ReturnType<typeof nextWorkspace>>;
@@ -571,8 +572,11 @@ it("renders metadata provenance as human fields and preserves a keyboard- and po
         await route.fulfill({ response, json: value });
       },
     );
+    // Docked from a 1440 px window, where its handle is (spec 1.4).
+    await w.page.setViewportSize({ width: 1440, height: 900 });
     await open(w, "doc");
     await w.page.locator(".reading-article").waitFor();
+    await readerPanel(w.page);
     const resize = w.page.getByRole("separator", { name: "文献信息栏宽度" });
     await resize.focus();
     const before = Number(await resize.getAttribute("aria-valuenow"));
@@ -629,7 +633,8 @@ it("renders metadata provenance as human fields and preserves a keyboard- and po
       before + 96,
     );
     await resize.dblclick();
-    expect(Number(await resize.getAttribute("aria-valuenow"))).toBe(330);
+    // Back to the default width, 352 px (spec 1.4).
+    expect(Number(await resize.getAttribute("aria-valuenow"))).toBe(352);
     expect(w.errors).toEqual([]);
   } finally {
     await w.page.unrouteAll({ behavior: "wait" });

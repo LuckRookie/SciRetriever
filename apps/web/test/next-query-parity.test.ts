@@ -1,3 +1,4 @@
+import { readerPanel } from "./reader-controls.js";
 import { showAllLibraryStatuses } from "./next-workspace-fixture.js";
 import { processorFixture } from "../../server/test/processor-fixture.js";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
@@ -439,7 +440,9 @@ it("reads, searches, follows references and downloads through the query-only pag
     ).toBe("true");
     await page.keyboard.press("Escape");
     await page.unroute("**/api/v1/query/material-bytes");
-    await page.getByRole("button", { name: /^参考文献 \d/ }).click();
+    // The references are in the side panel's “关联” tab (spec 1.4, 3.7).
+    await readerPanel(page, "关联");
+    await page.getByRole("button", { name: "引用", exact: true }).click();
     await page
       .getByRole("button", {
         name: "Query reader reference target",

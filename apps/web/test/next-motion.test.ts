@@ -104,12 +104,9 @@ it.each(["no-preference", "reduce"] as const)(
         .locator('.reading-pdf-page[data-rendered="true"]')
         .first()
         .waitFor();
-      await w.page
-        .getByRole("button", { name: "收起信息", exact: true })
-        .click();
-      await w.page
-        .getByRole("button", { name: "显示信息", exact: true })
-        .click();
+      // The side panel starts closed (spec 1.4): open, close, open.
+      for (const name of ["显示信息", "收起信息", "显示信息"])
+        await w.page.getByRole("button", { name, exact: true }).click();
       await begin(w.page);
       for (let index = 0; index < 10; index++) {
         await w.page
@@ -215,11 +212,12 @@ it.each(["no-preference", "reduce"] as const)(
         .locator('.react-reader[data-reading-ready="true"]')
         .waitFor();
       const seen = await animationsDuring(w.page, async () => {
-        await w.page
-          .getByRole("button", { name: "收起信息", exact: true })
-          .click();
+        // Closed at first (spec 1.4): open, then close.
         await w.page
           .getByRole("button", { name: "显示信息", exact: true })
+          .click();
+        await w.page
+          .getByRole("button", { name: "收起信息", exact: true })
           .click();
         await w.page.getByRole("tab", { name: "PDF", exact: true }).click();
         await w.page

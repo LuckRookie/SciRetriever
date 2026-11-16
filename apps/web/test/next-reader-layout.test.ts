@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
   readerMore,
+  readerPanel,
   readerToLibrary,
   readerType,
   readerView,
@@ -339,11 +340,12 @@ it("keeps the block at the reading line in place across font size, information p
     moves["font round trip"] = Math.abs(
       (await anchor(first.key)).top - first.top,
     );
-    await measure("panel closed", () =>
-      w.page.getByRole("button", { name: "收起信息", exact: true }).click(),
-    );
+    // The side panel starts closed (spec 1.4): open, then close.
     await measure("panel open", () =>
       w.page.getByRole("button", { name: "显示信息", exact: true }).click(),
+    );
+    await measure("panel closed", () =>
+      w.page.getByRole("button", { name: "收起信息", exact: true }).click(),
     );
     await measure("window 1440 → 1200", () =>
       w.page.setViewportSize({ width: 1200, height: 900 }),
@@ -523,6 +525,7 @@ it("records the place before the marks list moves the reader", async () => {
     });
     await w.page.getByRole("toolbar", { name: "选中文字" }).waitFor();
     await w.page.keyboard.press("3");
+    await readerPanel(w.page, "批注");
     await w.page.getByRole("tab", { name: "批注 1" }).waitFor();
     // Read far on, then go to the mark from the list. The place is the block
     // at the reading line and where the line falls in it (spec 4.1): put the
@@ -791,6 +794,9 @@ it("lays the PDF on the sheet's desk, one sheet per page, and folds the top bar 
     await w.page
       .locator(`${shown}[data-view="doc"] .reading-article`)
       .waitFor();
+    // The side panel open first, so focus mode has one to close.
+    await readerPanel(w.page);
+    await w.page.waitForTimeout(400);
     const before = await box(`${shown} .reader-page-header`);
     await w.page
       .locator(".reader-engine-body")
@@ -837,3 +843,142 @@ it("lays the PDF on the sheet's desk, one sheet per page, and folds the top bar 
     await w.close();
   }
 }, 90000);
+
+it("opens the side panel closed by default, docked from a 1440 px window and floating below it, with its four tabs (spec 1.4)", async () => {
+  const w = await nextWorkspace({
+    ready: "body",
+    setup: async (env) =>
+      env.setText(
+        Array.from(
+          { length: 120 },
+          (_, i) =>
+            `Paragraph ${i}: measured values with their conditions.\n\n`,
+        ).join(""),
+      ),
+  });
+  try {
+    const id = w.env.parseRequest.literature_id;
+    const sheet = () =>
+      w.page.evaluate(() => {
+        // The page header spans the sheet (spec 1.2).
+        const el = document.querySelector<HTMLElement>(
+          ".reader-view:not([hidden]) .reader-page-header",
+        )!;
+        const r = el.getBoundingClientRect();
+        return { left: r.left, width: r.width };
+      });
+    const panel = w.page.getByRole("complementary", { name: "右侧面板" });
+    // At a 1440 px window the desk is 1088 px, where the column is already
+    // a little narrower (spec 1.1): the sheet's width is compared at 1600.
+    for (const [width, docked] of [
+      [1600, true],
+      [1439, false],
+    ] as const) {
+      await w.page.setViewportSize({ width, height: 900 });
+      await w.page.goto(`${w.origin}/?literature=${id}&reader=doc`);
+      await w.page
+        .locator('.react-reader[data-reading-ready="true"]')
+        .waitFor();
+      // Closed until asked for.
+      expect(await panel.isVisible()).toBe(false);
+      const before = await sheet();
+      await readerPanel(w.page);
+      // The slide in (spec 6.1) done.
+      await panel.evaluate((el) =>
+        Promise.all(
+          el
+            .closest(".react-reader")!
+            .getAnimations({ subtree: true })
+            .map((a) => a.finished),
+        ),
+      );
+      const box = (await panel.boundingBox())!;
+      expect(Math.round(box.width)).toBe(352);
+      expect(Math.round(box.x + box.width)).toBe(width);
+      expect(await w.page.evaluate(() => scrollX)).toBe(0);
+      const after = await sheet();
+      // Docked: the desk narrows, the sheet keeps its width and moves left
+      // to stay centred; floating: nothing moves.
+      expect(Math.abs(after.width - before.width)).toBeLessThanOrEqual(1);
+      if (docked) expect(after.left).toBeLessThan(before.left - 100);
+      else expect(Math.abs(after.left - before.left)).toBeLessThanOrEqual(1);
+      expect(
+        await panel.evaluate((el) =>
+          el.classList.contains("reader-information-floating"),
+        ),
+      ).toBe(!docked);
+      // Four tabs: 信息, 批注, 关联, 翻译; the choice is kept for the paper.
+      expect(
+        await panel
+          .getByRole("tab")
+          .evaluateAll((tabs) => tabs.map((tab) => tab.textContent?.trim())),
+      ).toEqual(["信息", "批注", "关联", "翻译"]);
+      await panel.getByRole("tab", { name: "关联", exact: true }).click();
+      const overview = panel.getByRole("region", { name: "库内概况" });
+      await overview.waitFor();
+      expect(await overview.getByRole("rowheader").allInnerTexts()).toEqual([
+        "被引用",
+        "引用",
+      ]);
+      await w.page
+        .getByRole("button", { name: "收起信息", exact: true })
+        .click();
+      await w.page.reload();
+      await w.page
+        .locator('.react-reader[data-reading-ready="true"]')
+        .waitFor();
+      expect(await panel.isVisible()).toBe(false);
+      await w.page
+        .getByRole("button", { name: "显示信息", exact: true })
+        .click();
+      expect(
+        await panel
+          .getByRole("tab", { name: "关联", exact: true })
+          .getAttribute("aria-selected"),
+      ).toBe("true");
+      await panel.getByRole("tab", { name: "信息", exact: true }).click();
+      await w.page
+        .getByRole("button", { name: "收起信息", exact: true })
+        .click();
+    }
+    // Docked from exactly 1440 px.
+    await w.page.setViewportSize({ width: 1440, height: 900 });
+    await readerPanel(w.page);
+    await expect
+      .poll(() =>
+        panel.evaluate((el) =>
+          el.classList.contains("reader-information-floating"),
+        ),
+      )
+      .toBe(false);
+    // 信息: every item of the old information panel is still there (block 02).
+    const info = await readerPanel(w.page, "信息");
+    for (const heading of ["摘要", "标签", "材料"])
+      await info.getByRole("heading", { name: heading, exact: true }).waitFor();
+    // Citations are in “关联” only; other versions are part of 材料 (spec 1.4).
+    expect(
+      await info.getByRole("heading", { name: "关联", exact: true }).count(),
+    ).toBe(0);
+    expect(await info.innerText()).not.toContain("库内被引");
+    expect(await info.locator(".reader-info-archive").innerText()).toContain(
+      "其他版本",
+    );
+    for (const button of [
+      "复制引用",
+      "导出书目",
+      "编辑元数据",
+      "编辑标签",
+      "技术详情",
+    ])
+      await info.getByRole("button", { name: button, exact: true }).waitFor();
+    expect(await info.innerText()).toContain("原始 PDF 已保存");
+    // 翻译: the section at the reading line can be translated.
+    await readerPanel(w.page, "翻译");
+    await panel
+      .getByRole("button", { name: "翻译当前所在的节", exact: true })
+      .waitFor();
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 120000);

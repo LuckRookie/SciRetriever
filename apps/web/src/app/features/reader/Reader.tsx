@@ -69,7 +69,7 @@ import { ProofreadEditor } from "./ProofreadEditor.js";
 import { StructurePanel } from "../archive/StructurePanel.js";
 import { useReaderMarks } from "./marks/ReaderMarks.js";
 import { download, OperationDialog } from "../library/OperationDialog.js";
-import { ReaderInformation } from "./ReaderInformation.js";
+import { ReaderInformation, ReaderRelations } from "./ReaderInformation.js";
 import { RunOperatorDialog } from "../processing/RunOperator.js";
 import "./reading.css";
 import { SummaryView } from "./SummaryView.js";
@@ -105,6 +105,14 @@ import {
 } from "./input/commands.js";
 import { TEXT_SCALE, textPercent } from "./input/scale.js";
 import { readingArea, readingLine } from "../../../reading/anchor.js";
+
+/** Spec 1.4: the side panel docks from a 1440 px window. */
+const DOCKED = "(min-width: 1440px)";
+function subscribeDocking(change: () => void) {
+  const media = matchMedia(DOCKED);
+  media.addEventListener("change", change);
+  return () => media.removeEventListener("change", change);
+}
 
 export default function Reader() {
   const api = useApi(),
@@ -182,9 +190,12 @@ export default function Reader() {
   const [resources, setResources] = useState<readonly ReaderResourceEntry[]>(
     [],
   );
-  const [sideTab, setSideTab] = useState<"info" | "marks" | "translation">(
-    "info",
-  );
+  const [sideTab, setSideTab] = useState<
+    "info" | "marks" | "relations" | "translation"
+  >("info");
+  // Spec 1.4: the side panel is 352 px wide (the existing handle still
+  // resizes it, remembered); from a 1440 px window it docks beside the desk,
+  // narrower it floats over it.
   const [informationWidth, setInformationWidth] = useState(() =>
     Math.min(
       520,
@@ -193,9 +204,14 @@ export default function Reader() {
         Number.parseInt(
           preferences.read("sciretriever:panel:information:v1") ?? "",
           10,
-        ) || 330,
+        ) || 352,
       ),
     ),
+  );
+  const docked = useSyncExternalStore(
+    subscribeDocking,
+    () => matchMedia(DOCKED).matches,
+    () => true,
   );
   const source = useMemo(() => {
     try {
@@ -518,6 +534,8 @@ export default function Reader() {
   const { reduced } = useMotionPreference();
   const panelShown = layoutPosition.information && !shell.readerFocus;
   const [panelLeaving, setPanelLeaving] = useState(false);
+  const shownNow = useRef(panelShown);
+  shownNow.current = panelShown;
   // When the person asked: the slide ends its token's time after that
   // (spec 6.1), counting the frame it starts in.
   const panelInput = useRef(0);
@@ -532,6 +550,7 @@ export default function Reader() {
       informationWidth,
       pdf,
       layoutPosition,
+      docked,
     });
   panelInputs.current = {
     reduced,
@@ -539,9 +558,11 @@ export default function Reader() {
     informationWidth,
     pdf,
     layoutPosition,
+    docked,
   };
   useLayoutEffect(() => {
-    const { reduced, mode, informationWidth, pdf } = panelInputs.current;
+    const { reduced, mode, informationWidth, pdf, docked } =
+      panelInputs.current;
     const before = panelBefore.current;
     panelBefore.current = panelShown;
     const scroller = body.current;
@@ -556,7 +577,12 @@ export default function Reader() {
         : easing("--ease-in", "ease-in");
     // Where the sheet (or the PDF's page column) was and is now on the desk.
     const desk = scroller.clientWidth,
-      was = opening ? desk + informationWidth : desk - informationWidth;
+      // Floating over the desk, the panel moves nothing (spec 1.4).
+      was = !docked
+        ? desk
+        : opening
+          ? desk + informationWidth
+          : desk - informationWidth;
     const pages = scroller.querySelector<HTMLElement>(
         ".reader-engine:not([hidden]) .reader-view:not([hidden]) .reading-pdf-pages",
       ),
@@ -576,6 +602,8 @@ export default function Reader() {
         [{ transform: `translateX(${shift}px)` }, { transform: "none" }],
         { duration: ms, easing: ease },
       );
+    // Opened again while sliding out: the slide out stops (its cleanup).
+    if (opening) setPanelLeaving(false);
     if (opening)
       root.current
         ?.querySelector<HTMLElement>(".reader-information")
@@ -600,8 +628,9 @@ export default function Reader() {
       },
     );
     animation.onfinish = () => {
-      // Gone in this frame; the page catches up with its next render.
-      aside.hidden = true;
+      // Gone in this frame, unless it was opened again meanwhile; the page
+      // catches up with its next render.
+      if (!shownNow.current) aside.hidden = true;
       setPanelLeaving(false);
     };
     return () => animation.cancel();
@@ -720,6 +749,7 @@ export default function Reader() {
     if (
       memory.sideTab === "info" ||
       memory.sideTab === "marks" ||
+      memory.sideTab === "relations" ||
       memory.sideTab === "translation"
     )
       setSideTab(memory.sideTab);
@@ -1446,11 +1476,93 @@ export default function Reader() {
       ? "返回结果"
       : "返回检索";
   const fixedSource = fromSummary || route.parameters.has("from");
+  // Spec 1.4: four tabs; 批注 and 翻译 where the reader can mark and
+  // translate, 关联 always (citations need no processing).
+  const sideTabs = [
+    { id: "info", label: "信息" },
+    ...(marks.active
+      ? [{ id: "marks", label: marks.count ? `批注 ${marks.count}` : "批注" }]
+      : []),
+    { id: "relations", label: "关联" },
+    ...(marks.active ? [{ id: "translation", label: "翻译" }] : []),
+  ];
+  const tabShown = sideTabs.some((tab) => tab.id === sideTab)
+    ? sideTab
+    : "info";
+  /**
+   * The full text's section at the reading line, for “翻译当前所在的节”
+   * (spec 1.4): its heading's block and the blocks up to the next heading.
+   */
+  const currentSection = () => {
+    const scroller = body.current;
+    if (!scroller) return null;
+    const blocks = [
+      ...scroller.querySelectorAll<HTMLElement>(
+        ".reader-engine:not([hidden]) .reader-view:not([hidden]) article [data-byte-start]",
+      ),
+    ];
+    if (!blocks.length) return null;
+    const line = readingLine(readingArea(scroller, headerHost ?? undefined));
+    const heading = (block: HTMLElement) =>
+      !!block.querySelector(":scope > :is(h1, h2, h3, h4, h5, h6)");
+    let at = blocks.findIndex((b) => b.getBoundingClientRect().bottom > line);
+    if (at < 0) at = blocks.length - 1;
+    let start = at;
+    while (start > 0 && !heading(blocks[start]!)) start--;
+    let end = at + 1;
+    while (end < blocks.length && !heading(blocks[end]!)) end++;
+    return blocks
+      .slice(start, end)
+      .map((b) => (b.innerText || "").trim())
+      .filter(Boolean)
+      .join("\n\n");
+  };
+  const sidePanel = (
+    <aside
+      className={`reader-information${docked ? "" : " reader-information-floating"}`}
+      aria-label="右侧面板"
+      hidden={!informationShown && !panelLeaving}
+      data-leaving={panelLeaving || undefined}
+      style={panelLeaving && docked ? { width: informationWidth } : undefined}
+    >
+      <Tabs
+        label="右侧面板"
+        value={tabShown}
+        onChange={(value) => {
+          setSideTab(value as typeof sideTab);
+          rememberReading(catalog, id, { sideTab: value });
+        }}
+        items={sideTabs}
+      />
+      {tabShown === "marks" ? (
+        marks.panel
+      ) : tabShown === "relations" ? (
+        <AnimatedPanel preset="panelContent">
+          <ReaderRelations detail={detail.data} />
+        </AnimatedPanel>
+      ) : tabShown === "translation" ? (
+        <>
+          {/* Spec 1.3: the PDF's side-by-side translation is set here. */}
+          {mode === "pdf" && api.kind === "workspace" ? (
+            <FullTextControls fullText={fullText} translation={translation} />
+          ) : null}
+          <TranslationPanel
+            translation={translation}
+            notify={notify}
+            {...(mode === "doc" ? { section: currentSection } : {})}
+          />
+        </>
+      ) : (
+        <AnimatedPanel preset="panelContent">{information}</AnimatedPanel>
+      )}
+    </aside>
+  );
   return (
     <section
       ref={root}
-      className={`react-reader reader-workspace ${mode === "edit" ? "reader-editing" : !informationShown && !panelLeaving ? "reader-without-information" : ""}`}
+      className={`react-reader reader-workspace ${mode === "edit" ? "reader-editing" : `${!informationShown && !panelLeaving ? "reader-without-information" : ""}${docked ? "" : " reader-panel-floating"}`}`}
       data-layout={layout}
+      style={{ "--panel-width": `${informationWidth}px` } as CSSProperties}
       data-panel-leaving={panelLeaving || undefined}
       aria-label="文献阅读器"
     >
@@ -1516,7 +1628,7 @@ export default function Reader() {
         width={
           mode === "edit"
             ? editorWidth
-            : informationShown
+            : docked && informationShown
               ? informationWidth
               : 0
         }
@@ -1530,7 +1642,7 @@ export default function Reader() {
         }}
         min={mode === "edit" ? 320 : 250}
         max={mode === "edit" ? 900 : 520}
-        defaultWidth={mode === "edit" ? 560 : 330}
+        defaultWidth={mode === "edit" ? 560 : 352}
         side={
           mode === "edit" ? (
             sources.data?.material ? (
@@ -1545,49 +1657,7 @@ export default function Reader() {
               <p>此文献尚无 PDF 材料。</p>
             )
           ) : (
-            <aside
-              className="reader-information"
-              hidden={!informationShown && !panelLeaving}
-              data-leaving={panelLeaving || undefined}
-              style={panelLeaving ? { width: informationWidth } : undefined}
-            >
-              {marks.active ? (
-                <Tabs
-                  label="信息栏"
-                  value={sideTab}
-                  onChange={(value) => {
-                    setSideTab(value as typeof sideTab);
-                    rememberReading(catalog, id, { sideTab: value });
-                  }}
-                  items={[
-                    { id: "info", label: "信息" },
-                    {
-                      id: "marks",
-                      label: marks.count ? `批注 ${marks.count}` : "批注",
-                    },
-                    { id: "translation", label: "翻译" },
-                  ]}
-                />
-              ) : null}
-              {marks.active && sideTab === "marks" ? (
-                marks.panel
-              ) : marks.active && sideTab === "translation" ? (
-                <>
-                  {/* Spec 1.3: the PDF's side-by-side translation is set here. */}
-                  {mode === "pdf" && api.kind === "workspace" ? (
-                    <FullTextControls
-                      fullText={fullText}
-                      translation={translation}
-                    />
-                  ) : null}
-                  <TranslationPanel translation={translation} notify={notify} />
-                </>
-              ) : (
-                <AnimatedPanel preset="panelContent">
-                  {information}
-                </AnimatedPanel>
-              )}
-            </aside>
+            sidePanel
           )
         }
       >

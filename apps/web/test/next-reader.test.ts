@@ -13,6 +13,7 @@ import {
   readerPageNumber,
   readerToLibrary,
   readerType,
+  readerPanel,
 } from "./reader-controls.js";
 import { missingId } from "./processor-workspace-fixture.js";
 import { doubtfulDraft, draftPdf, formDraft } from "./draft-fixture.js";
@@ -80,9 +81,12 @@ it.each(["no-preference", "reduce"] as const)(
           );
         });
       expect(await readerPageNumber(w.page)).toBe(1);
-      await w.page
-        .getByRole("button", { name: "收起信息", exact: true })
-        .click();
+      // The side panel starts closed (spec 1.4).
+      expect(
+        await w.page
+          .getByRole("button", { name: "显示信息", exact: true })
+          .isVisible(),
+      ).toBe(true);
       await w.page.getByRole("tab", { name: "原文", exact: true }).click();
       await w.page.locator(".reader-engine-body .reading-article").waitFor();
       await expect
@@ -829,7 +833,7 @@ it("reads a draft as the default text: its level, its note, no editing, its doub
     ).toBe(0);
     await w.page.keyboard.press("Escape");
     // The marks list says on which level each mark was made.
-    await w.page.getByRole("tab", { name: /^批注/ }).click();
+    await readerPanel(w.page, "批注");
     await expect
       .poll(() => w.page.locator(".mark-card-level").allInnerTexts())
       .toEqual(["初稿上"]);

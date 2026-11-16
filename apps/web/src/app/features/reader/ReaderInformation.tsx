@@ -165,6 +165,67 @@ function Relations({
     </div>
   );
 }
+/**
+ * “关联” (reading-experience 1.4, 3.7): always there, since citations between
+ * papers need no processing. Of the overview, the rows 被引用 and 引用; the
+ * rest (一致, 矛盾, the topic pages, by key point) waits for processing.
+ * The counts are the information panel's 参考文献 and 库内被引.
+ */
+export function ReaderRelations({ detail }: { detail: LiteratureDetail }) {
+  const [open, setOpen] = useState<"references" | "cited-by" | null>(null);
+  const id = detail.literature.literature_id;
+  const rows = [
+    {
+      key: "cited-by" as const,
+      label: "被引用",
+      total: null,
+      library: detail.cited_by_count,
+    },
+    {
+      key: "references" as const,
+      label: "引用",
+      total: detail.reference_count,
+      library: null,
+    },
+  ];
+  return (
+    <section className="reader-relations-overview" aria-label="库内概况">
+      <h3>库内概况</h3>
+      <table className="reader-relations-table">
+        <thead>
+          <tr>
+            <td />
+            <th scope="col">总数</th>
+            <th scope="col">库内数</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.key}>
+              <th scope="row">
+                <Button
+                  variant="text"
+                  size="compact"
+                  aria-expanded={open === row.key}
+                  onPress={() =>
+                    setOpen((value) => (value === row.key ? null : row.key))
+                  }
+                >
+                  {row.label}
+                </Button>
+              </th>
+              <td>{row.total === null ? "—" : row.total.toLocaleString()}</td>
+              <td>
+                {row.library === null ? "—" : row.library.toLocaleString()}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {open ? <Relations key={open} id={id} direction={open} /> : null}
+    </section>
+  );
+}
 /** One archive fact: done, in progress, needs attention, or not yet. */
 function Step({
   state,
@@ -203,9 +264,7 @@ export function ReaderInformation({
     folders = useFolders(),
     [expanded, setExpanded] = useState(false),
     [editing, setEditing] = useState<"metadata" | "tags" | null>(null),
-    [relation, setRelation] = useState<
-      "references" | "cited-by" | "versions" | "resources" | null
-    >(null),
+    [relation, setRelation] = useState<"versions" | "resources" | null>(null),
     [operation, setOperation] = useState<
       "archive" | "export" | "identity" | null
     >(null);
@@ -374,24 +433,14 @@ export function ReaderInformation({
         ]
       : []),
   ];
+  // Citations between papers are in the “关联” tab (spec 1.4); the
+  // paper's other versions and its figure resources are part of 材料.
   const relations: {
-    key: "references" | "cited-by" | "versions" | "resources";
+    key: "versions" | "resources";
     label: string;
     count: number;
     unit: string;
   }[] = [
-    {
-      key: "references",
-      label: "参考文献",
-      count: detail.reference_count,
-      unit: "条",
-    },
-    {
-      key: "cited-by",
-      label: "库内被引",
-      count: detail.cited_by_count,
-      unit: "次",
-    },
     {
       key: "versions",
       label: "其他版本",
@@ -523,75 +572,8 @@ export function ReaderInformation({
           </ul>
         </section>
       ) : null}
-      <section>
-        <h3>关联</h3>
-        <ul className="reader-relation-list">
-          {relations
-            .filter((r) => r.key !== "resources" || r.count > 0)
-            .map((r) => (
-              <li key={r.key}>
-                {/* Saved relations can exist where the source gave no count. */}
-                {r.count > 0 ||
-                r.key === "references" ||
-                r.key === "cited-by" ? (
-                  <Button
-                    variant="text"
-                    size="compact"
-                    aria-label={`${r.label} ${r.count.toLocaleString()} ${r.unit}`}
-                    aria-expanded={relation === r.key}
-                    onPress={() =>
-                      setRelation((value) => (value === r.key ? null : r.key))
-                    }
-                  >
-                    <span>{r.label}</span>
-                    <span className="reader-count">
-                      {r.count.toLocaleString()} {r.unit}
-                    </span>
-                  </Button>
-                ) : (
-                  <span className="reader-relation-empty">
-                    <span>{r.label}</span>
-                    <span className="reader-count">无</span>
-                  </span>
-                )}
-              </li>
-            ))}
-        </ul>
-        {relation === "references" || relation === "cited-by" ? (
-          <Relations key={relation} id={id} direction={relation} />
-        ) : null}
-        {relation === "versions" ? (
-          <div className="reader-relations">
-            {detail.other_versions.map((version) => (
-              <div key={version.literature.literature_id}>
-                <Button
-                  variant="text"
-                  onPress={() =>
-                    shell.openPaper(version.literature.literature_id)
-                  }
-                >
-                  <RichTitle parts={paperTitleParts(version)} />
-                </Button>
-              </div>
-            ))}
-          </div>
-        ) : null}
-        {relation === "resources" ? (
-          <div className="reader-resources">
-            {resources.map((resource) => (
-              <Button
-                key={resource.reference}
-                variant="text"
-                onPress={resource.open}
-              >
-                {resource.reference}
-              </Button>
-            ))}
-          </div>
-        ) : null}
-      </section>
       <section className="reader-info-archive">
-        <h3>档案</h3>
+        <h3>材料</h3>
         <ul className="reader-steps">
           <Step state={detail.primary_pdf ? "done" : "todo"}>
             {detail.primary_pdf ? "原始 PDF 已保存" : "还没有原始 PDF"}
@@ -685,6 +667,64 @@ export function ReaderInformation({
             ) : null}
           </Step>
         </ul>
+        <ul className="reader-relation-list">
+          {relations
+            .filter((r) => r.key !== "resources" || r.count > 0)
+            .map((r) => (
+              <li key={r.key}>
+                {r.count > 0 ? (
+                  <Button
+                    variant="text"
+                    size="compact"
+                    aria-label={`${r.label} ${r.count.toLocaleString()} ${r.unit}`}
+                    aria-expanded={relation === r.key}
+                    onPress={() =>
+                      setRelation((value) => (value === r.key ? null : r.key))
+                    }
+                  >
+                    <span>{r.label}</span>
+                    <span className="reader-count">
+                      {r.count.toLocaleString()} {r.unit}
+                    </span>
+                  </Button>
+                ) : (
+                  <span className="reader-relation-empty">
+                    <span>{r.label}</span>
+                    <span className="reader-count">无</span>
+                  </span>
+                )}
+              </li>
+            ))}
+        </ul>
+        {relation === "versions" ? (
+          <div className="reader-relations">
+            {detail.other_versions.map((version) => (
+              <div key={version.literature.literature_id}>
+                <Button
+                  variant="text"
+                  onPress={() =>
+                    shell.openPaper(version.literature.literature_id)
+                  }
+                >
+                  <RichTitle parts={paperTitleParts(version)} />
+                </Button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {relation === "resources" ? (
+          <div className="reader-resources">
+            {resources.map((resource) => (
+              <Button
+                key={resource.reference}
+                variant="text"
+                onPress={resource.open}
+              >
+                {resource.reference}
+              </Button>
+            ))}
+          </div>
+        ) : null}
         {reading.data ? (
           <dl className="reader-fields">
             <div>

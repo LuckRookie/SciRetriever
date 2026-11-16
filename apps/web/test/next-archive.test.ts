@@ -1,4 +1,9 @@
-import { readerMore, readerType, readerView } from "./reader-controls.js";
+import {
+  readerMore,
+  readerPanel,
+  readerType,
+  readerView,
+} from "./reader-controls.js";
 import { expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { parseAsset, sha256 } from "@sciretriever/contracts";
@@ -30,6 +35,8 @@ it("offers archiving for an unparsed paper, and archiving parses it first", asyn
   try {
     const p = w.page;
     await p.goto(`${w.origin}/?literature=${missingId}&reader=pdf`);
+    // The side panel starts closed (spec 1.4).
+    await readerPanel(p);
     const info = p.locator(".reader-info-archive");
     await expect.poll(() => info.innerText()).toContain("全文尚未建档");
     await expect
@@ -106,6 +113,7 @@ it("archives a paper straight from its PDF, then exposes ready state and metadat
       .toBe("READY");
     expect(w.env.parseCalls).toBeGreaterThan(initial);
     await p.goto(`${w.origin}/?literature=${missingId}&reader=doc`);
+    await readerPanel(p);
     await p.getByRole("button", { name: "编辑元数据", exact: true }).click();
     await p.getByRole("button", { name: "编辑标题", exact: true }).click();
     await p
@@ -244,6 +252,7 @@ it("previews undo dependencies before reverting a vocabulary change", async () =
     await p.goto(
       `${w.origin}/?literature=${w.env.parseRequest.literature_id}&reader=doc`,
     );
+    await readerPanel(p);
     await p.getByRole("button", { name: "编辑标签", exact: true }).click();
     await select(p, "要添加的标签", "Extra topic");
     await p.getByRole("button", { name: /支持该标签的原文片段/ }).click();

@@ -1,3 +1,4 @@
+import { readerPanel } from "./reader-controls.js";
 import { expect, it } from "vitest";
 import { parseLiterature, parseReference } from "@sciretriever/contracts";
 import { nextWorkspace } from "./next-workspace-fixture.js";
@@ -119,12 +120,15 @@ it("restores search and detail history and reads more than 25 references with th
       .getByRole("article", { name: title, exact: true })
       .locator(".paper-open")
       .click();
-    await page.locator(".reader-information").waitFor();
+    // The side panel starts closed (spec 1.4).
+    await readerPanel(page);
     expect(new URL(page.url()).searchParams.get("literature")).toBe(id);
     await expect
       .poll(() => page.locator(".reader-information").textContent())
       .toContain("尚未核对这份 PDF 是否就是这篇文章");
-    await page.getByRole("button", { name: /^参考文献 \d/ }).click();
+    // The references are in the side panel's “关联” tab (spec 1.4, 3.7).
+    await readerPanel(page, "关联");
+    await page.getByRole("button", { name: "引用", exact: true }).click();
     await page
       .getByRole("button", { name: "加载更多引用", exact: true })
       .waitFor()
@@ -180,7 +184,7 @@ it("restores search and detail history and reads more than 25 references with th
         .inputValue(),
     ).toBe(title);
     await page.goForward();
-    await page.locator(".reader-information").waitFor();
+    await readerPanel(page);
     await page.setViewportSize({ width: 390, height: 844 });
     expect(
       await page.evaluate(

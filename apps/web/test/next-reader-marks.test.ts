@@ -1,3 +1,4 @@
+import { readerPanel } from "./reader-controls.js";
 import { expect, it } from "vitest";
 import { nextWorkspace } from "./next-workspace-fixture.js";
 
@@ -38,6 +39,7 @@ it(
       await expect
         .poll(() => page.locator(".mark-highlight").count())
         .toBeGreaterThan(0);
+      await readerPanel(page, "批注");
       await page.getByRole("tab", { name: "批注 1" }).click();
       await expect
         .poll(() => page.locator(".mark-card-quote").first().textContent())

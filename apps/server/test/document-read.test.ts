@@ -25,7 +25,7 @@ import { startQueryOnlyWorkbench } from "../src/bootstrap/workbench.js";
 import { TypeScriptParserArtifactRules } from "../src/parsing/artifact-rules.js";
 import type { ParserBackend } from "./parser-fixture-types.js";
 import { DocumentReadError } from "../src/document/read.js";
-import { readerMore } from "../../web/test/reader-controls.js";
+import { readerMore, readerPanel } from "../../web/test/reader-controls.js";
 import { SqliteDocumentStorage } from "../src/document/storage.js";
 import {
   FIXTURE_LITERATURE,
@@ -1202,6 +1202,7 @@ describe("bounded document and material reading", () => {
       await expect
         .poll(async () => (await article.textContent())?.length ?? 0)
         .toBeGreaterThan(8192);
+      await readerPanel(page);
       await page
         .locator(".reader-information")
         .getByRole("button", { name: "技术详情", exact: true })
@@ -1300,6 +1301,7 @@ describe("bounded document and material reading", () => {
       // The outline is in the top bar's “更多” (reading-experience 1.3).
       await readerMore(page, "显示目录");
       expect(await page.locator(".reader-outline button").count()).toBe(0);
+      await readerPanel(page);
       await page
         .locator(".reader-information")
         .getByRole("button", { name: "技术详情", exact: true })
@@ -1418,8 +1420,9 @@ describe("bounded document and material reading", () => {
       // The second synthetic cursor is not a real server cursor. Reuse the first
       // validated page as the resource descriptor source for this pagination probe.
       await page.reload();
+      await readerPanel(page);
       await page
-        // The relations row names its label and count without a space between.
+        // The material row names its label and count without a space between.
         .getByRole("button", { name: /^图表资源\s*51 项$/ })
         .click();
       expect(await page.locator(".reader-resources button").count()).toBe(51);

@@ -67,6 +67,34 @@
   .reader-without-information > .ui-split-pane > .ui-split-side {
     display: none;
   }
+  /* Narrower than 1440 px it floats over the desk, moving nothing; the
+     same element as when docked, so what is open in it stays open. */
+  .react-reader.reader-panel-floating > .ui-split-pane {
+    position: relative;
+  }
+  .react-reader.reader-panel-floating > .ui-split-pane > .ui-split-side {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    /* Over everything the desk floats (the outline, the spine, notes). */
+    z-index: 10;
+    /* An absolute grid item is placed in its grid area: span the whole pane. */
+    grid-column: 1 / -1;
+    grid-row: 1 / -1;
+    width: var(--panel-width, 352px);
+    max-width: 100%;
+    overflow: visible;
+  }
+  .react-reader.reader-panel-floating .ui-split-handle {
+    display: none;
+  }
+  .react-reader.reader-panel-floating .reader-information {
+    height: 100%;
+    width: 100%;
+    background: var(--bg);
+    box-shadow: var(--shadow-pop);
+  }
   /* Spec 6.1: closing, the panel slides out over the desk that the sheet
      is moving into. */
   .react-reader[data-panel-leaving] > .ui-split-pane > .ui-split-side {
@@ -86,7 +114,9 @@
     min-height: 0;
     display: flex;
     position: relative;
-    overflow: hidden;
+    /* Clipped, never scrolled: focus or scrolling into view in the floating
+       side panel must not shift the desk sideways. */
+    overflow: clip;
     container: reader-center / inline-size;
   }
   /* Too narrow for the outline beside a readable column: it floats over the
@@ -604,11 +634,32 @@
     font-size: var(--text-secondary);
     min-height: 48px;
   }
+  /* “关联”: the overview's two rows (spec 3.7). */
+  .reader-information .reader-relations-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-variant-numeric: tabular-nums;
+  }
+  .reader-information .reader-relations-table :is(th, td) {
+    padding: var(--space-1) var(--space-2);
+    border-bottom: 1px solid var(--line);
+    text-align: right;
+    font-weight: 400;
+  }
+  .reader-information
+    .reader-relations-table
+    :is(th[scope="row"], td:first-child) {
+    text-align: left;
+    padding-left: 0;
+  }
+  .reader-information .reader-relations-table th[scope="col"] {
+    color: var(--fg2);
+  }
   .reader-information {
     height: 100%;
     overflow: auto;
     padding: var(--space-5);
-    border-left: 1px solid var(--line);
+    border-left: 1px solid var(--line2);
     font-size: var(--text-secondary);
     line-height: 1.6;
     overflow-wrap: anywhere;

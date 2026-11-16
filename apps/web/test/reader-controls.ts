@@ -118,3 +118,31 @@ export async function readerToLibrary(page: Page) {
     .first()
     .click();
 }
+/**
+ * Opens the side panel (reading-experience 1.4: closed by default) unless
+ * it is open, and shows one of its tabs.
+ */
+export async function readerPanel(
+  page: Page,
+  tab: "信息" | "批注" | "关联" | "翻译" = "信息",
+) {
+  const open = page.getByRole("button", { name: "显示信息", exact: true });
+  await page.getByRole("button", { name: "更多", exact: true }).waitFor();
+  if (await open.isVisible()) await open.click();
+  else if (
+    !(await page
+      .getByRole("button", { name: "收起信息", exact: true })
+      .isVisible())
+  ) {
+    // Below 760 px it is in “更多” (spec 1.3).
+    await page.getByRole("button", { name: "更多", exact: true }).click();
+    const item = page.getByRole("menuitem", { name: "显示信息", exact: true });
+    if (await item.count()) await item.click();
+    else await page.keyboard.press("Escape");
+  }
+  const panel = page.getByRole("complementary", { name: "右侧面板" });
+  await panel.waitFor();
+  const tabs = panel.getByRole("tab", { name: new RegExp(`^${tab}`) });
+  if (await tabs.count()) await tabs.first().click();
+  return panel;
+}

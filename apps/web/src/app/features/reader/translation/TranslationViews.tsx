@@ -179,13 +179,39 @@ export function TranslationPopover({
 export function TranslationPanel({
   translation,
   notify,
+  section,
 }: {
   translation: ReaderTranslation;
   notify: (message: string) => void;
+  /** The full text's section at the reading line (spec 1.4); absent in the PDF. */
+  section?: () => string | null;
 }) {
   const { settings, setSettings, catalog, model, current, source, load } =
     translation;
   useEffect(load, [load]);
+  const [cut, setCut] = useState(false);
+  /** Takes the current section, as much as one request carries, and translates it. */
+  const translateSection = () => {
+    const text = section?.();
+    if (!text) return;
+    const limit = catalog?.max_chars ?? 4000;
+    let taken = text;
+    if ([...text].length > limit) {
+      // Whole paragraphs up to the limit.
+      const kept: string[] = [];
+      for (const paragraph of text.split("\n\n")) {
+        if ([...[...kept, paragraph].join("\n\n")].length > limit) break;
+        kept.push(paragraph);
+      }
+      taken = kept.length
+        ? kept.join("\n\n")
+        : [...text].slice(0, limit).join("");
+    }
+    setCut(taken !== text);
+    translation.setSource(taken);
+    translation.dismiss();
+    void translation.translate(taken, null);
+  };
   const result = current && current.text === source.trim() ? current : null;
   const output = result?.result?.translation ?? "";
   return (
@@ -221,6 +247,14 @@ export function TranslationPanel({
         />
       </div>
       <div className="translation-source">
+        {section ? (
+          <Button variant="text" size="compact" onPress={translateSection}>
+            翻译当前所在的节
+          </Button>
+        ) : null}
+        {cut ? (
+          <p className="ui-description">本节较长，只放入了前面的段落。</p>
+        ) : null}
         <TextArea
           label="原文"
           width="full"

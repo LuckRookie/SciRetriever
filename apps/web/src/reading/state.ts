@@ -53,7 +53,8 @@ export function readingPosition(
       fontSize: 20,
       wide: false,
       outline: false,
-      information: true,
+      // Spec 1.4: the side panel starts closed.
+      information: false,
       query: "",
       scroll: 0,
     };
