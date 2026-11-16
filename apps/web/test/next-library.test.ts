@@ -261,6 +261,8 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
     const dialog = p.getByRole("dialog", { name: "保存筛选" });
     await dialog.getByRole("textbox", { name: "筛选名称" }).fill("My library");
     await dialog.getByRole("button", { name: "保存", exact: true }).click();
+    // Saved by the service (user organization 9.1): the dialog closes once it is.
+    await dialog.waitFor({ state: "detached" });
     await p.reload();
     await (await openSavedViews(p))
       .getByRole("menuitem", { name: "My library", exact: true })

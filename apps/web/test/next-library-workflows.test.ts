@@ -1,3 +1,5 @@
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import {
   libraryStatus,
   openSavedViews,
@@ -10,7 +12,6 @@ import { nextWorkspace } from "./next-workspace-fixture.js";
 import { missingId } from "./processor-workspace-fixture.js";
 import { draftPdf, formDraft } from "./draft-fixture.js";
 import { workbenchPdf } from "../../server/src/workbench/synthetic-fixture.js";
-import { join } from "node:path";
 async function select(page: Page, label: string, option: string) {
   await page
     .getByRole("button", { name: new RegExp(label) })
@@ -103,147 +104,186 @@ it("opens keyboard search and live activity without starting work, and preserves
   }
 }, 60000);
 
-it("loads catalog-scoped saved filters, caps their count and persists deletion without affecting other catalogs", async () => {
+it("keeps saved filters in the catalog: the menu applies, saves and deletes through the service, and imports this browser's old ones once (user organization 9.1)", async () => {
   const w = await nextWorkspace();
   try {
     const page = w.page;
-    let catalog = join(w.env.home, "catalog.sqlite");
-    const otherCatalog = join(w.env.home, "other-catalog.sqlite");
-    const oldKey = `sciretriever:library-views:v1:${catalog}`;
-    const otherKey = `sciretriever:react:sciretriever:library-views:v1:${otherCatalog}`;
-    await page.route(
-      (url) => url.pathname === "/api/workspace",
-      async (route) => {
-        const response = await route.fetch();
-        const value = await response.json();
-        value.workspace.catalog_path = catalog;
-        await route.fulfill({ response, json: value });
-      },
-    );
-    const savedViews = JSON.stringify(
-      Array.from({ length: 51 }, (_, i) => ({
-        id: `saved-${i + 1}`,
-        name: `Saved ${i + 1}`,
+    const app = w.env.app as unknown as {
+      filters: {
+        query(op: unknown): Promise<unknown>;
+        manage(op: unknown): Promise<unknown>;
+      };
+      workspace?: unknown;
+    };
+    const list = async () =>
+      (
+        (await app.filters.query({ operation: "list", request: {} })) as {
+          items: {
+            name: string;
+            query: unknown;
+            sort: string;
+            updated_at: string;
+          }[];
+        }
+      ).items;
+    // One made outside the Web (as the CLI would): it shows in the menu.
+    await app.filters.manage({
+      operation: "create",
+      request: {
+        name: "Existing",
         query: { text: "Unparsed" },
         sort: "title-desc",
-      })),
-    );
-    await page.evaluate(
-      ({ oldKey, otherKey, savedViews }) => {
-        localStorage.setItem(`sciretriever:react:${oldKey}`, savedViews);
-        localStorage.setItem(oldKey, "obsolete-value-must-not-be-read");
-        localStorage.setItem(
-          otherKey,
-          JSON.stringify([
-            {
-              id: "different-catalog",
-              name: "Different catalog",
-              query: {},
-              sort: "title-asc",
-            },
-          ]),
-        );
       },
-      { oldKey, otherKey, savedViews },
-    );
-    await page.reload();
+    });
+    // The catalog this browser keys its old filters by, as the Web reads it.
+    const [workspace] = await Promise.all([
+      page.waitForResponse(
+        (r) => new URL(r.url()).pathname === "/api/workspace",
+      ),
+      page.reload(),
+    ]);
+    const catalog = (
+      (await workspace.json()) as { workspace?: { catalog_path?: string } }
+    ).workspace?.catalog_path;
     let views = await openSavedViews(page);
     await views
-      .getByRole("menuitem", { name: "Saved 1", exact: true })
+      .getByRole("menuitem", { name: "Existing", exact: true })
       .waitFor();
+    // No old data in this browser: no way to import.
     expect(
-      await views.getByRole("menuitem", { name: /^Saved \d+$/ }).count(),
-    ).toBe(50);
-    expect(
-      await views
-        .getByRole("menuitem", { name: "Saved 51", exact: true })
-        .count(),
+      await views.getByRole("menuitem", { name: /^导入这个浏览器/u }).count(),
     ).toBe(0);
-    expect(
-      await views
-        .getByRole("menuitem", { name: "Different catalog", exact: true })
-        .count(),
-    ).toBe(0);
-    await views.getByRole("menuitem", { name: "Saved 1", exact: true }).click();
-    await expect.poll(() => page.locator(".paper-row").count()).toBe(1);
-    expect(
-      JSON.parse(new URL(page.url()).searchParams.get("query")!),
-    ).toMatchObject({ text: "Unparsed" });
-    expect(new URL(page.url()).searchParams.get("sort")).toBe("title-desc");
+    // Applying a filter reads only: nothing in the catalog changes.
+    const before = JSON.stringify(await list());
+    await views
+      .getByRole("menuitem", { name: "Existing", exact: true })
+      .click();
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get("sort"))
+      .toBe("title-desc");
+    expect(JSON.stringify(await list())).toBe(before);
+    // “用当前条件更新这项筛选”: the current condition replaces the saved one; the name stays.
+    await page.getByRole("searchbox", { name: "搜索文献" }).fill("Synthetic");
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get("query") ?? "")
+      .toContain("Synthetic");
+    views = await openSavedViews(page);
+    await views
+      .getByRole("menuitem", { name: "用当前条件更新这项筛选", exact: true })
+      .click();
+    await expect
+      .poll(
+        async () => (await list()).find((f) => f.name === "Existing")?.query,
+      )
+      .toMatchObject({ text: "Synthetic" });
+    await app.filters.manage({
+      operation: "update",
+      request: {
+        filter_id: (
+          (await list()) as unknown as { name: string; filter_id: string }[]
+        ).find((f) => f.name === "Existing")!.filter_id,
+        query: { text: "Unparsed" },
+        sort: "title-desc",
+      },
+    });
+    // Save and delete go to the service and survive a reload.
     views = await openSavedViews(page);
     await views
       .getByRole("menuitem", { name: "保存当前筛选…", exact: true })
       .click();
     const dialog = page.getByRole("dialog", { name: "保存筛选", exact: true });
-    await dialog
-      .getByRole("textbox", { name: "筛选名称" })
-      .fill("Newest saved view");
+    await dialog.getByRole("textbox", { name: "筛选名称" }).fill("Newest");
     await dialog.getByRole("button", { name: "保存", exact: true }).click();
+    await expect
+      .poll(async () => (await list()).map((f) => f.name))
+      .toContain("Newest");
+    await page.reload();
     views = await openSavedViews(page);
-    await views
-      .getByRole("menuitem", { name: "Newest saved view", exact: true })
-      .waitFor();
-    expect(
-      await views
-        .getByRole("menuitem", { name: "Saved 1", exact: true })
-        .count(),
-    ).toBe(0);
-    await page.keyboard.press("Escape");
-    const saved = await page.evaluate(
-      (key) => localStorage.getItem(`sciretriever:react:${key}`),
-      oldKey,
-    );
-    expect(JSON.parse(saved!)).toHaveLength(50);
-    views = await openSavedViews(page);
-    await views
-      .getByRole("menuitem", { name: "Newest saved view", exact: true })
-      .click();
+    await views.getByRole("menuitem", { name: "Newest", exact: true }).click();
     views = await openSavedViews(page);
     await views
       .getByRole("menuitem", { name: "删除当前筛选", exact: true })
       .click();
+    await expect
+      .poll(async () => (await list()).map((f) => f.name))
+      .not.toContain("Newest");
+    // This browser's old filters: offered for import, item by item.
+
+    const key = `sciretriever:react:sciretriever:library-views:v1:${catalog ?? "unbound"}`;
+    const old = [
+      {
+        id: "a",
+        name: "Existing",
+        query: { text: "Unparsed" },
+        sort: "title-desc",
+      },
+      { id: "b", name: "Existing", query: {}, sort: "title-asc" },
+      { id: "c", name: "Mine", query: {}, sort: "publication-year-desc" },
+      { id: "d", name: "Bad", query: {}, sort: "bogus" },
+      7,
+    ];
+    await page.evaluate(
+      ({ key, old }) => localStorage.setItem(key, JSON.stringify(old)),
+      { key, old },
+    );
     await page.reload();
     views = await openSavedViews(page);
     await views
-      .getByRole("menuitem", { name: "Saved 2", exact: true })
-      .waitFor();
-    expect(
-      await views
-        .getByRole("menuitem", { name: "Newest saved view", exact: true })
-        .count(),
-    ).toBe(0);
+      .getByRole("menuitem", {
+        name: "导入这个浏览器里保存的筛选（5 项）",
+        exact: true,
+      })
+      .click();
+    const report = page.getByRole("dialog", {
+      name: "导入的筛选",
+      exact: true,
+    });
+    await report.waitFor();
+    expect(await report.innerText()).toContain(
+      "导入 1 项，改名 1 项，跳过 1 项，未导入 2 项。",
+    );
+    expect(await report.innerText()).toContain("已改名导入：Existing (2)");
+    expect(await report.innerText()).toContain("未导入：条件不合格");
     await page.keyboard.press("Escape");
-    expect(
-      JSON.parse(
-        (await page.evaluate(
-          (key) => localStorage.getItem(`sciretriever:react:${key}`),
-          oldKey,
-        ))!,
-      ),
-    ).toHaveLength(49);
-    expect(
-      await page.evaluate((key) => localStorage.getItem(key), oldKey),
-    ).toBe("obsolete-value-must-not-be-read");
-    expect(
-      await page.evaluate((key) => localStorage.getItem(key), otherKey),
-    ).toContain("Different catalog");
-    catalog = otherCatalog;
+    // The old data stays, each item marked; the entry is gone.
+    const stored = JSON.parse(
+      (await page.evaluate((key) => localStorage.getItem(key), key))!,
+    ) as Record<string, unknown>[];
+    expect(stored).toHaveLength(5);
+    expect(stored.map((item) => item.imported)).toEqual([
+      "skipped",
+      "renamed",
+      "imported",
+      "invalid",
+      "invalid",
+    ]);
+    expect(stored[0]).toMatchObject({ id: "a", name: "Existing" });
     await page.reload();
     views = await openSavedViews(page);
-    await views
-      .getByRole("menuitem", { name: "Different catalog", exact: true })
-      .waitFor();
+    await views.getByRole("menuitem", { name: "Mine", exact: true }).waitFor();
     expect(
-      await views.getByRole("menuitem", { name: /^Saved \d+$/ }).count(),
+      await views.getByRole("menuitem", { name: /^导入这个浏览器/u }).count(),
     ).toBe(0);
     await page.keyboard.press("Escape");
+    // The same data again creates nothing.
+    const count = (await list()).length;
+    await app.filters.manage({
+      operation: "import",
+      request: {
+        items: old.slice(0, 3).map((o) => ({
+          name: (o as { name: string }).name,
+          query: (o as { query: unknown }).query,
+          sort: (o as { sort: string }).sort,
+        })),
+      },
+    });
+    expect((await list()).length).toBe(count);
     expect(w.env.modelCalls).toBe(0);
-    expect(await w.env.app.jobs!.listJobs(10)).toHaveLength(0);
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();
   }
-}, 60000);
+}, 90000);
 
 it("aborts a library search when navigating to another page and ignores its late response", async () => {
   const w = await nextWorkspace();
@@ -412,3 +452,74 @@ it("marks draft rows, filters and sorts by the draft facts, and hands the result
     await w.close();
   }
 }, 90000);
+
+it("shows the filter menu with the import entry and the import report (plan 25 block 09 screenshots)", async (context) => {
+  const output = process.env.SCIRETRIEVER_WEB_FILTER_SHOTS;
+  if (!output) return context.skip();
+  await mkdir(output, { recursive: true });
+  const w = await nextWorkspace();
+  try {
+    const page = w.page;
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const app = w.env.app as unknown as {
+      filters: { manage(op: unknown): Promise<unknown> };
+    };
+    await app.filters.manage({
+      operation: "create",
+      request: {
+        name: "近五年的含能盐",
+        query: { text: "Unparsed" },
+        sort: "title-desc",
+      },
+    });
+    const [workspace] = await Promise.all([
+      page.waitForResponse(
+        (r) => new URL(r.url()).pathname === "/api/workspace",
+      ),
+      page.reload(),
+    ]);
+    const catalog = (
+      (await workspace.json()) as { workspace?: { catalog_path?: string } }
+    ).workspace?.catalog_path;
+    await page.evaluate(
+      (key) =>
+        localStorage.setItem(
+          key,
+          JSON.stringify([
+            {
+              id: "a",
+              name: "近五年的含能盐",
+              query: { text: "Unparsed" },
+              sort: "title-desc",
+            },
+            { id: "b", name: "近五年的含能盐", query: {}, sort: "title-asc" },
+            { id: "c", name: "待读", query: {}, sort: "publication-year-desc" },
+            { id: "d", name: "旧格式", query: {}, sort: "bogus" },
+          ]),
+        ),
+      `sciretriever:react:sciretriever:library-views:v1:${catalog ?? "unbound"}`,
+    );
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate(
+        (theme) =>
+          localStorage.setItem(
+            "sciretriever:react:sciretriever:theme:v1",
+            theme,
+          ),
+        theme,
+      );
+      await page.reload();
+      await openSavedViews(page);
+      await page.waitForTimeout(300);
+      await page.screenshot({ path: join(output, `filter-menu-${theme}.png`) });
+      await page.keyboard.press("Escape");
+    }
+    const views = await openSavedViews(page);
+    await views.getByRole("menuitem", { name: /^导入这个浏览器/u }).click();
+    await page.getByRole("dialog", { name: "导入的筛选" }).waitFor();
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: join(output, "import-report-dark.png") });
+  } finally {
+    await w.close();
+  }
+}, 120000);

@@ -50,8 +50,14 @@ it("restores current theme, panel width and saved view through application start
         localStorage.setItem(key, value);
     }, values);
     await w.page.goto(`${w.origin}/?view=lib`);
-    await (await openSavedViews(w.page))
-      .getByRole("menuitem", { name: "My library view", exact: true })
+    await (
+      await openSavedViews(w.page)
+    )
+      // The browser's saved view is no filter now: it waits to be imported (user organization 9.1).
+      .getByRole("menuitem", {
+        name: "导入这个浏览器里保存的筛选（1 项）",
+        exact: true,
+      })
       .waitFor();
     await w.page.keyboard.press("Escape");
     expect(await w.page.locator("html").getAttribute("data-theme")).toBe(
@@ -67,8 +73,14 @@ it("restores current theme, panel width and saved view through application start
       expect(stored[key]).toBe(value);
     expect(stored[prefix + "preferences-migrated:v1"]).toBeUndefined();
     await w.page.reload();
-    await (await openSavedViews(w.page))
-      .getByRole("menuitem", { name: "My library view", exact: true })
+    await (
+      await openSavedViews(w.page)
+    )
+      // The browser's saved view is no filter now: it waits to be imported (user organization 9.1).
+      .getByRole("menuitem", {
+        name: "导入这个浏览器里保存的筛选（1 项）",
+        exact: true,
+      })
       .waitFor();
     await w.page.keyboard.press("Escape");
     expect(await w.page.locator("html").getAttribute("data-theme")).toBe(

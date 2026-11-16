@@ -49,7 +49,6 @@ import { AnimatedPanel, Presence, LayoutGroup } from "../../motion/index.js";
 import type { ApiClient } from "../../data/api.js";
 import { useApi } from "../../data/query.js";
 import { useUrlState, navigate } from "../../data/url.js";
-import { preferences } from "../../data/preferences.js";
 import {
   emptyQuery,
   paperAuthors,
@@ -67,7 +66,6 @@ import { useIntakeBatch } from "../../data/intake-batches.js";
 import { AcquireDialog, type AcquireScope } from "./AcquireDialog.js";
 import { ScopeTerms } from "./ScopeTerms.js";
 import { useShell } from "../../shell/context.js";
-import { randomId } from "../../../browser-platform.js";
 import { archiveQuery, useArchiveAction, rows } from "../../data/archive.js";
 import { record } from "../../data/wire.js";
 import { archiveReason, errorMessage, statusLabels } from "../../strings.js";
@@ -87,49 +85,21 @@ import {
 } from "./Folders.js";
 import { manageFolder } from "../../data/folders.js";
 import {
+  browserFilters,
+  createFilter,
+  deleteFilter,
+  importFilters,
+  listFilters,
+  markBrowserFilters,
+  updateFilter,
+} from "../../data/saved-filters.js";
+import {
   RunOperatorDialog,
   type OperatorScope,
 } from "../processing/RunOperator.js";
 
 const scrollPositions = new WeakMap<ApiClient, Map<string, number>>();
 const rowMeasurements = new WeakMap<ApiClient, Map<string, VirtualItem[]>>();
-interface SavedView {
-  id: string;
-  name: string;
-  query: LibraryQuery;
-  sort: LibrarySort;
-}
-function loadViews(key: string): SavedView[] {
-  try {
-    const values: unknown = JSON.parse(preferences.read(key) ?? "[]");
-    if (!Array.isArray(values)) return [];
-    return values.slice(0, 50).map((value: unknown) => {
-      if (
-        !value ||
-        typeof value !== "object" ||
-        !("id" in value) ||
-        !("name" in value) ||
-        !("query" in value) ||
-        !("sort" in value) ||
-        typeof value.id !== "string" ||
-        typeof value.name !== "string"
-      )
-        throw new Error("invalid saved view");
-      const request = parseLibrarySearchRequest({
-        query: value.query,
-        sort: value.sort,
-      });
-      return {
-        id: value.id,
-        name: value.name.slice(0, 100),
-        query: request.query,
-        sort: request.sort,
-      };
-    });
-  } catch {
-    return [];
-  }
-}
 /** Text levels in words (page specs “文献库”, reading-experience 3.4). */
 export const TEXT_LEVEL_LABELS = {
   draft: "初稿",
@@ -252,9 +222,66 @@ export default function Library() {
   const [mobileTools, setMobileTools] = useState(false);
   const [viewName, setViewName] = useState("");
   const [saveOpen, setSaveOpen] = useState(false);
-  const preferenceKey = `sciretriever:library-views:v1:${api.workspace.catalog ?? "unbound"}`;
-  const [views, setViews] = useState(() => loadViews(preferenceKey));
+  // User organization 9.1: saved filters live in the catalog, read and
+  // written through the service; this browser's old ones are only imported.
+  const catalog = api.workspace.catalog;
+  const savedFilters = useQuery({
+    queryKey: ["filters", catalog],
+    queryFn: ({ signal }) => listFilters(api, signal),
+  });
+  const views = savedFilters.data ?? [];
   const [activeView, setActiveView] = useState("");
+  const [browserTick, setBrowserTick] = useState(0);
+  const pendingImport = useMemo(
+    () => (api.kind === "workspace" ? browserFilters(catalog) : []),
+    // `browserTick` re-reads this browser's data after an import.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [catalog, api.kind, browserTick],
+  );
+  const [importReport, setImportReport] = useState<
+    | {
+        name: string;
+        status: string;
+        result: string | null;
+        reason: string | null;
+      }[]
+    | null
+  >(null);
+  const refreshFilters = () =>
+    void queries.invalidateQueries({ queryKey: ["filters", catalog] });
+  const importBrowserFilters = async () => {
+    try {
+      const report: NonNullable<typeof importReport> = [];
+      // At most 200 items a call (user organization 9.1).
+      for (let at = 0; at < pendingImport.length; at += 200) {
+        const batch = pendingImport.slice(at, at + 200);
+        const results = await importFilters(
+          api,
+          batch.map((entry) => entry.item),
+        );
+        markBrowserFilters(
+          catalog,
+          results.map((r) => ({
+            index: batch[r.index]!.index,
+            status: r.status,
+          })),
+        );
+        for (const r of results)
+          report.push({
+            name: batch[r.index]!.name,
+            status: r.status,
+            result: r.filter?.name ?? null,
+            reason: r.reason,
+          });
+      }
+      setBrowserTick((value) => value + 1);
+      refreshFilters();
+      setImportReport(report);
+    } catch (error) {
+      // Said as it is; nothing falls back to this browser's storage.
+      shell.notify(errorMessage(error));
+    }
+  };
   const [peek, setPeek] = useState<string | null>(null);
   const [operation, setOperation] = useState<{
     ids: string[];
@@ -517,7 +544,7 @@ export default function Library() {
       <Menu
         label={`筛选${
           activeView
-            ? `：${views.find((view) => view.id === activeView)?.name ?? ""}`
+            ? `：${views.find((view) => view.filter_id === activeView)?.name ?? ""}`
             : chips.length
               ? ` · ${chips.length}`
               : ""
@@ -535,14 +562,27 @@ export default function Library() {
             },
           },
           ...views.map((view, index) => ({
-            id: `view:${view.id}`,
+            id: `view:${view.filter_id}`,
             label: view.name,
             divider: index === 0,
+            // Spec “文献库”: a filter whose folder is gone says so.
+            ...(view.missing_folder_id ? { description: "文件夹已删除" } : {}),
             onAction: () => {
-              setActiveView(view.id);
+              setActiveView(view.filter_id);
               updateQuery(view.query, view.sort);
             },
           })),
+          ...(savedFilters.error
+            ? [
+                {
+                  id: "filters-error",
+                  label: "暂时无法读取保存的筛选",
+                  divider: true,
+                  disabled: true,
+                  onAction: () => {},
+                },
+              ]
+            : []),
           {
             id: "save",
             label: "保存当前筛选…",
@@ -552,16 +592,46 @@ export default function Library() {
           ...(activeView
             ? [
                 {
+                  // Spec “文献库”: the current condition and order replace
+                  // this filter's; its name stays (user organization 9.1).
+                  id: "update",
+                  label: "用当前条件更新这项筛选",
+                  onAction: () => {
+                    void updateFilter(api, activeView, {
+                      query: route.query,
+                      sort: route.sort,
+                    })
+                      .then(refreshFilters)
+                      .catch((error: unknown) =>
+                        shell.notify(errorMessage(error)),
+                      );
+                  },
+                },
+                {
                   id: "delete",
                   label: "删除当前筛选",
                   onAction: () => {
-                    const values = views.filter(
-                      (view) => view.id !== activeView,
-                    );
-                    setViews(values);
-                    preferences.write(preferenceKey, JSON.stringify(values));
-                    setActiveView("");
+                    void deleteFilter(api, activeView)
+                      .then(() => {
+                        setActiveView("");
+                        refreshFilters();
+                      })
+                      .catch((error: unknown) =>
+                        shell.notify(errorMessage(error)),
+                      );
                   },
+                },
+              ]
+            : []),
+          // User organization 9.1: while this browser has filters not yet
+          // imported, the menu ends with the way to bring them over.
+          ...(pendingImport.length
+            ? [
+                {
+                  id: "import-browser",
+                  label: `导入这个浏览器里保存的筛选（${pendingImport.length} 项）`,
+                  divider: true,
+                  onAction: () => void importBrowserFilters(),
                 },
               ]
             : []),
@@ -1067,19 +1137,18 @@ export default function Library() {
             variant="primary"
             onPress={() => {
               if (!viewName.trim()) return;
-              const values = [
-                ...views,
-                {
-                  id: randomId(),
-                  name: viewName.trim().slice(0, 100),
-                  query: route.query,
-                  sort: route.sort,
-                },
-              ].slice(-50);
-              setViews(values);
-              preferences.write(preferenceKey, JSON.stringify(values));
-              setSaveOpen(false);
-              setViewName("");
+              void createFilter(api, {
+                name: viewName.trim(),
+                query: route.query,
+                sort: route.sort,
+              })
+                .then((saved) => {
+                  setActiveView(saved.filter_id);
+                  refreshFilters();
+                  setSaveOpen(false);
+                  setViewName("");
+                })
+                .catch((error: unknown) => shell.notify(errorMessage(error)));
             }}
           >
             保存
@@ -1087,6 +1156,15 @@ export default function Library() {
         }
       >
         <TextField label="筛选名称" value={viewName} onChange={setViewName} />
+      </Dialog>
+      <Dialog
+        title="导入的筛选"
+        isOpen={!!importReport}
+        onOpenChange={(open) => {
+          if (!open) setImportReport(null);
+        }}
+      >
+        {importReport ? <ImportReport items={importReport} /> : null}
       </Dialog>
       {runner ? (
         <RunOperatorDialog fixed={runner} onClose={() => setRunner(null)} />
@@ -1845,4 +1923,53 @@ function dragGhost(count: number, title: string): HTMLElement {
   // The browser copies the element when the drag starts; it is not kept.
   requestAnimationFrame(() => ghost.remove());
   return ghost;
+}
+
+const IMPORT_STATUS: Record<string, string> = {
+  imported: "已导入",
+  renamed: "已改名导入",
+  skipped: "已有相同的筛选，跳过",
+  invalid: "未导入",
+};
+const IMPORT_REASON: Record<string, string> = {
+  "filter-condition-invalid": "条件不合格",
+  "invalid-contract": "名称或格式不合格",
+};
+/** User organization 9.1: what became of each item this browser had saved. */
+function ImportReport({
+  items,
+}: {
+  items: readonly {
+    name: string;
+    status: string;
+    result: string | null;
+    reason: string | null;
+  }[];
+}) {
+  const count = (status: string) =>
+    items.filter((item) => item.status === status).length;
+  return (
+    <div className="saved-filter-report">
+      <p>
+        导入 {count("imported")} 项，改名 {count("renamed")} 项，跳过{" "}
+        {count("skipped")} 项，未导入 {count("invalid")} 项。
+      </p>
+      <ul>
+        {items.map((item, index) => (
+          <li key={index} data-status={item.status}>
+            <span className="saved-filter-report-name">{item.name}</span>
+            <span className="ui-description">
+              {IMPORT_STATUS[item.status] ?? item.status}
+              {item.status === "renamed" && item.result
+                ? `：${item.result}`
+                : ""}
+              {item.status === "invalid"
+                ? `：${IMPORT_REASON[item.reason ?? ""] ?? item.reason ?? "原因不明"}`
+                : ""}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }

@@ -1428,3 +1428,21 @@
     overflow-wrap: anywhere;
   }
 }
+
+@layer pages {
+  /* The browser import's report (user organization 9.1). */
+  .saved-filter-report p {
+    margin: 0;
+  }
+  .saved-filter-report ul {
+    display: grid;
+    gap: var(--space-2);
+    margin: var(--space-3) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .saved-filter-report li {
+    display: grid;
+    gap: 2px;
+  }
+}
