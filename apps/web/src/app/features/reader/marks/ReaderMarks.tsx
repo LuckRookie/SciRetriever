@@ -36,6 +36,7 @@ import { TranslationPopover } from "../translation/TranslationViews.js";
 import type { ReaderTranslation } from "../translation/use-translation.js";
 import "./marks.css";
 import type { ReaderCommand } from "../input/commands.js";
+import { samePart, versionParts } from "../../../../reading/mark-relocate.js";
 
 const PEN_KEY = "sciretriever:marks:pen:v1";
 type Bar = { kind: "selection" } | { kind: "mark"; id: string } | null;
@@ -153,6 +154,65 @@ export function useReaderMarks({
   const find = (markId: string) =>
     latest.current.marks.find((m) => m.mark_id === markId);
 
+  /**
+   * The paper's parts (9.4 “只在同一部分里找”): each PDF and default text
+   * version by the asset it belongs to; anything else counts as the main one.
+   */
+  const parts = useRef({
+    pdf: new Map<string, string>(),
+    version: new Map<string, string>(),
+  });
+  parts.current = {
+    pdf: new Map([
+      ...(detail?.primary_pdf
+        ? [[detail.primary_pdf.asset.sha256, "main"] as [string, string]]
+        : []),
+      ...(detail?.additional_assets ?? []).map(
+        (a) => [a.asset.sha256, `part-${a.asset.asset_id}`] as [string, string],
+      ),
+    ]),
+    version: new Map([
+      // Older versions (a draft before its proofread text, a replaced text):
+      // their part from what describe said of each (9.4, 5.4).
+      ...versionParts(
+        versions.flatMap((version, index) => {
+          const ref = described[index]?.data?.document.source_material_ref;
+          return ref ? [{ version, assetId: ref.asset_id }] : [];
+        }),
+        {
+          primary: detail?.primary_pdf?.asset.asset_id ?? null,
+          additional: (detail?.additional_assets ?? []).map(
+            (a) => a.asset.asset_id,
+          ),
+        },
+      ),
+      ...(detail?.primary_pdf?.default_text
+        ? [
+            [detail.primary_pdf.default_text.document_version_id, "main"] as [
+              string,
+              string,
+            ],
+          ]
+        : []),
+      ...(detail?.additional_assets ?? []).flatMap((a) =>
+        a.default_text
+          ? [
+              [
+                a.default_text.document_version_id,
+                `part-${a.asset.asset_id}`,
+              ] as [string, string],
+            ]
+          : [],
+      ),
+    ]),
+  };
+  const shownPart = useRef("main");
+  // Once describe tells an older version's part, the marks are placed again.
+  const versionKey = [...parts.current.version].join(";");
+  useEffect(() => {
+    surface.current?.setMarks(latest.current.marks);
+  }, [versionKey]);
+
   const highlight = useCallback(
     (color: MarkColor, quiet = false): ReadingMark | null => {
       const d = draft.current;
@@ -188,6 +248,11 @@ export function useReaderMarks({
   const events = useMemo<MarkSurfaceEvents>(
     () => ({
       hot: setHot,
+      // User organization 9.4: found on another material, recorded once.
+      record: (markId, target, similarity) =>
+        latest.current.store.place(markId, target, similarity),
+      // A mark whose part cannot be told is not looked for (9.4).
+      samePart: (m) => samePart(m, shownPart.current, parts.current),
       peek: (markId, anchor) =>
         setPeek(markId && anchor ? { id: markId, anchor } : null),
       activate(markId, _anchor, viaMarker) {
@@ -245,6 +310,10 @@ export function useReaderMarks({
       onJump?: () => void,
     ) => {
       body.current = host;
+      shownPart.current =
+        material.kind === "pdf"
+          ? (parts.current.pdf.get(material.sha256) ?? "main")
+          : (parts.current.version.get(material.version) ?? "main");
       jump.current = onJump ?? null;
       const created =
         material.kind === "pdf"

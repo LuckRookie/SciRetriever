@@ -3,9 +3,11 @@ import type {
   MarkDocumentAnchor,
   MarkPdfAnchor,
   MarkRect,
+  MarkTarget,
   ReadingMark,
 } from "@sciretriever/contracts";
 import type { PdfPageView } from "./contract.js";
+import { recordedPlace, relocate, wantsSearch } from "./mark-relocate.js";
 import {
   APPROXIMATE,
   PLACE,
@@ -38,6 +40,10 @@ export interface RegionDraft {
 export interface MarkSurfaceEvents {
   hot(id: string | null): void;
   activate(id: string, anchor: DOMRect, viaMarker: boolean): void;
+  /** A mark found on another material (9.4): record where, with how close. */
+  record?(id: string, target: MarkTarget, similarity: number): void;
+  /** Whether a mark belongs to the part shown (9.4 “只在同一部分里找”). */
+  samePart?(mark: ReadingMark): boolean;
   /** A PDF note marker hovered (spec 3.5): show its note, or stop (null). */
   peek?(id: string | null, anchor: DOMRect | null): void;
   selection(draft: SelectionDraft | null): void;
@@ -183,7 +189,29 @@ export function createPdfMarkSurface(
     pendingFlash: string | null = null;
   const pages = new Map<number, PdfPageView>();
   const tried = new Set<string>();
-  const onPage = (m: ReadingMark) => m.pdf?.sha256 === sha256;
+  /**
+   * Where each mark is on this PDF (user organization 9.4): its own anchor;
+   * else the place recorded for this file; else where this session found
+   * it. Marks of another file found nowhere here are not drawn.
+   */
+  const found = new Map<
+    string,
+    { page: number; rects: MarkRect[]; sim: number }
+  >();
+  const anchorOf = (m: ReadingMark) => {
+    if (m.pdf?.sha256 === sha256)
+      return { page: m.pdf.page, rects: m.pdf.rects, sim: 1 };
+    const recorded = recordedPlace(m, { kind: "pdf", sha256 });
+    if (recorded && "pdf" in recorded.target)
+      return {
+        page: recorded.target.pdf.page,
+        rects: recorded.target.pdf.rects,
+        sim: recorded.similarity,
+      };
+    return found.get(m.mark_id) ?? null;
+  };
+  const pdfOf = (m: ReadingMark) => anchorOf(m)!;
+  const onPage = (m: ReadingMark) => !!anchorOf(m);
   const layers = (view: PdfPageView) => {
     let under = view.element.querySelector<HTMLElement>(":scope > .mark-under"),
       over = view.element.querySelector<HTMLElement>(":scope > .mark-over");
@@ -215,8 +243,8 @@ export function createPdfMarkSurface(
     over.replaceChildren();
     let note = 0;
     for (const m of marks) {
-      if (!onPage(m) || m.pdf!.page !== n) continue;
-      const first = m.pdf!.rects[0]!;
+      if (!onPage(m) || pdfOf(m).page !== n) continue;
+      const first = pdfOf(m).rects[0]!;
       if (m.kind === "region") {
         const region = document.createElement("div");
         region.className = "mark-region";
@@ -226,9 +254,11 @@ export function createPdfMarkSurface(
         Object.assign(region.style, box(view, first));
         over.append(region);
       } else
-        m.pdf!.rects.forEach((rect, i) => {
+        pdfOf(m).rects.forEach((rect, i) => {
           const hl = document.createElement("div");
           hl.className = "mark-highlight";
+          // Found on this file only approximately (9.4, 5.3): a dashed line.
+          if (pdfOf(m).sim < PLACE) hl.dataset.near = "";
           hl.dataset.color = m.color;
           hl.dataset.id = m.mark_id;
           if (m.mark_id === hot) hl.dataset.hot = "";
@@ -274,7 +304,7 @@ export function createPdfMarkSurface(
     if (
       pendingFlash &&
       marks.some(
-        (m) => m.mark_id === pendingFlash && onPage(m) && m.pdf!.page === n,
+        (m) => m.mark_id === pendingFlash && onPage(m) && pdfOf(m).page === n,
       )
     ) {
       const id = pendingFlash;
@@ -284,32 +314,69 @@ export function createPdfMarkSurface(
   };
   /** Marks made on the full text try to find their words on each drawn page. */
   const placeMissing = (view: PdfPageView) => {
+    const key = (m: ReadingMark) => `${m.mark_id}:${view.page}`;
+    // Marks made on the full text, and (9.4) highlights of another PDF of
+    // this part not yet found here: looked for on each drawn page, once a
+    // session, never on opening the whole file.
     const missing = marks.filter(
       (m) =>
-        !m.pdf &&
-        m.kind === "highlight" &&
-        !tried.has(`${m.mark_id}:${view.page}`),
+        !tried.has(key(m)) &&
+        !found.has(m.mark_id) &&
+        // A full-text mark of a part that cannot be told is not looked for.
+        ((!m.pdf && m.kind === "highlight" && (events.samePart?.(m) ?? true)) ||
+          (!!m.pdf &&
+            wantsSearch(
+              m,
+              { kind: "pdf", sha256 },
+              events.samePart?.(m) ?? true,
+            ))),
     );
     if (!missing.length) return;
     const index = indexText(view.text);
+    let drew = false;
     for (const m of missing) {
-      tried.add(`${m.mark_id}:${view.page}`);
-      const hit = locate(canon(m.quote), index.text, {
-        prefix: m.quote_prefix,
-        suffix: m.quote_suffix,
-      });
-      if (!hit || hit.sim < PLACE) continue;
+      tried.add(key(m));
+      if (!m.pdf) {
+        const hit = locate(canon(m.quote), index.text, {
+          prefix: m.quote_prefix,
+          suffix: m.quote_suffix,
+        });
+        if (!hit || hit.sim < PLACE) continue;
+        const range = rangeOf(index, hit.start, hit.end);
+        if (!range) continue;
+        const rects = lineRects(range, view.element, scaleOf(view));
+        if (rects.length)
+          events.place(m.mark_id, { pdf: { sha256, page: view.page, rects } });
+        continue;
+      }
+      const hit = relocate(m, index.text);
+      if (!hit) continue;
       const range = rangeOf(index, hit.start, hit.end);
       if (!range) continue;
       const rects = lineRects(range, view.element, scaleOf(view));
-      if (rects.length)
-        events.place(m.mark_id, { pdf: { sha256, page: view.page, rects } });
+      if (!rects.length) continue;
+      found.set(m.mark_id, { page: view.page, rects, sim: hit.similarity });
+      drew = true;
+      // Recorded once (9.4): the next opening reads it, not looking again.
+      events.record?.(
+        m.mark_id,
+        { pdf: { sha256, page: view.page, rects } },
+        hit.similarity,
+      );
+    }
+    if (drew) {
+      draw(view.page);
+      report();
     }
   };
   const report = () =>
     events.placed?.(
       new Set(marks.filter(onPage).map((m) => m.mark_id)),
-      new Set(),
+      new Set(
+        marks
+          .filter((m) => onPage(m) && anchorOf(m)!.sim < PLACE)
+          .map((m) => m.mark_id),
+      ),
     );
   const hitTest = (event: PointerEvent | MouseEvent): string | null => {
     const target = event.target as Element | null;
@@ -326,9 +393,9 @@ export function createPdfMarkSurface(
       y = (event.clientY - r.top) / s;
     let found: string | null = null;
     for (const m of marks) {
-      if (!onPage(m) || m.pdf!.page !== n) continue;
+      if (!onPage(m) || pdfOf(m).page !== n) continue;
       if (
-        m.pdf!.rects.some(
+        pdfOf(m).rects.some(
           ([rx, ry, rw, rh]) =>
             x >= rx - 1 && x <= rx + rw + 1 && y >= ry - 1 && y <= ry + rh + 1,
         )
@@ -495,21 +562,21 @@ export function createPdfMarkSurface(
     const m = marks.find((x) => x.mark_id === id);
     if (!m || !onPage(m)) return null;
     const page = body.querySelector<HTMLElement>(
-        `.reading-pdf-page[data-pdf-page="${m.pdf!.page}"]`,
+        `.reading-pdf-page[data-pdf-page="${pdfOf(m).page}"]`,
       ),
-      view = pages.get(m.pdf!.page);
+      view = pages.get(pdfOf(m).page);
     if (!page || !view) return null;
     const r = page.getBoundingClientRect(),
       s = scaleOf(view),
-      [x, y, w, h] = m.pdf!.rects[0]!;
+      [x, y, w, h] = pdfOf(m).rects[0]!;
     return new DOMRect(r.left + x * s, r.top + y * s, w * s, h * s);
   };
   const flash = (id: string) => {
     const m = marks.find((x) => x.mark_id === id);
-    const view = m?.pdf ? pages.get(m.pdf.page) : undefined;
+    const view = m && onPage(m) ? pages.get(pdfOf(m).page) : undefined;
     if (!m || !view) return;
     const { over } = layers(view);
-    for (const rect of m.pdf!.rects) {
+    for (const rect of pdfOf(m).rects) {
       const f = document.createElement("div");
       f.className = "mark-flash";
       f.dataset.color = m.color;
@@ -554,19 +621,20 @@ export function createPdfMarkSurface(
       const m = marks.find((x) => x.mark_id === id);
       if (!m || !onPage(m)) return false;
       const page = body.querySelector<HTMLElement>(
-        `.reading-pdf-page[data-pdf-page="${m.pdf!.page}"]`,
+        `.reading-pdf-page[data-pdf-page="${pdfOf(m).page}"]`,
       );
       if (!page) return false;
       const s =
-        page.clientWidth / (pages.get(m.pdf!.page)?.width ?? page.clientWidth);
+        page.clientWidth /
+        (pages.get(pdfOf(m).page)?.width ?? page.clientWidth);
       const target =
-        page.offsetTop + m.pdf!.rects[0]![1] * s - body.clientHeight * 0.3;
+        page.offsetTop + pdfOf(m).rects[0]![1] * s - body.clientHeight * 0.3;
       const distance = Math.abs(body.scrollTop - target);
       body.scrollTo({
         top: target,
         behavior: reduced() || distance > 6000 ? "auto" : "smooth",
       });
-      if (pages.has(m.pdf!.page))
+      if (pages.has(pdfOf(m).page))
         setTimeout(
           () => flash(id),
           reduced() ? 0 : Math.min(450, 120 + distance / 6),
@@ -583,26 +651,26 @@ export function createPdfMarkSurface(
       const total = Math.max(1, body.scrollHeight);
       return marks.filter(onPage).flatMap((m) => {
         const page = body.querySelector<HTMLElement>(
-          `.reading-pdf-page[data-pdf-page="${m.pdf!.page}"]`,
+          `.reading-pdf-page[data-pdf-page="${pdfOf(m).page}"]`,
         );
         if (!page) return [];
-        const width = pages.get(m.pdf!.page)?.width;
+        const width = pages.get(pdfOf(m).page)?.width;
         const s = width ? page.clientWidth / width : 1;
         return [
           {
             id: m.mark_id,
             color: m.color,
-            at: (page.offsetTop + m.pdf!.rects[0]![1] * s) / total,
+            at: (page.offsetTop + pdfOf(m).rects[0]![1] * s) / total,
           },
         ];
       });
     },
     drawThumbnail(id, target) {
       const m = marks.find((x) => x.mark_id === id);
-      const view = m?.pdf ? pages.get(m.pdf.page) : undefined;
+      const view = m && onPage(m) ? pages.get(pdfOf(m).page) : undefined;
       const canvas = view?.element.querySelector("canvas");
-      if (!m?.pdf || !view || !canvas?.width) return false;
-      const [x, y, w, h] = m.pdf.rects[0]!,
+      if (!m || !view || !canvas?.width) return false;
+      const [x, y, w, h] = pdfOf(m).rects[0]!,
         k = canvas.width / view.width,
         fit = Math.min(1, 640 / (w * k));
       target.width = Math.max(1, Math.round(w * k * fit));
@@ -657,6 +725,8 @@ export function createDocumentMarkSurface(
   const ranges = new Map<string, Range>(),
     approximate = new Set<string>(),
     persisted = new Set<string>();
+  // Searches that found nothing in the text loaded so far (9.4, once a session).
+  const missed = new Set<string>();
   const registry =
     typeof CSS !== "undefined" && "highlights" in CSS ? CSS.highlights : null;
   const sections = () => [
@@ -670,6 +740,11 @@ export function createDocumentMarkSurface(
     !!node.parentElement?.closest(
       ".reading-block-source, .reading-margin-note",
     );
+  /**
+   * The highlights this surface painted. The registry is the document's, so a
+   * surface going away removes only its own: a newer surface's marks stay.
+   */
+  const painted = new Map<string, Highlight>();
   const paintHighlights = () => {
     if (!registry) return;
     for (const c of COLORS) {
@@ -684,13 +759,17 @@ export function createDocumentMarkSurface(
       const name = `${approximate.has(m.mark_id) ? "mark-near" : "mark"}-${m.color}`;
       groups.set(name, [...(groups.get(name) ?? []), range]);
     }
-    for (const [name, list] of groups)
-      registry.set(name, new Highlight(...list));
+    for (const [name, list] of groups) {
+      const highlight = new Highlight(...list);
+      registry.set(name, highlight);
+      painted.set(name, highlight);
+    }
     const h = hot && ranges.get(hot);
     if (h) {
       const highlight = new Highlight(h);
       highlight.priority = 1;
       registry.set("mark-hot", highlight);
+      painted.set("mark-hot", highlight);
     }
   };
   /** Find every mark in the loaded text; marks from the PDF save their place once found. */
@@ -721,12 +800,36 @@ export function createDocumentMarkSurface(
       }
       return { text, at };
     };
+    const here = { kind: "document" as const, version: documentVersionId };
     for (const m of marks) {
       if (m.kind !== "highlight") continue;
       let candidates = spans;
-      if (m.document?.document_version_id === documentVersionId) {
-        const a = m.document.start_utf8,
-          b = m.document.end_utf8;
+      // User organization 9.4: on another text version, the place recorded
+      // for this one first; else a search (in this part only), once for the
+      // text loaded so far, recorded when found.
+      const recorded =
+        m.document && m.document.document_version_id !== documentVersionId
+          ? recordedPlace(m, here)
+          : null;
+      const searching =
+        !!m.document &&
+        !recorded &&
+        m.document.document_version_id !== documentVersionId;
+      if (searching) {
+        if (!wantsSearch(m, here, events.samePart?.(m) ?? true)) continue;
+        const attempt = `${m.mark_id}:${spans.length}`;
+        if (missed.has(attempt)) continue;
+        missed.add(attempt);
+      }
+      const span =
+        recorded && "document" in recorded.target
+          ? recorded.target.document
+          : m.document?.document_version_id === documentVersionId
+            ? m.document
+            : null;
+      if (span) {
+        const a = span.start_utf8,
+          b = span.end_utf8;
         candidates = spans.filter(
           (s) =>
             Number(s.el.dataset.byteEnd) > a &&
@@ -765,6 +868,23 @@ export function createDocumentMarkSurface(
       range.setStart(sa.nodes[a.local]!, sa.offsets[a.local]!);
       range.setEnd(sb.nodes[b.local]!, sb.offsets[b.local]! + 1);
       ranges.set(m.mark_id, range);
+      if (searching) {
+        missed.delete(`${m.mark_id}:${spans.length}`);
+        if (!persisted.has(m.mark_id)) {
+          persisted.add(m.mark_id);
+          events.record?.(
+            m.mark_id,
+            {
+              document: {
+                document_version_id: documentVersionId,
+                start_utf8: Number(a.span.el.dataset.byteStart),
+                end_utf8: Number(b.span.el.dataset.byteEnd),
+              },
+            },
+            Math.round(hit.sim * 1000) / 1000,
+          );
+        }
+      }
       if (hit.sim < PLACE) approximate.add(m.mark_id);
       else if (!m.document && !persisted.has(m.mark_id)) {
         persisted.add(m.mark_id);
@@ -882,6 +1002,7 @@ export function createDocumentMarkSurface(
       const highlight = new Highlight(selection.getRangeAt(0).cloneRange());
       highlight.priority = 2;
       registry.set(`mark-preview-${color}`, highlight);
+      painted.set(`mark-preview-${color}`, highlight);
     },
     blockOf: (id) => {
       const node = ranges.get(id)?.startContainer;
@@ -902,7 +1023,11 @@ export function createDocumentMarkSurface(
         const flash = new Highlight(range);
         flash.priority = 3;
         registry.set("mark-flash", flash);
-        setTimeout(() => registry.delete("mark-flash"), 900);
+        painted.set("mark-flash", flash);
+        setTimeout(() => {
+          if (registry.get("mark-flash") === flash)
+            registry.delete("mark-flash");
+        }, 900);
       }
       return true;
     },
@@ -928,8 +1053,9 @@ export function createDocumentMarkSurface(
       body.removeEventListener("keyup", keyup);
       body.classList.remove("marks-previewing");
       if (registry)
-        for (const name of [...registry.keys()])
-          if (String(name).startsWith("mark-")) registry.delete(name);
+        for (const [name, highlight] of painted)
+          if (registry.get(name) === highlight) registry.delete(name);
+      painted.clear();
     },
   };
 }

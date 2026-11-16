@@ -165,15 +165,20 @@ export function MarginNotes({
   return createPortal(
     <div className="reading-margin-notes" aria-label="页边批注">
       <svg className="reading-margin-leaders" aria-hidden="true">
-        {layout.places.map((p) => (
-          <path
-            key={p.id}
-            d={`M ${layout.column + 2} ${p.line} H ${left - 8} V ${p.top + 9} H ${left}`}
-          />
-        ))}
+        {layout.places
+          .filter((p) => byId.has(p.id))
+          .map((p) => (
+            <path
+              key={p.id}
+              d={`M ${layout.column + 2} ${p.line} H ${left - 8} V ${p.top + 9} H ${left}`}
+            />
+          ))}
       </svg>
       {layout.places.map((p) => {
-        const mark = byId.get(p.id)!;
+        // The layout is measured after a render; a mark that has just lost
+        // its note or its place waits for the next measure, off the margin.
+        const mark = byId.get(p.id);
+        if (!mark) return null;
         return (
           <div
             key={p.id}

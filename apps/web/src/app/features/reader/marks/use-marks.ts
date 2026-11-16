@@ -1,4 +1,5 @@
-import { useCallback, useMemo } from "react";
+import { placeRequest } from "../../../../reading/mark-relocate.js";
+import { useCallback, useMemo, useRef } from "react";
 import {
   useMutation,
   useQuery,
@@ -13,6 +14,7 @@ import {
   type MarkDocumentAnchor,
   type MarkKind,
   type MarkPdfAnchor,
+  type MarkTarget,
   type ReadingMark,
 } from "@sciretriever/contracts";
 import { archiveQuery, archiveWrite } from "../../../data/archive.js";
@@ -82,7 +84,13 @@ export function useMarks(
       return [{ ...m, ...command.patch, note, tags: markTags(note) }];
     });
   };
+  // The last command given for each mark: an older command's reply never
+  // overwrites what a newer one shows (a note typed while the mark saves).
+  const issued = useRef(new Map<string, number>());
   const write = useMutation({
+    // One after another, in the order given: an edit never reaches the
+    // service before the mark it edits.
+    scope: { id: `marks:${literatureId}` },
     mutationFn: async (command: Command) => {
       const request =
         command.operation === "create"
@@ -113,13 +121,18 @@ export function useMarks(
       const before = queries.getQueryData<readonly ReadingMark[]>(key);
       if (before && command.operation !== "restore")
         queries.setQueryData(key, apply(before, command));
-      return { before };
+      const id =
+        command.operation === "create" ? command.mark.mark_id : command.id;
+      const turn = (issued.current.get(id) ?? 0) + 1;
+      issued.current.set(id, turn);
+      return { before, id, turn };
     },
     onError: (_error, _command, context) => {
       if (context?.before) queries.setQueryData(key, context.before);
       notify("批注没有保存，已恢复到之前的状态。");
     },
-    onSuccess: (saved, command) => {
+    onSuccess: (saved, command, context) => {
+      if (context && issued.current.get(context.id) !== context.turn) return;
       queries.setQueryData<readonly ReadingMark[]>(key, (marks = []) =>
         saved.deleted_at
           ? marks.filter((m) => m.mark_id !== saved.mark_id)
@@ -167,6 +180,24 @@ export function useMarks(
       write.mutate({ operation: "update", id, patch }),
     remove: (id: string) => write.mutate({ operation: "delete", id }),
     restore: (id: string) => write.mutate({ operation: "restore", id }),
+    /**
+     * User organization 9.4: where a mark was found on another material,
+     * recorded once; the list then carries it and nothing is looked for
+     * again. A failed record is only lost work: the next opening looks again.
+     */
+    place: (id: string, target: MarkTarget, similarity: number) => {
+      void archiveWrite(api, "marks", placeRequest(id, target, similarity))
+        .then((value) => {
+          const saved = parseReadingMark(value);
+          queries.setQueryData<readonly ReadingMark[]>(key, (marks) =>
+            // Only the places: an edit given meanwhile stays as shown.
+            marks?.map((m) =>
+              m.mark_id === saved.mark_id ? { ...m, places: saved.places } : m,
+            ),
+          );
+        })
+        .catch(() => {});
+    },
     exportText: async (format: "markdown" | "json") =>
       String(
         record(

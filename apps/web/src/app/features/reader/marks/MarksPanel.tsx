@@ -166,7 +166,12 @@ export function MarksPanel({
                   view === "pdf"
                     ? !placed.has(m.mark_id) && m.kind === "highlight"
                       ? "仅全文"
-                      : null
+                      : // 9.4: a region is never looked for on another file.
+                        !placed.has(m.mark_id) && m.kind === "region"
+                        ? "属于原来那份文件"
+                        : approximate.has(m.mark_id)
+                          ? "近似位置"
+                          : null
                     : m.kind === "region"
                       ? "仅 PDF"
                       : !placed.has(m.mark_id)

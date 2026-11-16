@@ -97,6 +97,9 @@
   .mark-highlight[data-color="purple"] {
     --mark-ink: var(--t-purple);
   }
+  .mark-highlight[data-near] {
+    border-bottom-style: dashed;
+  }
   .mark-highlight[data-hot],
   .mark-highlight[data-preview] {
     background: var(--sel);
