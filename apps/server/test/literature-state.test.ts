@@ -5,6 +5,7 @@ it("requires a completed archive after parsing and preserves accepted material w
   const e = await archiveFixture();
   try {
     const original = (await e.app.library.detail(e.id)).primary_pdf;
+    expect(original!.default_text).toBeNull();
     expect((await e.app.archive.status(e.id)).missing_step).toBe("raw-parse");
     await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
     expect((await e.app.archive.status(e.id)).missing_step).toBe("arrange");
@@ -24,7 +25,18 @@ it("requires a completed archive after parsing and preserves accepted material w
       }),
     ).rejects.toThrow();
     expect(await e.app.library.detail(e.id)).toEqual(before);
-    expect(before.primary_pdf).toEqual(original);
+    const main = (await e.app.archive.status(e.id)).parts.find(
+      (part) => part.part === "main",
+    )!;
+    expect(main.text_level).toBe("proofread");
+    expect(before.primary_pdf).toEqual({
+      ...original,
+      default_text: {
+        document_version_id: main.document_version_id,
+        text_level: "proofread",
+        draft_facts: null,
+      },
+    });
   } finally {
     await e.close();
   }

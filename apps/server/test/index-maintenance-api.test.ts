@@ -239,15 +239,34 @@ it("reads missing/ready/corrupt state through all transports and authenticates d
 it("counts metadata and fixed document versions as rebuild sources rather than text chunks", async () => {
   const e = await archiveFixture();
   try {
-    await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
+    const parsed = await e.app.documentProcessing.parseDocuments(
+      e.rawParseRequest,
+    );
+    expect(parsed.draft.status).toBe("formed");
     expect((await e.submit("source-progress")).failures).toEqual([]);
+    const sources = await new RetrievalStorageClient(
+      e.app.database,
+    ).literatureSources(e.id);
+    expect(sources.metadata?.literature_id).toBe(e.id);
+    expect(sources.documents).toHaveLength(2);
+    const levels = [];
+    for (const source of sources.documents)
+      levels.push(
+        (
+          await e.app.documentRead.describe({
+            document_version_id: source.document_version_id!,
+          })
+        ).text_level,
+      );
+    expect(levels.sort()).toEqual(["draft", "proofread"]);
     const receipt = await e.app.maintenance!.rebuildIndex();
-    expect(receipt.source_count).toBe(2);
+    // One metadata source and both accepted fixed text levels, not the chunks.
+    expect(receipt.source_count).toBe(3);
     expect(receipt.entry_count).toBeGreaterThan(receipt.source_count);
     expect(await e.app.indexRefreshStatus!()).toMatchObject({
       status: "updated",
       operation: "rebuild",
-      progress: { done: 2, total: 2 },
+      progress: { done: 3, total: 3 },
     });
   } finally {
     await e.close();

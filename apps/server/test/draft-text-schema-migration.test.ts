@@ -46,6 +46,15 @@ it("prepares a synthetic frozen-v16 input with long corrected text, processing, 
           .get()!.n,
       ).toBeGreaterThan(0);
       expect(f.longDocument).toMatchObject({ pages: 51, reasons: ["pages"] });
+      expect(
+        db
+          .prepare(
+            "SELECT schema_version,builder_version FROM document_versions",
+          )
+          .all(),
+      ).toEqual([
+        { schema_version: 2, builder_version: "source-order-leaves-v4" },
+      ]);
       for (const table of ["retrieval_fts", "processor_result_fts"])
         expect(
           db

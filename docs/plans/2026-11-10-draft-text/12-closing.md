@@ -43,7 +43,7 @@
   - [初始化与恢复](../../guides/upgrade.md)：schema 17 的离线迁移步骤。
   - [Web 指南](../../guides/web-workbench.md)：10.7 已写则核对。
   - 按[文档影响映射](../../development/documentation-map.md)检查其余影响。
-- [ ] **12.3 收尾全量**：`pnpm full` 一次。失败逐个单文件复跑定向修复，修完只复跑这些文件；与本计划无关、HEAD 上同样失败的记为后续事项（HARNESS 第 6 节）。
+- [x] **12.3 收尾全量**（2026-11-16：`pnpm full` quick 全过；测试 3265 项中 8 项失败，4 项单独重跑通过（负载偶发：command-palette、jobs-parity、motion、intake-runtime），4 项为测试未跟上 04/08/09 的行为，已修夹具与期望（产品代码未改），复跑通过；证据 `sandbox/reports/2026-11-16-full*`）：`pnpm full` 一次。失败逐个单文件复跑定向修复，修完只复跑这些文件；与本计划无关、HEAD 上同样失败的记为后续事项（HARNESS 第 6 节）。
 - [ ] **12.4 部署**（G4，每一步分开授权）
   1. 部署 4174：候选构建、预演、预检无运行中任务、停服、备份。04 与 07 必须在同一版本中上线。
   2. 正式库离线迁移：先确认正式库的 schema。若还是 15，先按计划 20 迁到 16，再运行 `scripts/migrate-draft-text-v17.mjs`。迁移前后核对行数、内容版本事件为零、加工结果过时状态不变。启动并确认就绪。
