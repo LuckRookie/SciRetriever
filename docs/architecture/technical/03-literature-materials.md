@@ -1573,6 +1573,12 @@ IntakeDisposition = "created" | "enriched" | "matched" | "restored" | "conflict"
 
 本批新建的对象由 `intake_batch_objects` 记录。
 
+**登记之前形成的批次。** `intake_batch_objects` 的写入随撤回一起上线，在那之前形成的批次没有这些记录。一个批次有分类为 created 的成员、却在 `intake_batch_objects` 中没有任何一行时，按“登记之前形成”处理：
+
+- 仍可撤回。撤回范围只按 `intake_batch_members` 判定：分类为 created、且没有下表任一原因的文献，连同它们的全部文件关系一起标记。
+- 本批新建的文件夹、文件夹成员与批注认不出来，不撤回。被撤回文献的文件夹成员与批注随文献一起不再出现（见“撤回之后”），但不另行标记；文件夹本身保留，可能因此变空。
+- 预估与报告的 `registered` 为 false，并写明“本批在登记之前形成，文件夹与批注不在撤回范围内”。不猜测哪些文件夹或批注属于本批。
+
 **不撤回的内容。** 以下文献连同它在本批的文件关系、文件夹成员与批注都不撤回，在预估与报告里按原因列出。一篇文献可以有几个原因，全部列出。
 
 | 原因                 | 判定                                                                                               |
@@ -1595,6 +1601,7 @@ IntakeWithdrawalPreview
   remove: {literatures: int, file_relations: int, folders: int, folder_members: int, marks: int}
   keep: {literatures: int, by_reason: {reason: int}}
   kept_items: tuple[{literature_id, title, reasons: tuple[reason, ...]}, ...]   # 最多 200 项，按 literature_id 排序
+  registered: bool                 # 本批新建的对象有无登记；false 时见“登记之前形成的批次”
 
 IntakeWithdrawalReport             # 撤回或整批恢复之后
   remove 或 restore 的实际计数（字段同 remove）
