@@ -38,6 +38,10 @@ export interface IntakeWithdrawalPreview {
   }[];
   readonly registered: boolean;
 }
+export interface IntakeRestorePreview {
+  readonly restore: IntakeWithdrawalCounts;
+  readonly already_restored: { readonly literatures: number };
+}
 export type IntakeWithdrawalReport = Omit<IntakeWithdrawalPreview, "remove"> & {
   readonly at: string;
   readonly by: "web";
@@ -128,6 +132,16 @@ export function parseIntakeWithdrawalPreview(
 ): IntakeWithdrawalPreview {
   const r = tagRecord(value, ["remove", "keep", "kept_items", "registered"]);
   return { remove: counts(r.remove), ...common(r) };
+}
+export function parseIntakeRestorePreview(
+  value: unknown,
+): IntakeRestorePreview {
+  const r = tagRecord(value, ["restore", "already_restored"]);
+  const already = tagRecord(r.already_restored, ["literatures"]);
+  return {
+    restore: counts(r.restore),
+    already_restored: { literatures: tagInteger(already.literatures) },
+  };
 }
 export function parseIntakeWithdrawalReport(
   value: unknown,

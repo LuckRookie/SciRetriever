@@ -5480,14 +5480,15 @@ port.on("message", (message: WorkerMessage) => {
       }
       case "intake_read": {
         const c = message.command;
-        value = readTransaction(() => {
+        const read = () => {
           registerLibraryStates();
           return intakeModule.queryIntakeBatches(
             db,
             c.value,
             data.archive_profile,
           );
-        });
+        };
+        value = db.isTransaction ? read() : readTransaction(read);
         break;
       }
       case "intake_write": {

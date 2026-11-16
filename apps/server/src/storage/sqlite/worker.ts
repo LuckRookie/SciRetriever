@@ -2,6 +2,7 @@ import { FilterError } from "../../literature/filters.js";
 import { FolderError } from "../../literature/folders.js";
 import { MarkError } from "../../literature/marks.js";
 import { IntakeWithdrawalError } from "../../literature/intake-withdrawal.js";
+import { isIntakeWithdrawalRead } from "./intake-withdrawal-engine.js";
 import {
   canonicalJsonBytes,
   parseLibraryCounts,
@@ -2737,10 +2738,9 @@ export class SqliteWorker {
       value?: unknown;
       code?: string;
     }>({
-      kind:
-        command.operation === "preview"
-          ? "intake_withdrawal_read"
-          : "intake_withdrawal_write",
+      kind: isIntakeWithdrawalRead(command.operation)
+        ? "intake_withdrawal_read"
+        : "intake_withdrawal_write",
       command,
     });
     if (!result.ok)

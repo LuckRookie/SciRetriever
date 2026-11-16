@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import {
   parseIntakeWithdrawalPreview,
   parseIntakeWithdrawalReport,
+  parseIntakeRestorePreview,
 } from "../src/index.js";
 
 it("parses exact, bounded withdrawal and restoration reports without inventing legacy ownership", () => {
@@ -55,4 +56,28 @@ it("parses exact, bounded withdrawal and restoration reports without inventing l
     },
   ])
     expect(() => parseIntakeWithdrawalPreview(bad)).toThrow();
+});
+
+it("parses exact restore previews with nonnegative integral counts", () => {
+  const preview = {
+    restore: {
+      literatures: 2,
+      file_relations: 1,
+      folders: 0,
+      folder_members: 3,
+      marks: 1,
+    },
+    already_restored: { literatures: 1 },
+  };
+  expect(parseIntakeRestorePreview(preview)).toEqual(preview);
+  for (const bad of [
+    { ...preview, extra: true },
+    { ...preview, restore: { ...preview.restore, extra: 0 } },
+    { ...preview, restore: { ...preview.restore, marks: -1 } },
+    { ...preview, restore: { ...preview.restore, literatures: 0.5 } },
+    { ...preview, already_restored: { literatures: -1 } },
+    { ...preview, already_restored: { literatures: 1, folders: 0 } },
+    { ...preview, already_restored: null },
+  ])
+    expect(() => parseIntakeRestorePreview(bad)).toThrow();
 });

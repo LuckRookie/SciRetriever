@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   canonicalJsonBytes,
   parseMetadataObservation,
+  parseIntakeBatch,
   parseIntakeBatchId,
   parseIntakeCreate,
   parseFolderOperation,
@@ -275,6 +276,32 @@ export class ImportSessionReadService {
 
 /** Durable workflow; its read projections are the exact same read-only service. */
 export class ImportSessionService extends ImportSessionReadService {
+  withdrawal(id: string) {
+    return this.tracked(() =>
+      this.database.withReadSnapshot(async (reader) => ({
+        batch: parseIntakeBatch(
+          await reader.intakeBatches({
+            operation: "get",
+            request: { batch_id: id },
+          }),
+        ),
+        withdrawal: await new IntakeWithdrawalService(reader).read(id),
+      })),
+    );
+  }
+  restorePreview(id: string) {
+    return this.tracked(() =>
+      this.database.withReadSnapshot(async (reader) => ({
+        batch: parseIntakeBatch(
+          await reader.intakeBatches({
+            operation: "get",
+            request: { batch_id: id },
+          }),
+        ),
+        restore: await new IntakeWithdrawalService(reader).restorePreview(id),
+      })),
+    );
+  }
   withdrawalPreview(id: string) {
     return this.tracked(async () => ({
       batch: await this.database.intakeBatches({

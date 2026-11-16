@@ -62,6 +62,11 @@ it.each(["finished", "cancelled"] as const)(
         });
       const service = new IntakeWithdrawalService(f.app.database),
         before = catalogRows(f.db);
+      expect(await service.read(source.id)).toBeNull();
+      expect(
+        (await f.app.importSessions.withdrawal(source.id)).withdrawal,
+      ).toBeNull();
+      expect(catalogRows(f.db)).toEqual(before);
       const preview = await service.preview(source.id);
       expect(catalogRows(f.db)).toEqual(before);
       expect(preview).toEqual({
@@ -88,6 +93,20 @@ it.each(["finished", "cancelled"] as const)(
       const report = await service.withdraw(source.id);
       expect(report).toEqual({ ...preview, at: expect.any(String), by: "web" });
       expect(parseIntakeWithdrawalReport(report)).toEqual(report);
+      const withdrawnRows = catalogRows(f.db);
+      expect(await service.read(source.id)).toEqual(report);
+      expect(
+        (await f.app.importSessions.withdrawal(source.id)).withdrawal,
+      ).toEqual(report);
+      const restorationPreview = await f.app.importSessions.restorePreview(
+        source.id,
+      );
+      expect(restorationPreview.batch.state).toBe("withdrawn");
+      expect(restorationPreview.restore).toEqual({
+        restore: preview.remove,
+        already_restored: { literatures: 0 },
+      });
+      expect(catalogRows(f.db)).toEqual(withdrawnRows);
       expect(
         Number(
           f.rows("SELECT revision FROM retrieval_source_revision")[0]!.revision,
@@ -132,6 +151,17 @@ it.each(["finished", "cancelled"] as const)(
         keep: preview.keep,
         registered: true,
       });
+      expect("restore" in restored && restored.restore).toEqual(
+        restorationPreview.restore.restore,
+      );
+      const restoredRows = catalogRows(f.db);
+      expect(
+        (await f.app.importSessions.withdrawal(source.id)).withdrawal,
+      ).toBeNull();
+      await expect(service.restorePreview(source.id)).rejects.toMatchObject({
+        code: "intake-batch-state",
+      });
+      expect(catalogRows(f.db)).toEqual(restoredRows);
       expect((await f.app.importSessions.status(source.id)).state).toBe(prior);
       expect(await f.app.database.getLiterature(clean!)).not.toBeNull();
       expect(
@@ -868,6 +898,12 @@ it("re-entry restores the original identity, ownership and source without changi
         b.id,
       )[0]!.report_json,
     );
+    const beforeReentry = catalogRows(f.db);
+    expect(await service.read(b.id)).toEqual(JSON.parse(report));
+    const initialRestore = await f.app.importSessions.restorePreview(b.id);
+    expect(initialRestore.restore.restore.literatures).toBe(2);
+    expect(initialRestore.restore.already_restored).toEqual({ literatures: 0 });
+    expect(catalogRows(f.db)).toEqual(beforeReentry);
     const observations = f.rows("SELECT * FROM metadata_observations").length;
     const next = await f.batch([record("reenter")], b.library);
     expect(next.report.items[0]).toMatchObject({
@@ -894,7 +930,29 @@ it("re-entry restores the original identity, ownership and source without changi
     ).toBe(report);
     expect((await f.app.importSessions.status(b.id)).state).toBe("withdrawn");
     expect(await f.app.database.getLiterature(remainder!)).toBeNull();
+    const afterReentry = catalogRows(f.db);
+    expect((await f.app.importSessions.withdrawal(b.id)).withdrawal).toEqual(
+      JSON.parse(report),
+    );
+    const remaining = await f.app.importSessions.restorePreview(b.id);
+    expect(remaining.restore).toEqual({
+      restore: {
+        literatures: 1,
+        file_relations: 0,
+        folders: 0,
+        folder_members: 1,
+        marks: 0,
+      },
+      already_restored: { literatures: 1 },
+    });
+    expect(catalogRows(f.db)).toEqual(afterReentry);
     const result = await service.restore(b.id);
+    expect("restore" in result && result.restore).toEqual(
+      remaining.restore.restore,
+    );
+    expect("restore" in result && result.restore.literatures).not.toBe(
+      initialRestore.restore.restore.literatures,
+    );
     expect(result).toMatchObject({
       restore: {
         literatures: 1,

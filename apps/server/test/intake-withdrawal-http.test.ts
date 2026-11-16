@@ -19,9 +19,10 @@ import {
 import {
   withdrawalFixture,
   withdrawalRecord,
+  catalogRows,
 } from "./intake-withdrawal-fixture.js";
 
-it("requires Web login, client, Origin and CSRF for all three routes; every device purpose and MCP/CLI are refused", async () => {
+it("requires Web login, client, Origin and CSRF for all five routes; every device purpose and MCP/CLI are refused", async () => {
   const f = await withdrawalFixture(),
     screen = new ProductionWorkbenchSession(null, undefined);
   const server = await startWorkbenchHttp({
@@ -37,11 +38,16 @@ it("requires Web login, client, Origin and CSRF for all three routes; every devi
   const client = new Client({ name: "withdrawal-boundary", version: "1" });
   let transport: StreamableHTTPClientTransport | undefined;
   try {
-    const b = await f.batch([withdrawalRecord("web-only")]);
+    const b = await f.batch([
+      withdrawalRecord("web-only"),
+      withdrawalRecord("web-remainder"),
+    ]);
     const paths = [
       `/batches/${b.id}/withdrawal/preview`,
       `/batches/${b.id}/withdraw`,
       `/batches/${b.id}/restore`,
+      `/batches/${b.id}/withdrawal`,
+      `/batches/${b.id}/restore/preview`,
     ];
     const body = JSON.stringify({ protocol_version: 1, request: {} });
     const post = (path: string, headers: Record<string, string>, suffix = "") =>
@@ -186,31 +192,84 @@ it("requires Web login, client, Origin and CSRF for all three routes; every devi
       expect(missingClient.status).toBe(401);
       expect(await missingClient.json()).toEqual({ code: "client-required" });
     }
+    const initialRows = catalogRows(f.db);
+    const empty = await post(paths[3]!, headers, suffix);
+    expect(empty.status).toBe(200);
+    expect((await empty.json()).result.withdrawal).toBeNull();
+    expect(catalogRows(f.db)).toEqual(initialRows);
     const preview = await post(paths[0]!, headers, suffix);
     expect(preview.status).toBe(200);
     expect(await preview.json()).toMatchObject({
       protocol_version: 1,
       result: {
         batch: { batch_id: b.id },
-        withdrawal: { remove: { literatures: 1 }, registered: false },
+        withdrawal: { remove: { literatures: 2 }, registered: false },
       },
     });
     const withdrawn = await post(paths[1]!, headers, suffix);
     expect(withdrawn.status).toBe(200);
-    expect(await withdrawn.json()).toMatchObject({
+    const withdrawnBody = await withdrawn.json();
+    expect(withdrawnBody).toMatchObject({
       result: {
         batch: { state: "withdrawn" },
-        withdrawal: { by: "web", remove: { literatures: 1 } },
+        withdrawal: {
+          by: "web",
+          at: expect.any(String),
+          remove: { literatures: 2 },
+        },
       },
     });
+    const withdrawnRows = catalogRows(f.db);
+    const saved = await post(paths[3]!, headers, suffix);
+    expect(saved.status).toBe(200);
+    expect((await saved.json()).result.withdrawal).toEqual(
+      withdrawnBody.result.withdrawal,
+    );
+    const initialPreview = await post(paths[4]!, headers, suffix);
+    expect(initialPreview.status).toBe(200);
+    expect((await initialPreview.json()).result.restore).toEqual({
+      restore: withdrawnBody.result.withdrawal.remove,
+      already_restored: { literatures: 0 },
+    });
+    expect(catalogRows(f.db)).toEqual(withdrawnRows);
+    await f.batch([withdrawalRecord("web-only")], b.library);
+    const partiallyRestoredRows = catalogRows(f.db);
+    const readAgain = await post(paths[3]!, headers, suffix);
+    expect(readAgain.status).toBe(200);
+    expect((await readAgain.json()).result.withdrawal).toEqual(
+      withdrawnBody.result.withdrawal,
+    );
+    const remaining = await post(paths[4]!, headers, suffix);
+    expect(remaining.status).toBe(200);
+    const restorePreview = (await remaining.json()).result.restore;
+    expect(restorePreview).toEqual({
+      restore: {
+        literatures: 1,
+        file_relations: 0,
+        folders: 0,
+        folder_members: 0,
+        marks: 0,
+      },
+      already_restored: { literatures: 1 },
+    });
+    expect(catalogRows(f.db)).toEqual(partiallyRestoredRows);
     const restored = await post(paths[2]!, headers, suffix);
     expect(restored.status).toBe(200);
-    expect(await restored.json()).toMatchObject({
+    const restoredBody = await restored.json();
+    expect(restoredBody).toMatchObject({
       result: {
         batch: { state: "finished" },
         restoration: { by: "web", restore: { literatures: 1 } },
       },
     });
+    expect(restoredBody.result.restoration.restore).toEqual(
+      restorePreview.restore,
+    );
+    const restoredRows = catalogRows(f.db);
+    const noLongerWithdrawn = await post(paths[3]!, headers, suffix);
+    expect(noLongerWithdrawn.status).toBe(200);
+    expect((await noLongerWithdrawn.json()).result.withdrawal).toBeNull();
+    expect(catalogRows(f.db)).toEqual(restoredRows);
   } finally {
     await client.close();
     await transport?.close();

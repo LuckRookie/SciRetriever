@@ -1033,6 +1033,20 @@ export function parseIntakeData(value: unknown): IntakeData {
 export const INTAKE_HTTP_ENDPOINTS = [
   [
     "POST",
+    "/api/v1/intake/batches/:batch_id/withdrawal",
+    "withdrawal-read",
+    "{}",
+    "{batch,withdrawal:IntakeWithdrawalReport|null}",
+  ],
+  [
+    "POST",
+    "/api/v1/intake/batches/:batch_id/restore/preview",
+    "restore-preview",
+    "{}",
+    "{batch,restore:IntakeRestorePreview}",
+  ],
+  [
+    "POST",
     "/api/v1/intake/batches/:batch_id/withdrawal/preview",
     "withdrawal-preview",
     "{}",

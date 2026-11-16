@@ -94,7 +94,7 @@ export function importInterface(formats: readonly string[]) {
       "The literature PDF supplement endpoint is Web-only, requires the percent-encoded UTF-8 X-Sciretriever-File-Name header and returns {batch_id,file}; devices are not granted this route. It shares the streaming file channel and a per-entry daily open batch.",
       "One active batch per source library. Repeating a sequence with identical data is idempotent; different data is rejected with intake-data-conflict, without replacing the staged part.",
       "Global source library IDs are independent of device; local library IDs are scoped to device connection. source=null creates an isolated one-off source; it cannot resume a source namespace and uses bibliographic-import semantics, except web-page fields retain user/web-capture provenance.",
-      "Import adds observations, folders/members and missing primary PDFs. Web-only withdrawal preview, withdraw and restore accept no device purpose and have no CLI/MCP operations. Withdrawal marks eligible objects without deleting immutable facts or files. registered=false means this batch predates ownership registration; folders and marks are outside its withdrawal scope. Re-import restores the original literature and reports restored.",
+      "Import adds observations, folders/members and missing primary PDFs. Web-only withdrawal preview, saved withdrawal read, restore preview, withdraw and restore accept no device purpose and have no CLI/MCP operations. Withdrawal marks eligible objects without deleting immutable facts or files. registered=false means this batch predates ownership registration; folders and marks are outside its withdrawal scope. Re-import restores the original literature and reports restored.",
       "metadata_only defaults to false and is fixed in batch.request. When true, attachment references are counted as metadata-only-attachment without creating file entries; bibliography-only CLI/stdio/legacy Web wrappers always set it.",
       "Upload the preferred PDF only when action=upload; action=hash needs only sha256. Missing files are paginated; repeat uploads are idempotent.",
       "No file-size ceiling; data requests and batch items have the limits above. Interrupted files restart from byte zero; accepted files remain durable.",
@@ -466,6 +466,10 @@ export function importHttpRoutes(
               result = { batch: await service.confirmInBackground(id!) };
             else if (operation === "finish")
               result = { batch: await service.finish(id!) };
+            else if (operation === "withdrawal-read")
+              result = await service.withdrawal(id!);
+            else if (operation === "restore-preview")
+              result = await service.restorePreview(id!);
             else if (operation === "withdrawal-preview")
               result = await service.withdrawalPreview(id!);
             else if (operation === "withdraw")
@@ -490,6 +494,8 @@ export function importHttpRoutes(
       path,
       purposes: [
         "supplement",
+        "withdrawal-read",
+        "restore-preview",
         "withdrawal-preview",
         "withdraw",
         "restore",

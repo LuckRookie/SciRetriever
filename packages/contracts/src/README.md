@@ -11,7 +11,7 @@
 - [import-sessions.ts](import-sessions.ts)：供现有纯适配器使用的内部类型别名；实际模型与 parser 归 intake.ts，不提供旧 wire 字段。
 - [capture.ts](capture.ts)：单篇网页入库的原始页面输入、预览、请求 UUID 与文件声明、补全/接纳结果；PDF 页面在认篇之前返回 literature_id 为 null 的独立待交文件形状，有标题的网页立即保存；空条目由页面适配后的应用边界拒绝。web-capture 的用户 provenance 仍由 index 中的封闭 observation 合同校验。
 - [intake-page.ts](intake-page.ts)：原始 WebPageData 的精确键、URL、meta/JSON-LD 数量与 UTF-8 字节上限；保留原始标签值，不在合同层解读页面；拥有上传文件名、相对路径校验与来源地址脱敏。`index.ts` 导出的 URL 解析复用已有来源地址校验。
-- [intake-withdrawal.ts](intake-withdrawal.ts)：撤回预估与撤回/恢复报告的精确键、八种保留原因、对象计数及最多 200 条有序保留项目；registered 标记旧批次的保守范围。
+- [intake-withdrawal.ts](intake-withdrawal.ts)：撤回/恢复预估与撤回/恢复报告的精确键、八种保留原因、对象计数及最多 200 条有序保留项目；registered 标记旧批次的保守范围。
 - [intake.ts](intake.ts)：统一批次、条目、来源、分段、纯适配器、报告、文件状态、状态/结果、进度、端点与错误码；source 可为 null，由服务形成一次性来源。也拥有范围词频与 PDF 获取范围/预览合同。
 - [acquisition.ts](acquisition.ts)：当前/待生效来源与有界安全获取轨迹，供配置、任务和浏览器读取。
 - [document.ts](document.ts)：文档合同。

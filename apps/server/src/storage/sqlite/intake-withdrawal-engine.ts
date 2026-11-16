@@ -2,6 +2,8 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   parseIntakeWithdrawalPreview,
   parseIntakeWithdrawalReport,
+  parseIntakeRestorePreview,
+  type IntakeRestorePreview,
   type IntakeWithdrawalPreview,
   type IntakeWithdrawalCounts,
   type IntakeWithdrawalReason,
@@ -55,11 +57,15 @@ function countObjects(objects: readonly ObjectRef[]): IntakeWithdrawalCounts {
     marks: count("mark"),
   };
 }
-function requireBatch(db: DatabaseSync, id: string, restore = false) {
+function getBatch(db: DatabaseSync, id: string) {
   const batch = db
     .prepare("SELECT * FROM intake_batches WHERE batch_id=?")
     .get(id);
   if (!batch) fail("intake-batch-missing");
+  return batch;
+}
+function requireBatch(db: DatabaseSync, id: string, restore = false) {
+  const batch = getBatch(db, id);
   if (
     restore
       ? batch.state !== "withdrawn"
@@ -312,19 +318,80 @@ export function restoreWithdrawnLiterature(
   return true;
 }
 export type IntakeWithdrawalCommand = {
-  readonly operation: "preview" | "withdraw" | "restore";
+  readonly operation:
+    | "preview"
+    | "withdraw"
+    | "restore"
+    | "read"
+    | "restore-preview";
   readonly batch_id: string;
   readonly at: string;
 };
+export function isIntakeWithdrawalRead(
+  operation: IntakeWithdrawalCommand["operation"],
+): boolean {
+  return (
+    operation === "preview" ||
+    operation === "read" ||
+    operation === "restore-preview"
+  );
+}
+function savedWithdrawal(db: DatabaseSync, batchId: string) {
+  const row = db
+    .prepare("SELECT * FROM intake_withdrawals WHERE batch_id=?")
+    .get(batchId);
+  if (!row) fail("intake-batch-state");
+  const report = parseIntakeWithdrawalReport(
+    JSON.parse(String(row.report_json)),
+  );
+  if (!("remove" in report)) fail("intake-batch-state");
+  return { row, report };
+}
+/** Both preview and execution read exactly the objects still owned by this withdrawal. */
+function remainingObjects(db: DatabaseSync, batchId: string): ObjectRef[] {
+  return db
+    .prepare(
+      "SELECT object_kind AS kind,object_id AS id FROM intake_withdrawn_objects WHERE batch_id=?",
+    )
+    .all(batchId) as ObjectRef[];
+}
 export function runIntakeWithdrawal(
   db: DatabaseSync,
   command: IntakeWithdrawalCommand,
-): IntakeWithdrawalPreview | IntakeWithdrawalReport {
-  db.exec(command.operation === "preview" ? "BEGIN" : "BEGIN IMMEDIATE");
+):
+  | IntakeWithdrawalPreview
+  | IntakeWithdrawalReport
+  | IntakeRestorePreview
+  | null {
+  const read = isIntakeWithdrawalRead(command.operation),
+    own = !read || !db.isTransaction;
+  if (own) db.exec(read ? "BEGIN" : "BEGIN IMMEDIATE");
   try {
+    if (command.operation === "read") {
+      const batch = getBatch(db, command.batch_id);
+      const result =
+        batch.state === "withdrawn"
+          ? savedWithdrawal(db, command.batch_id).report
+          : null;
+      if (own) db.exec("COMMIT");
+      return result;
+    }
+    if (command.operation === "restore-preview") {
+      requireBatch(db, command.batch_id, true);
+      const { report } = savedWithdrawal(db, command.batch_id);
+      const restore = countObjects(remainingObjects(db, command.batch_id));
+      const result = parseIntakeRestorePreview({
+        restore,
+        already_restored: {
+          literatures: report.remove.literatures - restore.literatures,
+        },
+      });
+      if (own) db.exec("COMMIT");
+      return result;
+    }
     if (command.operation === "preview") {
       const result = plan(db, command.batch_id).preview;
-      db.exec("COMMIT");
+      if (own) db.exec("COMMIT");
       return result;
     }
     let result: IntakeWithdrawalReport;
@@ -363,18 +430,11 @@ export function runIntakeWithdrawal(
       ).run(command.batch_id);
     } else {
       requireBatch(db, command.batch_id, true);
-      const old = db
-        .prepare("SELECT * FROM intake_withdrawals WHERE batch_id=?")
-        .get(command.batch_id);
-      if (!old) fail("intake-batch-state");
-      const previous = parseIntakeWithdrawalReport(
-        JSON.parse(String(old.report_json)),
+      const { row: old, report: previous } = savedWithdrawal(
+        db,
+        command.batch_id,
       );
-      const objects = db
-        .prepare(
-          "SELECT object_kind AS kind,object_id AS id FROM intake_withdrawn_objects WHERE batch_id=?",
-        )
-        .all(command.batch_id) as { kind: ObjectKind; id: string }[];
+      const objects = remainingObjects(db, command.batch_id);
       db.prepare("DELETE FROM intake_withdrawn_objects WHERE batch_id=?").run(
         command.batch_id,
       );
@@ -402,7 +462,7 @@ export function runIntakeWithdrawal(
     db.exec("COMMIT");
     return result;
   } catch (error) {
-    if (db.isTransaction) db.exec("ROLLBACK");
+    if (own && db.isTransaction) db.exec("ROLLBACK");
     throw error;
   }
 }

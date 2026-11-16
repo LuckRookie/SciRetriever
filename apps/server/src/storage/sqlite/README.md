@@ -88,6 +88,6 @@ metadata_only 仅存 intake_batches.request_json，不增加列；import-engine 
 
 `marks-engine.ts` 在 `reading_mark_places` 按批注与目标替换位置，读取仅给当前定位方法，随批注物理清除级联；定位不改 `reading_marks` 原锚点或文献状态。`place` 的 PDF 校验先只读检查，再带页数进入写事务重判；原 `create`/`update` 锚点规则保持。
 
-[intake-objects.ts](intake-objects.ts) 在文件夹、成员、资产关系与批注的创建事务中登记批次归属，文献归属沿用批次 created 成员。[intake-withdrawal-engine.ts](intake-withdrawal-engine.ts) 在单个事务中重判八种保留原因、检查忙碌任务、撤回或恢复并保存报告。旧批次没有登记时，有任何文件夹成员或批注都保留；不推断历史归属。共享文件字节与来源事实保留。
+[intake-objects.ts](intake-objects.ts) 在文件夹、成员、资产关系与批注的创建事务中登记批次归属，文献归属沿用批次 created 成员。[intake-withdrawal-engine.ts](intake-withdrawal-engine.ts) 在单个事务中重判八种保留原因、检查忙碌任务、撤回或恢复并保存报告。撤回记录读回与恢复预估复用已有记录和剩余标记；与批次状态在同一个只读快照返回，恢复执行重新读取剩余标记。旧批次没有登记时，有任何文件夹成员或批注都保留；不推断历史归属。共享文件字节与来源事实保留。
 
-[intake-visibility.ts](intake-visibility.ts) 为文献库、词频、全文检索与 Context、引用两端、发现原因、任务范围、文件夹与批注提供读取排除条件；MetaLiterature 代表只在读投影中重选。身份、sha256 和外部对应读取完整事实，命中后在成员写入事务恢复原文献及其原撤回关系，分类 restored，原批次报告保持不变。撤回服务只接网页登录的三条入库 HTTP 路由，无设备用途、CLI 或 MCP 操作。
+[intake-visibility.ts](intake-visibility.ts) 为文献库、词频、全文检索与 Context、引用两端、发现原因、任务范围、文件夹与批注提供读取排除条件；MetaLiterature 代表只在读投影中重选。身份、sha256 和外部对应读取完整事实，命中后在成员写入事务恢复原文献及其原撤回关系，分类 restored，原批次报告保持不变。撤回服务只接网页登录的五条入库 HTTP 路由，无设备用途、CLI 或 MCP 操作。

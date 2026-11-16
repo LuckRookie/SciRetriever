@@ -2,6 +2,7 @@ import {
   parseAssetId,
   parseIntakeWithdrawalPreview,
   parseIntakeWithdrawalReport,
+  parseIntakeRestorePreview,
 } from "@sciretriever/contracts";
 import type { SqliteWorker } from "../storage/sqlite/worker.js";
 export class IntakeWithdrawalError extends Error {
@@ -12,6 +13,23 @@ export class IntakeWithdrawalError extends Error {
 /** Web-only application boundary. Its methods are not CLI/MCP operations. */
 export class IntakeWithdrawalService {
   constructor(private readonly database: SqliteWorker) {}
+  async read(id: unknown) {
+    const value = await this.database.intakeWithdrawal({
+      operation: "read",
+      batch_id: parseAssetId(id),
+      at: new Date().toISOString(),
+    });
+    return value === null ? null : parseIntakeWithdrawalReport(value);
+  }
+  async restorePreview(id: unknown) {
+    return parseIntakeRestorePreview(
+      await this.database.intakeWithdrawal({
+        operation: "restore-preview",
+        batch_id: parseAssetId(id),
+        at: new Date().toISOString(),
+      }),
+    );
+  }
   async preview(id: unknown) {
     return parseIntakeWithdrawalPreview(
       await this.database.intakeWithdrawal({
