@@ -1,4 +1,14 @@
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
+const {
+  restoreWithdrawnLiterature,
+}: typeof import("./intake-withdrawal-engine.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./intake-withdrawal-engine.ts"
+      : "./intake-withdrawal-engine.js",
+    import.meta.url,
+  ).href
+);
 import {
   IMPORT_LIMITS,
   EMPTY_METADATA,
@@ -379,13 +389,8 @@ export function writeIntakeItem(db: DatabaseSync, r: IntakeItemWrite): unknown {
       item_id: r.item_id,
     });
   }
-  if (r.kind === "restore") {
-    const lit = r.literature_id;
-    db.prepare(
-      "DELETE FROM intake_withdrawn_objects WHERE (object_kind='literature' AND object_id=?) OR (object_kind='literature-asset' AND object_id IN (SELECT literature_asset_id FROM literature_assets WHERE literature_id=?)) OR (object_kind='folder-member' AND json_extract(object_id,'$[1]')=?) OR (object_kind='mark' AND object_id IN (SELECT mark_id FROM reading_marks WHERE literature_id=?)) OR (object_kind='folder' AND object_id IN (WITH RECURSIVE parents(id) AS (SELECT folder_id FROM folder_members WHERE literature_id=? UNION SELECT f.parent_id FROM folders f JOIN parents p ON f.folder_id=p.id WHERE f.parent_id IS NOT NULL) SELECT id FROM parents))",
-    ).run(lit, lit, lit, lit, lit);
-    return true;
-  }
+  if (r.kind === "restore")
+    return restoreWithdrawnLiterature(db, r.literature_id);
   if (r.kind === "needs") {
     if (r.needed)
       db.prepare(

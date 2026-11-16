@@ -1,3 +1,15 @@
+const {
+  visibleLiteratureSql,
+  visibleObjectSql,
+  visibleCitationSql,
+}: typeof import("./intake-visibility.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./intake-visibility.ts"
+      : "./intake-visibility.js",
+    import.meta.url,
+  ).href
+);
 import type * as Tags from "./tag-engine.js";
 const { resolveLibraryTagIds, tagBackfillPending }: typeof Tags = await import(
   new URL(
@@ -43,7 +55,10 @@ function libraryFilter(
   ftsQuery: string | null,
   intakeOrder = false,
 ) {
-  const terms: string[] = ["sr_query_continue()"],
+  const terms: string[] = [
+      "sr_query_continue()",
+      visibleLiteratureSql("l.literature_id"),
+    ],
     args: SQLInputValue[] = [];
   const add = (sql: string, ...values: SQLInputValue[]) => {
     terms.push(sql);
@@ -109,7 +124,7 @@ function libraryFilter(
   if (q.discovery_run_ids.length) {
     const ids = JSON.stringify(q.discovery_run_ids);
     add(
-      "l.literature_id IN (SELECT actual_literature_id FROM topic_discovery_causes WHERE discovery_run_id IN (SELECT value FROM json_each(?)) UNION SELECT actual_literature_id FROM citation_discovery_causes WHERE discovery_run_id IN (SELECT value FROM json_each(?)))",
+      `l.literature_id IN (SELECT actual_literature_id FROM topic_discovery_causes WHERE discovery_run_id IN (SELECT value FROM json_each(?)) UNION SELECT actual_literature_id FROM citation_discovery_causes WHERE ${visibleCitationSql()} AND discovery_run_id IN (SELECT value FROM json_each(?)))`,
       ids,
       ids,
     );
@@ -125,7 +140,7 @@ function libraryFilter(
       ? "WITH RECURSIVE descendants(id) AS (SELECT folder_id FROM folders WHERE folder_id=? UNION SELECT f.folder_id FROM folders f JOIN descendants d ON f.parent_id=d.id) SELECT id FROM descendants"
       : "SELECT folder_id FROM folders WHERE folder_id=?";
     add(
-      `EXISTS(SELECT 1 FROM folder_members fm WHERE fm.literature_id=l.literature_id AND fm.folder_id IN (${ids}))`,
+      `EXISTS(SELECT 1 FROM folder_members fm WHERE fm.literature_id=l.literature_id AND ${visibleObjectSql("folder-member", "json_array(fm.folder_id,fm.literature_id)")} AND ${visibleObjectSql("folder", "fm.folder_id")} AND fm.folder_id IN (${ids}))`,
       q.folder.id,
     );
   }
@@ -367,29 +382,33 @@ export function libraryFacets(
     );
   const wholeCount = () =>
     Number(
-      db.prepare("SELECT count(*) AS n FROM literature_metadata").get()!.n,
+      db
+        .prepare(
+          `SELECT count(*) AS n FROM literature_metadata WHERE ${visibleLiteratureSql("literature_metadata.literature_id")}`,
+        )
+        .get()!.n,
     );
   const aggregateWhole = (total: number) => {
     const coverage = db
       .prepare(
-        "SELECT (SELECT count(DISTINCT literature_id) FROM literature_tag_items) AS tags,(SELECT count(DISTINCT literature_id) FROM literature_metadata_keywords) AS keywords,(SELECT count(DISTINCT literature_id) FROM literature_metadata_subject_terms) AS subject_terms",
+        `SELECT (SELECT count(DISTINCT literature_id) FROM literature_tag_items WHERE ${visibleLiteratureSql("literature_tag_items.literature_id")}) AS tags,(SELECT count(DISTINCT literature_id) FROM literature_metadata_keywords WHERE ${visibleLiteratureSql("literature_metadata_keywords.literature_id")}) AS keywords,(SELECT count(DISTINCT literature_id) FROM literature_metadata_subject_terms WHERE ${visibleLiteratureSql("literature_metadata_subject_terms.literature_id")}) AS subject_terms`,
       )
       .get() as { tags: number; keywords: number; subject_terms: number };
     const tags = db
       .prepare(
-        `SELECT c.tag_id,${TAG_DISPLAY_NAME} AS value,c.count FROM (SELECT tag_id,count(DISTINCT literature_id) AS count FROM literature_tag_items GROUP BY tag_id) c JOIN tags t ON t.tag_id=c.tag_id WHERE t.status='active' ORDER BY c.count DESC,value COLLATE BINARY ASC,c.tag_id LIMIT ?`,
+        `SELECT c.tag_id,${TAG_DISPLAY_NAME} AS value,c.count FROM (SELECT tag_id,count(DISTINCT literature_id) AS count FROM literature_tag_items WHERE ${visibleLiteratureSql("literature_tag_items.literature_id")} GROUP BY tag_id) c JOIN tags t ON t.tag_id=c.tag_id WHERE t.status='active' ORDER BY c.count DESC,value COLLATE BINARY ASC,c.tag_id LIMIT ?`,
       )
       .all(limit) as Array<LibraryFacets["tags"][number]>;
     const keywords = db
       .prepare(
-        "SELECT min(keyword) AS value,count(DISTINCT literature_id) AS count FROM literature_metadata_keywords GROUP BY sr_normalize(keyword) ORDER BY count DESC,value COLLATE BINARY ASC LIMIT ?",
+        `SELECT min(keyword) AS value,count(DISTINCT literature_id) AS count FROM literature_metadata_keywords WHERE ${visibleLiteratureSql("literature_metadata_keywords.literature_id")} GROUP BY sr_normalize(keyword) ORDER BY count DESC,value COLLATE BINARY ASC LIMIT ?`,
       )
       .all(limit) as { value: string; count: number }[];
     // A normalized subject term is unique within one paper. Its covering
     // index permits a single ordered aggregate without materializing all IDs.
     const subject_terms = db
       .prepare(
-        "SELECT min(term) AS value,count(*) AS count FROM literature_metadata_subject_terms INDEXED BY literature_subject_terms_normalized GROUP BY normalized_term ORDER BY count DESC,value COLLATE BINARY ASC LIMIT ?",
+        `SELECT min(term) AS value,count(*) AS count FROM literature_metadata_subject_terms INDEXED BY literature_subject_terms_normalized WHERE ${visibleLiteratureSql("literature_metadata_subject_terms.literature_id")} GROUP BY normalized_term ORDER BY count DESC,value COLLATE BINARY ASC LIMIT ?`,
       )
       .all(limit) as { value: string; count: number }[];
     return {
@@ -459,7 +478,7 @@ export function acquirePdfSelection(
   const ids = selectionIds(db, request);
   const facts = db
     .prepare(
-      "SELECT l.literature_id,l.version_role,EXISTS(SELECT 1 FROM literature_assets a WHERE a.literature_id=l.literature_id AND a.role='primary-pdf') AS has_pdf,EXISTS(SELECT 1 FROM automatic_pdf_acquisition_exhaustions ex WHERE ex.literature_id=l.literature_id) AND sr_status(l.literature_id)='UNREVIEWED' AS unavailable FROM literatures l WHERE l.literature_id IN (SELECT value FROM json_each(?))",
+      `SELECT l.literature_id,l.version_role,EXISTS(SELECT 1 FROM literature_assets a WHERE a.literature_id=l.literature_id AND a.role='primary-pdf') AS has_pdf,EXISTS(SELECT 1 FROM automatic_pdf_acquisition_exhaustions ex WHERE ex.literature_id=l.literature_id) AND sr_status(l.literature_id)='UNREVIEWED' AS unavailable FROM literatures l WHERE ${visibleLiteratureSql("l.literature_id")} AND l.literature_id IN (SELECT value FROM json_each(?))`,
     )
     .all(JSON.stringify(ids));
   if (facts.length !== ids.length)
@@ -540,7 +559,7 @@ export function parseDocumentSelection(
     ids = selectionIds(db, request);
   const facts = db
     .prepare(
-      `SELECT l.literature_id,l.version_role,a.asset_id AS asset_id,${CURRENT_PARSE_SQL} AS parsed FROM literatures l LEFT JOIN literature_assets la ON la.literature_id=l.literature_id AND la.role='primary-pdf' LEFT JOIN assets a ON a.asset_id=la.asset_id WHERE l.literature_id IN (SELECT value FROM json_each(?))`,
+      `SELECT l.literature_id,l.version_role,a.asset_id AS asset_id,${CURRENT_PARSE_SQL} AS parsed FROM literatures l LEFT JOIN literature_assets la ON la.literature_id=l.literature_id AND la.role='primary-pdf' LEFT JOIN assets a ON a.asset_id=la.asset_id WHERE ${visibleLiteratureSql("l.literature_id")} AND l.literature_id IN (SELECT value FROM json_each(?))`,
     )
     .all(profile, JSON.stringify(ids));
   if (facts.length !== ids.length)

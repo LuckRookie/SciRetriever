@@ -46,6 +46,7 @@ export interface ProviderRelationObservation {
   readonly cited: ProviderRelationEndpoint;
 }
 export interface LiteratureAssetPublication {
+  readonly intake_batch_id?: string;
   readonly literature_asset_id: string;
   readonly literature_id: string;
   readonly asset: import("@sciretriever/contracts").Asset;

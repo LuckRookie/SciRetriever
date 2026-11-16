@@ -1,3 +1,12 @@
+const { visibleLiteratureSql }: typeof import("./intake-visibility.js") =
+  await import(
+    new URL(
+      import.meta.url.endsWith(".ts")
+        ? "./intake-visibility.ts"
+        : "./intake-visibility.js",
+      import.meta.url,
+    ).href
+  );
 import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type * as Schema from "./schema.js";
@@ -552,7 +561,7 @@ export class RetrievalStorageEngine {
   ): readonly RetrievalSource[] {
     return this.db
       .prepare(
-        `SELECT l.literature_id,l.meta_literature_id,m.metadata_revision,m.metadata_sha256,m.title,m.abstract,m.venue,m.publisher,m.publication_year,(SELECT group_concat(display_name,' ') FROM literature_metadata_authors a WHERE a.literature_id=l.literature_id) AS authors,(SELECT group_concat(keyword,' ') FROM literature_metadata_keywords k WHERE k.literature_id=l.literature_id) AS keywords,(SELECT asset_id FROM literature_assets p WHERE p.literature_id=l.literature_id AND p.role='primary-pdf') AS primary_asset_id FROM literatures l JOIN literature_metadata m ON m.literature_id=l.literature_id WHERE (? IS NULL OR l.literature_id>?) ORDER BY l.literature_id LIMIT ?`,
+        `SELECT l.literature_id,l.meta_literature_id,m.metadata_revision,m.metadata_sha256,m.title,m.abstract,m.venue,m.publisher,m.publication_year,(SELECT group_concat(display_name,' ') FROM literature_metadata_authors a WHERE a.literature_id=l.literature_id) AS authors,(SELECT group_concat(keyword,' ') FROM literature_metadata_keywords k WHERE k.literature_id=l.literature_id) AS keywords,(SELECT asset_id FROM literature_assets p WHERE p.literature_id=l.literature_id AND p.role='primary-pdf') AS primary_asset_id FROM literatures l JOIN literature_metadata m ON m.literature_id=l.literature_id WHERE ${visibleLiteratureSql("l.literature_id")} AND (? IS NULL OR l.literature_id>?) ORDER BY l.literature_id LIMIT ?`,
       )
       .all(after, after, limit) as unknown as RetrievalSource[];
   }
@@ -561,7 +570,7 @@ export class RetrievalStorageEngine {
     return Number(
       this.db
         .prepare(
-          "SELECT (SELECT count(*) FROM literatures JOIN literature_metadata USING(literature_id))+(SELECT count(*) FROM document_versions JOIN literatures USING(literature_id) JOIN literature_metadata USING(literature_id)) AS n",
+          `SELECT (SELECT count(*) FROM literatures l JOIN literature_metadata USING(literature_id) WHERE ${visibleLiteratureSql("l.literature_id")})+(SELECT count(*) FROM document_versions v JOIN literatures USING(literature_id) JOIN literature_metadata USING(literature_id) WHERE ${visibleLiteratureSql("v.literature_id")}) AS n`,
         )
         .get()!.n,
     );
@@ -572,10 +581,10 @@ export class RetrievalStorageEngine {
       .prepare(
         `
       SELECT l.literature_id,l.meta_literature_id,m.metadata_revision,m.metadata_sha256,'metadata' AS kind,NULL AS document_version_id,NULL AS representation_sha256,NULL AS source_asset_id,NULL AS source_asset_sha256,1 AS is_default
-      FROM literatures l JOIN literature_metadata m USING(literature_id) ${literature === undefined ? "" : "WHERE l.literature_id=?"}
+      FROM literatures l JOIN literature_metadata m USING(literature_id) WHERE ${visibleLiteratureSql("l.literature_id")} ${literature === undefined ? "" : "AND l.literature_id=?"}
       UNION ALL
       SELECT v.literature_id,l.meta_literature_id,m.metadata_revision,m.metadata_sha256,'document',v.document_version_id,v.representation_sha256,v.source_asset_id,v.source_sha256,CASE WHEN d.document_version_id=v.document_version_id AND EXISTS(SELECT 1 FROM literature_assets p WHERE p.literature_id=v.literature_id AND p.asset_id=v.source_asset_id AND p.role IN ('primary-pdf','supplementary-pdf')) THEN 1 ELSE 0 END
-      FROM document_versions v JOIN literatures l USING(literature_id) JOIN literature_metadata m USING(literature_id) LEFT JOIN document_defaults d ON d.document_id=v.document_id ${literature === undefined ? "" : "WHERE v.literature_id=?"}
+      FROM document_versions v JOIN literatures l USING(literature_id) JOIN literature_metadata m USING(literature_id) LEFT JOIN document_defaults d ON d.document_id=v.document_id WHERE ${visibleLiteratureSql("v.literature_id")} ${literature === undefined ? "" : "AND v.literature_id=?"}
       ORDER BY literature_id,kind,document_version_id
     `,
       )
@@ -1016,7 +1025,7 @@ export class RetrievalStorageEngine {
   ): readonly RetrievalSource[] {
     return this.db
       .prepare(
-        `SELECT v.literature_id,l.meta_literature_id,m.metadata_revision,m.metadata_sha256,m.title,m.abstract,NULL AS authors,NULL AS keywords,m.venue,m.publisher,m.publication_year,(SELECT asset_id FROM literature_assets p WHERE p.literature_id=v.literature_id AND p.role='primary-pdf') AS primary_asset_id,v.document_version_id,v.representation_sha256,v.source_asset_id,v.source_sha256 AS source_asset_sha256,CASE WHEN d.document_version_id=v.document_version_id AND EXISTS(SELECT 1 FROM literature_assets p WHERE p.literature_id=v.literature_id AND p.asset_id=v.source_asset_id AND p.role IN ('primary-pdf','supplementary-pdf')) THEN 1 ELSE 0 END AS is_default FROM document_versions v JOIN literatures l ON l.literature_id=v.literature_id JOIN literature_metadata m ON m.literature_id=v.literature_id LEFT JOIN document_defaults d ON d.document_id=v.document_id WHERE (? IS NULL OR v.document_version_id>?) ${literature === undefined ? "" : "AND v.literature_id=?"} ORDER BY v.document_version_id LIMIT ?`,
+        `SELECT v.literature_id,l.meta_literature_id,m.metadata_revision,m.metadata_sha256,m.title,m.abstract,NULL AS authors,NULL AS keywords,m.venue,m.publisher,m.publication_year,(SELECT asset_id FROM literature_assets p WHERE p.literature_id=v.literature_id AND p.role='primary-pdf') AS primary_asset_id,v.document_version_id,v.representation_sha256,v.source_asset_id,v.source_sha256 AS source_asset_sha256,CASE WHEN d.document_version_id=v.document_version_id AND EXISTS(SELECT 1 FROM literature_assets p WHERE p.literature_id=v.literature_id AND p.asset_id=v.source_asset_id AND p.role IN ('primary-pdf','supplementary-pdf')) THEN 1 ELSE 0 END AS is_default FROM document_versions v JOIN literatures l ON l.literature_id=v.literature_id JOIN literature_metadata m ON m.literature_id=v.literature_id LEFT JOIN document_defaults d ON d.document_id=v.document_id WHERE ${visibleLiteratureSql("v.literature_id")} AND (? IS NULL OR v.document_version_id>?) ${literature === undefined ? "" : "AND v.literature_id=?"} ORDER BY v.document_version_id LIMIT ?`,
       )
       .all(
         after,
@@ -1329,7 +1338,7 @@ export class RetrievalStorageEngine {
       const versionsJson = JSON.stringify(explicitVersions ?? []);
       const rows = this.db
         .prepare(
-          `SELECT e.entry_id,e.generation_id,e.kind,e.literature_id,e.meta_literature_id,e.metadata_revision,e.metadata_sha256,e.document_version_id,e.representation_sha256,e.source_asset_id,e.source_asset_sha256,e.unit_start_utf8,e.unit_end_utf8,e.unit_sha256,e.section_id,e.unit_ordinal,e.is_default,retrieval_fts.title,retrieval_fts.body,(SELECT asset_id FROM literature_assets p WHERE p.literature_id=e.literature_id AND p.role='primary-pdf') AS primary_asset_id FROM retrieval_fts JOIN retrieval_entries e ON e.entry_id=retrieval_fts.rowid WHERE retrieval_fts MATCH ? AND e.generation_id=? AND e.kind IN (SELECT value FROM json_each(?)) AND (json_array_length(?)=0 OR e.literature_id IN (SELECT value FROM json_each(?))) AND (e.kind='metadata' OR (?=0 AND e.is_default=1) OR (?=1 AND e.document_version_id IN (SELECT value FROM json_each(?)))) ORDER BY e.entry_id LIMIT 4098`,
+          `SELECT e.entry_id,e.generation_id,e.kind,e.literature_id,e.meta_literature_id,e.metadata_revision,e.metadata_sha256,e.document_version_id,e.representation_sha256,e.source_asset_id,e.source_asset_sha256,e.unit_start_utf8,e.unit_end_utf8,e.unit_sha256,e.section_id,e.unit_ordinal,e.is_default,retrieval_fts.title,retrieval_fts.body,(SELECT asset_id FROM literature_assets p WHERE p.literature_id=e.literature_id AND p.role='primary-pdf') AS primary_asset_id FROM retrieval_fts JOIN retrieval_entries e ON e.entry_id=retrieval_fts.rowid WHERE retrieval_fts MATCH ? AND ${visibleLiteratureSql("e.literature_id")} AND e.generation_id=? AND e.kind IN (SELECT value FROM json_each(?)) AND (json_array_length(?)=0 OR e.literature_id IN (SELECT value FROM json_each(?))) AND (e.kind='metadata' OR (?=0 AND e.is_default=1) OR (?=1 AND e.document_version_id IN (SELECT value FROM json_each(?)))) ORDER BY e.entry_id LIMIT 4098`,
         )
         .all(
           ftsQuery,
@@ -1423,7 +1432,7 @@ export class RetrievalStorageEngine {
   metadataSource(literatureId: string): RetrievalSource | null {
     const row = this.db
       .prepare(
-        `SELECT l.literature_id,l.meta_literature_id,m.metadata_revision,m.metadata_sha256,m.title,m.abstract,m.venue,m.publisher,m.publication_year,(SELECT group_concat(display_name,' ') FROM literature_metadata_authors a WHERE a.literature_id=l.literature_id) AS authors,(SELECT group_concat(keyword,' ') FROM literature_metadata_keywords k WHERE k.literature_id=l.literature_id) AS keywords,(SELECT asset_id FROM literature_assets p WHERE p.literature_id=l.literature_id AND p.role='primary-pdf') AS primary_asset_id FROM literatures l JOIN literature_metadata m ON m.literature_id=l.literature_id WHERE l.literature_id=?`,
+        `SELECT l.literature_id,l.meta_literature_id,m.metadata_revision,m.metadata_sha256,m.title,m.abstract,m.venue,m.publisher,m.publication_year,(SELECT group_concat(display_name,' ') FROM literature_metadata_authors a WHERE a.literature_id=l.literature_id) AS authors,(SELECT group_concat(keyword,' ') FROM literature_metadata_keywords k WHERE k.literature_id=l.literature_id) AS keywords,(SELECT asset_id FROM literature_assets p WHERE p.literature_id=l.literature_id AND p.role='primary-pdf') AS primary_asset_id FROM literatures l JOIN literature_metadata m ON m.literature_id=l.literature_id WHERE ${visibleLiteratureSql("l.literature_id")} AND l.literature_id=?`,
       )
       .get(literatureId) as RetrievalSource | undefined;
     return row ?? null;
@@ -1447,7 +1456,7 @@ export class RetrievalStorageEngine {
     if (scope.length) {
       const found = this.db
         .prepare(
-          "SELECT literature_id FROM literatures WHERE literature_id IN (SELECT value FROM json_each(?))",
+          `SELECT literature_id FROM literatures WHERE ${visibleLiteratureSql("literature_id")} AND literature_id IN (SELECT value FROM json_each(?))`,
         )
         .all(JSON.stringify(scope)) as { literature_id: string }[];
       if (found.length !== scope.length)
@@ -1456,7 +1465,7 @@ export class RetrievalStorageEngine {
     if (explicit) {
       const matched = this.db
         .prepare(
-          "SELECT count(*) AS n FROM json_each(?) j JOIN document_versions v ON v.document_version_id=json_extract(j.value,'$.document_version_id') AND v.literature_id=json_extract(j.value,'$.literature_id') AND v.representation_sha256=json_extract(j.value,'$.representation_sha256')",
+          `SELECT count(*) AS n FROM json_each(?) j JOIN document_versions v ON v.document_version_id=json_extract(j.value,'$.document_version_id') AND v.literature_id=json_extract(j.value,'$.literature_id') AND v.representation_sha256=json_extract(j.value,'$.representation_sha256') WHERE ${visibleLiteratureSql("v.literature_id")}`,
         )
         .get(JSON.stringify(explicit)) as { n: number };
       if (matched.n !== explicit.length)
@@ -1467,12 +1476,12 @@ export class RetrievalStorageEngine {
     if (!scope.length) {
       const missing = !!this.db
         .prepare(
-          "SELECT 1 FROM literatures l WHERE NOT EXISTS(SELECT 1 FROM literature_assets p WHERE p.literature_id=l.literature_id AND p.role='primary-pdf') LIMIT 1",
+          `SELECT 1 FROM literatures l WHERE ${visibleLiteratureSql("l.literature_id")} AND NOT EXISTS(SELECT 1 FROM literature_assets p WHERE p.literature_id=l.literature_id AND p.role='primary-pdf') LIMIT 1`,
         )
         .get();
       const unrepresented = !!this.db
         .prepare(
-          "SELECT 1 FROM literature_assets p WHERE p.role='primary-pdf' AND NOT EXISTS(SELECT 1 FROM document_versions v JOIN document_defaults d ON d.document_version_id=v.document_version_id WHERE v.literature_id=p.literature_id AND v.source_asset_id=p.asset_id) LIMIT 1",
+          `SELECT 1 FROM literature_assets p WHERE ${visibleLiteratureSql("p.literature_id")} AND p.role='primary-pdf' AND NOT EXISTS(SELECT 1 FROM document_versions v JOIN document_defaults d ON d.document_version_id=v.document_version_id WHERE v.literature_id=p.literature_id AND v.source_asset_id=p.asset_id) LIMIT 1`,
         )
         .get();
       return [
@@ -1486,7 +1495,7 @@ export class RetrievalStorageEngine {
     }
     const rows = this.db
       .prepare(
-        "SELECT l.literature_id,(SELECT p.asset_id FROM literature_assets p WHERE p.literature_id=l.literature_id AND p.role='primary-pdf') AS asset_id,EXISTS(SELECT 1 FROM document_defaults d JOIN document_versions v ON v.document_version_id=d.document_version_id WHERE v.literature_id=l.literature_id AND v.source_asset_id=(SELECT p.asset_id FROM literature_assets p WHERE p.literature_id=l.literature_id AND p.role='primary-pdf')) AS ready FROM literatures l WHERE (json_array_length(?)=0 OR l.literature_id IN (SELECT value FROM json_each(?)))",
+        `SELECT l.literature_id,(SELECT p.asset_id FROM literature_assets p WHERE p.literature_id=l.literature_id AND p.role='primary-pdf') AS asset_id,EXISTS(SELECT 1 FROM document_defaults d JOIN document_versions v ON v.document_version_id=d.document_version_id WHERE v.literature_id=l.literature_id AND v.source_asset_id=(SELECT p.asset_id FROM literature_assets p WHERE p.literature_id=l.literature_id AND p.role='primary-pdf')) AS ready FROM literatures l WHERE ${visibleLiteratureSql("l.literature_id")} AND (json_array_length(?)=0 OR l.literature_id IN (SELECT value FROM json_each(?)))`,
       )
       .all(JSON.stringify(scope), JSON.stringify(scope)) as {
       literature_id: string;
@@ -1520,7 +1529,7 @@ export class RetrievalStorageEngine {
   hasDefault(literatureId: string, assetId: string): boolean {
     return !!this.db
       .prepare(
-        "SELECT 1 FROM document_defaults d JOIN document_versions v ON v.document_version_id=d.document_version_id WHERE v.literature_id=? AND v.source_asset_id=?",
+        `SELECT 1 FROM document_defaults d JOIN document_versions v ON v.document_version_id=d.document_version_id WHERE ${visibleLiteratureSql("v.literature_id")} AND v.literature_id=? AND v.source_asset_id=?`,
       )
       .get(literatureId, assetId);
   }

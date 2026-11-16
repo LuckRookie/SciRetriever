@@ -1029,8 +1029,29 @@ export function parseIntakeData(value: unknown): IntakeData {
   return { records, groups, excluded };
 }
 
-/** Implemented intake routes. Later recognition/decision/withdrawal routes register when connected. */
+/** Implemented intake routes, explicitly registered by their owning adapters. */
 export const INTAKE_HTTP_ENDPOINTS = [
+  [
+    "POST",
+    "/api/v1/intake/batches/:batch_id/withdrawal/preview",
+    "withdrawal-preview",
+    "{}",
+    "{batch,withdrawal:IntakeWithdrawalPreview}",
+  ],
+  [
+    "POST",
+    "/api/v1/intake/batches/:batch_id/withdraw",
+    "withdraw",
+    "{}",
+    "{batch,withdrawal:IntakeWithdrawalReport}",
+  ],
+  [
+    "POST",
+    "/api/v1/intake/batches/:batch_id/restore",
+    "restore",
+    "{}",
+    "{batch,restoration:IntakeWithdrawalReport}",
+  ],
   [
     "POST",
     "/api/v1/intake/batches/:batch_id/file-items",

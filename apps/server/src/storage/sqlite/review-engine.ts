@@ -1,3 +1,14 @@
+const {
+  visibleLiteratureSql,
+  literatureWithdrawn,
+}: typeof import("./intake-visibility.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./intake-visibility.ts"
+      : "./intake-visibility.js",
+    import.meta.url,
+  ).href
+);
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
   PROCESSOR_METHOD_REVISION,
@@ -497,17 +508,19 @@ function taskRun(db: DatabaseSync, r: Record<string, unknown>) {
   const targetRows = targetId
     ? db
         .prepare(
-          "SELECT * FROM execution_targets WHERE job_id=? AND target_id=?",
+          `SELECT * FROM execution_targets WHERE job_id=? AND target_id=? AND (literature_id IS NULL OR ${visibleLiteratureSql("literature_id")})`,
         )
         .all(id, targetId)
     : db
         .prepare(
-          "SELECT * FROM execution_targets WHERE job_id=? ORDER BY ordinal LIMIT ? OFFSET ?",
+          `SELECT * FROM execution_targets WHERE job_id=? AND (literature_id IS NULL OR ${visibleLiteratureSql("literature_id")}) ORDER BY ordinal LIMIT ? OFFSET ?`,
         )
         .all(id, limit, offset);
   const count = Number(
     db
-      .prepare("SELECT count(*) AS n FROM execution_targets WHERE job_id=?")
+      .prepare(
+        `SELECT count(*) AS n FROM execution_targets WHERE job_id=? AND (literature_id IS NULL OR ${visibleLiteratureSql("literature_id")})`,
+      )
       .get(id)!.n,
   );
   const totalUsage = db
@@ -534,6 +547,8 @@ function taskRun(db: DatabaseSync, r: Record<string, unknown>) {
         if (typeof mapped.literature_id === "string")
           ids.add(mapped.literature_id);
     }
+    for (const literature of ids)
+      if (literatureWithdrawn(db, literature)) ids.delete(literature);
     const synthesis = (request.inputs ?? []).some(
       (source: { kind: string }) => source.kind === "snapshot",
     );

@@ -79,6 +79,7 @@ export class CandidateAcceptanceService {
     private readonly repository: CandidateAcceptanceRepository,
     private readonly collector: BrowserTransferCollector,
     private readonly publisher: CandidatePublisher,
+    private readonly intakeBatchId?: string,
   ) {}
   async accept(
     command: AcceptCandidateCommand,
@@ -142,6 +143,7 @@ export class CandidateAcceptanceService {
     const assetId =
       existing?.asset_id ?? (await stableId("pdf-asset", candidate.sha256));
     const intent = parseCandidatePublicationIntent({
+      ...(this.intakeBatchId ? { intake_batch_id: this.intakeBatchId } : {}),
       receipt_id: input.receipt_id,
       literature_id: input.literature_id,
       metadata_snapshot: input.metadata_snapshot,

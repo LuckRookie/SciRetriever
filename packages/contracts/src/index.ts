@@ -11,6 +11,7 @@ import { parseNetworkReadiness, type NetworkReadiness } from "./network.js";
 import { parseDocumentReceipt, type ParseDocumentReceipt } from "./document.js";
 export * from "./network.js";
 export * from "./device-connections.js";
+export * from "./intake-withdrawal.js";
 export * from "./import-sessions.js";
 import {
   parseAcquisitionAttempts,
@@ -1878,6 +1879,8 @@ export function parseLiteratureCurrentFacts(
 }
 
 export interface CandidatePublicationIntent {
+  /** Internal intake attribution, persisted with the recoverable publication. */
+  readonly intake_batch_id?: string;
   readonly metadata_snapshot: MetadataSnapshot;
   readonly receipt_id: string;
   readonly candidate: DurableCandidate;
@@ -1903,9 +1906,11 @@ export interface CandidatePublicationReceipt {
 export function parseCandidatePublicationIntent(
   value: unknown,
 ): CandidatePublicationIntent {
+  const input = object(value, []);
   const r = exact(
-    value,
+    input,
     [
+      ...(Object.hasOwn(input, "intake_batch_id") ? ["intake_batch_id"] : []),
       "receipt_id",
       "metadata_snapshot",
       "candidate",
@@ -1977,6 +1982,9 @@ export function parseCandidatePublicationIntent(
       fail(["source_url"]);
   }
   return Object.freeze({
+    ...(Object.hasOwn(r, "intake_batch_id")
+      ? { intake_batch_id: parseAssetId(r.intake_batch_id) }
+      : {}),
     metadata_snapshot: metadataSnapshot,
     receipt_id: r.receipt_id as string,
     candidate,

@@ -42,6 +42,7 @@ import type {
 } from "../literature/identity.js";
 import { FolderError, type FolderService } from "../literature/folders.js";
 import { activityContext } from "../logging/activity.js";
+import { IntakeWithdrawalService } from "../literature/intake-withdrawal.js";
 import { importAdapters } from "../literature/import-adapters.js";
 import { SOURCE_TYPE_MAPPING_VERSION } from "../literature/metadata-types.js";
 import {
@@ -274,6 +275,43 @@ export class ImportSessionReadService {
 
 /** Durable workflow; its read projections are the exact same read-only service. */
 export class ImportSessionService extends ImportSessionReadService {
+  withdrawalPreview(id: string) {
+    return this.tracked(async () => ({
+      batch: await this.database.intakeBatches({
+        operation: "get",
+        request: { batch_id: id },
+      }),
+      withdrawal: await new IntakeWithdrawalService(this.database).preview(id),
+    }));
+  }
+  withdraw(id: string) {
+    return this.tracked(async () => {
+      const withdrawal = await new IntakeWithdrawalService(
+        this.database,
+      ).withdraw(id);
+      return {
+        batch: await this.database.intakeBatches({
+          operation: "get",
+          request: { batch_id: id },
+        }),
+        withdrawal,
+      };
+    });
+  }
+  restore(id: string) {
+    return this.tracked(async () => {
+      const restoration = await new IntakeWithdrawalService(
+        this.database,
+      ).restore(id);
+      return {
+        batch: await this.database.intakeBatches({
+          operation: "get",
+          request: { batch_id: id },
+        }),
+        restoration,
+      };
+    });
+  }
   private readonly adapters: ReadonlyMap<string, ImportAdapter>;
   private readonly now: () => number;
   private readonly confirmations = new Map<string, Promise<IntakeBatch>>();
@@ -834,9 +872,14 @@ export class ImportSessionService extends ImportSessionReadService {
   ) {
     if (mapping?.content_sha256 === hash(record)) {
       const facts = await this.database.currentFacts(mapping.internal_id);
+      const withdrawn = await this.database.literatureWithdrawn(
+        mapping.internal_id,
+      );
       return facts
         ? {
-            disposition: "matched" as const,
+            disposition: withdrawn
+              ? ("restored" as const)
+              : ("matched" as const),
             literature_id: mapping.internal_id,
             reason: null,
             unchanged: true,
@@ -866,6 +909,9 @@ export class ImportSessionService extends ImportSessionReadService {
   ): Promise<LiteratureIdentityDecision> {
     if (unchanged) {
       const facts = await this.database.currentFacts(mapping!.internal_id);
+      const withdrawn = await this.database.literatureWithdrawn(
+        mapping!.internal_id,
+      );
       if (!facts)
         return { disposition: "rejected", reason: "external-target-missing" };
       await this.database.writeIntake({
@@ -873,14 +919,14 @@ export class ImportSessionService extends ImportSessionReadService {
         member: {
           batch_id: parseIntakeBatchId(s.batch_id!),
           literature_id: mapping!.internal_id,
-          disposition: "matched",
+          disposition: withdrawn ? "restored" : "matched",
         },
       });
       return {
         disposition: "accepted",
         literature_id: mapping!.internal_id,
         meta_literature_id: facts.literature.meta_literature_id,
-        outcome: "matched",
+        outcome: withdrawn ? "restored" : "matched",
         created: false,
       };
     }
@@ -1008,7 +1054,7 @@ export class ImportSessionService extends ImportSessionReadService {
               continue;
             }
           }
-          if (owner?.withdrawn)
+          if (owner?.withdrawn || decision.disposition === "restored")
             (summary.records as { restored: number }).restored++;
           else if (owner) (summary.records as { matched: number }).matched++;
           else if (decision.disposition === "created")
@@ -1714,7 +1760,7 @@ export class ImportSessionService extends ImportSessionReadService {
           else {
             // Replay after a process died between the identity commit and this checkpoint.
             const member = await this.read<{
-              disposition: "created" | "enriched" | "matched";
+              disposition: "created" | "enriched" | "matched" | "restored";
             } | null>({
               op: "intake-member",
               batch_id: s.batch_id!,
@@ -1968,6 +2014,7 @@ export class ImportSessionService extends ImportSessionReadService {
     await this.database.folders({
       ...command,
       folder_id: folderId,
+      intake_batch_id: s.batch_id,
       actor: activityContext().actor,
       now: new Date(this.now()).toISOString(),
     });
@@ -2011,28 +2058,36 @@ export class ImportSessionService extends ImportSessionReadService {
     const root = await this.ensureFolder(s, "root", s.source.name, null),
       cache = new Map<string, string>();
     for (const id of record.groups)
-      await this.folders.manage({
-        operation: "add",
-        request: {
-          folder_id: await this.sourceGroup(s, groups, id, cache),
-          literature_ids: [literatureId],
+      await this.folders.manage(
+        {
+          operation: "add",
+          request: {
+            folder_id: await this.sourceGroup(s, groups, id, cache),
+            literature_ids: [literatureId],
+          },
         },
-      });
+        undefined,
+        s.batch_id,
+      );
     if (s.import_user_tags && record.user_tags.length) {
       const tags = await this.ensureFolder(s, "user-tags", "标签", root);
       for (const name of new Set(record.user_tags))
-        await this.folders.manage({
-          operation: "add",
-          request: {
-            folder_id: await this.ensureFolder(
-              s,
-              `tag:${hash(name)}`,
-              name,
-              tags,
-            ),
-            literature_ids: [literatureId],
+        await this.folders.manage(
+          {
+            operation: "add",
+            request: {
+              folder_id: await this.ensureFolder(
+                s,
+                `tag:${hash(name)}`,
+                name,
+                tags,
+              ),
+              literature_ids: [literatureId],
+            },
           },
-        });
+          undefined,
+          s.batch_id,
+        );
     }
   }
   missingFiles(

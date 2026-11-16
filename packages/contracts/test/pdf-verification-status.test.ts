@@ -52,6 +52,24 @@ it("accepts classified and legacy PDF publication paths without admitting other 
     expect(parseCandidatePublicationIntent({ ...intent, target }).target).toBe(
       target,
     );
+  const original = parseCandidatePublicationIntent({
+    ...intent,
+    target: "objects/legacy.pdf",
+  });
+  expect(Object.hasOwn(original, "intake_batch_id")).toBe(false);
+  const withOwner = parseCandidatePublicationIntent({
+    ...original,
+    intake_batch_id: view.literature_asset.literature_id,
+  });
+  const { intake_batch_id, ...unchanged } = withOwner;
+  expect(intake_batch_id).toBe(view.literature_asset.literature_id);
+  expect(JSON.stringify(unchanged)).toBe(JSON.stringify(original));
+  expect(() =>
+    parseCandidatePublicationIntent({
+      ...original,
+      intake_batch_id: "invalid",
+    }),
+  ).toThrow();
   for (const target of [
     ".staging/unpublished.pdf",
     intent.candidate.reference,

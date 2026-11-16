@@ -1,4 +1,14 @@
 import type { DatabaseSync } from "node:sqlite";
+const {
+  restoreWithdrawnLiterature,
+}: typeof import("./intake-withdrawal-engine.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./intake-withdrawal-engine.ts"
+      : "./intake-withdrawal-engine.js",
+    import.meta.url,
+  ).href
+);
 import {
   ContractValidationError,
   parseIntakeBatch,
@@ -75,6 +85,8 @@ export function recordResolvedIntakeMember(
   insertIntakeMember(db, member);
 }
 function insertIntakeMember(db: DatabaseSync, member: IntakeMember): void {
+  if (restoreWithdrawnLiterature(db, member.literature_id))
+    member = { ...member, disposition: "restored" };
   db.prepare(
     `INSERT INTO intake_batch_members VALUES(?,?,?) ON CONFLICT(batch_id,literature_id) DO UPDATE SET disposition=${member.authoritative ? "excluded.disposition" : "CASE WHEN disposition='restored' OR excluded.disposition='restored' THEN 'restored' WHEN disposition='created' OR excluded.disposition='created' THEN 'created' WHEN disposition='enriched' OR excluded.disposition='enriched' THEN 'enriched' ELSE 'matched' END"}`,
   ).run(member.batch_id, member.literature_id, member.disposition);

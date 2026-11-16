@@ -79,7 +79,7 @@ export async function readProcessingTask(
 ) {
   const job = await repository.getJob(jobId);
   if (!job) throw new ProcessingTaskError("processing-not-found");
-  const targets = await repository.listTargets(jobId, 10000);
+  const targets = await repository.listTargets(jobId, 10000, true);
   const events = await processingEvents(repository, jobId);
   return {
     job,

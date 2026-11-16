@@ -40,7 +40,7 @@ export type LiteratureIdentityDecision =
       readonly disposition: "accepted";
       readonly literature_id: string;
       readonly meta_literature_id: string;
-      readonly outcome: "created" | "enriched" | "matched";
+      readonly outcome: "created" | "enriched" | "matched" | "restored";
       readonly created: boolean;
     }
   | {
@@ -373,7 +373,9 @@ export class LiteratureIdentityService {
       };
     return {
       disposition: assessment.current
-        ? ("matched" as const)
+        ? assessment.currentFact?.withdrawn
+          ? ("restored" as const)
+          : ("matched" as const)
         : ("created" as const),
       literature_id: assessment.current?.literature_id ?? null,
       reason: null,
@@ -507,12 +509,14 @@ export class LiteratureIdentityService {
         member: intake_member,
       });
     const outcome =
-      current === null
-        ? "created"
-        : acceptance.projection.observations_projection_changed &&
-            !acceptance.deduplicated
-          ? "enriched"
-          : "matched";
+      currentFact?.withdrawn && intakeBatchId
+        ? ("restored" as const)
+        : current === null
+          ? "created"
+          : acceptance.projection.observations_projection_changed &&
+              !acceptance.deduplicated
+            ? "enriched"
+            : "matched";
     return {
       disposition: "accepted",
       literature_id: publication.result.literature_id,

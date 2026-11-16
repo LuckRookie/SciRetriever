@@ -1,3 +1,14 @@
+const {
+  visibleLiteratureSql,
+  visibleObjectSql,
+}: typeof import("./intake-visibility.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./intake-visibility.ts"
+      : "./intake-visibility.js",
+    import.meta.url,
+  ).href
+);
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
   parseFolderOperation,
@@ -6,13 +17,27 @@ import {
   parseFolderExportRequest,
   type FolderExportNode,
 } from "@sciretriever/contracts";
-export const FOLDER_DESCENDANTS_SQL =
-  "WITH RECURSIVE descendants(id) AS (SELECT folder_id FROM folders WHERE folder_id=? UNION SELECT f.folder_id FROM folders f JOIN descendants d ON f.parent_id=d.id) SELECT id FROM descendants";
+const {
+  recordIntakeObject,
+  intakeMemberObjectId,
+}: typeof import("./intake-objects.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./intake-objects.ts"
+      : "./intake-objects.js",
+    import.meta.url,
+  ).href
+);
+export const FOLDER_DESCENDANTS_SQL = `WITH RECURSIVE descendants(id) AS (SELECT folder_id FROM folders WHERE folder_id=? AND ${visibleObjectSql("folder", "folder_id")} UNION SELECT f.folder_id FROM folders f JOIN descendants d ON f.parent_id=d.id WHERE ${visibleObjectSql("folder", "f.folder_id")}) SELECT id FROM descendants`;
 function fail(code: string): never {
   throw Object.assign(new Error(code), { code });
 }
 function folder(db: DatabaseSync, id: string) {
-  const row = db.prepare("SELECT * FROM folders WHERE folder_id=?").get(id);
+  const row = db
+    .prepare(
+      `SELECT * FROM folders WHERE folder_id=? AND ${visibleObjectSql("folder", "folder_id")}`,
+    )
+    .get(id);
   if (!row) fail("folder-not-found");
   return row;
 }
@@ -24,7 +49,7 @@ function impact(db: DatabaseSync, id: string) {
     .map((r) => String(r.id));
   const counts = db
     .prepare(
-      "SELECT count(*) AS members,count(DISTINCT literature_id) AS papers FROM folder_members WHERE folder_id IN (SELECT value FROM json_each(?))",
+      `SELECT count(*) AS members,count(DISTINCT literature_id) AS papers FROM folder_members WHERE ${visibleLiteratureSql("literature_id")} AND ${visibleObjectSql("folder-member", "json_array(folder_id,literature_id)")} AND folder_id IN (SELECT value FROM json_each(?))`,
     )
     .get(JSON.stringify(ids))!;
   return {
@@ -42,7 +67,9 @@ function present(db: DatabaseSync, row: Record<string, unknown>) {
     ...row,
     own_count: Number(
       db
-        .prepare("SELECT count(*) AS n FROM folder_members WHERE folder_id=?")
+        .prepare(
+          `SELECT count(*) AS n FROM folder_members WHERE folder_id=? AND ${visibleLiteratureSql("literature_id")} AND ${visibleObjectSql("folder-member", "json_array(folder_id,literature_id)")}`,
+        )
         .get(id)!.n,
     ),
     total_count: counts.literature_count,
@@ -71,7 +98,7 @@ export function libraryMembership(db: DatabaseSync, id: string) {
   return {
     folder_ids: db
       .prepare(
-        "SELECT folder_id FROM folder_members WHERE literature_id=? ORDER BY folder_id",
+        `SELECT folder_id FROM folder_members WHERE literature_id=? AND ${visibleObjectSql("folder", "folder_id")} AND ${visibleObjectSql("folder-member", "json_array(folder_id,literature_id)")} ORDER BY folder_id`,
       )
       .all(id)
       .map((r) => String(r.folder_id)),
@@ -103,11 +130,18 @@ function readExport(db: DatabaseSync, value: unknown): FolderExportStoragePage {
     const folders = r.export_include_tree
       ? (db
           .prepare(
-            "SELECT folder_id,name,parent_id,position FROM folders ORDER BY folder_id",
+            `SELECT folder_id,name,parent_id,position FROM folders WHERE ${visibleObjectSql("folder", "folder_id")} ORDER BY folder_id`,
           )
           .all() as unknown as FolderExportNode[])
       : null;
-    const where: string[] = [],
+    const where: string[] = [
+        visibleLiteratureSql("literature_id"),
+        visibleObjectSql("folder", "folder_id"),
+        visibleObjectSql(
+          "folder-member",
+          "json_array(folder_id,literature_id)",
+        ),
+      ],
       args: SQLInputValue[] = [];
     if (r.export_folder_id !== undefined) {
       where.push("folder_id=?");
@@ -150,6 +184,7 @@ export function runFolderStorage(db: DatabaseSync, value: unknown): unknown {
     now?: string;
     actor?: string;
     folder_id?: string;
+    intake_batch_id?: string;
   };
   if (r.operation === "export") return readExport(db, value);
   const write = !["list", "delete-preview"].includes(r.operation);
@@ -160,7 +195,9 @@ export function runFolderStorage(db: DatabaseSync, value: unknown): unknown {
       const { literature_id } = parseReadingOpen(r.request);
       if (
         !db
-          .prepare("SELECT 1 FROM literatures WHERE literature_id=?")
+          .prepare(
+            `SELECT 1 FROM literatures WHERE literature_id=? AND ${visibleLiteratureSql("literature_id")}`,
+          )
           .get(literature_id)
       )
         fail("literature-not-found");
@@ -181,7 +218,7 @@ export function runFolderStorage(db: DatabaseSync, value: unknown): unknown {
         result = {
           items: db
             .prepare(
-              "SELECT * FROM folders ORDER BY parent_id,position,folder_id",
+              `SELECT * FROM folders WHERE ${visibleObjectSql("folder", "folder_id")} ORDER BY parent_id,position,folder_id`,
             )
             .all()
             .map((row) => present(db, row)),
@@ -200,7 +237,7 @@ export function runFolderStorage(db: DatabaseSync, value: unknown): unknown {
           Number(
             db
               .prepare(
-                "SELECT count(*) AS n FROM literatures WHERE literature_id IN (SELECT value FROM json_each(?))",
+                `SELECT count(*) AS n FROM literatures WHERE ${visibleLiteratureSql("literature_id")} AND literature_id IN (SELECT value FROM json_each(?))`,
               )
               .get(JSON.stringify(ids))!.n,
           ) !== ids.length
@@ -223,8 +260,16 @@ export function runFolderStorage(db: DatabaseSync, value: unknown): unknown {
                     )
                     .run(op.request.folder_id, id).changes,
             )
-          )
+          ) {
             changedIds.push(id);
+            if (op.operation === "add")
+              recordIntakeObject(
+                db,
+                r.intake_batch_id,
+                "folder-member",
+                intakeMemberObjectId(op.request.folder_id, id),
+              );
+          }
         result = {
           folder_id: op.request.folder_id,
           changed: changedIds.length,
@@ -280,6 +325,8 @@ export function runFolderStorage(db: DatabaseSync, value: unknown): unknown {
             "UPDATE folders SET parent_id=?,name=?,position=?,updated_at=? WHERE folder_id=?",
           ).run(parent, name, position, r.now!, id);
         if (op.operation === "create" || op.operation === "move") {
+          if (op.operation === "create")
+            recordIntakeObject(db, r.intake_batch_id, "folder", id);
           if (old && old.parent_id !== parent)
             orderSiblings(db, old.parent_id as string | null, null);
           orderSiblings(db, parent, id, position);

@@ -1,3 +1,12 @@
+const { literatureWithdrawn }: typeof import("./intake-visibility.js") =
+  await import(
+    new URL(
+      import.meta.url.endsWith(".ts")
+        ? "./intake-visibility.ts"
+        : "./intake-visibility.js",
+      import.meta.url,
+    ).href
+  );
 import { createHash } from "node:crypto";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
@@ -325,6 +334,11 @@ export function runArchiveStorage(
 ): unknown {
   const r = args as Record<string, unknown>;
   return transaction(db, !ARCHIVE_READ_ACTIONS.includes(action), () => {
+    if (
+      typeof r.literature_id === "string" &&
+      literatureWithdrawn(db, r.literature_id)
+    )
+      fail("archive-literature-missing");
     if (action === "state")
       return archiveState(db, String(r.literature_id), maxTags, archiveProfile);
     if (action === "events")
@@ -356,7 +370,7 @@ export function runArchiveStorage(
         revision: JSON.stringify(
           db
             .prepare(
-              "SELECT (SELECT COALESCE(MAX(sequence),0) FROM archive_version_events) AS facts,(SELECT count(*) FROM processor_results) AS results,(SELECT count(*) FROM snapshots) AS snapshots,(SELECT rowid||status FROM operation_records WHERE operation IN ('folders','snapshot-rename') ORDER BY rowid DESC LIMIT 1) AS organization,(SELECT version FROM vocabulary_state WHERE singleton=1) AS vocabulary,(SELECT MAX(started_at||COALESCE(finished_at,'')||state) FROM archive_runs) AS runs,(SELECT count(*)||':'||COALESCE(MAX(rowid),0) FROM literature_assets) AS files,(SELECT count(*)||':'||COALESCE(MAX(rowid),0) FROM raw_parses) AS parses",
+              "SELECT (SELECT COALESCE(MAX(sequence),0) FROM archive_version_events) AS facts,(SELECT count(*) FROM processor_results) AS results,(SELECT count(*) FROM snapshots) AS snapshots,(SELECT rowid||status FROM operation_records WHERE operation IN ('folders','snapshot-rename') ORDER BY rowid DESC LIMIT 1) AS organization,(SELECT version FROM vocabulary_state WHERE singleton=1) AS vocabulary,(SELECT MAX(started_at||COALESCE(finished_at,'')||state) FROM archive_runs) AS runs,(SELECT count(*)||':'||COALESCE(MAX(rowid),0) FROM literature_assets) AS files,(SELECT count(*)||':'||COALESCE(MAX(rowid),0) FROM raw_parses) AS parses,(SELECT revision FROM retrieval_source_revision WHERE singleton=1) AS visibility",
             )
             .get(),
         ),

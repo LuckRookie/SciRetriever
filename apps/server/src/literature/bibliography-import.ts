@@ -39,7 +39,7 @@ export interface BibliographyIdentityPort {
     readonly disposition: "accepted" | "rejected" | "uncertain";
     readonly literature_id?: string;
     readonly meta_literature_id?: string;
-    readonly outcome?: "created" | "enriched" | "matched";
+    readonly outcome?: "created" | "enriched" | "matched" | "restored";
     readonly created?: boolean;
     readonly reason?: string;
   }>;
@@ -48,6 +48,7 @@ export type BibliographyImportDisposition =
   | "created"
   | "enriched"
   | "matched"
+  | "restored"
   | "rejected";
 export interface BibliographyImportItem {
   readonly record_index: number;

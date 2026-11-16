@@ -150,6 +150,7 @@ export class ImportFileChannel {
       this.database,
       transfers,
       new CandidatePublisher(transfers, this.database),
+      id,
     );
     const abandonment = new CandidateAbandonmentService(
       this.database,

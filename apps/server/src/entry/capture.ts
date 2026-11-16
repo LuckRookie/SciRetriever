@@ -476,10 +476,14 @@ export class CaptureService {
       const missing: string[] = [];
       for (const folder_id of r.folder_ids) {
         try {
-          await this.folders.manage({
-            operation: "add",
-            request: { folder_id, literature_ids: [stored.literature_id!] },
-          });
+          await this.folders.manage(
+            {
+              operation: "add",
+              request: { folder_id, literature_ids: [stored.literature_id!] },
+            },
+            undefined,
+            stored.batch_id,
+          );
         } catch (error) {
           if (
             !(error instanceof FolderError) ||
@@ -727,7 +731,10 @@ export class CaptureService {
         item_id: item.item_id,
         connection_id: connection,
         literature_id: accepted.literature_id,
-        disposition: owner ? "matched" : accepted.outcome,
+        disposition:
+          owner && accepted.outcome !== "restored"
+            ? "matched"
+            : accepted.outcome,
         replay: false,
         file,
         source_url: item.work?.source_url ?? null,
@@ -739,10 +746,14 @@ export class CaptureService {
     const missing: string[] = [];
     for (const folder_id of item.work?.folder_ids ?? []) {
       try {
-        await this.folders.manage({
-          operation: "add",
-          request: { folder_id, literature_ids: [accepted.literature_id] },
-        });
+        await this.folders.manage(
+          {
+            operation: "add",
+            request: { folder_id, literature_ids: [accepted.literature_id] },
+          },
+          undefined,
+          item.batch_id,
+        );
       } catch (error) {
         if (
           !(error instanceof FolderError) ||
@@ -769,7 +780,10 @@ export class CaptureService {
         item_id: item.item_id,
         batch_id: s.batch_id,
         literature_id: accepted.literature_id,
-        disposition: owner ? "matched" : accepted.outcome,
+        disposition:
+          owner && accepted.outcome !== "restored"
+            ? "matched"
+            : accepted.outcome,
         metadata: {
           status: recognized.observation ? "completed" : "partial",
           job_id: null,

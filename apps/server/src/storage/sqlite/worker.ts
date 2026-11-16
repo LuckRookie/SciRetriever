@@ -1,6 +1,7 @@
 import { FilterError } from "../../literature/filters.js";
 import { FolderError } from "../../literature/folders.js";
 import { MarkError } from "../../literature/marks.js";
+import { IntakeWithdrawalError } from "../../literature/intake-withdrawal.js";
 import {
   canonicalJsonBytes,
   parseLibraryCounts,
@@ -230,6 +231,7 @@ export interface IdentityReadContext {
     readonly metadata_revision: number;
     readonly metadata_sha256: string;
     readonly content_ready: boolean;
+    readonly withdrawn?: boolean;
     readonly field_states: readonly MetadataFieldState[];
   }[];
 }
@@ -295,6 +297,11 @@ function parseDiscoveryPublication(value: unknown): DiscoveryPublication {
 }
 
 export type SqliteCommand =
+  | { readonly kind: "intake_withdrawn"; readonly literature_id: string }
+  | {
+      readonly kind: "intake_withdrawal_read" | "intake_withdrawal_write";
+      readonly command: import("./intake-withdrawal-engine.js").IntakeWithdrawalCommand;
+    }
   | {
       readonly kind: "draft_text_read";
       readonly request: import("./draft-text-engine.js").DraftTextRead;
@@ -494,6 +501,7 @@ export type SqliteCommand =
     }
   | {
       readonly kind: "execution_list_targets";
+      readonly visibleOnly?: boolean;
       readonly jobId: string;
       readonly limit: number;
     }
@@ -1273,6 +1281,8 @@ export class SqliteWorker {
     const readOnly = new Set<string>([
       "draft_text_read",
       "intake_read",
+      "intake_withdrawal_read",
+      "intake_withdrawn",
       "library_facets",
       "acquire_pdf_selection",
       "parse_document_selection",
@@ -1475,6 +1485,7 @@ export class SqliteWorker {
       now?: string;
       actor?: string;
       mark_id?: string;
+      intake_batch_id?: string;
       check_only?: boolean;
       page_count?: number;
     },
@@ -1506,6 +1517,7 @@ export class SqliteWorker {
       now?: string;
       actor?: string;
       folder_id?: string;
+      intake_batch_id?: string;
       export_after?: readonly [string, string] | null;
       export_folder_id?: string;
       export_tree_only?: boolean;
@@ -2042,6 +2054,7 @@ export class SqliteWorker {
   async listExecutionTargets(
     jobId: string,
     limit = 1000,
+    visibleOnly = false,
   ): Promise<readonly ExecutionTarget[]> {
     executionText(jobId);
     if (
@@ -2054,6 +2067,7 @@ export class SqliteWorker {
       kind: "execution_list_targets",
       jobId,
       limit,
+      visibleOnly,
     });
     if (!Array.isArray(value)) throw new SqliteWorkerError();
     return Object.freeze(value.map(parseExecutionTarget));
@@ -2715,6 +2729,30 @@ export class SqliteWorker {
       | import("@sciretriever/contracts").IntakeBatch
     >({ kind: "intake_read", value });
   }
+  async intakeWithdrawal(
+    command: import("./intake-withdrawal-engine.js").IntakeWithdrawalCommand,
+  ): Promise<unknown> {
+    const result = await this.run<{
+      ok: boolean;
+      value?: unknown;
+      code?: string;
+    }>({
+      kind:
+        command.operation === "preview"
+          ? "intake_withdrawal_read"
+          : "intake_withdrawal_write",
+      command,
+    });
+    if (!result.ok)
+      throw new IntakeWithdrawalError(result.code ?? "intake-unavailable");
+    return result.value;
+  }
+  literatureWithdrawn(id: string) {
+    return this.run<boolean>({
+      kind: "intake_withdrawn",
+      literature_id: parseLiteratureId(id),
+    });
+  }
   writeIntake(action: import("./intake-engine.js").IntakeWrite) {
     return this.run<boolean>({ kind: "intake_write", action });
   }
@@ -3170,6 +3208,7 @@ export class SqliteWorker {
             metadata_revision: fact.metadata_revision as number,
             metadata_sha256: fact.metadata_sha256,
             content_ready: fact.content_ready,
+            withdrawn: fact.withdrawn === true,
             field_states: Object.freeze(
               fact.field_states.map(parseMetadataFieldState),
             ),

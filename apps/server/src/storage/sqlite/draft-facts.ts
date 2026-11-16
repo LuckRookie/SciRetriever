@@ -1,3 +1,14 @@
+const {
+  visibleLiteratureSql,
+  visibleObjectSql,
+}: typeof import("./intake-visibility.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./intake-visibility.ts"
+      : "./intake-visibility.js",
+    import.meta.url,
+  ).href
+);
 import type { DatabaseSync } from "node:sqlite";
 import {
   parseDraftFacts,
@@ -33,6 +44,8 @@ export function readDefaultTextFacts(
   ids?: readonly string[],
 ): readonly DefaultTextFactsRow[] {
   const where = [
+    visibleLiteratureSql("la.literature_id"),
+    visibleObjectSql("literature-asset", "la.literature_asset_id"),
     "a.media_type='application/pdf'",
     "la.role IN ('primary-pdf','supplementary-pdf')",
   ];

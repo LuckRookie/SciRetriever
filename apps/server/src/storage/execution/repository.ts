@@ -172,8 +172,9 @@ export class ExecutionRepository {
   listTargets(
     jobId: string,
     limit = 1000,
+    visibleOnly = false,
   ): Promise<readonly ExecutionTarget[]> {
-    return this.database.listExecutionTargets(jobId, limit);
+    return this.database.listExecutionTargets(jobId, limit, visibleOnly);
   }
   listAttempts(
     targetId: string,

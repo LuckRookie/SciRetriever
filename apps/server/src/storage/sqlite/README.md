@@ -72,7 +72,7 @@ schema 15 增加入库批次、成员与主题词；13 的按篇状态失效提�
 
 `device-connection-engine.ts` 保存设备认证派生值、配对消费、撤销和有界限流计数；check 只按已认证的连接 ID 重读有效性，不能代替令牌认证；不记录认证原值，不改变文献/索引水位。[import-engine.ts](import-engine.ts) 保存通用导入库、外部编号对应、会话、原始分段引用、去重键、逐条结果与文件状态；书目事实仍由身份 owner 提交，文件夹和 PDF 不另建写入 owner。冻结 schema 16 由 `import-schema-migration.ts` 显式离线从精确 15 转换，设备与导入表共用 `IMPORT_SCHEMA_V16`，不回填历史虚构来源；16 布局已冻结。旧 14→15 迁移固定旧输出，打开路径仍只接纳当前布局。
 
-统一入库从建批次时就有唯一 batch_id。intake_batches 是状态与结果的所有者，import_sessions 仅保存来源、分段与检查点，其 active 与批次状态在同一写事务中变化。导入根目录的外部对应先 pending 预留编号，再创建目录，最后 settled；content_sha256 只保存内容 hash。schema.ts 的 IMPORT_SCHEMA_V16 汇集全部入库与未来认篇/决定/撤回 DDL，import-schema-migration.ts 在单一 15→16 事务中回填旧批次并保留全部旧表行数。未来功能的表先保留结构，不由启动流程产生决定、撤回或书目待补事实；这些表不参与建档状态输入或检索修订。
+统一入库从建批次时就有唯一 batch_id。intake_batches 是状态与结果的所有者，import_sessions 仅保存来源、分段与检查点，其 active 与批次状态在同一写事务中变化。导入根目录的外部对应先 pending 预留编号，再创建目录，最后 settled；content_sha256 只保存内容 hash。schema.ts 的 IMPORT_SCHEMA_V16 汇集全部入库与未来认篇/决定/撤回 DDL，import-schema-migration.ts 在单一 15→16 事务中回填旧批次并保留全部旧表行数。决定与书目待补事实由对应入库服务写入，启动不推断业务事实。撤回使用既有标记表，不改 schema；标记及恢复显式推进检索修订，不改变建档状态输入表。
 
 后台入库复用 phase、storage_failures 与 updated_at 保存检查点和一分钟重试间隔；成功的逐条结算重置连续失败数，第三次存储失败同事务结束为 failed，summary.excluded 写明 storage-failure 与 unprocessed-records。失败计数按显式累计值幂等写入；若连失败检查点也暂时无法落盘，进程保留累计值，达到三次后只重试写入失败终态，不再接纳记录。进程退出前始终无法写入的计数不能跨重启保存，恢复以最后落盘的检查点为准。补 PDF 的开放批次使用 supplement:web/cli/mcp 与本地日期，条目、matched 成员及待交文件同事务登记；不增加第二套文件状态表。
 
@@ -87,3 +87,7 @@ metadata_only 仅存 intake_batches.request_json，不增加列；import-engine 
 `intake-items.ts` 还保存首次预览物化的数据条目、可能重复候选、决定审计与三十天保留期限。普通条目和批次成员写入仍检查原状态；结束后的决定与文件结算走专用受限操作。`import-engine.ts` 在同一事务里替换待决定回执并更新原批次成员与结果，过期清理保留 `decision-expired` 报告原因，不重开批次、不改变身份规则或表结构。
 
 `marks-engine.ts` 在 `reading_mark_places` 按批注与目标替换位置，读取仅给当前定位方法，随批注物理清除级联；定位不改 `reading_marks` 原锚点或文献状态。`place` 的 PDF 校验先只读检查，再带页数进入写事务重判；原 `create`/`update` 锚点规则保持。
+
+[intake-objects.ts](intake-objects.ts) 在文件夹、成员、资产关系与批注的创建事务中登记批次归属，文献归属沿用批次 created 成员。[intake-withdrawal-engine.ts](intake-withdrawal-engine.ts) 在单个事务中重判八种保留原因、检查忙碌任务、撤回或恢复并保存报告。旧批次没有登记时，有任何文件夹成员或批注都保留；不推断历史归属。共享文件字节与来源事实保留。
+
+[intake-visibility.ts](intake-visibility.ts) 为文献库、词频、全文检索与 Context、引用两端、发现原因、任务范围、文件夹与批注提供读取排除条件；MetaLiterature 代表只在读投影中重选。身份、sha256 和外部对应读取完整事实，命中后在成员写入事务恢复原文献及其原撤回关系，分类 restored，原批次报告保持不变。撤回服务只接网页登录的三条入库 HTTP 路由，无设备用途、CLI 或 MCP 操作。

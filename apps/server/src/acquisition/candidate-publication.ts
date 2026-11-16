@@ -12,6 +12,7 @@ import {
 import { settlePreparedPublication } from "../storage/files/publication.js";
 
 export interface CandidatePublicationInput {
+  readonly intake_batch_id?: string;
   readonly metadata_snapshot: MetadataSnapshot;
   readonly receipt_id: string;
   readonly candidate: DurableCandidate;

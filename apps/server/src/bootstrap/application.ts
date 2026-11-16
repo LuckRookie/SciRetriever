@@ -2043,6 +2043,8 @@ async function createApplicationOwned(
           "upload",
           "finish",
           "cancel",
+          "withdraw",
+          "restore",
         ],
         admission,
       ),

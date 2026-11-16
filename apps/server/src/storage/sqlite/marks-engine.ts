@@ -1,3 +1,15 @@
+const {
+  visibleLiteratureSql,
+  visibleObjectSql,
+  literatureWithdrawn,
+}: typeof import("./intake-visibility.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./intake-visibility.ts"
+      : "./intake-visibility.js",
+    import.meta.url,
+  ).href
+);
 import type { DatabaseSync } from "node:sqlite";
 import {
   markTags,
@@ -12,6 +24,15 @@ import {
   type MarkPdfAnchor,
   type ReadingMark,
 } from "@sciretriever/contracts";
+const { recordIntakeObject }: typeof import("./intake-objects.js") =
+  await import(
+    new URL(
+      import.meta.url.endsWith(".ts")
+        ? "./intake-objects.ts"
+        : "./intake-objects.js",
+      import.meta.url,
+    ).href
+  );
 
 /** Deleted marks stay restorable for this long, then the next write removes them. */
 const RETAIN_DELETED_MS = 30 * 86400000;
@@ -80,7 +101,16 @@ function present(db: DatabaseSync, row: Record<string, unknown>): ReadingMark {
 }
 function mark(db: DatabaseSync, id: string) {
   const row = db.prepare("SELECT * FROM reading_marks WHERE mark_id=?").get(id);
-  if (!row) fail("mark-not-found");
+  if (
+    !row ||
+    literatureWithdrawn(db, String(row.literature_id)) ||
+    db
+      .prepare(
+        "SELECT 1 FROM intake_withdrawn_objects WHERE object_kind='mark' AND object_id=?",
+      )
+      .get(id)
+  )
+    fail("mark-not-found");
   return row;
 }
 /** An anchor must name this paper's own PDF or one of its own full-text versions. */
@@ -189,6 +219,7 @@ export function runMarkStorage(db: DatabaseSync, value: unknown): unknown {
     now?: string;
     actor?: string;
     mark_id?: string;
+    intake_batch_id?: string;
     check_only?: boolean;
     page_count?: number;
   };
@@ -204,7 +235,9 @@ export function runMarkStorage(db: DatabaseSync, value: unknown): unknown {
     } else if (op.operation === "list" || op.operation === "export") {
       if (
         !db
-          .prepare("SELECT 1 FROM literatures WHERE literature_id=?")
+          .prepare(
+            `SELECT 1 FROM literatures WHERE literature_id=? AND ${visibleLiteratureSql("literature_id")}`,
+          )
           .get(op.request.literature_id)
       )
         fail("literature-not-found");
@@ -212,7 +245,7 @@ export function runMarkStorage(db: DatabaseSync, value: unknown): unknown {
         items: sortMarks(
           db
             .prepare(
-              "SELECT * FROM reading_marks WHERE literature_id=? AND deleted_at IS NULL ORDER BY created_at,mark_id",
+              `SELECT * FROM reading_marks WHERE literature_id=? AND deleted_at IS NULL AND ${visibleObjectSql("mark", "mark_id")} ORDER BY created_at,mark_id`,
             )
             .all(op.request.literature_id)
             .map((row) => present(db, row)),
@@ -221,14 +254,16 @@ export function runMarkStorage(db: DatabaseSync, value: unknown): unknown {
     } else {
       const now = r.now!;
       db.prepare(
-        "DELETE FROM reading_marks WHERE deleted_at IS NOT NULL AND deleted_at<?",
+        `DELETE FROM reading_marks WHERE deleted_at IS NOT NULL AND deleted_at<? AND ${visibleObjectSql("mark", "mark_id")} AND ${visibleLiteratureSql("literature_id")}`,
       ).run(new Date(Date.parse(now) - RETAIN_DELETED_MS).toISOString());
       if (op.operation === "create") {
         const q = op.request,
           id = q.mark_id ?? r.mark_id!;
         if (
           !db
-            .prepare("SELECT 1 FROM literatures WHERE literature_id=?")
+            .prepare(
+              `SELECT 1 FROM literatures WHERE literature_id=? AND ${visibleLiteratureSql("literature_id")}`,
+            )
             .get(q.literature_id)
         )
           fail("literature-not-found");
@@ -257,6 +292,7 @@ export function runMarkStorage(db: DatabaseSync, value: unknown): unknown {
           now,
           r.actor!,
         );
+        recordIntakeObject(db, r.intake_batch_id, "mark", id);
         result = present(db, mark(db, id));
       } else {
         const old = mark(db, op.request.mark_id),

@@ -143,15 +143,22 @@ async function fixture() {
     expect(report.items.every((i) => i.literature_id !== null)).toBe(true);
     return { id: b.batch_id, report, library };
   };
-  // 17.2 will wire these ownership writes to the real creation transactions.
-  // The drill registers each object when created, never infers origin at withdrawal.
+  // This historical schema drill constructs its own synthetic ownership. The
+  // supplement used to create PDF bytes now registers its real batch too; assign
+  // that freshly created relation to this drill's synthetic import explicitly.
+  // The production transaction/ownership path is tested in intake-withdrawal.
   const own = (batch: string, kind: Exclude<Kind, "literature">, id: string) =>
     transaction(() => {
-      db.prepare("INSERT INTO intake_batch_objects VALUES(?,?,?)").run(
-        kind,
-        id,
-        batch,
-      );
+      db.prepare(
+        "INSERT INTO intake_batch_objects VALUES(?,?,?) ON CONFLICT(object_kind,object_id) DO UPDATE SET batch_id=excluded.batch_id",
+      ).run(kind, id, batch);
+      expect(
+        db
+          .prepare(
+            "SELECT batch_id FROM intake_batch_objects WHERE object_kind=? AND object_id=?",
+          )
+          .get(kind, id)?.batch_id,
+      ).toBe(batch);
     });
   return {
     app,
@@ -867,8 +874,10 @@ it.each(["finished", "cancelled"] as const)(
               cited_by_count: null,
             }),
           );
+          // The implemented re-entry contract now names a masked identity
+          // "restored" in preview; it still matches the exact original UUID.
           expect(preview).toMatchObject({
-            disposition: "matched",
+            disposition: "restored",
             literature_id: original.literature_id,
           });
         }
@@ -929,29 +938,18 @@ it.each(["finished", "cancelled"] as const)(
                     : folders.has(o.id),
           );
         };
-        await f.transaction(() => {
-          for (const o of restoreIds(id("clean-pdf")))
-            f.db
-              .prepare(
-                "DELETE FROM intake_withdrawn_objects WHERE object_kind=? AND object_id=? AND batch_id=?",
-              )
-              .run(o.kind, o.id, main.id);
-          for (const table of [
-            "intake_batch_members",
-            "import_record_results",
-            "intake_items",
-          ])
-            f.db
-              .prepare(
-                `UPDATE ${table} SET disposition='restored' WHERE batch_id=? AND literature_id=?`,
-              )
-              .run(reentry.id, id("clean-pdf"));
-          f.db
-            .prepare(
-              "UPDATE retrieval_source_revision SET revision=revision+1 WHERE singleton=1",
-            )
-            .run();
-        });
+        // Re-entry now restores these masks and advances source revision in
+        // its real member transaction. Assert that work instead of replaying
+        // the drill's former manual restoration (which would count it twice).
+        for (const o of restoreIds(id("clean-pdf")))
+          expect(
+            f.rows(
+              "SELECT 1 FROM intake_withdrawn_objects WHERE object_kind=? AND object_id=? AND batch_id=?",
+              o.kind,
+              o.id,
+              main.id,
+            ),
+          ).toEqual([]);
         const restoredReport: IntakeReport = await f.app.importSessions.report(
           reentry.id,
         );
@@ -1012,11 +1010,15 @@ it.each(["finished", "cancelled"] as const)(
               }),
               main.id,
             );
-          // Derived Library FTS can be rebuilt exactly; facts and immutable bytes are retained.
+          // Real re-entry already rebuilds its metadata FTS row, potentially at
+          // a new rowid. Remove both that logical owner and the saved rowid
+          // before restoring the drill's exact baseline (including rowids).
           for (const row of fts) {
             f.db
-              .prepare("DELETE FROM literature_search_fts WHERE rowid=?")
-              .run(row.rowid!);
+              .prepare(
+                "DELETE FROM literature_search_fts WHERE literature_id=? OR rowid=?",
+              )
+              .run(row.literature_id!, row.rowid!);
             const columns = Object.keys(row);
             f.db
               .prepare(

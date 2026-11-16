@@ -1,3 +1,12 @@
+const { literatureWithdrawn }: typeof import("./intake-visibility.js") =
+  await import(
+    new URL(
+      import.meta.url.endsWith(".ts")
+        ? "./intake-visibility.ts"
+        : "./intake-visibility.js",
+      import.meta.url,
+    ).href
+  );
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -70,7 +79,7 @@ function capture(
     excluded: { literature_id: string; reason: string }[] = [];
   for (const id of ids) {
     const state = states.get(id);
-    if (!state) {
+    if (!state || literatureWithdrawn(db, id)) {
       excluded.push({ literature_id: id, reason: "not-found" });
       continue;
     }

@@ -72,6 +72,14 @@ export class MarkService {
     };
   }
   async manage(value: unknown, signal?: AbortSignal): Promise<ReadingMark> {
+    return this.manageForIntake(value, undefined, signal);
+  }
+  /** Internal annotation-import port; batch attribution is never a wire field. */
+  async manageForIntake(
+    value: unknown,
+    intakeBatchId?: string,
+    signal?: AbortSignal,
+  ): Promise<ReadingMark> {
     const command = parseMarkOperation(value);
     if (command.operation === "list" || command.operation === "export")
       throw new MarkError("mark-write-operation-invalid");
@@ -96,6 +104,7 @@ export class MarkService {
           ...command,
           ...(page_count === undefined ? {} : { page_count }),
           actor: activityContext().actor,
+          ...(intakeBatchId ? { intake_batch_id: intakeBatchId } : {}),
           now: new Date().toISOString(),
           ...(command.operation === "create" ? { mark_id: randomUUID() } : {}),
         },

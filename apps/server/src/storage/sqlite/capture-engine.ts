@@ -124,7 +124,7 @@ export function readCapture(db: DatabaseSync, r: CaptureRead): StoredCapture {
     batch_id: String(row.batch_id),
     literature_id:
       row.literature_id === null ? null : String(row.literature_id),
-    disposition: ["created", "enriched", "matched"].includes(
+    disposition: ["created", "enriched", "matched", "restored"].includes(
       String(row.disposition),
     )
       ? (row.disposition as StoredCapture["disposition"])

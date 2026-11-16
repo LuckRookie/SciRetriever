@@ -38,7 +38,7 @@ export class FolderService {
       throw new FolderError("folder-read-operation-invalid");
     return this.database.folders(command, signal);
   }
-  manage(value: unknown, signal?: AbortSignal) {
+  manage(value: unknown, signal?: AbortSignal, intakeBatchId?: string) {
     const command = parseFolderOperation(value);
     if (
       command.operation === "list" ||
@@ -50,6 +50,9 @@ export class FolderService {
       {
         ...command,
         actor: activityContext().actor,
+        ...(intakeBatchId
+          ? { intake_batch_id: parseAssetId(intakeBatchId) }
+          : {}),
         now: new Date().toISOString(),
         ...(command.operation === "create" ? { folder_id: randomUUID() } : {}),
       },

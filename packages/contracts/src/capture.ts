@@ -107,7 +107,7 @@ export interface IntakePageResult {
   readonly item_id: string;
   readonly batch_id: string;
   readonly literature_id: string | null;
-  readonly disposition: "created" | "enriched" | "matched" | null;
+  readonly disposition: "created" | "enriched" | "matched" | "restored" | null;
   readonly metadata: IntakePageCompletion;
   readonly missing_folder_ids: readonly string[];
   readonly file: IntakeFileStatus | IntakePendingPageFile | null;

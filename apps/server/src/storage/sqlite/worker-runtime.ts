@@ -65,6 +65,31 @@ const deviceModule = await import(
     import.meta.url,
   ).href
 );
+const withdrawalModule: typeof import("./intake-withdrawal-engine.js") =
+  await import(
+    new URL(
+      import.meta.url.endsWith(".ts")
+        ? "./intake-withdrawal-engine.ts"
+        : "./intake-withdrawal-engine.js",
+      import.meta.url,
+    ).href
+  );
+const visibilityModule: typeof import("./intake-visibility.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./intake-visibility.ts"
+      : "./intake-visibility.js",
+    import.meta.url,
+  ).href
+);
+const intakeObjectsModule: typeof import("./intake-objects.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./intake-objects.ts"
+      : "./intake-objects.js",
+    import.meta.url,
+  ).href
+);
 const importModule = await import(
   new URL(
     import.meta.url.endsWith(".ts")
@@ -576,6 +601,7 @@ function writeMetadataAtRevision(
   indexMetadata(literatureId, m);
 }
 function indexMetadata(literatureId: Dynamic, m: Dynamic): Dynamic {
+  if (visibilityModule.literatureWithdrawn(db, literatureId)) return;
   const contentBody =
     db
       .prepare(
@@ -623,7 +649,9 @@ function indexMetadata(literatureId: Dynamic, m: Dynamic): Dynamic {
     contentBody,
   );
 }
-function getLiterature(id: Dynamic): Dynamic {
+function getLiterature(id: Dynamic, includeWithdrawn = false): Dynamic {
+  if (!includeWithdrawn && visibilityModule.literatureWithdrawn(db, id))
+    return null;
   const l = db
     .prepare(
       "SELECT literature_id,meta_literature_id,version_role FROM literatures WHERE literature_id=?",
@@ -686,7 +714,7 @@ function getLiteratures(ids: Dynamic): Dynamic {
   const json = JSON.stringify(ids);
   const roots = db
     .prepare(
-      "SELECT l.literature_id,l.meta_literature_id,l.version_role,m.title,m.abstract,m.publication_date,m.publication_year,m.publication_form,m.article_kind,m.language,m.venue,m.publisher,m.volume,m.issue,m.pages FROM literatures l JOIN literature_metadata m ON m.literature_id=l.literature_id WHERE l.literature_id IN (SELECT value FROM json_each(?)) ORDER BY l.literature_id",
+      `SELECT l.literature_id,l.meta_literature_id,l.version_role,m.title,m.abstract,m.publication_date,m.publication_year,m.publication_form,m.article_kind,m.language,m.venue,m.publisher,m.volume,m.issue,m.pages FROM literatures l JOIN literature_metadata m ON m.literature_id=l.literature_id WHERE ${visibilityModule.visibleLiteratureSql("l.literature_id")} AND l.literature_id IN (SELECT value FROM json_each(?)) ORDER BY l.literature_id`,
     )
     .all(json);
   const authors = db
@@ -801,7 +829,7 @@ function findLiteratureByIdentifiers(identifiers: Dynamic): Dynamic {
     for (const row of query.all(identifier.namespace, identifier.value))
       ids.add(row.literature_id);
   }
-  return [...ids].sort().map(getLiterature);
+  return [...ids].sort().map((id) => getLiterature(id, true));
 }
 function stateEvidence(id: string): Dynamic {
   return archiveModule.archiveState(
@@ -1035,7 +1063,9 @@ function librarySnapshot(
     }
     // Select IDs before materializing domain rows: an unrelated row must not be
     // parsed just because it shares the catalog or an FTS term with this scope.
-    const conditions: string[] = [];
+    const conditions: string[] = [
+      visibilityModule.visibleLiteratureSql("literature_id"),
+    ];
     const parameters: string[] = [];
     if (scopeMatches) {
       conditions.push("literature_id IN (SELECT value FROM json_each(?))");
@@ -1057,7 +1087,7 @@ function librarySnapshot(
     }
     if (discoveryRunIds.length) {
       conditions.push(
-        "literature_id IN (SELECT actual_literature_id FROM topic_discovery_causes WHERE discovery_run_id IN (SELECT value FROM json_each(?)) UNION SELECT actual_literature_id FROM citation_discovery_causes WHERE discovery_run_id IN (SELECT value FROM json_each(?)))",
+        `literature_id IN (SELECT actual_literature_id FROM topic_discovery_causes WHERE discovery_run_id IN (SELECT value FROM json_each(?)) UNION SELECT actual_literature_id FROM citation_discovery_causes WHERE ${visibilityModule.visibleCitationSql()} AND discovery_run_id IN (SELECT value FROM json_each(?)))`,
       );
       const json = JSON.stringify(discoveryRunIds);
       parameters.push(json, json);
@@ -1099,7 +1129,7 @@ function librarySnapshot(
       );
       rows = db
         .prepare(
-          "SELECT literature_id FROM literatures WHERE meta_literature_id IN (SELECT meta_literature_id FROM literatures WHERE literature_id IN (SELECT value FROM json_each(?))) ORDER BY literature_id",
+          `SELECT literature_id FROM literatures WHERE ${visibilityModule.visibleLiteratureSql("literature_id")} AND meta_literature_id IN (SELECT meta_literature_id FROM literatures WHERE literature_id IN (SELECT value FROM json_each(?))) ORDER BY literature_id`,
         )
         .all(JSON.stringify(rows.map((row: Dynamic) => row.literature_id)))
         .map((row: Dynamic) => ({
@@ -1136,7 +1166,7 @@ function librarySnapshot(
       const discovery = new Map<Dynamic, Dynamic>();
       for (const item of db
         .prepare(
-          "SELECT actual_literature_id,discovery_run_id FROM topic_discovery_causes WHERE actual_literature_id IN (SELECT value FROM json_each(?)) UNION SELECT actual_literature_id,discovery_run_id FROM citation_discovery_causes WHERE actual_literature_id IN (SELECT value FROM json_each(?)) ORDER BY actual_literature_id,discovery_run_id",
+          `SELECT actual_literature_id,discovery_run_id FROM topic_discovery_causes WHERE actual_literature_id IN (SELECT value FROM json_each(?)) UNION SELECT actual_literature_id,discovery_run_id FROM citation_discovery_causes WHERE ${visibilityModule.visibleCitationSql()} AND actual_literature_id IN (SELECT value FROM json_each(?)) ORDER BY actual_literature_id,discovery_run_id`,
         )
         .all(json, json)) {
         const values = discovery.get(item.actual_literature_id) ?? [];
@@ -1193,7 +1223,7 @@ function librarySnapshot(
           .get(row.literature_id),
         discovery_run_ids: db
           .prepare(
-            "SELECT discovery_run_id FROM topic_discovery_causes WHERE actual_literature_id=? UNION SELECT discovery_run_id FROM citation_discovery_causes WHERE actual_literature_id=?",
+            `SELECT discovery_run_id FROM topic_discovery_causes WHERE actual_literature_id=? UNION SELECT discovery_run_id FROM citation_discovery_causes WHERE ${visibilityModule.visibleCitationSql()} AND actual_literature_id=?`,
           )
           .all(row.literature_id, row.literature_id)
           .map((x: Dynamic) => x.discovery_run_id),
@@ -1266,7 +1296,7 @@ function librarySearchPage(request: Dynamic): Dynamic {
           .get(row.literature_id),
         discovery_run_ids: db
           .prepare(
-            "SELECT discovery_run_id FROM topic_discovery_causes WHERE actual_literature_id=? UNION SELECT discovery_run_id FROM citation_discovery_causes WHERE actual_literature_id=?",
+            `SELECT discovery_run_id FROM topic_discovery_causes WHERE actual_literature_id=? UNION SELECT discovery_run_id FROM citation_discovery_causes WHERE ${visibilityModule.visibleCitationSql()} AND actual_literature_id=?`,
           )
           .all(row.literature_id, row.literature_id)
           .map((r: Dynamic) => r.discovery_run_id),
@@ -1277,7 +1307,7 @@ function librarySearchPage(request: Dynamic): Dynamic {
 function listLiterature(afterId: Dynamic, limit: Dynamic): Dynamic {
   const rows = db
     .prepare(
-      "SELECT literature_id FROM literatures WHERE (? IS NULL OR literature_id>?) ORDER BY literature_id LIMIT ?",
+      `SELECT literature_id FROM literatures WHERE ${visibilityModule.visibleLiteratureSql("literature_id")} AND (? IS NULL OR literature_id>?) ORDER BY literature_id LIMIT ?`,
     )
     .all(afterId, afterId, limit + 1);
   const items = rows
@@ -1291,7 +1321,7 @@ function listLiterature(afterId: Dynamic, limit: Dynamic): Dynamic {
 function currentFacts(id: Dynamic): Dynamic {
   db.exec("BEGIN");
   try {
-    const literature = getLiterature(id);
+    const literature = getLiterature(id, true);
     if (!literature) {
       db.exec("COMMIT");
       return null;
@@ -1749,7 +1779,7 @@ function identityRead(r: Dynamic): Dynamic {
         )
         .all(metaId))
         memberIds.push(row.literature_id);
-    const literatures = memberIds.map(getLiterature);
+    const literatures = memberIds.map((id) => getLiterature(id, true));
     if (literatures.some((x: Dynamic) => !x)) fail();
     const meta_literatures = [...metaIds]
       .sort()
@@ -1787,6 +1817,10 @@ function identityRead(r: Dynamic): Dynamic {
         metadata_sha256: metadata.metadata_sha256,
         content_ready:
           stateEvidence(literature.literature_id).status === "READY",
+        withdrawn: visibilityModule.literatureWithdrawn(
+          db,
+          literature.literature_id,
+        ),
         field_states: metadataFieldsModule.readMetadataFields(
           db,
           literature.literature_id,
@@ -2165,7 +2199,7 @@ function acceptObservation(c: Dynamic): Dynamic {
         r.term,
         queryTextModule.normalizeQueryText(r.term),
       );
-    indexMetadata(c.literatureId, getLiterature(c.literatureId).metadata);
+    indexMetadata(c.literatureId, getLiterature(c.literatureId, true).metadata);
     // Accepting a new MetadataObservation invalidates the automatic acquisition exhaustion fact.
     db.prepare(
       "DELETE FROM automatic_pdf_acquisition_exhaustions WHERE literature_id=?",
@@ -2201,6 +2235,9 @@ function insertExact(table: Dynamic, values: Dynamic, key: Dynamic): Dynamic {
     fail();
 }
 function writeLiteratureAsset(p: Dynamic): Dynamic {
+  const existed = db
+    .prepare("SELECT 1 FROM literature_assets WHERE literature_asset_id=?")
+    .get(p.literature_asset_id);
   insertExact("provenances", p.provenance, "provenance_id");
   const a = p.asset;
   const registered = db
@@ -2250,6 +2287,13 @@ function writeLiteratureAsset(p: Dynamic): Dynamic {
     },
     "literature_asset_id",
   );
+  if (!existed)
+    intakeObjectsModule.recordIntakeObject(
+      db,
+      p.intake_batch_id,
+      "literature-asset",
+      p.literature_asset_id,
+    );
 }
 function transaction(operation: Dynamic): Dynamic {
   db.exec("BEGIN IMMEDIATE");
@@ -2520,6 +2564,11 @@ function createExecutionJob(
     )
       fail();
     for (const target of targets) {
+      if (
+        target.literature_id &&
+        visibilityModule.literatureWithdrawn(db, target.literature_id)
+      )
+        fail();
       if (!target || target.job_id !== row.job_id) fail();
       db.prepare(
         "INSERT INTO execution_targets(target_id,job_id,ordinal,literature_id,version_role,stage,disposition,next_eligible_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(target_id) DO NOTHING",
@@ -2649,7 +2698,7 @@ function listExecutionJobs(
         SELECT job_id, count(*) AS total,
           count(CASE WHEN disposition IN ('completed','failed','skipped') THEN 1 END) AS done
         FROM execution_targets
-        WHERE job_id IN (SELECT job_id FROM selected_jobs)
+        WHERE job_id IN (SELECT job_id FROM selected_jobs) AND (literature_id IS NULL OR ${visibilityModule.visibleLiteratureSql("literature_id")})
         GROUP BY job_id
       )
       SELECT job.*, COALESCE(progress.total,0) AS progress_total,
@@ -2725,7 +2774,11 @@ function consumeExecutionBudget(
     return { accepted, budget: getExecutionBudget(jobId) };
   });
 }
-function listExecutionTargets(jobId: Dynamic, limit: Dynamic): Dynamic {
+function listExecutionTargets(
+  jobId: Dynamic,
+  limit: Dynamic,
+  visibleOnly = false,
+): Dynamic {
   requireRuntime();
   if (
     !Number.isSafeInteger(limit) ||
@@ -2735,7 +2788,7 @@ function listExecutionTargets(jobId: Dynamic, limit: Dynamic): Dynamic {
     fail();
   return db
     .prepare(
-      "SELECT * FROM execution_targets WHERE job_id=? ORDER BY ordinal,target_id LIMIT ?",
+      `SELECT * FROM execution_targets WHERE job_id=? ${visibleOnly ? "AND (literature_id IS NULL OR " + visibilityModule.visibleLiteratureSql("literature_id") + ")" : ""} ORDER BY ordinal,target_id LIMIT ?`,
     )
     .all(jobId, limit)
     .map((row: Dynamic) => ({
@@ -3388,6 +3441,9 @@ function commitReceipt(intent: Dynamic, created: Dynamic): Dynamic {
       insertExact("provenances", intent.provenance, "provenance_id");
     } else
       writeLiteratureAsset({
+        ...(intent.intake_batch_id
+          ? { intake_batch_id: intent.intake_batch_id }
+          : {}),
         literature_asset_id: intent.literature_asset_id,
         literature_id: intent.literature_id,
         asset: {
@@ -3538,6 +3594,7 @@ function articleIdentityPut(a: Dynamic): Dynamic {
 }
 function documentMaterial(literatureId: Dynamic, assetId: Dynamic): Dynamic {
   return readTransaction(() => {
+    if (visibilityModule.literatureWithdrawn(db, literatureId)) return null;
     const source = db
       .prepare(
         "SELECT a.sha256,a.size_bytes,a.media_type,a.relative_path FROM literature_assets l JOIN assets a ON a.asset_id=l.asset_id WHERE l.literature_id=? AND l.asset_id=? AND l.role IN ('primary-pdf','supplementary-pdf')",
@@ -3577,7 +3634,8 @@ function documentVersion(versionId: Dynamic): Dynamic {
   const v = db
     .prepare("SELECT * FROM document_versions WHERE document_version_id=?")
     .get(versionId);
-  if (!v) return null;
+  if (!v || visibilityModule.literatureWithdrawn(db, v.literature_id))
+    return null;
   const resources = db
     .prepare(
       "SELECT resource_id,reference,relation,artifact_sha256,artifact_byte_size,artifact_media_type FROM document_version_resources WHERE document_version_id=? ORDER BY ordinal",
@@ -3672,6 +3730,7 @@ function documentDefault(
   assetSha256: Dynamic,
 ): Dynamic {
   requireDocumentV3();
+  if (visibilityModule.literatureWithdrawn(db, literatureId)) return null;
   return (
     db
       .prepare(
@@ -4078,7 +4137,7 @@ function referenceSnapshot(): Dynamic {
   try {
     const rows = db
       .prepare(
-        "SELECT reference_id,source_literature_id,target_literature_id FROM literature_references WHERE EXISTS(SELECT 1 FROM provider_relation_reference_supports s WHERE s.reference_id=literature_references.reference_id) OR EXISTS(SELECT 1 FROM metadata_reference_text_supports s WHERE s.reference_id=literature_references.reference_id) OR EXISTS(SELECT 1 FROM archive_reference_text_supports s JOIN document_defaults f ON f.document_version_id=s.document_version_id JOIN structure_annotation_current c ON c.document_version_id=s.document_version_id AND c.annotation_id=s.annotation_id JOIN document_versions d ON d.document_version_id=s.document_version_id JOIN literature_assets l ON l.literature_id=d.literature_id AND l.asset_id=d.source_asset_id AND l.role='primary-pdf' WHERE s.reference_id=literature_references.reference_id) ORDER BY source_literature_id,target_literature_id,reference_id",
+        `SELECT reference_id,source_literature_id,target_literature_id FROM literature_references WHERE ${visibilityModule.visibleLiteratureSql("source_literature_id")} AND ${visibilityModule.visibleLiteratureSql("target_literature_id")} AND (EXISTS(SELECT 1 FROM provider_relation_reference_supports s WHERE s.reference_id=literature_references.reference_id) OR EXISTS(SELECT 1 FROM metadata_reference_text_supports s WHERE s.reference_id=literature_references.reference_id) OR EXISTS(SELECT 1 FROM archive_reference_text_supports s JOIN document_defaults f ON f.document_version_id=s.document_version_id JOIN structure_annotation_current c ON c.document_version_id=s.document_version_id AND c.annotation_id=s.annotation_id JOIN document_versions d ON d.document_version_id=s.document_version_id JOIN literature_assets l ON l.literature_id=d.literature_id AND l.asset_id=d.source_asset_id AND l.role='primary-pdf' WHERE s.reference_id=literature_references.reference_id)) ORDER BY source_literature_id,target_literature_id,reference_id`,
       )
       .all();
     const result = rows.map((row: Dynamic) => {
@@ -4135,7 +4194,7 @@ function referenceQueryRows(selection: Dynamic): Dynamic {
         : "target_literature_id=?";
   const rows = db
     .prepare(
-      "SELECT reference_id,source_literature_id,target_literature_id FROM literature_references WHERE " +
+      `SELECT reference_id,source_literature_id,target_literature_id FROM literature_references WHERE ${visibilityModule.visibleLiteratureSql("source_literature_id")} AND ${visibilityModule.visibleLiteratureSql("target_literature_id")} AND ` +
         where,
     )
     .all(selection.reference_id ?? selection.literature_id);
@@ -4248,11 +4307,10 @@ function literatureDetailSnapshot(
       if (!nested) db.exec("COMMIT");
       return null;
     }
-    const meta_literature = db
-      .prepare(
-        "SELECT meta_literature_id,representative_literature_id FROM meta_literatures WHERE meta_literature_id=?",
-      )
-      .get(literature.meta_literature_id);
+    const meta_literature = visibilityModule.visibleMetaLiterature(
+      db,
+      literature.meta_literature_id,
+    );
     if (
       !meta_literature ||
       !db
@@ -4311,7 +4369,7 @@ function literatureDetailSnapshot(
       primaryTexts = draftFactsModule.primaryDefaultTexts(defaultRows);
     const assets = db
       .prepare(
-        "SELECT literature_asset_id,literature_id,asset_id,role,provenance_id,source_url FROM literature_assets WHERE literature_id=? ORDER BY role,literature_asset_id",
+        `SELECT literature_asset_id,literature_id,asset_id,role,provenance_id,source_url FROM literature_assets WHERE literature_id=? AND ${visibilityModule.visibleObjectSql("literature-asset", "literature_asset_id")} ORDER BY role,literature_asset_id`,
       )
       .all(id)
       .map(({ provenance_id, ...relation }: Dynamic) => {
@@ -4345,7 +4403,7 @@ function literatureDetailSnapshot(
     const primary_pdf = primary[0] || null;
     const versionRows = db
       .prepare(
-        "SELECT literature_id FROM literatures WHERE meta_literature_id=? AND literature_id<>? ORDER BY CASE version_role WHEN 'published' THEN 0 WHEN 'accepted-manuscript' THEN 1 WHEN 'preprint' THEN 2 ELSE 3 END,literature_id",
+        `SELECT literature_id FROM literatures WHERE ${visibilityModule.visibleLiteratureSql("literature_id")} AND meta_literature_id=? AND literature_id<>? ORDER BY CASE version_role WHEN 'published' THEN 0 WHEN 'accepted-manuscript' THEN 1 WHEN 'preprint' THEN 2 ELSE 3 END,literature_id`,
       )
       .all(literature.meta_literature_id, id);
     const versionTexts = primaryDocumentTexts(
@@ -4515,7 +4573,7 @@ function getDiscovery(id: Dynamic): Dynamic {
     run.kind === "citation"
       ? db
           .prepare(
-            "SELECT literature_id FROM citation_discovery_seeds WHERE discovery_run_id=? ORDER BY seed_ordinal",
+            `SELECT literature_id FROM citation_discovery_seeds WHERE discovery_run_id=? AND ${visibilityModule.visibleLiteratureSql("literature_id")} ORDER BY seed_ordinal`,
           )
           .all(id)
           .map((x: Dynamic) => x.literature_id)
@@ -4545,19 +4603,24 @@ function getDiscovery(id: Dynamic): Dynamic {
     }));
   const results = db
     .prepare(
-      "SELECT meta_literature_id FROM discovery_results WHERE discovery_run_id=? ORDER BY meta_literature_id",
+      `SELECT meta_literature_id FROM discovery_results WHERE discovery_run_id=? AND EXISTS(SELECT 1 FROM literatures l WHERE l.meta_literature_id=discovery_results.meta_literature_id AND ${visibilityModule.visibleLiteratureSql("l.literature_id")}) ORDER BY meta_literature_id`,
     )
     .all(id);
   const topic_causes = db
     .prepare(
-      "SELECT meta_literature_id,metadata_observation_id,actual_literature_id FROM topic_discovery_causes WHERE discovery_run_id=? ORDER BY meta_literature_id,metadata_observation_id",
+      `SELECT meta_literature_id,metadata_observation_id,actual_literature_id FROM topic_discovery_causes WHERE discovery_run_id=? AND ${visibilityModule.visibleLiteratureSql("actual_literature_id")} ORDER BY meta_literature_id,metadata_observation_id`,
     )
     .all(id);
   const citation_causes = db
     .prepare(
-      "SELECT meta_literature_id,source_literature_id,target_literature_id,actual_literature_id,depth FROM citation_discovery_causes WHERE discovery_run_id=? ORDER BY depth,source_literature_id,target_literature_id",
+      `SELECT meta_literature_id,source_literature_id,target_literature_id,actual_literature_id,depth FROM citation_discovery_causes WHERE discovery_run_id=? AND ${visibilityModule.visibleLiteratureSql("source_literature_id")} AND ${visibilityModule.visibleLiteratureSql("target_literature_id")} ORDER BY depth,source_literature_id,target_literature_id`,
     )
     .all(id);
+  const visibleResults = new Set(
+    [...topic_causes, ...citation_causes].map(
+      (cause: Dynamic) => cause.meta_literature_id,
+    ),
+  );
   return {
     run: {
       ...run,
@@ -4566,7 +4629,9 @@ function getDiscovery(id: Dynamic): Dynamic {
     },
     providers,
     source_results,
-    results,
+    results: results.filter((result: Dynamic) =>
+      visibleResults.has(result.meta_literature_id),
+    ),
     topic_causes,
     citation_causes,
   };
@@ -4863,6 +4928,35 @@ port.on("message", (message: WorkerMessage) => {
         break;
       case "device_connections":
         value = deviceModule.runDeviceStorage(db, message.command.command);
+        break;
+      case "intake_withdrawn":
+        value = visibilityModule.literatureWithdrawn(
+          db,
+          message.command.literature_id,
+        );
+        break;
+      case "intake_withdrawal_read":
+      case "intake_withdrawal_write":
+        try {
+          value = {
+            ok: true,
+            value: withdrawalModule.runIntakeWithdrawal(
+              db,
+              message.command.command,
+            ),
+          };
+        } catch (error) {
+          throwCatalogCorruption(error);
+          if (
+            error &&
+            typeof error === "object" &&
+            "code" in error &&
+            typeof error.code === "string" &&
+            error.code.startsWith("intake-batch-")
+          )
+            value = { ok: false, code: error.code };
+          else throw error;
+        }
         break;
       case "folders":
         try {
@@ -5164,20 +5258,24 @@ port.on("message", (message: WorkerMessage) => {
       case "document_parts": {
         requireDocumentV3();
         const { literatureId, offset, limit } = message.command;
-        value = readTransaction(() => ({
-          total: Number(
-            db
-              .prepare(
-                "SELECT count(*) AS n FROM literature_assets l JOIN assets a ON a.asset_id=l.asset_id WHERE l.literature_id=? AND l.role IN ('primary-pdf','supplementary-pdf') AND a.media_type='application/pdf'",
-              )
-              .get(literatureId).n,
-          ),
-          items: db
-            .prepare(
-              "SELECT l.asset_id,a.sha256 AS asset_sha256,CASE l.role WHEN 'primary-pdf' THEN 'main' ELSE 'supplementary' END AS role FROM literature_assets l JOIN assets a ON a.asset_id=l.asset_id WHERE l.literature_id=? AND l.role IN ('primary-pdf','supplementary-pdf') AND a.media_type='application/pdf' ORDER BY CASE l.role WHEN 'primary-pdf' THEN 0 ELSE 1 END,l.rowid LIMIT ? OFFSET ?",
-            )
-            .all(literatureId, limit, offset),
-        }));
+        value = readTransaction(() =>
+          visibilityModule.literatureWithdrawn(db, literatureId)
+            ? { total: 0, items: [] }
+            : {
+                total: Number(
+                  db
+                    .prepare(
+                      "SELECT count(*) AS n FROM literature_assets l JOIN assets a ON a.asset_id=l.asset_id WHERE l.literature_id=? AND l.role IN ('primary-pdf','supplementary-pdf') AND a.media_type='application/pdf'",
+                    )
+                    .get(literatureId).n,
+                ),
+                items: db
+                  .prepare(
+                    "SELECT l.asset_id,a.sha256 AS asset_sha256,CASE l.role WHEN 'primary-pdf' THEN 'main' ELSE 'supplementary' END AS role FROM literature_assets l JOIN assets a ON a.asset_id=l.asset_id WHERE l.literature_id=? AND l.role IN ('primary-pdf','supplementary-pdf') AND a.media_type='application/pdf' ORDER BY CASE l.role WHEN 'primary-pdf' THEN 0 ELSE 1 END,l.rowid LIMIT ? OFFSET ?",
+                  )
+                  .all(literatureId, limit, offset),
+              },
+        );
         break;
       }
       case "document_material":
@@ -5235,6 +5333,7 @@ port.on("message", (message: WorkerMessage) => {
         value = listExecutionTargets(
           message.command.jobId,
           message.command.limit,
+          message.command.visibleOnly,
         );
         break;
       case "execution_list_attempts":
@@ -5466,9 +5565,11 @@ port.on("message", (message: WorkerMessage) => {
       case "put_discovery":
         value = putDiscovery(message.command.publication);
         break;
-      case "get_discovery":
-        value = getDiscovery(message.command.discoveryRunId);
+      case "get_discovery": {
+        const { discoveryRunId } = message.command;
+        value = readTransaction(() => getDiscovery(discoveryRunId));
         break;
+      }
       case "list_candidates":
         value = listCandidates(message.command.articleId);
         break;

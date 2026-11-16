@@ -1,3 +1,12 @@
+const { visibleLiteratureSql }: typeof import("./intake-visibility.js") =
+  await import(
+    new URL(
+      import.meta.url.endsWith(".ts")
+        ? "./intake-visibility.ts"
+        : "./intake-visibility.js",
+      import.meta.url,
+    ).href
+  );
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
@@ -128,7 +137,7 @@ export function runDraftTextRead(db: DatabaseSync, request: DraftTextRead) {
         : [...selector.literature_ids];
     const members = db
       .prepare(
-        "SELECT literature_id,version_role FROM literatures WHERE literature_id IN (SELECT value FROM json_each(?))",
+        `SELECT literature_id,version_role FROM literatures WHERE ${visibleLiteratureSql("literature_id")} AND literature_id IN (SELECT value FROM json_each(?))`,
       )
       .all(JSON.stringify(ids));
     if (members.length !== ids.length) fail("literature-not-found");
