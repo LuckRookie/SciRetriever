@@ -1,7 +1,7 @@
 # 浏览器扩展
 
 类型：代码导航
-负责：网页收藏扩展（计划 20 · 09）
+负责：网页收藏扩展（计划 25 · 16）
 状态：现行
 
 Chrome、Edge 用的 Manifest V3 扩展，用法见[浏览器扩展指南](../../docs/guides/browser-extension.md)，弹窗规格见[页面规格](../../docs/architecture/web/page-specs.md#浏览器扩展弹窗)。

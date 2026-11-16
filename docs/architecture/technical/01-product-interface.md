@@ -223,7 +223,7 @@ Web 管理均为 POST，要求登录 Cookie、工作台 Cookie、client_id、同
 
 #### 2.4.2 入库 HTTP（目标，尚未实现）
 
-目标，尚未实现（计划 20 的 14–17 块）。本节按 [ADR 0063](../decisions/0063-unified-intake.md) 规定唯一的一组入库接口：扩展、网页与 Agent 都用它，CLI 与 MCP 的书目导入和补 PDF 是它的包装。单独的收藏接口（原 `/api/v1/capture/`）与原 `/api/v1/import/` 不再存在；对外只有入库批次，没有会话编号。各对象的业务含义见[文献与材料 6.4](03-literature-materials.md#64-入库目标尚未实现)，批次的读模型见[查询 2.1.6](06-retrieval-context.md#216-入库批次范围词频与-pdf-获取范围)。
+目标，尚未实现（计划 20 的 14–16 块已实现，撤回为计划 25 的 13 块；24.1 核对后改为现状）。本节按 [ADR 0063](../decisions/0063-unified-intake.md) 规定唯一的一组入库接口：扩展、网页与 Agent 都用它，CLI 与 MCP 的书目导入和补 PDF 是它的包装。单独的收藏接口（原 `/api/v1/capture/`）与原 `/api/v1/import/` 不再存在；对外只有入库批次，没有会话编号。各对象的业务含义见[文献与材料 6.4](03-literature-materials.md#64-入库目标尚未实现)，批次的读模型见[查询 2.1.6](06-retrieval-context.md#216-入库批次范围词频与-pdf-获取范围)。
 
 **准入**
 

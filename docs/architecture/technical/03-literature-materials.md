@@ -1467,7 +1467,7 @@ Application 的 writes 为 FileStore 与 SQLite 提供同一短写入准入。�
 
 #### 6.4.9 经扩展从 Zotero 导入
 
-依据 [ADR 0063](../decisions/0063-unified-intake.md) 第 6 节。下面标“待探测”的各项，以计划 20 的 Zotero 探测结果为准，规格暂不规定。
+依据 [ADR 0063](../decisions/0063-unified-intake.md) 第 6 节。下面标“待探测”的各项，以计划 25 的 14（Zotero 探测）结果为准，规格暂不规定。
 
 **扩展交来什么。**
 

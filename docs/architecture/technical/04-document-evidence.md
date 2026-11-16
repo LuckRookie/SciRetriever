@@ -781,7 +781,7 @@ interface DraftDifference {
 
 ### 8.6 加工读取
 
-尚未实现（随计划 16）；现行算子只读 READY 文献的校订稿。
+尚未实现（随知识加工，见[知识加工提案](../../proposals/2026-11-16-knowledge-processing/README.md)）；现行算子只读 READY 文献的校订稿。
 
 算子的准入、复用与计数归[知识加工](05-knowledge-processing.md#72-算子输入与复用)。本模块为它提供以下读取合同：
 

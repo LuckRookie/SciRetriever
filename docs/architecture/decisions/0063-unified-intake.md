@@ -21,7 +21,7 @@
     - 第 3 节“没有父条目的独立 PDF……不导入”：改为可以入库（第 2 节）。
     - 第 5 节“读不到 DOI 或 arXiv 号时……否则不保存”，以及由扩展解读页面书目标签：改为第 2、5 节。
   - [ADR 0052](0052-intake-batches-and-explicit-scope.md) 第 1 节：入库方式不再逐项列举，一切入库都形成入库批次；批次增加完成之前的状态和撤回（第 3、9 节）。
-- Related：[产品需求](../requirements.md)收1–收4、规2；[ADR 0029](0029-unverified-pdf-acquisition.md) PDF 验收；[ADR 0060](0060-two-level-full-text.md) 全文两级；计划 20 的[实现审查](../../plans/2026-11-09-zotero-import/README.md)
+- Related：[产品需求](../requirements.md)收1–收4、规2；[ADR 0029](0029-unverified-pdf-acquisition.md) PDF 验收；[ADR 0060](0060-two-level-full-text.md) 全文两级；计划 20 的[实现审查](../../archive/2026-11-09-zotero-import/README.md)
 
 ## 背景
 

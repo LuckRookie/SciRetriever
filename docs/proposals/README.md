@@ -8,7 +8,9 @@
 
 ## 当前提案
 
-当前没有独立活动提案。已被精简首版替代的完整版知识加工方案已完整移入[历史提案](../archive/2026-10-17-knowledge-processing-full-design/README.md)；其它已接受或被替代材料见[历史索引](../archive/README.md)。目标合同中尚待定稿的部分继续在其归属技术文档标明，不能当作已发布接口。
+- [知识加工](2026-11-16-knowledge-processing/README.md)：draft，暂缓。所有关于知识加工的计划内容（原计划 16 的全部、原计划 24 的第三次交付、原计划 21 与 24 中只为加工服务的部分），Owner 2026-11-16 决定收在这里，计划中不再出现。
+
+已被精简首版替代的完整版知识加工方案已完整移入[历史提案](../archive/2026-10-17-knowledge-processing-full-design/README.md)；其它已接受或被替代材料见[历史索引](../archive/README.md)。目标合同中尚待定稿的部分继续在其归属技术文档标明，不能当作已发布接口。
 
 活动提案使用 TOML front matter：
 

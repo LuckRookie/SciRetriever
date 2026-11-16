@@ -22,7 +22,7 @@
   - ADR 0037 第 8 节 `READY` 的定义与条件不变，只是不再作为算子门槛。ADR 0037 第 10 节“用时核对”对校订稿片段的文字比对保留，新增证据根的核对见第 4 节。
   - [ADR 0026](0026-agent-knowledge-and-human-collaboration.md) 第 3 节 2026-10-12 Owner 修订中“不设 token、累计调用次数或整篇执行时长的业务预算”——对知识加工及其辅助模型操作改为第 6 节的软预算；对解析等其它范围不变。
 - 需求：本 ADR 回答[产品需求](../requirements.md)的炼1–炼4 和用3“怎样做到”。它依赖 Owner 同时在需求第 6 节补一句关于实体与关系的说明（见“对既有决定的处理”）。ADR 不反向修改需求。
-- Related: [知识加工规格](../technical/05-knowledge-processing.md)第 8 节（规格）；[计划 16](../../plans/2026-10-24-operator-plugins/README.md)（实施与验收）
+- Related: [知识加工规格](../technical/05-knowledge-processing.md)第 8 节（规格）；[计划 16](../../proposals/2026-11-16-knowledge-processing/00-plan-16.md)（实施与验收）
 
 ## 背景
 

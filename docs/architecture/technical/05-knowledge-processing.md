@@ -641,7 +641,7 @@ ProcessorResult 保存稳定 ID、比较身份、内容、字段证据、覆盖�
 
 ## 8. 知识加工平台与研究任务（尚未实现）
 
-本节是 [ADR 0044](../decisions/0044-knowledge-processing-platform.md) 的规格，文本输入按 [ADR 0060](../decisions/0060-two-level-full-text.md) 第 4 节。本节各条都尚未实现；当前行为见第 2、3、6、7 节。实施与验收见[计划 16](../../plans/2026-10-24-operator-plugins/README.md)。
+本节是 [ADR 0044](../decisions/0044-knowledge-processing-platform.md) 的规格，文本输入按 [ADR 0060](../decisions/0060-two-level-full-text.md) 第 4 节。本节各条都尚未实现；当前行为见第 2、3、6、7 节。实施与验收见[计划 16](../../proposals/2026-11-16-knowledge-processing/00-plan-16.md)。
 
 本节实现后取代的现行合同（ADR 0044 与 ADR 0060 的“部分取代”逐句列出对应的旧条款）：
 
