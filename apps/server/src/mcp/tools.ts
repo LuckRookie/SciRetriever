@@ -583,7 +583,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "library_counts",
-    "Count library quick filters, ignoring statuses and needs_manual_pdf but preserving all other LibraryQuery facets. No writes.",
+    "Count library quick filters, ignoring statuses and needs_manual_pdf but preserving all other LibraryQuery facets, including has_primary_pdf. full_text={total,obtained,missing,exhausted} counts papers (MetaLiterature) across all current sibling versions; statuses and with_primary_pdf count versions. All counts share one read-only snapshot. No writes, network, model calls or tasks.",
     object({ query: { type: "object" } }),
   ),
   tool(
@@ -602,7 +602,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
             query: {
               type: "object",
               description:
-                "LibraryQuery: text, title, author, author_orcids, identifiers, publication_year_from/to, venue, publisher, publication_forms, article_kinds, languages, keywords, version_roles, statuses, missing_steps, needs_manual_pdf, needs_metadata, discovery_run_ids, text_levels, has_draft_differences, has_image_only_pages, cited_by_results, has_unfound_citations. Draft fact filters and sort keys use the primary PDF default only; non-drafts match neither true nor false. Returned draft_facts are catalog facts, not a proofreading action.",
+                "LibraryQuery: text, title, author, author_orcids, identifiers, publication_year_from/to, venue, publisher, publication_forms, article_kinds, languages, keywords, version_roles, statuses, missing_steps, needs_manual_pdf, has_primary_pdf (per version; true/false, null or omitted means no filter), needs_metadata, discovery_run_ids, text_levels, has_draft_differences, has_image_only_pages, cited_by_results, has_unfound_citations. Draft fact filters and sort keys use the primary PDF default only; non-drafts match neither true nor false. Returned draft_facts are catalog facts, not a proofreading action.",
             },
             limit: { type: "integer", minimum: 1, maximum: 100 },
             cursor: nullable(text),

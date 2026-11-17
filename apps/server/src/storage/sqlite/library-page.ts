@@ -33,6 +33,16 @@ const { PRIMARY_TEXT_LEVEL_SQL, primaryDraftFactSql }: typeof DraftFacts =
 import type { LibraryFacets, LibraryQuery } from "@sciretriever/contracts";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import type { LibraryPageQuery } from "../../literature/query.js";
+const { fullTextCounts }: typeof import("./full-text-counts.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./full-text-counts.ts"
+      : "./full-text-counts.js",
+    import.meta.url,
+  ).href
+);
+
+const HAS_PRIMARY_PDF_SQL = `EXISTS(SELECT 1 FROM literature_assets pdf WHERE pdf.literature_id=l.literature_id AND pdf.role='primary-pdf' AND ${visibleObjectSql("literature-asset", "pdf.literature_asset_id")})`;
 
 export const OPENED_SQL =
   "(SELECT last_opened_at FROM reading_history h WHERE h.literature_id=l.literature_id)";
@@ -121,6 +131,8 @@ function libraryFilter(
   if (q.needs_manual_pdf === true)
     add(`(${exhaustion} AND sr_status(l.literature_id)='UNREVIEWED')`);
   if (q.needs_manual_pdf === false) add(`NOT ${exhaustion}`);
+  if (typeof q.has_primary_pdf === "boolean")
+    add(`${HAS_PRIMARY_PDF_SQL} = ?`, Number(q.has_primary_pdf));
   if (q.discovery_run_ids.length) {
     const ids = JSON.stringify(q.discovery_run_ids);
     add(
@@ -189,18 +201,20 @@ export function libraryCounts(
   // Status is a per-row function; materialize it so each row computes it once.
   const rows = db
     .prepare(
-      `WITH s AS MATERIALIZED (SELECT sr_status(l.literature_id) AS status, EXISTS(SELECT 1 FROM automatic_pdf_acquisition_exhaustions ex WHERE ex.literature_id=l.literature_id) AS exhausted ${from} ${where}) SELECT status, count(*) AS count, sum(status='UNREVIEWED' AND exhausted) AS unavailable FROM s GROUP BY status`,
+      `WITH s AS MATERIALIZED (SELECT sr_status(l.literature_id) AS status, EXISTS(SELECT 1 FROM automatic_pdf_acquisition_exhaustions ex WHERE ex.literature_id=l.literature_id) AS exhausted, ${HAS_PRIMARY_PDF_SQL} AS has_pdf ${from} ${where}) SELECT status, count(*) AS count, sum(status='UNREVIEWED' AND exhausted) AS unavailable, sum(has_pdf) AS with_pdf FROM s GROUP BY status`,
     )
     .all(...args);
   const statuses = Object.fromEntries(LITERATURE_STATUSES.map((s) => [s, 0]));
   let total = 0,
-    unavailable_pdf = 0;
+    unavailable_pdf = 0,
+    with_primary_pdf = 0;
   for (const row of rows) {
     if (!Object.hasOwn(statuses, String(row.status)))
       throw new Error("invalid library status");
     statuses[String(row.status)] = Number(row.count);
     total += Number(row.count);
     unavailable_pdf += Number(row.unavailable);
+    with_primary_pdf += Number(row.with_pdf);
   }
   const recent = db
     .prepare(
@@ -212,6 +226,11 @@ export function libraryCounts(
     statuses,
     unavailable_pdf,
     recently_opened: Math.min(100, Number(recent.n)),
+    with_primary_pdf,
+    full_text: fullTextCounts(db, {
+      sql: `SELECT l.literature_id ${from} ${where}`,
+      parameters: args,
+    }),
   };
 }
 export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {

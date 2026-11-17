@@ -39,6 +39,8 @@ export interface LibraryCounts {
   readonly recently_opened: number;
   readonly statuses: Readonly<Record<LiteratureStatus, number>>;
   readonly unavailable_pdf: number;
+  readonly with_primary_pdf: number;
+  readonly full_text: FullTextCounts;
 }
 export function parseLibraryCounts(value: unknown): LibraryCounts {
   const fail = (): never => {
@@ -48,7 +50,7 @@ export function parseLibraryCounts(value: unknown): LibraryCounts {
   const r = value as Record<string, unknown>;
   if (
     Object.keys(r).sort().join() !==
-      "recently_opened,statuses,total,unavailable_pdf" ||
+      "full_text,recently_opened,statuses,total,unavailable_pdf,with_primary_pdf" ||
     !r.statuses ||
     typeof r.statuses !== "object" ||
     Array.isArray(r.statuses)
@@ -73,10 +75,15 @@ export function parseLibraryCounts(value: unknown): LibraryCounts {
     fail();
   const recently_opened = count(r.recently_opened);
   if (recently_opened > Math.min(100, total)) fail();
+  const with_primary_pdf = count(r.with_primary_pdf),
+    full_text = parseFullTextCounts(r.full_text);
+  if (with_primary_pdf > total || full_text.total > total) fail();
   return Object.freeze({
     recently_opened,
     total,
     statuses: Object.freeze(statuses),
     unavailable_pdf: unavailable,
+    with_primary_pdf,
+    full_text,
   });
 }

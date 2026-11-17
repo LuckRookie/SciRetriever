@@ -13,6 +13,11 @@ import {
 import { createApplication } from "../src/bootstrap/application.js";
 import { runCli } from "../src/cli/main.js";
 import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
+import {
+  libraryFullTextFixture,
+  fullTextCatalogRows,
+  FULL_TEXT_EXPECTED,
+} from "./library-fulltext-fixture.js";
 
 const id = (n: number) =>
   `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
@@ -22,6 +27,31 @@ const digest = async (path: string) => sha256(await readFile(path));
 async function* input(bytes: Uint8Array): AsyncIterable<Uint8Array> {
   yield bytes;
 }
+
+it("reads paper full-text counts and version PDF counts through literature counts without modifying the catalog", async () => {
+  const f = await libraryFullTextFixture();
+  try {
+    const before = fullTextCatalogRows(f.home),
+      errors: string[] = [];
+    const result = await runCli(
+      ["literature", "counts", "--request", "-", "--json"],
+      {
+        home: f.home,
+        stdin: input(Buffer.from(JSON.stringify({ query: {} }))),
+        stdout: () => {},
+        stderr: (value) => errors.push(value),
+      },
+    );
+    expect(result.code, errors.join("\n")).toBe(0);
+    expect((result.value as { result: unknown }).result).toEqual(
+      FULL_TEXT_EXPECTED,
+    );
+    expect(f.modelCalls).toBe(0);
+    expect(fullTextCatalogRows(f.home)).toEqual(before);
+  } finally {
+    await f.close();
+  }
+});
 
 describe("TypeScript CLI", () => {
   it("explains fixed text levels, draft counts, basis and bounded differences in help without opening a library", async () => {
@@ -38,6 +68,9 @@ describe("TypeScript CLI", () => {
     const help = printed.join("");
     for (const word of [
       "text_level=draft|proofread",
+      "literature counts --request FILE|-",
+      "full_text counts papers (MetaLiterature)",
+      "statuses and with_primary_pdf count versions",
       "draft_summary={differs_segments,differences,image_only_pages}",
       "text-layer-match|text-layer-differs|no-text-layer",
       "coverage_note",

@@ -261,6 +261,7 @@ export const MISSING_STEPS = [
 ] as const;
 export type MissingStep = (typeof MISSING_STEPS)[number];
 export interface LibraryQuery {
+  readonly has_primary_pdf?: boolean | null;
   readonly needs_metadata?: boolean;
   readonly text_levels?: readonly TextLevel[];
   readonly has_draft_differences?: boolean | null;
@@ -1208,6 +1209,7 @@ export function parseLibraryQuery(value: unknown): LibraryQuery {
       "folder",
       "recently_opened",
       ...[
+        "has_primary_pdf",
         "needs_metadata",
         "text_levels",
         "has_draft_differences",
@@ -1231,6 +1233,9 @@ export function parseLibraryQuery(value: unknown): LibraryQuery {
     ...(Object.hasOwn(record, "needs_metadata")
       ? { needs_metadata: wireBoolean(record.needs_metadata) }
       : {}),
+    ...(record.has_primary_pdf === null || record.has_primary_pdf === undefined
+      ? {}
+      : { has_primary_pdf: wireBoolean(record.has_primary_pdf) }),
     text: nullableText(record.text, ["text"]),
     title: nullableText(record.title, ["title"]),
     author: nullableText(record.author, ["author"]),

@@ -61,6 +61,6 @@
 \n`document-layout.ts` 定义普通 Markdown 的文章信息、图表分组和逐条页脚注 UTF-8 区间；新文档通过 describe 返回，outline 的无原标题项以 null 表示。\n
 `device-connections.ts` 定义设备用途、无敏感值的连接投影与管理输入；连接码解析和一次性交付类型只用于认证边界，不进入普通文献事实或日志。
 
-`intake.ts` 定义统一入库批次、文件与报告、显式路由清单，以及获取 PDF/解析任务的范围计数。`library-counts.ts` 提供两者共用的 FullTextCounts 和关系校验；批次 full_text 按论文，estimates 按版本，LibraryCounts 的后续扩展不在此处提前启用。
+`intake.ts` 定义统一入库批次、文件与报告、显式路由清单，以及获取 PDF/解析任务的范围计数。`library-counts.ts` 提供共用的 FullTextCounts 和关系校验；批次及文献库的 full_text 按论文，批次 estimates 与文献库状态、with_primary_pdf 按版本。LibraryQuery 的 has_primary_pdf 按版本筛选；省略或 null 不增加规范化字段。
 
 `LibraryQuery.needs_metadata` 与文献摘要/详情的同名可选字段用于书目待补；省略时不增加查询序列化字段。`post-parse-recognition` 是封闭的用户来源类型，要求原始解析引用和输入 hash，不接受任意自定义来源。

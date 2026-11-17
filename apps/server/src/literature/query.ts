@@ -232,6 +232,7 @@ export function queryFingerprint(query: LibraryQuery): string {
     ...Object.fromEntries(
       (
         [
+          "has_primary_pdf",
           "needs_metadata",
           "has_draft_differences",
           "has_image_only_pages",
@@ -848,6 +849,8 @@ export class LiteratureQueryService {
         total: 0,
         recently_opened: 0,
         unavailable_pdf: 0,
+        with_primary_pdf: 0,
+        full_text: { total: 0, obtained: 0, missing: 0, exhausted: 0 },
         statuses: Object.fromEntries(
           LITERATURE_STATUSES.map((s) => [s, 0]),
         ) as Record<(typeof LITERATURE_STATUSES)[number], number>,
@@ -922,7 +925,10 @@ export class LiteratureQueryService {
       [],
       [],
       query.tags,
-      query.folder || query.recently_opened || query.intake_batch_ids?.length
+      query.folder ||
+        query.recently_opened ||
+        query.intake_batch_ids?.length ||
+        typeof query.has_primary_pdf === "boolean"
         ? query
         : undefined,
     );

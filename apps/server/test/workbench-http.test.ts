@@ -4,7 +4,15 @@ import {
 } from "./workbench-auth-fixture.js";
 import { request as httpRequest } from "node:http";
 import { describe, expect, it } from "vitest";
-import { startWorkbenchHttp } from "../src/workbench/http.js";
+import {
+  startWorkbenchHttp,
+  startQueryOnlyHttp,
+} from "../src/workbench/http.js";
+import {
+  libraryFullTextFixture,
+  fullTextCatalogRows,
+  FULL_TEXT_EXPECTED,
+} from "./library-fulltext-fixture.js";
 import { WorkbenchSession } from "../src/workbench/session.js";
 import { parseWorkbenchView } from "@sciretriever/contracts";
 
@@ -35,6 +43,60 @@ function request(
     req.end(body === undefined ? undefined : JSON.stringify(body));
   });
 }
+it("returns paper full-text counts and version PDF counts from the shared library-counts HTTP boundary without writes", async () => {
+  const f = await libraryFullTextFixture(),
+    server = await startQueryOnlyHttp({ application: f.reader });
+  try {
+    const before = fullTextCatalogRows(f.home);
+    const response = await request(
+      server.origin,
+      "/api/v1/query/library-counts",
+      "POST",
+      { "Content-Type": "application/json" },
+      { protocol_version: 1, request: { query: {} } },
+    );
+    expect(response.status).toBe(200);
+    expect(JSON.parse(response.text)).toEqual({
+      protocol_version: 1,
+      result: FULL_TEXT_EXPECTED,
+    });
+    const selected = await request(
+      server.origin,
+      "/api/v1/query/library-counts",
+      "POST",
+      { "Content-Type": "application/json" },
+      {
+        protocol_version: 1,
+        request: {
+          query: {
+            has_primary_pdf: true,
+            statuses: ["UNREVIEWED"],
+            needs_manual_pdf: true,
+          },
+        },
+      },
+    );
+    expect(selected.status).toBe(200);
+    expect(JSON.parse(selected.text).result).toEqual({
+      ...FULL_TEXT_EXPECTED,
+      total: 2,
+      unavailable_pdf: 0,
+      with_primary_pdf: 2,
+      full_text: { total: 2, obtained: 2, missing: 0, exhausted: 0 },
+      statuses: {
+        ...FULL_TEXT_EXPECTED.statuses,
+        UNREVIEWED: 0,
+        ASSET_READY: 2,
+      },
+    });
+    expect(f.modelCalls).toBe(0);
+    expect(fullTextCatalogRows(f.home)).toEqual(before);
+  } finally {
+    await server.close();
+    await f.close();
+  }
+});
+
 describe("authenticated loopback workbench API", () => {
   it("enforces Host, Origin, session cookie, per-tab CSRF and strict commands; reconnect reads the same page", async () => {
     let calls = 0;

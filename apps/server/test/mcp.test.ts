@@ -7,6 +7,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createMcpServer } from "../src/mcp/server.js";
 import { coreProcessingFixture } from "./core-processing-fixture.js";
 import { createQueryApplication } from "../src/bootstrap/application.js";
+import {
+  libraryFullTextFixture,
+  fullTextCatalogRows,
+  FULL_TEXT_EXPECTED,
+} from "./library-fulltext-fixture.js";
 
 async function connected(host: ReturnType<typeof createMcpServer>) {
   const [server, transport] = InMemoryTransport.createLinkedPair();
@@ -15,6 +20,34 @@ async function connected(host: ReturnType<typeof createMcpServer>) {
   await client.connect(transport);
   return client;
 }
+it("exposes paper full_text and version with_primary_pdf in the read-only library_counts tool", async () => {
+  const f = await libraryFullTextFixture(),
+    host = createMcpServer({ home: f.home }),
+    client = await connected(host);
+  try {
+    const before = fullTextCatalogRows(f.home);
+    const tool = (await client.listTools()).tools.find(
+      (t) => t.name === "library_counts",
+    )!;
+    expect(tool.description).toContain("counts papers (MetaLiterature)");
+    expect(tool.description).toContain("with_primary_pdf count versions");
+    const result = await client.callTool({
+      name: "library_counts",
+      arguments: { query: {} },
+    });
+    expect(result.isError).not.toBe(true);
+    expect((result.structuredContent as { result: unknown }).result).toEqual(
+      FULL_TEXT_EXPECTED,
+    );
+    expect(f.modelCalls).toBe(0);
+    expect(fullTextCatalogRows(f.home)).toEqual(before);
+  } finally {
+    await client.close();
+    await host.close();
+    await f.close();
+  }
+});
+
 describe("formal MCP product adapter", () => {
   // Reached 2.6 s under Full (36/12) load, too close to the 5 s default.
   it("exposes a failed raw parsing attempt and completes the same task after repair and explicit retry", async () => {

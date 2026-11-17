@@ -174,6 +174,7 @@ function usage(options: CliOptions): CliResult {
     "  metadata lookup ID[,ID] | sources statistics --request FILE|-\n" +
     "  complete pdf|parser [--literature-id ID] [--transfers ID,...]\n" +
     "  literature search [query options] | show ID | references ID | cited-by ID\n" +
+    "  literature counts --request FILE|-  # full_text counts papers (MetaLiterature); statuses and with_primary_pdf count versions; read-only\n" +
     "    --needs-metadata | --no-needs-metadata filters the independent bibliographic recognition mark\n" +
     "  import metadata FORMAT SOURCE | import pdf ID SOURCE\n" +
     "  document parse --literature-id ID --asset-id ID --asset-sha256 SHA256 [--profiles pipeline,vlm-engine] [--force] (default: deployment profile)\n" +

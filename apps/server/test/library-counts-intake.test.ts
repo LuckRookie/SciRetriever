@@ -102,6 +102,8 @@ it(
         total: 3,
         recently_opened: 0,
         unavailable_pdf: 1,
+        with_primary_pdf: 0,
+        full_text: { total: 3, obtained: 0, missing: 3, exhausted: 1 },
         statuses: {
           UNREVIEWED: 3,
           ASSET_READY: 0,

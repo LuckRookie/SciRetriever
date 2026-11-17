@@ -37,7 +37,7 @@
 
 `metadata-rules.ts` 将作者声明（declared_keywords）投影为作者关键词，逐字段裁决仍保留人工 > 校订证据 > 来源的优先级及锁。数据库主题词由 provider 顺序合并、忽略大小写去重并限于 8 项；不进入书目导出的作者关键词。`query.ts` 提供批次读取、整个筛选范围的词频，以及按当前排序冻结的 PDF 获取预览；分页搜索与批量范围使用同一 SQL 条件。
 
-`query.ts` 的 parseSelection 复用获取 PDF 的范围选择器，读取有主 PDF 且没有当前部署 profile 原始解析的版本；它只读，不下载、解析或创建任务。批次读取返回按论文的 full_text 及按版本的 acquire_pdf/parse 预估；文献库 LibraryCounts 的扩展另行接入同一计数 owner。
+`query.ts` 的 parseSelection 复用获取 PDF 的范围选择器，读取有主 PDF 且没有当前部署 profile 原始解析的版本；它只读，不下载、解析或创建任务。批次与文献库计数的 full_text 共用按论文的取得情况聚合，查看命中论文的全部可见版本；文献库 statuses、with_primary_pdf 与 has_primary_pdf 筛选按版本。省略 has_primary_pdf 时规范化查询及 cursor 字节保持原样。
 
 [intake-recognition.ts](intake-recognition.ts) 依次核对标识、标题与作者/年份，只复用配置允许的元数据查询；按 Unicode 码点计算标题相似度，候选不自动接纳。预览不写文献事实。[post-parse-recognition.ts](post-parse-recognition.ts) 在原始解析发布后只处理书目待补文献，保留来源与人工锁；不执行解析或模型。文献查询的 needs_metadata 标记独立于建档状态。
 

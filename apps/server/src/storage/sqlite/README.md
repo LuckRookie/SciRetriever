@@ -19,7 +19,7 @@
 - [capture-engine.ts](capture-engine.ts)：单篇网页的请求 UUID/规范输入 hash 与持久回执、设备按系统时区日期唯一的开放批次。条目存在 intake_items，文件存在 import_files，身份发布与批次成员复用相同事务边界；重放从已提交成员恢复分类，不再有独立收藏表。
 - [intake-schema-migration.ts](intake-schema-migration.ts)：显式离线 14 → 15，旧运行回填、早期批次、主题词映射及确定性元数据/索引投影；[intake-metadata-migration.ts](intake-metadata-migration.ts) 复用元数据裁决与读取。
 - [openalex-top-concepts-cleanup.ts](openalex-top-concepts-cleanup.ts)：显式离线删除旧 OpenAlex 观测中 19 个顶层大类，并复用关键词层重投影，仅更新受影响文献与 Library FTS；不改 schema，不由启动或查询调用。检索 source revision 正常推进，后续刷新追赶。
-- [library-page.ts](library-page.ts)：LibraryQuery 的只读 SQL 筛选、计数和游标分页，完整文献只装载当前页；不修改业务事实或 catalog schema。
+- [library-page.ts](library-page.ts)：LibraryQuery 的只读 SQL 筛选、计数和游标分页，完整文献只装载当前页；has_primary_pdf 与 with_primary_pdf 按版本，full_text 复用 [full-text-counts.ts](full-text-counts.ts) 在同一快照按论文聚合，并检查全部可见兄弟版本。计数忽略 statuses、needs_manual_pdf，其余筛选保留；不修改业务事实或 catalog schema。
 - [filter-engine.ts](filter-engine.ts)：保存筛选的只读列表、导出与原子写入；不改文献状态或检索 revision。`folder-engine.ts` 的导出只读目录与成员 ID，按复合主键分页，不直接读取书目表。
 - [draft-facts.ts](draft-facts.ts)：在查询的只读快照中按页批量读取各 PDF 的默认版本及初稿事实；引用数与“找不到”计数沿固定版本索引聚合，只排除内容过时的结果，不打开结果文件。列表筛选与排序仅使用主 PDF，补充部分只在详情和建档状态返回。
 - [retrieval-engine.ts](retrieval-engine.ts)：材料检索持久化。

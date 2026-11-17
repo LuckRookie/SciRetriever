@@ -2,7 +2,7 @@
 
 类型：计划（结果块）
 负责：任意文献库范围的“已取得、未取得、已试完”三个数在 CLI、MCP、HTTP 上的读取
-状态：Pending
+状态：Completed（2026-11-17）
 
 来源：原计划 23 的 02（任务 2.x 改为 18.x）。
 
@@ -27,11 +27,11 @@
 
 ## Tasks
 
-- [ ] **18.1 合同**：`LibraryCounts` 增加 `full_text` 与 `with_primary_pdf`（按版本），`FullTextCounts` 的四个字段与解析函数；解析时核对 `total = obtained + missing` 与 `exhausted ≤ missing`。`LibraryQuery.has_primary_pdf` 与解析；省略时规范化查询与 cursor 的字节不变。
-- [ ] **18.2 计数**：在同一个只读快照里求 `full_text`：范围与现有计数相同（忽略 `statuses` 与 `needs_manual_pdf`）；按论文（MetaLiterature）计；论文在范围内当且仅当至少一个版本命中；是否取得、是否试完看这篇论文的全部当前版本（取法同 `selectionSnapshot` 的 matches 与 members）。在 SQL 里聚合，不逐篇读取。
-- [ ] **18.3 筛选**：`has_primary_pdf` 按版本筛选，与其它条件 AND。
-- [ ] **18.4 三端**：三个入口返回同一结果；MCP 工具说明与 CLI 帮助写明 `full_text` 按论文、状态计数按版本。
-- [ ] **18.5 规模**：在 5 万篇的合成库上测一次计数耗时（本机），记入回执；若超出 Web 可用的范围（例如数秒），停下交总设计师，与 20 的数字一起判断是否需要投影（计划 README“数据库”）。
+- [x] **18.1 合同**：`LibraryCounts` 增加 `full_text` 与 `with_primary_pdf`（按版本），`FullTextCounts` 的四个字段与解析函数；解析时核对 `total = obtained + missing` 与 `exhausted ≤ missing`。`LibraryQuery.has_primary_pdf` 与解析；省略时规范化查询与 cursor 的字节不变。
+- [x] **18.2 计数**：在同一个只读快照里求 `full_text`：范围与现有计数相同（忽略 `statuses` 与 `needs_manual_pdf`）；按论文（MetaLiterature）计；论文在范围内当且仅当至少一个版本命中；是否取得、是否试完看这篇论文的全部当前版本（取法同 `selectionSnapshot` 的 matches 与 members）。在 SQL 里聚合，不逐篇读取。
+- [x] **18.3 筛选**：`has_primary_pdf` 按版本筛选，与其它条件 AND。
+- [x] **18.4 三端**：三个入口返回同一结果；MCP 工具说明与 CLI 帮助写明 `full_text` 按论文、状态计数按版本。
+- [x] **18.5 规模**：在 5 万篇的合成库上测一次计数耗时（本机），记入回执；若超出 Web 可用的范围（例如数秒），停下交总设计师，与 20 的数字一起判断是否需要投影（计划 README“数据库”）。
 
 ## 集成与影响
 
@@ -53,7 +53,9 @@
 
 ## 证据
 
-提交号；定向测试结果；18.4 的耗时与数据规模。
+- 2026-11-17，后端实施者实现，总设计师审查后提交。`LibraryCounts` 加 `full_text` 与 `with_primary_pdf`，`LibraryQuery` 加 `has_primary_pdf`；同一只读快照内 SQL 聚合，按命中的 Meta 去重；被撤回的文献照 13 排除；旧 cursor 字节兼容。
+- 规模（18.5）：5 万篇、6 万版本的合成库，首次计数 1,830 ms，状态缓存后 449 ms，不需要投影表（`sandbox/reports/2026-11-17-plan25-18/benchmark.json`）。
+- 后端实施者串行运行 25 个文件 123 项通过；总设计师复跑 `pnpm quick` 通过，`library-fulltext-status`、合同、`library-counts-intake` 9 项通过。
 
 ## 退出条件
 
