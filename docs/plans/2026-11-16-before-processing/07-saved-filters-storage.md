@@ -2,7 +2,7 @@
 
 类型：计划（结果块）
 负责：保存的筛选的合同、服务、存储、三端入口，以及本计划唯一的表结构迁移
-状态：Completed（2026-11-16；7.7 待 G-lib，在 24.3 的 schema 18 部署点之前做）
+状态：Completed（2026-11-17）
 
 来源：原计划 22 的 03（任务 3.1–3.7 改为 7.1–7.7）。
 
@@ -41,7 +41,7 @@
 - [x] **7.4 三端入口**：CLI `filters list` 与 `filters create|rename|update|delete|import --request FILE`；MCP `filters_query`（`read`）与 `filters_manage`（`operate`）；HTTP `POST /api/v1/query/filters` 与 `POST /api/v1/maintenance/filters`；MCP 工具按设备用途列出与拒绝；设备令牌不能调用 `/api/v1/query/*` 与 `/api/v1/maintenance/*`（规格 6.3）。
 - [x] **7.5 schema 编号的检查**：所有写死当前编号的检查改为 18，与 17 的检查列表对齐。
 - [x] **7.6 离线迁移**：沿用现有迁移模块的结构：只接受绝对路径与精确的 17 指纹；未知结构、已是 18、有运行中任务时拒绝；事务内 DDL 与身份更新；完整性与外键检查；所有旧表行数不变；新表为空；回执写出耗时与核对结果。不读个人配置，不调用模型，不改文献资产，不搬迁浏览器里的数据。
-- [ ] **7.7 正式库只读副本演练**（G-lib）：在本机副本上运行脚本，记录耗时与回执；副本与报告放 `sandbox/runs/`、`sandbox/reports/`，不提交。
+- [x] **7.7 正式库只读副本演练**（G-lib）：在本机副本上运行脚本，记录耗时与回执；副本与报告放 `sandbox/runs/`、`sandbox/reports/`，不提交。
 
 ## 集成与影响
 
@@ -69,6 +69,7 @@
 
 - 2026-11-16，后端实施者实现，总设计师审查后提交。DDL 见 `sandbox/reports/2026-11-16-plan25-07/DDL.md`；新增 `packages/contracts/src/filters.ts`、`literature/filters.ts`、`storage/sqlite/filter-engine.ts`、`storage/sqlite/user-organization-schema-migration.ts`、`scripts/migrate-user-organization-v18.mjs` 与合成 V17 辅助；冻结 `SCHEMA_MANIFEST_V17`，16→17 迁移只改目标绑定。合成库上 17→18 迁移 60.79 ms，旧数据、FTS、状态与 18 份资产 hash 不变，新表为空。
 - 后端实施者逐个单独运行 44 个文件 304 项全过（改了编号期望的旧测试及理由见 `EVIDENCE.md`）；总设计师复跑 `pnpm quick` 通过，复跑 `saved-filters`、`user-organization-schema-migration`、`catalog-schema`、`mcp-http`、`draft-text-schema-migration` 54 项通过（`review/`）。
+- 7.7（2026-11-17，Owner“副本演练迁移后部署”）：正式库只读副本上 17→18 迁移 19 s，187 个旧表行数与内容不变，内容版本事件新增 0，`verify-catalog` 通过；4199 冷启动 0.85 s，四项读取通过（`sandbox/reports/2026-11-17-plan25-rehearsal-18/`）。
 - `pnpm quick` 曾被 `apps/web/test/reader-smoothness.test.ts` 中 05 留下的未使用变量挡住，前端实施者已删去。
 
 ## 退出条件
