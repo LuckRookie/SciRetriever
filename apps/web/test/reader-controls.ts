@@ -54,13 +54,21 @@ export async function readerType(page: Page, item: string) {
       .getByRole("menuitem", { name: now < wanted ? "放大" : "缩小" })
       .click();
   }
-  await page.keyboard.press("Escape");
+  await closeMenus(page);
+}
+/**
+ * Escape closes one layer: below 760 px “排版” is a submenu of “更多”, so
+ * the second Escape closes “更多” as well.
+ */
+async function closeMenus(page: Page) {
+  for (let i = 0; i < 3 && (await page.locator(".ui-menu").count()); i++)
+    await page.keyboard.press("Escape");
 }
 /** The scale in force, as the title of “排版”'s scale group says it. */
 export async function readerTypeChoice(page: Page) {
   await openType(page);
   const value = await scaleTitle(page);
-  await page.keyboard.press("Escape");
+  await closeMenus(page);
   return value.trim();
 }
 /** Opens a PDF page through the page number in the page header. */

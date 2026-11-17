@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { nextWorkspace } from "./next-workspace-fixture.js";
+import { readerPanel } from "./reader-controls.js";
 import { topicDraft } from "../../server/test/tag-fixture.js";
 
 it(
@@ -183,6 +184,9 @@ it(
         calls = w.env.modelCalls;
       const before = await w.env.app.archive.status(id);
       await w.page.goto(`${w.origin}/?literature=${id}&reader=pdf`);
+      // “单步处理” is in the information tab of the side panel, which starts
+      // closed (reading-experience 1.3).
+      await readerPanel(w.page, "信息");
       await w.page
         .getByRole("button", { name: "单步处理", exact: true })
         .click();
