@@ -45,7 +45,8 @@ it("opens keyboard search and live activity without starting work, and preserves
     await expect.poll(() => page.locator(".paper-row").count()).toBe(1);
     expect(
       JSON.parse(new URL(page.url()).searchParams.get("query")!),
-    ).toMatchObject({ statuses: ["UNREVIEWED"] });
+      // “仅元数据” is the papers without a primary PDF (page specs “文献库”).
+    ).toMatchObject({ statuses: [], has_primary_pdf: false });
     await select(page, "排序", "标题：Z–A");
     expect(new URL(page.url()).searchParams.get("sort")).toBe("title-desc");
     await page.getByRole("button", { name: "预览", exact: true }).click();

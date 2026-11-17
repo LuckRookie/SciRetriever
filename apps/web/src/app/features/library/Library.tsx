@@ -70,6 +70,7 @@ import { archiveQuery, useArchiveAction, rows } from "../../data/archive.js";
 import { record } from "../../data/wire.js";
 import { archiveReason, errorMessage, statusLabels } from "../../strings.js";
 import { OperationDialog, download } from "./OperationDialog.js";
+import { FullTextLine } from "./FullTextLine.js";
 import {
   SELECTION_GROUPS,
   groupSelection,
@@ -151,6 +152,7 @@ export default function Library() {
       article_kinds: "文章性质",
       tags: "标签",
       needs_manual_pdf: "无法获取",
+      has_primary_pdf: "主 PDF",
       text_levels: "文本等级",
       has_draft_differences: "初稿与文字层有差异",
       has_image_only_pages: "含扫描页",
@@ -162,7 +164,8 @@ export default function Library() {
       value === null ||
       (value === false &&
         key !== "has_draft_differences" &&
-        key !== "has_image_only_pages") ||
+        key !== "has_image_only_pages" &&
+        key !== "has_primary_pdf") ||
       (Array.isArray(value) && !value.length)
     )
       return [];
@@ -185,7 +188,8 @@ export default function Library() {
                     .map((level) => TEXT_LEVEL_LABELS[level])
                     .join("、")
                 : key === "has_draft_differences" ||
-                    key === "has_image_only_pages"
+                    key === "has_image_only_pages" ||
+                    key === "has_primary_pdf"
                   ? value
                     ? "有"
                     : "没有"
@@ -329,21 +333,35 @@ export default function Library() {
     selected: shell.selected,
     setSelected: shell.setSelected,
   });
+  // The scope the counts describe: the quick filters left out, so every
+  // quick filter has its number and switching between them changes none.
+  const countScope: LibraryQuery = {
+    ...route.query,
+    statuses: [],
+    needs_manual_pdf: null,
+    has_primary_pdf: null,
+  };
   const counts = useQuery({
-    queryKey: ["library", "counts", route.query],
-    queryFn: ({ signal }) => readLibraryCounts(api, route.query, signal),
+    queryKey: ["library", "counts", countScope],
+    queryFn: ({ signal }) => readLibraryCounts(api, countScope, signal),
     placeholderData: keepPreviousData,
     enabled: api.workspace.readiness === "ready",
   });
+  // “有 PDF” and “仅元数据” count versions with and without a primary PDF,
+  // as the list does (page specs “文献库”, query technical 2.1.8).
   const countFor = (filter: string) =>
     counts.data
       ? filter === ""
         ? counts.data.total
         : filter === "failed"
           ? counts.data.unavailable_pdf
-          : (counts.data.statuses[
-              filter as keyof typeof counts.data.statuses
-            ] ?? 0)
+          : filter === "pdf"
+            ? counts.data.with_primary_pdf
+            : filter === "metadata"
+              ? counts.data.total - counts.data.with_primary_pdf
+              : (counts.data.statuses[
+                  filter as keyof typeof counts.data.statuses
+                ] ?? 0)
       : null;
   const folders = useFolders();
   const folder = route.query.folder ?? null;
@@ -357,14 +375,21 @@ export default function Library() {
     navigate({ query: JSON.stringify(query), sort }, { replace: true });
   const statusFilter = route.query.needs_manual_pdf
     ? "failed"
-    : (route.query.statuses[0] ?? "");
+    : route.query.has_primary_pdf === true
+      ? "pdf"
+      : route.query.has_primary_pdf === false
+        ? "metadata"
+        : (route.query.statuses[0] ?? "");
+  // One quick filter at a time; the scope's other conditions stay.
   const setStatusFilter = (value: string) =>
     updateQuery(
       parseLibrarySearchRequest({
         query: {
           ...route.query,
-          statuses: value && value !== "failed" ? [value] : [],
+          statuses: QUICK_ONLY.has(value) || !value ? [] : [value],
           needs_manual_pdf: value === "failed" ? true : null,
+          has_primary_pdf:
+            value === "pdf" ? true : value === "metadata" ? false : null,
         },
       }).query,
     );
@@ -911,6 +936,10 @@ export default function Library() {
             </AnimatedPanel>
           )}
         </Presence>
+        <FullTextLine
+          counts={counts.data?.full_text}
+          onPick={setStatusFilter}
+        />
         <div className="library-list-heading">
           <Checkbox
             label="全选已加载"
@@ -1250,15 +1279,19 @@ function rowTerms(item: LiteratureSearchItem) {
   const m = item.literature.metadata;
   return (m.keywords.length ? m.keywords : m.subject_terms).slice(0, ROW_TAGS);
 }
+// “有 PDF” is having a primary PDF whatever came after, “仅元数据” its
+// complement; “无法获取” stays the exhausted papers (page specs “文献库”).
 const STATUS_FILTERS = [
   { id: "", label: "全部" },
   { id: "READY", label: "已就绪" },
-  { id: "ASSET_READY", label: "有 PDF" },
+  { id: "pdf", label: "有 PDF" },
   { id: "ARCHIVING", label: "建档中" },
   { id: "ARCHIVE_FAILED", label: "建档失败" },
   { id: "failed", label: "无法获取" },
-  { id: "UNREVIEWED", label: "仅元数据" },
+  { id: "metadata", label: "仅元数据" },
 ] as const;
+/** Quick filters that are not a status. */
+const QUICK_ONLY = new Set(["failed", "pdf", "metadata"]);
 /** Scroll-range updates belong to the list, not the page's forms and motion layout. */
 const LibraryList = memo(function LibraryList({
   items,

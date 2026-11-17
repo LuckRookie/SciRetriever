@@ -2,7 +2,7 @@
 
 类型：计划（结果块）
 负责：文献库页面显示当前范围的全文取得情况
-状态：Pending
+状态：Completed（2026-11-17）
 
 来源：原计划 23 的 03（任务 3.x 改为 19.x）。
 
@@ -26,11 +26,11 @@
 
 ## Tasks
 
-- [ ] **19.1 数据**：读取 18 的 `full_text`；类型来自 `packages/contracts`。
-- [ ] **19.2 全文取得情况一行**：按页面规格的位置与写法；j 为 0 时不显示括号，范围为空时整行不显示；进行中的获取任务结束后，随现有刷新更新。
-- [ ] **19.3 链接**：已取得 → 有 PDF（`has_primary_pdf: true`），未取得 → 仅元数据（`has_primary_pdf: false`），已试完 → 无法获取（`needs_manual_pdf: true`），总数 → 全部；只改快速筛选，保留当前范围的其它条件。
-- [ ] **19.4 快速筛选的新含义**：“有 PDF”“仅元数据”改用 `has_primary_pdf`；它们的计数取 18 的 `with_primary_pdf` 与 `total − with_primary_pdf`（按版本，与列表一致）。
-- [ ] **19.5 指南**：同步 [Web 指南](../../guides/web-workbench.md)中文献库的描述（实现合入后写）。
+- [x] **19.1 数据**：读取 18 的 `full_text`；类型来自 `packages/contracts`。
+- [x] **19.2 全文取得情况一行**：按页面规格的位置与写法；j 为 0 时不显示括号，范围为空时整行不显示；进行中的获取任务结束后，随现有刷新更新。
+- [x] **19.3 链接**：已取得 → 有 PDF（`has_primary_pdf: true`），未取得 → 仅元数据（`has_primary_pdf: false`），已试完 → 无法获取（`needs_manual_pdf: true`），总数 → 全部；只改快速筛选，保留当前范围的其它条件。
+- [x] **19.4 快速筛选的新含义**：“有 PDF”“仅元数据”改用 `has_primary_pdf`；它们的计数取 18 的 `with_primary_pdf` 与 `total − with_primary_pdf`（按版本，与列表一致）。
+- [x] **19.5 指南**：同步 [Web 指南](../../guides/web-workbench.md)中文献库的描述（实现合入后写）。
 
 ## 集成与影响
 
@@ -44,7 +44,8 @@
 
 ## 证据
 
-提交号；Web 定向测试结果；截图位置。
+- 2026-11-17，前端实施者实现，总设计师审查后提交。全文取得情况一行的四个数字各自链到对应筛选并保留其它条件；“有 PDF”“仅元数据”改用 `has_primary_pdf`。计数请求去掉 `has_primary_pdf`，切换快速筛选时数字不变。实施中因后台命令等待自身而停滞约 6.5 小时。
+- 总设计师复跑 `pnpm quick` 通过，`next-library`、`next-library-workflows` 9 项通过、2 项跳过；截图在 `sandbox/reports/2026-11-17-plan25-19/`。
 
 ## 退出条件
 

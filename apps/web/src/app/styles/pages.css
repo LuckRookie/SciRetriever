@@ -501,6 +501,33 @@
     gap: var(--space-1);
     padding-block: var(--space-2);
   }
+  /* The scope's full text, by paper; each number applies its quick filter. */
+  .library-full-text {
+    margin: var(--space-2) 0 0;
+    padding: 0 var(--space-2);
+    color: var(--fg2);
+    font-size: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+  .library-full-text-link {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--blue);
+    font: inherit;
+    text-decoration: underline;
+    text-decoration-color: var(--line2);
+    text-underline-offset: 0.18em;
+    cursor: pointer;
+  }
+  .library-full-text-link:hover {
+    text-decoration-color: currentColor;
+  }
+  .library-full-text-link:focus-visible {
+    border-radius: var(--radius-sm);
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
+  }
   .library-list-heading {
     display: flex;
     align-items: center;

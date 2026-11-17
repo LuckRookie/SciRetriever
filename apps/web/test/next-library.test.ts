@@ -3,14 +3,25 @@ import {
   showAllLibraryStatuses,
 } from "./next-workspace-fixture.js";
 import { expect, it } from "vitest";
-import { canonicalJsonBytes } from "@sciretriever/contracts";
+import {
+  canonicalJsonBytes,
+  parseFolderNode,
+  parseLiterature,
+} from "@sciretriever/contracts";
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { nextWorkspace } from "./next-workspace-fixture.js";
-import { FIXTURE_LITERATURE } from "../../server/src/workbench/synthetic-fixture.js";
+import {
+  FIXTURE_LITERATURE,
+  workbenchPdf,
+} from "../../server/src/workbench/synthetic-fixture.js";
 import { missingId } from "./processor-workspace-fixture.js";
+import {
+  finishIntake,
+  startIntake,
+} from "../../server/src/literature/intake.js";
 import { syntheticReadingPdf } from "./reading-pdf-fixture.js";
 import { readerToLibrary } from "./reader-controls.js";
 
@@ -380,6 +391,221 @@ it("opens a PDF without text in the PDF view, and its full text says what is mis
         .getByRole("button", { name: "建立文献档案", exact: true })
         .getAttribute("data-variant"),
     ).not.toBe("primary");
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);
+
+const fullTextId = (n: number) =>
+  `00000000-0000-0000-0019-${String(n).padStart(12, "0")}`;
+/**
+ * Papers for the full-text line: one in two versions (the preprint without
+ * a PDF, the published version with one), an excluded paper with its PDF and
+ * an exhausted one, beside the fixture's ready paper and its paper without a
+ * PDF; a folder and an intake batch over some of them.
+ */
+async function seedFullText(w: Awaited<ReturnType<typeof nextWorkspace>>) {
+  const id = fullTextId;
+  const app = w.env.app;
+  const paper = async (
+    n: number,
+    meta: number,
+    title: string,
+    patch: Record<string, unknown> = {},
+  ) =>
+    app.database.putLiterature(
+      parseLiterature({
+        ...FIXTURE_LITERATURE,
+        literature_id: id(n),
+        meta_literature_id: id(meta),
+        metadata: {
+          ...FIXTURE_LITERATURE.metadata,
+          title,
+          identifiers: [],
+        },
+        ...patch,
+      }),
+    );
+  // One paper in two versions: the preprint without a PDF, the published
+  // version with one; an excluded paper with its PDF; an exhausted one.
+  await paper(1, 101, "Full text two versions", { version_role: "preprint" });
+  await paper(2, 101, "Full text two versions");
+  await paper(3, 103, "Full text excluded", {
+    metadata: {
+      ...FIXTURE_LITERATURE.metadata,
+      title: "Full text excluded",
+      identifiers: [],
+      article_kind: "correction-or-editorial",
+    },
+  });
+  await paper(4, 104, "Full text exhausted");
+  for (const n of [2, 3])
+    await app.maintenance!.ingestPdf({
+      literature_id: id(n),
+      bytes: Buffer.from(workbenchPdf(`10.5555/full-text-${n}`)),
+    });
+  await app.database.setAutomaticPdfExhaustion(id(4));
+  const folder = parseFolderNode(
+    await app.folders.manage({
+      operation: "create",
+      request: { name: "全文范围" },
+    }),
+  ).folder_id;
+  await app.folders.manage({
+    operation: "add",
+    request: { folder_id: folder, literature_ids: [id(2), id(4)] },
+  });
+  const batch = await startIntake(app.database, "topic", "全文批次", {}, "web");
+  for (const n of [3, 4])
+    await app.database.writeIntake({
+      operation: "member",
+      member: {
+        batch_id: batch,
+        literature_id: id(n),
+        disposition: "matched",
+      },
+    });
+  await finishIntake(app.database, batch, "completed");
+  return { folder, batch };
+}
+
+it("shows the scope's full text by paper above the list, each number applying its quick filter, without fetching anything (page specs “文献库”)", async () => {
+  const w = await nextWorkspace();
+  try {
+    const page = w.page;
+    const id = fullTextId;
+    const { folder, batch } = await seedFullText(w);
+    // Anything that would fetch, parse or spend.
+    const started: string[] = [];
+    page.on("request", (request) => {
+      const path = new URL(request.url()).pathname;
+      if (
+        request.method() !== "GET" &&
+        (path.startsWith("/api/tasks") ||
+          path.startsWith("/api/discovery") ||
+          path.includes("acquire"))
+      )
+        started.push(path);
+    });
+    await page.reload();
+    const line = page.getByLabel("全文取得情况");
+    // Library: 5 papers of 6 versions; the fixture's ready paper, the two
+    // versions and the excluded one have their full text.
+    await expect
+      .poll(() => line.textContent())
+      .toBe("全文已取得 3 / 总数 5，未取得 2（其中自动途径已试完 1）");
+    // The quick filters count versions, as the list does.
+    const chip = (name: string) =>
+      page
+        .locator(".library-status-filters")
+        .getByRole("button", { name: new RegExp(`^${name}`) });
+    expect(await chip("有 PDF").textContent()).toBe("有 PDF 3");
+    expect(await chip("仅元数据").textContent()).toBe("仅元数据 3");
+    // Switching quick filters keeps the line as it is.
+    await chip("已就绪").click();
+    await expect.poll(() => page.locator(".paper-row").count()).toBe(1);
+    expect(await line.textContent()).toBe(
+      "全文已取得 3 / 总数 5，未取得 2（其中自动途径已试完 1）",
+    );
+    // “已取得” is “有 PDF”: whatever came after, excluded included.
+    const rowIds = () =>
+      page
+        .locator(".paper-row")
+        .evaluateAll((rows) =>
+          rows.map((row) => row.getAttribute("data-literature-id")).sort(),
+        );
+    await line.getByRole("button", { name: "已取得 3 篇" }).click();
+    await expect
+      .poll(rowIds)
+      .toEqual([FIXTURE_LITERATURE.literature_id, id(2), id(3)].sort());
+    const query = () =>
+      JSON.parse(new URL(page.url()).searchParams.get("query") ?? "{}");
+    expect(query()).toMatchObject({ has_primary_pdf: true, statuses: [] });
+    // “未取得” is its complement, by version: the preprint is listed.
+    await line.getByRole("button", { name: "未取得 2 篇" }).click();
+    await expect.poll(rowIds).toEqual([missingId, id(1), id(4)].sort());
+    expect(query().has_primary_pdf).toBe(false);
+    await line.getByRole("button", { name: "已试完 1 篇" }).click();
+    await expect.poll(() => page.locator(".paper-row").count()).toBe(1);
+    expect(query()).toMatchObject({ needs_manual_pdf: true });
+    expect(query().has_primary_pdf).toBeUndefined();
+    await line.getByRole("button", { name: "总数 5 篇" }).click();
+    await expect.poll(() => page.locator(".paper-row").count()).toBe(6);
+    // An intake batch narrows it to its papers.
+    await page
+      .getByRole("group", { name: "最近入库" })
+      .getByRole("button", { name: /^全文批次/u })
+      .click();
+    await expect
+      .poll(() => line.textContent())
+      .toBe("全文已取得 1 / 总数 2，未取得 1（其中自动途径已试完 1）");
+    expect(query().intake_batch_ids).toEqual([batch]);
+    // A folder narrows it; a link there keeps the folder.
+    await page
+      .getByRole("group", { name: "文献文件夹", exact: true })
+      .getByRole("button", { name: /^全文范围/u })
+      .click();
+    await expect
+      .poll(() => line.textContent())
+      .toBe("全文已取得 1 / 总数 2，未取得 1（其中自动途径已试完 1）");
+    await line.getByRole("button", { name: "已取得 1 篇" }).click();
+    await expect.poll(() => query().has_primary_pdf).toBe(true);
+    expect(query().folder).toMatchObject({ id: folder });
+    await expect.poll(() => page.locator(".paper-row").count()).toBe(1);
+    // A search narrows it too; with nothing exhausted, no parentheses.
+    await page
+      .getByRole("searchbox", { name: "搜索文献" })
+      .fill("Full text two versions");
+    await expect
+      .poll(() => line.textContent())
+      .toBe("全文已取得 1 / 总数 1，未取得 0");
+    expect(query()).toMatchObject({
+      has_primary_pdf: true,
+      folder: { id: folder },
+    });
+    // An empty scope has no line.
+    await page
+      .getByRole("searchbox", { name: "搜索文献" })
+      .fill("nothing-at-all");
+    await expect.poll(() => line.count()).toBe(0);
+    expect(started).toEqual([]);
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);
+
+it("shows the full-text line for the whole library, an intake batch and a folder (plan 25 block 19 screenshots)", async (context) => {
+  const output = process.env.SCIRETRIEVER_WEB_FULLTEXT_SHOTS;
+  if (!output) return context.skip();
+  await mkdir(output, { recursive: true });
+  const w = await nextWorkspace();
+  try {
+    const page = w.page;
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await seedFullText(w);
+    await page.reload();
+    const line = page.getByLabel("全文取得情况");
+    const shot = (name: string) =>
+      page.screenshot({ path: join(output, `${name}.png`) });
+    await expect.poll(() => line.textContent()).toContain("总数 5");
+    await shot("full-text-library");
+    await page
+      .getByRole("group", { name: "最近入库" })
+      .getByRole("button", { name: /^全文批次/u })
+      .click();
+    await expect.poll(() => line.textContent()).toContain("总数 2");
+    await page.locator(".paper-row").first().waitFor();
+    await shot("full-text-batch");
+    await page
+      .getByRole("group", { name: "文献文件夹", exact: true })
+      .getByRole("button", { name: /^全文范围/u })
+      .click();
+    await page.getByRole("heading", { name: "全文范围" }).waitFor();
+    await expect.poll(() => line.textContent()).toContain("总数 2");
+    await shot("full-text-folder");
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();
