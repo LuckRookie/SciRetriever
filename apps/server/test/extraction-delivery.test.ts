@@ -23,6 +23,7 @@ import {
 import {
   createApplication,
   createQueryApplication,
+  type ApplicationOptions,
 } from "../src/bootstrap/application.js";
 import { startQueryOnlyHttp } from "../src/workbench/http.js";
 import { runExtractionStorage } from "../src/storage/sqlite/extraction-engine.js";
@@ -68,11 +69,13 @@ async function specification() {
   };
   return { ...content, spec_sha256: await extractionSpecHash(content) };
 }
-async function environment() {
+async function environment(
+  options: Pick<ApplicationOptions, "indexRefreshIntervalMs"> = {},
+) {
   const home = await mkdtemp(
     join(tmpdir(), "sciretriever-extraction-delivery-"),
   );
-  let app = await createApplication(home);
+  let app = await createApplication(home, options);
   try {
     await app.database.putLiterature(FIXTURE_LITERATURE);
     const assets = [];
@@ -112,7 +115,7 @@ async function environment() {
     }
     await app.close();
     const catalog = join(home, "catalog.sqlite");
-    app = await createApplication(home);
+    app = await createApplication(home, options);
     const spec = await specification();
     const inputs = assets.map((asset, index) => ({
       input_id: `source-${index + 1}`,
@@ -322,7 +325,8 @@ describe("extraction candidate delivery on v5", () => {
     }
   });
   it("does not post a queued cancelled write and settles a posted real commit before shutdown", async () => {
-    const env = await environment();
+    // This test explicitly owns catalog admission order across independent writers.
+    const env = await environment({ indexRefreshIntervalMs: null });
     let worker: SqliteWorker | undefined;
     try {
       const op = await operation(env);
@@ -330,8 +334,16 @@ describe("extraction candidate delivery on v5", () => {
       const blocked = new Promise<void>((resolve) => {
         releaseBlock = resolve;
       });
+      let holding!: () => void;
+      const held = new Promise<void>((resolve) => {
+        holding = resolve;
+      });
       const admission = new CatalogWriteAdmission(env.catalog);
-      const holder = admission.run(() => blocked);
+      const holder = admission.run(() => {
+        holding();
+        return blocked;
+      });
+      await Promise.race([held, holder]);
       worker = new SqliteWorker(env.catalog, admission);
       const cancelled = new AbortController();
       const queued = worker.extraction(
@@ -345,12 +357,13 @@ describe("extraction candidate delivery on v5", () => {
         },
         cancelled.signal,
       );
+      const rejected = expect(queued).rejects.toMatchObject({
+        code: "write-admission-cancelled",
+      });
       cancelled.abort();
       releaseBlock();
       await holder;
-      await expect(queued).rejects.toMatchObject({
-        code: "write-admission-cancelled",
-      });
+      await rejected;
       const db = new DatabaseSync(env.catalog, { readOnly: true });
       try {
         expect(

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { expect, it, vi } from "vitest";
 import {
+  DEVICE_PURPOSES,
   parseDeviceConnectionCode,
   type DevicePurpose,
 } from "@sciretriever/contracts";
@@ -40,6 +41,7 @@ it("shares the exact import handlers between authenticated Web and import-purpos
       importSessions: { maintain: false },
     }),
     session = new ProductionWorkbenchSession(null, undefined);
+  const routes = deviceBusinessRoutes(app);
   const server = await startWorkbenchHttp({
     session,
     assets: new Map([
@@ -50,7 +52,7 @@ it("shares the exact import handlers between authenticated Web and import-purpos
     importBibliography: createMetadataOperations(app).importBibliography,
     devices: {
       service: app.deviceConnections,
-      routes: deviceBusinessRoutes(app),
+      routes,
     },
   });
   const token = async (purpose: DevicePurpose) => {
@@ -411,7 +413,52 @@ it("shares the exact import handlers between authenticated Web and import-purpos
     });
     expect(docs.status).toBe(200);
     const reference = (await docs.json()).result;
-    expect(reference.endpoints).toHaveLength(25);
+    expect(reference.endpoints).toHaveLength(30);
+    const webOnly = [
+      ["withdrawal-read", "withdrawal", "finished"],
+      ["withdrawal-preview", "withdrawal/preview", "finished"],
+      ["withdraw", "withdraw", "withdrawn"],
+      ["restore-preview", "restore/preview", "withdrawn"],
+      ["restore", "restore", "finished"],
+    ] as const;
+    for (const [operation, suffix] of webOnly) {
+      expect(reference.endpoints).toContainEqual(
+        expect.objectContaining({
+          method: "POST",
+          path: `/api/v1/intake/batches/:batch_id/${suffix}`,
+          operation,
+        }),
+      );
+      const path = `/api/v1/intake/batches/${legacySession.batch_id}/${suffix}`;
+      const registration = routes.find("POST", path);
+      expect(registration?.route.purposes).toEqual([]);
+      expect(registration?.route.handleWeb).toBeTypeOf("function");
+      const unauthenticated = await send(path, {}, {});
+      expect(unauthenticated.status).toBe(401);
+      await unauthenticated.arrayBuffer();
+    }
+    for (const purpose of DEVICE_PURPOSES) {
+      const headers = { Authorization: `Bearer ${await token(purpose)}` };
+      for (const [, suffix] of webOnly) {
+        const denied = await send(
+          `/api/v1/intake/batches/${legacySession.batch_id}/${suffix}`,
+          {},
+          headers,
+        );
+        expect(denied.status).toBe(403);
+        expect((await denied.json()).code).toBe("device-purpose-forbidden");
+      }
+    }
+    for (const [, suffix, state] of webOnly) {
+      const response = await web(
+        `/api/v1/intake/batches/${legacySession.batch_id}/${suffix}`,
+        {},
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        result: { batch: { batch_id: legacySession.batch_id, state } },
+      });
+    }
     expect(reference.endpoints).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
