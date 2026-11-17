@@ -62,10 +62,10 @@ LibraryQuery
   folder: {id: FolderId, include_descendants: bool} | None
   recently_opened: bool | None
 
-  # 目标（尚未实现），见 2.1.8
+  # 见 2.1.8
   has_primary_pdf: bool | None
 
-  # 目标（尚未实现），见文献与材料 8.4
+  # 见文献与材料 8.4
   needs_metadata: bool | None
 
 LiteratureMissingStep =
@@ -127,9 +127,9 @@ CONTENT_READY
 
 按文本等级和选择校订范围的事实筛选，见 [2.1.7](#217-文本等级与选择校订范围的事实)。
 
-**被撤回的文献**（目标，尚未实现，计划 25 的 13 块）：任何 `LibraryQuery` 的结果、`total_count`、计数（2.1.8）、词频、引用关系的两端、发现原因与 `QuerySelector` 的展开都排除被撤回的文献，详情按不存在处理；字段不变，调用方不能选择包含它们。撤回的规则见[文献与材料 6.4.11](03-literature-materials.md#6411-撤回)。
+**被撤回的文献**：任何 `LibraryQuery` 的结果、`total_count`、计数（2.1.8）、词频、引用关系的两端、发现原因与 `QuerySelector` 的展开都排除被撤回的文献，详情按不存在处理；字段不变，调用方不能选择包含它们。撤回的规则见[文献与材料 6.4.11](03-literature-materials.md#6411-撤回)。
 
-`needs_metadata`（目标，尚未实现，计划 20 的 15 块）为 true 时，只匹配带“书目待补”标记的版本；为 false 时只匹配不带的；null 或省略时不筛选。省略时不进入规范化的查询，已有请求与 cursor 的字节不变。标记的含义见[文献与材料 8.4](03-literature-materials.md#84-书目待补目标尚未实现)。
+`needs_metadata` 为 true 时，只匹配带“书目待补”标记的版本；为 false 时只匹配不带的；null 或省略时不筛选。省略时不进入规范化的查询，已有请求与 cursor 的字节不变。标记的含义见[文献与材料 8.4](03-literature-materials.md#84-书目待补)。
 
 #### 2.1.2 搜索请求与页面
 
@@ -168,7 +168,7 @@ LibrarySearchPage
 
 列表不嵌入 MetadataObservations、资产、ParserResult、LiteratureContent、Reference/Support、Discovery cause 或 artifact 字节。`LibrarySearchPage` 是一次读取结果，不另套 Entry Report。
 
-条目的 `text_level`、`draft_facts` 与按它们排序的键见 [2.1.7](#217-文本等级与选择校订范围的事实)。条目与 `LiteratureDetail` 另增加 `needs_metadata: bool`（目标，尚未实现，见[文献与材料 8.4](03-literature-materials.md#84-书目待补目标尚未实现)）。
+条目的 `text_level`、`draft_facts` 与按它们排序的键见 [2.1.7](#217-文本等级与选择校订范围的事实)。条目与 `LiteratureDetail` 另增加 `needs_metadata: bool`（见[文献与材料 8.4](03-literature-materials.md#84-书目待补)）。
 
 #### 2.1.3 LiteratureDetail
 
@@ -307,7 +307,7 @@ Catalog、Report 或 `LiteratureDetail`。因此 Detail 本身不增加 `open()`
 
 #### 2.1.6 入库批次、范围词频与 PDF 获取范围
 
-目标，尚未实现（计划 20 的 14 块）：下面 `IntakeBatch` 中标为“目标”的字段，批次的状态与结果分开，以及逐条确认的开放批次。决定见 [ADR 0052](../decisions/0052-intake-batches-and-explicit-scope.md) 与 [ADR 0063](../decisions/0063-unified-intake.md) 第 1、3 节。
+决定见 [ADR 0052](../decisions/0052-intake-batches-and-explicit-scope.md) 与 [ADR 0063](../decisions/0063-unified-intake.md) 第 1、3 节。
 
 **读模型。** 一切入库都形成入库批次：主题发现、引用扩展，以及经[入库过程](03-literature-materials.md#642-过程与状态)的各种载体。`IntakeBatch` 是入库批次唯一的读模型：入库记录的列表、批次页，以及 HTTP 版 MCP 的 `intake_batch_status`，读的都是它。对外只有批次编号，没有另一套会话编号。
 
@@ -321,24 +321,24 @@ Catalog、Report 或 `LiteratureDetail`。因此 Detail 本身不增加 `open()`
 ```text
 IntakeBatch
   batch_id, kind: topic | citation | import | legacy
-  confirmation: batch | per-item | None        # 目标；topic、citation、legacy 为 None
+  confirmation: batch | per-item | None        # topic、citation、legacy 为 None
   origin: web | cli | mcp | migration
-  initiated_by: str                            # 目标；"local:web" | "local:cli" | "local:mcp" | "device:<connection_id>"
-  state                                        # 目标：collecting | awaiting-confirmation | running | finished | cancelled | withdrawn
-  result                                       # 目标：completed | partial | failed | interrupted | None，只在 finished（及其后撤回）时非空
+  initiated_by: str                            # "local:web" | "local:cli" | "local:mcp" | "device:<connection_id>"
+  state                                        # collecting | awaiting-confirmation | running | finished | cancelled | withdrawn
+  result                                       # completed | partial | failed | interrupted | None，只在 finished（及其后撤回）时非空
   created_at, confirmed_at, finished_at
   label, default_label, renamed
   request            # 用户输入的简要形式；多种子、双方向的完整参数留在 DiscoveryRun
-  source: {system, library_id, identity: global | local | adhoc, name} | None   # 目标；只有 import 有
+  source: {system, library_id, identity: global | local | adhoc, name} | None   # 只有 import 有
   counts: hits, created, enriched, matched, rejected
-          restored, conflicts, possible_duplicates, pending_decision, needs_metadata     # 目标
+          restored, conflicts, possible_duplicates, pending_decision, needs_metadata
   pdf: has_pdf, unavailable, pending   # 读取时按当前库现算，按版本
-  full_text: FullTextCounts            # 目标；定义同 2.1.8，按论文，范围是批次成员，读取时现算
-  progress: IntakeProgress | None      # 目标；只有 running 的 import 批次有
-  estimates: {acquire_pdf: int, parse: int}   # 目标；批次页“接着做什么”的两个预估数
+  full_text: FullTextCounts            # 定义同 2.1.8，按论文，范围是批次成员，读取时现算
+  progress: IntakeProgress | None      # 只有 running 的 import 批次有
+  estimates: {acquire_pdf: int, parse: int}   # 批次页“接着做什么”的两个预估数
   source_failures
 
-IntakeProgress                         # 目标
+IntakeProgress
   phase: metadata | files | closing    # 书目入库、等待文件、收尾
   processed_items: int
   total_items: int
@@ -371,7 +371,7 @@ AcquirePdfCounts
   matched, process, skipped_has_pdf, skipped_unavailable, over_limit
 ```
 
-- **批次**：每次主题发现、引用扩展各形成一个批次；入库过程的批次在建立时就存在，确认后才接纳成员。CLI 与 stdio 的书目入口同样经入库过程。设备 HTTP 的 origin 为 web，`initiated_by` 区分设备与 local:web/cli/mcp。接口见[入库 HTTP](01-product-interface.md#242-入库-http目标尚未实现)，导入规则见[书目交换](03-literature-materials.md#61-书目交换规则)与[入库](03-literature-materials.md#64-入库目标尚未实现)。成员与身份发布在同一事务提交；同一篇按 created > enriched > matched 计一次。`counts.hits` 是成员数；`legacy` 批次的 hits 不满足 created + enriched + matched 等式。异常或进程退出的发现批次保留已接纳的成员，结果读作 `interrupted`。列表按 `created_at` 倒序翻页，人工改名为单行 1–120 字。
+- **批次**：每次主题发现、引用扩展各形成一个批次；入库过程的批次在建立时就存在，确认后才接纳成员。CLI 与 stdio 的书目入口同样经入库过程。设备 HTTP 的 origin 为 web，`initiated_by` 区分设备与 local:web/cli/mcp。接口见[入库 HTTP](01-product-interface.md#242-入库-http)，导入规则见[书目交换](03-literature-materials.md#61-书目交换规则)与[入库](03-literature-materials.md#64-入库)。成员与身份发布在同一事务提交；同一篇按 created > enriched > matched 计一次。`counts.hits` 是成员数；`legacy` 批次的 hits 不满足 created + enriched + matched 等式。异常或进程退出的发现批次保留已接纳的成员，结果读作 `interrupted`。列表按 `created_at` 倒序翻页，人工改名为单行 1–120 字。
 - **词频**（层次与排列见 [ADR 0053](../decisions/0053-scope-terms-led-by-tags.md)）：对一个 `LibraryQuery` 的全部命中统计标签、作者关键词和主题词，同篇同词计一次，按篇数降序、词升序，每层最多 30 个。
   - 标签只计 `active` 的标签直接标注的篇数，主次都算；`tag_id` 即标签筛选用的 ID。标签筛选包含子标签，所以父标签筛出的篇数可能多于词频。
   - 作者关键词规范化后等于某个 `active` 标签的名称或别名时，`tag` 给出该标签，否则为 `None`。
@@ -380,7 +380,7 @@ AcquirePdfCounts
   - `query`：服务端展开全部命中，不受前端已加载行数限制；先跳过已有主 PDF 的和已标记无法获取的，再按 `sort` 取前 `limit` 篇，其余计入 `over_limit`。
   - `literatures`：调用方明确点名的文献全部处理，包括已有 PDF（重新获取）和已标记无法获取的；`process = matched`，三项跳过都为 0。
   - 成员在创建任务时固定，之后入库的文献不加入。任务保存 `scope: {selector, counts}`，任务列表、详情和运行记录返回同一份；旧任务为 `None`。
-- 补形成初稿的维护操作复用 `AcquirePdfSelector`，计数与跳过规则另行规定，见[文档与证据 8.11](04-document-evidence.md#811-补形成初稿的维护操作)（目标，尚未实现）。
+- 补形成初稿的维护操作复用 `AcquirePdfSelector`，计数与跳过规则另行规定，见[文档与证据 8.11](04-document-evidence.md#811-补形成初稿的维护操作)。
 
 #### 2.1.7 文本等级与选择校订范围的事实
 
@@ -458,10 +458,10 @@ LibraryCounts
   statuses: {LiteratureStatus: int}   # 六种状态各多少个版本，合计等于 total
   unavailable_pdf: int            # 状态为 UNREVIEWED 且有自动 PDF 获取耗尽事实的版本数
   recently_opened: int            # 范围内最近 30 天打开过的版本数，最多计到 100
-  with_primary_pdf: int           # 目标（尚未实现）：有主 PDF 的版本数，供快速筛选“有 PDF”；“仅元数据”为 total − with_primary_pdf
-  full_text: FullTextCounts       # 目标（尚未实现），见下文
+  with_primary_pdf: int           # 有主 PDF 的版本数，供快速筛选“有 PDF”；“仅元数据”为 total − with_primary_pdf
+  full_text: FullTextCounts       # 见下文
 
-FullTextCounts                    # 目标（尚未实现）
+FullTextCounts
   total: int                      # 范围内的论文数
   obtained: int                   # 已取得全文的论文数
   missing: int                    # 未取得全文的论文数
@@ -472,7 +472,7 @@ FullTextCounts                    # 目标（尚未实现）
 
 **状态计数。** `total`、`statuses`、`unavailable_pdf`、`recently_opened` 与 `with_primary_pdf` 按具体版本（`Literature`）计，与列表的单位相同（[2.2.1](#221-libraryquery-与结果单位)）。同一篇论文的预印本与正式版各计一次。
 
-**全文取得情况（目标，尚未实现）。** `full_text` 回答需求[收2](../requirements.md#收2-取得全文)“多少已经取得，多少还没有，其中多少已经试完了自动途径”，按论文计：
+**全文取得情况。** `full_text` 回答需求[收2](../requirements.md#收2-取得全文)“多少已经取得，多少还没有，其中多少已经试完了自动途径”，按论文计：
 
 - **单位是论文，不是版本。** 一篇论文就是一个 `MetaLiterature`，它的几个版本只计一次（需求[收4](../requirements.md#收4-规模与持续积累)：一个版本达到目标即可）。论文在范围内，当且仅当它至少有一个版本命中 `query`。判断是否取得、是否试完时看这篇论文的全部当前版本，不只看命中的版本；取法同 `selectionSnapshot` 的 matches 与 members（[2.2.1](#221-libraryquery-与结果单位)）。
 - **已取得（`obtained`）**：至少一个版本有主 PDF。之后处于什么状态都算：等待解析或建档、建档中、建档失败、就绪，以及 `EXCLUDED`。被排除的论文仍有它的全文。
@@ -483,7 +483,7 @@ FullTextCounts                    # 目标（尚未实现）
 
 **一致性与只读。** 同一次读取的全部数字来自同一个只读快照。计数不联网、不调用模型、不创建任务，不写库（规1）。这些数是查询时的聚合，不另存（[存储 2.3.6](07-versioned-storage.md#236-有意保存与有意推导)）。
 
-**筛选“有主 PDF”（目标，尚未实现）。** `LibraryQuery.has_primary_pdf` 为 true 时只匹配有主 PDF 的版本，为 false 时只匹配没有主 PDF 的版本，null 或省略时不筛选。它按版本，与列表的单位相同。省略时不进入规范化的查询，已有请求与 cursor 的字节不变。文献库从“全文取得情况”一行跳到列表时用它（[页面规格“文献库”](../web/page-specs.md#文献库)）；列表按版本列出，所以条数可以多于对应的论文数。
+**筛选“有主 PDF”。** `LibraryQuery.has_primary_pdf` 为 true 时只匹配有主 PDF 的版本，为 false 时只匹配没有主 PDF 的版本，null 或省略时不筛选。它按版本，与列表的单位相同。省略时不进入规范化的查询，已有请求与 cursor 的字节不变。文献库从“全文取得情况”一行跳到列表时用它（[页面规格“文献库”](../web/page-specs.md#文献库)）；列表按版本列出，所以条数可以多于对应的论文数。
 
 ### 2.2 查询
 

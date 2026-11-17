@@ -18,7 +18,7 @@
 ## 进入条件
 
 - 入库接口（原计划 20 的 14）已完成；13.1 的结论已写进规格。
-- 13.2 起按[文献与材料 6.4.11](../../architecture/technical/03-literature-materials.md#6411-撤回)与[存储 9.1](../../architecture/technical/07-versioned-storage.md#91-schema-16-的目标变化目标尚未实现)（已写）。
+- 13.2 起按[文献与材料 6.4.11](../../architecture/technical/03-literature-materials.md#6411-撤回)与[存储 9.1](../../architecture/technical/07-versioned-storage.md#91-schema-16-的变化)（已写）。
 
 ## 责任边界
 

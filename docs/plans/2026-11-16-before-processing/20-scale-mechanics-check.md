@@ -13,7 +13,7 @@
 - 一份 JSON 报告记录收4 要求的数字：所用数据、各阶段时长、吞吐、内存、磁盘；外部调用花费为零（全部是假来源），报告写明这一点。
 - 不联网，不读正式库，不需要授权；不进入普通的 `pnpm test` 与全量。
 
-规格：[任务协调 9.4 万篇机制检查](../../architecture/technical/02-task-coordination.md#94-万篇机制检查目标尚未实现)（数据、假来源、入库、中断与故障、测量、不变量）；计数见[查询技术篇 2.1.8](../../architecture/technical/06-retrieval-context.md#218-文献库计数与全文取得情况)；获取流程见[文献与材料第 4 节](../../architecture/technical/03-literature-materials.md#45-获取流程)；批量运行、中断与恢复见[任务协调 5.1、5.2](../../architecture/technical/02-task-coordination.md#52-并发中断与恢复)；测量要求见 [tests/README](../../../tests/README.md)“测试时间限制”。
+规格：[任务协调 9.4 万篇机制检查](../../architecture/technical/02-task-coordination.md#94-万篇机制检查)（数据、假来源、入库、中断与故障、测量、不变量）；计数见[查询技术篇 2.1.8](../../architecture/technical/06-retrieval-context.md#218-文献库计数与全文取得情况)；获取流程见[文献与材料第 4 节](../../architecture/technical/03-literature-materials.md#45-获取流程)；批量运行、中断与恢复见[任务协调 5.1、5.2](../../architecture/technical/02-task-coordination.md#52-并发中断与恢复)；测量要求见 [tests/README](../../../tests/README.md)“测试时间限制”。
 
 ## 进入条件
 

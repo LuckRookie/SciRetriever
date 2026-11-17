@@ -2,7 +2,7 @@
 
 类型：规格（前端阅读页）
 负责：阅读页的版面构件、排版与标记、视图、阅读位置、连续性、过渡与加载
-状态：现行；全部为目标，尚未实现；当前实现与差距单独成节
+状态：现行；依赖知识加工的视图与标记是目标，尚未实现，见第 9 节
 
 阅读页的阅读模式见 [ADR 0061](../decisions/0061-reading-first-reader-and-layered-reading.md)，样子见 [ADR 0062](../decisions/0062-reader-visual-manuscript-on-a-desk.md)。全站的字体、颜色、控件和动效规则见[设计内核](design-core.md)，本文只写阅读页自己的规则；页面区域的概述见[页面规格](page-specs.md#阅读页)。批注的数据与锚点见 [ADR 0046](../decisions/0046-reading-marks.md) 与[使用者组织技术篇第 5 节](../technical/09-user-organization.md#5-批注与笔记)；文本等级见 [ADR 0060](../decisions/0060-two-level-full-text.md) 与[文档与证据技术篇](../technical/04-document-evidence.md)。
 
@@ -656,22 +656,12 @@
 | 排版           | 阅读区内只出现第 2.1 节表中的字号；作者的文字（`data-origin="author"`）用衬线体，机器与界面文字用无衬线体；`--reader-check-fail` 在两种主题的纸页上对比度 ≥ 4.5:1          |
 | 截图           | 设计样例库增加阅读页的页面：原文、概览、脉络、PDF、按问题阅读、库内关联、加载，在 1440×900、1024×768、390 宽度，浅色与深色主题下截图                                       |
 
-## 9. 当前实现与差距
+## 9. 尚未实现
 
-以下是 2026-11-13 代码中阅读器的行为，路径在 `apps/web/src/` 下。它们与上文的目标不同，按上文改。
+第 1–6 节与第 8 节的检查已在计划 24 的第一次交付与计划 25 的 01–05 实现（2026-11-17），下列部分仍是目标：
 
-- 切换 PDF 与全文、切换文献时拆掉阅读引擎：`app/features/reader/Reader.tsx` 的引擎 effect 在开始和清理时都调用 `host.replaceChildren()`，依赖里包括视图模式和文献详情。
-- 每次重建都重新读取并校验材料：`reading/transport.ts` 下载后计算 sha256 比对；PDF 引擎每次挂载新建一个 worker（`reading/pdf.ts`）。
-- 页面加载边界按文献重新挂载：`app/shell/Application.tsx` 的 `Suspense` 以 `section:literature` 为 key，切换时显示“正在打开…”。
-- 阅读位置只在内存里，按材料身份分别记录，PDF 与全文各一份，关闭标签即释放（`reading/state.ts`）。
-- 缩放、适合宽度、窗口变化和侧栏开合都调用 `reflow()`，先清空所有已渲染页的画布（`reading/pdf.ts`）；只有可见页及前后各一页保留画布。
-- 全文滚动容器设置了 `overflow-anchor: none`（`app/features/reader/reading.css`），图片异步解码载入后没有位置补偿（`reading/document.ts`）。
-- 顶栏的活动查询每 5 秒轮询一次任务（`app/shell/Application.tsx`）；任务列表变化时让文献详情等查询失效，文献详情一有变化，阅读引擎就整体重建（`Reader.tsx` 的引擎 effect 依赖文献详情）。
-- 视图切换、目录、信息栏和查找栏的出现没有过渡。
-- 文献库的行总是以 PDF 模式打开，没有 PDF 的文献也一样（`app/features/library/Library.tsx`）。
-- 全文查找按整段标出命中（`reading/document.ts` 的 `onFind` 给整个块加 `reading-match`）。
-- PDF 内的跳转直接到位，没有返回原处的办法。
-- 动效令牌已经存在（`app/styles/tokens.css` 的 `--dur-1/2/3`、`--ease-out` 等），阅读页的过渡可以直接使用。
-- 键盘与鼠标（2026-11-16 核对）：原文字号只有 18、20、22、24 四档（`app/features/reader/Reader.tsx`），按资料记住；PDF 缩放只有七档；Ctrl+滚轮与 Ctrl+= 是浏览器的页面缩放；阅读区没有自己的右键菜单；关闭当前标签页就离开阅读页（`app/shell/Application.tsx` 的 `closeTab`），刷新后只剩地址栏里的那一篇；键盘滚动要先点一下阅读区；查找只有“下一处”；快捷键分散在 `Reader.tsx` 与 `ReaderMarks.tsx` 中。
+- **依赖知识加工的视图与标记**：概览（3.2）、脉络（3.3）、按问题阅读与提问框（3.6）、库内关联中的一致、矛盾与按要点（3.7）、长资料按章阅读（3.8）、证据、关键句与“与原文不符的引用”（2.5）、书脊上对应的刻度（1.5）、信息标签页“材料”一组中的概览与脉络（1.4）。它们随知识加工暂缓，见[知识加工提案](../../proposals/2026-11-16-knowledge-processing/README.md)；按第 1.3 节“只显示能用的”，没有加工能力时不出现。
+- **鼠标侧键在 Firefox 上**（1.8.4）：未验证，Firefox 上不提供。
+- **出处角标**（2.5 与文档与证据 3.5）：段号“¶n”已在左页边显示，分句与“¶段·句”角标随知识加工实现。
 
 [Web 设计目录](README.md)

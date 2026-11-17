@@ -13,7 +13,7 @@
 - 名称规则、200 项上限、按名称排序、`missing_folder_id` 与错误码按规格。
 - 一个离线迁移工具把精确的前一个 schema 升级到 schema 18（见计划 README“schema 18”），一次加入 `saved_filters` 与 `reading_mark_places` 两张表（后者供 08 使用），不改文献资产，不调用模型。
 
-规格：[用户整理 9.1](../../architecture/technical/09-user-organization.md#91-保存的筛选进入文献库)（是什么、操作、入口、浏览器导入）；两张表见[存储技术篇第 7 节](../../architecture/technical/07-versioned-storage.md#7-运行审查存储)的“用户整理的两张表”；设备用途见[第 6.3 节](../../architecture/technical/09-user-organization.md#63-agent-的同等授权)；迁移方式见[存储技术篇第 7 节](../../architecture/technical/07-versioned-storage.md#7-运行审查存储)与 [4.1](../../architecture/technical/07-versioned-storage.md#41-当前-schema-与显式转换)。
+规格：[用户整理 9.1](../../architecture/technical/09-user-organization.md#4-保存的筛选)（是什么、操作、入口、浏览器导入）；两张表见[存储技术篇第 7 节](../../architecture/technical/07-versioned-storage.md#7-运行审查存储)的“用户整理的两张表”；设备用途见[第 6.3 节](../../architecture/technical/09-user-organization.md#63-agent-的同等授权)；迁移方式见[存储技术篇第 7 节](../../architecture/technical/07-versioned-storage.md#7-运行审查存储)与 [4.1](../../architecture/technical/07-versioned-storage.md#41-当前-schema-与显式转换)。
 
 ## 进入条件
 

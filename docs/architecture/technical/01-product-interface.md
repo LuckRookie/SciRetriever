@@ -124,7 +124,7 @@ QueryApplication 的状态为 ready、not-initialized、unavailable。缺库不�
 
 #### 2.4.1 设备连接与按用途准入
 
-目标，尚未实现（计划 20 的 14 块）：用途合并为 `intake`、换令牌的限流按来源地址、最近使用时间合并写入，以及三种下载改走入库路径。本节其余规则已实现。决定见 [ADR 0058](../decisions/0058-import-system-and-agent-access.md) 第 2 节与 [ADR 0063](../decisions/0063-unified-intake.md) 第 7 节。
+决定见 [ADR 0058](../decisions/0058-import-system-and-agent-access.md) 第 2 节与 [ADR 0063](../decisions/0063-unified-intake.md) 第 7 节。
 
 `workbench/device-connections.ts` 拥有一次性配对与设备认证，生产和合成 Web 组装到同一 HTTP 地址。
 
@@ -153,22 +153,22 @@ QueryApplication 的状态为 ready、not-initialized、unavailable。缺库不�
 
 用途为 `intake`、`read`、`operate`，非空，彼此不隐含。旧值 `capture`、`import` 不再接受；已经是 schema 16 的开发库与测试库不提供转换，重新建库。
 
-| 用途      | 能调用                                                                                                                                              |
-| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `intake`  | [入库 HTTP](#242-入库-http目标尚未实现)中除撤回、恢复与补 PDF 以外的全部路由，以及 `/instructions`、`/agent-guide`、`/skill`、`/extension` 四个下载 |
-| `read`    | [HTTP 版 MCP](#http-版-mcp) 的读取工具                                                                                                              |
-| `operate` | HTTP 版 MCP 的操作工具                                                                                                                              |
+| 用途      | 能调用                                                                                                                                  |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `intake`  | [入库 HTTP](#242-入库-http)中除撤回、恢复与补 PDF 以外的全部路由，以及 `/instructions`、`/agent-guide`、`/skill`、`/extension` 四个下载 |
+| `read`    | [HTTP 版 MCP](#http-版-mcp) 的读取工具                                                                                                  |
+| `operate` | HTTP 版 MCP 的操作工具                                                                                                                  |
 
 - 唯一登记点 `bootstrap/device-routes.ts::deviceBusinessRoutes(application)` 返回用途与路由的对应表。`DeviceRouteRegistry` 只允许 `/api/v1/intake/` 命名空间与 `/mcp`；每个精确方法/路径（允许受限 `:id`）列出可接受的用途。
 - MCP 同时在列出和调用工具处检查用途，见 [HTTP 版 MCP](#http-版-mcp)。
 - 未登记的所有既有 query/maintenance/管理路径均拒绝令牌。
-- 凭 `intake` 令牌只能看到和操作本连接发起的批次，规则见 [2.4.2](#242-入库-http目标尚未实现)。
+- 凭 `intake` 令牌只能看到和操作本连接发起的批次，规则见 [2.4.2](#242-入库-http)。
 
 **认证与最近使用时间**
 
 - 每次认证都从 catalog 核对令牌是否撤销，没有跨请求的授权缓存。
 - `last_used_at` 合并写入：同一个连接距上次写入不足 5 分钟时，不再写，只读核对撤销。
-- 撤销不回滚先前已接纳的操作。正在进行的上传在撤销时中断，见 [2.4.2](#242-入库-http目标尚未实现)。
+- 撤销不回滚先前已接纳的操作。正在进行的上传在撤销时中断，见 [2.4.2](#242-入库-http)。
 
 **Web 管理**
 
@@ -181,7 +181,7 @@ Web 管理均为 POST，要求登录 Cookie、工作台 Cookie、client_id、同
 | `/api/v1/device-connections/rename`   | `{connection_id,name}`         | `{connection}`                              |
 | `/api/v1/device-connections/revoke`   | `{connection_id}`              | `{connection}`，幂等                        |
 
-- `DeviceConnection` 只含 UUID connection_id、1–120 字符的 name、purposes、`kind`、created_at，以及 nullable 的 paired_at/last_used_at/revoked_at。`kind` 为 `"extension"`、`"agent"` 或 null：建立连接时由网页按使用者点的按钮（“连接浏览器扩展”或“连接 Agent”）写入，之后不变；schema 18 之前建立的连接为 null，界面写“设备”。`kind` 只用于显示，不参与准入；准入只看用途。（目标，尚未实现：计划 25 的 12 块，总设计师 2026-11-17 补。）
+- `DeviceConnection` 只含 UUID connection_id、1–120 字符的 name、purposes、`kind`、created_at，以及 nullable 的 paired_at/last_used_at/revoked_at。`kind` 为 `"extension"`、`"agent"` 或 null：建立连接时由网页按使用者点的按钮（“连接浏览器扩展”或“连接 Agent”）写入，之后不变；schema 18 之前建立的连接为 null，界面写“设备”。`kind` 只用于显示，不参与准入；准入只看用途。
 - 列表不返回 token、配对码或其派生值，包含未配对与已撤销项。
 - 用途变更需要重新连接。
 - 管理不走记录请求/响应的通用 operation wrapper。
@@ -189,7 +189,7 @@ Web 管理均为 POST，要求登录 Cookie、工作台 Cookie、client_id、同
 
 **下载**
 
-接口说明、Agent 指南、skill 与扩展安装包都在入库路径下（[2.4.2](#242-入库-http目标尚未实现)）。
+接口说明、Agent 指南、skill 与扩展安装包都在入库路径下（[2.4.2](#242-入库-http)）。
 
 | 路径                              | 内容                                                             |
 | --------------------------------- | ---------------------------------------------------------------- |
@@ -221,9 +221,9 @@ Web 管理均为 POST，要求登录 Cookie、工作台 Cookie、client_id、同
 - 实际的 SQLite 损坏保留 `catalog-corrupt`（503）和 `maintenance_hint:"verify-catalog"`；未知内部异常不透传。Web 原有的认证错误保持。
 - 持久化与迁移见[设备认证存储](07-versioned-storage.md#8-设备认证存储)。
 
-#### 2.4.2 入库 HTTP（目标，尚未实现）
+#### 2.4.2 入库 HTTP
 
-目标，尚未实现（计划 20 的 14–16 块已实现，撤回为计划 25 的 13 块；24.1 核对后改为现状）。本节按 [ADR 0063](../decisions/0063-unified-intake.md) 规定唯一的一组入库接口：扩展、网页与 Agent 都用它，CLI 与 MCP 的书目导入和补 PDF 是它的包装。单独的收藏接口（原 `/api/v1/capture/`）与原 `/api/v1/import/` 不再存在；对外只有入库批次，没有会话编号。各对象的业务含义见[文献与材料 6.4](03-literature-materials.md#64-入库目标尚未实现)，批次的读模型见[查询 2.1.6](06-retrieval-context.md#216-入库批次范围词频与-pdf-获取范围)。
+本节按 [ADR 0063](../decisions/0063-unified-intake.md) 规定唯一的一组入库接口：扩展、网页与 Agent 都用它，CLI 与 MCP 的书目导入和补 PDF 是它的包装。单独的收藏接口（原 `/api/v1/capture/`）与原 `/api/v1/import/` 不再存在；对外只有入库批次，没有会话编号。各对象的业务含义见[文献与材料 6.4](03-literature-materials.md#64-入库)，批次的读模型见[查询 2.1.6](06-retrieval-context.md#216-入库批次范围词频与-pdf-获取范围)。
 
 **准入**
 
@@ -286,7 +286,7 @@ Web 管理均为 POST，要求登录 Cookie、工作台 Cookie、client_id、同
 - `format` 取接口说明里列出的格式名。现有格式为 `records`（中性条目）、`bibtex`、`biblatex`、`ris`、`csl-json`；Zotero 接口数据的格式名在 Zotero 适配器定下后加入（[文献与材料 6.4.9](03-literature-materials.md#649-经扩展从-zotero-导入)）。`records` 是正式的公开格式，规则见[文献与材料 6.4.1](03-literature-materials.md#641-条目与格式)。
 - 分页默认 50，最多 200。批次列表按 `created_at`、`batch_id` 倒序；条目按 `item_id` 排序；报告按输入序号与条号排序，只有文件的条目排在最后；文件按 `file_id` 排序。
 - `files.pending` 默认为 true；结束后的报告用 false 读取全部文件，包括冲突与未交项。
-- `IntakeBatch` 的字段见[查询 2.1.6](06-retrieval-context.md#216-入库批次范围词频与-pdf-获取范围)。条目、决定、文件状态、预览与报告的字段见[文献与材料 6.4](03-literature-materials.md#64-入库目标尚未实现)。精确类型由 `packages/contracts/src/import-sessions.ts` 改名迁入 `packages/contracts/src/intake.ts`。
+- `IntakeBatch` 的字段见[查询 2.1.6](06-retrieval-context.md#216-入库批次范围词频与-pdf-获取范围)。条目、决定、文件状态、预览与报告的字段见[文献与材料 6.4](03-literature-materials.md#64-入库)。精确类型由 `packages/contracts/src/import-sessions.ts` 改名迁入 `packages/contracts/src/intake.ts`。
 
 **只导书目**
 
@@ -391,7 +391,7 @@ IntakePageResult
 
 #### 2.4.3 传输：请求时长与 Content-Type
 
-目标，尚未实现（计划 20 的 13 块）。本节对正式 Web 的全部 HTTP 路由生效。
+本节对正式 Web 的全部 HTTP 路由生效。
 
 **请求时长**
 
@@ -556,7 +556,7 @@ sciretriever config test --all
 - `complete` 接收一个类型化范围和 `pdf`/`content` 目标，分别映射到 `ASSET_READY`/`CONTENT_READY`，不再按 Acquisition、Parsing 和 Analysis 拆成用户命令；
 - `literature search/show/references/cited-by` 只读取本地文献数据库，整个 `literature` 组保持只读；
 - `import metadata` 读取 BibTeX/BibLaTeX、RIS 或 CSL JSON，经入库过程一次完成建批次、交数据与确认，允许创建或命中 Literature。它在 CLI 进程里同步跑完，命令名与结果格式不变（[文献与材料 6.4.2](03-literature-materials.md#642-过程与状态)）；
-- `import pdf` 必须指定一个已经存在的具体 Literature，复制、检查并接纳用户 PDF，不隐式继续 Parsing/Analysis。目标，尚未实现（计划 20 的 14 块）：它改为[补 PDF](#242-入库-http目标尚未实现)的包装，没有大小上限，归入 CLI 当天的“补充文件”开放批次；命令名与结果格式不变。MCP 的 `begin_pdf_upload`、`append_pdf_upload`、`commit_pdf_upload`、`discard_pdf_upload` 同样改为它的包装，结果格式不变。这些命令与工具的说明文字称“入库”，不称“导入会话”；
+- `import pdf` 必须指定一个已经存在的具体 Literature，复制、检查并接纳用户 PDF，不隐式继续 Parsing/Analysis。它是[补 PDF](#242-入库-http)的包装，没有大小上限，归入 CLI 当天的“补充文件”开放批次；命令名与结果格式不变。MCP 的 `begin_pdf_upload`、`append_pdf_upload`、`commit_pdf_upload`、`discard_pdf_upload` 同样是它的包装，结果格式不变。这些命令与工具的说明文字称“入库”，不称“导入会话”；
 - `export metadata` 按已接受的导出范围与格式原子发布书目文件；
 - `export pdf` 和 `export content` 从一个具体 LiteratureDetail 取得当前主 PDF 或规范轻结构化 Markdown 引用，再按 artifact 导出规则写入用户目标。
 - 所有正常命令都经 Configuration 读取固定的 `~/.sciretriever/config.toml`；Entry 不读取配置路径
@@ -1460,11 +1460,11 @@ SDK 初始化生成 `Mcp-Session-Id`，后续请求带同一 ID 和令牌；会�
 | read           | stdio 的 `QUERY_TOOLS`，去除 `configuration_*`；包括入库批次的只读状态与报告 |
 | operate        | stdio `MAINTENANCE_TOOLS` 中的业务工具，去除配置和输入传输工具               |
 | read + operate | 上述并集；两种用途互不隐含                                                   |
-| intake         | 不授予 MCP 权限；入库继续走[入库 HTTP](#242-入库-http目标尚未实现)           |
+| intake         | 不授予 MCP 权限；入库继续走[入库 HTTP](#242-入库-http)                       |
 
 HTTP 不提供 `configuration_*`、`device_*`、`browser_*`、`runtime_*`，也不提供 `import_bibliography`、`begin_pdf_upload`、`append_pdf_upload`、`commit_pdf_upload`、`discard_pdf_upload`。入库的数据与文件不经 HTTP 版 MCP；stdio 的这些既有能力及 `--workbench-url` 保持，其中书目导入与 PDF 上传是入库接口的包装（[3.1.2](#312-文献操作-cli-与-operator-入口)）。未知或用途不足的工具既不列出，调用也以 `device-purpose-forbidden` 拒绝。
 
-目标，尚未实现（计划 20 的 14 块）。两种传输都提供 `intake_batch_status({batch_id}) → {batch}` 与 `intake_batch_report({batch_id,cursor?,limit?}) → {batch,estimated:false,summary,items,next_cursor}`；原名 `import_session_status`、`import_session_report` 直接删除，不保留别名。报告分页沿用 sequence:record_index 游标，默认 50，最多 200。`read` 用途可以读到全部批次，不受 [2.4.2](#242-入库-http目标尚未实现) 中 `intake` 用途的归属限制，但只读。QueryApplication 只组装批次的只读服务，不创建写入 Application、不恢复批次、不推进入库。批次的字段见[查询 2.1.6](06-retrieval-context.md#216-入库批次范围词频与-pdf-获取范围)，条目与报告见[文献与材料 6.4](03-literature-materials.md#64-入库目标尚未实现)。工具成功仍采用既有 MCP `{content,structuredContent:{protocol_version:1,result}}`；业务失败为 isError=true 与 result.failure.code，不回显内部异常。
+两种传输都提供 `intake_batch_status({batch_id}) → {batch}` 与 `intake_batch_report({batch_id,cursor?,limit?}) → {batch,estimated:false,summary,items,next_cursor}`；原名 `import_session_status`、`import_session_report` 直接删除，不保留别名。报告分页沿用 sequence:record_index 游标，默认 50，最多 200。`read` 用途可以读到全部批次，不受 [2.4.2](#242-入库-http) 中 `intake` 用途的归属限制，但只读。QueryApplication 只组装批次的只读服务，不创建写入 Application、不恢复批次、不推进入库。批次的字段见[查询 2.1.6](06-retrieval-context.md#216-入库批次范围词频与-pdf-获取范围)，条目与报告见[文献与材料 6.4](03-literature-materials.md#64-入库)。工具成功仍采用既有 MCP `{content,structuredContent:{protocol_version:1,result}}`；业务失败为 isError=true 与 result.failure.code，不回显内部异常。
 
 MCP HTTP 总 JSON 上限 10 MiB，以容纳原有 `proofread_save`；各工具参数继续受原来 1 MiB+4 KiB 或该工具 9 MiB 限额，回执保持 4 MiB。协议会话最多 64、每设备 8；没有在途 HTTP/SSE 的会话空闲 30 分钟后清理（每分钟及新请求时检查）。服务关闭、显式 DELETE 或 Web 设备撤销会关闭连接；撤销取消在途调用，已经接纳的 durable 任务继续由业务 owner 管理。MCP 连接只借用 Web 的 Application/QueryApplication，不关闭共享 owner。审计身份固定为 `mcp:device:<connection_id>`，不采用客户端自报名称；认证与 Cookie 不传给 SDK 请求上下文。
 

@@ -12,7 +12,7 @@
 - 浏览器里还有未导入的旧筛选时，菜单末尾显示“导入这个浏览器里保存的筛选（n 项）”；使用者点了才导入，导入后用对话框列出导入、改名、跳过与未导入的项及原因。
 - 不自动搬迁，不读写其他浏览器或机器上的数据。
 
-规格：[用户整理 9.1](../../architecture/technical/09-user-organization.md#91-保存的筛选进入文献库) 与[第 4 节](../../architecture/technical/09-user-organization.md#4-保存的筛选)（“浏览器中已有筛选的导入”）；菜单项与对话框见[页面规格“文献库”](../../architecture/web/page-specs.md#文献库)的“筛选”菜单一条。
+规格：[用户整理 9.1](../../architecture/technical/09-user-organization.md#4-保存的筛选) 与[第 4 节](../../architecture/technical/09-user-organization.md#4-保存的筛选)（“浏览器中已有筛选的导入”）；菜单项与对话框见[页面规格“文献库”](../../architecture/web/page-specs.md#文献库)的“筛选”菜单一条。
 
 ## 进入条件
 

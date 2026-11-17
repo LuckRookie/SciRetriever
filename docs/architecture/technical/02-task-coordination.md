@@ -1443,7 +1443,9 @@ FileStore、DB Worker、Agents、Browser、Acquisition 与业务。每个切片�
 任何 v1 bytes/hash/schema、owner、secret、SSRF、不可变发布、Candidate 对账或恢复差异都阻断下游并回到
 对应 owner；不在后续模块增加长期兼容旁路。
 
-### 9.4 万篇机制检查（目标，尚未实现）
+### 9.4 万篇机制检查
+
+检查已实现：`apps/server/test/scale-collection.test.ts` 与 `scale-*.ts`，只在设置 `SCIRETRIEVER_SCALE_RECORDS` 时运行；完整规模（10,000 篇）的运行记录见计划 25 的 20。
 
 需求[收4](../requirements.md#收4-规模与持续积累)的验收行要求“至少一万篇文献及其材料的持续接纳、重复收敛、缺失补全、中断后继续、局部失败隔离和库内查询都成立；记录所用数据、时长、吞吐、内存、磁盘和外部调用花费”。本节规定合成数据上的这项检查怎样做。它是检查的规则，不是产品的行为；真实库上的运行另经授权，不在本节。
 

@@ -14,7 +14,7 @@
 - 初稿升级为校订稿时同样适用（规格 5.4，不另设规则）。
 - 批注画成什么样、批注标签页里怎样标注，按阅读体验第 1.4、2.5 节，由 02、04 实现。
 
-规格：[用户整理 9.4](../../architecture/technical/09-user-organization.md#94-材料换版本时重新定位并记录)（什么时候查找、只在同一部分里找、框选、记录），比对规则见 [5.3](../../architecture/technical/09-user-organization.md#53-两种材料之间对位)；[阅读体验](../../architecture/web/reading-experience.md)第 1.4、2.5、4.3、5.2 节。
+规格：[用户整理 9.4](../../architecture/technical/09-user-organization.md#57-材料换版本时重新定位并记录)（什么时候查找、只在同一部分里找、框选、记录），比对规则见 [5.3](../../architecture/technical/09-user-organization.md#53-两种材料之间对位)；[阅读体验](../../architecture/web/reading-experience.md)第 1.4、2.5、4.3、5.2 节。
 
 ## 进入条件
 
