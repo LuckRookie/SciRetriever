@@ -18,7 +18,10 @@ import {
   catalogRows,
   catalogSnapshot,
   directoryBytes,
+  SCALE_SEED,
+  scaleClock,
   scaleDataset,
+  scaleElapsed,
   scalePaperCount,
   ScaleProcess,
   sourceLog,
@@ -54,12 +57,18 @@ describe.runIf(!!process.env.SCIRETRIEVER_SCALE_RECORDS)(
       "keeps identity, files and frozen jobs across a crash and one storage failure, then reads without side effects",
       { timeout: 0 },
       async () => {
+        const testStart = scaleClock();
         const home = await mkdtemp(join(tmpdir(), "sciretriever-scale-"));
         const reportDirectory =
           process.env.SCIRETRIEVER_SCALE_REPORT ?? join(home, "report");
         await mkdir(reportDirectory, { recursive: true });
+        const pauseFile = join(reportDirectory, "pauses.json");
         const dataset = scaleDataset(
           Number(process.env.SCIRETRIEVER_SCALE_RECORDS),
+          SCALE_SEED,
+          process.env.SCIRETRIEVER_SCALE_RETRY_BOUNDARY === "1"
+            ? "retry-boundary"
+            : "standard",
         );
         const datasetFile = join(home, "dataset.json"),
           catalog = join(home, "catalog.sqlite");
@@ -68,6 +77,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_SCALE_RECORDS)(
           status: "running",
           seed: dataset.seed,
           records: dataset.papers,
+          scenario: dataset.scenario,
           expected: dataset.expected,
           environment: {
             node: process.version,
@@ -91,6 +101,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_SCALE_RECORDS)(
               "source-PDF-generation",
               "process-startup",
               "restart-startup",
+              "external-test-pauses",
             ],
             external_cost: 0,
           },
@@ -106,15 +117,18 @@ describe.runIf(!!process.env.SCIRETRIEVER_SCALE_RECORDS)(
           papers: number | ((result: T) => number),
           operation: () => Promise<T>,
         ) => {
-          const start = performance.now();
+          const start = scaleClock();
           const result = await operation();
-          const elapsed = performance.now() - start;
+          const elapsed = scaleElapsed(start, pauseFile);
           const paperCount =
             typeof papers === "number" ? papers : papers(result);
           phases[name] = {
-            wall_ms: elapsed,
+            ...elapsed,
             papers: paperCount,
-            papers_per_minute: (paperCount * 60_000) / elapsed,
+            papers_per_minute:
+              elapsed.wall_ms > 0
+                ? (paperCount * 60_000) / elapsed.wall_ms
+                : null,
           };
           report.current_stage = name;
           await writeFile(
@@ -314,7 +328,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_SCALE_RECORDS)(
               crashJob.targets.length - 1,
               Math.floor(ids.length * 0.4),
             );
-          const startAcquisition = performance.now();
+          const startAcquisition = scaleClock();
           const interrupted = backend!
             .call("run", { job_id: crashJob.id, checkpoint: threshold })
             .then(
@@ -341,7 +355,11 @@ describe.runIf(!!process.env.SCIRETRIEVER_SCALE_RECORDS)(
           await backend!.stop("SIGKILL");
           expect(await interrupted).toBe("killed");
           await source!.stop("SIGKILL");
-          const firstLegMs = checkpointAt - startAcquisition;
+          const firstLeg = scaleElapsed(
+            startAcquisition,
+            pauseFile,
+            checkpointAt,
+          );
           expect(pdfs()).toEqual(durablePdfs);
           expect(facts()).toEqual(metadataBefore);
           await startSource(port);
@@ -386,9 +404,14 @@ describe.runIf(!!process.env.SCIRETRIEVER_SCALE_RECORDS)(
             accepted_files_preserved: durablePdfs.length,
             recovered: recovered.recovery,
             finished_targets_not_repeated: completed.length,
-            first_leg_wall_ms: firstLegMs,
+            first_leg_wall_ms: firstLeg.wall_ms,
+            first_leg_raw_wall_ms: firstLeg.raw_wall_ms,
+            first_leg_paused_ms: firstLeg.paused_ms,
             papers: papersIn(completed),
-            papers_per_minute: (papersIn(completed) * 60_000) / firstLegMs,
+            papers_per_minute:
+              firstLeg.wall_ms > 0
+                ? (papersIn(completed) * 60_000) / firstLeg.wall_ms
+                : null,
           };
 
           // A second whole-library task excludes every normal miss, but includes
@@ -426,11 +449,16 @@ describe.runIf(!!process.env.SCIRETRIEVER_SCALE_RECORDS)(
             kind: "acquire-pdf",
             idempotency_key: "scale-second",
             selector,
+            // The injected publication failure aborts the first run; an explicit
+            // retry must have enough budget to attempt the entire frozen scope.
+            policy: { max_attempts: 2 * preview.counts.process },
           });
           const frozenSecond = await backend!.call<JobState>("state", {
             job_id: supplement.job_id,
           });
           expect(frozenSecond.targets.length).toBeLessThanOrEqual(10000);
+          if (dataset.scenario === "retry-boundary")
+            expect(frozenSecond.targets.length).toBeGreaterThan(1000);
           expect(
             frozenSecond.targets.every(
               (t) => !exhaustedIds.includes(t.literature_id),
@@ -483,6 +511,33 @@ describe.runIf(!!process.env.SCIRETRIEVER_SCALE_RECORDS)(
             ),
             () => backend!.call("run", { job_id: supplement.job_id }),
           );
+          const budgetSkips = catalogRows<{
+            job_id: string;
+            target_id: string | null;
+            literature_id: string | null;
+            title: string | null;
+            payload_json: string;
+          }>(
+            catalog,
+            `SELECT e.job_id,t.target_id,t.literature_id,m.title,e.payload_json
+            FROM execution_events e
+            LEFT JOIN execution_targets t ON t.target_id=json_extract(e.payload_json,'$.target_id')
+            LEFT JOIN literature_metadata m ON m.literature_id=t.literature_id
+            WHERE e.kind='target-budget-exhausted' ORDER BY e.job_id,t.ordinal`,
+          );
+          report.budgets = {
+            supplement_targets: frozenSecond.targets.length,
+            supplement_max_attempts: 2 * preview.counts.process,
+            usage: catalogRows(
+              catalog,
+              "SELECT * FROM execution_budgets ORDER BY job_id",
+            ),
+            exhausted_targets: budgetSkips,
+          };
+          expect(
+            budgetSkips,
+            `Budget-exhausted targets: ${JSON.stringify(budgetSkips)}`,
+          ).toEqual([]);
           for (const fact of afterStorage) expect(pdfs()).toContainEqual(fact);
           const finalRequests = await sourceLog(logFile);
           for (const jobId of [
@@ -531,14 +586,19 @@ describe.runIf(!!process.env.SCIRETRIEVER_SCALE_RECORDS)(
           const beforeReads = catalogSnapshot(catalog),
             networkBefore = await sourceLog(logFile);
           const measuredReads: Record<string, number> = {};
+          const rawReads: Record<string, number> = {};
+          const pausedReads: Record<string, number> = {};
           const read = async <T>(
             name: string,
             operation: string,
             input: unknown = {},
           ) => {
-            const start = performance.now(),
+            const start = scaleClock(),
               value = await backend!.call<T>(operation, input);
-            measuredReads[name] = performance.now() - start;
+            const elapsed = scaleElapsed(start, pauseFile);
+            measuredReads[name] = elapsed.wall_ms;
+            rawReads[name] = elapsed.raw_wall_ms;
+            pausedReads[name] = elapsed.paused_ms;
             return value;
           };
           const finalCounts = await read<LibraryCounts>("counts_ms", "counts");
@@ -624,6 +684,8 @@ describe.runIf(!!process.env.SCIRETRIEVER_SCALE_RECORDS)(
           ).toBe(0);
           report.reads = {
             timings: measuredReads,
+            raw_timings: rawReads,
+            paused_timings: pausedReads,
             counts: finalCounts,
             page_items: page.items.length,
             filtered_total: filtered.total_count,
@@ -640,6 +702,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_SCALE_RECORDS)(
             finished_work_not_repeated: true,
             transient_is_not_exhausted: true,
             normal_misses_skipped_on_supplement: true,
+            budget_exhausted_targets: 0,
             sha256_verified_files: saved.length,
             read_only_queries: true,
             external_requests: 0,
@@ -682,6 +745,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_SCALE_RECORDS)(
           await backend?.stop();
           await source?.stop();
           report.server_peak_rss_bytes = peakRss;
+          report.timing = scaleElapsed(testStart, pauseFile);
           (report.environment as Record<string, unknown>).load_end = loadavg();
           await writeFile(
             join(reportDirectory, "scale-report.json"),

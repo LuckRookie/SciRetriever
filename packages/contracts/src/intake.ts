@@ -1101,7 +1101,13 @@ export const INTAKE_HTTP_ENDPOINTS = [
     "{decision:IntakeDecision}",
     "{item:IntakeBatchItem}",
   ],
-  ["POST", "/api/v1/intake/folders", "folders", "{}", "{folders:Folder[]}"],
+  [
+    "POST",
+    "/api/v1/intake/folders",
+    "folders",
+    "{}",
+    "{items:[{folder_id,parent_id,name,position}]}",
+  ],
   [
     "POST",
     "/api/v1/intake/literatures/:literature_id/pdf",

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { fork, type ChildProcess } from "node:child_process";
 import { appendFile, readFile, readdir, stat } from "node:fs/promises";
 import { once } from "node:events";
@@ -23,6 +24,7 @@ export interface ScalePaper {
   metadata: MetadataObservation["metadata"];
 }
 export interface ScaleDataset {
+  scenario: "standard" | "retry-boundary";
   seed: number;
   papers: number;
   versions: ScalePaper[];
@@ -63,7 +65,11 @@ export function scalePaperCount(
 }
 
 /** A seeded shuffle chooses overlapping DOI, duplicate, version and source cohorts. */
-export function scaleDataset(count: number, seed = SCALE_SEED): ScaleDataset {
+export function scaleDataset(
+  count: number,
+  seed = SCALE_SEED,
+  scenario: ScaleDataset["scenario"] = "standard",
+): ScaleDataset {
   if (!Number.isSafeInteger(count) || count < 20)
     throw new Error("SCIRETRIEVER_SCALE_RECORDS must be an integer >= 20");
   let state = seed >>> 0;
@@ -111,8 +117,21 @@ export function scaleDataset(count: number, seed = SCALE_SEED): ScaleDataset {
   );
   const large = new Set(
     shuffle(
-      indexes().filter((n) => ["pdf", "retry-pdf"].includes(byOutcome.get(n)!)),
-    ).slice(0, Math.max(1, Math.round((pdfCount + retryCount) * 0.01))),
+      indexes().filter(
+        (n) =>
+          scenario === "retry-boundary" ||
+          ["pdf", "retry-pdf"].includes(byOutcome.get(n)!),
+      ),
+    ).slice(
+      0,
+      Math.max(
+        1,
+        Math.round(
+          (scenario === "retry-boundary" ? count : pdfCount + retryCount) *
+            0.01,
+        ),
+      ),
+    ),
   );
   const versions: ScalePaper[] = [];
   for (const paper of indexes()) {
@@ -144,7 +163,10 @@ export function scaleDataset(count: number, seed = SCALE_SEED): ScaleDataset {
       title,
       doi,
       metadata,
-      outcome: byOutcome.get(paper)!,
+      outcome:
+        scenario === "retry-boundary"
+          ? ("retry-pdf" as const)
+          : byOutcome.get(paper)!,
       bytes: large.has(paper)
         ? 20 * 1024 * 1024
         : 50 * 1024 + Math.floor(random() * 450 * 1024),
@@ -233,6 +255,7 @@ export function scaleDataset(count: number, seed = SCALE_SEED): ScaleDataset {
     version: "published",
   };
   return {
+    scenario,
     seed,
     papers: count,
     versions,
@@ -246,9 +269,12 @@ export function scaleDataset(count: number, seed = SCALE_SEED): ScaleDataset {
       literature: versions.length,
       second_source: duplicates.size,
       without_doi: noDoi.size,
-      obtained: pdfCount + retryCount,
-      exhausted: missCount,
-      temporary: count - pdfCount - missCount - retryCount,
+      obtained: scenario === "retry-boundary" ? count : pdfCount + retryCount,
+      exhausted: scenario === "retry-boundary" ? 0 : missCount,
+      temporary:
+        scenario === "retry-boundary"
+          ? 0
+          : count - pdfCount - missCount - retryCount,
       with_primary_pdf: versions.filter((v) =>
         ["pdf", "retry-pdf"].includes(v.outcome),
       ).length,
@@ -257,6 +283,75 @@ export function scaleDataset(count: number, seed = SCALE_SEED): ScaleDataset {
         .length,
     },
   };
+}
+
+export interface ScalePauseInterval {
+  start_ms: number;
+  end_ms: number | null;
+}
+
+/** Clip and union pauses so stage measurements never subtract a pause twice. */
+export function scalePausedMs(
+  pauses: readonly ScalePauseInterval[],
+  start: number,
+  end: number,
+): number {
+  if (
+    !Array.isArray(pauses) ||
+    !Number.isFinite(start) ||
+    !Number.isFinite(end) ||
+    end < start
+  )
+    throw new Error("scale pause timing is invalid");
+  const intervals = pauses
+    .map((pause) => {
+      if (
+        !pause ||
+        !Number.isFinite(pause.start_ms) ||
+        (pause.end_ms !== null &&
+          (!Number.isFinite(pause.end_ms) || pause.end_ms < pause.start_ms))
+      )
+        throw new Error("scale pause interval is invalid");
+      return [
+        Math.max(start, pause.start_ms),
+        Math.min(end, pause.end_ms ?? end),
+      ] as const;
+    })
+    .filter(([from, to]) => to > from)
+    .sort((a, b) => a[0] - b[0]);
+  let duration = 0,
+    edge = start;
+  for (const [from, to] of intervals) {
+    if (to > edge) duration += to - Math.max(edge, from);
+    edge = Math.max(edge, to);
+  }
+  return duration;
+}
+
+export function scaleClock() {
+  return { monotonic_ms: performance.now(), epoch_ms: Date.now() };
+}
+
+export function scaleElapsed(
+  start: ReturnType<typeof scaleClock>,
+  pauseFile: string,
+  end = performance.now(),
+) {
+  const raw = end - start.monotonic_ms;
+  let pauses: ScalePauseInterval[];
+  try {
+    pauses = JSON.parse(
+      readFileSync(pauseFile, "utf8"),
+    ) as ScalePauseInterval[];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    pauses = [];
+  }
+  const paused = Math.min(
+    raw,
+    scalePausedMs(pauses, start.epoch_ms, start.epoch_ms + raw),
+  );
+  return { wall_ms: raw - paused, raw_wall_ms: raw, paused_ms: paused };
 }
 
 export interface ScaleMessage {

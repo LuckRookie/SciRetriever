@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
   EMPTY_METADATA,
+  INTAKE_HTTP_ENDPOINTS,
   parseAcquirePdfCounts,
   parseAcquirePdfScope,
   parseAcquirePdfSelector,
@@ -18,6 +19,19 @@ import {
   parseLiteratureMetadata,
 } from "../src/index.js";
 const id = "00000000-0000-0000-0000-000000000001";
+it("describes the intake folder response with its items wrapper and tree fields", () => {
+  expect(
+    INTAKE_HTTP_ENDPOINTS.find(
+      (route) => route[1] === "/api/v1/intake/folders",
+    ),
+  ).toEqual([
+    "POST",
+    "/api/v1/intake/folders",
+    "folders",
+    "{}",
+    "{items:[{folder_id,parent_id,name,position}]}",
+  ]);
+});
 const batch = {
   batch_id: id,
   kind: "topic",
