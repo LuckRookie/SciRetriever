@@ -654,6 +654,10 @@
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
+  /* Literature materials 8.4: in the secondary colour, after the citation. */
+  .paper-needs-metadata {
+    color: var(--fg3);
+  }
   .paper-citation {
     font-size: var(--text-secondary);
     color: var(--fg2);

@@ -1,4 +1,5 @@
 import {
+  openFilterConditions,
   openSavedViews,
   showAllLibraryStatuses,
 } from "./next-workspace-fixture.js";
@@ -606,6 +607,75 @@ it("shows the full-text line for the whole library, an intake batch and a folder
     await page.getByRole("heading", { name: "全文范围" }).waitFor();
     await expect.poll(() => line.textContent()).toContain("总数 2");
     await shot("full-text-folder");
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);
+
+it("filters the papers whose bibliography is still to complete and marks their rows (literature materials 8.4)", async () => {
+  const w = await nextWorkspace({
+    setup: async (env) => {
+      // The paper without a PDF was taken in without being recognized.
+      const db = new DatabaseSync(join(env.home, "catalog.sqlite"));
+      try {
+        db.prepare(
+          "INSERT INTO literature_needs_metadata VALUES(?,?,NULL)",
+        ).run(missingId, "2026-11-17T00:00:00.000Z");
+      } finally {
+        db.close();
+      }
+    },
+  });
+  try {
+    const page = w.page;
+    const rows = page.locator(".paper-row");
+    await expect.poll(() => rows.count()).toBe(2);
+    // The mark ends the bibliography line, on that row only.
+    const marked = page.locator(
+      `.paper-row[data-literature-id="${missingId}"]`,
+    );
+    expect(await marked.locator(".paper-citation").textContent()).toMatch(
+      / · 书目待补$/u,
+    );
+    expect(await page.locator(".paper-needs-metadata").count()).toBe(1);
+    // The filter sends needs_metadata: true and keeps the other conditions.
+    const searches: unknown[] = [];
+    page.on("request", (request) => {
+      if (
+        ["/api/v1/query/search", "/api/library/search"].includes(
+          new URL(request.url()).pathname,
+        )
+      )
+        searches.push(request.postDataJSON());
+    });
+    await openFilterConditions(page);
+    await page
+      .locator(".library-filters")
+      .getByText("书目待补", { exact: true })
+      .click();
+    expect(
+      await page
+        .getByRole("checkbox", { name: "书目待补", exact: true })
+        .isChecked(),
+    ).toBe(true);
+    await page.getByRole("button", { name: "应用筛选", exact: true }).click();
+    await expect.poll(() => rows.count()).toBe(1);
+    expect(await rows.first().getAttribute("data-literature-id")).toBe(
+      missingId,
+    );
+    const query = () =>
+      JSON.parse(new URL(page.url()).searchParams.get("query") ?? "{}");
+    expect(query().needs_metadata).toBe(true);
+    expect(JSON.stringify(searches)).toContain('"needs_metadata":true');
+    // Its condition reads as such and clears to no field at all.
+    const chip = page
+      .locator(".library-applied")
+      .getByRole("button", { name: "书目待补：是", exact: true });
+    await chip.waitFor();
+    await chip.click();
+    await expect.poll(() => rows.count()).toBe(2);
+    expect(Object.hasOwn(query(), "needs_metadata")).toBe(false);
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();

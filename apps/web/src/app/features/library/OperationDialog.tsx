@@ -108,24 +108,25 @@ function MaterialDialog({ ids, kind, file, onClose }: OperationProps) {
         return `已导出 ${unique.length} 篇文献`;
       }
       if (kind === "upload") {
-        if (
-          !selectedFile ||
-          selectedFile.size < 1 ||
-          selectedFile.size > 16 * 1024 * 1024
-        )
-          throw new Error("请选择不超过 16 MiB 的非空 PDF。");
-        const response = await api.fetch("/api/v1/maintenance/ingest-pdf", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/pdf",
-            "X-Sciretriever-Protocol-Version": "1",
-            "X-Sciretriever-Csrf": api.csrf,
-            "X-Literature-Id": unique[0]!,
-          },
-          body: selectedFile,
-        });
-        await api.json(response);
-        return "PDF 已接纳，原有材料已保留。";
+        if (!selectedFile || selectedFile.size < 1)
+          throw new Error("请选择一个非空的 PDF。");
+        // Product interface 2.4.2: the supplement goes through intake, into
+        // the day's “补充文件” batch; the bytes stream, with no size limit.
+        const result = await api.send(
+          `/api/v1/intake/literatures/${encodeURIComponent(unique[0]!)}/pdf`,
+          selectedFile,
+          controller.current.signal,
+          { "X-Sciretriever-File-Name": encodeURIComponent(selectedFile.name) },
+        );
+        const file =
+          result.file && typeof result.file === "object"
+            ? (result.file as { status?: unknown })
+            : null;
+        return file?.status === "existing"
+          ? "库里已有相同的 PDF，没有重复保存。"
+          : file?.status === "conflict"
+            ? "这篇文献已有另一份 PDF，没有替换。"
+            : "PDF 已上传，归入今天的“补充文件”批次；原有材料保留。";
       }
       if (kind === "archive") {
         await archiveWrite(

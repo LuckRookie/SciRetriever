@@ -489,6 +489,30 @@ function Materials() {
           }}
           onPress={() =>
             run(async (signal) => {
+              // In the workspace the PDF goes through intake (product
+              // interface 2.4.2): streamed, no size limit, into the day's
+              // “补充文件” batch. The independent maintenance entry has no
+              // intake routes and keeps its own route and limit.
+              if (api.kind === "workspace") {
+                if (!file || file.size < 1)
+                  throw new Error("请选择一个非空的 PDF。");
+                const result = await api.send(
+                  `/api/v1/intake/literatures/${encodeURIComponent(literature.trim())}/pdf`,
+                  file,
+                  signal,
+                  { "X-Sciretriever-File-Name": encodeURIComponent(file.name) },
+                );
+                context.onTasksChanged();
+                const status =
+                  result.file && typeof result.file === "object"
+                    ? (result.file as { status?: unknown }).status
+                    : null;
+                return status === "existing"
+                  ? "库里已有相同的 PDF，没有重复保存。"
+                  : status === "conflict"
+                    ? "这篇文献已有另一份 PDF，没有替换。"
+                    : "PDF 已上传，归入今天的“补充文件”批次；原有材料保留。";
+              }
               if (!file || file.size < 1 || file.size > 16 * 1024 * 1024)
                 throw new Error("请选择不超过 16 MiB 的非空 PDF。");
               const session = await api.read(

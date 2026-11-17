@@ -308,6 +308,13 @@ it("accepts a selected PDF in Chromium, reads the same fact, and reports rejecti
   });
   try {
     const page = await browser.newPage(motionOptions());
+    // The independent maintenance entry has no intake routes: it keeps its own.
+    const routes: string[] = [];
+    page.on("request", (request) => {
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith("/ingest-pdf") || path.includes("/intake/"))
+        routes.push(path);
+    });
     await page.goto(`${workbench.origin}/?view=set`);
     await page
       .getByLabel("文献编号", { exact: true })
@@ -342,6 +349,9 @@ it("accepts a selected PDF in Chromium, reads the same fact, and reports rejecti
     await expect
       .poll(() => page.locator(".maintenance-grid").textContent())
       .toContain("PDF 已接纳");
+    expect(new Set(routes)).toEqual(
+      new Set(["/api/v1/maintenance/ingest-pdf"]),
+    );
     await page.goto(`${workbench.origin}/query`);
     await showAllLibraryStatuses(page);
     expect(new URL(page.url()).pathname).toBe("/query");

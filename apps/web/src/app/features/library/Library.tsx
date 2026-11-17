@@ -153,6 +153,7 @@ export default function Library() {
       tags: "标签",
       needs_manual_pdf: "无法获取",
       has_primary_pdf: "主 PDF",
+      needs_metadata: "书目待补",
       text_levels: "文本等级",
       has_draft_differences: "初稿与文字层有差异",
       has_image_only_pages: "含扫描页",
@@ -193,14 +194,22 @@ export default function Library() {
                   ? value
                     ? "有"
                     : "没有"
-                  : Array.isArray(value)
-                    ? value.join("、")
-                    : String(value);
+                  : key === "needs_metadata"
+                    ? "是"
+                    : Array.isArray(value)
+                      ? value.join("、")
+                      : String(value);
     return [
       {
         key,
         label: `${names[key] ?? key}：${label}`,
-        clear: () =>
+        clear: () => {
+          // “书目待补” is present or absent, never null.
+          if (key === "needs_metadata") {
+            const { needs_metadata: _drop, ...rest } = route.query;
+            void _drop;
+            return updateQuery(rest);
+          }
           updateQuery({
             ...route.query,
             [key]:
@@ -209,7 +218,8 @@ export default function Library() {
                 : Array.isArray(value)
                   ? []
                   : null,
-          }),
+          });
+        },
       },
     ];
   });
@@ -1631,6 +1641,10 @@ const LibraryRow = memo(function LibraryRow({
         <span className="paper-citation">
           {rowAuthors(item)} · <Venue name={item.literature.metadata.venue} /> ·{" "}
           {item.literature.metadata.publication_year ?? "年份未提供"}
+          {/* Literature materials 8.4: its bibliography still lacks parts. */}
+          {item.needs_metadata ? (
+            <span className="paper-needs-metadata"> · 书目待补</span>
+          ) : null}
         </span>
         {item.tags?.length ? (
           <span className="paper-tags">
@@ -1797,6 +1811,7 @@ function Filters({
     ),
     [differs, setDiffers] = useState(flag(query.has_draft_differences)),
     [scanned, setScanned] = useState(flag(query.has_image_only_pages)),
+    [needsMetadata, setNeedsMetadata] = useState(query.needs_metadata === true),
     [tagMode, setTagMode] = useState(query.tags?.mode ?? "any"),
     [error, setError] = useState("");
   const api = useApi();
@@ -1816,10 +1831,14 @@ function Filters({
       onSubmit={(event) => {
         event.preventDefault();
         try {
+          // Present only when chosen: the field is a filter, never “false”.
+          const { needs_metadata: _drop, ...rest } = query;
+          void _drop;
           onApply(
             parseLibrarySearchRequest({
               query: {
-                ...query,
+                ...rest,
+                ...(needsMetadata ? { needs_metadata: true } : {}),
                 publication_year_from: from ? Number(from) : null,
                 publication_year_to: to ? Number(to) : null,
                 publication_forms: form ? [form] : [],
@@ -1919,6 +1938,11 @@ function Filters({
         value={scanned}
         onChange={setScanned}
         options={FLAG_OPTIONS}
+      />
+      <Checkbox
+        label="书目待补"
+        isSelected={needsMetadata}
+        onChange={setNeedsMetadata}
       />
       <Select
         label="标签范围"
