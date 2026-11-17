@@ -107,7 +107,7 @@ Owner 2026-11-16：“先把阅读、用户体验、元数据下载、pdf导入�
 | [21](21-real-run.md)              | 真实获取运行                                            | 执行者、Owner   | 18、20；G-lib 等                    | Pending     |
 | [22](22-scale-follow-up.md)       | 从数字到后续                                            | 总设计师、Owner | 20；21                              | Pending     |
 | [23](23-real-checks.md)           | 真实文件、真实文献库上的核对与试用                      | 各方            | 各项单独授权                        | Pending     |
-| [25](25-web-intake-gaps.md)       | 网页上的两处入库缺口：书目待补、上传 PDF 改走补 PDF     | 前端；25.3 后端 | —                                   | Pending     |
+| [25](25-web-intake-gaps.md)       | 网页上的两处入库缺口：书目待补、上传 PDF 改走补 PDF     | 前端；25.3 后端 | —                                   | Completed   |
 | [24](24-closing.md)               | 收尾：规格、指南、部署、全量                            | 总设计师、后端  | 各块                                | Pending     |
 
 ## 先后顺序
