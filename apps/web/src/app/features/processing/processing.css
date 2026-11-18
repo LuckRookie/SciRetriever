@@ -263,11 +263,17 @@
     min-height: var(--control-small-height);
     max-width: 60ch;
     padding-block: var(--space-1);
+    /* Its text starts where the column header's does. */
+    padding-inline: 0;
     justify-content: flex-start;
     text-align: left;
     line-height: 1.5;
     white-space: normal;
     overflow-wrap: break-word;
+  }
+  /* 覆盖: the badge and “字段详情” each stay on one line. */
+  .result-coverage .ui-disclosure-trigger {
+    white-space: nowrap;
   }
   .evidence-peek blockquote {
     margin: 0 0 var(--space-2);

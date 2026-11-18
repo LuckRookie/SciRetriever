@@ -82,7 +82,11 @@ export async function readLiterature(
 }
 /** Title with its inline sub/sup/italic markup, for visible headings and rows. */
 export function paperTitleParts(item: LiteratureSearchItem): TitlePart[] {
-  const parts = titleParts(item.literature.metadata.title);
+  return metadataTitleParts(item.literature.metadata.title);
+}
+/** The same, from a stored metadata title where only the title is at hand. */
+export function metadataTitleParts(title: unknown): TitlePart[] {
+  const parts = titleParts(typeof title === "string" ? title : null);
   return parts.length ? parts : ["未命名文献"];
 }
 /** Plain title for labels, tabs and sorting. */

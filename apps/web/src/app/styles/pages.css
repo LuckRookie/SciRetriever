@@ -887,9 +887,11 @@
     .paper-row {
       grid-template-columns: 24px minmax(0, 1fr);
     }
-    .paper-status {
+    /* The status cell drops under the citation, aligned with the title. */
+    .paper-row > .paper-status-cell {
       grid-column: 2;
       justify-self: start;
+      align-items: flex-start;
       margin-top: var(--space-2);
     }
     .paper-title {

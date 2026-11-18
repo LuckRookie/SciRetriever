@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { SegmentedControl } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
 import { navigate } from "../../data/url.js";
+import { runningTaskCount } from "../../data/tasks.js";
 
 /** Shares the shell's activity query, so this adds no extra polling. */
 export function useActiveTaskCount() {
@@ -13,7 +14,7 @@ export function useActiveTaskCount() {
     enabled: api.kind === "workspace",
     refetchInterval: 5000,
   });
-  return Array.isArray(tasks.data?.tasks) ? tasks.data.tasks.length : 0;
+  return runningTaskCount(tasks.data);
 }
 
 /** Tasks, the Agent sessions they start and their source statistics share one page under 运行. */

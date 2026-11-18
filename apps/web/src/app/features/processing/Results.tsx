@@ -727,7 +727,7 @@ function Detail({
             ? "partial"
             : "complete",
         render: (row) => (
-          <>
+          <div className="result-coverage">
             <Badge
               status={
                 data.descriptions
@@ -746,7 +746,7 @@ function Detail({
                 )}
               </pre>
             </TechDetails>
-          </>
+          </div>
         ),
       },
     ];

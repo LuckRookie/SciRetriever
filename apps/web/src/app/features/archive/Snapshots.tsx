@@ -13,6 +13,7 @@ import {
   Icon,
   PageHeader,
   Dialog,
+  RichTitle,
   Select,
   Skeleton,
   TextArea,
@@ -21,6 +22,7 @@ import {
 import { archiveQuery, rows, useArchiveAction } from "../../data/archive.js";
 import { useApi } from "../../data/query.js";
 import { record } from "../../data/wire.js";
+import { metadataTitleParts } from "../../data/library.js";
 import { navigate, useUrlState } from "../../data/url.js";
 import { useShell } from "../../shell/context.js";
 import { randomId } from "../../../browser-platform.js";
@@ -370,9 +372,11 @@ export default function Snapshots() {
                       variant="text"
                       onPress={() => shell.openPaper(String(m.literature_id))}
                     >
-                      {String(
-                        record(m.metadata, "metadata").title ?? "无标题文献",
-                      )}
+                      <RichTitle
+                        parts={metadataTitleParts(
+                          record(m.metadata, "metadata").title,
+                        )}
+                      />
                     </Button>
                   </li>
                 ))}

@@ -1570,7 +1570,9 @@
     display: block;
     width: max-content;
     margin: 0;
-    padding: 0 var(--space-2) 0 0;
+    /* The word starts below the paragraph number (“¶n”, 12 px / 1.45 at
+       0.45em) in the same margin; the dashed rule still spans the segment. */
+    padding: var(--space-5) var(--space-2) 0 0;
     border: 0;
     border-right: 1px dashed var(--fg3);
     background: none;

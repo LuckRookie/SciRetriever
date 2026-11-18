@@ -127,6 +127,27 @@ it("renders publisher inline markup in titles, raw or entity-escaped, as real ta
     await context.close();
   }
 });
+it("renders the same title markup in a snapshot's member list", async () => {
+  const context = await browser.newContext({ serviceWorkers: "block" });
+  const page = await context.newPage();
+  try {
+    await loginWorkbenchPage(page, samples.origin, password);
+    await page.goto(
+      `${samples.origin}/?view=snapshots&snapshot=${samples.ids.snapshot}`,
+    );
+    const members = page.locator(".snapshot-detail li");
+    const raw = members.filter({ hasText: "[Sample 01]" });
+    await raw.waitFor();
+    expect(await raw.locator("sub").allTextContents()).toEqual(["6", "5"]);
+    expect(await raw.textContent()).not.toMatch(/<sub>/);
+    const escaped = members.filter({ hasText: "[Sample 02]" });
+    expect(await escaped.locator("sup").allTextContents()).toEqual(["3"]);
+    expect(await escaped.locator("i").allTextContents()).toEqual(["via"]);
+    expect(await escaped.textContent()).not.toMatch(/&lt;|<sup>/);
+  } finally {
+    await context.close();
+  }
+});
 it(
   "selects runs of papers by dragging the checkbox column and Shift+click, and Esc clears",
   { timeout: 60000 },
@@ -190,3 +211,137 @@ it(
     }
   },
 );
+/** A logged-in page on one design sample, at one width. */
+async function onSample(id: string, width: number) {
+  const context = await browser.newContext({
+    viewport: { width, height: width === 390 ? 844 : 900 },
+    reducedMotion: "reduce",
+    serviceWorkers: "block",
+  });
+  const page = await context.newPage();
+  page.setDefaultTimeout(30_000);
+  await loginWorkbenchPage(page, samples.origin, password);
+  await reachDesignSample(
+    page,
+    samples.origin,
+    samples.ids,
+    designSamplePages.find((entry) => entry.id === id)!,
+  );
+  return { page, close: () => context.close() };
+}
+it("keeps each library row's status on a phone screen, under the citation and aligned with the title", async () => {
+  for (const id of ["library", "library-selection-mixed"]) {
+    const { page, close } = await onSample(id, 390);
+    try {
+      const rows = await page
+        .locator(".paper-row:has(.paper-status)")
+        .evaluateAll((rows) =>
+          rows.map((row) => {
+            const box = (selector: string) =>
+              row.querySelector(selector)!.getBoundingClientRect();
+            return {
+              status: box(".paper-status"),
+              title: box(".paper-title").left,
+              citation: box(".paper-open").bottom,
+            };
+          }),
+        );
+      expect(rows.length, id).toBeGreaterThan(0);
+      for (const row of rows) {
+        expect(row.status.left, id).toBeGreaterThanOrEqual(0);
+        expect(row.status.right, id).toBeLessThanOrEqual(390);
+        expect(Math.abs(row.status.left - row.title), id).toBeLessThan(1);
+        expect(row.status.top, id).toBeGreaterThanOrEqual(row.citation);
+      }
+    } finally {
+      await close();
+    }
+  }
+});
+it("sets a draft's doubt word in the left margin below the paragraph number, not over it", async () => {
+  const { page, close } = await onSample("reader-draft", 1440);
+  try {
+    const marks = await page
+      .locator(".reading-show-sources section[data-paragraph] > .reading-doubt")
+      .evaluateAll((marks) =>
+        marks.map((mark) => {
+          const section = mark.parentElement!;
+          const number = getComputedStyle(section, "::before");
+          const top =
+            section.getBoundingClientRect().top + parseFloat(number.top);
+          const range = document.createRange();
+          range.selectNodeContents(mark);
+          const word = range.getBoundingClientRect();
+          return {
+            word: mark.textContent,
+            numberBottom: top + parseFloat(number.lineHeight),
+            wordTop: word.top,
+          };
+        }),
+      );
+    expect(marks.map((m) => m.word)).toEqual(
+      expect.arrayContaining(["疑点", "无文字层"]),
+    );
+    for (const mark of marks)
+      expect(mark.wordTop, mark.word ?? "").toBeGreaterThanOrEqual(
+        mark.numberBottom,
+      );
+  } finally {
+    await close();
+  }
+});
+it("keeps an operator result's values flush with their column headers and 字段详情 on one line", async () => {
+  const { page, close } = await onSample("result-detail", 1440);
+  try {
+    const table = page.locator('[aria-label="提取结果"]');
+    const geometry = await table.evaluate((table) => {
+      const textLeft = (el: Element) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        return range.getClientRects()[0]?.left ?? NaN;
+      };
+      const headers = [...table.querySelectorAll("thead th")].map(textLeft);
+      const cells = [...table.querySelectorAll("tbody tr:first-child > td")];
+      const coverage = cells.at(-1)!;
+      const left = (selector: string) =>
+        coverage.querySelector(selector)!.getBoundingClientRect().left;
+      // One rect per line of the trigger's words, its chevron left out.
+      const words = document.createRange();
+      const trigger = coverage.querySelector(".ui-disclosure-trigger")!;
+      const text = [...trigger.querySelectorAll("*")]
+        .concat(trigger)
+        .flatMap((el) => [...el.childNodes])
+        .find((node) => node.nodeType === 3 && node.textContent?.trim())!;
+      words.selectNodeContents(text);
+      return {
+        values: cells.flatMap((td, i) =>
+          [...td.querySelectorAll(".result-value .ui-button-label")].map(
+            (value) => ({ header: headers[i]!, value: textLeft(value) }),
+          ),
+        ),
+        coverage: {
+          header: headers[cells.length - 1]!,
+          badge: left(".ui-badge"),
+          trigger: left(".ui-disclosure-trigger"),
+        },
+        word: text.textContent,
+        lines: new Set(
+          [...words.getClientRects()].map((r) => Math.round(r.top)),
+        ).size,
+      };
+    });
+    expect(geometry.values.length).toBeGreaterThan(0);
+    for (const cell of geometry.values)
+      expect(Math.abs(cell.value - cell.header)).toBeLessThan(1);
+    expect(
+      Math.abs(geometry.coverage.badge - geometry.coverage.header),
+    ).toBeLessThan(1);
+    expect(
+      Math.abs(geometry.coverage.trigger - geometry.coverage.header),
+    ).toBeLessThan(1);
+    expect(geometry.word).toBe("字段详情");
+    expect(geometry.lines).toBe(1);
+  } finally {
+    await close();
+  }
+});

@@ -30,6 +30,22 @@ export const taskStatusLabel: Readonly<Record<string, string>> = {
   open: "待处理",
   resolved: "已处理",
 };
+/**
+ * “n 进行中” counts the tasks actually running in an active-group answer: a
+ * queued task (saved and never started, or waiting for a slot) is “等待执行”,
+ * not in progress (page specs “任务”). Lists still show both.
+ */
+export function runningTaskCount(answer: unknown): number {
+  const tasks = (answer as { tasks?: unknown } | null | undefined)?.tasks;
+  return Array.isArray(tasks)
+    ? tasks.filter(
+        (task: unknown) =>
+          !!task &&
+          typeof task === "object" &&
+          (task as { status?: unknown }).status === "running",
+      ).length
+    : 0;
+}
 export const operationLabels: Readonly<Record<string, string>> = {
   "acquire-metadata": "获取元数据",
   "parse-documents": "解析 PDF",
