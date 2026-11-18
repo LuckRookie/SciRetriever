@@ -7,6 +7,7 @@ import {
   type RefObject,
 } from "react";
 import { badgeTones, type BadgeStatus } from "./status.js";
+import { statusLabels } from "../strings.js";
 import {
   Button as AriaButton,
   Dialog,
@@ -176,15 +177,15 @@ export function ChipGroup({
   );
 }
 const badgeLabels: Record<BadgeStatus, string> = {
-  metadata: "仅元数据",
-  pdf: "有 PDF",
-  ready: "已就绪",
-  running: "进行中",
-  partial: "部分完成",
+  metadata: statusLabels.UNREVIEWED!,
+  pdf: statusLabels.ASSET_READY!,
+  ready: statusLabels.READY!,
+  running: statusLabels.running!,
+  partial: statusLabels.partial!,
   stale: "已过时",
-  completed: "完成",
-  failed: "失败",
-  unavailable: "无法获取",
+  completed: statusLabels.completed!,
+  failed: statusLabels.failed!,
+  unavailable: statusLabels.UNAVAILABLE!,
 };
 /** Rule 5: the colour comes from the one status map; work in progress turns a ring. */
 export function Badge({

@@ -1279,7 +1279,7 @@ export default function Reader() {
       ? [
           {
             id: "edit",
-            label: "编辑校订稿",
+            label: "修改全文",
             checked: mode === "edit",
             divider: compactBar,
             onAction: () => changeMode(mode === "edit" ? "doc" : "edit"),
@@ -1635,7 +1635,7 @@ export default function Reader() {
       {input.contextMenu}
       {input.shortcutsDialog}
       <SplitPane
-        label={mode === "edit" ? "校订稿编辑区宽度" : "文献信息栏宽度"}
+        label={mode === "edit" ? "全文编辑区宽度" : "文献信息栏宽度"}
         edge="left"
         width={
           mode === "edit"
@@ -1817,7 +1817,7 @@ export default function Reader() {
                     ? {
                         action: (
                           <Button onPress={() => setOperation("archive")}>
-                            建立文献档案
+                            生成全文
                           </Button>
                         ),
                       }

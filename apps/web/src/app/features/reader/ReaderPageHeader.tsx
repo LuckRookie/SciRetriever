@@ -63,7 +63,7 @@ function ViewText({
     return (
       <span>
         原文
-        {level ? ` · ${level === "draft" ? "初稿" : "校订稿"}` : ""}
+        {level ? ` · ${level === "draft" ? "未校对" : "已校对"}` : ""}
         {scaleText || lastScale ? (
           <span
             className="reader-page-header-scale"

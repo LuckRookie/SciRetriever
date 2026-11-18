@@ -42,7 +42,7 @@ const labels: Record<string, string> = {
   version_roles: "版本类型",
   statuses: "材料状态",
   missing_steps: "待完成步骤",
-  needs_manual_pdf: "无法获取 PDF",
+  needs_manual_pdf: "没找到 PDF",
   discovery_run_ids: "发现批次",
   tags: "标签",
   folder: "文件夹",

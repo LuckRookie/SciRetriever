@@ -223,7 +223,7 @@ const recordItems = (s: BatchSummary) =>
     ["恢复", s.records.restored],
     ["冲突", s.records.conflicts],
     ["可能重复", s.records.possible_duplicates],
-    ["书目待补", s.records.needs_metadata],
+    ["书目不全", s.records.needs_metadata],
     ["未接纳", s.records.rejected],
   ] as const;
 /** The same categories from the batch alone (batches without an import report). */
@@ -234,7 +234,7 @@ const batchItems = (c: IntakeBatch["counts"]) =>
     ["恢复", c.restored],
     ["冲突", c.conflicts],
     ["可能重复", c.possible_duplicates],
-    ["书目待补", c.needs_metadata],
+    ["书目不全", c.needs_metadata],
     ["未接纳", c.rejected],
   ] as const;
 
@@ -932,7 +932,7 @@ export function BatchPage({ id }: { id: string }) {
               }
               onPress={() => setParse(true)}
             >
-              解析并形成初稿 {batch.estimates.parse.toLocaleString()} 篇
+              解析并形成未校对的全文 {batch.estimates.parse.toLocaleString()} 篇
             </Button>
             <span className="ui-description">会联网，可能花费。</span>
           </div>

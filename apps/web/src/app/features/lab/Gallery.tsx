@@ -242,8 +242,8 @@ function Foundations() {
         </ul>
       </Example>
       <Example
-        title="建档状态与标签"
-        usage="七种建档状态全站同一套颜色；占大多数的“仅元数据”在列表里不显示。"
+        title="材料状态与标签"
+        usage="七种材料状态全站同一套颜色；占大多数的“只有书目”在列表里不显示。"
       >
         <div className="lab-row">
           {archiveStates.map((state) => (
@@ -253,7 +253,7 @@ function Foundations() {
               data-state={state}
               data-tone={literatureTone(state)}
             >
-              {state === "UNAVAILABLE" ? "无法获取" : statusLabels[state]}
+              {statusLabels[state]}
             </span>
           ))}
           <span
@@ -261,7 +261,7 @@ function Foundations() {
             data-state="ASSET_READY"
             data-tone={literatureTone("ASSET_READY")}
           >
-            有 PDF<small>待建档</small>
+            {statusLabels.ASSET_READY}
           </span>
         </div>
         <div className="lab-row">
@@ -592,7 +592,7 @@ export default function Gallery() {
           <Button
             onPress={() =>
               toast({
-                message: "示例结果已就绪",
+                message: "示例结果已准备好",
                 action: { label: "查看", onPress: () => setDrawer(true) },
               })
             }

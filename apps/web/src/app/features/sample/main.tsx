@@ -23,10 +23,10 @@ import "../../styles/components.css";
 import "../../../../entry/public/react-aria.css";
 import "./sample.css";
 const labels: Record<DemoPhase, string> = {
-  idle: "示例页面已就绪",
+  idle: "示例页面已准备好",
   running: "正在演示 PDF 获取…",
   paused: "演示已暂停",
-  ready: "候选已就绪，等待确认",
+  ready: "候选已准备好，等待确认",
   uncertain: "候选已保留，身份待确认",
   blocked: "示例请求被网络策略拒绝",
   published: "演示入库完成",

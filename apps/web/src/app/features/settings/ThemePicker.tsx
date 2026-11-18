@@ -37,7 +37,7 @@ function Preview({ id, bare = false }: { id: ThemeId; bare?: boolean }) {
           <>
             <span className="theme-preview-title">文献</span>
             <i data-line="meta" />
-            <span className="theme-preview-badge">已就绪</span>
+            <span className="theme-preview-badge">有全文</span>
           </>
         )}
       </span>

@@ -40,7 +40,7 @@ import { navigate } from "../../data/url.js";
 import { titleParts } from "../../../reading/title.js";
 import { useShell } from "../../shell/context.js";
 import { record } from "../../data/wire.js";
-import { errorMessage, localTime } from "../../strings.js";
+import { errorMessage, localTime, statusLabels } from "../../strings.js";
 import type { ReaderResourceEntry } from "../../../reading/contract.js";
 import { copyText } from "../../../browser-platform.js";
 import { EvidencePreview } from "./SummaryView.js";
@@ -151,7 +151,7 @@ function Relations({
                   ? "由元数据供应商提供的关系"
                   : support.source.kind === "metadata_reference_text"
                     ? `元数据参考文献第 ${support.source.reference_index + 1} 项`
-                    : `校订稿参考文献第 ${support.source.reference_index + 1} 项`}
+                    : `全文参考文献第 ${support.source.reference_index + 1} 项`}
               </li>
             ))}
           </ul>
@@ -521,7 +521,7 @@ export function ReaderInformation({
           <p className="reader-quiet">
             {detail.literature.status === "READY"
               ? "元数据里没有摘要，可在“编辑元数据”中补上。"
-              : "元数据里没有摘要，建档时会从全文补上。"}
+              : "元数据里没有摘要，生成全文时会从全文补上。"}
           </p>
         )}
       </section>
@@ -642,12 +642,12 @@ export function ReaderInformation({
           >
             {(
               {
-                READY: "全文已建档",
-                ARCHIVING: "正在建档",
-                ARCHIVE_FAILED: "建档失败，可以重新建档",
+                READY: statusLabels.READY!,
+                ARCHIVING: statusLabels.ARCHIVING!,
+                ARCHIVE_FAILED: "全文生成失败，可以重新生成",
               } as Record<string, string>
             )[detail.literature.status] ??
-              (next && !unparsed ? "已解析，全文尚未建档" : "全文尚未建档")}
+              (next && !unparsed ? "已解析，还没有生成全文" : "还没有生成全文")}
             {detail.literature.status === "READY" && detail.long_document ? (
               <p className="ui-description">
                 长文档（{detail.long_document.pages} 页）·
@@ -657,12 +657,12 @@ export function ReaderInformation({
             {/* Reading-experience 1.4, 3.4: each part's default text, by level. */}
             {levels.map(([part, level]) => (
               <p key={part} className="ui-description reader-text-level">
-                {part}：{level === "draft" ? "初稿" : "校订稿"}
+                {part}：{level === "draft" ? "未校对" : "已校对"}
               </p>
             ))}
             {levels.some(([, level]) => level === "draft") ? (
               <p className="ui-description">
-                初稿不接受改字，建档后在校订稿上修改
+                未校对的全文不接受改字，生成全文并校对后再修改
               </p>
             ) : null}
           </Step>
@@ -736,10 +736,10 @@ export function ReaderInformation({
               </dd>
             </div>
             <div>
-              <dt>文字层</dt>
+              <dt>PDF 自带的文字</dt>
               <dd>
                 {reading.data.text_layer_pages} / {reading.data.total_pages}{" "}
-                页有文字层
+                页有自带的文字
               </dd>
             </div>
             <div>
@@ -757,8 +757,8 @@ export function ReaderInformation({
             <p>
               {/* Reading-experience 3.4: what archiving adds to a draft. */}
               {detail.text_level === "draft"
-                ? "已有初稿，可以阅读和翻译；建档后得到校订稿，可以改字和运行算子。"
-                : "建档后可以读全文、翻译和运行算子。"}
+                ? "已有未校对的全文，可以阅读和翻译；生成全文后得到已校对的全文，可以改字和运行算子。"
+                : "生成全文后可以读全文、翻译和运行算子。"}
               {unparsed
                 ? "会先用 MinerU 解析版面，再调用模型校订全文、补全元数据。"
                 : "会调用模型校订全文、补全元数据。"}
@@ -772,7 +772,7 @@ export function ReaderInformation({
                 variant={archivePrimaryElsewhere ? "text" : "primary"}
                 onPress={() => setOperation(next)}
               >
-                建档
+                生成全文
               </Button>
             ) : null}
             <StepActions id={id} />

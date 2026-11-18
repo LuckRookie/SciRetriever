@@ -209,7 +209,7 @@ export function RunOperatorDialog({
               paper = await readLiterature(api, id, signal),
               asset = paper.primary_pdf?.asset;
             if (paper.literature.status !== "READY") {
-              gaps.push(`${paperTitle(paper)} · 未建档就绪`);
+              gaps.push(`${paperTitle(paper)} · 还没有全文`);
               continue;
             }
             if (!asset) {
@@ -918,7 +918,7 @@ function SpecFields({
         />
       ) : null}
       <p className="ui-description">
-        仅使用就绪校订稿，不自动获取或解析前序材料。
+        仅使用已有的全文，不自动获取或解析前序材料。
       </p>
     </div>
   );

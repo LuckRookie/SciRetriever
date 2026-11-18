@@ -62,7 +62,7 @@ export function ParseDialog({
   });
   return (
     <Dialog
-      title="解析并形成初稿"
+      title="解析并形成未校对的全文"
       isOpen
       onOpenChange={(open) => {
         if (!open && !submit.isPending) onClose();
@@ -119,7 +119,7 @@ export function ParseDialog({
         </dl>
         <p className="muted">
           会把 PDF 交给 MinerU
-          解析，可能花费；解析完成后自动形成初稿，不调用模型。
+          解析，可能花费；解析完成后自动形成未校对的全文，不调用模型。
         </p>
         {submit.isError ? (
           <ErrorNotice message={`任务未提交：${errorMessage(submit.error)}`} />

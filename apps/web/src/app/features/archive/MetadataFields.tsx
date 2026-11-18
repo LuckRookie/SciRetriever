@@ -148,7 +148,7 @@ export function MetadataFields({ id }: { id: string }) {
   };
   const source = (state: MetadataFieldState | undefined) =>
     state?.evidence.source === "proofread"
-      ? "校订稿"
+      ? "已校对的全文"
       : state?.evidence.source === "manual"
         ? "人工编辑"
         : state
@@ -158,7 +158,7 @@ export function MetadataFields({ id }: { id: string }) {
     <section aria-label="元数据字段与来源" className="archive-fields">
       <h3>{archiveStrings.metadata}</h3>
       <p className="ui-description">
-        编辑会锁定字段，自动建档将保留你的修改；解锁后允许重新提议。
+        编辑会锁定字段，自动生成全文时保留你的修改；解锁后允许重新提议。
       </p>
       {failure || action.error ? (
         <ErrorNotice message={failure || errorMessage(action.error)} />
@@ -256,7 +256,7 @@ export function MetadataFields({ id }: { id: string }) {
                   <p key={i}>
                     {text(field, c.value)} ·{" "}
                     {c.evidence.source === "proofread"
-                      ? "校订稿"
+                      ? "已校对的全文"
                       : "元数据来源"}
                   </p>
                 ))}

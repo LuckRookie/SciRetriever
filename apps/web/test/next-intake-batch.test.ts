@@ -244,7 +244,7 @@ it("shows a batch awaiting confirmation: estimated counts, recognition that bloc
       .waitFor();
     await expect
       .poll(() => view.getByLabel("书目计数").textContent())
-      .toBe("新增 118已在库 30恢复 4冲突 2可能重复 3书目待补 5未接纳 1");
+      .toBe("新增 118已在库 30恢复 4冲突 2可能重复 3书目不全 5未接纳 1");
     expect(await view.getByLabel("文件计数").textContent()).toBe(
       "要上传 118只核对 30",
     );
@@ -366,7 +366,7 @@ it("confirms without blocking, follows the progress by polling, restores after a
     await view.getByText("完成").first().waitFor();
     await view.getByText(/^全文已取得 0 \/ 总数 2，未取得 2/u).waitFor();
     const acquire = view.getByRole("button", { name: "获取全文 2 篇" }),
-      parse = view.getByRole("button", { name: "解析并形成初稿 0 篇" });
+      parse = view.getByRole("button", { name: "解析并形成未校对的全文 0 篇" });
     await acquire.waitFor();
     expect(await parse.isDisabled()).toBe(true);
     await view.getByText("会联网，可能花费。").waitFor();
@@ -427,13 +427,15 @@ it("parses a batch's PDFs only from its dialog: one parse-documents task scoped 
         });
       },
     );
-    const parse = view.getByRole("button", { name: "解析并形成初稿 2 篇" });
+    const parse = view.getByRole("button", {
+      name: "解析并形成未校对的全文 2 篇",
+    });
     await parse.click();
-    const dialog = page.getByRole("dialog", { name: "解析并形成初稿" });
+    const dialog = page.getByRole("dialog", { name: "解析并形成未校对的全文" });
     await dialog.getByText("入库批次：library.bib").waitFor();
     await dialog
       .getByText(
-        "会把 PDF 交给 MinerU 解析，可能花费；解析完成后自动形成初稿，不调用模型。",
+        "会把 PDF 交给 MinerU 解析，可能花费；解析完成后自动形成未校对的全文，不调用模型。",
       )
       .waitFor();
     expect(tasks).toEqual([]);
@@ -691,8 +693,12 @@ it("shows the intake page's four parts, the drop zone and the batch page in each
       estimates: { acquire_pdf: 2, parse: 2 },
     }));
     await page.reload();
-    await view.getByRole("button", { name: "解析并形成初稿 2 篇" }).click();
-    await page.getByRole("dialog", { name: "解析并形成初稿" }).waitFor();
+    await view
+      .getByRole("button", { name: "解析并形成未校对的全文 2 篇" })
+      .click();
+    await page
+      .getByRole("dialog", { name: "解析并形成未校对的全文" })
+      .waitFor();
     await shot("batch-parse-dialog");
     expect(w.errors).toEqual([]);
   } finally {

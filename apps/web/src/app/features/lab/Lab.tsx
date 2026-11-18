@@ -135,7 +135,7 @@ function Sample({ kind, variant }: { kind: number; variant: Variant }) {
         </Button>
         {active ? (
           <div className="lab-inline-message" role="status">
-            材料已就绪
+            材料已准备好
             <Button
               size="inline"
               variant="text"

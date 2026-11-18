@@ -18,6 +18,7 @@ import {
   Icon,
   IconButton,
   ListRow,
+  LocalTime,
   SearchField,
   Skeleton,
   TechDetails,
@@ -25,6 +26,8 @@ import {
 } from "../../components/index.js";
 import { archiveQuery, rows } from "../../data/archive.js";
 import { useApi } from "../../data/query.js";
+import { ApiError } from "../../data/api.js";
+import { paperTitle, readLiterature } from "../../data/library.js";
 import { navigate, useUrlState } from "../../data/url.js";
 import { useShell } from "../../shell/context.js";
 import { TaskPage } from "./TaskPage.js";
@@ -33,7 +36,6 @@ import { TaskSummary } from "./TaskSummary.js";
 import {
   agentRoleName,
   errorMessage,
-  localTime,
   skipReasons,
   statusLabels,
 } from "../../strings.js";
@@ -42,9 +44,12 @@ import {
   acquisitionTask,
   parseTaskDetail,
   taskTitle,
-  taskStatusLabel,
+  taskActions,
+  taskPaperId,
+  taskStateLabel,
   taskLiteratureId,
   operationLabels,
+  type TaskAction,
   type TaskDetail,
 } from "../../data/tasks.js";
 import "./tasks.css";
@@ -60,8 +65,12 @@ function isProcessor(task: TaskDetail) {
     record(selector.request, "request").schema_version === 2
   );
 }
-export function TaskBadge({ status }: { status: unknown }) {
-  const value = String(status);
+/**
+ * A task's state badge: 进行中 turns, 已完成 is green, 失败、已中断 and
+ * 等你处理 are red (someone has to act), the rest grey (rule 5).
+ */
+export function TaskBadge({ job }: { job: JsonRecord }) {
+  const value = String(job.status);
   return (
     <Badge
       status={
@@ -69,16 +78,32 @@ export function TaskBadge({ status }: { status: unknown }) {
           ? "running"
           : value === "completed"
             ? "completed"
-            : ["failed", "interrupted"].includes(value)
+            : ["failed", "interrupted", "paused"].includes(value)
               ? "failed"
-              : value === "paused"
-                ? "partial"
-                : "metadata"
+              : "metadata"
       }
     >
-      {taskStatusLabel[value] ?? value}
+      {taskStateLabel(job)}
     </Badge>
   );
+}
+/**
+ * The task's name, with its only paper's title once read (shared with every
+ * other place that shows the paper, so the list does not read it twice).
+ */
+export function TaskName({ job }: { job: JsonRecord }) {
+  return <>{useTaskName(job)}</>;
+}
+function useTaskName(job: JsonRecord): string {
+  const api = useApi(),
+    id = taskPaperId(job);
+  const paper = useQuery({
+    queryKey: ["literature", id],
+    queryFn: ({ signal }) => readLiterature(api, id!, signal),
+    enabled: !!id,
+    staleTime: 60_000,
+  });
+  return taskTitle(job, paper.data ? paperTitle(paper.data) : null);
 }
 export function ActivityList({ onSelect }: { onSelect: (id: string) => void }) {
   const api = useApi();
@@ -124,9 +149,9 @@ export function ActivityList({ onSelect }: { onSelect: (id: string) => void }) {
               result.data.map((job) => (
                 <div key={String(job.job_id)} data-task-id={String(job.job_id)}>
                   <ListRow
-                    title={taskTitle(job)}
-                    bibliography={formatDate(job.created_at)}
-                    badge={<TaskBadge status={job.status} />}
+                    title={<TaskName job={job} />}
+                    bibliography={<LocalTime value={job.created_at} />}
+                    badge={<TaskBadge job={job} />}
                     onPress={() => onSelect(String(job.job_id))}
                   />
                 </div>
@@ -142,6 +167,7 @@ export function ActivityList({ onSelect }: { onSelect: (id: string) => void }) {
 }
 export default function Tasks() {
   const api = useApi(),
+    queries = useQueryClient(),
     route = useUrlState();
   const [group, setGroup] = useState(""),
     [text, setText] = useState("");
@@ -171,11 +197,19 @@ export default function Tasks() {
         .map((job) => [String(job.job_id), job]),
     ).values(),
   ];
-  const filtered = items.filter((job) =>
-    `${taskTitle(job)} ${String(job.job_id)}`
+  // The search also finds a task by its paper's title, once that was read.
+  const filtered = items.filter((job) => {
+    const id = taskPaperId(job),
+      paper = id ? queries.getQueryData(["literature", id]) : undefined;
+    return `${taskTitle(job, paper ? paperTitle(paper as Parameters<typeof paperTitle>[0]) : null)} ${String(job.job_id)}`
       .toLocaleLowerCase()
-      .includes(text.toLocaleLowerCase()),
+      .includes(text.toLocaleLowerCase());
+  });
+  // “发起方” only says something when the shown tasks differ in who started them.
+  const actors = new Set(
+    filtered.map((job) => String(job.actor_label ?? job.actor ?? "")),
   );
+  const showActor = actors.size > 1;
   const selected = route.parameters.get("task");
   if (api.kind !== "workspace")
     return (
@@ -244,10 +278,18 @@ export default function Tasks() {
           <thead>
             <tr>
               <th scope="col">任务</th>
-              <th scope="col">发起方</th>
-              <th scope="col">进度</th>
+              {showActor ? (
+                <th scope="col" className="task-col-actor">
+                  发起方
+                </th>
+              ) : null}
+              <th scope="col" className="task-col-progress">
+                进度
+              </th>
               <th scope="col">状态</th>
-              <th scope="col">开始</th>
+              <th scope="col" className="task-col-time">
+                开始
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -269,23 +311,27 @@ export default function Tasks() {
                         navigate({ task: id });
                       }}
                     >
-                      {taskTitle(job)}
+                      <TaskName job={job} />
                     </button>
                   </td>
-                  <td>
-                    {job.actor_label || job.actor ? (
-                      String(job.actor_label ?? job.actor)
-                    ) : (
-                      <span className="task-empty">—</span>
-                    )}
-                  </td>
-                  <td>
+                  {showActor ? (
+                    <td className="task-col-actor">
+                      {job.actor_label || job.actor ? (
+                        String(job.actor_label ?? job.actor)
+                      ) : (
+                        <span className="task-empty">—</span>
+                      )}
+                    </td>
+                  ) : null}
+                  <td className="task-col-progress">
                     <TaskProgress job={job} />
                   </td>
                   <td>
-                    <TaskBadge status={job.status} />
+                    <TaskBadge job={job} />
                   </td>
-                  <td className="task-time">{formatDate(job.created_at)}</td>
+                  <td className="task-time task-col-time">
+                    <LocalTime value={job.created_at} />
+                  </td>
                 </tr>
               );
             })}
@@ -371,7 +417,11 @@ function TaskPanel({ id, onClose }: { id: string; onClose: () => void }) {
     </aside>
   );
 }
-/** Shown only when the list reports a total; otherwise the processed count. */
+/**
+ * Shown only when the list reports a total of more than one item; a task of
+ * one item says how it went by its state alone. Without a total, the
+ * processed count.
+ */
 function TaskProgress({ job }: { job: JsonRecord }) {
   const progress =
     job.progress && typeof job.progress === "object"
@@ -379,7 +429,7 @@ function TaskProgress({ job }: { job: JsonRecord }) {
       : null;
   const total = Number(progress?.total),
     done = Number(progress?.done);
-  if (!progress || !Number.isFinite(done))
+  if (!progress || !Number.isFinite(done) || total === 1)
     return <span className="task-time task-empty">—</span>;
   if (!Number.isFinite(total) || total <= 0)
     return <span className="task-time">已处理 {done}</span>;
@@ -439,16 +489,13 @@ function TaskSessions({ id }: { id: string }) {
             </Button>
             <span className="task-time">
               {statusLabels[String(s.status)] ?? "处理中"} ·{" "}
-              {localTime(s.started_at)}
+              <LocalTime value={s.started_at} />
             </span>
           </li>
         ))}
       </ul>
     </section>
   );
-}
-function formatDate(value: unknown) {
-  return localTime(value);
 }
 function detailsText(value: JsonRecord, task: TaskDetail): string {
   // A skipped item's own event has no reason; the operation's receipt does.
@@ -466,9 +513,15 @@ function detailsText(value: JsonRecord, task: TaskDetail): string {
       return errorMessage(new Error(String(value[name])));
   return "详细信息已保留，可展开查看。";
 }
+/** What a refused control means, in words (31.6). */
+const TASK_CONFLICTS: Readonly<Record<string, string>> = {
+  "processing-terminal": "这个任务已经结束，不能再操作。已刷新它的状态。",
+  "processing-resume-required": "这个任务要用“继续”恢复。已刷新它的状态。",
+};
 export function TaskDetails({ id }: { id: string }) {
   const api = useApi(),
     queries = useQueryClient();
+  const [notice, setNotice] = useState("");
   const detail = useQuery({
     queryKey: ["tasks", "detail", id],
     queryFn: async ({ signal }) =>
@@ -499,19 +552,12 @@ export function TaskDetails({ id }: { id: string }) {
   const task = detail.data,
     status = String(task.job.status),
     processor = isProcessor(task);
-  const actions = [
-    ...(status === "queued" ? ["start"] : []),
-    ...(["queued", "running"].includes(status) ? ["pause"] : []),
-    ...(["paused", "interrupted"].includes(status) ? ["resume"] : []),
-    ...(["failed", "interrupted"].includes(status) ||
-    (status === "completed" &&
-      task.failures.length > 0 &&
-      task.targets.some((target) => target.stage === "skipped"))
-      ? ["retry"]
-      : []),
-    ...(!["completed", "cancelled"].includes(status) ? ["cancel"] : []),
-  ];
-  const labels: Record<string, string> = {
+  const actions = taskActions(
+    { status, start_requested: task.start_requested },
+    task.failures.length > 0 &&
+      task.targets.some((target) => target.stage === "skipped"),
+  );
+  const labels: Record<TaskAction, string> = {
     start: "启动",
     pause: "暂停",
     resume: "继续",
@@ -521,12 +567,36 @@ export function TaskDetails({ id }: { id: string }) {
   const refresh = async () => {
     await queries.invalidateQueries({ queryKey: ["tasks"] });
   };
+  /**
+   * The task moved on since this panel read it (another tab, the CLI, a
+   * restart): say so in words and read its state again instead of failing.
+   */
+  const control = async (action: TaskAction) => {
+    setNotice("");
+    try {
+      await api.request(`/api/tasks/${encodeURIComponent(id)}/${action}`, {});
+    } catch (error) {
+      if (
+        error instanceof ApiError &&
+        (error.code === "processing-terminal" ||
+          error.code === "processing-resume-required")
+      ) {
+        setNotice(TASK_CONFLICTS[error.code]!);
+        await refresh();
+        return;
+      }
+      throw error;
+    }
+    await refresh();
+  };
   const collection = task.collections.at(-1);
   return (
     <div className="task-detail">
       <header className="task-detail-header">
-        <h2>{taskTitle(task.job)}</h2>
-        <TaskBadge status={status} />
+        <h2>
+          <TaskName job={task.job} />
+        </h2>
+        <TaskBadge job={{ status, start_requested: task.start_requested }} />
       </header>
       {detail.isError ? (
         <ErrorNotice
@@ -552,25 +622,24 @@ export function TaskDetails({ id }: { id: string }) {
                   },
                 }
               : {})}
-            onPress={async () => {
-              await api.request(
-                `/api/tasks/${encodeURIComponent(id)}/${action}`,
-                {},
-              );
-              await refresh();
-            }}
+            onPress={() => control(action)}
           >
             {labels[action]}
           </Button>
         ))}
       </div>
+      {notice ? (
+        <p className="task-notice" role="status">
+          {notice}
+        </p>
+      ) : null}
       {task.runtime_failure ? (
         <ErrorNotice message={task.runtime_failure} />
       ) : null}
       {task.interventions
         .filter((item) => item.status === "open")
         .map((item) => (
-          <Card key={String(item.intervention_id)} title="任务等待处理">
+          <Card key={String(item.intervention_id)} title="任务等你处理">
             <p>{detailsText(item, task)}</p>
             <div className="task-actions">
               {[
@@ -707,7 +776,7 @@ export function TaskDetails({ id }: { id: string }) {
         <ol className="task-events">
           {task.events.map((event, index) => (
             <li key={index}>
-              <time>{formatDate(event.created_at ?? event.timestamp)}</time>
+              <LocalTime value={event.created_at ?? event.timestamp} />
               <p>{String(event.kind ?? event.type)}</p>
               <TechDetails>
                 <pre>{JSON.stringify(event.payload ?? event, null, 2)}</pre>
@@ -777,7 +846,7 @@ function ResultLink({
     <div>
       {parse && Array.isArray(saved.profiles) ? (
         <div>
-          <p>各模式的解析结果如下。建档需要另行发起。</p>
+          <p>各种解析方式的结果如下。生成全文需要另行发起。</p>
           <ul>
             {saved.profiles.map((item, i) => {
               const p = record(item, "parsing profile");

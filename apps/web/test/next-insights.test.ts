@@ -151,3 +151,62 @@ it("shows one figure per available distribution, switches all figures to tables 
     await w.close();
   }
 }, 60000);
+
+it("counts “材料状态” in the library's quick-filter categories, with the same numbers (page specs “界面用词”)", async () => {
+  const w = await nextWorkspace({
+    path: "/?view=ins&scope=all",
+    ready: ".insight-figures",
+  });
+  try {
+    const page = w.page;
+    await page.getByRole("button", { name: "以表格查看", exact: true }).click();
+    const table = page.getByRole("table", { name: "材料状态", exact: true });
+    await table.locator("tbody tr").first().waitFor();
+    const rows = Object.fromEntries(
+      await table
+        .locator("tbody tr")
+        .evaluateAll((items) =>
+          items.map((row) => [
+            (row as HTMLTableRowElement).cells[0]!.textContent,
+            Number(
+              (row as HTMLTableRowElement).cells[1]!.textContent!.replace(
+                /,/gu,
+                "",
+              ),
+            ),
+          ]),
+        ),
+    ) as Record<string, number>;
+    const categories = [
+      "有全文",
+      "有 PDF",
+      "只有书目",
+      "正在生成全文",
+      "全文生成失败",
+      "没找到 PDF",
+      "已排除",
+    ];
+    expect(Object.keys(rows).every((name) => categories.includes(name))).toBe(
+      true,
+    );
+    // The library's quick filters show the same numbers, adding up to 全部.
+    await page.goto(`${w.origin}/?view=lib`);
+    const chips = page.locator(".library-status-filters .ui-filter");
+    await chips.first().waitFor();
+    await expect
+      .poll(async () => (await chips.allTextContents()).join("|"))
+      .toMatch(/全部 \d/u);
+    const quick = Object.fromEntries(
+      (await chips.allTextContents()).map((text) => {
+        const [, name, count] = /^(.*) ([\d,]+)$/u.exec(text)!;
+        return [name!, Number(count!.replace(/,/gu, ""))];
+      }),
+    ) as Record<string, number>;
+    for (const name of ["有全文", "有 PDF", "只有书目"])
+      expect(rows[name] ?? 0).toBe(quick[name] ?? 0);
+    expect(Object.values(rows).reduce((a, b) => a + b, 0)).toBe(quick["全部"]);
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 60000);

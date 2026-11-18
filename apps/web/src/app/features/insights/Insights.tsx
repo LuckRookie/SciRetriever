@@ -24,9 +24,16 @@ import {
   emptyQuery,
   paperTitle,
   paperTitleParts,
+  readLibraryCounts,
   readLiterature,
   searchLibrary,
 } from "../../data/library.js";
+import {
+  MATERIAL_STATES,
+  itemMaterialState,
+  materialCount,
+  materialCountScope,
+} from "../../data/material-states.js";
 import { navigate, useUrlState } from "../../data/url.js";
 import { useShell } from "../../shell/context.js";
 import { errorMessage } from "../../strings.js";
@@ -88,6 +95,30 @@ export default function Insights() {
       return { items: items.slice(0, 1000), total };
     },
   });
+  // “材料状态” reads the library's own category counts, so both pages show
+  // the same numbers; a selection is counted from its papers.
+  const countScope = materialCountScope(query);
+  const counts = useQuery({
+    queryKey: ["library", "counts", countScope],
+    queryFn: ({ signal }) => readLibraryCounts(api, countScope, signal),
+    enabled: !selection && api.workspace.readiness === "ready",
+  });
+  const states = useMemo(
+    () =>
+      MATERIAL_STATES.map((state) => ({
+        label: state.label,
+        tone: literatureTone(state.tone),
+        count: selection
+          ? (papers.data?.items ?? []).filter(
+              (item) => itemMaterialState(item) === state.id,
+            ).length
+          : counts.data
+            ? materialCount(counts.data, state.id)
+            : 0,
+      })).filter((state) => state.count > 0),
+    [selection, papers.data, counts.data],
+  );
+  const statesTotal = states.reduce((sum, state) => sum + state.count, 0);
   const seeds = useMemo(
     () => (center ? [center] : (papers.data?.items.slice(0, 40) ?? [])),
     [center, papers.data],
@@ -159,14 +190,6 @@ export default function Insights() {
           ]),
         ),
       ),
-      state: STATES.map((state) => ({
-        ...state,
-        count: items.filter((item) =>
-          state.id === "unavailable"
-            ? item.needs_manual_pdf
-            : !item.needs_manual_pdf && item.literature.status === state.id,
-        ).length,
-      })).filter((state) => state.count > 0),
     };
   }, [papers.data]);
   return (
@@ -239,12 +262,12 @@ export default function Insights() {
                 <Figure
                   number={2}
                   title="材料状态"
-                  meta={`${papers.data.items.length.toLocaleString()} 篇`}
+                  meta={`${statesTotal.toLocaleString()} 篇`}
                 >
                   {asTable ? (
-                    <CountTable title="材料状态" rows={groups.state} />
+                    <CountTable title="材料状态" rows={states} />
                   ) : (
-                    <Proportion rows={groups.state} />
+                    <Proportion rows={states} />
                   )}
                 </Figure>
                 {groups.venue.length ? (
@@ -282,6 +305,9 @@ export default function Insights() {
                 {papers.data.total > papers.data.items.length
                   ? `（范围共 ${papers.data.total.toLocaleString()} 篇，单次最多读取 1,000 篇）`
                   : ""}
+                {selection
+                  ? ""
+                  : "；图 2 与文献库的快速筛选同一口径，计入范围内全部文献"}
                 。未提供的字段单独计为“未提供”，不做推断
                 {groups.venueMissing
                   ? `；${groups.venueMissing.toLocaleString()} 篇未提供期刊，未计入图 3`
@@ -343,16 +369,6 @@ export default function Insights() {
 }
 const MISSING = "未提供";
 type Row = { label: string; count: number };
-// Rule 4: the material-state chart takes the status map's colours.
-const STATES = [
-  { id: "READY", label: "已就绪" },
-  { id: "ASSET_READY", label: "有 PDF" },
-  { id: "ARCHIVING", label: "建档中" },
-  { id: "ARCHIVE_FAILED", label: "建档失败" },
-  { id: "unavailable", label: "无法获取" },
-  { id: "UNREVIEWED", label: "仅元数据" },
-  { id: "EXCLUDED", label: "已排除" },
-].map((state) => ({ ...state, tone: literatureTone(state.id) }));
 const percent = (count: number, total: number) =>
   total
     ? `${((count / total) * 100).toFixed(count / total < 0.1 ? 1 : 0)}%`

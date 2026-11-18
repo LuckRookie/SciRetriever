@@ -162,9 +162,9 @@ it("preserves source parameters and runtime sections, rejects incomplete setting
     const saved = await owner!.read();
     expect(saved.configuration.providers).toEqual(providers);
     expect(saved.configuration.models).toEqual(models);
-    await tab("解析与 Browser");
+    await tab("解析与浏览器");
     await page
-      .getByRole("textbox", { name: "Browser profile", exact: true })
+      .getByRole("textbox", { name: "浏览器个人资料", exact: true })
       .fill("web-fixture");
     await page
       .getByRole("textbox", { name: "MinerU 服务地址", exact: true })
@@ -196,7 +196,7 @@ it("preserves source parameters and runtime sections, rejects incomplete setting
       ["browser"],
     );
     await page
-      .getByRole("textbox", { name: "Browser profile", exact: true })
+      .getByRole("textbox", { name: "浏览器个人资料", exact: true })
       .fill("draft-after-conflict");
     await page
       .getByRole("button", { name: "保存运行配置", exact: true })
@@ -206,7 +206,7 @@ it("preserves source parameters and runtime sections, rejects incomplete setting
       .toContainEqual(expect.stringContaining("草稿仍保留"));
     expect(
       await page
-        .getByRole("textbox", { name: "Browser profile", exact: true })
+        .getByRole("textbox", { name: "浏览器个人资料", exact: true })
         .inputValue(),
     ).toBe("draft-after-conflict");
     const probes: unknown[] = [];
@@ -223,7 +223,7 @@ it("preserves source parameters and runtime sections, rejects incomplete setting
       });
     });
     const beforeProbe = (await owner!.read()).revision;
-    for (const name of ["测试 Parse", "测试 Browser 模型"]) {
+    for (const name of ["测试 解析服务", "测试 浏览器模型"]) {
       await page.getByRole("button", { name, exact: true }).click();
       await page
         .getByRole("dialog", { name: "测试连接" })
@@ -240,7 +240,7 @@ it("preserves source parameters and runtime sections, rejects incomplete setting
       .toEqual(
         expect.arrayContaining([
           "测试通过，连接正常。",
-          "测试结果：失败。模型服务拒绝了 API key，请在凭据中检查这个服务商的密钥。",
+          "测试结果：失败。模型服务拒绝了 API key，请在凭据中检查这个模型服务的密钥。",
         ]),
       );
     expect((await owner!.read()).revision).toBe(beforeProbe);
@@ -249,7 +249,7 @@ it("preserves source parameters and runtime sections, rejects incomplete setting
     await expect
       .poll(() =>
         page
-          .getByRole("textbox", { name: "Browser profile", exact: true })
+          .getByRole("textbox", { name: "浏览器个人资料", exact: true })
           .inputValue(),
       )
       .toBe("external-change");

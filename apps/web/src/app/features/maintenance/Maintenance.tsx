@@ -588,7 +588,7 @@ function Materials() {
             description:
               mode === "reparse"
                 ? "将调用已配置的解析服务，并保留已有解析版本。"
-                : "复用已有成功结果，只调用解析服务补齐缺失模式。完成后可另行发起建档。",
+                : "复用已有成功结果，只调用解析服务补齐缺失模式。完成后可另行发起生成全文。",
             confirmLabel: "解析 PDF",
           }}
           onPress={() =>
@@ -632,7 +632,7 @@ function Materials() {
       </Card>
       <Card title="DSH 单篇分析">
         <p>
-          使用所选文献的已建档校订稿。DSH
+          使用所选文献已校对的全文。DSH
           持续读取正文和图片；调用模型必须显式确认。
         </p>
         <Select
@@ -710,7 +710,7 @@ function Materials() {
               );
               setResult(receipt);
               context.onTasksChanged();
-              return "总结任务已提交，使用已建档校订稿，进度可在任务页查看。";
+              return "总结任务已提交，使用已校对的全文，进度可在任务页查看。";
             })
           }
         >

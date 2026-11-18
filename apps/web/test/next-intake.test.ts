@@ -171,7 +171,7 @@ it("records each import as a batch, narrows it by its keywords and gets PDFs for
       .click();
     await expect.poll(() => page.locator(".paper-row").count()).toBe(2);
     // “Current results” takes the whole filter, and the dialog states it before submitting.
-    await page.getByRole("button", { name: /^用当前结果/ }).click();
+    await page.getByRole("button", { name: /^批量操作/ }).click();
     await page
       .getByRole("menuitem", { name: "获取 PDF…", exact: true })
       .click();

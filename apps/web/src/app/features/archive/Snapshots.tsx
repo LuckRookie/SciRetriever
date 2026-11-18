@@ -679,7 +679,7 @@ export default function Snapshots() {
           ) : null}
           {!snapshots.isPending && !items.length ? (
             <p className="snapshot-empty">
-              还没有快照。在文献库应用筛选后，从“用当前结果”生成快照。
+              还没有快照。在文献库应用筛选后，从“批量操作”生成快照。
             </p>
           ) : null}
           {snapshots.hasNextPage ? (

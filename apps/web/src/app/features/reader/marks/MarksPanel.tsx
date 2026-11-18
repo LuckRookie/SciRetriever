@@ -210,8 +210,8 @@ export function MarksPanel({
                         <span className="mark-card-level">
                           {levels.get(m.document.document_version_id) ===
                           "draft"
-                            ? "初稿上"
-                            : "校订稿上"}
+                            ? "未校对的全文上"
+                            : "已校对的全文上"}
                         </span>
                       ) : null}
                       {where ? (

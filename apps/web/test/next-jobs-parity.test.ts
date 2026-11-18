@@ -165,8 +165,25 @@ describe("durable task workbench", () => {
           .getByRole("button", { name, exact: true });
       await create();
       expect(runCalls).toBe(0);
+      // Saved and never asked to start: 未启动, with only 启动 and 取消任务.
+      await drawer.getByText("未启动", { exact: true }).first().waitFor();
+      expect(
+        await drawer
+          .locator(".task-actions")
+          .first()
+          .getByRole("button")
+          .allTextContents(),
+      ).toEqual(["启动", "取消任务"]);
+      // Asked to start, it waits its turn (排队中) and can be paused.
+      await application.jobs!.requestStart(
+        new URL(page.url()).searchParams.get("task")!,
+      );
+      await drawer
+        .getByText("排队中", { exact: true })
+        .first()
+        .waitFor({ timeout: 20_000 });
       await control("暂停").click();
-      await drawer.getByText("等待处理", { exact: true }).first().waitFor();
+      await drawer.getByText("等你处理", { exact: true }).first().waitFor();
       expect(await control("继续").isEnabled()).toBe(true);
       await control("取消任务").click();
       await page
@@ -454,7 +471,7 @@ describe("durable task workbench", () => {
         await page
           .getByRole("button", { name: "查看任务", exact: true })
           .click();
-        await drawer.getByText("等待执行", { exact: true }).first().waitFor();
+        await drawer.getByText("未启动", { exact: true }).first().waitFor();
         return new URL(page.url()).searchParams.get("task")!;
       };
       const control = (name: string) =>
@@ -506,8 +523,15 @@ describe("durable task workbench", () => {
         "processing-result",
       );
       const resumedId = await submit("web-pause-resume", 1);
+      // 未启动 has nothing to pause; once asked to start it is 排队中.
+      expect(await control("暂停").count()).toBe(0);
+      await env.app.jobs!.requestStart(resumedId);
+      await drawer
+        .getByText("排队中", { exact: true })
+        .first()
+        .waitFor({ timeout: 20_000 });
       await control("暂停").click();
-      await drawer.getByText("等待处理", { exact: true }).first().waitFor();
+      await drawer.getByText("等你处理", { exact: true }).first().waitFor();
       expect(env.parseCalls).toBe(3);
       await control("继续").click();
       // Background work started here can outlast the 1 s poll default under Full load.

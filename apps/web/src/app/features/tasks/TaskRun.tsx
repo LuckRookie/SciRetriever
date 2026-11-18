@@ -13,7 +13,7 @@ import {
   processorMapStatus,
   skipReasons,
 } from "../../strings.js";
-import { taskStatusLabel } from "../../data/tasks.js";
+import { targetStatusLabel } from "../../data/tasks.js";
 
 /**
  * Who started the run and what it cost, then each target's own progress.
@@ -88,7 +88,7 @@ export function TaskRun({
                     ? "复用已有结果"
                     : result
                       ? "新计算完成"
-                      : (taskStatusLabel[String(item.status)] ?? "处理中")}
+                      : (targetStatusLabel(item.status) ?? "处理中")}
                   {Number(item.literature_count) > 1
                     ? ` · ${item.literature_count} 篇文献`
                     : ""}
@@ -177,7 +177,7 @@ export function TaskRun({
                     >
                       {/config|unconfigured/.test(code)
                         ? "前往设置"
-                        : "查看建档问题"}
+                        : "查看需处理的问题"}
                     </Button>
                   </div>
                 ) : null}
@@ -376,7 +376,9 @@ function ArchiveSteps({ value }: { value: Record<string, unknown> }) {
           key={asset}
           className="task-step-list archive-run-steps"
           aria-label={
-            assets.length > 1 ? `材料 ${index + 1} 的建档步骤` : "建档步骤"
+            assets.length > 1
+              ? `材料 ${index + 1} 生成全文的步骤`
+              : "生成全文的步骤"
           }
         >
           {ARCHIVE_ORDER.map((step) => {
@@ -456,7 +458,7 @@ function StopReason({ stop }: { stop: Record<string, unknown> }) {
         : progress
           ? `。连续 ${Number(progress.consecutive_calls)} 次调用没有进展，达到 ${Number(progress.threshold)} 次即停。`
           : "。"}
-      {stop.retryable ? "可以继续建档。" : ""}
+      {stop.retryable ? "可以继续生成全文。" : ""}
     </p>
   );
 }

@@ -72,7 +72,16 @@ import { archiveQuery, useArchiveAction, rows } from "../../data/archive.js";
 import { record } from "../../data/wire.js";
 import { archiveReason, errorMessage, statusLabels } from "../../strings.js";
 import { OperationDialog, download } from "./OperationDialog.js";
-import { FullTextLine } from "./FullTextLine.js";
+import { FullTextLine, type FullTextFilter } from "./FullTextLine.js";
+import {
+  MAIN_MATERIAL_STATES,
+  MORE_MATERIAL_STATES,
+  materialCount,
+  materialCountScope,
+  materialQuery,
+  queryMaterialState,
+  type MaterialState,
+} from "../../data/material-states.js";
 import {
   SELECTION_GROUPS,
   groupSelection,
@@ -105,22 +114,24 @@ import {
 
 const scrollPositions = new WeakMap<ApiClient, Map<string, number>>();
 const rowMeasurements = new WeakMap<ApiClient, Map<string, VirtualItem[]>>();
+/** The draft-difference filter in words (page specs “界面用词”). */
+const DIFFERS_LABEL = "全文和 PDF 自带的文字不一样";
 /** Text levels in words (page specs “文献库”, reading-experience 3.4). */
 export const TEXT_LEVEL_LABELS = {
-  draft: "初稿",
-  proofread: "校订稿",
+  draft: "未校对",
+  proofread: "已校对",
 } as const satisfies Record<TextLevel, string>;
 /**
  * The draft mark on a row; sorted by a draft fact, followed by its count
- * (page specs “文献库”): “初稿 · 差异 12 段”, “初稿 · 扫描 3 页”.
+ * (page specs “文献库”): “未校对 · 差异 12 段”, “未校对 · 扫描 3 页”.
  */
 function draftNote(item: LiteratureSearchItem, sort: LibrarySort) {
   const facts = item.draft_facts;
   if (facts && sort === "draft-differences-desc")
-    return `初稿 · 差异 ${facts.differs_segments} 段`;
+    return `未校对 · 差异 ${facts.differs_segments} 段`;
   if (facts && sort === "image-only-pages-desc")
-    return `初稿 · 扫描 ${facts.image_only_pages} 页`;
-  return "初稿";
+    return `未校对 · 扫描 ${facts.image_only_pages} 页`;
+  return "未校对";
 }
 export default function Library() {
   const api = useApi(),
@@ -154,11 +165,11 @@ export default function Library() {
       publication_forms: "出版形式",
       article_kinds: "文章性质",
       tags: "标签",
-      needs_manual_pdf: "无法获取",
+      needs_manual_pdf: statusLabels.UNAVAILABLE!,
       has_primary_pdf: "主 PDF",
-      needs_metadata: "书目待补",
+      needs_metadata: "书目不全",
       text_levels: "文本等级",
-      has_draft_differences: "初稿与文字层有差异",
+      has_draft_differences: DIFFERS_LABEL,
       has_image_only_pages: "含扫描页",
     };
     // Folder and "recently read" are the page's scope, shown in its title.
@@ -346,35 +357,20 @@ export default function Library() {
     selected: shell.selected,
     setSelected: shell.setSelected,
   });
-  // The scope the counts describe: the quick filters left out, so every
-  // quick filter has its number and switching between them changes none.
-  const countScope: LibraryQuery = {
-    ...route.query,
-    statuses: [],
-    needs_manual_pdf: null,
-    has_primary_pdf: null,
-  };
+  const countScope = materialCountScope(route.query);
   const counts = useQuery({
     queryKey: ["library", "counts", countScope],
     queryFn: ({ signal }) => readLibraryCounts(api, countScope, signal),
     placeholderData: keepPreviousData,
     enabled: api.workspace.readiness === "ready",
   });
-  // “有 PDF” and “仅元数据” count versions with and without a primary PDF,
-  // as the list does (page specs “文献库”, query technical 2.1.8).
-  const countFor = (filter: string) =>
+  // The categories do not overlap, so their counts add up to the total
+  // (page specs “界面用词”).
+  const countFor = (filter: MaterialState | "") =>
     counts.data
       ? filter === ""
         ? counts.data.total
-        : filter === "failed"
-          ? counts.data.unavailable_pdf
-          : filter === "pdf"
-            ? counts.data.with_primary_pdf
-            : filter === "metadata"
-              ? counts.data.total - counts.data.with_primary_pdf
-              : (counts.data.statuses[
-                  filter as keyof typeof counts.data.statuses
-                ] ?? 0)
+        : materialCount(counts.data, filter)
       : null;
   const folders = useFolders();
   const folder = route.query.folder ?? null;
@@ -386,26 +382,30 @@ export default function Library() {
   const [adding, setAdding] = useState<string[] | null>(null);
   const updateQuery = (query: LibraryQuery, sort = route.sort) =>
     navigate({ query: JSON.stringify(query), sort }, { replace: true });
-  const statusFilter = route.query.needs_manual_pdf
-    ? "failed"
-    : route.query.has_primary_pdf === true
-      ? "pdf"
-      : route.query.has_primary_pdf === false
-        ? "metadata"
-        : (route.query.statuses[0] ?? "");
+  // “主 PDF” from the full-text line selects no quick filter, not even 全部.
+  const statusFilter =
+    typeof route.query.has_primary_pdf === "boolean"
+      ? null
+      : queryMaterialState(route.query);
   // One quick filter at a time; the scope's other conditions stay.
-  const setStatusFilter = (value: string) =>
+  const setStatusFilter = (value: MaterialState | "") =>
     updateQuery(
-      parseLibrarySearchRequest({
-        query: {
-          ...route.query,
-          statuses: QUICK_ONLY.has(value) || !value ? [] : [value],
-          needs_manual_pdf: value === "failed" ? true : null,
-          has_primary_pdf:
-            value === "pdf" ? true : value === "metadata" ? false : null,
-        },
-      }).query,
+      parseLibrarySearchRequest({ query: materialQuery(route.query, value) })
+        .query,
     );
+  // The full-text line counts by paper whether a primary PDF is in hand;
+  // its “已试完” is the category “没找到 PDF”.
+  const pickFullText = (value: FullTextFilter) =>
+    value === "pdf" || value === "metadata"
+      ? updateQuery(
+          parseLibrarySearchRequest({
+            query: {
+              ...materialQuery(route.query, ""),
+              has_primary_pdf: value === "pdf",
+            },
+          }).query,
+        )
+      : setStatusFilter(value === "failed" ? "unavailable" : "");
   useEffect(() => {
     setText(route.query.text ?? "");
   }, [route.query.text]);
@@ -573,9 +573,9 @@ export default function Library() {
   const acquireReason = batchReason("no-pdf", "所选文献都已有 PDF"),
     archivingReason = batchReason(
       "unarchived",
-      "所选文献没有待建档的；建档需要先有 PDF",
+      "所选文献没有要生成全文的；生成全文需要先有 PDF",
     ),
-    runReason = batchReason("ready", "所选文献都还没有建档就绪");
+    runReason = batchReason("ready", "所选文献都还没有全文");
   const primary = selectionPrimary(acquireReason, archivingReason);
   // The whole catalog is always over the limit, so the reason lives with the
   // disabled actions instead of occupying the toolbar.
@@ -732,7 +732,7 @@ export default function Library() {
       ) : null}
       {mutable ? (
         <Menu
-          label="用当前结果"
+          label="批量操作"
           indicator
           variant="text"
           items={[
@@ -756,7 +756,7 @@ export default function Library() {
               ? [
                   {
                     id: "archive",
-                    label: "建档…",
+                    label: "生成全文…",
                     disabled: total === 0,
                     onAction: () => {
                       setMobileTools(false);
@@ -849,44 +849,56 @@ export default function Library() {
         </div>
         <div className="library-quick">
           <div className="library-status-filters" aria-label="按材料状态筛选">
-            {STATUS_FILTERS.filter(
+            {[
+              { id: "" as const, label: "全部" },
+              ...MAIN_MATERIAL_STATES,
+              // A category from “更多状态” shows as a chip while selected.
+              ...MORE_MATERIAL_STATES.filter(
+                (filter) => statusFilter === filter.id,
+              ),
+            ]
+              .filter(
+                (filter) =>
+                  filter.id === "" ||
+                  statusFilter === filter.id ||
+                  countFor(filter.id) !== 0,
+              )
+              .map((filter) => (
+                <FilterChip
+                  key={filter.id}
+                  isSelected={statusFilter === filter.id}
+                  onChange={() => setStatusFilter(filter.id)}
+                >
+                  {filter.label}
+                  {countFor(filter.id) !== null ? " " : null}
+                  {countFor(filter.id) !== null ? (
+                    <span className="filter-count">
+                      {countFor(filter.id)!.toLocaleString()}
+                    </span>
+                  ) : null}
+                </FilterChip>
+              ))}
+            {MORE_MATERIAL_STATES.some(
               (filter) =>
-                filter.id === "" ||
-                statusFilter === filter.id ||
-                countFor(filter.id) !== 0,
-            ).map((filter) => (
-              <FilterChip
-                key={filter.id}
-                isSelected={statusFilter === filter.id}
-                onChange={() => setStatusFilter(filter.id)}
-              >
-                {filter.label}
-                {countFor(filter.id) !== null ? " " : null}
-                {countFor(filter.id) !== null ? (
-                  <span className="filter-count">
-                    {countFor(filter.id)!.toLocaleString()}
-                  </span>
-                ) : null}
-              </FilterChip>
-            ))}
-            {statusFilter === "EXCLUDED" ? (
-              <FilterChip isSelected onChange={() => setStatusFilter("")}>
-                已排除
-              </FilterChip>
-            ) : (
+                statusFilter !== filter.id && countFor(filter.id) !== 0,
+            ) ? (
               <Menu
                 label="更多状态"
                 indicator
                 variant="text"
-                items={[
-                  {
-                    id: "EXCLUDED",
-                    label: "已排除",
-                    onAction: () => setStatusFilter("EXCLUDED"),
-                  },
-                ]}
+                items={MORE_MATERIAL_STATES.filter(
+                  (filter) =>
+                    statusFilter !== filter.id && countFor(filter.id) !== 0,
+                ).map((filter) => ({
+                  id: filter.id,
+                  label:
+                    countFor(filter.id) === null
+                      ? filter.label
+                      : `${filter.label} ${countFor(filter.id)!.toLocaleString()}`,
+                  onAction: () => setStatusFilter(filter.id),
+                }))}
               />
-            )}
+            ) : null}
           </div>
           {folder ? (
             <Switch
@@ -949,10 +961,7 @@ export default function Library() {
             </AnimatedPanel>
           )}
         </Presence>
-        <FullTextLine
-          counts={counts.data?.full_text}
-          onPick={setStatusFilter}
-        />
+        <FullTextLine counts={counts.data?.full_text} onPick={pickFullText} />
         <div className="library-list-heading">
           <Checkbox
             label="全选已加载"
@@ -995,7 +1004,7 @@ export default function Library() {
                 isPending={choosing}
                 disabledReason={
                   total > 1000
-                    ? `共 ${total.toLocaleString()} 篇，超过 1,000 篇上限。获取 PDF 可用“用当前结果 → 获取 PDF”整体提交。`
+                    ? `共 ${total.toLocaleString()} 篇，超过 1,000 篇上限。获取 PDF 可用“批量操作 → 获取 PDF”整体提交。`
                     : undefined
                 }
                 onPress={selectScope}
@@ -1104,7 +1113,7 @@ export default function Library() {
                       setOperation({ ids: groups.unarchived, kind: "archive" })
                     }
                   >
-                    建档 <span>{groups.unarchived.length}</span>
+                    生成全文 <span>{groups.unarchived.length}</span>
                   </Button>
                   <Button
                     icon={<Icon name="folder" />}
@@ -1151,7 +1160,7 @@ export default function Library() {
                         onAction: () =>
                           setRunner({
                             scope: { kind: "literatures", ids: groups.ready },
-                            label: `已选中已就绪的 ${groups.ready.length} 篇`,
+                            label: `已选中有全文的 ${groups.ready.length} 篇`,
                           }),
                       },
                       {
@@ -1289,19 +1298,6 @@ function rowTerms(item: LiteratureSearchItem) {
   const m = item.literature.metadata;
   return (m.keywords.length ? m.keywords : m.subject_terms).slice(0, ROW_TAGS);
 }
-// “有 PDF” is having a primary PDF whatever came after, “仅元数据” its
-// complement; “无法获取” stays the exhausted papers (page specs “文献库”).
-const STATUS_FILTERS = [
-  { id: "", label: "全部" },
-  { id: "READY", label: "已就绪" },
-  { id: "pdf", label: "有 PDF" },
-  { id: "ARCHIVING", label: "建档中" },
-  { id: "ARCHIVE_FAILED", label: "建档失败" },
-  { id: "failed", label: "无法获取" },
-  { id: "metadata", label: "仅元数据" },
-] as const;
-/** Quick filters that are not a status. */
-const QUICK_ONLY = new Set(["failed", "pdf", "metadata"]);
 /** Scroll-range updates belong to the list, not the page's forms and motion layout. */
 const LibraryList = memo(function LibraryList({
   items,
@@ -1643,7 +1639,7 @@ const LibraryRow = memo(function LibraryRow({
           {item.literature.metadata.publication_year ?? "年份未提供"}
           {/* Literature materials 8.4: its bibliography still lacks parts. */}
           {item.needs_metadata ? (
-            <span className="paper-needs-metadata"> · 书目待补</span>
+            <span className="paper-needs-metadata"> · 书目不全</span>
           ) : null}
         </span>
         {item.tags?.length ? (
@@ -1688,11 +1684,8 @@ const LibraryRow = memo(function LibraryRow({
             )}
           >
             {item.needs_manual_pdf
-              ? "无法获取"
+              ? statusLabels.UNAVAILABLE
               : statusLabels[item.literature.status]}
-            {item.literature.status === "ASSET_READY" ? (
-              <small>待建档</small>
-            ) : null}
             {item.literature.status === "ARCHIVING" ? (
               <small>
                 {item.missing_step
@@ -1722,7 +1715,7 @@ const LibraryRow = memo(function LibraryRow({
           {item.literature.status === "READY" && item.long_document ? (
             <small
               className="paper-status-note"
-              title="按简化流程建档，未逐页校订；以 PDF 为准"
+              title="按简化流程生成全文，未逐页校对；以 PDF 为准"
             >
               长文档
             </small>
@@ -1730,7 +1723,7 @@ const LibraryRow = memo(function LibraryRow({
           {item.text_level === "draft" ? (
             <small
               className="paper-status-note"
-              title="未经校订，文字可能含解析错误；以 PDF 为准"
+              title="全文未校对，文字可能含解析错误；以 PDF 为准"
             >
               {draftNote(item, sort)}
             </small>
@@ -1758,7 +1751,7 @@ const LibraryRow = memo(function LibraryRow({
               },
               {
                 id: "archive",
-                label: "建档",
+                label: "生成全文",
                 ...(item.literature.status === "UNREVIEWED"
                   ? { disabled: true, description: "需要先有 PDF" }
                   : {}),
@@ -1942,7 +1935,7 @@ function Filters({
         ]}
       />
       <Select
-        label="初稿与文字层有差异"
+        label={DIFFERS_LABEL}
         value={differs}
         onChange={setDiffers}
         options={FLAG_OPTIONS}
@@ -1954,7 +1947,7 @@ function Filters({
         options={FLAG_OPTIONS}
       />
       <Checkbox
-        label="书目待补"
+        label="书目不全"
         isSelected={needsMetadata}
         onChange={setNeedsMetadata}
       />

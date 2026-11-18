@@ -39,10 +39,10 @@ it("offers archiving for an unparsed paper, and archiving parses it first", asyn
     // The side panel starts closed (spec 1.4).
     await readerPanel(p);
     const info = p.locator(".reader-info-archive");
-    await expect.poll(() => info.innerText()).toContain("全文尚未建档");
+    await expect.poll(() => info.innerText()).toContain("还没有生成全文");
     await expect
       .poll(() =>
-        info.getByRole("button", { name: "建档", exact: true }).count(),
+        info.getByRole("button", { name: "生成全文", exact: true }).count(),
       )
       .toBe(1);
     expect(
@@ -102,9 +102,9 @@ it("archives a paper straight from its PDF, then exposes ready state and metadat
     ).toBe(0);
     await p
       .getByRole("region", { name: "文献选择" })
-      .getByRole("button", { name: /^建档 \d+$/ })
+      .getByRole("button", { name: /^生成全文 \d+$/ })
       .click();
-    const build = p.getByRole("dialog", { name: "建立文献档案", exact: true });
+    const build = p.getByRole("dialog", { name: "生成全文", exact: true });
     await build.getByRole("button", { name: "确认启动", exact: true }).click();
     await build.getByRole("button", { name: "关闭", exact: true }).click();
     await expect
@@ -172,7 +172,7 @@ it("creates a snapshot and runs mapped DSH summaries and synthesis with clickabl
           },
     );
     const p = w.page;
-    await p.getByRole("button", { name: "用当前结果", exact: true }).click();
+    await p.getByRole("button", { name: "批量操作", exact: true }).click();
     await p.getByRole("menuitem", { name: "生成快照", exact: true }).click();
     // Generating a snapshot opens it directly.
     await p.getByRole("heading", { name: /1 篇/ }).waitFor();
@@ -272,7 +272,10 @@ it("previews undo dependencies before reverting a vocabulary change", async () =
       .toBe(true);
     // The reader page's navigation is in its drawer (spec 1.3).
     await p.getByRole("button", { name: "打开导航", exact: true }).click();
-    await openProcessingEntry(p.getByRole("dialog", { name: "导航" }), "词表");
+    await openProcessingEntry(
+      p.getByRole("dialog", { name: "导航" }),
+      "标签词表",
+    );
     await p.getByRole("heading", { name: "标签词表", exact: true }).waitFor();
     await p.getByRole("button", { name: "词表变更日志", exact: true }).click();
     await p
@@ -371,9 +374,9 @@ it("locks an edited block, marks its summary stale and locates the fixed PDF reg
       .getByRole("button", { name: /查看区块来源/ })
       .first()
       .click();
-    const editor = p.getByRole("region", { name: "校订稿编辑", exact: true });
+    const editor = p.getByRole("region", { name: "修改全文", exact: true });
     const field = editor.getByRole("textbox", {
-      name: "第 1 页校订稿",
+      name: "第 1 页全文",
       exact: true,
     });
     await field.waitFor();
@@ -478,13 +481,31 @@ it("recovers archive issues and parses a new supplement in the same run, readabl
     failed.mockRestore();
     const p = w.page;
     await p.goto(`${w.origin}/?view=archive`);
+    // The group says the problem itself; the row says where the paper stopped
+    // and offers one main action, the rest in a menu (plan 25 block 31.5).
+    const group = p.locator(".archive-group").first();
+    await group.waitFor();
+    expect(await group.locator("h2").innerText()).toMatch(/^标签生成失败/u);
+    const issue = group.locator(".archive-issue").first();
+    expect(await issue.locator(".ui-description").innerText()).toMatch(
+      /^停在“文献标签”这一步|“文献标签”没有完成/u,
+    );
+    expect(
+      await issue
+        .locator(".archive-issue-actions")
+        .getByRole("button", { name: /^(?!其他操作)/u })
+        .allTextContents(),
+    ).toEqual(["编辑文献标签"]);
+    // The raw code is still there, in the technical details.
+    await group.getByRole("button", { name: "技术详情", exact: true }).click();
+    expect(await group.innerText()).toContain("tags-failed");
     await p.getByRole("button", { name: "编辑文献标签", exact: true }).click();
     await p
       .getByRole("region", { name: "文献标签编辑", exact: true })
       .waitFor();
+    await issue.getByRole("button", { name: "其他操作", exact: true }).click();
     await p
-      .getByRole("button", { name: "继续建档", exact: true })
-      .first()
+      .getByRole("menuitem", { name: "继续生成全文", exact: true })
       .click();
     await expect
       .poll(async () => (await e.app.archive.status(id)).status, {
@@ -639,14 +660,17 @@ it("preserves summary reading position and presents evidence on demand across sc
     }
     await readerView(p, "原文");
     await readerType(p, "显示核对依据");
-    await readerMore(p, "编辑校订稿");
-    const editor = p.getByRole("region", { name: "校订稿编辑", exact: true });
+    await readerMore(p, "修改全文");
+    const editor = p.getByRole("region", { name: "修改全文", exact: true });
     await editor.getByRole("tab", { name: "预览", exact: true }).click();
     await editor.locator(".katex").first().waitFor();
     await p.setViewportSize({ width: 1440, height: 1000 });
     // The reader page's navigation is in its drawer (spec 1.3).
     await p.getByRole("button", { name: "打开导航", exact: true }).click();
-    await openProcessingEntry(p.getByRole("dialog", { name: "导航" }), "词表");
+    await openProcessingEntry(
+      p.getByRole("dialog", { name: "导航" }),
+      "标签词表",
+    );
     await p.getByRole("button", { name: "Spectroscopy", exact: true }).click();
     await p
       .getByRole("heading", { name: "Spectroscopy", exact: true })
@@ -683,12 +707,14 @@ it("shows all states and styled ranked tags on a cold library entry", async () =
     // No archive, vocabulary or reader route has been loaded in this browser.
     await expect.poll(() => p.locator(".paper-row").count()).toBe(2);
     await p.getByText("Unparsed source", { exact: true }).waitFor();
-    expect(
-      await p
-        .locator(".paper-status small")
-        .first()
-        .evaluate((el) => getComputedStyle(el).display),
-    ).toBe("block");
+    // “有 PDF” no longer carries “待建档” (page specs “界面用词”); the status
+    // badge itself shows the page styles arrived on a cold entry.
+    const status = p.locator(".paper-status", { hasText: "有 PDF" }).first();
+    expect(await status.innerText()).toBe("有 PDF");
+    // An unstyled span would be “inline”; the badge lays out as flex.
+    expect(await status.evaluate((el) => getComputedStyle(el).display)).toMatch(
+      /flex$/u,
+    );
     const tags = p.locator(".paper-tags").first();
     await tags.waitFor();
     expect(await tags.evaluate((el) => getComputedStyle(el).display)).toBe(
@@ -705,7 +731,7 @@ it("shows all states and styled ranked tags on a cold library entry", async () =
     expect(
       await primary.evaluate((el) => getComputedStyle(el).backgroundColor),
     ).not.toBe("rgba(0, 0, 0, 0)");
-    await libraryStatus(p, "已就绪");
+    await libraryStatus(p, "有全文");
     await expect.poll(() => p.locator(".paper-row").count()).toBe(1);
     expect(w.errors).toEqual([]);
   } finally {

@@ -104,7 +104,7 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
       "30,002",
     );
     // Over the 1,000-paper limit, running and exporting explain the limit instead of acting.
-    await p.getByRole("button", { name: "用当前结果", exact: true }).click();
+    await p.getByRole("button", { name: "批量操作", exact: true }).click();
     expect(await p.getByRole("menu").textContent()).toContain(
       "超过 1,000 篇上限",
     );
@@ -389,7 +389,7 @@ it("opens a PDF without text in the PDF view, and its full text says what is mis
     // A secondary button: one primary per screen at most.
     expect(
       await empty
-        .getByRole("button", { name: "建立文献档案", exact: true })
+        .getByRole("button", { name: "生成全文", exact: true })
         .getAttribute("data-variant"),
     ).not.toBe("primary");
     expect(w.errors).toEqual([]);
@@ -496,15 +496,35 @@ it("shows the scope's full text by paper above the list, each number applying it
     await expect
       .poll(() => line.textContent())
       .toBe("全文已取得 3 / 总数 5，未取得 2（其中自动途径已试完 1）");
-    // The quick filters count versions, as the list does.
+    // The quick filters count versions, as the list does, in categories
+    // that do not overlap: they add up to 全部 (page specs “界面用词”).
     const chip = (name: string) =>
       page
         .locator(".library-status-filters")
         .getByRole("button", { name: new RegExp(`^${name}`) });
-    expect(await chip("有 PDF").textContent()).toBe("有 PDF 3");
-    expect(await chip("仅元数据").textContent()).toBe("仅元数据 3");
+    const quick = await page
+      .locator(".library-status-filters .ui-filter")
+      .allTextContents();
+    await page.getByRole("button", { name: "更多状态", exact: true }).click();
+    const more = await page.getByRole("menuitem").allTextContents();
+    await page.keyboard.press("Escape");
+    const number = (text: string) =>
+      Number(text.replace(/^\D+/u, "").replace(/,/gu, ""));
+    const all = quick.find((text) => text.startsWith("全部"))!;
+    expect(
+      [...quick.filter((text) => !text.startsWith("全部")), ...more]
+        .map(number)
+        .reduce((a, b) => a + b, 0),
+    ).toBe(number(all));
+    expect(quick.map((text) => text.replace(/ [\d,]+$/u, ""))).toEqual(
+      expect.arrayContaining(["全部", "有全文", "有 PDF", "只有书目"]),
+    );
+    expect(more.map((text) => text.replace(/ [\d,]+$/u, ""))).toEqual(
+      expect.arrayContaining(["没找到 PDF"]),
+    );
+    expect(number(all)).toBe(6);
     // Switching quick filters keeps the line as it is.
-    await chip("已就绪").click();
+    await chip("有全文").click();
     await expect.poll(() => page.locator(".paper-row").count()).toBe(1);
     expect(await line.textContent()).toBe(
       "全文已取得 3 / 总数 5，未取得 2（其中自动途径已试完 1）",
@@ -636,7 +656,7 @@ it("filters the papers whose bibliography is still to complete and marks their r
       `.paper-row[data-literature-id="${missingId}"]`,
     );
     expect(await marked.locator(".paper-citation").textContent()).toMatch(
-      / · 书目待补$/u,
+      / · 书目不全$/u,
     );
     expect(await page.locator(".paper-needs-metadata").count()).toBe(1);
     // The filter sends needs_metadata: true and keeps the other conditions.
@@ -652,11 +672,11 @@ it("filters the papers whose bibliography is still to complete and marks their r
     await openFilterConditions(page);
     await page
       .locator(".library-filters")
-      .getByText("书目待补", { exact: true })
+      .getByText("书目不全", { exact: true })
       .click();
     expect(
       await page
-        .getByRole("checkbox", { name: "书目待补", exact: true })
+        .getByRole("checkbox", { name: "书目不全", exact: true })
         .isChecked(),
     ).toBe(true);
     await page.getByRole("button", { name: "应用筛选", exact: true }).click();
@@ -671,7 +691,7 @@ it("filters the papers whose bibliography is still to complete and marks their r
     // Its condition reads as such and clears to no field at all.
     const chip = page
       .locator(".library-applied")
-      .getByRole("button", { name: "书目待补：是", exact: true });
+      .getByRole("button", { name: "书目不全：是", exact: true });
     await chip.waitFor();
     await chip.click();
     await expect.poll(() => rows.count()).toBe(2);

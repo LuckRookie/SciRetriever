@@ -25,7 +25,13 @@ import {
 import { useApi } from "../../data/query.js";
 import { TaskPage } from "../tasks/TaskPage.js";
 import { registerNavigationGuard, useUrlState } from "../../data/url.js";
-import { errorMessage, serviceMessage } from "../../strings.js";
+import {
+  errorMessage,
+  localTime,
+  serviceMessage,
+  shortTime,
+  statusLabels,
+} from "../../strings.js";
 import { ProblemDetails, problemText } from "../sources/problem.js";
 import { randomId } from "../../../browser-platform.js";
 import { candidateStatus } from "../../data/candidate-status.js";
@@ -51,7 +57,7 @@ const states: Readonly<Record<string, string>> = {
   failed: "未能继续",
 };
 const phases: Readonly<Record<string, string>> = {
-  queued: "等待执行",
+  queued: statusLabels.queued!,
   ready: "等待观察",
   deciding: "Agent 推理中",
   waiting: "等待页面或控制权",
@@ -128,7 +134,7 @@ function PhaseBadge({ session }: { session: Session }) {
       <Badge status="failed">未获取</Badge>
     );
   if (session.phase === "queued")
-    return <Badge status="metadata">等待执行</Badge>;
+    return <Badge status="metadata">{statusLabels.queued}</Badge>;
   return (
     <Badge status="running">{phases[session.phase] ?? session.phase}</Badge>
   );
@@ -175,15 +181,8 @@ function groupSessions(sessions: readonly Session[]): SessionGroup[] {
     (b.started ?? "").localeCompare(a.started ?? ""),
   );
 }
-const clock = (iso: string | undefined) =>
-  iso
-    ? new Date(iso).toLocaleString("zh-CN", {
-        month: "numeric",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : "";
+/** Rule 6: the one way a time is written. */
+const clock = (iso: string | undefined) => (iso ? shortTime(iso) : "");
 function groupSummary(group: SessionGroup, active: boolean) {
   const count = (test: (s: Session) => boolean) =>
     group.members.filter(test).length;
@@ -195,7 +194,7 @@ function groupSummary(group: SessionGroup, active: boolean) {
   if (active) {
     parts.push(
       `${count((s) => !closed(s) && s.phase !== "queued")} 进行中`,
-      `${count((s) => s.phase === "queued")} 等待`,
+      `${count((s) => s.phase === "queued")} ${statusLabels.queued}`,
       `${count(closed)} 已结束`,
     );
   } else {
@@ -301,7 +300,11 @@ export default function Browser() {
             .filter((g) => g.members.some((m) => m.phase !== "closed"))
             .map((group) => (
               <div key={group.id} className="browser-group">
-                <h3>{groupSummary(group, true)}</h3>
+                <h3
+                  title={group.started ? localTime(group.started) : undefined}
+                >
+                  {groupSummary(group, true)}
+                </h3>
                 <div className="browser-sessions">
                   {group.members
                     .filter((m) => m.phase !== "closed")

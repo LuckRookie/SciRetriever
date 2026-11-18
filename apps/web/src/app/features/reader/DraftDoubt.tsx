@@ -10,7 +10,7 @@ function Difference({ difference }: { difference: DraftDifference }) {
   if (difference.kind === "elsewhere")
     return (
       <p>
-        这段文字在本页的文字层里找不到，出现在第{" "}
+        这段文字在本页 PDF 自带的文字里找不到，出现在第{" "}
         {(difference.other_page_index ?? 0) + 1} 页。
       </p>
     );
@@ -19,11 +19,11 @@ function Difference({ difference }: { difference: DraftDifference }) {
   return (
     <div className="reader-doubt-pair">
       <p>
-        <span className="reader-doubt-label">文字层：</span>
+        <span className="reader-doubt-label">PDF 自带的文字：</span>
         {side(difference.text_layer)}
       </p>
       <p>
-        <span className="reader-doubt-label">初稿：</span>
+        <span className="reader-doubt-label">未校对的全文：</span>
         {side(difference.parsed)}
       </p>
     </div>

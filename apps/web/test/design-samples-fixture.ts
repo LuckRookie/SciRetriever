@@ -51,7 +51,7 @@ export interface DesignSampleIds {
   metadataOnly: string;
 }
 export const DESIGN_SAMPLE_GAPS = [
-  "无法获取是 PDF 获取耗尽筛选（unavailable_pdf），不是第七个 LiteratureStatus；按实际合同展示。",
+  "没找到 PDF 是 PDF 获取耗尽筛选（unavailable_pdf），不是第七个 LiteratureStatus；按实际合同展示。",
   "no-citation 与 citation-unavailable 不能经当前算子正常接纳产生；不伪造结果或删除引用材料。已有 found、not-found、value-null、derived；其余两种留给独立合同回归。",
   "设置页的显式‘样例库’标记需要前端配合；当前以样例目录名、虚构期刊与标题识别，不注入 UI。",
   "基线 885e9e1 尚无 gallery 路由，组件基线使用 lab；后续构建有 gallery 时自动采用 gallery 并在 manifest 记录。",

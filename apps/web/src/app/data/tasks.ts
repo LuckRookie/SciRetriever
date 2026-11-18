@@ -4,6 +4,7 @@ import {
   type AcquisitionTaskTrace,
   type TaskSourceResults,
 } from "@sciretriever/contracts";
+import { statusLabels } from "../strings.js";
 import {
   envelopeRecord,
   jobRecord,
@@ -13,27 +14,61 @@ import {
   type JsonRecord as Json,
 } from "./wire.js";
 
-export const taskStatusLabel: Readonly<Record<string, string>> = {
-  queued: "等待执行",
-  running: "执行中",
-  paused: "等待处理",
-  cancelled: "已取消",
-  completed: "已完成",
-  failed: "执行失败",
-  interrupted: "上次运行中断",
-  skipped: "已跳过",
+/** A target's stage in a task's run; its plain states read as `statusLabels`. */
+const targetStageLabels: Readonly<Record<string, string>> = {
   acquisition: "获取 PDF",
   parsing: "解析材料",
   analysis: "分析材料",
   literature: "保存结果",
-  pending: "等待执行",
   open: "待处理",
   resolved: "已处理",
 };
+export function targetStatusLabel(status: unknown): string | undefined {
+  const value = String(status);
+  return targetStageLabels[value] ?? statusLabels[value];
+}
+/** A task that was saved and never asked to start: queued, not waiting its turn. */
+export function taskNotStarted(job: {
+  readonly status?: unknown;
+  readonly start_requested?: unknown;
+}): boolean {
+  return job.status === "queued" && job.start_requested !== true;
+}
+/**
+ * A task's state in the page specs' words: a queued task is “未启动” until
+ * someone asked it to start, then “排队中” (page specs “界面用词”).
+ */
+export function taskStateLabel(job: {
+  readonly status?: unknown;
+  readonly start_requested?: unknown;
+}): string {
+  if (taskNotStarted(job)) return "未启动";
+  const value = String(job.status);
+  return statusLabels[value] ?? value;
+}
+export type TaskAction = "start" | "pause" | "resume" | "retry" | "cancel";
+/**
+ * The controls each state can use (page specs “任务与 Agent 会话”): 未启动
+ * 启动、取消; 排队中 and 进行中 暂停、取消; 等你处理 and 已中断 继续、取消;
+ * a failed task, or a finished one with skipped failures, 重试. An ended task
+ * has nothing to cancel.
+ */
+export function taskActions(
+  job: { readonly status?: unknown; readonly start_requested?: unknown },
+  retryFinished = false,
+): TaskAction[] {
+  const status = String(job.status);
+  if (taskNotStarted(job)) return ["start", "cancel"];
+  if (status === "queued" || status === "running") return ["pause", "cancel"];
+  if (status === "paused" || status === "interrupted")
+    return ["resume", "cancel"];
+  if (status === "failed") return ["retry"];
+  if (status === "completed" && retryFinished) return ["retry"];
+  return [];
+}
 /**
  * “n 进行中” counts the tasks actually running in an active-group answer: a
- * queued task (saved and never started, or waiting for a slot) is “等待执行”,
- * not in progress (page specs “任务”). Lists still show both.
+ * queued task (未启动, or 排队中 waiting for a slot) is not in progress (page specs “任务”). Lists still show both.
  */
 export function runningTaskCount(answer: unknown): number {
   const tasks = (answer as { tasks?: unknown } | null | undefined)?.tasks;
@@ -61,6 +96,8 @@ export const operationLabels: Readonly<Record<string, string>> = {
   "assess-article-identity": "核验材料身份",
   synthesize: "集合综合",
   "run-processor": "知识处理",
+  "build-archive": "生成全文",
+  "backfill-tags": "标签回溯",
 };
 
 /** The range a scoped PDF task fixed at creation: on the job in lists, inside its selector in detail. */
@@ -74,7 +111,44 @@ export function taskScope(job: {
     ? ((selector as { scope?: unknown }).scope ?? null)
     : null;
 }
-export function taskTitle(job: Json): string {
+/** The one paper an operation works on, when it names exactly one. */
+function operationLiterature(item: Json): string | null {
+  const request =
+    item.request && typeof item.request === "object"
+      ? (item.request as Json)
+      : null;
+  if (!request) return null;
+  if (
+    item.operation === "build-archive" ||
+    item.operation === "parse-documents" ||
+    item.operation === "assess-article-identity"
+  )
+    return typeof request.literature_id === "string"
+      ? request.literature_id
+      : null;
+  if (item.operation !== "run-processor" || !Array.isArray(request.inputs))
+    return null;
+  if (request.inputs.length !== 1) return null;
+  const source = request.inputs[0] as Json | null;
+  if (!source || typeof source !== "object") return null;
+  if (typeof source.literature_id === "string") return source.literature_id;
+  const document = source.document as Json | undefined;
+  const material = document?.source_material_ref as Json | undefined;
+  return typeof material?.literature_id === "string"
+    ? material.literature_id
+    : null;
+}
+/**
+ * What a task works on (page specs “任务与 Agent 会话”): its kind, then the
+ * one paper it names or how many. `paper` is the task's only paper, when
+ * `taskPaperId` names one and its title has been read.
+ */
+interface TaskSubject {
+  readonly name: string;
+  readonly paper: string | null;
+  readonly scope: string;
+}
+function taskSubject(job: Json): TaskSubject | string {
   const selector = record(job.selector, "task selector");
   if (selector.schema_version === 3) {
     const request = record(selector.request, "processing request");
@@ -84,21 +158,28 @@ export function taskTitle(job: Json): string {
     const metadata =
       operations.length === 1 ? metadataTitle(operations[0]!) : null;
     if (metadata) return metadata;
-    if (
+    const name =
       request.schema_version === 2 &&
       typeof request.collection_name === "string"
-    )
-      return `${request.collection_name} · ${operations.length} 项`;
-    const names = [
-      ...new Set(
-        operations.map(
-          (item) => operationLabels[String(item.operation)] ?? "材料加工",
-        ),
-      ),
-    ];
-    return `${names.join("、")} · ${operations.length} 项`;
+        ? request.collection_name
+        : [
+            ...new Set(
+              operations.map(
+                (item) => operationLabels[String(item.operation)] ?? "材料加工",
+              ),
+            ),
+          ].join("、");
+    const papers = operations.map(operationLiterature);
+    if (operations.length && papers.every(Boolean)) {
+      const distinct = new Set(papers);
+      return distinct.size === 1
+        ? { name, paper: papers[0]!, scope: "1 篇" }
+        : { name, paper: null, scope: `${distinct.size} 篇` };
+    }
+    return { name, paper: null, scope: `${operations.length} 项` };
   }
   const input = record(selector.selector ?? {}, "literature selector");
+  const name = selector.goal === "pdf" ? "获取 PDF" : "文献处理";
   let scope = "文献批次";
   if (input.kind === "query") {
     const query = record(input.query, "task query");
@@ -115,9 +196,26 @@ export function taskTitle(job: Json): string {
     input.kind === "literatures" &&
     Array.isArray(input.literature_ids)
   ) {
-    scope = `${input.literature_ids.length} 篇指定文献`;
+    const distinct = new Set(input.literature_ids.map(String));
+    return distinct.size === 1
+      ? { name, paper: [...distinct][0]!, scope: "1 篇" }
+      : { name, paper: null, scope: `${distinct.size} 篇` };
   } else if (input.kind === "all-pending") scope = "待处理文献";
-  return `${selector.goal === "pdf" ? "获取 PDF" : "文献处理"} · ${scope}`;
+  return { name, paper: null, scope };
+}
+/** The task's only paper, whose title the task's name carries. */
+export function taskPaperId(job: Json): string | null {
+  const subject = taskSubject(job);
+  return typeof subject === "string" ? null : subject.paper;
+}
+/**
+ * “生成全文 · 文献标题” for one paper, “获取 PDF · 10 篇” for several; until
+ * the one paper's title is read, “1 篇”.
+ */
+export function taskTitle(job: Json, paperTitle?: string | null): string {
+  const subject = taskSubject(job);
+  if (typeof subject === "string") return subject;
+  return `${subject.name} · ${subject.paper && paperTitle ? paperTitle : subject.scope}`;
 }
 
 /** Only PDF acquisition and metadata tasks carry per-source results worth showing. */
@@ -147,6 +245,8 @@ export interface TaskDetail {
   /** Per-source counts; absent on older servers, "unrecorded" on tasks from before them. */
   readonly source_results?: TaskSourceResults;
   readonly job: Json;
+  /** Someone asked the task to start (31.1); false on servers and tasks from before it. */
+  readonly start_requested: boolean;
   readonly targets: readonly Json[];
   readonly results: readonly Json[];
   readonly partial_results: readonly Json[];
@@ -181,6 +281,7 @@ export function parseTaskDetail(value: unknown): TaskDetail {
       ? {}
       : { source_results: parseTaskSourceResults(task.source_results) }),
     job,
+    start_requested: task.start_requested === true,
     targets: list("targets"),
     results: list("results"),
     partial_results:

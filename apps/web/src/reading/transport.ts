@@ -452,6 +452,6 @@ export async function readDraftDifferences(
     at += b.length;
   }
   const list: unknown = JSON.parse(new TextDecoder().decode(all));
-  if (!Array.isArray(list)) throw new Error("初稿差异回执无效");
+  if (!Array.isArray(list)) throw new Error("未校对全文的差异回执无效");
   return list.map((item) => parseDraftDifference(item));
 }

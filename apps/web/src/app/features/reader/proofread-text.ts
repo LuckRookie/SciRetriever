@@ -53,14 +53,14 @@ export async function readProofreadText(
       new TextEncoder().encode(chunk.text).length !== chunk.end - start ||
       Number(chunk.total_bytes) > MAX_BYTES
     )
-      throw new Error("校订稿分块不一致，请重新读取。");
+      throw new Error("全文分块不一致，请重新读取。");
     first ??= chunk;
     proofread = chunk.proofread_id;
     text += chunk.text;
     total = Number(chunk.total_bytes);
     ranges.push(...rows(chunk, "ranges"));
     if (chunk.end >= total) break;
-    if (chunk.end === start) throw new Error("校订稿续读位置无效。");
+    if (chunk.end === start) throw new Error("全文续读位置无效。");
     start = chunk.end;
   }
   const bytes = new TextEncoder().encode(text),
@@ -72,7 +72,7 @@ export async function readProofreadText(
     pageCount < 1 ||
     pageCount > 10000
   )
-    throw new Error("校订稿未完整读取。");
+    throw new Error("全文未完整读取。");
   const arranged = first.format === "arranged-v2";
   return {
     format: arranged ? "arranged-v2" : "legacy-v1",
@@ -111,7 +111,7 @@ function arrangedSegments(
       r.end > bytes.length ||
       r.end < r.start
     )
-      throw new Error("校订稿页定位无效。");
+      throw new Error("全文页定位无效。");
   const cuts: { page: number; from: number }[] = [];
   let previousEnd = 0;
   for (const r of sorted) {
@@ -132,7 +132,7 @@ function arrangedSegments(
     };
   });
   if (segments.map((s) => s.text).join("") !== decode(0, bytes.length))
-    throw new Error("校订稿页内容不完整，未打开编辑。");
+    throw new Error("全文页内容不完整，未打开编辑。");
   return segments;
 }
 
@@ -155,7 +155,7 @@ function legacySegments(
       to > bytes.length ||
       to < from
     )
-      throw new Error("校订稿页定位无效。");
+      throw new Error("全文页定位无效。");
     pages[n] += new TextDecoder("utf-8", { fatal: true }).decode(
       bytes.slice(from, to),
     );

@@ -42,12 +42,13 @@ it("opens keyboard search and live activity without starting work, and preserves
       JSON.parse(new URL(page.url()).searchParams.get("query")!),
     ).toMatchObject({ text: "Unparsed" });
     await libraryStatus(page, "全部");
-    await libraryStatus(page, "仅元数据");
+    await libraryStatus(page, "只有书目");
     await expect.poll(() => page.locator(".paper-row").count()).toBe(1);
     expect(
       JSON.parse(new URL(page.url()).searchParams.get("query")!),
-      // “仅元数据” is the papers without a primary PDF (page specs “文献库”).
-    ).toMatchObject({ statuses: [], has_primary_pdf: false });
+      // “只有书目” is the papers without a primary PDF whose automatic routes
+      // are not exhausted; those are “没找到 PDF” (page specs “界面用词”).
+    ).toMatchObject({ statuses: ["UNREVIEWED"], needs_manual_pdf: false });
     await select(page, "排序", "标题：Z–A");
     expect(new URL(page.url()).searchParams.get("sort")).toBe("title-desc");
     await page.getByRole("button", { name: "预览", exact: true }).click();
@@ -69,7 +70,7 @@ it("opens keyboard search and live activity without starting work, and preserves
     ).toContain("已选 1 篇");
     // A metadata-only paper can be fetched, not run: each batch action counts its own papers.
     const bar = page.getByRole("region", { name: "文献选择" });
-    expect(await bar.textContent()).toContain("无 PDF 1");
+    expect(await bar.textContent()).toContain("只有书目 1");
     await bar.getByRole("button", { name: "更多", exact: true }).click();
     expect(
       await page
@@ -483,9 +484,9 @@ it("marks draft rows, filters and sorts by the draft facts, and hands the result
     // where “长文档” is, not inside the status badge.
     await expect
       .poll(() => draftRow.locator(".paper-status-note").allInnerTexts())
-      .toContain("初稿");
+      .toContain("未校对");
     expect(await draftRow.locator(".paper-status").innerText()).not.toContain(
-      "初稿",
+      "未校对",
     );
     // The sort menu offers the two draft facts processing does not need.
     await page
@@ -494,40 +495,45 @@ it("marks draft rows, filters and sorts by the draft facts, and hands the result
       .click();
     const sorts = await page.getByRole("option").allInnerTexts();
     expect(sorts).toEqual(
-      expect.arrayContaining(["初稿差异：多到少", "扫描页：多到少"]),
+      expect.arrayContaining([
+        "与 PDF 自带文字的差异：多到少",
+        "扫描页：多到少",
+      ]),
     );
     expect(sorts).not.toContain("被结果引用：多到少");
     expect(sorts).not.toContain("找不到的引用：多到少");
     await page.keyboard.press("Escape");
-    await select(page, "排序", "初稿差异：多到少");
+    await select(page, "排序", "与 PDF 自带文字的差异：多到少");
     expect(new URL(page.url()).searchParams.get("sort")).toBe(
       "draft-differences-desc",
     );
     await expect
       .poll(() => draftRow.locator(".paper-status-note").allInnerTexts())
-      .toContain("初稿 · 差异 0 段");
+      .toContain("未校对 · 差异 0 段");
     await select(page, "排序", "扫描页：多到少");
     await expect
       .poll(() => draftRow.locator(".paper-status-note").allInnerTexts())
-      .toContain("初稿 · 扫描 0 页");
+      .toContain("未校对 · 扫描 0 页");
     // The filters: text level, and the two yes-or-no draft facts.
     await page.getByRole("button", { name: /^筛选/ }).click();
     await page
       .getByRole("menuitem", { name: /^(?:筛选条件…|收起筛选条件)$/ })
       .click();
-    await select(page, "文本等级", "初稿");
-    await select(page, "初稿与文字层有差异", "没有");
+    await select(page, "文本等级", "未校对");
+    await select(page, "全文和 PDF 自带的文字不一样", "没有");
     await page.getByRole("button", { name: "应用筛选", exact: true }).click();
     await expect.poll(() => page.locator(".paper-row").count()).toBe(1);
     expect(
       JSON.parse(new URL(page.url()).searchParams.get("query")!),
     ).toMatchObject({ text_levels: ["draft"], has_draft_differences: false });
     const chips = await page.locator(".library-applied").innerText();
-    expect(chips).toContain("文本等级：初稿");
-    expect(chips).toContain("初稿与文字层有差异：没有");
-    // “用当前结果 → 建档…” opens the archiving scope with its count.
-    await page.getByRole("button", { name: "用当前结果", exact: true }).click();
-    await page.getByRole("menuitem", { name: "建档…", exact: true }).click();
+    expect(chips).toContain("文本等级：未校对");
+    expect(chips).toContain("全文和 PDF 自带的文字不一样：没有");
+    // “批量操作 → 生成全文…” opens the archiving scope with its count.
+    await page.getByRole("button", { name: "批量操作", exact: true }).click();
+    await page
+      .getByRole("menuitem", { name: "生成全文…", exact: true })
+      .click();
     const dialog = page.getByRole("dialog");
     await dialog.getByText("范围已固定：1 篇文献。", { exact: true }).waitFor();
     await dialog.getByRole("button", { name: "取消", exact: true }).click();

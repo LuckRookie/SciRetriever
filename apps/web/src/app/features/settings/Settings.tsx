@@ -58,10 +58,10 @@ const tabs = [
   { id: "paths", label: "文献库位置" },
   { id: "sources", label: "文献来源" },
   { id: "models", label: "模型" },
-  { id: "parser", label: "解析与 Browser" },
+  { id: "parser", label: "解析与浏览器" },
   { id: "network", label: "网络" },
   { id: "devices", label: "设备连接" },
-  { id: "archive", label: "建档" },
+  { id: "archive", label: "生成全文" },
   { id: "cred", label: "凭据" },
   { id: "status", label: "运行状态" },
   { id: "appearance", label: "外观" },
@@ -300,7 +300,7 @@ export default function Settings() {
       });
       const text = variables.sections.includes("paths")
         ? "数据库绑定已保存。当前进程继续使用启动时的数据库；重启服务后生效。已有数据没有移动。"
-        : `${variables.sections.includes("sources") ? "来源配置" : variables.sections.includes("providers") ? "Provider/Model" : variables.sections.includes("network") ? "网络设置" : "运行配置"}已保存并重新读取。${result.application_restart_required === true ? "当前服务需重启后应用新配置。" : ""}`;
+        : `${variables.sections.includes("sources") ? "来源配置" : variables.sections.includes("providers") ? "模型服务" : variables.sections.includes("network") ? "网络设置" : "运行配置"}已保存并重新读取。${result.application_restart_required === true ? "当前服务需重启后应用新配置。" : ""}`;
       setMessage(text);
       shell.notify(text);
       // The source directory saves against the newest revision too.
@@ -404,9 +404,9 @@ export default function Settings() {
         nextModels: JsonRecord = {};
       for (const row of providers) {
         if (!row.name.trim() || !row.api || !row.url.trim())
-          throw new Error("每个 Provider 都需要名称、协议和 Base URL。");
+          throw new Error("每个模型服务都需要名称、协议和服务地址。");
         if (Object.hasOwn(nextProviders, row.name.trim()))
-          throw new Error("Provider 名称重复。");
+          throw new Error("模型服务名称重复。");
         nextProviders[row.name.trim()] = {
           api: row.api,
           base_url: row.url.trim(),
@@ -418,7 +418,7 @@ export default function Settings() {
           !row.name.trim() ||
           !Object.hasOwn(nextProviders, row.provider)
         )
-          throw new Error("每个模型需要已注册的 Provider 和远程名称。");
+          throw new Error("每个模型需要已登记的模型服务和远程名称。");
         const ref = `${row.provider}/${row.name.trim()}`;
         if (Object.hasOwn(nextModels, ref)) throw new Error("模型名称重复。");
         nextModels[ref] = {
@@ -434,7 +434,7 @@ export default function Settings() {
           savedRef = savedConfig ? record(savedConfig[role], role).model : null;
         if (savedRef && !Object.hasOwn(nextModels, String(savedRef)))
           throw new Error(
-            `当前保存的 ${role === "browser" ? "Browser" : "分析"} 配置仍引用这个模型，请先调整并保存角色绑定。`,
+            `当前保存的${role === "browser" ? "浏览器" : "分析"}配置仍引用这个模型，请先调整并保存角色绑定。`,
           );
         const ref = value(role, "model");
         if (ref && !Object.hasOwn(nextModels, String(ref)))
@@ -444,7 +444,7 @@ export default function Settings() {
           ref &&
           record(nextModels[String(ref)], "model").image !== true
         )
-          throw new Error("Browser 绑定需要支持图像的模型，请先调整绑定。");
+          throw new Error("浏览器绑定需要支持图像的模型，请先调整绑定。");
       }
       save(["providers", "models"], {
         ...draft,
@@ -562,12 +562,12 @@ export default function Settings() {
                     >
                       <Definitions>
                         <Definition
-                          term="Catalog 路径"
+                          term="文献库文件"
                           description="修改后重启服务生效，已有文件不会移动。"
                           value={pathValue(api.workspace.catalog, "数据库路径")}
                         >
                           <TextField
-                            label="Catalog 路径"
+                            label="文献库文件"
                             width="long"
                             value={str(value("paths", "catalog_path"))}
                             onChange={(value) =>
@@ -576,12 +576,15 @@ export default function Settings() {
                           />
                         </Definition>
                         <Definition
-                          term="资产目录"
-                          description="PDF、解析材料与校订稿存放的位置。"
-                          value={pathValue(api.workspace.artifacts, "资产目录")}
+                          term="文件存放位置"
+                          description="PDF、解析材料与全文存放的位置。"
+                          value={pathValue(
+                            api.workspace.artifacts,
+                            "文件存放位置",
+                          )}
                         >
                           <TextField
-                            label="资产目录"
+                            label="文件存放位置"
                             width="long"
                             value={str(value("paths", "artifact_root"))}
                             onChange={(value) =>
@@ -670,26 +673,26 @@ export default function Settings() {
                   <>
                     <Section
                       title="模型服务"
-                      description="Provider 定义连接协议，Model 记录远程模型与能力；凭据在“凭据”分区保存。"
+                      description="模型服务写明连接协议与地址，模型记录远程名称与能力；凭据在“凭据”分区保存。"
                       action={saveButton(
                         ["providers", "models"],
-                        "保存 Provider/Model",
+                        "保存模型服务",
                         saveModels,
                       )}
                     >
                       <div className="settings-registry">
-                        <h3>Provider</h3>
+                        <h3>模型服务</h3>
                         {providers.map((row, index) => (
                           <fieldset key={row.id}>
                             <legend>
-                              Provider {index + 1}
+                              模型服务 {index + 1}
                               {proxied.providers.includes(row.name) ? (
                                 <span className="settings-egress">经代理</span>
                               ) : null}
                             </legend>
                             <div className="settings-grid">
                               <TextField
-                                label={`Provider ${index + 1} 名称`}
+                                label={`模型服务 ${index + 1} 名称`}
                                 value={row.name}
                                 onChange={(name) => {
                                   setProviders(
@@ -703,7 +706,7 @@ export default function Settings() {
                                 }}
                               />
                               <Select
-                                label={`Provider ${index + 1} 协议`}
+                                label={`模型服务 ${index + 1} 协议`}
                                 value={row.api}
                                 onChange={(api) => {
                                   setProviders(
@@ -718,7 +721,7 @@ export default function Settings() {
                                 options={MODEL_APIS}
                               />
                               <TextField
-                                label={`Provider ${index + 1} Base URL`}
+                                label={`模型服务 ${index + 1} 服务地址`}
                                 width="long"
                                 value={row.url}
                                 onChange={(url) => {
@@ -741,7 +744,7 @@ export default function Settings() {
                                     )
                                   ) {
                                     setMessage(
-                                      "Provider 仍有模型引用，请先移除或调整模型。",
+                                      "这个模型服务仍有模型引用，请先移除或调整模型。",
                                     );
                                     return;
                                   }
@@ -753,7 +756,7 @@ export default function Settings() {
                                   mark("providers");
                                 }}
                               >
-                                移除 Provider
+                                移除模型服务
                               </Button>
                             </div>
                           </fieldset>
@@ -772,15 +775,15 @@ export default function Settings() {
                             mark("providers");
                           }}
                         >
-                          添加 Provider
+                          添加模型服务
                         </Button>
-                        <h3>Model</h3>
+                        <h3>模型</h3>
                         {models.map((row, index) => (
                           <fieldset key={row.id}>
-                            <legend>Model {index + 1}</legend>
+                            <legend>模型 {index + 1}</legend>
                             <div className="settings-grid">
                               <Select
-                                label={`Model ${index + 1} Provider`}
+                                label={`模型 ${index + 1} 所属服务`}
                                 value={row.provider}
                                 onChange={(provider) => {
                                   setModels(
@@ -803,7 +806,7 @@ export default function Settings() {
                                 ]}
                               />
                               <TextField
-                                label={`Model ${index + 1} 远程名称`}
+                                label={`模型 ${index + 1} 远程名称`}
                                 value={row.name}
                                 onChange={(name) => {
                                   setModels(
@@ -817,7 +820,7 @@ export default function Settings() {
                                 }}
                               />
                               <Select
-                                label={`Model ${index + 1} Reasoning`}
+                                label={`模型 ${index + 1} 推理强度`}
                                 value={row.reasoning}
                                 onChange={(reasoning) => {
                                   setModels(
@@ -836,7 +839,7 @@ export default function Settings() {
                               />
                               <div className="settings-choices">
                                 <Checkbox
-                                  label={`Model ${index + 1} 支持图像`}
+                                  label={`模型 ${index + 1} 支持图像`}
                                   isSelected={row.image}
                                   onChange={(image) => {
                                     setModels(
@@ -850,7 +853,7 @@ export default function Settings() {
                                   }}
                                 />
                                 <Checkbox
-                                  label={`Model ${index + 1} 流式输出`}
+                                  label={`模型 ${index + 1} 流式输出`}
                                   isSelected={row.stream}
                                   onChange={(stream) => {
                                     setModels(
@@ -962,11 +965,11 @@ export default function Settings() {
                           </Definition>
                         ))}
                         <Definition
-                          term="Browser 模型"
+                          term="浏览器模型"
                           description="须支持图像。"
                         >
                           <Select
-                            label="Browser 模型"
+                            label="浏览器模型"
                             value={str(value("browser", "model"))}
                             onChange={(value) =>
                               edit("browser", "model", value || null)
@@ -988,9 +991,12 @@ export default function Settings() {
                 )}
                 {section === "archive" && (
                   <Section
-                    title="建档与标签"
+                    title="生成全文与标签"
                     description="元数据和章节判定使用“模型”分区的分析模型。"
-                    action={saveButton(["tags", "proofread"], "保存建档设置")}
+                    action={saveButton(
+                      ["tags", "proofread"],
+                      "保存生成全文的设置",
+                    )}
                   >
                     {readiness.data?.diagnostics?.some(
                       (d) => d.code === "configuration-option-removed",
@@ -1025,7 +1031,7 @@ export default function Settings() {
                         </Definition>
                       ))}
                       <Definition
-                        term="解析 profile"
+                        term="解析方式"
                         description="部署配置，只读。"
                       >
                         <span className="settings-readonly">
@@ -1039,12 +1045,12 @@ export default function Settings() {
                 {section === "parser" && (
                   <>
                     <Section
-                      title="Browser"
+                      title="浏览器"
                       action={saveButton(runtimeSections, "保存运行配置")}
                     >
                       <Definitions>
                         <Definition
-                          term="启用 Browser"
+                          term="启用浏览器"
                           description="获取 PDF 时可以打开受控浏览器。"
                         >
                           <Switch
@@ -1053,12 +1059,12 @@ export default function Settings() {
                               edit("browser", "enabled", value)
                             }
                           >
-                            启用 Browser
+                            启用浏览器
                           </Switch>
                         </Definition>
-                        <Definition term="Browser profile">
+                        <Definition term="浏览器个人资料">
                           <TextField
-                            label="Browser profile"
+                            label="浏览器个人资料"
                             width="long"
                             value={str(value("browser", "profile"))}
                             onChange={(value) =>
@@ -1067,11 +1073,11 @@ export default function Settings() {
                           />
                         </Definition>
                         <Definition
-                          term="Browser 模型"
+                          term="浏览器模型"
                           description="与“模型”分区的角色绑定相同。"
                         >
                           <Select
-                            label="Browser 模型"
+                            label="浏览器模型"
                             value={str(value("browser", "model"))}
                             onChange={(value) =>
                               edit("browser", "model", value || null)
@@ -1371,7 +1377,7 @@ function Probe({
         isPending={probe.isPending}
         onPress={() => probe.mutate()}
       >
-        测试 {target ?? (owner === "parse" ? "Parse" : "Browser 模型")}
+        测试 {target ?? (owner === "parse" ? "解析服务" : "浏览器模型")}
       </Button>
       {probe.isError && (
         <p role="alert">
@@ -1475,14 +1481,14 @@ function Credential({
             value={namespace}
             onChange={setNamespace}
             options={[
-              { value: "model", label: "模型 Provider" },
-              { value: "mineru", label: "MinerU bearer token" },
+              { value: "model", label: "模型服务" },
+              { value: "mineru", label: "MinerU 访问令牌" },
             ]}
           />
         </Definition>
         <Definition
           term="目标名称"
-          description="Provider 名称或 MinerU。文献来源的凭据在“文献来源”里配置。"
+          description="模型服务名称或 MinerU。文献来源的凭据在“文献来源”里配置。"
         >
           <TextField label="目标名称" value={target} onChange={setTarget} />
         </Definition>

@@ -6,7 +6,7 @@ import type {
 export const sectionLabels = {
   lib: "文献库",
   archive: "需处理",
-  tags: "词表",
+  tags: "标签词表",
   snapshots: "快照",
   disc: "入库",
   ins: "洞察",
@@ -21,26 +21,32 @@ export const sectionLabels = {
   lab: "交互实验台",
   gallery: "组件画廊",
 } as const;
+/**
+ * The one word for each state on screen (page specs “界面用词”): a paper's
+ * material, a task, a target or an Agent session. A queued task that was never
+ * started reads “未启动”, see `taskStateLabel` in `data/tasks.ts`.
+ */
 export const statusLabels: Readonly<Record<string, string>> = {
-  UNREVIEWED: "仅元数据",
+  UNREVIEWED: "只有书目",
   ASSET_READY: "有 PDF",
-  READY: "已就绪",
-  ARCHIVING: "建档中",
-  ARCHIVE_FAILED: "建档失败",
+  READY: "有全文",
+  ARCHIVING: "正在生成全文",
+  ARCHIVE_FAILED: "全文生成失败",
   EXCLUDED: "已排除",
-  queued: "等待执行",
+  UNAVAILABLE: "没找到 PDF",
+  queued: "排队中",
+  pending: "排队中",
   running: "进行中",
-  paused: "待处理",
+  paused: "等你处理",
   cancelled: "已取消",
-  completed: "完成",
-  complete: "完成",
+  completed: "已完成",
+  complete: "已完成",
   partial: "部分完成",
   failed: "失败",
-  interrupted: "运行中断",
+  interrupted: "已中断",
   skipped: "已跳过",
   unavailable: "不可用",
   unknown: "未知",
-  pending: "等待执行",
 };
 export function errorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : "";
@@ -65,12 +71,13 @@ export const archiveStrings = {
     backfill: "标签回溯",
   },
   title: "需处理",
-  description: "按需处理影响阅读与加工的问题。解析、建档和总结都由你分别启动。",
+  description:
+    "按需处理影响阅读与加工的问题。解析、生成全文和总结都由你分别启动。",
   metadata: "字段与来源",
-  continue: "继续建档",
-  retry: "重试建档",
-  empty: "没有待处理的建档问题",
-  stats: "建档用量",
+  continue: "继续生成全文",
+  retry: "重新生成全文",
+  empty: "没有需要处理的问题",
+  stats: "生成全文的用量",
   snapshot: "快照",
   createSnapshot: "从当前筛选生成快照",
   vocabulary: "标签词表",
@@ -107,12 +114,17 @@ export const dropReasons: Readonly<Record<string, string>> = {
 
 /** Why a processing task left a paper untouched, with what to do next. */
 export const skipReasons: Readonly<Record<string, string>> = {
-  "needs-parse": "还没有解析 PDF。点“建档”会先解析，再接着建档。",
+  "needs-parse": "还没有解析 PDF。点“生成全文”会先解析，再接着生成全文。",
   "needs-pdf": "还没有 PDF。先获取或补充 PDF。",
   blocked: "所需的前一步还没有完成，这一项暂时不能处理。",
-  excluded: "文章性质为观点、评论、勘误或社论，不进入建档。",
+  excluded: "文章性质为观点、评论、勘误或社论，不生成全文。",
 };
-export function archiveReason(code: string): string {
+/**
+ * A problem as a short phrase (“解析服务连不上”), for group titles and the
+ * one line that says where a paper stopped; never the raw code. Null for a
+ * code without a phrase of its own.
+ */
+export function problemPhrase(code: string): string | null {
   return (
     (
       {
@@ -120,46 +132,58 @@ export function archiveReason(code: string): string {
         "raw-parse": "原始解析",
         "primary-pdf": "获取 PDF",
         "tags-failed": "标签生成失败",
-        "needs-parse": "还没有解析 PDF，重新建档会先解析",
-        "parser-unavailable": "解析服务尚不可用，请检查解析配置",
+        "needs-parse": "还没有解析 PDF",
+        "parser-unavailable": "解析服务连不上",
         "parse-failed": "解析 PDF 没有完成",
-        "proofread-incomplete": "校订尚未完成",
-        "correction-model-unconfigured": "矫正模型未配置",
-        "correction-budget-exhausted": "本次矫正预算已用完，可继续",
-        "page-content-missing": "有页面没有解析出正文",
-        "validation-repeated": "同一校验错误连续出现",
-        "no-progress": "模型连续多次没有进展",
-        "page-tools-unavailable": "页面图像暂不可读",
+        "proofread-incomplete": "校订没有完成",
+        "correction-model-unconfigured": "还没有配置矫正模型",
+        "correction-budget-exhausted": "矫正预算用完了",
+        "page-content-missing": "有页面没解析出正文",
+        "validation-repeated": "同一校验错误反复出现",
+        "no-progress": "模型多次没有进展",
+        "page-tools-unavailable": "页面图像读不到",
         "model-failed": "模型调用失败",
-        "request-too-large": "单次请求过大",
-        "response-too-large": "模型回复过大",
-        "source-integrity": "原始材料校验未通过",
-        "publication-conflict": "内容已被其他操作更新",
+        "request-too-large": "单次请求太大",
+        "response-too-large": "模型回复太大",
+        "source-integrity": "原始材料校验没通过",
+        "publication-conflict": "内容被其他操作改过",
         "render-failed": "全文渲染失败",
         "input-stale": "原始解析已变化",
         "input-missing": "缺少原始解析",
         interrupted: "任务被中断",
-        "configuration-option-removed": "配置中有已删除的选项",
-        "manual-conflict": "初稿已变化，请核对人工修订",
-        "metadata-incomplete": "元数据字段不完整",
+        "configuration-option-removed": "配置里有已删除的选项",
+        "manual-conflict": "人工修订与新解析冲突",
+        "metadata-incomplete": "书目缺少必填项",
         "structure-unsatisfied": "章节结构待确认",
-        "tags-empty": "尚无有效标签",
-        "part-unavailable": "补充材料尚不可用",
-        "model-unavailable": "模型尚不可用",
+        "tags-empty": "还没有有效标签",
+        "part-unavailable": "补充材料暂不可用",
+        "model-unavailable": "模型不可用",
+        "metadata-missing": "书目缺少必填项",
       } as Record<string, string>
-    )[code] ?? serviceMessage(code)
+    )[code] ?? null
   );
+}
+/** The phrase, or for an unknown code the service's general message. */
+export function archiveReason(code: string): string {
+  return problemPhrase(code) ?? serviceMessage(code);
+}
+/**
+ * A 需处理 group's title: the problem itself, or for a code without a phrase
+ * (such as “archive-step-failed”) the step that did not finish.
+ */
+export function issueTitle(code: string, stepName: string): string {
+  return problemPhrase(code) ?? `“${stepName}”没有完成`;
 }
 
 const valueCheckReasons: Readonly<Record<string, string>> = {
   "synthesis-requires-interpretation":
     "这是综合结论，不做原文比对；请查看所链接来源结果各自的核对状态。",
   "corrected-fragment-unavailable":
-    "所引片段在当前校订稿中已不存在，无法比对。",
+    "所引片段在当前已校对的全文中已不存在，无法比对。",
   "value-not-reported": "原文未报告这个值。",
   "cited-values-present":
-    "值中的数字、单位或文字能在所引校订片段中找到；这只核对抄录，不判断科学解释。",
-  "cited-value-missing": "值未能在所引校订片段中找到，请对照原文确认。",
+    "值中的数字、单位或文字能在所引的已校对片段中找到；这只核对抄录，不判断科学解释。",
+  "cited-value-missing": "值未能在所引的已校对片段中找到，请对照原文确认。",
   "value-evidence-missing": "没有提供这个值所依据的原文。",
 };
 export function valueCheckReason(code: string): string {
@@ -178,14 +202,14 @@ export const valueCheckLabels: Readonly<Record<ProcessorCheckStatus, string>> =
     derived: "综合值",
   };
 export const valueCheckBasisLabels: Readonly<Record<ProofreadBasis, string>> = {
-  "text-layer": "文字层",
+  "text-layer": "PDF 自带的文字",
   "image-only": "图像页转写",
   manual: "人工修改",
 };
 
 const probeReasons: Readonly<Record<string, string>> = {
   "model-authentication-rejected":
-    "模型服务拒绝了 API key，请在凭据中检查这个服务商的密钥。",
+    "模型服务拒绝了 API key，请在凭据中检查这个模型服务的密钥。",
   "model-quota-limited": "模型服务限流或额度已用完，稍后再试或检查账户余额。",
   "model-provider-unavailable": "模型服务出错（5xx），稍后再试。",
   "model-request-rejected":
@@ -277,12 +301,12 @@ export function serviceMessage(code: string): string {
         "parser-unavailable": "解析服务尚不可用，请检查解析配置。",
         "model-unavailable": "模型尚不可用，请检查模型配置。",
         "proofread-manual-stale":
-          "校订版本已被其他操作修改。当前草稿仍保留，请对照最新版本后再保存。",
-        "proofread-missing": "此材料尚无校订稿，请先解析并建立档案。",
+          "全文已被其他操作修改。当前草稿仍保留，请对照最新版本后再保存。",
+        "proofread-missing": "此材料还没有全文，请先生成全文。",
         "proofread-manual-input-conflict":
           "原始解析已变化，现有人工修订不会被自动覆盖，请先核对原稿。",
         "proofread-edit-pages-invalid":
-          "校订稿的页定位无效，请重新读取当前版本后核对。",
+          "全文的页定位无效，请重新读取当前版本后核对。",
         "proofread-renderer-unavailable":
           "PDF 页面渲染器不可用，请检查浏览器运行环境。",
         "network-error": "网络连接失败，请检查连接后重试。",
@@ -294,12 +318,12 @@ export function serviceMessage(code: string): string {
           "有服务选择了走代理，代理地址不能为空。请先取消这些选择，或填写代理地址。",
         "network-source-unknown": "走代理的来源中有未知项，请刷新配置后重试。",
         "network-provider-unknown":
-          "走代理的模型服务中有已删除的 Provider，请刷新配置后重试。",
+          "走代理的模型服务中有已删除的模型服务，请刷新配置后重试。",
         "network-local-target":
           "本机或局域网上的服务始终直连，不能选择走代理。",
         "network-target-unresolved":
           "无法解析所选服务的域名，暂时不能确认它不在局域网内，请稍后再试。",
-        "archive-tagging": "建档时自动生成标签",
+        "archive-tagging": "生成全文时自动生成标签",
         "correction-failed": "本次矫正未完成",
         "correction-edit-conflict": "矫正与当前文字存在冲突，请重新核对",
         "page-content-missing": "页面正文尚未完整确认",
@@ -400,7 +424,7 @@ export function estimateStageName(kind: string) {
         consolidate: "词表整理",
         "parse-documents": "解析（不调用语言模型）",
         "assess-article-identity": "文章身份核验",
-        "build-archive": "指定步骤建档",
+        "build-archive": "按指定步骤生成全文",
       } as Record<string, string>
     )[kind] ?? "处理"
   );
@@ -436,4 +460,19 @@ export function localTime(value: unknown): string {
   return Number.isNaN(date.getTime())
     ? "时间未知"
     : localTimeFormat.format(date);
+}
+/**
+ * Design core rule 6, the one way a time is written: today only the clock
+ * (14:28), this year the day and clock (11月19日 14:28), an earlier year the
+ * date (2025年11月19日). `localTime` gives the full time for hover.
+ */
+export function shortTime(value: unknown, now: Date = new Date()): string {
+  const date = value instanceof Date ? value : new Date(String(value));
+  if (Number.isNaN(date.getTime())) return "时间未知";
+  const clock = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  if (date.getFullYear() !== now.getFullYear())
+    return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+  if (date.getMonth() === now.getMonth() && date.getDate() === now.getDate())
+    return clock;
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${clock}`;
 }

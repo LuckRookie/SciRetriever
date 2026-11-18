@@ -1007,7 +1007,7 @@ export async function renderPdf(
       hits = [];
       current = -1;
       frame.onFindNext?.(null);
-      frame.findStatus.textContent = "正在查找 PDF 文字层…";
+      frame.findStatus.textContent = "正在查找 PDF 自带的文字…";
       for (let n = 1; pdf && n <= pdf.numPages; n++) {
         if (closed || revision !== searchRevision) return;
         const page = await pdf.getPage(n),
@@ -1035,7 +1035,7 @@ export async function renderPdf(
       else {
         frame.findStatus.textContent = hasText
           ? "未找到匹配关键词。"
-          : "此 PDF 没有可检索文字层，可能是扫描文件。";
+          : "此 PDF 没有自带的文字可以检索，可能是扫描文件。";
         for (const [n, entry] of rendered) highlight(entry.text, n);
       }
     };

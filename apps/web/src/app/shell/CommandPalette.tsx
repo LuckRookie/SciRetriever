@@ -180,7 +180,7 @@ function Palette({ onClose }: { onClose: () => void }) {
                 )}
               >
                 {item.needs_manual_pdf
-                  ? "无法获取"
+                  ? statusLabels.UNAVAILABLE
                   : statusLabels[item.literature.status]}
               </span>
             )}

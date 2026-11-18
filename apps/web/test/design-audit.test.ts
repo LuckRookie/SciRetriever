@@ -58,7 +58,7 @@ it("records reproducible computed-style evidence on the synthetic React workspac
           await w.page.locator(".paper-row").first().waitFor();
         if (name === "set")
           await w.page
-            .getByRole("textbox", { name: "Catalog 路径", exact: true })
+            .getByRole("textbox", { name: "文献库文件", exact: true })
             .waitFor();
         const placeholder = (await w.page.locator("body").innerText()).includes(
           "正在迁移",

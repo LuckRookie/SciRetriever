@@ -348,9 +348,9 @@ it(
         asset = w.env.parseRequest.asset_id,
         p = w.page;
       await p.goto(`${w.origin}/?literature=${id}&reader=edit`);
-      const editor = p.getByRole("region", { name: "校订稿编辑", exact: true }),
+      const editor = p.getByRole("region", { name: "修改全文", exact: true }),
         field = editor.getByRole("textbox", {
-          name: "第 1 页校订稿",
+          name: "第 1 页全文",
           exact: true,
         });
       await field.waitFor();

@@ -134,8 +134,8 @@ export async function renderDocument(
     note.setAttribute("role", "note");
     note.textContent =
       level === "draft"
-        ? "初稿：未经校订，文字可能含解析错误；以 PDF 为准"
-        : `长文档：按简化流程建档，未逐页校订，文字可能含解析错误；以 PDF 为准（${described.long_document!.pages} 页）`;
+        ? "全文 · 未校对：文字可能含解析错误；以 PDF 为准"
+        : `长文档：按简化流程生成全文，未逐页校对，文字可能含解析错误；以 PDF 为准（${described.long_document!.pages} 页）`;
     article.append(note);
   }
   layer.append(article);
@@ -705,13 +705,13 @@ export async function renderDocument(
         source.textContent =
           (
             {
-              "text-layer": "文字层核对",
+              "text-layer": "对照 PDF 自带的文字",
               "image-only": "原图核对",
               manual: "人工核对",
               // A draft's three (technical 04 §8.3).
-              "text-layer-match": "与文字层一致",
-              "text-layer-differs": "与文字层有差异",
-              "no-text-layer": "没有文字层可以核对",
+              "text-layer-match": "和 PDF 自带的文字一致",
+              "text-layer-differs": "和 PDF 自带的文字不一样",
+              "no-text-layer": "没有 PDF 自带的文字可以对照",
             } as Record<string, string>
           )[segment.basis ?? ""] ?? "查看来源";
         if (segment.locate === "page") source.textContent += " · 仅页级定位";
@@ -739,7 +739,7 @@ export async function renderDocument(
         const mark = document.createElement(differs ? "button" : "span");
         mark.className = "reading-doubt";
         mark.dataset.origin = "machine";
-        mark.textContent = differs ? "疑点" : "无文字层";
+        mark.textContent = differs ? "疑点" : "无自带文字";
         if (mark instanceof HTMLButtonElement) {
           mark.type = "button";
           mark.setAttribute("aria-haspopup", "dialog");

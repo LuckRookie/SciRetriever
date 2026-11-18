@@ -40,7 +40,7 @@ export function skippedText(counts: AcquirePdfCounts) {
   const parts = [
     counts.skipped_has_pdf ? `${counts.skipped_has_pdf} 篇已有 PDF` : "",
     counts.skipped_unavailable
-      ? `${counts.skipped_unavailable} 篇已标记无法获取`
+      ? `${counts.skipped_unavailable} 篇已标记没找到 PDF`
       : "",
     counts.over_limit ? `${counts.over_limit} 篇超出本次上限` : "",
   ].filter(Boolean);

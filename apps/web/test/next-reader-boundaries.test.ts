@@ -399,7 +399,7 @@ it("explains scan-only PDFs and refuses bytes whose immutable hash changed", asy
       .press("Enter");
     await expect
       .poll(() => w.page.locator(".reader-find").innerText())
-      .toContain("没有可检索文字层");
+      .toContain("没有自带的文字可以检索");
     await w.page.route(
       (url) => url.pathname === "/api/v1/query/material-bytes",
       async (route) => {

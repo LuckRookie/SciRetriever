@@ -12,9 +12,13 @@ import {
 } from "../../data/acquisition-wording.js";
 import { paperTitleParts, readLiterature } from "../../data/library.js";
 import { useApi } from "../../data/query.js";
-import { taskScope, type TaskDetail } from "../../data/tasks.js";
+import {
+  taskNotStarted,
+  taskScope,
+  type TaskDetail,
+} from "../../data/tasks.js";
 import { useShell } from "../../shell/context.js";
-import { localTime } from "../../strings.js";
+import { localTime, shortTime } from "../../strings.js";
 import { problemText } from "../sources/problem.js";
 import { CitationScope, TaskScope } from "./TaskScope.js";
 
@@ -38,15 +42,23 @@ const time = (value: string) => {
     ? null
     : date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
 };
-/** “10月29日 13:27 – 13:31”, with the date written once when both ends share it. */
+/**
+ * “11月19日 13:27 – 13:31” by rule 6, with the date written once when both
+ * ends share it; the full times on hover.
+ */
 function span(start: string, end: string | null) {
   const a = new Date(start),
     b = end ? new Date(end) : null;
   if (Number.isNaN(a.getTime())) return null;
-  if (!b || Number.isNaN(b.getTime())) return `${localTime(start)} 开始`;
-  return a.toDateString() === b.toDateString()
-    ? `${localTime(start)} – ${time(end!)}`
-    : `${localTime(start)} – ${localTime(end)}`;
+  if (!b || Number.isNaN(b.getTime()))
+    return { text: `${shortTime(start)} 开始`, full: localTime(start) };
+  return {
+    text:
+      a.toDateString() === b.toDateString()
+        ? `${shortTime(start)} – ${time(end!)}`
+        : `${shortTime(start)} – ${shortTime(end)}`,
+    full: `${localTime(start)} – ${localTime(end)}`,
+  };
 }
 /** A running task's elapsed time moves once a second; a finished one stays still. */
 function useNow(running: boolean) {
@@ -98,7 +110,9 @@ const SHADES = [0.72, 0.52, 0.38, 0.28, 0.2];
  */
 export function TaskSummary({ task }: { task: TaskDetail }) {
   const status = String(task.job.status),
-    running = !TERMINAL.includes(status);
+    // A task nobody started has not used any time yet (page specs “任务”).
+    idle = taskNotStarted({ status, start_requested: task.start_requested }),
+    running = !idle && !TERMINAL.includes(status);
   const now = useNow(running);
   const created = String(task.job.created_at ?? ""),
     finished =
@@ -117,8 +131,24 @@ export function TaskSummary({ task }: { task: TaskDetail }) {
   return (
     <section className="task-summary" aria-label="本次任务">
       <p className="task-summary-time">
-        {running ? `已用时 ${duration(elapsed)}` : `用时 ${duration(elapsed)}`}
-        {when ? <span> · {when}</span> : null}
+        {idle ? (
+          <>
+            未启动
+            {created ? (
+              <span title={localTime(created)}>
+                {" "}
+                · {shortTime(created)} 创建
+              </span>
+            ) : null}
+          </>
+        ) : (
+          <>
+            {running
+              ? `已用时 ${duration(elapsed)}`
+              : `用时 ${duration(elapsed)}`}
+            {when ? <span title={when.full}> · {when.text}</span> : null}
+          </>
+        )}
       </p>
       <TaskScope value={taskScope(task.job)} />
       <CitationScope selector={task.job.selector} />
@@ -127,18 +157,24 @@ export function TaskSummary({ task }: { task: TaskDetail }) {
           <PdfSummary pdf={pdf} papers={papers} running={running} />
         ) : (
           <p className="task-summary-headline">
-            {running
-              ? `已处理 ${count.format(done + failed + skipped)} / ${count.format(total)} 项`
-              : [
-                  `完成 ${count.format(done)} 项`,
-                  failed ? `失败 ${count.format(failed)} 项` : null,
-                  skipped ? `未处理 ${count.format(skipped)} 项` : null,
-                ]
-                  .filter(Boolean)
-                  .join("，")}
+            {idle
+              ? total > 1
+                ? `共 ${count.format(total)} 项，还没有开始`
+                : "还没有开始"
+              : running && total <= 1
+                ? "正在处理"
+                : running
+                  ? `已处理 ${count.format(done + failed + skipped)} / ${count.format(total)} 项`
+                  : [
+                      `完成 ${count.format(done)} 项`,
+                      failed ? `失败 ${count.format(failed)} 项` : null,
+                      skipped ? `未处理 ${count.format(skipped)} 项` : null,
+                    ]
+                      .filter(Boolean)
+                      .join("，")}
           </p>
         )}
-        {running && total ? (
+        {running && total > 1 ? (
           <span className="task-summary-progress" aria-hidden="true">
             <i
               style={{ width: `${((done + failed + skipped) / total) * 100}%` }}

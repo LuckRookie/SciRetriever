@@ -19,7 +19,7 @@ export const SORT_LABELS: Record<LibrarySort, string> = {
   "title-asc": "标题：A–Z",
   "title-desc": "标题：Z–A",
   relevance: "相关性",
-  "draft-differences-desc": "初稿差异：多到少",
+  "draft-differences-desc": "与 PDF 自带文字的差异：多到少",
   "image-only-pages-desc": "扫描页：多到少",
   "citing-results-desc": "被结果引用：多到少",
   "unfound-citations-desc": "找不到的引用：多到少",

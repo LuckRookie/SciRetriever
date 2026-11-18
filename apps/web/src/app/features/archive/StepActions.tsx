@@ -198,7 +198,7 @@ export function StepActions({ id }: { id: string }) {
         {!allowed && !state.isPending ? (
           <p>
             {part && !arrangementId
-              ? "所选部分还没有按新流程整理，请先发起建档。"
+              ? "所选部分还没有按新流程整理，请先生成全文。"
               : "所选部分尚不具备此步骤需要的材料，请先完成前置步骤。"}
           </p>
         ) : null}

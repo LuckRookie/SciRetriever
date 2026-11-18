@@ -150,17 +150,17 @@ describe("formal Web launch and database binding", () => {
         await expect
           .poll(() =>
             page
-              .getByRole("textbox", { name: "Catalog 路径", exact: true })
+              .getByRole("textbox", { name: "文献库文件", exact: true })
               .inputValue(),
           )
           .toBe(catalog);
         const nextCatalog = join(home, "other.sqlite");
         const nextArtifacts = join(home, "other-materials");
         await page
-          .getByRole("textbox", { name: "Catalog 路径", exact: true })
+          .getByRole("textbox", { name: "文献库文件", exact: true })
           .fill(nextCatalog);
         await page
-          .getByRole("textbox", { name: "资产目录", exact: true })
+          .getByRole("textbox", { name: "文件存放位置", exact: true })
           .fill(nextArtifacts);
         await page
           .getByRole("button", { name: "保存文献库位置", exact: true })
@@ -183,7 +183,7 @@ describe("formal Web launch and database binding", () => {
         await expect
           .poll(() =>
             page
-              .getByRole("textbox", { name: "Catalog 路径", exact: true })
+              .getByRole("textbox", { name: "文献库文件", exact: true })
               .inputValue(),
           )
           .toBe(nextCatalog);

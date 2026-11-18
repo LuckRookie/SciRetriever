@@ -15,7 +15,7 @@ export function SourceBadge({
     <Badge status="completed">
       {
         {
-          parser: "解析初稿",
+          parser: "解析结果",
           rule: "规则清理",
           agent: "Agent 矫正",
           manual: "人工修订",

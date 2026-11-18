@@ -815,20 +815,20 @@ it("reads a draft as the default text: its level, its note, no editing, its doub
       .poll(() =>
         w.page.locator(`${shown} .reader-page-header-view`).innerText(),
       )
-      .toBe("原文 · 初稿");
+      .toBe("原文 · 未校对");
     expect(
       await w.page.locator(`${shown} .reading-long-document`).innerText(),
-    ).toBe("初稿：未经校订，文字可能含解析错误；以 PDF 为准");
+    ).toBe("全文 · 未校对：文字可能含解析错误；以 PDF 为准");
     // The information panel: each part's level, and why there is no editing.
     const information = w.page.locator(".reader-information");
-    await expect.poll(() => information.innerText()).toContain("全文：初稿");
+    await expect.poll(() => information.innerText()).toContain("全文：未校对");
     expect(await information.innerText()).toContain(
-      "初稿不接受改字，建档后在校订稿上修改",
+      "未校对的全文不接受改字，生成全文并校对后再修改",
     );
     await w.page.getByRole("button", { name: "更多", exact: true }).click();
     expect(
       await w.page
-        .getByRole("menuitem", { name: "编辑校订稿", exact: true })
+        .getByRole("menuitem", { name: "修改全文", exact: true })
         .count(),
     ).toBe(0);
     await w.page.keyboard.press("Escape");
@@ -836,7 +836,7 @@ it("reads a draft as the default text: its level, its note, no editing, its doub
     await readerPanel(w.page, "批注");
     await expect
       .poll(() => w.page.locator(".mark-card-level").allInnerTexts())
-      .toEqual(["初稿上"]);
+      .toEqual(["未校对的全文上"]);
     await w.page.getByRole("tab", { name: "信息", exact: true }).click();
     // “显示核对依据”: the draft's three values, and the doubts in the left margin.
     await readerType(w.page, "显示核对依据");
@@ -846,14 +846,14 @@ it("reads a draft as the default text: its level, its note, no editing, its doub
       .allInnerTexts();
     expect(sources).toEqual(
       expect.arrayContaining([
-        "与文字层一致",
-        "与文字层有差异",
-        "没有文字层可以核对",
+        "和 PDF 自带的文字一致",
+        "和 PDF 自带的文字不一样",
+        "没有 PDF 自带的文字可以对照",
       ]),
     );
     expect(
       await w.page.locator(`${shown} .reading-doubt`).allInnerTexts(),
-    ).toEqual(["疑点", "无文字层"]);
+    ).toEqual(["疑点", "无自带文字"]);
     // “疑点” opens the saved differences: text layer over draft, or another page.
     await w.page
       .locator(`${shown} .reading-doubt`)
@@ -862,9 +862,11 @@ it("reads a draft as the default text: its level, its note, no editing, its doub
     const popover = w.page.locator(".reader-doubt");
     await expect.poll(() => popover.innerText()).toContain("疑点 · 2 处差异");
     const text = await popover.innerText();
-    expect(text).toContain("文字层：findings");
-    expect(text).toContain("初稿：results");
-    expect(text).toContain("这段文字在本页的文字层里找不到，出现在第 3 页。");
+    expect(text).toContain("PDF 自带的文字：findings");
+    expect(text).toContain("未校对的全文：results");
+    expect(text).toContain(
+      "这段文字在本页 PDF 自带的文字里找不到，出现在第 3 页。",
+    );
     await w.page.keyboard.press("Escape");
     // Reading forms, parses and runs nothing.
     expect(w.env.parseCalls).toBe(before.parses);
@@ -880,13 +882,13 @@ it("reads a draft as the default text: its level, its note, no editing, its doub
         () => w.page.locator(`${shown} .reader-page-header-view`).innerText(),
         { timeout: 20_000 },
       )
-      .toBe("原文 · 校订稿");
+      .toBe("原文 · 已校对");
     expect(
       await w.page.locator(`${shown} .reading-long-document`).count(),
     ).toBe(0);
     await w.page.getByRole("button", { name: "更多", exact: true }).click();
     await w.page
-      .getByRole("menuitem", { name: "编辑校订稿", exact: true })
+      .getByRole("menuitem", { name: "修改全文", exact: true })
       .waitFor();
     await w.page.keyboard.press("Escape");
     expect(w.errors).toEqual([]);

@@ -611,7 +611,7 @@ function Result({
         {/* Page specs “全文检索”: the level of the version the hit is in. */}
         {"text_level" in item && item.text_level ? (
           <span className="retrieval-level" data-testid="retrieval-level">
-            {item.text_level === "draft" ? "初稿" : "校订稿"}
+            {item.text_level === "draft" ? "全文 · 未校对" : "全文 · 已校对"}
           </span>
         ) : null}
         <span data-testid="retrieval-kind">

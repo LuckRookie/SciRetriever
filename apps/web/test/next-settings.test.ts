@@ -60,12 +60,12 @@ it("preserves drafts across section publications and conflicts, explains restart
       sourceOperation: (operation, value, signal) =>
         executeConfiguration(owner, operation, value, signal),
     }),
-    ...{ ready: 'label:has-text("Catalog 路径")' },
+    ...{ ready: 'label:has-text("文献库文件")' },
   });
   try {
     const page = w.page;
-    await page.getByRole("tab", { name: "建档", exact: true }).click();
-    const profile = page.locator(".ui-definition", { hasText: "解析 profile" });
+    await page.getByRole("tab", { name: "生成全文", exact: true }).click();
+    const profile = page.locator(".ui-definition", { hasText: "解析方式" });
     await profile.waitFor();
     expect(await profile.textContent()).toContain("vlm-engine");
     await page
@@ -78,7 +78,7 @@ it("preserves drafts across section publications and conflicts, explains restart
         new URL(response.url()).pathname === "/api/configuration/publish-json",
     );
     await page
-      .getByRole("button", { name: "保存建档设置", exact: true })
+      .getByRole("button", { name: "保存生成全文的设置", exact: true })
       .click();
     expect((await publication).status()).toBe(200);
     await expect
@@ -94,11 +94,9 @@ it("preserves drafts across section publications and conflicts, explains restart
     const runtime = page.locator(".settings-runtime[data-state]");
     await expect.poll(() => runtime.textContent()).toContain("core");
     expect(await runtime.getAttribute("data-state")).toBe("restart-required");
+    await page.getByRole("tab", { name: "解析与浏览器", exact: true }).click();
     await page
-      .getByRole("tab", { name: "解析与 Browser", exact: true })
-      .click();
-    await page
-      .getByRole("textbox", { name: "Browser profile", exact: true })
+      .getByRole("textbox", { name: "浏览器个人资料", exact: true })
       .fill("synthetic-unsaved-profile");
     await page.getByRole("tab", { name: "文献来源", exact: true }).click();
     await page
@@ -114,12 +112,10 @@ it("preserves drafts across section publications and conflicts, explains restart
     expect((await owner!.read()).configuration.sources.metadata.limit).toBe(
       501,
     );
-    await page
-      .getByRole("tab", { name: "解析与 Browser", exact: true })
-      .click();
+    await page.getByRole("tab", { name: "解析与浏览器", exact: true }).click();
     expect(
       await page
-        .getByRole("textbox", { name: "Browser profile", exact: true })
+        .getByRole("textbox", { name: "浏览器个人资料", exact: true })
         .inputValue(),
     ).toBe("synthetic-unsaved-profile");
     await page.getByRole("tab", { name: "文献来源", exact: true }).click();

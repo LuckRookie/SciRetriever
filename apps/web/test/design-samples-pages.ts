@@ -179,11 +179,12 @@ export const designSamplePages: readonly DesignSamplePage[] = [
   },
   {
     id: "library-drafts",
-    name: "文献库 · 初稿行与新筛选",
+    name: "文献库 · 未校对行与新筛选",
     // Plan 21: draft papers, sorted by their differences, the filters open.
     route: () =>
       `/?view=lib&query=${encodeURIComponent(JSON.stringify({ text_levels: ["draft"] }))}&sort=draft-differences-desc`,
-    interaction: "按文本等级“初稿”筛选、按初稿差异排序，展开筛选",
+    interaction:
+      "按文本等级“未校对”筛选、按与 PDF 自带文字的差异排序，展开筛选",
     // The sample's drafts agree with their text layers; the first is given
     // the same simulated doubt as “reader-draft”, so the two pages agree.
     prepare: async (p, ids) => {
@@ -247,13 +248,13 @@ export const designSamplePages: readonly DesignSamplePage[] = [
   },
   {
     id: "archive-estimate",
-    name: "建档 · 发起前预计消耗",
+    name: "生成全文 · 发起前预计消耗",
     // Only failed archives can be archived again here; the fixture still archives samples 15 and 16.
     route: route(
       "lib",
       `&sort=title-asc&query=${query({ statuses: ["ARCHIVE_FAILED"] })}`,
     ),
-    interaction: "在建档失败的文献里勾选两篇，点“建档”",
+    interaction: "在全文生成失败的文献里勾选两篇，点“生成全文”",
     prepare: async (p) => {
       const rows = p.locator(".paper-row");
       await rows.nth(1).waitFor();
@@ -264,7 +265,7 @@ export const designSamplePages: readonly DesignSamplePage[] = [
       }
       await p
         .getByRole("region", { name: "文献选择" })
-        .getByRole("button", { name: "建档 2", exact: true })
+        .getByRole("button", { name: "生成全文 2", exact: true })
         .click();
     },
     ready: '[aria-label="启动前用量预估"] table',
@@ -415,7 +416,7 @@ export const designSamplePages: readonly DesignSamplePage[] = [
   },
   {
     id: "reader-draft",
-    name: "阅读 · 初稿（核对依据与差异浮层）",
+    name: "阅读 · 未校对的全文（核对依据与差异浮层）",
     route: (ids) => `/?literature=${ids.draft}&reader=doc`,
     // The sample's page layer agrees with its parse: the doubts come from
     // served replies made doubtful, as in the reader's tests.
@@ -673,7 +674,9 @@ export const designSamplePages: readonly DesignSamplePage[] = [
       if ((await fold.getAttribute("aria-expanded")) !== "true")
         await fold.click();
     },
-    ready: ".navigation-fold-items",
+    // On a narrow window the page's own sidebar stays mounted but hidden;
+    // the open fold to wait for is the one in the drawer.
+    ready: ".navigation-fold-items:visible",
   },
   {
     id: "task-detail",
@@ -683,9 +686,9 @@ export const designSamplePages: readonly DesignSamplePage[] = [
   },
   {
     id: "task-detail-archive",
-    name: "任务 · 建档步骤",
+    name: "任务 · 生成全文的步骤",
     route: (ids) => `/?view=task&task=${ids.archiveTask}`,
-    interaction: "滚到建档步骤",
+    interaction: "滚到生成全文的步骤",
     prepare: async (p) => {
       await p.locator(".archive-run-steps").scrollIntoViewIfNeeded();
     },
@@ -806,14 +809,14 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     id: "archive-issues",
     name: "任务 · 需处理",
     route: route("archive"),
-    ready: '.task-page.archive-page [aria-label="建档问题列表"]',
+    ready: '.task-page.archive-page [aria-label="需处理的问题列表"]',
   },
   ...[
     "文献库位置",
     "文献来源",
     "模型",
-    "解析与 Browser",
-    "建档",
+    "解析与浏览器",
+    "生成全文",
     "凭据",
     "运行状态",
     "外观",
@@ -849,9 +852,9 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     id: "settings-dirty",
     name: "设置 · 未保存改动",
     route: route("set"),
-    interaction: "在建档分区输入一个新数值，不离开输入框",
+    interaction: "在生成全文分区输入一个新数值，不离开输入框",
     prepare: async (p) => {
-      await openSettings(p, "建档");
+      await openSettings(p, "生成全文");
       const field = p.getByRole("textbox", { name: "每篇标签上限" });
       await field.fill("12");
     },

@@ -24,9 +24,16 @@ async function openType(page: Page) {
     await page.getByRole("menuitem", { name: "排版", exact: true }).click();
   }
 }
-/** The scale group's title in “排版”: “比例 110%”, “比例 适合宽度”. */
+/**
+ * The scale group's title in “排版”: “比例 110%”, “比例 适合宽度”. Below
+ * 760 px “排版” opens from “更多”, whose own heading “加工” stays open
+ * beside it, so the title is found by its word, not by being first.
+ */
 const scaleTitle = (page: Page) =>
-  page.locator(".ui-popover .ui-menu-heading").first().innerText();
+  page
+    .locator(".ui-popover .ui-menu-heading", { hasText: /^比例/u })
+    .first()
+    .innerText();
 /**
  * “排版”: an item by name, or a reading scale reached the way a person does
  * (reading-experience 1.3, 1.8.1): a reading size ("24 px", 20 px is 100%)

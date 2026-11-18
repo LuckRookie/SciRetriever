@@ -78,7 +78,7 @@ it("keeps the sidebar to one column with a folding “加工” remembered in th
     expect(await entryNames(nav, processing)).toEqual([
       "算子",
       "快照",
-      "词表",
+      "标签词表",
       "洞察",
     ]);
     expect(
@@ -190,7 +190,7 @@ it("puts 需处理, 浏览器 and Agent 会话 in the task page's tabs; old addr
     await tablist.getByRole("tab", { name: "需处理" }).click();
     await expect.poll(view).toBe("archive");
     await page
-      .getByLabel("建档问题列表")
+      .getByLabel("需处理的问题列表")
       .or(page.locator(".archive-empty"))
       .waitFor();
     await tablist.getByRole("tab", { name: "浏览器" }).click();
@@ -278,7 +278,7 @@ it("writes “n 进行中 · m 需处理” beside 任务, leaving out a zero", 
   }
 }, 60000);
 
-it("makes the first usable of 获取 PDF and 建档 the selection bar's primary, none when both are 0, and ends every menu with “加工”", async () => {
+it("makes the first usable of 获取 PDF and 生成全文 the selection bar's primary, none when both are 0, and ends every menu with “加工”", async () => {
   const w = await nextWorkspace();
   try {
     const page = w.page;
@@ -307,7 +307,7 @@ it("makes the first usable of 获取 PDF and 建档 the selection bar's primary,
     await bar.waitFor();
     expect((await actions()).filter((text) => text !== "取消选择")).toEqual([
       "获取 PDF 1",
-      "建档 0",
+      "生成全文 0",
       "加入文件夹…",
       "更多",
     ]);
@@ -329,7 +329,7 @@ it("makes the first usable of 获取 PDF and 建档 the selection bar's primary,
     await page.keyboard.press("Space");
     await bar.waitFor();
     expect(await bar.textContent()).toContain("获取 PDF 0");
-    expect(await bar.textContent()).toContain("建档 0");
+    expect(await bar.textContent()).toContain("生成全文 0");
     expect(await primary()).toEqual([]);
     await page.getByRole("button", { name: "取消选择", exact: true }).click();
     await bar.waitFor({ state: "detached" });
@@ -340,14 +340,14 @@ it("makes the first usable of 获取 PDF and 建档 the selection bar's primary,
       .click();
     expect(await menuContent(page)).toEqual([
       "获取 PDF",
-      "建档",
+      "生成全文",
       "加入文件夹…",
       "[加工]",
       "运行算子…",
     ]);
     await closeMenu(page);
     // “用当前结果” ends the same way.
-    await page.getByRole("button", { name: "用当前结果", exact: true }).click();
+    await page.getByRole("button", { name: "批量操作", exact: true }).click();
     expect((await menuContent(page)).slice(-3)).toEqual([
       "[加工]",
       "运行算子…",

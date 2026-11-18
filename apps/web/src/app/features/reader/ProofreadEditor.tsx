@@ -139,7 +139,7 @@ export function ProofreadEditor({
     try {
       const text = draft.segments.map((s) => s.text).join("");
       if (new TextEncoder().encode(text).length > 8 * 1024 * 1024)
-        throw new Error("校订稿超过单份文档大小限制，请缩减后保存。");
+        throw new Error("全文超过单份文档大小限制，请缩减后保存。");
       const response = record(
         await archiveWrite(api, "proofread-save", {
           schema_version: 2,
@@ -236,7 +236,7 @@ export function ProofreadEditor({
       });
       setPendingPages([]);
       setMessage(
-        "已提交建档任务：只重新校订待处理的页，其余页复用。进度见任务。",
+        "已提交生成全文的任务：只重新校订待处理的页，其余页复用。进度见任务。",
       );
       invalidateMaterials(queries);
     } catch (error) {
@@ -255,13 +255,13 @@ export function ProofreadEditor({
     : dirty
       ? "先保存或放弃当前修订，再恢复已删除的内容。"
       : !editable
-        ? "这份校订稿不能在这里修改。"
+        ? "这份全文不能在这里修改。"
         : null;
   const shownPages = new Set<number>();
   return (
-    <section className="proofread-editor" aria-label="校订稿编辑">
+    <section className="proofread-editor" aria-label="修改全文">
       <header className="proofread-editor-header">
-        <h2>校订稿</h2>
+        <h2>修改全文</h2>
         <div className="form-actions">
           <SegmentedControl
             label="校订显示"
@@ -288,7 +288,7 @@ export function ProofreadEditor({
         </div>
         <p className="ui-description">
           {draft?.format === "legacy-v1"
-            ? "这份校订稿来自旧的建档流程，只能阅读。重新建档后可以在这里修改。"
+            ? "这份全文来自旧的流程，只能阅读。重新生成全文后可以在这里修改。"
             : "只能改已有段落里的文字。保存后，读取这篇的算子结果会标为过时；保存与重新生成全文不调用模型。"}
         </p>
         {message ? <p role="status">{message}</p> : null}
@@ -345,7 +345,7 @@ export function ProofreadEditor({
         }}
       >
         {!draft && data.isPending ? (
-          <Skeleton label="正在完整读取校订稿" />
+          <Skeleton label="正在完整读取全文" />
         ) : null}
         {showDropped && dropped.isPending ? (
           <Skeleton label="正在读取已删除的内容" />
@@ -375,7 +375,7 @@ export function ProofreadEditor({
                   ) : (
                     <div onFocus={() => onPage(pageIndex + 1)}>
                       <TextArea
-                        label={`${label}校订稿`}
+                        label={`${label}全文`}
                         width="full"
                         value={segment.text}
                         onChange={(value) => {
@@ -408,7 +408,7 @@ export function ProofreadEditor({
             })
           : null}
         {showDropped && dropped.data && !dropped.data.length ? (
-          <p className="ui-description">这份校订稿没有删除任何内容。</p>
+          <p className="ui-description">这份全文没有删除任何内容。</p>
         ) : null}
       </div>
       <Dialog

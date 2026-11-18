@@ -244,7 +244,9 @@ it("searches source and knowledge in all three modes, paginates, and explains Ch
       .allTextContents();
     expect(
       await w.page.locator('[data-testid="retrieval-level"]').allTextContents(),
-    ).toEqual(kinds.filter((kind) => kind === "原文").map(() => "校订稿"));
+    ).toEqual(
+      kinds.filter((kind) => kind === "原文").map(() => "全文 · 已校对"),
+    );
     await search(w.page, "nanocrystal", "source");
     expect(w.requests.at(-1)?.kinds).toEqual(["metadata", "document"]);
     expect(

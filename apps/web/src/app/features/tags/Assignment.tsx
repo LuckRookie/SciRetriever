@@ -316,7 +316,7 @@ export function Assignment({ id }: { id: string }) {
       >
         添加并锁定
       </Button>
-      {!docs.data ? <p>需要已有校订稿才能选择标签的支持证据。</p> : null}
+      {!docs.data ? <p>需要这篇已有全文才能选择标签的支持证据。</p> : null}
       <Button
         variant="text"
         onPress={() => navigate({ view: "tags", literature: null })}

@@ -239,7 +239,7 @@ it("marks a long document above the text, in the information panel and in the li
     const note = w.page.locator(".reading-long-document");
     await note.waitFor();
     expect(await note.innerText()).toBe(
-      "长文档：按简化流程建档，未逐页校订，文字可能含解析错误；以 PDF 为准（294 页）",
+      "长文档：按简化流程生成全文，未逐页校对，文字可能含解析错误；以 PDF 为准（294 页）",
     );
     expect(await w.page.getByText("长文档（294 页）· 未逐页校订").count()).toBe(
       1,
@@ -627,7 +627,7 @@ it("puts the reader under one top bar: navigation in a drawer, the views, find, 
     const more = await menuItems("更多");
     for (const item of [
       "运行算子…",
-      "编辑校订稿",
+      "修改全文",
       "显示目录",
       "进入专注模式",
       "高亮笔",

@@ -280,7 +280,7 @@ it("sets a draft's doubt word in the left margin below the paragraph number, not
         }),
       );
     expect(marks.map((m) => m.word)).toEqual(
-      expect.arrayContaining(["疑点", "无文字层"]),
+      expect.arrayContaining(["疑点", "无自带文字"]),
     );
     for (const mark of marks)
       expect(mark.wordTop, mark.word ?? "").toBeGreaterThanOrEqual(

@@ -1,4 +1,4 @@
-import { errorMessage } from "../strings.js";
+import { errorMessage, localTime, shortTime } from "../strings.js";
 import {
   createContext,
   useContext,
@@ -585,5 +585,26 @@ export function SplitPane({
       </div>
       <div className="ui-split-main">{children}</div>
     </div>
+  );
+}
+/** A time written by rule 6, with the full local time on hover. */
+export function LocalTime({
+  value,
+  className,
+}: {
+  value: unknown;
+  className?: string;
+}) {
+  const date = new Date(String(value));
+  const valid = !Number.isNaN(date.getTime());
+  return (
+    <time
+      className={className}
+      {...(valid
+        ? { dateTime: date.toISOString(), title: localTime(value) }
+        : {})}
+    >
+      {shortTime(value)}
+    </time>
   );
 }

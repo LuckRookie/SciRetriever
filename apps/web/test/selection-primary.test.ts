@@ -1,13 +1,16 @@
 import { expect, it } from "vitest";
 import { selectionPrimary } from "../src/app/features/library/selection.js";
 
-it("makes the first usable of 获取 PDF and 建档 the selection bar's primary, and none when both are disabled (page specs “连续选择与选择栏”)", () => {
-  // Papers without a PDF: 获取 PDF leads, whatever 建档 can do.
+it("makes the first usable of 获取 PDF and 生成全文 the selection bar's primary, and none when both are disabled (page specs “连续选择与选择栏”)", () => {
+  // Papers without a PDF: 获取 PDF leads, whatever 生成全文 can do.
   expect(selectionPrimary(undefined, undefined)).toBe("acquire");
   expect(
-    selectionPrimary(undefined, "所选文献没有待建档的；建档需要先有 PDF"),
+    selectionPrimary(
+      undefined,
+      "所选文献没有要生成全文的；生成全文需要先有 PDF",
+    ),
   ).toBe("acquire");
-  // All have PDFs: 建档 leads when it acts on some.
+  // All have PDFs: 生成全文 leads when it acts on some.
   expect(selectionPrimary("所选文献都已有 PDF", undefined)).toBe("archive");
   // Over the limit is disabled too, so it never leads.
   expect(selectionPrimary("最多处理 1,000 篇，请减少选择。", undefined)).toBe(
@@ -17,7 +20,7 @@ it("makes the first usable of 获取 PDF and 建档 the selection bar's primary,
   expect(
     selectionPrimary(
       "所选文献都已有 PDF",
-      "所选文献没有待建档的；建档需要先有 PDF",
+      "所选文献没有要生成全文的；生成全文需要先有 PDF",
     ),
   ).toBeNull();
 });

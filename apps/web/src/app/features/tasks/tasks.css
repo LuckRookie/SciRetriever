@@ -23,6 +23,12 @@
     align-items: center;
     gap: var(--space-2);
   }
+  /* A refused control, said in words beside the controls. */
+  .task-notice {
+    margin: 0;
+    color: var(--fg2);
+    font-size: var(--text-caption);
+  }
   .archive-run-steps {
     display: grid;
     gap: var(--space-2);
@@ -105,7 +111,7 @@
   .task-table tbody tr:hover {
     transition: var(--feedback-hot);
   }
-  .task-table td:nth-child(3) {
+  .task-table .task-col-progress {
     width: 200px;
   }
   .task-table th,
@@ -115,10 +121,10 @@
   /* With the detail panel open only task, progress and status remain. */
   .tasks-page[data-panel="open"]
     .task-table
-    :is(th, td):is(:nth-child(2), :nth-child(5)) {
+    :is(.task-col-actor, .task-col-time) {
     display: none;
   }
-  .tasks-page[data-panel="open"] .task-table td:nth-child(3) {
+  .tasks-page[data-panel="open"] .task-table .task-col-progress {
     width: 140px;
   }
   .task-open {
@@ -239,7 +245,7 @@
     .task-table td:nth-child(1) {
       grid-column: 1 / -1;
     }
-    .task-table td:nth-child(3) {
+    .task-table .task-col-progress {
       width: auto;
     }
     /* A card has no columns to hold open, so missing values simply drop out. */

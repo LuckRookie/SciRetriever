@@ -245,7 +245,7 @@ function Record({
         </div>
         <PartsBar
           total={hits}
-          label={`有 PDF ${pdf.has_pdf} 篇，无法获取 ${pdf.unavailable} 篇，待获取 ${pdf.pending} 篇`}
+          label={`有 PDF ${pdf.has_pdf} 篇，没找到 PDF ${pdf.unavailable} 篇，待获取 ${pdf.pending} 篇`}
           parts={[
             { part: "has", tone: "pdf", value: pdf.has_pdf },
             { part: "unavailable", tone: "other", value: pdf.unavailable },
@@ -257,7 +257,7 @@ function Record({
             : [
                 `有 PDF ${pdf.has_pdf.toLocaleString()}`,
                 pdf.unavailable
-                  ? `无法获取 ${pdf.unavailable.toLocaleString()}`
+                  ? `没找到 PDF ${pdf.unavailable.toLocaleString()}`
                   : "",
                 `待获取 ${pdf.pending.toLocaleString()}`,
               ]
