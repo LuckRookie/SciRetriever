@@ -46,6 +46,7 @@ import {
   RichTitle,
   literatureTone,
 } from "../../components/index.js";
+import type { MenuOption } from "../../components/index.js";
 import { AnimatedPanel, Presence, LayoutGroup } from "../../motion/index.js";
 import type { ApiClient } from "../../data/api.js";
 import { useApi } from "../../data/query.js";
@@ -75,6 +76,7 @@ import { FullTextLine } from "./FullTextLine.js";
 import {
   SELECTION_GROUPS,
   groupSelection,
+  selectionPrimary,
   useRangeSelection,
   type SelectionGroup,
 } from "./selection.js";
@@ -568,6 +570,13 @@ export default function Library() {
       : groups[group].length > 1000
         ? "最多处理 1,000 篇，请减少选择。"
         : undefined;
+  const acquireReason = batchReason("no-pdf", "所选文献都已有 PDF"),
+    archivingReason = batchReason(
+      "unarchived",
+      "所选文献没有待建档的；建档需要先有 PDF",
+    ),
+    runReason = batchReason("ready", "所选文献都还没有建档就绪");
+  const primary = selectionPrimary(acquireReason, archivingReason);
   // The whole catalog is always over the limit, so the reason lives with the
   // disabled actions instead of occupying the toolbar.
   const overLimit =
@@ -741,19 +750,6 @@ export default function Library() {
                 });
               },
             },
-            {
-              id: "run",
-              label: "运行算子…",
-              disabled: total === 0 || total > 1000,
-              ...overLimit,
-              onAction: () => {
-                setMobileTools(false);
-                setRunner({
-                  scope: { kind: "query" },
-                  label: `文献库当前筛选（${total.toLocaleString()} 篇）`,
-                });
-              },
-            },
             // The current results go to archiving as a fixed scope, as the
             // selection does (page specs “文献库”).
             ...(api.workspace.capabilities.maintenance
@@ -770,17 +766,33 @@ export default function Library() {
                 ]
               : []),
             {
-              id: "snapshot",
-              label: "生成快照",
-              disabled: total === 0,
-              onAction: () => snapshot({ kind: "query", query: route.query }),
-            },
-            {
               id: "export",
               label: "导出书目",
               disabled: total === 0 || total > 1000,
               ...overLimit,
               onAction: () => void operate("export", false),
+            },
+            // Running an operator and fixing a snapshot are processing: the
+            // last group (page specs “整体信息架构”).
+            processingHeading,
+            {
+              id: "run",
+              label: "运行算子…",
+              disabled: total === 0 || total > 1000,
+              ...overLimit,
+              onAction: () => {
+                setMobileTools(false);
+                setRunner({
+                  scope: { kind: "query" },
+                  label: `文献库当前筛选（${total.toLocaleString()} 篇）`,
+                });
+              },
+            },
+            {
+              id: "snapshot",
+              label: "生成快照",
+              disabled: total === 0,
+              onAction: () => snapshot({ kind: "query", query: route.query }),
             },
           ]}
         />
@@ -817,16 +829,6 @@ export default function Library() {
           counts.data
             ? `${route.query.recently_opened ? "最近 30 天 · " : ""}${counts.data.total.toLocaleString()} 篇`
             : undefined
-        }
-        action={
-          mutable ? (
-            <Button
-              icon={<Icon name="plus" />}
-              onPress={() => navigate({ view: "disc", literature: null })}
-            >
-              入库
-            </Button>
-          ) : undefined
         }
       />
       <div className="library-controls">
@@ -1070,8 +1072,8 @@ export default function Library() {
               {mutable ? (
                 <>
                   <Button
-                    variant="primary"
-                    disabledReason={batchReason("no-pdf", "所选文献都已有 PDF")}
+                    variant={primary === "acquire" ? "primary" : "secondary"}
+                    disabledReason={acquireReason}
                     onPress={() =>
                       setAcquire(
                         wholeScope?.key === scrollKey &&
@@ -1096,24 +1098,8 @@ export default function Library() {
                     获取 PDF <span>{groups["no-pdf"].length}</span>
                   </Button>
                   <Button
-                    disabledReason={batchReason(
-                      "ready",
-                      "所选文献都还没有建档就绪",
-                    )}
-                    onPress={() =>
-                      setRunner({
-                        scope: { kind: "literatures", ids: groups.ready },
-                        label: `已选中已就绪的 ${groups.ready.length} 篇`,
-                      })
-                    }
-                  >
-                    运行算子 <span>{groups.ready.length}</span>
-                  </Button>
-                  <Button
-                    disabledReason={batchReason(
-                      "unarchived",
-                      "所选文献没有待建档的；建档需要先有 PDF",
-                    )}
+                    variant={primary === "archive" ? "primary" : "secondary"}
+                    disabledReason={archivingReason}
                     onPress={() =>
                       setOperation({ ids: groups.unarchived, kind: "archive" })
                     }
@@ -1146,9 +1132,27 @@ export default function Library() {
                           ]
                         : []),
                       {
+                        id: "export",
+                        label: "导出书目",
+                        onAction: () => void operate("export", true),
+                      },
+                      {
                         id: "identity",
                         label: "核验文章身份",
                         onAction: () => void operate("identity", true),
+                      },
+                      processingHeading,
+                      {
+                        id: "run",
+                        label: `运行算子 ${groups.ready.length}`,
+                        ...(runReason
+                          ? { disabled: true, description: runReason }
+                          : {}),
+                        onAction: () =>
+                          setRunner({
+                            scope: { kind: "literatures", ids: groups.ready },
+                            label: `已选中已就绪的 ${groups.ready.length} 篇`,
+                          }),
                       },
                       {
                         id: "snapshot",
@@ -1158,11 +1162,6 @@ export default function Library() {
                             kind: "literatures",
                             literature_ids: [...shell.selected],
                           }),
-                      },
-                      {
-                        id: "export",
-                        label: "导出书目",
-                        onAction: () => void operate("export", true),
                       },
                     ]}
                   />
@@ -1753,19 +1752,8 @@ const LibraryRow = memo(function LibraryRow({
             iconOnly
             items={[
               {
-                id: "run",
-                label: "运行算子…",
-                onAction: () => onRowAction(id, title, "run"),
-              },
-              {
-                id: "folder",
-                label: "加入文件夹…",
-                onAction: () => onRowAction(id, title, "folder"),
-              },
-              {
                 id: "acquire",
                 label: "获取 PDF",
-                divider: true,
                 onAction: () => onRowAction(id, title, "acquire"),
               },
               {
@@ -1776,6 +1764,17 @@ const LibraryRow = memo(function LibraryRow({
                   : {}),
                 onAction: () => onRowAction(id, title, "archive"),
               },
+              {
+                id: "folder",
+                label: "加入文件夹…",
+                onAction: () => onRowAction(id, title, "folder"),
+              },
+              processingHeading,
+              {
+                id: "run",
+                label: "运行算子…",
+                onAction: () => onRowAction(id, title, "run"),
+              },
             ]}
           />
         ) : null}
@@ -1783,6 +1782,17 @@ const LibraryRow = memo(function LibraryRow({
     </article>
   );
 });
+
+/**
+ * The last group of every library menu (page specs “整体信息架构”): running an
+ * operator and fixing a snapshot are processing, after the main-line actions.
+ */
+const processingHeading: MenuOption = {
+  id: "processing",
+  label: "加工",
+  heading: true,
+  onAction: () => {},
+};
 
 /** A yes/no filter that may be left open: 不限, 有, 没有. */
 const FLAG_OPTIONS = [

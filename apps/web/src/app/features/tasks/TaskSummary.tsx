@@ -16,7 +16,7 @@ import { taskScope, type TaskDetail } from "../../data/tasks.js";
 import { useShell } from "../../shell/context.js";
 import { localTime } from "../../strings.js";
 import { problemText } from "../sources/problem.js";
-import { TaskScope } from "./TaskScope.js";
+import { CitationScope, TaskScope } from "./TaskScope.js";
 
 const count = new Intl.NumberFormat("zh-CN");
 const TERMINAL = ["completed", "cancelled", "failed", "interrupted"];
@@ -121,6 +121,7 @@ export function TaskSummary({ task }: { task: TaskDetail }) {
         {when ? <span> · {when}</span> : null}
       </p>
       <TaskScope value={taskScope(task.job)} />
+      <CitationScope selector={task.job.selector} />
       <div className="ui-block task-summary-block">
         {pdf ? (
           <PdfSummary pdf={pdf} papers={papers} running={running} />

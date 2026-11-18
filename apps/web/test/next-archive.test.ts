@@ -11,6 +11,7 @@ import type { Page } from "playwright";
 import {
   libraryStatus,
   nextWorkspace,
+  openProcessingEntry,
   runFromSnapshot,
 } from "./next-workspace-fixture.js";
 import { missingId } from "./processor-workspace-fixture.js";
@@ -271,7 +272,7 @@ it("previews undo dependencies before reverting a vocabulary change", async () =
       .toBe(true);
     // The reader page's navigation is in its drawer (spec 1.3).
     await p.getByRole("button", { name: "打开导航", exact: true }).click();
-    await p.getByRole("button", { name: "词表", exact: true }).click();
+    await openProcessingEntry(p.getByRole("dialog", { name: "导航" }), "词表");
     await p.getByRole("heading", { name: "标签词表", exact: true }).waitFor();
     await p.getByRole("button", { name: "词表变更日志", exact: true }).click();
     await p
@@ -407,7 +408,9 @@ it("locks an edited block, marks its summary stale and locates the fixed PDF reg
       editorBox = await editor.boundingBox();
     expect(editorBox!.x).toBeGreaterThanOrEqual(pdfBox!.x + pdfBox!.width);
     await p.goto(`${w.origin}/?view=archive`);
-    await p.getByRole("heading", { name: "需处理", exact: true }).waitFor();
+    await p
+      .getByRole("tab", { name: "需处理", exact: true, selected: true })
+      .waitFor();
     await p.screenshot({
       path: "/tmp/sciretriever-archive-implementation-yzz1ycub/archive-desktop.png",
     });
@@ -643,7 +646,7 @@ it("preserves summary reading position and presents evidence on demand across sc
     await p.setViewportSize({ width: 1440, height: 1000 });
     // The reader page's navigation is in its drawer (spec 1.3).
     await p.getByRole("button", { name: "打开导航", exact: true }).click();
-    await p.getByRole("button", { name: "词表", exact: true }).click();
+    await openProcessingEntry(p.getByRole("dialog", { name: "导航" }), "词表");
     await p.getByRole("button", { name: "Spectroscopy", exact: true }).click();
     await p
       .getByRole("heading", { name: "Spectroscopy", exact: true })

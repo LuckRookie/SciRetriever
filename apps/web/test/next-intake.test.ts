@@ -80,10 +80,10 @@ it("keeps discovery and import explicit and uploads a selected PDF without hidde
     await w.page
       .getByRole("textbox", { name: "种子文献 ID" })
       .fill(w.env.parseRequest.literature_id);
-    await w.page.getByRole("button", { name: "开始发现", exact: true }).click();
+    await w.page.getByRole("button", { name: "开始扩展", exact: true }).click();
     await w.page
       .getByRole("dialog", { name: "确认发现文献" })
-      .getByRole("button", { name: "确认执行", exact: true })
+      .getByRole("button", { name: "开始扩展", exact: true })
       .click();
     await expect.poll(() => discoveries.length).toBe(2);
     expect(discoveries[1]).toMatchObject({
@@ -278,7 +278,7 @@ it("says how to connect the extension until one is connected, then where Zotero 
   }
 }, 60000);
 
-it("takes any scan limit of at least 1, 50,000 included, as the discovery's scan_limit (ADR 0022 §3)", async () => {
+it("takes any scan limit of at least 1, 50,000 included, as the discovery's scan_limit, and sends citation limits only when filled in (ADR 0022 §3, ADR 0064)", async () => {
   const w = await nextWorkspace({ path: "/?view=disc", ready: ".intake-form" });
   try {
     const page = w.page;
@@ -313,24 +313,104 @@ it("takes any scan limit of at least 1, 50,000 included, as the discovery's scan
       query: "halide",
       scan_limit: 50000,
     });
-    // Citation expansion takes it too.
+    // Citation expansion is bounded by depth: 1 by default, and its count
+    // limits are left out unless filled in, meaning no limit (ADR 0064).
     await page.getByRole("tab", { name: "引用扩展", exact: true }).click();
-    await page
-      .getByText("最多扫描的原始条数，不少于 1。", { exact: true })
-      .waitFor();
+    await page.getByText("从种子往外扩展几层引用。", { exact: true }).waitFor();
     await page
       .getByRole("textbox", { name: "种子文献 ID" })
       .fill(w.env.parseRequest.literature_id);
-    const cited = page.getByRole("textbox", { name: "扫描上限" });
+    expect(
+      await page
+        .getByRole("textbox", { name: "层数", exact: true })
+        .inputValue(),
+    ).toBe("1");
+    for (const name of ["结果上限", "扫描上限"]) {
+      const field = page.getByRole("textbox", { name, exact: true });
+      expect(await field.inputValue()).toBe("");
+      // Optional limits have no plus and minus buttons (design core rule 11).
+      expect(
+        await page
+          .locator(".ui-field", { has: field })
+          .getByRole("button", { name: "增加" })
+          .count(),
+      ).toBe(0);
+    }
+    expect(
+      await page
+        .locator(".ui-field", {
+          has: page.getByRole("textbox", { name: "层数", exact: true }),
+        })
+        .getByRole("button", { name: "增加" })
+        .count(),
+    ).toBe(1);
+    await page.getByRole("button", { name: "开始扩展", exact: true }).click();
+    const expand = page.getByRole("dialog", { name: "确认发现文献" });
+    await expand.getByText("处理范围：1 层 · 不限条数").waitFor();
+    await expand.getByRole("button", { name: "开始扩展", exact: true }).click();
+    await expect.poll(() => discoveries.length).toBe(2);
+    expect(discoveries[1]).toEqual({
+      kind: "citation",
+      seed_literature_id: w.env.parseRequest.literature_id,
+      direction: "references",
+      max_depth: 1,
+    });
+    await page.getByRole("button", { name: "开始扩展", exact: true }).waitFor();
+    const depth = page.getByRole("textbox", { name: "层数", exact: true });
+    await depth.fill("3");
+    await depth.press("Tab");
+    const cited = page.getByRole("textbox", { name: "扫描上限", exact: true });
     await cited.fill("50000");
     await cited.press("Tab");
-    await page.getByRole("button", { name: "开始发现", exact: true }).click();
-    await dialog.getByRole("button", { name: "确认执行", exact: true }).click();
-    await expect.poll(() => discoveries.length).toBe(2);
-    expect(discoveries[1]).toMatchObject({
+    await page.getByRole("button", { name: "开始扩展", exact: true }).click();
+    await expand.getByText("处理范围：3 层 · 每来源最多 50,000 条").waitFor();
+    await expand.getByRole("button", { name: "开始扩展", exact: true }).click();
+    await expect.poll(() => discoveries.length).toBe(3);
+    expect(discoveries[2]).toEqual({
       kind: "citation",
+      seed_literature_id: w.env.parseRequest.literature_id,
+      direction: "references",
+      max_depth: 3,
       scan_limit: 50000,
     });
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 60000);
+
+it("reads a citation expansion's null limits back as 不限 in the task details (ADR 0064)", async () => {
+  const w = await nextWorkspace({ path: "/?view=disc", ready: ".intake-form" });
+  try {
+    const job = await w.env.app.processingTasks!.submit({
+      schema_version: 1,
+      idempotency_key: "web-citation-unbounded",
+      operations: [
+        {
+          operation: "acquire-metadata",
+          request: {
+            kind: "citation",
+            seed_literature_ids: [w.env.parseRequest.literature_id],
+            direction: "references",
+            max_depth: 2,
+            result_limit: null,
+            providers: [{ source: "openalex", scan_limit: null }],
+          },
+        },
+      ],
+    });
+    await w.page.goto(
+      `${w.origin}/?view=task&task=${encodeURIComponent(job.job_id)}`,
+    );
+    const scope = w.page
+      .getByRole("region", { name: "任务详情" })
+      .getByLabel("扩展范围");
+    await scope.waitFor();
+    expect(await scope.locator("dd").allTextContents()).toEqual([
+      "2 层",
+      "不限",
+      "不限",
+    ]);
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();

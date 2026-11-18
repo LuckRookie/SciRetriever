@@ -92,6 +92,18 @@ export async function independentNextAssets(kind: "query" | "maintenance") {
   return loadIndependentReactAssets(kind, pathToFileURL(`${directory}/`));
 }
 
+/**
+ * Opens a page of the sidebar's folding “加工” group (算子, 快照, 词表, 洞察),
+ * unfolding the group first when it is closed (plan 25 block 27).
+ */
+export async function openProcessingEntry(
+  scope: Pick<Locator, "getByRole">,
+  name: string,
+) {
+  const fold = scope.getByRole("button", { name: "加工", exact: true });
+  if ((await fold.getAttribute("aria-expanded")) !== "true") await fold.click();
+  await scope.getByRole("button", { name, exact: true }).click();
+}
 /** Explicitly reset any active status filter to include raw and imported papers. */
 export async function showAllLibraryStatuses(page: Page) {
   await libraryStatus(page, "全部");

@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import {
   libraryStatus,
+  openProcessingEntry,
   openSavedViews,
   showAllLibraryStatuses,
 } from "./next-workspace-fixture.js";
@@ -69,11 +70,13 @@ it("opens keyboard search and live activity without starting work, and preserves
     // A metadata-only paper can be fetched, not run: each batch action counts its own papers.
     const bar = page.getByRole("region", { name: "文献选择" });
     expect(await bar.textContent()).toContain("无 PDF 1");
+    await bar.getByRole("button", { name: "更多", exact: true }).click();
     expect(
-      await bar
-        .getByRole("button", { name: "运行算子 0", exact: true })
-        .isDisabled(),
-    ).toBe(true);
+      await page
+        .getByRole("menuitem", { name: /^运行算子 0/u })
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
+    await page.keyboard.press("Escape");
     await bar.getByRole("button", { name: "获取 PDF 1", exact: true }).click();
     await page.getByRole("dialog", { name: "获取 PDF", exact: true }).waitFor();
     await page.keyboard.press("Escape");
@@ -223,6 +226,15 @@ it("keeps saved filters in the catalog: the menu applies, saves and deletes thro
     const committed = () =>
       db.prepare("PRAGMA data_version").get()!.data_version;
     try {
+      // The delete above can still commit just after its answer; start from a
+      // catalog that has been quiet for a moment, so only the export counts.
+      let quiet = committed();
+      for (let still = 0; still < 5; ) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const now = committed();
+        still = now === quiet ? still + 1 : 0;
+        quiet = now;
+      }
       const version = committed(),
         saved = JSON.stringify(await list());
       views = await openSavedViews(page);
@@ -394,7 +406,7 @@ it("aborts a library search when navigating to another page and ignores its late
       .getByRole("searchbox", { name: "搜索文献", exact: true })
       .fill("Unparsed");
     await began;
-    await page.getByRole("button", { name: "洞察", exact: true }).click();
+    await openProcessingEntry(page.getByLabel("主导航"), "洞察");
     await page.locator(".insight-figures").waitFor();
     await expect.poll(() => cancelled, { timeout: 20_000 }).toBe(true);
     release();

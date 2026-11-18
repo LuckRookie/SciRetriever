@@ -113,6 +113,26 @@
   .navigation-footer {
     padding-top: var(--space-3);
   }
+  /* “加工”: the one folding group of the sidebar; its pages sit indented
+     under it, as the folders sit under 文献库. */
+  .navigation-fold {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
+  }
+  .navigation-fold-toggle > svg {
+    transform: rotate(-90deg);
+    transition: transform var(--dur-2) var(--ease-out);
+  }
+  .navigation-fold-toggle[data-open] > svg {
+    transform: none;
+  }
+  .navigation-fold-items {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
+    padding-left: var(--space-3);
+  }
   /* Folder tree under the library entry: recent papers, folders, create. */
   .folder-navigation {
     display: grid;

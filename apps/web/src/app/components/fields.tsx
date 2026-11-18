@@ -344,6 +344,7 @@ export function NumberField({
   placeholder,
   formatOptions,
   live = false,
+  stepper = true,
   ...field
 }: FieldProps & {
   value: number;
@@ -355,6 +356,8 @@ export function NumberField({
   formatOptions?: Intl.NumberFormatOptions;
   /** Report each typed in-range value instead of waiting for blur or Enter. */
   live?: boolean;
+  /** Plus and minus buttons, only where stepping means something (design core rule 11). */
+  stepper?: boolean;
 }) {
   const [focused, setFocused] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -403,12 +406,24 @@ export function NumberField({
                 }
               : {})}
           />
-          <Button slot="decrement" className="ui-number-step" aria-label="减少">
-            <Icon name="minus" />
-          </Button>
-          <Button slot="increment" className="ui-number-step" aria-label="增加">
-            <Icon name="plus" />
-          </Button>
+          {stepper ? (
+            <>
+              <Button
+                slot="decrement"
+                className="ui-number-step"
+                aria-label="减少"
+              >
+                <Icon name="minus" />
+              </Button>
+              <Button
+                slot="increment"
+                className="ui-number-step"
+                aria-label="增加"
+              >
+                <Icon name="plus" />
+              </Button>
+            </>
+          ) : null}
         </Group>
       </Field>
     </AriaNumberField>

@@ -1,4 +1,7 @@
-import { showAllLibraryStatuses } from "./next-workspace-fixture.js";
+import {
+  openProcessingEntry,
+  showAllLibraryStatuses,
+} from "./next-workspace-fixture.js";
 import { SCHEMA_VERSION } from "../../server/src/storage/sqlite/schema.js";
 import { loginWorkbenchPage } from "../../server/test/workbench-auth-fixture.js";
 import { mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises";
@@ -119,8 +122,9 @@ describe("formal Web launch and database binding", () => {
             page.getByLabel("文献列表", { exact: true }).textContent(),
           )
           .toContain("没有符合条件的文献");
+        // 入库 is in the sidebar; the library header has no button for it.
         await page
-          .getByRole("main")
+          .getByRole("complementary", { name: "主导航" })
           .getByRole("button", { name: "入库", exact: true })
           .click();
         const imported = await importExport(page, {
@@ -217,10 +221,10 @@ describe("formal Web launch and database binding", () => {
         await page
           .getByRole("button", { name: "打开导航", exact: true })
           .click();
-        await page
-          .getByRole("dialog", { name: "导航", exact: true })
-          .getByRole("button", { name: "快照", exact: true })
-          .click();
+        await openProcessingEntry(
+          page.getByRole("dialog", { name: "导航", exact: true }),
+          "快照",
+        );
         await expect
           .poll(() =>
             page.getByRole("dialog", { name: "导航", exact: true }).count(),

@@ -657,6 +657,25 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     ready: ".task-table",
   },
   {
+    id: "navigation-processing",
+    name: "侧栏 · 加工展开",
+    route: route("task"),
+    interaction: "展开侧栏的“加工”",
+    prepare: async (p) => {
+      await p.locator(".task-table").waitFor();
+      // A narrow window keeps the same sidebar in its drawer.
+      const drawer = p.getByRole("button", { name: "打开导航", exact: true });
+      if (await drawer.isVisible()) await drawer.click();
+      const fold = p
+        .getByRole("group", { name: "加工", exact: true })
+        .filter({ visible: true })
+        .getByRole("button", { name: "加工", exact: true });
+      if ((await fold.getAttribute("aria-expanded")) !== "true")
+        await fold.click();
+    },
+    ready: ".navigation-fold-items",
+  },
+  {
     id: "task-detail",
     name: "任务 · 详情",
     route: (ids) => `/?view=task&task=${ids.task}`,
@@ -715,29 +734,29 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     id: "source-statistics",
     name: "任务 · 来源统计",
     route: route("stats"),
-    ready: ".source-statistics",
+    ready: ".task-page .source-statistics",
   },
   {
     id: "agents",
-    name: "Agent · 会话列表",
+    name: "任务 · Agent 会话",
     route: route("agent"),
-    ready: ".agent-session-list",
+    ready: ".task-page .agent-session-list",
   },
   {
     id: "agent-detail",
-    name: "Agent · 原样记录",
+    name: "任务 · Agent 会话原样记录",
     route: (ids) => `/?view=agent&agentSession=${ids.agent}`,
     ready: '[aria-label="会话记录"]',
   },
   {
     id: "browser",
-    name: "浏览器 · 离线未启动",
+    name: "任务 · 浏览器（离线未启动）",
     route: route("web"),
-    ready: ".browser-workspace, .browser-workbench, .browser-page",
+    ready: ".task-page.browser-page .ui-tab-panel",
   },
   {
     id: "browser-sessions",
-    name: "浏览器 · 会话分组",
+    name: "任务 · 浏览器会话分组",
     route: route("web"),
     interaction: "注入两个获取任务的合成会话",
     // No real browser runs in the sample library; only the session list in the
@@ -785,9 +804,9 @@ export const designSamplePages: readonly DesignSamplePage[] = [
   },
   {
     id: "archive-issues",
-    name: "建档问题",
+    name: "任务 · 需处理",
     route: route("archive"),
-    ready: '[aria-label="建档问题列表"]',
+    ready: '.task-page.archive-page [aria-label="建档问题列表"]',
   },
   ...[
     "文献库位置",

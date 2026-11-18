@@ -17,13 +17,13 @@ import {
   EmptyState,
   ErrorNotice,
   Icon,
-  PageHeader,
   PageNote,
   Skeleton,
   TechDetails,
   TextArea,
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
+import { TaskPage } from "../tasks/TaskPage.js";
 import { registerNavigationGuard, useUrlState } from "../../data/url.js";
 import { errorMessage, serviceMessage } from "../../strings.js";
 import { ProblemDetails, problemText } from "../sources/problem.js";
@@ -271,19 +271,19 @@ export default function Browser() {
       : []);
   const groups = groupSessions(sessions);
   return (
-    <section className="browser-page">
-      <PageHeader
-        title="浏览器"
-        action={
-          <Button
-            onPress={async () => {
-              await view.refetch();
-            }}
-          >
-            刷新会话
-          </Button>
-        }
-      />
+    <TaskPage
+      tab="web"
+      className="browser-page"
+      action={
+        <Button
+          onPress={async () => {
+            await view.refetch();
+          }}
+        >
+          刷新会话
+        </Button>
+      }
+    >
       {view.isPending ? <Skeleton label="正在读取浏览器会话" /> : null}
       {view.isError ? (
         <ErrorNotice
@@ -368,7 +368,7 @@ export default function Browser() {
         只显示当前服务持有的会话，服务重启后清空；更早的记录在任务页。点开会话可以看
         Agent 操作页面，直接点击画面即可操作，停手 10 秒后 Agent 继续。
       </PageNote>
-    </section>
+    </TaskPage>
   );
 }
 function SessionCard({

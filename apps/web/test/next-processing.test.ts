@@ -4,7 +4,11 @@ import { readFile } from "node:fs/promises";
 import { expect, it } from "vitest";
 import type { Page } from "playwright";
 import { unzipSync, strFromU8 } from "fflate";
-import { nextWorkspace, runFromSnapshot } from "./next-workspace-fixture.js";
+import {
+  nextWorkspace,
+  openProcessingEntry,
+  runFromSnapshot,
+} from "./next-workspace-fixture.js";
 import { assertMachineReadsWebResult } from "../../server/test/processor-machine-read-fixture.js";
 type Workspace = Awaited<ReturnType<typeof nextWorkspace>>;
 async function select(page: Page, label: string, option: string) {
@@ -57,9 +61,13 @@ async function enterSelected(
     .getByRole("checkbox", { name: `选择 ${paper}`, exact: true })
     .focus();
   await w.page.keyboard.press("Space");
+  // Running an operator is in “更多”, in its last group “加工”.
   await w.page
     .getByRole("region", { name: "文献选择", exact: true })
-    .getByRole("button", { name: "运行算子 1", exact: true })
+    .getByRole("button", { name: "更多", exact: true })
+    .click();
+  await w.page
+    .getByRole("menuitem", { name: "运行算子 1", exact: true })
     .click();
   await nextReady(w.page);
   await chooseOperator(w.page, operator);
@@ -95,10 +103,7 @@ async function reopen(page: Page) {
     .getByRole("button", { name: /^文献库/ })
     .first()
     .click();
-  await page
-    .getByLabel("主导航")
-    .getByRole("button", { name: "算子", exact: true })
-    .click();
+  await openProcessingEntry(page.getByLabel("主导航"), "算子");
   await openFromPage(page);
   await next(page);
 }
@@ -599,10 +604,7 @@ it("keeps cross-page selections and fixed evidence while exporting every origina
     await w.page
       .getByRole("button", { name: "选择来源文献", exact: true })
       .click();
-    await w.page
-      .getByLabel("主导航")
-      .getByRole("button", { name: "快照", exact: true })
-      .click();
+    await openProcessingEntry(w.page.getByLabel("主导航"), "快照");
     await w.page
       .getByRole("button", { name: "从当前筛选生成快照", exact: true })
       .click();
@@ -690,10 +692,7 @@ it("cancels an explicit processor task and refuses its late model response", asy
 it("freezes another snapshot from the same definition and submits the synthesis question and policy from the dialog", async () => {
   const w = await nextWorkspace();
   try {
-    await w.page
-      .getByLabel("主导航")
-      .getByRole("button", { name: "快照", exact: true })
-      .click();
+    await openProcessingEntry(w.page.getByLabel("主导航"), "快照");
     await w.page
       .getByRole("button", { name: "从当前筛选生成快照", exact: true })
       .click();
@@ -739,10 +738,7 @@ it("retries a failed processor scope read without submitting or discarding draft
     ready: '[aria-label="文献列表"] .paper-row:first-child',
   });
   try {
-    await w.page
-      .getByLabel("主导航")
-      .getByRole("button", { name: "算子", exact: true })
-      .click();
+    await openProcessingEntry(w.page.getByLabel("主导航"), "算子");
     // The run list reads the registry first; inject the failure for the dialog's own read.
     await w.page
       .getByRole("button", { name: /按算子筛选/ })

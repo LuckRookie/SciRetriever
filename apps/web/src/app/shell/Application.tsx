@@ -16,6 +16,7 @@ import type { LibraryCounts } from "@sciretriever/contracts";
 import {
   Button,
   Drawer,
+  Icon as ComponentIcon,
   ErrorNotice,
   EmptyState,
   IconButton,
@@ -57,8 +58,15 @@ import {
   paperTitle,
 } from "../data/library.js";
 import { recordReadingOpen } from "../data/folders.js";
-import { runningTaskCount } from "../data/tasks.js";
-import { LibraryFolders, withoutScope } from "../features/library/Folders.js";
+import { runningTaskCount, taskCountText } from "../data/tasks.js";
+import {
+  IntakeBatches,
+  LibraryFolders,
+  withoutScope,
+} from "../features/library/Folders.js";
+import { taskTabs } from "../features/tasks/TaskPage.js";
+import { archiveQuery } from "../data/archive.js";
+import { record } from "../data/wire.js";
 import { createReadingState, closeReadingState } from "../../reading/state.js";
 import { READER_PAINTED, ShellContext } from "./context.js";
 import { topBarLayout } from "../features/reader/geometry.js";
@@ -89,6 +97,9 @@ import {
 } from "../features/reader/input/commands.js";
 import { sectionLabels, errorMessage } from "../strings.js";
 import { warmInterfaceFonts } from "../styles/warm-fonts.js";
+
+const PROCESSING_KEY = "sciretriever:navigation:processing:v1";
+const processingLabel = "加工";
 
 /**
  * Route chunks load on first visit; once the shell is idle the rest are fetched
@@ -287,6 +298,10 @@ function Workspace({ api }: { api: ApiClient }) {
     [tabMenu, setTabMenu] = useState<ContextMenuRequest | null>(null),
     [mobileNav, setMobileNav] = useState(false),
     [activity, setActivity] = useState(false),
+    // The folding “加工” group, closed unless the person opened it.
+    [processingOpen, setProcessingOpen] = useState(
+      () => preferences.read(PROCESSING_KEY) === "open",
+    ),
     [search, setSearch] = useState(false),
     // Spec 1.3: the reader page's top bar, its slot for the reader's controls and its width.
     [readerNav, setReaderNav] = useState(false),
@@ -370,6 +385,25 @@ function Workspace({ api }: { api: ApiClient }) {
   });
   // “n 进行中” and “活动 · n”; the activity list still shows queued tasks.
   const running = runningTaskCount(tasks.data);
+  // “m 需处理” beside 任务: the archive issues' total, under the archive query
+  // prefix so resolving an issue refreshes it.
+  const issues = useQuery({
+    queryKey: ["archive", "issues", "count"],
+    queryFn: async ({ signal }) =>
+      Number(
+        record(
+          await archiveQuery(
+            api,
+            "archive",
+            { operation: "issues", request: { offset: 0, limit: 1 } },
+            signal,
+          ),
+          "archive issues",
+        ).total_count ?? 0,
+      ),
+    enabled: api.kind === "workspace" && api.workspace.readiness === "ready",
+    staleTime: 30000,
+  });
   const lastTasks = useRef<string | null>(null);
   const taskQueries = useQueryClient();
   useEffect(() => {
@@ -445,6 +479,60 @@ function Workspace({ api }: { api: ApiClient }) {
     );
     setMobileNav(false);
   };
+  const available = (section: Section) =>
+    api.kind === "workspace" ||
+    ["lib", "ins", "ask", "syn", "ext"].includes(section);
+  const mainSections = (["lib", "disc", "ask", "task"] as const).filter(
+      available,
+    ),
+    processingSections = (["ext", "snapshots", "tags", "ins"] as const).filter(
+      available,
+    );
+  const inProcessing =
+    !route.literature &&
+    (processingSections as readonly Section[]).includes(route.section);
+  // “加工” stays as the person left it; a page inside it opens it.
+  useEffect(() => {
+    if (inProcessing) setProcessingOpen(true);
+  }, [inProcessing]);
+  const toggleProcessing = (open: boolean) => {
+    setProcessingOpen(open);
+    preferences.write(PROCESSING_KEY, open ? "open" : "closed");
+  };
+  /** “n 进行中 · m 需处理”, leaving out a zero; nothing when both are. */
+  const taskCount = taskCountText(running, issues.data ?? 0);
+  const isCurrent = (section: Section) =>
+    section === "task"
+      ? // Its five tabs; the browser tab names the paper it watches.
+        taskTabs.includes(route.section) &&
+        (!route.literature || route.section === "web")
+      : route.section === section &&
+        !route.literature &&
+        // A folder, “recently read” or a batch is marked in its own entry.
+        !(
+          section === "lib" &&
+          (route.query.folder ||
+            route.query.recently_opened ||
+            route.query.intake_batch_ids.length)
+        );
+  const sectionButton = (section: Section) => (
+    <Button
+      variant="text"
+      aria-current={isCurrent(section) ? "page" : false}
+      icon={<Icon name={section} />}
+      onPress={() => (section === "lib" ? openLibrary() : go(section))}
+    >
+      {sectionLabels[section]}
+      {section === "lib" && (
+        <span className="navigation-count">
+          {count.isPending ? "…" : (count.data?.total.toLocaleString() ?? "")}
+        </span>
+      )}
+      {section === "task" && taskCount ? (
+        <span className="navigation-count">{taskCount}</span>
+      ) : null}
+    </Button>
+  );
   const navigation = (
     <>
       <div className="brand">
@@ -459,61 +547,46 @@ function Workspace({ api }: { api: ApiClient }) {
         >
           搜索 <kbd>⌘K</kbd>
         </Button>
-        {(
-          [
-            { name: "资料", sections: ["lib", "snapshots", "tags"] },
-            { name: "加工", sections: ["ext", "ask", "ins"] },
-            { name: "运行", sections: ["task", "web"] },
-          ] as const
-        ).map((group) => (
-          <div className="navigation-group" key={group.name}>
-            <span className="navigation-group-name">{group.name}</span>
-            {group.sections
-              .filter(
-                (section) =>
-                  api.kind === "workspace" ||
-                  ["lib", "ins", "ask", "syn", "ext"].includes(section),
-              )
-              .map((section) => (
-                <Fragment key={section}>
-                  <Button
-                    variant="text"
-                    aria-current={
-                      (route.section === section ||
-                        (section === "task" &&
-                          ["agent", "stats"].includes(route.section))) &&
-                      !route.literature &&
-                      !(
-                        section === "lib" &&
-                        (route.query.folder || route.query.recently_opened)
-                      )
-                        ? "page"
-                        : false
-                    }
-                    icon={<Icon name={section} />}
-                    onPress={() =>
-                      section === "lib" ? openLibrary() : go(section)
-                    }
-                  >
-                    {sectionLabels[section]}
-                    {section === "lib" && (
-                      <span className="navigation-count">
-                        {count.isPending
-                          ? "…"
-                          : (count.data?.total.toLocaleString() ?? "")}
-                      </span>
-                    )}
-                    {section === "task" && running > 0 && (
-                      <span className="navigation-count">{running} 进行中</span>
-                    )}
-                  </Button>
-                  {section === "lib" && api.kind === "workspace" ? (
-                    <LibraryFolders onNavigate={() => setMobileNav(false)} />
-                  ) : null}
-                </Fragment>
-              ))}
-          </div>
-        ))}
+        {/* One column on the main line, with “加工” as the one folding
+            group (page specs “整体信息架构”). */}
+        <div className="navigation-group">
+          {mainSections.map((section) => (
+            <Fragment key={section}>
+              {sectionButton(section)}
+              {section === "lib" && api.kind === "workspace" ? (
+                <LibraryFolders onNavigate={() => setMobileNav(false)} />
+              ) : null}
+              {section === "disc" ? (
+                <IntakeBatches onNavigate={() => setMobileNav(false)} />
+              ) : null}
+            </Fragment>
+          ))}
+          {processingSections.length ? (
+            <div
+              className="navigation-fold"
+              role="group"
+              aria-label={processingLabel}
+            >
+              <Button
+                variant="text"
+                className="navigation-fold-toggle"
+                aria-expanded={processingOpen}
+                data-open={processingOpen || undefined}
+                icon={<ComponentIcon name="chevron" />}
+                onPress={() => toggleProcessing(!processingOpen)}
+              >
+                {processingLabel}
+              </Button>
+              {processingOpen ? (
+                <div className="navigation-fold-items">
+                  {processingSections.map((section) => (
+                    <Fragment key={section}>{sectionButton(section)}</Fragment>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </div>
       {api.kind !== "query" ? (
         <div className="navigation-footer">

@@ -51,8 +51,14 @@ it("serves the React library under the production CSP with persisted preferences
       .poll(() => new URL(page.url()).searchParams.get("query"))
       .toContain('"publication_year_from":2020');
     await libraryStatus(page, "全部");
-    await page.getByRole("button", { name: "浏览器", exact: true }).click();
-    await page.getByRole("heading", { name: "浏览器", exact: true }).waitFor();
+    // 浏览器 is a tab of 任务 now; the sidebar has no entry for it.
+    await page
+      .getByRole("complementary", { name: "主导航" })
+      .getByRole("button", { name: /^任务/u })
+      .click();
+    await page.getByRole("tab", { name: "浏览器", exact: true }).click();
+    await page.getByRole("heading", { name: "任务", exact: true }).waitFor();
+    expect(new URL(page.url()).searchParams.get("view")).toBe("web");
     await page
       .getByRole("button", { name: /^文献库/ })
       .first()

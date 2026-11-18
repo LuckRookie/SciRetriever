@@ -83,10 +83,8 @@ it.each(["no-preference", "reduce"] as const)(
       });
       await loginWorkbenchPage(page, server.origin);
       await page.goto(`${server.origin}/?view=task`);
-      await page
-        .getByRole("complementary", { name: "主导航" })
-        .getByRole("button", { name: "浏览器", exact: true })
-        .click();
+      // 浏览器 is a tab of the task page (page specs “整体信息架构”).
+      await page.getByRole("tab", { name: "浏览器", exact: true }).click();
       await page
         .getByRole("button", { name: "观看 Agent", exact: true })
         .click();

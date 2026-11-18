@@ -57,8 +57,15 @@
     font-size: var(--text-secondary);
     color: var(--fg2);
   }
-  .tasks-page > .ui-segmented {
-    margin-bottom: var(--space-4);
+  /* The header and tabs sit where the other tabs have them; inside, the
+     browser tab keeps its sections apart as the page did on its own. */
+  .task-page.browser-page {
+    gap: 0;
+  }
+  .browser-page > .ui-tabs > .ui-tab-panel {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-5);
   }
   .tasks-toolbar {
     display: flex;

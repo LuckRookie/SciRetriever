@@ -23,9 +23,9 @@ import {
   ErrorNotice,
   PageHeader,
   SearchField,
-  SegmentedControl,
   Select,
   Skeleton,
+  Tabs,
   TechDetails,
   TextField,
   RichTitle,
@@ -108,7 +108,7 @@ export default function Retrieval() {
   const header = (
     <>
       <PageHeader title="全文检索" />
-      <SegmentedControl
+      <Tabs
         label="检索内容"
         value={mode}
         onChange={(value) =>

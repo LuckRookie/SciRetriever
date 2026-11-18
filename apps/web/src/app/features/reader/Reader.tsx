@@ -1273,16 +1273,6 @@ export default function Reader() {
           },
         ]
       : []),
-    ...(api.kind === "workspace"
-      ? [
-          {
-            id: "run",
-            label: "运行算子…",
-            divider: compactBar,
-            onAction: () => setRunner(true),
-          },
-        ]
-      : []),
     // Reading-experience 3.4: a draft takes no edits; there is no proofread
     // text to edit until it is archived.
     ...(sources.data?.material && !draftText
@@ -1291,11 +1281,14 @@ export default function Reader() {
             id: "edit",
             label: "编辑校订稿",
             checked: mode === "edit",
+            divider: compactBar,
             onAction: () => changeMode(mode === "edit" ? "doc" : "edit"),
           },
         ]
       : []),
-    ...item("outline"),
+    ...item("outline", {
+      divider: compactBar && !(sources.data?.material && !draftText),
+    }),
     ...item("focus"),
     // The marking tools (spec 1.3); the keys V, H, R and 1–5 still choose them.
     ...item("tool-pen", { divider: true }),
@@ -1364,11 +1357,27 @@ export default function Reader() {
         );
       },
     },
-    // Temporary until block 09: the results enter from the information panel.
+    // “加工”, the last group of actions (page specs “整体信息架构”): running an
+    // operator and, until block 09, the results (they also enter from the
+    // information panel).
+    {
+      id: "processing",
+      label: "加工",
+      heading: true,
+      onAction: () => {},
+    },
+    ...(api.kind === "workspace"
+      ? [
+          {
+            id: "run",
+            label: "运行算子…",
+            onAction: () => setRunner(true),
+          },
+        ]
+      : []),
     {
       id: "results",
       label: "加工结果",
-      divider: true,
       onAction: () => changeMode("results"),
     },
     ...item("shortcuts", { divider: true }),

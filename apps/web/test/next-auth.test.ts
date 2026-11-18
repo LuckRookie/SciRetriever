@@ -115,7 +115,7 @@ it.each(["no-preference", "reduce"] as const)(
       await input.fill(WORKBENCH_TEST_PASSWORD);
       await page.getByRole("button", { name: "进入文献库" }).click();
       await page
-        .getByRole("heading", { name: "浏览器", exact: true })
+        .getByRole("tab", { name: "浏览器", exact: true, selected: true })
         .waitFor();
       expect(new URL(page.url()).pathname).toBe("/");
       expect(new URL(page.url()).searchParams.get("view")).toBe("web");
@@ -144,7 +144,7 @@ it.each(["no-preference", "reduce"] as const)(
       await page.getByRole("button", { name: "刷新会话" }).click();
       await reattached;
       await page
-        .getByRole("heading", { name: "浏览器", exact: true })
+        .getByRole("tab", { name: "浏览器", exact: true, selected: true })
         .waitFor();
       expect(new URL(page.url()).searchParams.get("view")).toBe("web");
       expect(errors).toEqual([]);

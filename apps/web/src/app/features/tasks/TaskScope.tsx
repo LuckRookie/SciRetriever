@@ -73,3 +73,62 @@ export function TaskScope({ value }: { value: unknown }) {
     </dl>
   );
 }
+
+const limitText = (value: unknown) =>
+  typeof value === "number" ? value.toLocaleString() : "不限";
+
+/**
+ * A citation expansion's bounds as it was asked (ADR 0064): its depth, and a
+ * null result or scan limit reads “不限”.
+ */
+export function CitationScope({ selector }: { selector: unknown }) {
+  const request =
+    selector && typeof selector === "object"
+      ? (selector as { request?: { operations?: unknown } }).request
+      : null;
+  const operations = Array.isArray(request?.operations)
+    ? (request.operations as unknown[])
+    : [];
+  const citations = operations.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const operation = item as { operation?: unknown; request?: unknown };
+    const value = operation.request as
+      | {
+          kind?: unknown;
+          max_depth?: unknown;
+          result_limit?: unknown;
+          providers?: unknown;
+        }
+      | undefined;
+    return operation.operation === "acquire-metadata" &&
+      value?.kind === "citation"
+      ? [value]
+      : [];
+  });
+  if (citations.length !== 1) return null;
+  const citation = citations[0]!;
+  const providers = Array.isArray(citation.providers)
+    ? (citation.providers as { source?: unknown; scan_limit?: unknown }[])
+    : [];
+  const scans = [...new Set(providers.map((p) => limitText(p.scan_limit)))];
+  return (
+    <dl className="task-scope" aria-label="扩展范围">
+      <dt>层数</dt>
+      <dd>
+        {typeof citation.max_depth === "number"
+          ? `${citation.max_depth} 层`
+          : "—"}
+      </dd>
+      <dt>结果上限</dt>
+      <dd>{limitText(citation.result_limit)}</dd>
+      <dt>扫描上限</dt>
+      <dd>
+        {scans.length <= 1
+          ? (scans[0] ?? "不限")
+          : providers
+              .map((p) => `${String(p.source)} ${limitText(p.scan_limit)}`)
+              .join("；")}
+      </dd>
+    </dl>
+  );
+}

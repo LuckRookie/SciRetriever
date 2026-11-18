@@ -10,7 +10,6 @@ import {
 import {
   EmptyState,
   ErrorNotice,
-  PageHeader,
   SegmentedControl,
   Skeleton,
 } from "../../components/index.js";
@@ -18,7 +17,7 @@ import { useApi } from "../../data/query.js";
 import { sourceName, STAGES } from "../../data/acquisition-wording.js";
 import { errorMessage } from "../../strings.js";
 import { ProblemLabel } from "../sources/problem.js";
-import { RunSwitch } from "./RunSwitch.js";
+import { TaskPage } from "./TaskPage.js";
 import { namedProblems, percent } from "./source-bars.js";
 import { StageHint } from "./SourceResults.js";
 import "./tasks.css";
@@ -224,10 +223,8 @@ export default function SourceStatistics() {
     );
   const value = statistics.data;
   return (
-    <section className="tasks-page">
-      <PageHeader title="任务" />
+    <TaskPage tab="stats" className="tasks-page">
       <div className="source-statistics-toolbar">
-        <RunSwitch value="stats" />
         <SegmentedControl
           label="时间范围"
           value={range}
@@ -258,6 +255,6 @@ export default function SourceStatistics() {
           <MetadataTable metadata={value.metadata} />
         </div>
       )}
-    </section>
+    </TaskPage>
   );
 }

@@ -4,7 +4,10 @@ import {
   readerTextComplete,
   readerToLibrary,
 } from "./reader-controls.js";
-import { showAllLibraryStatuses } from "./next-workspace-fixture.js";
+import {
+  openProcessingEntry,
+  showAllLibraryStatuses,
+} from "./next-workspace-fixture.js";
 import { FIXTURE_DOI } from "../../server/src/workbench/synthetic-fixture.js";
 import {
   workbenchTestAccess,
@@ -126,10 +129,7 @@ it("keeps parsing separate from document publication and reads existing verified
       })
       .focus();
     await page.keyboard.press("Space");
-    await page
-      .getByLabel("主导航")
-      .getByRole("button", { name: "算子", exact: true })
-      .click();
+    await openProcessingEntry(page.getByLabel("主导航"), "算子");
     await page.getByRole("tab", { name: "算子与规范" }).click();
     await page
       .getByRole("button", { name: "使用库中选定范围", exact: true })
@@ -238,9 +238,7 @@ it("keeps parsing separate from document publication and reads existing verified
     );
     expect(env.parseCalls).toBe(3);
     // The reader page has no site sidebar: snapshots are in its navigation drawer.
-    await (await readerNavigation(page))
-      .getByRole("button", { name: "快照", exact: true })
-      .click();
+    await openProcessingEntry(await readerNavigation(page), "快照");
     await page
       .getByRole("button", { name: "从当前筛选生成快照", exact: true })
       .click();

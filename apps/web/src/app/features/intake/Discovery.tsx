@@ -24,6 +24,25 @@ const reports = new WeakMap<
   { name: string; report: IntakeReport }[]
 >();
 
+/** “1 层 · 不限条数”; a filled limit is written instead of “不限条数”. */
+export function citationScope(
+  depth: number,
+  resultLimit: number,
+  scanLimit: number,
+): string {
+  const limits = [
+    Number.isFinite(scanLimit)
+      ? `每来源最多 ${scanLimit.toLocaleString()} 条`
+      : null,
+    Number.isFinite(resultLimit)
+      ? `结果最多 ${resultLimit.toLocaleString()} 条`
+      : null,
+  ].filter(Boolean);
+  return [`${depth} 层`, ...(limits.length ? limits : ["不限条数"])].join(
+    " · ",
+  );
+}
+
 /**
  * “检索” (page specs “入库”): topic discovery and citation expansion, the
  * same two forms as before. A run confirms its scope and services first;
@@ -44,6 +63,11 @@ export function Discovery({
     [to, setTo] = useState(""),
     [seed, setSeed] = useState(""),
     [direction, setDirection] = useState("references"),
+    // Citation expansion is bounded by depth; its count limits are optional
+    // and left out of the request when empty, meaning no limit (ADR 0064).
+    [depth, setDepth] = useState(1),
+    [resultLimit, setResultLimit] = useState(Number.NaN),
+    [citeScan, setCiteScan] = useState(Number.NaN),
     [history, setHistory] = useState(() => reports.get(api) ?? []);
   const mutation = useMutation({
     mutationFn: async () => {
@@ -59,7 +83,11 @@ export function Discovery({
               kind: "citation",
               seed_literature_id: seed.trim(),
               direction,
-              scan_limit: limit,
+              max_depth: depth,
+              ...(Number.isFinite(resultLimit)
+                ? { result_limit: resultLimit }
+                : {}),
+              ...(Number.isFinite(citeScan) ? { scan_limit: citeScan } : {}),
             }
           : {
               query: query.trim(),
@@ -180,15 +208,36 @@ export function Discovery({
                   ]}
                 />
               </Definition>
+              <Definition term="层数" description="从种子往外扩展几层引用。">
+                <NumberField
+                  label="层数"
+                  value={depth}
+                  onChange={(value) =>
+                    setDepth(Number.isFinite(value) ? value : 1)
+                  }
+                  minValue={0}
+                  maxValue={32}
+                />
+              </Definition>
+              <Definition term="结果上限" description="选填，不填则不限。">
+                <NumberField
+                  label="结果上限"
+                  value={resultLimit}
+                  onChange={setResultLimit}
+                  minValue={1}
+                  stepper={false}
+                />
+              </Definition>
               <Definition
                 term="扫描上限"
-                description="最多扫描的原始条数，不少于 1。"
+                description="每个来源最多扫描的原始条数。选填，不填则不限。"
               >
                 <NumberField
                   label="扫描上限"
-                  value={limit}
-                  onChange={setLimit}
+                  value={citeScan}
+                  onChange={setCiteScan}
                   minValue={1}
+                  stepper={false}
                 />
               </Definition>
             </>
@@ -201,8 +250,12 @@ export function Discovery({
             title: "确认发现文献",
             description:
               "将通过已配置的文献来源查找并接纳元数据，不会自动获取 PDF。",
-            scope: `每来源最多 ${limit} 条`,
+            scope:
+              mode === "cite"
+                ? citationScope(depth, resultLimit, citeScan)
+                : `每来源最多 ${limit} 条`,
             service: "已配置的文献来源",
+            ...(mode === "cite" ? { confirmLabel: "开始扩展" } : {}),
           }}
           // Discovery can take minutes; the dialog closes at once and the
           // batch's progress shows in the records below.
@@ -210,7 +263,11 @@ export function Discovery({
             mutation.mutate();
           }}
         >
-          {mutation.isPending ? "正在发现…" : "开始发现"}
+          {mutation.isPending
+            ? "正在发现…"
+            : mode === "cite"
+              ? "开始扩展"
+              : "开始发现"}
         </Button>
         {mutation.isPending ? (
           <p role="status">

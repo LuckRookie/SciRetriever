@@ -50,6 +50,23 @@ export function groupSelection(
   return groups;
 }
 
+/**
+ * The selection bar's one primary action (page specs “连续选择与选择栏”): the
+ * first of 获取 PDF and 建档 that can act, each given as the reason it is
+ * disabled, if it is; a disabled button is never the primary, and with both
+ * disabled the bar has none.
+ */
+export function selectionPrimary(
+  acquire: string | undefined,
+  archive: string | undefined,
+): "acquire" | "archive" | null {
+  return acquire === undefined
+    ? "acquire"
+    : archive === undefined
+      ? "archive"
+      : null;
+}
+
 /** Edge band where a held drag scrolls the list, and its top speed per frame. */
 const EDGE = 56,
   SPEED = 18;

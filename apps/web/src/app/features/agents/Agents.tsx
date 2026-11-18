@@ -11,7 +11,6 @@ import {
   ErrorNotice,
   MasterDetail,
   MasterItem,
-  PageHeader,
   PageNote,
   Select,
   Skeleton,
@@ -20,7 +19,7 @@ import {
 } from "../../components/index.js";
 import { archiveQuery, rows } from "../../data/archive.js";
 import { readAgentConversation } from "../../data/agent-conversation.js";
-import { RunSwitch, useActiveTaskCount } from "../tasks/RunSwitch.js";
+import { TaskPage } from "../tasks/TaskPage.js";
 import { useApi } from "../../data/query.js";
 import { navigate, useUrlState } from "../../data/url.js";
 import { record } from "../../data/wire.js";
@@ -67,14 +66,8 @@ export default function Agents() {
       typeof p.next_before === "number" ? p.next_before : undefined,
   });
   const sessions = list.data?.pages.flatMap((p) => rows(p)) ?? [];
-  const running = useActiveTaskCount();
   return (
-    <section className="agent-monitor">
-      <PageHeader
-        title="任务"
-        count={running ? `${running} 个进行中` : undefined}
-      />
-      <RunSwitch value="agent" />
+    <TaskPage tab="agent" className="agent-monitor">
       <MasterDetail
         label="Agent 会话"
         toolbar={
@@ -164,7 +157,7 @@ export default function Agents() {
         }
       />
       <PageNote>结束后的过程记录保留 7 天。</PageNote>
-    </section>
+    </TaskPage>
   );
 }
 function SessionDetail({ id }: { id: string }) {

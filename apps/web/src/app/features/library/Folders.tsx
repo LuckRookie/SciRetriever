@@ -30,9 +30,6 @@ import {
 import { download } from "../../data/download.js";
 import { useShell } from "../../shell/context.js";
 import { errorMessage } from "../../strings.js";
-import { archiveQuery } from "../../data/archive.js";
-import { record } from "../../data/wire.js";
-import { Icon as SectionIcon } from "../../shell/icon.js";
 import { useRecentBatches } from "../../data/intake-batches.js";
 
 /** Drag payloads between library rows and the folder tree. */
@@ -135,6 +132,51 @@ function dragKind(event: DragEvent) {
       : null;
 }
 
+/**
+ * The newest intake batches under “入库” in the sidebar (page specs “整体信息架构”):
+ * a batch opens the library limited to it.
+ */
+export function IntakeBatches({ onNavigate }: { onNavigate: () => void }) {
+  const route = useUrlState();
+  const batches = useRecentBatches();
+  if (!batches.data?.items.length) return null;
+  return (
+    <div
+      className="folder-navigation folder-batches"
+      role="group"
+      aria-label="最近入库"
+    >
+      {batches.data.items.map((batch) => {
+        const current =
+          route.section === "lib" &&
+          !route.literature &&
+          route.query.intake_batch_ids.length === 1 &&
+          route.query.intake_batch_ids[0] === batch.batch_id;
+        return (
+          <Button
+            key={batch.batch_id}
+            variant="text"
+            className="folder-open folder-batch"
+            aria-current={current ? "page" : false}
+            aria-label={`${batch.label}，${batch.counts.hits} 篇`}
+            onPress={() => {
+              openBatch(batch.batch_id);
+              onNavigate();
+            }}
+          >
+            <span className="folder-name" title={batch.label}>
+              {batch.label}
+            </span>
+            <span className="navigation-count">
+              {batch.counts.hits.toLocaleString()}
+            </span>
+          </Button>
+        );
+      })}
+    </div>
+  );
+}
+
 /** The library's folder tree in the sidebar: recent papers, folders, management. */
 export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
   const api = useApi(),
@@ -142,26 +184,6 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
     shell = useShell(),
     queries = useQueryClient();
   const folders = useFolders();
-  const batches = useRecentBatches();
-  // Only the total is needed; it shares the archive query prefix so issue
-  // actions refresh it.
-  const issues = useQuery({
-    queryKey: ["archive", "issues", "count"],
-    queryFn: async ({ signal }) =>
-      Number(
-        record(
-          await archiveQuery(
-            api,
-            "archive",
-            { operation: "issues", request: { offset: 0, limit: 1 } },
-            signal,
-          ),
-          "archive issues",
-        ).total_count ?? 0,
-      ),
-    enabled: api.workspace.readiness === "ready",
-    staleTime: 30000,
-  });
   const counts = useQuery({
     queryKey: ["library", "counts", emptyQuery()],
     queryFn: ({ signal }) => readLibraryCounts(api, emptyQuery(), signal),
@@ -425,7 +447,6 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
     onError: (error) => shell.notify(`没有导出分组。${errorMessage(error)}`),
   });
   const recent = route.section === "lib" && route.query.recently_opened;
-  const needsAction = route.section === "archive" && !route.literature;
   return (
     <div
       className="folder-navigation"
@@ -455,66 +476,6 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
           {counts.data?.recently_opened.toLocaleString() ?? ""}
         </span>
       </Button>
-      <Button
-        variant="text"
-        className="folder-open folder-recent"
-        aria-current={needsAction ? "page" : false}
-        icon={<SectionIcon name="archive" />}
-        onPress={() => {
-          navigate({ view: "archive", literature: null });
-          onNavigate();
-        }}
-      >
-        <span className="folder-name">需处理</span>
-        <span
-          className="navigation-count"
-          data-zero={issues.data === 0 || undefined}
-        >
-          {issues.data?.toLocaleString() ?? ""}
-        </span>
-      </Button>
-      {batches.data?.items.length ? (
-        <div className="folder-batches" role="group" aria-label="最近入库">
-          <Button
-            variant="text"
-            className="folder-open folder-recent"
-            aria-current={route.section === "disc" ? "page" : false}
-            icon={<SectionIcon name="disc" />}
-            onPress={() => {
-              navigate({ view: "disc", literature: null });
-              onNavigate();
-            }}
-          >
-            <span className="folder-name">最近入库</span>
-          </Button>
-          {batches.data.items.map((batch) => {
-            const current =
-              route.section === "lib" &&
-              route.query.intake_batch_ids.length === 1 &&
-              route.query.intake_batch_ids[0] === batch.batch_id;
-            return (
-              <Button
-                key={batch.batch_id}
-                variant="text"
-                className="folder-open folder-batch"
-                aria-current={current ? "page" : false}
-                aria-label={`${batch.label}，${batch.counts.hits} 篇`}
-                onPress={() => {
-                  openBatch(batch.batch_id);
-                  onNavigate();
-                }}
-              >
-                <span className="folder-name" title={batch.label}>
-                  {batch.label}
-                </span>
-                <span className="navigation-count">
-                  {batch.counts.hits.toLocaleString()}
-                </span>
-              </Button>
-            );
-          })}
-        </div>
-      ) : null}
       <div className="folder-heading">
         <span className="navigation-group-name">文件夹</span>
         <Menu

@@ -18,7 +18,6 @@ import {
   Icon,
   IconButton,
   ListRow,
-  PageHeader,
   SearchField,
   Skeleton,
   TechDetails,
@@ -28,7 +27,7 @@ import { archiveQuery, rows } from "../../data/archive.js";
 import { useApi } from "../../data/query.js";
 import { navigate, useUrlState } from "../../data/url.js";
 import { useShell } from "../../shell/context.js";
-import { RunSwitch, useActiveTaskCount } from "./RunSwitch.js";
+import { TaskPage } from "./TaskPage.js";
 import { SourceResults } from "./SourceResults.js";
 import { TaskSummary } from "./TaskSummary.js";
 import {
@@ -178,7 +177,6 @@ export default function Tasks() {
       .includes(text.toLocaleLowerCase()),
   );
   const selected = route.parameters.get("task");
-  const running = useActiveTaskCount();
   if (api.kind !== "workspace")
     return (
       <EmptyState
@@ -187,27 +185,27 @@ export default function Tasks() {
       />
     );
   return (
-    <section className="tasks-page" data-panel={selected ? "open" : undefined}>
-      <PageHeader
-        title="任务"
-        count={running ? `${running} 个进行中` : undefined}
-        action={
-          <Button
-            onPress={async () => {
-              await jobs.refetch();
-            }}
-          >
-            刷新任务
-          </Button>
-        }
-      />
-      <RunSwitch value="task" />
+    <TaskPage
+      tab="task"
+      className="tasks-page"
+      {...(selected ? { panel: "open" as const } : {})}
+      action={
+        <Button
+          onPress={async () => {
+            await jobs.refetch();
+          }}
+        >
+          刷新任务
+        </Button>
+      }
+    >
       <div className="tasks-toolbar">
         <ChipGroup label="任务状态">
           {[
             { id: "", label: "全部" },
             { id: "active", label: "进行中" },
-            { id: "attention", label: "待处理" },
+            // Paused, interrupted and failed tasks: not named like “需处理”.
+            { id: "attention", label: "有问题" },
             { id: "ended", label: "已结束" },
           ].map((item) => (
             <FilterChip
@@ -337,7 +335,7 @@ export default function Tasks() {
           }}
         />
       ) : null}
-    </section>
+    </TaskPage>
   );
 }
 /**

@@ -6,7 +6,6 @@ import {
   Checkbox,
   Disclosure,
   ErrorNotice,
-  PageHeader,
   Select,
   Skeleton,
   RichTitle,
@@ -20,6 +19,7 @@ import { archiveReason, archiveStrings, errorMessage } from "../../strings.js";
 import { Assignment } from "../tags/Assignment.js";
 import { OperationDialog } from "../library/OperationDialog.js";
 import { MetadataFields } from "./MetadataFields.js";
+import { TaskPage } from "../tasks/TaskPage.js";
 import "./archive.css";
 function PaperName({ id }: { id: string }) {
   const api = useApi();
@@ -98,13 +98,7 @@ export default function Archive() {
   ];
   const paging = offset > 0 || query.data?.next_offset != null;
   return (
-    <div className="feature-page archive-page">
-      <PageHeader
-        title={archiveStrings.title}
-        count={
-          query.data ? `${Number(query.data.total_count ?? 0)} 项` : undefined
-        }
-      />
+    <TaskPage tab="archive" className="feature-page archive-page">
       {query.error || action.error ? (
         <ErrorNotice
           message={errorMessage(query.error ?? action.error)}
@@ -136,6 +130,10 @@ export default function Archive() {
                   })),
               ]}
             />
+            {/* The count the page header carried before it became a tab of 任务. */}
+            <span className="archive-count" role="status">
+              共 {Number(query.data?.total_count ?? 0)} 项
+            </span>
             {selected.size ? (
               <Button
                 isDisabled={action.isPending}
@@ -279,7 +277,7 @@ export default function Archive() {
           onClose={() => setRetryParse(null)}
         />
       ) : null}
-    </div>
+    </TaskPage>
   );
 }
 /** One issue as a row: what failed, and the actions that resolve it, without leaving the list. */

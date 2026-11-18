@@ -46,6 +46,15 @@ export function runningTaskCount(answer: unknown): number {
       ).length
     : 0;
 }
+/** Beside 任务: “2 进行中 · 12 需处理”, a zero left out, nothing when both are. */
+export function taskCountText(running: number, issues: number): string {
+  return [
+    running > 0 ? `${running.toLocaleString()} 进行中` : "",
+    issues > 0 ? `${issues.toLocaleString()} 需处理` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
 export const operationLabels: Readonly<Record<string, string>> = {
   "acquire-metadata": "获取元数据",
   "parse-documents": "解析 PDF",

@@ -925,7 +925,9 @@
   .ui-menu-item .ui-description {
     flex-basis: 100%;
   }
-  .ui-option:has(.ui-description) {
+  /* The reason under a disabled item, as under an option, not beside it. */
+  .ui-option:has(.ui-description),
+  .ui-menu-item:has(.ui-description) {
     flex-wrap: wrap;
     row-gap: 0;
   }
