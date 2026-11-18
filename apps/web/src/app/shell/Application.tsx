@@ -359,8 +359,16 @@ function Workspace({ api }: { api: ApiClient }) {
     enabled: api.kind === "workspace",
     refetchInterval: 5000,
   });
+  // “n 进行中” and “活动 · n” count the tasks actually running: a queued task
+  // (saved and never started, or waiting for a slot) is “等待执行”, not in
+  // progress (page specs “任务”). The activity list still shows them all.
   const running = Array.isArray(tasks.data?.tasks)
-    ? tasks.data.tasks.length
+    ? tasks.data.tasks.filter(
+        (task: unknown) =>
+          !!task &&
+          typeof task === "object" &&
+          (task as { status?: unknown }).status === "running",
+      ).length
     : 0;
   const lastTasks = useRef<string | null>(null);
   const taskQueries = useQueryClient();
