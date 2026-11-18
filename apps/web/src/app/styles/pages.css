@@ -3,6 +3,9 @@
     height: 100%;
     min-height: 0;
   }
+  /* Both sides fit the window rather than their content: the navigation's
+     middle then scrolls inside it and the brand row and “设置” stay in view. */
+  .application-shell > .ui-split-pane > .ui-split-side,
   .application-shell > .ui-split-pane > .ui-split-main {
     min-height: 0;
   }
