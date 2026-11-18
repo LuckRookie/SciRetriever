@@ -248,7 +248,7 @@ Metadata 边界的 raw-item `accepted` 只表示该 item 已成功转换为中�
 #### 3.1.2 引用发现
 
 ```text
-具体 Literature 种子 + 方向/max_depth/result_limit + 每个 Provider 的 run-wide scan_limit
+具体 Literature 种子 + 方向/max_depth（默认 1）+ 可选 result_limit + 每个 Provider 可选的 run-wide scan_limit
   -> 创建 citation DiscoveryRun
   -> Literature 解析本地种子身份
   -> Metadata 查询供应商引用关系
@@ -292,7 +292,7 @@ MetadataObservation.reference_texts 或 LiteratureContent.references
 ```text
 ProviderDiscoveryLimit
   provider_name: str
-  scan_limit: int
+  scan_limit: int | None
 
 TopicDiscoveryInput
   kind: Literal["topic"]
@@ -306,13 +306,13 @@ CitationDiscoveryInput
   seed_literature_ids: tuple[LiteratureId, ...]
   direction: Literal["references", "cited-by", "both"]
   max_depth: int
-  result_limit: int
+  result_limit: int | None
   providers: tuple[ProviderDiscoveryLimit, ...]
 
 DiscoveryInput = TopicDiscoveryInput | CitationDiscoveryInput
 ```
 
-`query` 去除边界空白后非空；年份为 1–9999 且范围有序。Provider 列表非空，名称非空且在一次输入中唯一，`scan_limit >= 1`。Citation seeds 非空且去重，`max_depth >= 0`，`result_limit >= 1`。Topic 输入不增加语言、文献类型、排序、相关度阈值或 Provider 私有查询参数。
+`query` 去除边界空白后非空；年份为 1–9999 且范围有序。Provider 列表非空，名称非空且在一次输入中唯一。Topic 的每个 `scan_limit >= 1`；Citation 的 `scan_limit` 为 `None`（不限）或 `>= 1`。Citation seeds 非空且去重，`max_depth >= 0`，调用方不写时为 1；`result_limit` 为 `None`（不限）或 `>= 1`，任何入口都不为它预填数值（ADR 0064）。Topic 输入不增加语言、文献类型、排序、相关度阈值或 Provider 私有查询参数。
 
 `scan_limit` 是每个 Provider 在整个 DiscoveryRun 中的原始 item 上限，过滤、最低身份准入和去重前计数；它不在每个种子、深度或请求上重置。`result_limit` 只用于引用发现，统计种子以外按 MetaLiterature 去重的 `DiscoveryResult`；无论对象是新入库还是已经存在都计数，同一对象重复到达只计一次。这些字段只表达已经由 Entry 边界规范化的中性输入，不包含 vendor query、cursor、request/response 或搜索分数。
 
