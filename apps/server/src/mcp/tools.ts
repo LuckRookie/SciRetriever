@@ -1249,11 +1249,32 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
   tool(
     "discover_citations",
     "Explicitly expand existing literature references or citations using configured sources. Saves metadata/relations, not PDFs.",
-    object({
-      seed_literature_id: id,
-      direction: { enum: ["references", "cited-by"] },
-      scan_limit: { type: "integer", minimum: 1 },
-    }),
+    object(
+      {
+        seed_literature_id: id,
+        direction: { enum: ["references", "cited-by"] },
+        max_depth: {
+          type: "integer",
+          minimum: 0,
+          maximum: 32,
+          default: 1,
+          description: "Expansion depth; defaults to 1.",
+        },
+        result_limit: nullable({
+          type: "integer",
+          minimum: 1,
+          description:
+            "Optional run-wide result limit; omitted or null means unlimited.",
+        }),
+        scan_limit: nullable({
+          type: "integer",
+          minimum: 1,
+          description:
+            "Optional per-source run-wide scan limit; omitted or null means unlimited.",
+        }),
+      },
+      ["seed_literature_id", "direction"],
+    ),
     false,
   ),
   tool(

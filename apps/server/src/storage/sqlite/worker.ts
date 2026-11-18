@@ -171,12 +171,12 @@ export interface DiscoveryPublication {
     readonly year_to?: number | null;
     readonly direction?: "references" | "cited-by" | "both";
     readonly max_depth?: number;
-    readonly result_limit?: number;
+    readonly result_limit?: number | null;
     readonly seed_literature_ids?: readonly string[];
   };
   readonly providers: readonly {
     readonly provider_name: string;
-    readonly scan_limit: number;
+    readonly scan_limit: number | null;
   }[];
   readonly source_results: readonly {
     readonly provider_name: string;
@@ -915,7 +915,8 @@ export interface ExecutionRuntimeInspection {
     | 15
     | 16
     | 17
-    | 18;
+    | 18
+    | 19;
   readonly catalog_fingerprint: string;
   readonly version: number | null;
   readonly fingerprint: string | null;

@@ -1,3 +1,4 @@
+import { migrateCitationLimitsSchema } from "../src/storage/sqlite/citation-limits-schema-migration.js";
 import { migrateImportSchema } from "../src/storage/sqlite/import-schema-migration.js";
 import { migrateDraftTextSchema } from "../src/storage/sqlite/draft-text-schema-migration.js";
 import { migrateUserOrganizationSchema } from "../src/storage/sqlite/user-organization-schema-migration.js";
@@ -69,7 +70,7 @@ it("migrates the exact 12 layout to 13 offline, preserves every old table count 
     for (const [table, count] of Object.entries(result.before))
       expect(result.after[table]).toBe(count);
     expect(result.after.library_state_changes).toBe(0);
-    // 13 is an intermediate layout now; the reading-marks step makes it current.
+    // Historical tools retain their targets; every later step is explicit.
     await expect(inspectCatalogSchema(path)).rejects.toMatchObject({
       reason: "catalog-layout-not-current",
     });
@@ -86,9 +87,19 @@ it("migrates the exact 12 layout to 13 offline, preserves every old table count 
     await migrateImportSchema(path);
     await migrateDraftTextSchema(path);
     await migrateUserOrganizationSchema(path);
+    const frozen18 = await readFile(path);
+    await expect(inspectCatalogSchema(path)).rejects.toMatchObject({
+      reason: "catalog-layout-not-current",
+    });
+    expect(await readFile(path)).toEqual(frozen18);
+    expect(await migrateCitationLimitsSchema(path)).toMatchObject({
+      from_version: 18,
+      to_version: 19,
+      foreign_key_violations: 0,
+    });
     expect(await inspectCatalogSchema(path)).toMatchObject({
       status: "ready",
-      schema_version: 18,
+      schema_version: 19,
     });
     await expect(migrateReadingMarksSchema(path)).rejects.toMatchObject({
       code: "reading-marks-schema-migration-refused",

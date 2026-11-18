@@ -1,3 +1,4 @@
+import { migrateCitationLimitsSchema } from "../src/storage/sqlite/citation-limits-schema-migration.js";
 import { migrateImportSchema } from "../src/storage/sqlite/import-schema-migration.js";
 import { migrateDraftTextSchema } from "../src/storage/sqlite/draft-text-schema-migration.js";
 import { migrateUserOrganizationSchema } from "../src/storage/sqlite/user-organization-schema-migration.js";
@@ -76,8 +77,8 @@ it("explicitly migrates 11 to 12 without changing row counts, keys or historical
     expect(result.before).toEqual(result.after);
     expect(result.after.archive_steps).toBe(2);
     expect(result.foreign_key_violations).toBe(0);
-    // The preserved 11 -> 12 tool still targets exactly 12. The explicit
-    // state-projection and reading-marks steps then make it current.
+    // Historical tools keep their exact targets. Reach the current catalog
+    // only through every subsequent explicit offline migration.
     await expect(inspectCatalogSchema(path)).rejects.toMatchObject({
       reason: "catalog-layout-not-current",
     });
@@ -95,9 +96,19 @@ it("explicitly migrates 11 to 12 without changing row counts, keys or historical
     await migrateImportSchema(path);
     await migrateDraftTextSchema(path);
     await migrateUserOrganizationSchema(path);
+    const frozen18 = await readFile(path);
+    await expect(inspectCatalogSchema(path)).rejects.toMatchObject({
+      reason: "catalog-layout-not-current",
+    });
+    expect(await readFile(path)).toEqual(frozen18);
+    expect(await migrateCitationLimitsSchema(path)).toMatchObject({
+      from_version: 18,
+      to_version: 19,
+      foreign_key_violations: 0,
+    });
     expect(await inspectCatalogSchema(path)).toMatchObject({
       status: "ready",
-      schema_version: 18,
+      schema_version: 19,
       schema_fingerprint: SCHEMA_FINGERPRINT,
     });
     const next = new DatabaseSync(path, { readOnly: true });

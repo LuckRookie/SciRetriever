@@ -18,19 +18,13 @@ export function createMetadataOperations(app: Application) {
         "kind" in value &&
         value.kind === "citation"
       ) {
-        const r = inputRecord(value, [
-          "kind",
-          "seed_literature_id",
-          "direction",
-          "scan_limit",
-        ]);
+        const r = inputRecord(
+          value,
+          ["kind", "seed_literature_id", "direction"],
+          ["max_depth", "result_limit", "scan_limit"],
+        );
         const seed = parseLiteratureId(r.seed_literature_id);
-        if (
-          !["references", "cited-by"].includes(String(r.direction)) ||
-          typeof r.scan_limit !== "number" ||
-          !Number.isSafeInteger(r.scan_limit) ||
-          r.scan_limit < 1
-        )
+        if (!["references", "cited-by"].includes(String(r.direction)))
           throw new ContractValidationError();
         if (!app.metadata.reference_selection.length)
           throw new ProcessingTaskError("metadata-unavailable");
@@ -40,8 +34,8 @@ export function createMetadataOperations(app: Application) {
             kind: "citation",
             seed_literature_ids: [seed],
             direction: r.direction as "references" | "cited-by",
-            max_depth: 1,
-            result_limit: r.scan_limit,
+            max_depth: r.max_depth,
+            result_limit: r.result_limit,
             scan_limit: r.scan_limit,
           },
           signal,

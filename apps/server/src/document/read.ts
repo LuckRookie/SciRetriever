@@ -357,7 +357,7 @@ export class DocumentReadService {
         );
       }
     }
-    if (![18].includes(Number((await this.database.schema()).schema_version)))
+    if (![19].includes(Number((await this.database.schema()).schema_version)))
       throw new DocumentReadError("document-v3-required");
     let snapshot;
     try {
@@ -622,7 +622,7 @@ export class DocumentReadService {
       const literature = r.literature_id;
       const asset = r.asset_id;
       check(signal);
-      if (![18].includes(Number((await this.database.schema()).schema_version)))
+      if (![19].includes(Number((await this.database.schema()).schema_version)))
         throw new DocumentReadError("document-v3-required");
       const material = await this.database.documentMaterial(literature, asset);
       if (!material || material.material.asset_sha256 !== r.asset_sha256)

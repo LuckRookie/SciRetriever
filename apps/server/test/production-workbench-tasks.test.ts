@@ -1,3 +1,4 @@
+import { citationLimitsSource } from "./citation-limits-fixture.js";
 import { parseIntakeBatchId } from "@sciretriever/contracts";
 import { SCHEMA_VERSION } from "../src/storage/sqlite/schema.js";
 import { withRawParserFixture } from "./raw-parser-fixture.js";
@@ -29,7 +30,9 @@ import {
   workbenchPdf,
 } from "../src/workbench/synthetic-fixture.js";
 
-async function fixture() {
+async function fixture(
+  citationSource?: ReturnType<typeof citationLimitsSource>,
+) {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-production-tasks-"));
   const data = join(home, "selected-data");
   await mkdir(data);
@@ -67,10 +70,12 @@ async function fixture() {
         reference_query_ports: [
           {
             provider_name: "crossref",
-            open_reference_query: () => ({
-              pull_raw_item: async () => null,
-              convert_raw_item: () => ({ observations: [], relations: [] }),
-            }),
+            open_reference_query:
+              citationSource?.port.open_reference_query ??
+              (() => ({
+                pull_raw_item: async () => null,
+                convert_raw_item: () => ({ observations: [], relations: [] }),
+              })),
           },
         ],
         topic_search_ports: [
@@ -248,6 +253,69 @@ async function fixture() {
 }
 
 describe("production task workbench composition", () => {
+  it("saves an unlimited citation request unchanged, runs it to exhaustion and reads nulls over HTTP", async () => {
+    const source = citationLimitsSource();
+    const env = await fixture(source);
+    try {
+      await env.server.application.database.putLiterature(FIXTURE_LITERATURE);
+      const saved = await env.call("/api/tasks", {
+        kind: "metadata",
+        idempotency_key: "unlimited-citation",
+        request: {
+          kind: "citation",
+          seed_literature_ids: [FIXTURE_LITERATURE.literature_id],
+          direction: "references",
+        },
+      });
+      expect(saved.status, JSON.stringify(saved.value)).toBe(201);
+      const id = (saved.value.task as { job_id: string }).job_id;
+      expect(source.stats.opens).toBe(0);
+      const expected = {
+        request: {
+          operations: [
+            {
+              request: {
+                max_depth: 1,
+                result_limit: null,
+                providers: [{ source: "crossref", scan_limit: null }],
+              },
+            },
+          ],
+        },
+      };
+      expect(await env.server.application.jobs!.getJob(id)).toMatchObject({
+        selector: expected,
+      });
+      expect((await env.call(`/api/tasks/${id}`)).value).toMatchObject({
+        task: { job: { selector: expected } },
+      });
+      expect((await env.call(`/api/tasks/${id}/start`, {})).status).toBe(202);
+      await env.settledTask(id);
+      const detail = await env.server.application.processingTasks!.read(id);
+      expect(detail.job.status).toBe("completed");
+      const payload = detail.results[0] as {
+        result: { discovery_run_id: string; result_count: number };
+      };
+      expect(payload.result.result_count).toBe(source.count);
+      expect(
+        await env.server.application.database.getDiscovery(
+          payload.result.discovery_run_id,
+        ),
+      ).toMatchObject({
+        run: { result_limit: null },
+        providers: [{ scan_limit: null }],
+        source_results: [{ outcome: "EXHAUSTED" }],
+      });
+      expect(source.stats).toEqual({
+        opens: 1,
+        pulls: source.count + 1,
+        exhausted: 1,
+      });
+    } finally {
+      await env.close();
+    }
+  });
+
   it("saves metadata tasks with large safe budgets without running them and rejects invalid bounds", async () => {
     const env = await fixture();
     try {
@@ -488,7 +556,22 @@ describe("production task workbench composition", () => {
           seed_literature_ids: [FIXTURE_LITERATURE.literature_id],
           direction: "references",
           max_depth: 1,
-          result_limit: 50000,
+          result_limit: null,
+          providers: expect.arrayContaining([
+            expect.objectContaining({ scan_limit: 50000 }),
+          ]),
+        }),
+      );
+      const explicit = await env.call("/api/discovery", {
+        ...request,
+        max_depth: 2,
+        result_limit: 7,
+      });
+      expect(explicit.status).toBe(200);
+      expect(run).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          max_depth: 2,
+          result_limit: 7,
           providers: expect.arrayContaining([
             expect.objectContaining({ scan_limit: 50000 }),
           ]),

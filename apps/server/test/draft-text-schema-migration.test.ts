@@ -1,3 +1,4 @@
+import { migrateCitationLimitsSchema } from "../src/storage/sqlite/citation-limits-schema-migration.js";
 import { DatabaseSync } from "node:sqlite";
 import { copyFile, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -210,6 +211,16 @@ it("migrates a populated exact 16 without rewriting corrected documents, content
       reason: "catalog-layout-not-current",
     });
     await migrateUserOrganizationSchema(f.path);
+    const frozen18 = await readFile(f.path);
+    await expect(inspectCatalogSchema(f.path)).rejects.toMatchObject({
+      reason: "catalog-layout-not-current",
+    });
+    expect(await readFile(f.path)).toEqual(frozen18);
+    expect(await migrateCitationLimitsSchema(f.path)).toMatchObject({
+      from_version: 18,
+      to_version: 19,
+      foreign_key_violations: 0,
+    });
     await copyFile(f.path, join(f.env.home, "catalog.sqlite"));
     await f.env.reopen();
     expect(
@@ -219,7 +230,7 @@ it("migrates a populated exact 16 without rewriting corrected documents, content
         })
       ).document,
     ).toEqual(f.document);
-    expect((await inspectCatalogSchema(f.path)).schema_version).toBe(18);
+    expect((await inspectCatalogSchema(f.path)).schema_version).toBe(19);
     await expect(migrateDraftTextSchema(f.path)).rejects.toMatchObject({
       code: "draft-text-schema-migration-refused",
     });

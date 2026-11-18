@@ -10,7 +10,7 @@ import { runMarkStorage } from "../src/storage/sqlite/marks-engine.js";
 import { migrateUserOrganizationSchema } from "../src/storage/sqlite/user-organization-schema-migration.js";
 import { verifyOfflineLayout } from "../src/storage/sqlite/archive-schema-migration.js";
 import {
-  SCHEMA_MANIFEST,
+  SCHEMA_MANIFEST_V18 as SCHEMA_MANIFEST,
   SCHEMA_MANIFEST_V17,
 } from "../src/storage/sqlite/schema.js";
 import {

@@ -1,3 +1,5 @@
+import { DatabaseSync } from "node:sqlite";
+import { citationLimitsSource } from "./citation-limits-fixture.js";
 import { withActivity } from "../src/logging/activity.js";
 const runMetadataTask: typeof runMetadataTaskInternal = (...args) =>
   withActivity({ actor: "cli:test" }, () => runMetadataTaskInternal(...args));
@@ -10,6 +12,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import {
   parseMetadataObservation,
+  parseLiteratureId,
+  parseMetaLiteratureId,
   parseSourceStatistics,
   parseTaskSourceResults,
 } from "@sciretriever/contracts";
@@ -211,3 +215,186 @@ it("reads identical metadata task summaries and source statistics over HTTP, CLI
     await rm(home, { recursive: true, force: true });
   }
 }, 30000);
+
+it("keeps citation limits null through CLI execution, stored Runs and read-only HTTP/MCP task reports", async () => {
+  const home = await mkdtemp(join(tmpdir(), "sciretriever-citation-cli-"));
+  const source = citationLimitsSource();
+  const app = await createApplication(home, {
+    metadata: { reference_query_ports: [source.port] },
+    indexRefreshIntervalMs: null,
+  });
+  await app.database.putLiterature(FIXTURE_LITERATURE);
+  const boot = vi
+    .spyOn(applicationBootstrap, "createApplication")
+    .mockResolvedValueOnce(app);
+  let reply;
+  try {
+    reply = await runCli(
+      [
+        "discover",
+        "citations",
+        FIXTURE_LITERATURE.literature_id,
+        "--direction",
+        "references",
+        "--json",
+      ],
+      { home },
+    );
+    expect(reply.code).toBe(0);
+  } finally {
+    boot.mockRestore();
+  }
+  const report = reply.value as {
+    job_id: string;
+    discovery_run_id: string;
+    result_count: number;
+  };
+  expect(report.result_count).toBe(source.count);
+  expect(source.stats).toEqual({
+    opens: 1,
+    pulls: source.count + 1,
+    exhausted: 1,
+  });
+  const db = new DatabaseSync(join(home, "catalog.sqlite"), { readOnly: true });
+  try {
+    expect(
+      db
+        .prepare(
+          "SELECT max_depth,result_limit FROM citation_discovery_inputs WHERE discovery_run_id=?",
+        )
+        .get(report.discovery_run_id),
+    ).toEqual({ max_depth: 1, result_limit: null });
+    expect(
+      db
+        .prepare(
+          "SELECT scan_limit FROM discovery_run_providers WHERE discovery_run_id=?",
+        )
+        .get(report.discovery_run_id),
+    ).toEqual({ scan_limit: null });
+  } finally {
+    db.close();
+  }
+  const query = await createQueryApplication(home);
+  const web = await startQueryOnlyHttp({ application: query });
+  const host = createMcpServer({
+    maintenance: true,
+    queryFactory: () => createQueryApplication(home),
+    applicationFactory: async () => {
+      throw new Error("Reads must not reopen the writable application");
+    },
+  });
+  const client = new Client({ name: "nullable-citation-read", version: "1" });
+  const [serverTransport, clientTransport] =
+    InMemoryTransport.createLinkedPair();
+  try {
+    await host.connect(serverTransport);
+    await client.connect(clientTransport);
+    const response = await fetch(web.origin + "/api/v1/query/task-run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        protocol_version: 1,
+        request: { job_id: report.job_id },
+      }),
+    });
+    expect(response.status).toBe(200);
+    const http = (await response.json()) as { result: unknown };
+    const mcp = await client.callTool({
+      name: "read_task",
+      arguments: { job_id: report.job_id },
+    });
+    expect(mcp.isError, JSON.stringify(mcp)).not.toBe(true);
+    expect(http).toMatchObject({
+      result: {
+        job: { status: "completed" },
+        source_results: { metadata: { returned: source.count } },
+      },
+    });
+    expect(mcp.structuredContent).toMatchObject({
+      result: {
+        job: {
+          selector: {
+            request: {
+              operations: [
+                {
+                  request: {
+                    max_depth: 1,
+                    result_limit: null,
+                    providers: [{ scan_limit: null }],
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+    expect(source.stats).toEqual({
+      opens: 1,
+      pulls: source.count + 1,
+      exhausted: 1,
+    });
+  } finally {
+    await client.close();
+    await host.close();
+    await web.close();
+    await query.close();
+    await app.close();
+    await rm(home, { recursive: true, force: true });
+  }
+}, 30000);
+
+it.each([
+  { result_limit: 2, scan_limit: null, max_depth: 1, expected: 2 },
+  { result_limit: null, scan_limit: 2, max_depth: 1, expected: 2 },
+  { result_limit: null, scan_limit: null, max_depth: 0, expected: 0 },
+])(
+  "retains run-wide explicit caps and zero depth with $result_limit/$scan_limit/$max_depth",
+  async ({ result_limit, scan_limit, max_depth, expected }) => {
+    const home = await mkdtemp(
+      join(tmpdir(), "sciretriever-citation-explicit-"),
+    );
+    const source = citationLimitsSource();
+    const app = await createApplication(home, {
+      metadata: { reference_query_ports: [source.port] },
+      indexRefreshIntervalMs: null,
+    });
+    try {
+      await app.database.putLiterature(FIXTURE_LITERATURE);
+      const secondId = parseLiteratureId(randomUUID());
+      await app.database.putLiterature({
+        ...FIXTURE_LITERATURE,
+        literature_id: secondId,
+        meta_literature_id: parseMetaLiteratureId(randomUUID()),
+        metadata: {
+          ...FIXTURE_LITERATURE.metadata,
+          title: "Second synthetic seed",
+          identifiers: [{ namespace: "doi", value: "10.5555/second-seed" }],
+        },
+      });
+      const report = await app.citations.run({
+        origin: "cli",
+        seed_literature_ids: [FIXTURE_LITERATURE.literature_id, secondId],
+        direction: "references",
+        max_depth,
+        result_limit,
+        providers: [{ provider_name: "crossref", scan_limit }],
+      });
+      expect(report.result_count).toBe(expected);
+      expect(source.stats).toEqual({
+        opens: max_depth === 0 ? 0 : 1,
+        pulls: expected,
+        exhausted: 0,
+      });
+      expect(
+        await app.database.getDiscovery(report.discovery_run_id),
+      ).toMatchObject({
+        run: { max_depth, result_limit },
+        providers: [{ scan_limit }],
+      });
+    } finally {
+      await app.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  },
+);

@@ -1,3 +1,4 @@
+import { migrateCitationLimitsSchema } from "../src/storage/sqlite/citation-limits-schema-migration.js";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
@@ -141,7 +142,13 @@ it("migrates 14 to 15 with legacy and discovery cohorts, correct keyword layers,
     // Historical tools keep their own targets; current openers need the final step.
     expect((await migrateImportSchema(path)).to_version).toBe(16);
     expect((await migrateDraftTextSchema(path)).to_version).toBe(17);
-    expect((await migrateUserOrganizationSchema(path)).to_version).toBe(
+    expect((await migrateUserOrganizationSchema(path)).to_version).toBe(18);
+    const frozen18 = await readFile(path);
+    await expect(inspectCatalogSchema(path)).rejects.toMatchObject({
+      reason: "catalog-layout-not-current",
+    });
+    expect(await readFile(path)).toEqual(frozen18);
+    expect((await migrateCitationLimitsSchema(path)).to_version).toBe(
       SCHEMA_VERSION,
     );
     const app = await createQueryApplication(home);

@@ -2,7 +2,7 @@ import { PROCESSOR_METHOD_REVISION } from "@sciretriever/contracts";
 import { createHash } from "node:crypto";
 
 // One current catalog layout. This is not a migration ladder or a list of supported historic layouts.
-export const SCHEMA_VERSION = 18 as const;
+export const SCHEMA_VERSION = 19 as const;
 // Inputs read by archiveStates/deriveCurrentState, including view dependencies.
 // Reading history, folders and processing outputs do not invalidate this projection.
 export const LIBRARY_STATE_INPUT_TABLES_V16 = [
@@ -606,7 +606,8 @@ export const USER_ORGANIZATION_SCHEMA_V18 = [
   "CREATE TABLE saved_filters(filter_id TEXT NOT NULL PRIMARY KEY,name TEXT NOT NULL COLLATE BINARY UNIQUE CHECK(length(trim(name))>0),query_json TEXT NOT NULL CHECK(json_valid(query_json)),sort TEXT NOT NULL CHECK(length(trim(sort))>0),created_at TEXT NOT NULL,updated_at TEXT NOT NULL) STRICT",
   "CREATE TABLE reading_mark_places(mark_id TEXT NOT NULL,target_kind TEXT NOT NULL CHECK(target_kind IN ('pdf','document')),target_id TEXT NOT NULL CHECK(target_kind<>'pdf' OR (length(target_id)=64 AND target_id=lower(target_id) AND target_id NOT GLOB '*[^0-9a-f]*')),pdf_page INTEGER CHECK(pdf_page IS NULL OR pdf_page>=1),pdf_rects_json TEXT CHECK(pdf_rects_json IS NULL OR json_valid(pdf_rects_json)),document_start_utf8 INTEGER,document_end_utf8 INTEGER,similarity REAL NOT NULL CHECK(similarity BETWEEN 0.7 AND 1.0),method TEXT NOT NULL CHECK(length(trim(method))>0),located_at TEXT NOT NULL,PRIMARY KEY(mark_id,target_kind,target_id),FOREIGN KEY(mark_id) REFERENCES reading_marks(mark_id) ON DELETE CASCADE,CHECK((target_kind='pdf' AND pdf_page IS NOT NULL AND pdf_rects_json IS NOT NULL AND document_start_utf8 IS NULL AND document_end_utf8 IS NULL) OR (target_kind='document' AND pdf_page IS NULL AND pdf_rects_json IS NULL AND document_start_utf8 IS NOT NULL AND document_end_utf8 IS NOT NULL AND document_start_utf8>=0 AND document_end_utf8>document_start_utf8))) STRICT",
 ] as const;
-export const SCHEMA_MANIFEST = [
+/** Frozen V18: the 17 -> 18 target and 18 -> 19 input. */
+export const SCHEMA_MANIFEST_V18 = [
   ...SCHEMA_MANIFEST_V17.map((sql) => {
     const next = sql.replace(
       "CHECK(schema_version=17)",
@@ -630,6 +631,28 @@ export const SCHEMA_MANIFEST = [
   }),
   ...USER_ORGANIZATION_SCHEMA_V18,
 ] as const;
+export const SCHEMA_FINGERPRINT_V18 = createHash("sha256")
+  .update(JSON.stringify(SCHEMA_MANIFEST_V18))
+  .digest("hex");
+
+export const SCHEMA_MANIFEST = SCHEMA_MANIFEST_V18.map((sql) => {
+  if (sql.startsWith("CREATE TABLE citation_discovery_inputs("))
+    return sql.replace(
+      "result_limit INTEGER NOT NULL CHECK(typeof(result_limit)='integer' AND result_limit>=1)",
+      "result_limit INTEGER CHECK(result_limit IS NULL OR (typeof(result_limit)='integer' AND result_limit>=1))",
+    );
+  if (sql.startsWith("CREATE TABLE discovery_run_providers("))
+    return sql
+      .replace(
+        "scan_limit INTEGER NOT NULL CHECK(typeof(scan_limit)='integer' AND scan_limit>=1)",
+        "scan_limit INTEGER CHECK(scan_limit IS NULL OR (typeof(scan_limit)='integer' AND scan_limit>=1)),kind TEXT NOT NULL CHECK(kind IN ('topic','citation')),CHECK(kind='citation' OR scan_limit IS NOT NULL)",
+      )
+      .replace(
+        "FOREIGN KEY(discovery_run_id) REFERENCES discovery_runs(discovery_run_id)",
+        "FOREIGN KEY(discovery_run_id,kind) REFERENCES discovery_runs(discovery_run_id,kind)",
+      );
+  return sql.replace("CHECK(schema_version=18)", "CHECK(schema_version=19)");
+});
 export const SCHEMA_FINGERPRINT = createHash("sha256")
   .update(JSON.stringify(SCHEMA_MANIFEST))
   .digest("hex");

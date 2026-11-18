@@ -1611,10 +1611,12 @@ async function execute(
       .filter(Boolean);
     if (!seeds.length) invalidInput();
     const value = await withApplication(options, (app) => {
-      const limit = metadataScanLimit(
-        args,
-        app.configuration.sources.metadata.limit ?? 500,
-      );
+      const limit = args.includes("--scan-limit")
+        ? metadataScanLimit(args, 1)
+        : null;
+      for (const option of ["--result-limit", "--limit"])
+        if (args.includes(option) && argument(args, option) === null)
+          invalidInput();
       return runMetadataTask(
         app,
         {
@@ -1625,11 +1627,12 @@ async function execute(
             | "cited-by"
             | "both",
           max_depth: integerOption(args, "--max-depth", 1),
-          result_limit: integerOption(
-            args,
-            "--result-limit",
-            integerOption(args, "--limit", 1000),
-          ),
+          result_limit:
+            argument(args, "--result-limit") !== null
+              ? integerOption(args, "--result-limit", 1)
+              : argument(args, "--limit") !== null
+                ? integerOption(args, "--limit", 1)
+                : null,
           scan_limit: limit,
         },
         options.signal,

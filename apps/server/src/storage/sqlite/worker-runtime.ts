@@ -4685,8 +4685,8 @@ function putDiscovery(p: Dynamic): Dynamic {
     for (let i = 0; i < p.providers.length; i++) {
       const x = p.providers[i];
       db.prepare(
-        "INSERT INTO discovery_run_providers(discovery_run_id,provider_ordinal,provider_name,scan_limit) VALUES(?,?,?,?) ON CONFLICT(discovery_run_id,provider_ordinal) DO NOTHING",
-      ).run(r.discovery_run_id, i, x.provider_name, x.scan_limit);
+        "INSERT INTO discovery_run_providers(discovery_run_id,provider_ordinal,provider_name,scan_limit,kind) VALUES(?,?,?,?,?) ON CONFLICT(discovery_run_id,provider_ordinal) DO NOTHING",
+      ).run(r.discovery_run_id, i, x.provider_name, x.scan_limit, r.kind);
     }
     for (const x of p.source_results) {
       const f = x.failure;

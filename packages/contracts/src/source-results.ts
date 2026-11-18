@@ -24,24 +24,30 @@ export interface MetadataTaskProvider {
   readonly source: string;
   readonly scan_limit: number;
 }
-export type MetadataTaskRequest = {
-  readonly providers: readonly MetadataTaskProvider[];
-} & (
+export type MetadataTaskRequest =
   | {
       readonly kind: "topic";
+      readonly providers: readonly MetadataTaskProvider[];
       readonly query: string;
       readonly year_from: number | null;
       readonly year_to: number | null;
     }
   | {
       readonly kind: "citation";
+      readonly providers: readonly {
+        readonly source: string;
+        readonly scan_limit: number | null;
+      }[];
       readonly seed_literature_ids: readonly string[];
       readonly direction: "references" | "cited-by" | "both";
       readonly max_depth: number;
-      readonly result_limit: number;
+      readonly result_limit: number | null;
     }
-  | { readonly kind: "lookup"; readonly literature_ids: readonly string[] }
-);
+  | {
+      readonly kind: "lookup";
+      readonly providers: readonly MetadataTaskProvider[];
+      readonly literature_ids: readonly string[];
+    };
 export type MetadataSourceResult =
   | "hit"
   | "miss"
@@ -259,20 +265,33 @@ export function parseMetadataTaskRequest(value: unknown): MetadataTaskRequest {
       "literature_ids",
     ],
   );
-  const providers = unique(
-    list(
-      shape.providers,
-      (v) => {
-        const p = rec(v, ["source", "scan_limit"]),
-          limit = count(p.scan_limit);
-        if (!limit) fail();
-        return Object.freeze({ source: source(p.source), scan_limit: limit });
-      },
-      32,
-    ),
-    (p) => p.source,
-  );
-  if (!providers.length) fail();
+  const positiveLimit = (v: unknown) => {
+    const n = count(v);
+    return n >= 1 ? n : fail();
+  };
+  const readProviders = <T extends number | null>(
+    readLimit: (v: unknown) => T,
+    optional = false,
+  ) => {
+    const providers = unique(
+      list(
+        shape.providers,
+        (v) => {
+          const p = optional
+            ? rec(v, ["source"], ["scan_limit"])
+            : rec(v, ["source", "scan_limit"]);
+          return Object.freeze({
+            source: source(p.source),
+            scan_limit: readLimit(p.scan_limit),
+          });
+        },
+        32,
+      ),
+      (p) => p.source,
+    );
+    if (!providers.length) fail();
+    return providers;
+  };
   if (shape.kind === "topic") {
     const r = rec(value, [
       "kind",
@@ -293,33 +312,33 @@ export function parseMetadataTaskRequest(value: unknown): MetadataTaskRequest {
     if (from !== null && to !== null && from > to) fail();
     return Object.freeze({
       kind: "topic",
-      providers,
+      providers: readProviders(positiveLimit),
       query: r.query,
       year_from: from,
       year_to: to,
     });
   }
   if (shape.kind === "citation") {
-    const r = rec(value, [
-        "kind",
-        "providers",
-        "seed_literature_ids",
-        "direction",
-        "max_depth",
-        "result_limit",
-      ]),
+    const r = rec(
+        value,
+        ["kind", "providers", "seed_literature_ids", "direction"],
+        ["max_depth", "result_limit"],
+      ),
       seeds = unique(
         list(r.seed_literature_ids, parseLiteratureId, 1000),
         (v) => v,
       ),
-      limit = count(r.result_limit);
-    if (!seeds.length || !limit) fail();
+      limit = r.result_limit == null ? null : positiveLimit(r.result_limit);
+    if (!seeds.length) fail();
     return Object.freeze({
       kind: "citation",
-      providers,
+      providers: readProviders(
+        (v) => (v == null ? null : positiveLimit(v)),
+        true,
+      ),
       seed_literature_ids: seeds,
       direction: one(r.direction, ["references", "cited-by", "both"]),
-      max_depth: count(r.max_depth, 32),
+      max_depth: r.max_depth === undefined ? 1 : count(r.max_depth, 32),
       result_limit: limit,
     });
   }
@@ -327,7 +346,11 @@ export function parseMetadataTaskRequest(value: unknown): MetadataTaskRequest {
   if (r.kind !== "lookup") fail();
   const ids = unique(list(r.literature_ids, parseLiteratureId, 1000), (v) => v);
   if (!ids.length) fail();
-  return Object.freeze({ kind: "lookup", providers, literature_ids: ids });
+  return Object.freeze({
+    kind: "lookup",
+    providers: readProviders(positiveLimit),
+    literature_ids: ids,
+  });
 }
 export function parseMetadataSourceProgress(
   value: unknown,

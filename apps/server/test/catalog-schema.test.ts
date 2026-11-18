@@ -23,6 +23,8 @@ import {
   SCHEMA_MANIFEST,
   SCHEMA_MANIFEST_V16,
   SCHEMA_MANIFEST_V17,
+  SCHEMA_MANIFEST_V18,
+  SCHEMA_FINGERPRINT_V18,
   SCHEMA_FINGERPRINT_V17,
   SCHEMA_FINGERPRINT_V16,
 } from "../src/storage/sqlite/schema.js";
@@ -32,8 +34,20 @@ const digest = async (path: string) =>
   createHash("sha256")
     .update(await readFile(path))
     .digest("hex");
-it("pins frozen 16 and verifies the frozen 17 and exact current 18 manifest and version-specific column checks", () => {
-  expect(SCHEMA_VERSION).toBe(18);
+it("pins frozen 16 and verifies the frozen 17 and frozen 18 and exact current 19 manifest and version-specific column checks", () => {
+  expect(SCHEMA_VERSION).toBe(19);
+  expect(SCHEMA_FINGERPRINT).toBe(
+    "a605840d3d19206f08551c2cb5b78199d5c4190b93673c9502d5fb412b1cd88c",
+  );
+  expect(SCHEMA_FINGERPRINT_V18).toBe(
+    "a95b796f5f8dd69839748571476a8bcc0f3d38ed1547d8f8aab25c38b1e2d8cf",
+  );
+  expect(
+    createHash("sha256")
+      .update(JSON.stringify(SCHEMA_MANIFEST_V18))
+      .digest("hex"),
+  ).toBe(SCHEMA_FINGERPRINT_V18);
+  expect(SCHEMA_MANIFEST).toHaveLength(SCHEMA_MANIFEST_V18.length);
   expect(SCHEMA_FINGERPRINT_V17).toBe(
     "b8c82c83c57f6f4826e9ed8fdb4080942b1acc863b10581a45221abc3441de91",
   );
@@ -184,7 +198,7 @@ it("pins frozen 16 and verifies the frozen 17 and exact current 18 manifest and 
     db.close();
   }
 });
-it("adds literature ownership only to current 18 while preserving the registration index and cascading batch FK", () => {
+it("adds literature ownership from 18 onward while preserving the registration index and cascading batch FK", () => {
   const frozen = SCHEMA_MANIFEST_V17.find((sql) =>
     sql.startsWith("CREATE TABLE intake_batch_objects("),
   )!;
@@ -234,7 +248,7 @@ it("adds literature ownership only to current 18 while preserving the registrati
     db.close();
   }
 });
-it("adds a nullable, closed display kind only to current 18 devices", () => {
+it("adds a nullable, closed display kind from 18 onward devices", () => {
   const frozen = SCHEMA_MANIFEST_V17.find((sql) =>
     sql.startsWith("CREATE TABLE device_connections("),
   )!;

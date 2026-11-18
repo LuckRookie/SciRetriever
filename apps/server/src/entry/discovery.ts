@@ -61,10 +61,10 @@ export interface CitationDiscoveryRequest {
   readonly seed_literature_ids: readonly string[];
   readonly direction: "references" | "cited-by" | "both";
   readonly max_depth: number;
-  readonly result_limit: number;
+  readonly result_limit: number | null;
   readonly providers: readonly {
     readonly provider_name: string;
-    readonly scan_limit: number;
+    readonly scan_limit: number | null;
   }[];
   readonly signal?: AbortSignal;
 }
@@ -85,11 +85,15 @@ const providerFailure = (reason: string): StableFailure => ({
 
 interface CitationProviderState {
   readonly provider_name: string;
-  readonly scan_limit: number;
+  readonly scan_limit: number | null;
   raw_item_count: number;
   attempted: boolean;
   terminal: "SCAN_LIMIT_REACHED" | "FAILED" | null;
   failure: StableFailure | null;
+}
+
+function citationScanLimitReached(state: CitationProviderState): boolean {
+  return state.scan_limit !== null && state.raw_item_count >= state.scan_limit;
 }
 
 /** A missing work or malformed record must not disable unrelated branches. */
@@ -112,8 +116,11 @@ function consumeCitationInvocation(
   state: CitationProviderState,
   invocation: MetadataProviderInvocation,
 ): void {
-  const remaining = state.scan_limit - state.raw_item_count;
-  if (invocation.raw_item_count < 0 || invocation.raw_item_count > remaining)
+  if (
+    invocation.raw_item_count < 0 ||
+    (state.scan_limit !== null &&
+      invocation.raw_item_count > state.scan_limit - state.raw_item_count)
+  )
     throw new Error("citation provider exceeded its run scan limit");
   state.raw_item_count += invocation.raw_item_count;
   if (invocation.outcome === "FAILED") {
@@ -122,7 +129,7 @@ function consumeCitationInvocation(
       invocation.failure ?? providerFailure("The citation provider failed."),
     );
   }
-  if (state.raw_item_count === state.scan_limit) {
+  if (citationScanLimitReached(state)) {
     state.terminal = "SCAN_LIMIT_REACHED";
   }
 }
@@ -369,8 +376,9 @@ export class CitationDiscoveryService {
     if (
       !Number.isSafeInteger(request.max_depth) ||
       request.max_depth < 0 ||
-      !Number.isSafeInteger(request.result_limit) ||
-      request.result_limit < 1
+      (request.result_limit !== null &&
+        (!Number.isSafeInteger(request.result_limit) ||
+          request.result_limit < 1))
     )
       throw new TypeError("citation bounds are invalid");
     if (!Array.isArray(request.providers) || request.providers.length === 0)
@@ -380,8 +388,9 @@ export class CitationDiscoveryService {
       if (
         !provider.provider_name.trim() ||
         states.has(provider.provider_name) ||
-        !Number.isSafeInteger(provider.scan_limit) ||
-        provider.scan_limit < 1
+        (provider.scan_limit !== null &&
+          (!Number.isSafeInteger(provider.scan_limit) ||
+            provider.scan_limit < 1))
       )
         throw new TypeError("citation providers are invalid");
       states.set(provider.provider_name, {
@@ -417,21 +426,15 @@ export class CitationDiscoveryService {
     try {
       const seenEdges = new Set<string>();
       const results = new Map<string, { meta_literature_id: string }>();
+      const resultLimitReached = () =>
+        request.result_limit !== null && results.size >= request.result_limit;
       const causes: Array<DiscoveryPublication["citation_causes"][number]> = [];
       let interrupted = request.signal?.aborted ?? false;
-      while (
-        frontier.size &&
-        !interrupted &&
-        results.size < request.result_limit
-      ) {
+      while (frontier.size && !interrupted && !resultLimitReached()) {
         const current = [...frontier.entries()];
         frontier.clear();
         for (const [sourceId, depth] of current) {
-          if (
-            depth >= request.max_depth ||
-            results.size >= request.result_limit
-          )
-            continue;
+          if (depth >= request.max_depth || resultLimitReached()) continue;
           const source = await this.database.getLiterature(sourceId);
           if (!source)
             throw new Error("citation seed Literature was not found");
@@ -444,7 +447,7 @@ export class CitationDiscoveryService {
                 .metadata_observations
             : [];
           for (const provider of request.providers) {
-            if (results.size >= request.result_limit || interrupted) break;
+            if (resultLimitReached() || interrupted) break;
             const state = states.get(provider.provider_name)!;
             if (state.terminal !== null) continue;
             if (request.signal?.aborted) {
@@ -476,7 +479,9 @@ export class CitationDiscoveryService {
                 request.direction,
                 provider.provider_name,
                 [key],
-                state.scan_limit - state.raw_item_count,
+                state.scan_limit === null
+                  ? null
+                  : state.scan_limit - state.raw_item_count,
                 request.signal,
               );
             } catch (error) {
@@ -638,7 +643,7 @@ export class CitationDiscoveryService {
                     const lookupState = states.get(candidate.provider_name)!;
                     if (
                       lookupState.terminal !== null ||
-                      lookupState.raw_item_count >= lookupState.scan_limit
+                      citationScanLimitReached(lookupState)
                     )
                       continue;
                     const lookupKey =
@@ -741,7 +746,7 @@ export class CitationDiscoveryService {
                 if (interrupted) break;
                 if (!targetLiterature) {
                   incomplete = true;
-                  if (state.raw_item_count < state.scan_limit)
+                  if (!citationScanLimitReached(state))
                     recordCitationFailure(
                       state,
                       providerFailure(
@@ -798,17 +803,14 @@ export class CitationDiscoveryService {
                   visited.add(targetLiterature.literature_id);
                   frontier.set(targetLiterature.literature_id, depth + 1);
                 }
-                if (results.size >= request.result_limit) break;
+                if (resultLimitReached()) break;
               }
-              if (
-                state.raw_item_count >= state.scan_limit &&
-                state.terminal === null
-              )
+              if (citationScanLimitReached(state) && state.terminal === null)
                 state.terminal = "SCAN_LIMIT_REACHED";
               if (
                 interrupted ||
                 state.terminal !== null ||
-                results.size >= request.result_limit
+                resultLimitReached()
               )
                 break;
             }

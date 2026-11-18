@@ -120,6 +120,79 @@ it("accepts positive safe metadata budgets above ten thousand and rejects invali
       expect(() => parseMetadataTaskRequest(input)).toThrow();
   }
 });
+it("defaults citation depth to one and normalizes omitted or null limits without relaxing topic or lookup bounds", () => {
+  const base = {
+    kind: "citation",
+    seed_literature_ids: [literature],
+    direction: "references",
+  };
+  for (const optional of [{}, { result_limit: null }])
+    for (const provider of [
+      { source: "crossref" },
+      { source: "crossref", scan_limit: null },
+    ]) {
+      const parsed = parseMetadataTaskRequest({
+        ...base,
+        ...optional,
+        providers: [provider],
+      });
+      expect(parsed).toEqual({
+        ...base,
+        max_depth: 1,
+        result_limit: null,
+        providers: [{ source: "crossref", scan_limit: null }],
+      });
+      expect(Object.isFrozen(parsed.providers[0])).toBe(true);
+      expect(
+        parseMetadataTaskRequest({ ...parsed, max_depth: 0 }),
+      ).toMatchObject({ max_depth: 0 });
+    }
+  for (const value of [
+    0,
+    -1,
+    1.5,
+    Number.MAX_SAFE_INTEGER + 1,
+    Infinity,
+    "1",
+  ]) {
+    expect(() =>
+      parseMetadataTaskRequest({
+        ...base,
+        result_limit: value,
+        providers: [{ source: "crossref" }],
+      }),
+    ).toThrow();
+    expect(() =>
+      parseMetadataTaskRequest({
+        ...base,
+        providers: [{ source: "crossref", scan_limit: value }],
+      }),
+    ).toThrow();
+  }
+  for (const provider of [
+    { source: "crossref" },
+    { source: "crossref", scan_limit: null },
+  ]) {
+    expect(() =>
+      parseMetadataTaskRequest({ ...request, providers: [provider] }),
+    ).toThrow();
+    expect(() =>
+      parseMetadataTaskRequest({
+        kind: "lookup",
+        literature_ids: [literature],
+        providers: [provider],
+      }),
+    ).toThrow();
+  }
+  for (const max_depth of [null, -1, 1.5, 33])
+    expect(() =>
+      parseMetadataTaskRequest({
+        ...base,
+        max_depth,
+        providers: [{ source: "crossref" }],
+      }),
+    ).toThrow();
+});
 it("keeps bounded progress phase payloads and puts every reason code inside technical details", () => {
   expect(parseMetadataSourceProgress(progress)).toEqual(progress);
   const problem = {

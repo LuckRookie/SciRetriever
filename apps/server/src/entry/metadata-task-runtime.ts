@@ -46,11 +46,7 @@ export async function executeMetadataTask(
   targetId: string,
 ): Promise<Record<string, unknown>> {
   const request = parseMetadataTaskRequest(value),
-    source_run = new MetadataSourceRun(ports.repository, jobId, targetId),
-    providers = request.providers.map((p) => ({
-      provider_name: p.source,
-      scan_limit: p.scan_limit,
-    }));
+    source_run = new MetadataSourceRun(ports.repository, jobId, targetId);
   if (request.kind === "topic")
     return {
       ...presentDiscoveryReport(
@@ -58,7 +54,10 @@ export async function executeMetadataTask(
           query: request.query,
           year_from: request.year_from,
           year_to: request.year_to,
-          providers,
+          providers: request.providers.map((p) => ({
+            provider_name: p.source,
+            scan_limit: p.scan_limit,
+          })),
           signal,
           source_run,
         }),
@@ -72,7 +71,10 @@ export async function executeMetadataTask(
           direction: request.direction,
           max_depth: request.max_depth,
           result_limit: request.result_limit,
-          providers,
+          providers: request.providers.map((p) => ({
+            provider_name: p.source,
+            scan_limit: p.scan_limit,
+          })),
           signal,
           source_run,
         }),
@@ -88,7 +90,10 @@ export async function executeMetadataTask(
       break;
     }
     const detail = await ports.library.detail(literatureId);
-    for (const provider of providers) {
+    for (const provider of request.providers.map((p) => ({
+      provider_name: p.source,
+      scan_limit: p.scan_limit,
+    }))) {
       if (signal.aborted) {
         interrupted = true;
         break;

@@ -60,8 +60,8 @@ export async function cleanupOpenAlexTopConcepts(path: string) {
       const identity = db.prepare("SELECT * FROM schema_identity").get();
       if (
         identity?.product !== "sciretriever" ||
-        identity.schema_version !== 18 ||
-        SCHEMA_VERSION !== 18 ||
+        identity.schema_version !== 19 ||
+        SCHEMA_VERSION !== 19 ||
         identity.schema_fingerprint !== SCHEMA_FINGERPRINT
       )
         refuse();

@@ -11,8 +11,14 @@ export function prepareMetadataTask(app: Application, value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new ContractValidationError();
   const { scan_limit, ...r } = value as Record<string, unknown>,
-    limit = scan_limit ?? app.configuration.sources.metadata.limit ?? 500;
-  if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1)
+    limit =
+      r.kind === "citation"
+        ? (scan_limit ?? null)
+        : (scan_limit ?? app.configuration.sources.metadata.limit ?? 500);
+  if (
+    limit !== null &&
+    (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1)
+  )
     throw new ContractValidationError();
   const selection =
     r.kind === "topic"

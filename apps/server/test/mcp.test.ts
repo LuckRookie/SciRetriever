@@ -1,3 +1,4 @@
+import { citationLimitsSource } from "./citation-limits-fixture.js";
 import { ParsingFailure } from "../src/parsing/ports.js";
 import { processorFixture } from "./processor-fixture.js";
 import { FIXTURE_DOI } from "../src/workbench/synthetic-fixture.js";
@@ -21,6 +22,92 @@ async function connected(host: ReturnType<typeof createMcpServer>) {
   await client.connect(transport);
   return client;
 }
+it("expands citations to source exhaustion with nullable run budgets and optional tool limits", async () => {
+  const source = citationLimitsSource();
+  const env = await coreProcessingFixture({
+    offline: true,
+    analysisModel: false,
+    metadata: { reference_query_ports: [source.port] },
+  });
+  const host = createMcpServer({
+    home: env.home,
+    maintenance: true,
+    applicationFactory: async () => env.app,
+  });
+  const client = await connected(host);
+  try {
+    const tool = (await client.listTools()).tools.find(
+      (t) => t.name === "discover_citations",
+    )!;
+    const schema = tool.inputSchema as {
+      required: string[];
+      properties: Record<string, Record<string, unknown>>;
+    };
+    expect(schema.required).toEqual(["seed_literature_id", "direction"]);
+    expect(schema.properties.max_depth).toMatchObject({ default: 1 });
+    for (const name of ["scan_limit", "result_limit"])
+      expect(schema.properties[name]).not.toHaveProperty("default");
+    const response = await client.callTool({
+      name: "discover_citations",
+      arguments: {
+        seed_literature_id: env.parseRequest.literature_id,
+        direction: "references",
+      },
+    });
+    expect(response.isError, JSON.stringify(response)).not.toBe(true);
+    const report = (
+      response.structuredContent as {
+        result: {
+          discovery_run_id: string;
+          job_id: string;
+          result_count: number;
+        };
+      }
+    ).result;
+    expect(report.result_count).toBe(source.count);
+    expect(source.stats).toEqual({
+      opens: 1,
+      pulls: source.count + 1,
+      exhausted: 1,
+    });
+    expect(
+      await env.app.database.getDiscovery(report.discovery_run_id),
+    ).toMatchObject({
+      run: { max_depth: 1, result_limit: null },
+      providers: [{ provider_name: "crossref", scan_limit: null }],
+      source_results: [{ outcome: "EXHAUSTED" }],
+    });
+    const read = await client.callTool({
+      name: "read_task",
+      arguments: { job_id: report.job_id },
+    });
+    expect(read.isError, JSON.stringify(read)).not.toBe(true);
+    expect(read.structuredContent).toMatchObject({
+      result: {
+        job: {
+          selector: {
+            request: {
+              operations: [
+                {
+                  request: {
+                    max_depth: 1,
+                    result_limit: null,
+                    providers: [{ scan_limit: null }],
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+  } finally {
+    await client.close();
+    await host.close();
+    await env.close();
+  }
+});
+
 it("accepts large metadata budgets in tool definitions and rejects unsafe integers before durable submission", async () => {
   const open = vi.fn(() => ({
     pull_raw_item: () => null,
@@ -70,6 +157,7 @@ it("accepts large metadata budgets in tool definitions and rejects unsafe intege
         input: {
           seed_literature_id: env.parseRequest.literature_id,
           direction: "references",
+          result_limit: 50000,
           scan_limit: 50000,
         },
       },

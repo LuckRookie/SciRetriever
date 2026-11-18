@@ -71,12 +71,16 @@ function relationMatches(
 
 async function* scanItems(
   provider_name: string,
-  scan_limit: number,
+  scan_limit: number | null,
   open: () => RawItemSession | Promise<RawItemSession>,
   signal?: AbortSignal,
   referenceQuery?: ReferenceQueryContext,
 ): AsyncGenerator<MetadataScanEvent> {
-  if (!Number.isSafeInteger(scan_limit) || scan_limit < 1)
+  if (
+    scan_limit === null
+      ? referenceQuery === undefined
+      : !Number.isSafeInteger(scan_limit) || scan_limit < 1
+  )
     throw new TypeError("scan_limit must be positive");
   let raw_item_count = 0;
   let firstFailure: StableFailure | null = null;
@@ -92,7 +96,7 @@ async function* scanItems(
   }
   try {
     const session = await open();
-    while (raw_item_count < scan_limit) {
+    while (scan_limit === null || raw_item_count < scan_limit) {
       if (signal?.aborted) {
         yield {
           kind: "end",
@@ -157,7 +161,9 @@ async function* scanItems(
     return;
   }
   const normal: MetadataProviderResult["outcome"] =
-    raw_item_count >= scan_limit ? "SCAN_LIMIT_REACHED" : "EXHAUSTED";
+    scan_limit !== null && raw_item_count >= scan_limit
+      ? "SCAN_LIMIT_REACHED"
+      : "EXHAUSTED";
   yield {
     kind: "end",
     provider_name,
@@ -311,7 +317,7 @@ export class MetadataService {
     request: MetadataReferenceQueryRequest,
     provider: string,
     keys: readonly ProviderLiteratureKey[],
-    scan_limit: number,
+    scan_limit: number | null,
     signal?: AbortSignal,
   ): Promise<MetadataProviderInvocation> {
     const name = providerName(provider);
@@ -333,7 +339,7 @@ export class MetadataService {
     direction: ReferenceQueryContext["direction"],
     provider: string,
     keys: readonly ProviderLiteratureKey[],
-    scan_limit: number,
+    scan_limit: number | null,
     signal?: AbortSignal,
   ): AsyncGenerator<MetadataScanEvent> {
     const name = providerName(provider);

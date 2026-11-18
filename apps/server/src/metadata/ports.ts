@@ -21,7 +21,7 @@ export interface MetadataLookupRequest {
 export interface ProviderReferenceQuery {
   readonly provider_name: string;
   readonly keys: readonly ProviderLiteratureKey[];
-  readonly scan_limit: number;
+  readonly scan_limit: number | null;
 }
 export interface MetadataReferenceQueryRequest {
   readonly direction: ReferenceQueryDirection;
