@@ -541,7 +541,7 @@ BatchSelector =
 
 生产 Browser 工作台只订阅当前显式获取操作：Entry 在冻结选择器后报告目标范围，并在目标开始和结算时投影当前目标与各分区计数；操作结束后投影同一个最终 `DatabaseCompletionReport`。这些会话反馈不创建持久 Job，也不改变报告对冻结目标的五分区归属。
 
-Job 运行中，`DatabaseCompletionService` 在冻结操作全程持有 Catalog 写入准入。应用层决定的外部 pause/cancel 通过 Storage 的专用 `execution_control_job` 命令直接交给同一个 SQLite worker，以短事务原子改变 Job 状态；这条窄控制通道不发布文献事实，也不开放给一般 Job 结算或其它写入。它不等待长操作的写入准入，但仍由单 worker 顺序执行，并在关闭后拒绝。pause 仅从 queued/running 生效，cancel 可覆盖 paused，已取消 Job 不会被 pause 或运行终态覆写；每个后续目标在领取时原子检查 Job 状态，已在途目标继续结算并保留其有效提交。
+Job 运行中，`DatabaseCompletionService` 在冻结操作全程持有 Catalog 写入准入。应用层决定的外部 pause/cancel 通过 Storage 的专用 `execution_control_job` 命令直接交给同一个 SQLite worker，以短事务原子改变 Job 状态；这条窄控制通道不发布文献事实，也不开放给一般 Job 结算或其它写入。它不等待长操作的写入准入，但仍由单 worker 顺序执行，并在关闭后拒绝。pause 仅从 queued/running 生效，cancel 可从 queued/running/paused/interrupted 生效；对不允许的转换返回稳定冲突错误，不静默返回原状态，已取消 Job 不会被 pause 或运行终态覆写；每个后续目标在领取时原子检查 Job 状态，已在途目标继续结算并保留其有效提交。
 
 目标 Entry 使用五种互斥 Report：
 
@@ -1512,6 +1512,7 @@ ProcessingTaskService 都从共同执行边界进入。嵌套/并行运行共享
 异步释放完成前不接纳下一次租约；不跨模型调用持有业务写锁。
 ProcessingTaskService 按 `execution.max_concurrency` 并行（默认 4）：后台 start 超额等待，
 前台 run/runResults 超额只拒绝、不排队，已取消的前台调用不启动任务。
+后台 start 被接受时，在该任务的 execution_events 追加一条 `task-start-requested`；任务列表与详情读取带布尔字段 `start_requested`，界面据此区分“未启动”与“排队中”，不改库结构。服务启动且取得执行 runtime 后，把请求过启动、状态仍为 queued、没有任何 attempt 的任务重新放回等待队列；interrupted 的任务不自动继续。
 另一个 Application 启动时若执行 runtime 仍活跃，则跳过崩溃恢复，也不能抢跑任务。
 ProcessingTaskService 执行中每 500 ms 读取控制状态，可观察其它进程发出的 pause/cancel；完成产物保留。
 关闭服务会中断并结算在途任务，进程停止后不继续工作，重启后需要显式 run/resume/retry。
