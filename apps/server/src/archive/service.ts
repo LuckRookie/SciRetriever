@@ -178,7 +178,7 @@ export class ArchiveService extends ArchiveReader {
         }),
       })),
     });
-    this.tasks.start(job.job_id);
+    await this.tasks.start(job.job_id);
     return { job, members: selected.items.length };
   }
   async resume(id: string, signal?: AbortSignal) {

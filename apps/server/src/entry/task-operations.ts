@@ -91,7 +91,7 @@ export function createTaskOperations(app: Application) {
       task.status === "failed"
     )
       throw new ProcessingTaskError("processing-resume-required");
-    return { started: runtime.start(id), task };
+    return { started: await runtime.start(id), task };
   };
   const start = (id: string) =>
     app.restartAdmission
@@ -104,7 +104,8 @@ export function createTaskOperations(app: Application) {
     if (!(await repository.getJob(id)))
       throw new ProcessingTaskError("processing-not-found");
     await runtime.control(id, action);
-    if (action === "resume" || action === "retry") runtime.start(id);
+    if (action === "resume" || action === "retry")
+      await runtime.start(id, action);
     return read(id);
   };
   return {

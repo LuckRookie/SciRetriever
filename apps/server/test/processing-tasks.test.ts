@@ -267,7 +267,7 @@ describe("durable product processing tasks", () => {
         service.run(refused.job_id, controller.signal),
       ).rejects.toMatchObject({ code: "processing-capacity" });
       controller.abort();
-      expect(service.start(background.job_id)).toBe(false);
+      expect(await service.start(background.job_id)).toBe(false);
       release();
       await running;
       await vi.waitFor(
@@ -442,7 +442,7 @@ describe("durable product processing tasks", () => {
           { operation: "parse-documents", request: env.rawParseRequest },
         ],
       });
-      env.app.processingTasks!.start(job.job_id);
+      await env.app.processingTasks!.start(job.job_id);
       await vi.waitFor(() => expect(env.parseCalls).toBe(2));
       const paused = await env.app.processingTasks!.control(
         job.job_id,

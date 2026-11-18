@@ -1512,7 +1512,7 @@ ProcessingTaskService 都从共同执行边界进入。嵌套/并行运行共享
 异步释放完成前不接纳下一次租约；不跨模型调用持有业务写锁。
 ProcessingTaskService 按 `execution.max_concurrency` 并行（默认 4）：后台 start 超额等待，
 前台 run/runResults 超额只拒绝、不排队，已取消的前台调用不启动任务。
-后台 start 被接受时，在该任务的 execution_events 追加一条 `task-start-requested`；任务列表与详情读取带布尔字段 `start_requested`，界面据此区分“未启动”与“排队中”，不改库结构。服务启动且取得执行 runtime 后，把请求过启动、状态仍为 queued、没有任何 attempt 的任务重新放回等待队列；interrupted 的任务不自动继续。
+后台 start 被接受时，在该任务的 execution_events 追加一条 `task-start-requested`；任务列表与详情读取带布尔字段 `start_requested`，界面据此区分“未启动”与“排队中”，不改库结构。常驻网页服务启动且取得执行 runtime 后（CLI 命令、MCP stdio 等随调用开关的进程不续排），把请求过启动、状态仍为 queued、没有任何 attempt 的任务重新放回等待队列；interrupted 的任务不自动继续。
 另一个 Application 启动时若执行 runtime 仍活跃，则跳过崩溃恢复，也不能抢跑任务。
 ProcessingTaskService 执行中每 500 ms 读取控制状态，可观察其它进程发出的 pause/cancel；完成产物保留。
 关闭服务会中断并结算在途任务，进程停止后不继续工作，重启后需要显式 run/resume/retry。

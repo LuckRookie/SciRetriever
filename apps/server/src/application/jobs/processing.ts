@@ -86,6 +86,9 @@ export async function readProcessingTask(
   const events = await processingEvents(repository, jobId);
   return {
     job,
+    start_requested: events.some(
+      (event) => event.kind === "task-start-requested",
+    ),
     targets,
     source_results: await taskSourceResults(repository, jobId),
     archive: {
@@ -238,8 +241,35 @@ export class ProcessingTaskService {
       runtime_failure: this.backgroundFailures.get(jobId) ?? null,
     };
   }
-  start(jobId: string): boolean {
+  async start(
+    jobId: string,
+    intent: "start" | "resume" | "retry" = "start",
+  ): Promise<boolean> {
+    if (this.stopped) throw new ProcessingTaskError("processing-closed");
+    if (intent === "start") {
+      const job = await this.repository.requestStart(jobId);
+      if (!job) throw new ProcessingTaskError("processing-not-found");
+      if (job.status === "completed" || job.status === "cancelled")
+        throw new ProcessingTaskError("processing-terminal");
+      if (!["queued", "running"].includes(job.status))
+        throw new ProcessingTaskError("processing-resume-required");
+      // An accepted request remains durable if shutdown begins during its write.
+      if (this.stopped) return false;
+    }
     return this.admit(jobId, true);
+  }
+  /** Called only while startup owns the execution runtime, after crash recovery. */
+  async restoreRequested() {
+    for (const jobId of await this.repository.listRequestedJobs())
+      this.waiting.add(jobId);
+    this.drainWaiting();
+  }
+  private drainWaiting() {
+    if (this.stopped) return;
+    for (const jobId of this.waiting) {
+      if (this.running.size >= this.maxConcurrent) break;
+      this.admit(jobId, true);
+    }
   }
   private admit(jobId: string, enqueue: boolean): boolean {
     // Admission happens synchronously, before the first awaited repository read.
@@ -282,11 +312,7 @@ export class ProcessingTaskService {
       })
       .finally(() => {
         this.running.delete(jobId);
-        if (!this.stopped)
-          for (const queued of this.waiting) {
-            if (this.running.size >= this.maxConcurrent) break;
-            this.start(queued);
-          }
+        this.drainWaiting();
       });
     this.running.set(jobId, { controller, promise });
     // Observe detached rejection even if the store itself failed before recording it.

@@ -2700,11 +2700,18 @@ function listExecutionJobs(
         FROM execution_targets
         WHERE job_id IN (SELECT job_id FROM selected_jobs) AND (literature_id IS NULL OR ${visibilityModule.visibleLiteratureSql("literature_id")})
         GROUP BY job_id
+      ), requested_starts AS (
+        SELECT job_id, 1 AS requested
+        FROM execution_events
+        WHERE job_id IN (SELECT job_id FROM selected_jobs) AND kind='task-start-requested'
+        GROUP BY job_id
       )
       SELECT job.*, COALESCE(progress.total,0) AS progress_total,
-        COALESCE(progress.done,0) AS progress_done
+        COALESCE(progress.done,0) AS progress_done,
+        COALESCE(requested_starts.requested,0) AS start_requested
       FROM selected_jobs job
       LEFT JOIN progress ON progress.job_id=job.job_id
+      LEFT JOIN requested_starts ON requested_starts.job_id=job.job_id
       ORDER BY ${sort.replaceAll("job_id", "job.job_id")}`,
     )
     .all(...args, limit);
@@ -2718,7 +2725,45 @@ function listExecutionJobs(
     created_at: row.created_at,
     finished_at: row.finished_at,
     progress: { total: row.progress_total, done: row.progress_done },
+    start_requested: Boolean(row.start_requested),
   }));
+}
+function requestExecutionStart(
+  jobId: Dynamic,
+  eventId: Dynamic,
+  actor: Dynamic,
+  now: Dynamic,
+): Dynamic {
+  requireRuntime();
+  return transaction(() => {
+    const job = getExecutionJob(jobId);
+    if (job && ["queued", "running"].includes(job.status))
+      insertExecutionEvent({
+        event_id: eventId,
+        job_id: jobId,
+        sequence: -1,
+        kind: "task-start-requested",
+        payload: { actor },
+        created_at: now,
+      });
+    return job;
+  });
+}
+function listRequestedExecutionJobs(): Dynamic {
+  requireRuntime();
+  return db
+    .prepare(
+      `SELECT job.job_id FROM execution_jobs job
+       JOIN execution_events event ON event.job_id=job.job_id AND event.kind='task-start-requested'
+       WHERE job.status='queued' AND NOT EXISTS (
+         SELECT 1 FROM execution_targets target
+         JOIN execution_attempts attempt ON attempt.target_id=target.target_id
+         WHERE target.job_id=job.job_id
+       )
+       GROUP BY job.job_id ORDER BY MIN(event.rowid)`,
+    )
+    .all()
+    .map((row: Dynamic) => row.job_id);
 }
 function getExecutionPolicy(jobId: Dynamic): Dynamic {
   requireRuntime();
@@ -3107,33 +3152,32 @@ function finishExecutionAttempt(
 }
 function appendExecutionEvent(event: Dynamic): Dynamic {
   requireRuntime();
-  return transaction(() => {
-    if (
-      !db
-        .prepare("SELECT 1 FROM execution_jobs WHERE job_id=?")
-        .get(event.job_id)
+  return transaction(() => insertExecutionEvent(event));
+}
+function insertExecutionEvent(event: Dynamic): Dynamic {
+  if (
+    !db.prepare("SELECT 1 FROM execution_jobs WHERE job_id=?").get(event.job_id)
+  )
+    fail();
+  const last = db
+    .prepare(
+      "SELECT max(sequence) AS sequence FROM execution_events WHERE job_id=?",
     )
-      fail();
-    const last = db
-      .prepare(
-        "SELECT max(sequence) AS sequence FROM execution_events WHERE job_id=?",
-      )
-      .get(event.job_id);
-    const expected = last.sequence === null ? 0 : Number(last.sequence) + 1;
-    const sequence = event.sequence === -1 ? expected : event.sequence;
-    if (sequence !== expected) fail();
-    db.prepare(
-      "INSERT INTO execution_events(event_id,job_id,sequence,kind,payload_json,created_at) VALUES(?,?,?,?,?,?)",
-    ).run(
-      event.event_id,
-      event.job_id,
-      sequence,
-      event.kind,
-      JSON.stringify(event.payload),
-      event.created_at,
-    );
-    return { ...event, sequence };
-  });
+    .get(event.job_id);
+  const expected = last.sequence === null ? 0 : Number(last.sequence) + 1;
+  const sequence = event.sequence === -1 ? expected : event.sequence;
+  if (sequence !== expected) fail();
+  db.prepare(
+    "INSERT INTO execution_events(event_id,job_id,sequence,kind,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+  ).run(
+    event.event_id,
+    event.job_id,
+    sequence,
+    event.kind,
+    JSON.stringify(event.payload),
+    event.created_at,
+  );
+  return { ...event, sequence };
 }
 function listExecutionEvents(
   jobId: Dynamic,
@@ -5322,6 +5366,17 @@ port.on("message", (message: WorkerMessage) => {
         break;
       case "execution_get_job":
         value = getExecutionJob(message.command.jobId);
+        break;
+      case "execution_request_start":
+        value = requestExecutionStart(
+          message.command.jobId,
+          message.command.eventId,
+          message.command.actor,
+          message.command.now,
+        );
+        break;
+      case "execution_list_requested_jobs":
+        value = listRequestedExecutionJobs();
         break;
       case "execution_list_jobs":
         value = listExecutionJobs(

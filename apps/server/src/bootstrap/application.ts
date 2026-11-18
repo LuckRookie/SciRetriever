@@ -223,7 +223,6 @@ import { RetrievalIndexService } from "../retrieval/index.js";
 import { KnowledgeContextService } from "../retrieval/knowledge-query.js";
 import { MaterialContextService } from "../retrieval/query.js";
 import { ExecutionRepository } from "../storage/execution/repository.js";
-import { acquireExecutionRuntime } from "../storage/execution/runtime-owner.js";
 import { ArtifactReclaimer } from "../storage/files/reclamation.js";
 import { ArtifactRecovery } from "../storage/files/recovery.js";
 import { FileStore } from "../storage/files/store.js";
@@ -489,6 +488,8 @@ export type ApplicationStage =
   | "agents"
   | "schema";
 export interface ApplicationOptions {
+  /** Long-lived execution hosts opt in; one-shot Applications leave requested work queued. */
+  readonly restoreRequestedTasks?: boolean;
   readonly capture?: CaptureOptions;
   readonly importSessions?: ImportSessionOptions;
   /** Poll timing seam; null gives isolated tests explicit ownership of index phases. */
@@ -1912,36 +1913,35 @@ async function createApplicationOwned(
     );
     await database.schema();
     let executionRecovery: Application["executionRecovery"] = null;
-    let recoveryLease: Awaited<
-      ReturnType<typeof acquireExecutionRuntime>
-    > | null = null;
+    let recoveryEntered = false;
     try {
-      recoveryLease = await acquireExecutionRuntime(catalogPath);
+      await database.withExecutionRuntime(async () => {
+        recoveryEntered = true;
+        await artifactRecovery.recover();
+        if (queue && execution) {
+          const recovered = await queue.recover(bootId);
+          const publications = await execution.publisher.reconcile();
+          executionRecovery = {
+            recovered_attempts: recovered.recovered_attempts,
+            recovered_targets: recovered.recovered_targets,
+            recovered_jobs: recovered.recovered_jobs,
+            released_leases: recovered.released_leases,
+            expired_interventions: recovered.expired_interventions,
+            reconciled_publications: publications.length,
+          };
+          // Share the connection's runtime lease with the restored background
+          // runs so another Application cannot acquire it between recovery and dispatch.
+          if (options.restoreRequestedTasks === true)
+            await processingTasks?.restoreRequested();
+        }
+      });
     } catch (error) {
       if (
-        !(
-          error instanceof WriteAdmissionError &&
-          error.code === "write-admission-conflict"
-        )
+        recoveryEntered ||
+        !(error instanceof WriteAdmissionError) ||
+        error.code !== "write-admission-conflict"
       )
         throw error;
-    }
-    try {
-      if (recoveryLease) await artifactRecovery.recover();
-      if (recoveryLease && queue && execution) {
-        const recovered = await queue.recover(bootId);
-        const publications = await execution.publisher.reconcile();
-        executionRecovery = {
-          recovered_attempts: recovered.recovered_attempts,
-          recovered_targets: recovered.recovered_targets,
-          recovered_jobs: recovered.recovered_jobs,
-          released_leases: recovered.released_leases,
-          expired_interventions: recovered.expired_interventions,
-          reconciled_publications: publications.length,
-        };
-      }
-    } finally {
-      await recoveryLease?.release();
     }
     const effectiveAcquisitionRoutes = () =>
       configuredAcquisitionRoutes(

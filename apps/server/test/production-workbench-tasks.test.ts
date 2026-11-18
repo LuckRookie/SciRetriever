@@ -146,8 +146,12 @@ async function fixture(
   const start = ProcessingTaskService.prototype.start;
   const started = vi
     .spyOn(ProcessingTaskService.prototype, "start")
-    .mockImplementation(function (this: ProcessingTaskService, id: string) {
-      const admitted = start.call(this, id);
+    .mockImplementation(async function (
+      this: ProcessingTaskService,
+      ...args: Parameters<ProcessingTaskService["start"]>
+    ) {
+      const admitted = await start.apply(this, args);
+      const [id] = args;
       if (admitted) {
         const pending = this.runResults(id);
         settlements.set(id, pending);
@@ -253,6 +257,22 @@ async function fixture(
 }
 
 describe("production task workbench composition", () => {
+  it("opts its long-lived Application into restoring requested queued work", async () => {
+    const restored = vi.spyOn(
+      ProcessingTaskService.prototype,
+      "restoreRequested",
+    );
+    let env: Awaited<ReturnType<typeof fixture>> | undefined;
+    try {
+      env = await fixture();
+      expect(restored).toHaveBeenCalledOnce();
+      expect(env.server.application.executionRecovery).not.toBeNull();
+    } finally {
+      await env?.close();
+      restored.mockRestore();
+    }
+  });
+
   it("cancels an interrupted task over HTTP and retains published raw parses and receipts", async () => {
     const env = await fixture();
     try {
@@ -539,6 +559,7 @@ describe("production task workbench composition", () => {
         await repository.updateJob(jobId, item.status);
         expected.set(jobId, {
           ...job,
+          start_requested: false,
           scope: null,
           status: item.status,
           progress: { total: item.dispositions.length, done: item.done },
@@ -852,6 +873,9 @@ describe("production task workbench composition", () => {
       expect(submitted.status).toBe(201);
       const id = (submitted.value.task as { job_id: string }).job_id;
       expect(env.parseCalls).toBe(0);
+      expect(await env.call(`/api/tasks/${id}`)).toMatchObject({
+        value: { task: { start_requested: false } },
+      });
       expect(await env.call(`/api/tasks/${id}/start`, {})).toMatchObject({
         status: 202,
         value: { started: true },
@@ -866,6 +890,7 @@ describe("production task workbench composition", () => {
         value: {
           task: {
             job: { status: "completed" },
+            start_requested: true,
             results: [{ operation: "parse-documents" }],
             failures: [],
             policy: { mode: "never" },
@@ -923,8 +948,8 @@ describe("production task workbench composition", () => {
         status: 200,
         value: {
           tasks: expect.arrayContaining([
-            expect.objectContaining({ job_id: id }),
-            expect.objectContaining({ job_id: pdfId }),
+            expect.objectContaining({ job_id: id, start_requested: true }),
+            expect.objectContaining({ job_id: pdfId, start_requested: false }),
           ]),
         },
       });

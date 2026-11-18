@@ -495,6 +495,14 @@ export type SqliteCommand =
     }
   | { readonly kind: "execution_get_job"; readonly jobId: string }
   | {
+      readonly kind: "execution_request_start";
+      readonly jobId: string;
+      readonly eventId: string;
+      readonly actor: string;
+      readonly now: string;
+    }
+  | { readonly kind: "execution_list_requested_jobs" }
+  | {
       readonly kind: "execution_list_jobs";
       readonly before: ExecutionJobCursor | null;
       readonly statuses: readonly ExecutionJobStatus[];
@@ -801,6 +809,7 @@ export interface ExecutionJob {
 /** A list projection, not an additional persisted execution fact. */
 export interface ExecutionJobListItem extends ExecutionJob {
   readonly progress: TaskProgress;
+  readonly start_requested: boolean;
 }
 export interface ExecutionTarget {
   readonly target_id: string;
@@ -1297,6 +1306,7 @@ export class SqliteWorker {
       "execution_restore_check",
       "execution_get_job",
       "execution_list_jobs",
+      "execution_list_requested_jobs",
       "execution_list_targets",
       "execution_list_attempts",
       "execution_get_target",
@@ -1976,6 +1986,33 @@ export class SqliteWorker {
     });
     return value === null ? null : parseExecutionPolicy(value);
   }
+  async requestExecutionStart(
+    jobId: string,
+    eventId: string,
+    actor: string,
+    now: string,
+  ): Promise<ExecutionJob | null> {
+    executionText(jobId);
+    executionText(eventId);
+    executionText(actor);
+    executionText(now, 64);
+    const value = await this.run<unknown>({
+      kind: "execution_request_start",
+      jobId,
+      eventId,
+      actor,
+      now,
+    });
+    return value === null ? null : parseExecutionJob(value);
+  }
+  async listRequestedExecutionJobs(): Promise<readonly string[]> {
+    const value = await this.run<unknown>({
+      kind: "execution_list_requested_jobs",
+    });
+    if (!Array.isArray(value)) throw new SqliteWorkerError();
+    for (const id of value) executionText(id);
+    return Object.freeze(value as string[]);
+  }
   async getExecutionBudget(jobId: string): Promise<ExecutionBudget | null> {
     executionText(jobId);
     const value = await this.run<unknown>({
@@ -2049,8 +2086,13 @@ export class SqliteWorker {
     return Object.freeze(
       value.map((item: unknown) => {
         const job = parseExecutionJob(item);
-        const { progress } = item as Record<string, unknown>;
-        return { ...job, progress: parseTaskProgress(progress) };
+        const { progress, start_requested } = item as Record<string, unknown>;
+        if (typeof start_requested !== "boolean") throw new SqliteWorkerError();
+        return {
+          ...job,
+          progress: parseTaskProgress(progress),
+          start_requested,
+        };
       }),
     );
   }

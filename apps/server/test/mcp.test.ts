@@ -22,6 +22,132 @@ async function connected(host: ReturnType<typeof createMcpServer>) {
   await client.connect(transport);
   return client;
 }
+it("keeps previously requested work queued when its session-scoped MCP Application opens and closes", async () => {
+  const env = await coreProcessingFixture({
+    offline: true,
+    analysisModel: false,
+  });
+  let host: ReturnType<typeof createMcpServer> | undefined;
+  let client: Client | undefined;
+  try {
+    const job = await env.app.jobService!.create({
+      target_kind: "selector",
+      selector: {
+        kind: "literatures",
+        literature_ids: [env.parseRequest.literature_id],
+      },
+      goal: "pdf",
+      policy_version: "mcp-no-restore",
+      policy: { mode: "never", max_retries: 0 },
+      idempotency_key: "mcp-no-restore",
+    });
+    await env.app.jobs!.requestStart(job.job_id);
+    const target = (await env.app.jobs!.listTargets(job.job_id))[0]!;
+    await env.app.close();
+    host = createMcpServer({
+      home: env.home,
+      maintenance: true,
+    });
+    client = await connected(host);
+    // This saves a separate job and constructs the real MCP-owned Application.
+    // Both PDF targets already have a primary PDF; no provider is called.
+    const saved = await client.callTool({
+      name: "create_task",
+      arguments: {
+        request: {
+          kind: "acquire-pdf",
+          idempotency_key: "mcp-unstarted-sibling",
+          selector: {
+            kind: "literatures",
+            literature_ids: [env.parseRequest.literature_id],
+          },
+        },
+      },
+    });
+    expect(saved.isError, JSON.stringify(saved)).not.toBe(true);
+    const state = await client.callTool({
+      name: "read_task",
+      arguments: { job_id: job.job_id },
+    });
+    expect(state.isError, JSON.stringify(state)).not.toBe(true);
+    expect(state.structuredContent).toMatchObject({
+      result: { job: { status: "queued" }, start_requested: true },
+    });
+    await client.close();
+    await host.close();
+    await env.reopen();
+    expect((await env.app.jobs!.getJob(job.job_id))?.status).toBe("queued");
+    expect(await env.app.jobs!.listAttempts(target.target_id)).toEqual([]);
+    expect(env.parseCalls).toBe(0);
+    expect(env.modelCalls).toBe(0);
+  } finally {
+    await client?.close();
+    await host?.close();
+    await env.close();
+  }
+});
+
+it("reads durable start requests through task lists and both task detail tools", async () => {
+  const env = await coreProcessingFixture({
+    offline: true,
+    analysisModel: false,
+  });
+  const host = createMcpServer({
+    maintenance: true,
+    applicationFactory: async () => env.app,
+    queryFactory: () => createQueryApplication(env.home),
+  });
+  const client = await connected(host);
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const response = await client.callTool({ name, arguments: args });
+    expect(response.isError, JSON.stringify(response)).not.toBe(true);
+    return (response.structuredContent as { result: Record<string, unknown> })
+      .result;
+  };
+  try {
+    const job = await env.app.processingTasks!.submit({
+      schema_version: 1,
+      idempotency_key: "mcp-start-marker",
+      operations: [
+        { operation: "parse-documents", request: env.rawParseRequest },
+      ],
+    });
+    for (const tool of ["read_task", "inspect_task"])
+      expect(await call(tool, { job_id: job.job_id })).toMatchObject({
+        start_requested: false,
+      });
+    expect(await call("list_tasks", {})).toMatchObject({
+      tasks: [{ job_id: job.job_id, start_requested: false }],
+    });
+    expect(
+      await call("control_task", { job_id: job.job_id, action: "run" }),
+    ).toMatchObject({ start_requested: true });
+    await vi.waitFor(
+      async () =>
+        expect(
+          (await env.app.processingTasks!.read(job.job_id)).job.status,
+        ).toBe("completed"),
+      { timeout: 20_000 },
+    );
+    for (const tool of ["read_task", "inspect_task"])
+      expect(await call(tool, { job_id: job.job_id })).toMatchObject({
+        start_requested: true,
+      });
+    expect(await call("list_tasks", {})).toMatchObject({
+      tasks: [{ job_id: job.job_id, start_requested: true }],
+    });
+    expect(
+      (await env.app.jobs!.listEvents(job.job_id)).filter(
+        (e) => e.kind === "task-start-requested",
+      ),
+    ).toMatchObject([{ payload: { actor: expect.stringMatching(/^mcp:/u) } }]);
+  } finally {
+    await client.close();
+    await host.close();
+    await env.close();
+  }
+});
+
 it("expands citations to source exhaustion with nullable run budgets and optional tool limits", async () => {
   const source = citationLimitsSource();
   const env = await coreProcessingFixture({

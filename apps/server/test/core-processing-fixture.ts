@@ -53,6 +53,7 @@ export async function coreProcessingFixture(
     inspectResponseSchema?: (schema: unknown) => void;
     metadata?: ApplicationOptions["metadata"];
     autoIndexRefresh?: boolean;
+    restoreRequestedTasks?: boolean;
   } = {},
 ) {
   const home = await mkdtemp(
@@ -112,6 +113,9 @@ export async function coreProcessingFixture(
     };
   };
   const options: ApplicationOptions = {
+    ...(optionsInput.restoreRequestedTasks === undefined
+      ? {}
+      : { restoreRequestedTasks: optionsInput.restoreRequestedTasks }),
     // Most processor tests explicitly own index phases. Automatic-refresh tests
     // opt into a short clock while exercising the same production assembly.
     indexRefreshIntervalMs: optionsInput.autoIndexRefresh ? 25 : null,

@@ -138,6 +138,6 @@ async function performSubmitProcessor(
   if (!app.processors || !app.processingTasks)
     processorError("catalog-v10-required");
   const job = await app.processors.submit(value, signal);
-  if (start) app.processingTasks.start(job.job_id);
+  if (start) await app.processingTasks.start(job.job_id);
   return job;
 }

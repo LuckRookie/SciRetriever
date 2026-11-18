@@ -471,6 +471,7 @@ async function startProductionWorkbenchOwned(
     void _permit;
     application = await createApplication(options.home, {
       ...applicationOptions,
+      restoreRequestedTasks: true,
       importSessions: { maintain: true, ...applicationOptions.importSessions },
       configurationOwner,
 

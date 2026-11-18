@@ -147,6 +147,17 @@ export class ExecutionRepository {
   getJob(jobId: string): Promise<ExecutionJob | null> {
     return this.database.getExecutionJob(jobId);
   }
+  requestStart(jobId: string): Promise<ExecutionJob | null> {
+    return this.database.requestExecutionStart(
+      jobId,
+      `event-${randomUUID()}`,
+      activityContext().actor,
+      new Date().toISOString(),
+    );
+  }
+  listRequestedJobs(): Promise<readonly string[]> {
+    return this.database.listRequestedExecutionJobs();
+  }
   getPolicy(jobId: string): Promise<ExecutionPolicySnapshot | null> {
     return this.database.getExecutionPolicy(jobId);
   }

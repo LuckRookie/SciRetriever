@@ -178,7 +178,7 @@ async function performMaintenance(
       policy_version: "form-drafts-v1",
       policy: { mode: "never", max_retries: 0, max_model_calls: 0 },
     });
-    app.processingTasks.start(job.job_id);
+    await app.processingTasks.start(job.job_id);
     return job;
   }
   if (operation === "intake-batch-rename") {

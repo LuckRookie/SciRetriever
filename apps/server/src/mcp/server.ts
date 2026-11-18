@@ -342,7 +342,7 @@ export function createMcpServer(options: McpOptions = {}) {
       const a = await application();
       if (!a.processingTasks) unavailable();
       const job = await a.processingTasks.submit(args);
-      a.processingTasks.start(job.job_id);
+      await a.processingTasks.start(job.job_id);
       return { job_id: job.job_id, status: job.status };
     }
     if (name === "acquire_pdf") {
@@ -361,7 +361,7 @@ export function createMcpServer(options: McpOptions = {}) {
         policy: { mode: "never", max_retries: 0 },
         idempotency_key: args.idempotency_key as string,
       });
-      a.processingTasks.start(job.job_id);
+      await a.processingTasks.start(job.job_id);
       return { job_id: job.job_id, status: job.status };
     }
     if (name === "lookup_metadata") {
@@ -404,7 +404,10 @@ export function createMcpServer(options: McpOptions = {}) {
           args.action as "pause" | "cancel" | "resume" | "retry",
         );
       if (["run", "resume", "retry"].includes(String(args.action)))
-        a.processingTasks.start(id);
+        await a.processingTasks.start(
+          id,
+          args.action === "run" ? "start" : (args.action as "resume" | "retry"),
+        );
       return a.processingTasks.read(id);
     }
     const q = await reading();
