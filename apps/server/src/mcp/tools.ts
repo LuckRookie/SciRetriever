@@ -1203,7 +1203,7 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
         maxItems: 32,
         items: object({
           provider_name: text,
-          scan_limit: { type: "integer", minimum: 1, maximum: 10000 },
+          scan_limit: { type: "integer", minimum: 1 },
         }),
       },
     }),
@@ -1242,7 +1242,7 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
         maxItems: 1000,
         uniqueItems: true,
       },
-      scan_limit: { type: "integer", minimum: 1, maximum: 10000 },
+      scan_limit: { type: "integer", minimum: 1 },
     }),
     false,
   ),
@@ -1252,7 +1252,7 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
     object({
       seed_literature_id: id,
       direction: { enum: ["references", "cited-by"] },
-      scan_limit: { type: "integer", minimum: 1, maximum: 10000 },
+      scan_limit: { type: "integer", minimum: 1 },
     }),
     false,
   ),

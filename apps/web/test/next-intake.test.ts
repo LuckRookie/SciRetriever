@@ -277,3 +277,62 @@ it("says how to connect the extension until one is connected, then where Zotero 
     await w.close();
   }
 }, 60000);
+
+it("takes any scan limit of at least 1, 50,000 included, as the discovery's scan_limit (ADR 0022 §3)", async () => {
+  const w = await nextWorkspace({ path: "/?view=disc", ready: ".intake-form" });
+  try {
+    const page = w.page;
+    const discoveries: unknown[] = [];
+    await page.route("**/api/discovery?*", async (route) => {
+      discoveries.push(route.request().postDataJSON());
+      await route.fulfill({
+        status: 200,
+        json: {
+          report: {
+            discovery_run_id: "00000000-0000-0000-0000-000000000982",
+            status: "COMPLETED",
+            accepted_count: 0,
+            matched_count: 0,
+            source_results: [],
+            fixture: true,
+          },
+        },
+      });
+    });
+    await page.getByText("每个来源最多扫描的原始条数，不少于 1。").waitFor();
+    await page.getByRole("textbox", { name: "主题或检索式" }).fill("halide");
+    const limit = page.getByRole("textbox", { name: "逐来源扫描上限" });
+    await limit.fill("50000");
+    await limit.press("Tab");
+    await page.getByRole("button", { name: "开始发现", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "确认发现文献" });
+    await dialog.getByText("每来源最多 50000 条").waitFor();
+    await dialog.getByRole("button", { name: "确认执行", exact: true }).click();
+    await expect.poll(() => discoveries.length).toBe(1);
+    expect(discoveries[0]).toMatchObject({
+      query: "halide",
+      scan_limit: 50000,
+    });
+    // Citation expansion takes it too.
+    await page.getByRole("tab", { name: "引用扩展", exact: true }).click();
+    await page
+      .getByText("最多扫描的原始条数，不少于 1。", { exact: true })
+      .waitFor();
+    await page
+      .getByRole("textbox", { name: "种子文献 ID" })
+      .fill(w.env.parseRequest.literature_id);
+    const cited = page.getByRole("textbox", { name: "扫描上限" });
+    await cited.fill("50000");
+    await cited.press("Tab");
+    await page.getByRole("button", { name: "开始发现", exact: true }).click();
+    await dialog.getByRole("button", { name: "确认执行", exact: true }).click();
+    await expect.poll(() => discoveries.length).toBe(2);
+    expect(discoveries[1]).toMatchObject({
+      kind: "citation",
+      scan_limit: 50000,
+    });
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 60000);

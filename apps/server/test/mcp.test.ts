@@ -3,6 +3,7 @@ import { processorFixture } from "./processor-fixture.js";
 import { FIXTURE_DOI } from "../src/workbench/synthetic-fixture.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Ajv2020 } from "ajv/dist/2020.js";
 import { describe, expect, it, vi } from "vitest";
 import { createMcpServer } from "../src/mcp/server.js";
 import { coreProcessingFixture } from "./core-processing-fixture.js";
@@ -20,6 +21,165 @@ async function connected(host: ReturnType<typeof createMcpServer>) {
   await client.connect(transport);
   return client;
 }
+it("accepts large metadata budgets in tool definitions and rejects unsafe integers before durable submission", async () => {
+  const open = vi.fn(() => ({
+    pull_raw_item: () => null,
+    convert_raw_item: () => ({ observations: [], relations: [] }),
+  }));
+  const env = await coreProcessingFixture({
+    offline: true,
+    analysisModel: false,
+    metadata: {
+      topic_search_ports: [
+        { provider_name: "crossref", open_topic_search: open },
+      ],
+      lookup_ports: [{ provider_name: "crossref", open_lookup: open }],
+      reference_query_ports: [
+        { provider_name: "crossref", open_reference_query: open },
+      ],
+    },
+  });
+  const host = createMcpServer({
+    home: env.home,
+    maintenance: true,
+    applicationFactory: async () => env.app,
+  });
+  const client = await connected(host);
+  try {
+    const definitions = (await client.listTools()).tools;
+    const ajv = new Ajv2020({ strict: false });
+    const cases = [
+      {
+        name: "discover_metadata",
+        input: {
+          query: "synthetic",
+          year_from: null,
+          year_to: null,
+          providers: [{ provider_name: "crossref", scan_limit: 50000 }],
+        },
+      },
+      {
+        name: "lookup_metadata",
+        input: {
+          literature_ids: [env.parseRequest.literature_id],
+          scan_limit: 50000,
+        },
+      },
+      {
+        name: "discover_citations",
+        input: {
+          seed_literature_id: env.parseRequest.literature_id,
+          direction: "references",
+          scan_limit: 50000,
+        },
+      },
+    ];
+    for (const { name, input } of cases) {
+      const definition = definitions.find((tool) => tool.name === name)!;
+      expect(ajv.compile(definition.inputSchema)(input)).toBe(true);
+      const response = await client.callTool({ name, arguments: input });
+      expect(response.isError, JSON.stringify(response)).not.toBe(true);
+      const { job_id } = (
+        response.structuredContent as { result: { job_id: string } }
+      ).result;
+      expect((await env.app.jobs!.getJob(job_id))!.selector).toMatchObject({
+        request: {
+          operations: [
+            {
+              operation: "acquire-metadata",
+              request: {
+                providers: [{ source: "crossref", scan_limit: 50000 }],
+                ...(name === "discover_citations"
+                  ? { result_limit: 50000 }
+                  : {}),
+              },
+            },
+          ],
+        },
+      });
+    }
+    const citation = {
+      kind: "citation",
+      seed_literature_ids: [env.parseRequest.literature_id],
+      direction: "both",
+      max_depth: 1,
+      result_limit: 50000,
+      providers: [{ source: "crossref", scan_limit: 50000 }],
+    };
+    const saved = await client.callTool({
+      name: "create_task",
+      arguments: {
+        request: {
+          kind: "metadata",
+          idempotency_key: "large-citation-budget",
+          request: citation,
+        },
+      },
+    });
+    expect(saved.isError, JSON.stringify(saved)).not.toBe(true);
+    const { job_id } = (
+      saved.structuredContent as { result: { job_id: string } }
+    ).result;
+    expect((await env.app.jobs!.getJob(job_id))!.selector).toMatchObject({
+      request: { operations: [{ request: citation }] },
+    });
+    const submit = vi.spyOn(env.app.processingTasks!, "submit");
+    const opened = open.mock.calls.length;
+    try {
+      for (const limit of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+        for (const { name, input } of cases) {
+          const response = await client.callTool({
+            name,
+            arguments:
+              name === "discover_metadata"
+                ? {
+                    ...input,
+                    providers: [
+                      { provider_name: "crossref", scan_limit: limit },
+                    ],
+                  }
+                : { ...input, scan_limit: limit },
+          });
+          expect(response.isError).toBe(true);
+          expect(response.structuredContent).toMatchObject({
+            result: {
+              failure: {
+                code:
+                  limit > Number.MAX_SAFE_INTEGER
+                    ? "invalid-contract"
+                    : "invalid-request",
+              },
+            },
+          });
+        }
+        const response = await client.callTool({
+          name: "create_task",
+          arguments: {
+            request: {
+              kind: "metadata",
+              idempotency_key: "invalid-citation-budget",
+              request: { ...citation, result_limit: limit },
+            },
+          },
+        });
+        expect(response.isError).toBe(true);
+        expect(response.structuredContent).toMatchObject({
+          result: { failure: { code: "invalid-contract" } },
+        });
+      }
+      expect(submit).not.toHaveBeenCalled();
+      expect(open).toHaveBeenCalledTimes(opened);
+    } finally {
+      submit.mockRestore();
+    }
+    expect(env.parseCalls).toBe(0);
+    expect(env.modelCalls).toBe(0);
+  } finally {
+    await client.close();
+    await host.close();
+    await env.close();
+  }
+});
 it("exposes paper full_text and version with_primary_pdf in the read-only library_counts tool", async () => {
   const f = await libraryFullTextFixture(),
     host = createMcpServer({ home: f.home }),

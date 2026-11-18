@@ -55,6 +55,15 @@ async function fixture() {
     applicationOptions: {
       browserHost: () => null,
       metadata: {
+        lookup_ports: [
+          {
+            provider_name: "crossref",
+            open_lookup: () => ({
+              pull_raw_item: async () => null,
+              convert_raw_item: () => ({ observations: [], relations: [] }),
+            }),
+          },
+        ],
         reference_query_ports: [
           {
             provider_name: "crossref",
@@ -239,6 +248,78 @@ async function fixture() {
 }
 
 describe("production task workbench composition", () => {
+  it("saves metadata tasks with large safe budgets without running them and rejects invalid bounds", async () => {
+    const env = await fixture();
+    try {
+      const id = FIXTURE_LITERATURE.literature_id;
+      await env.server.application.database.putLiterature(FIXTURE_LITERATURE);
+      const requests = [
+        { kind: "topic", query: "synthetic", year_from: null, year_to: null },
+        { kind: "lookup", literature_ids: [id] },
+        {
+          kind: "citation",
+          seed_literature_ids: [id],
+          direction: "both",
+          max_depth: 1,
+          result_limit: 50000,
+        },
+      ];
+      for (const request of requests) {
+        const response = await env.call("/api/tasks", {
+          kind: "metadata",
+          idempotency_key: `large-${request.kind}`,
+          request: { ...request, scan_limit: 50000 },
+        });
+        expect(response.status, JSON.stringify(response.value)).toBe(201);
+        const jobId = (response.value.task as { job_id: string }).job_id;
+        expect(await env.server.application.jobs!.getJob(jobId)).toMatchObject({
+          status: "queued",
+          selector: {
+            request: {
+              operations: [
+                {
+                  request: {
+                    ...request,
+                    providers: [{ source: "crossref", scan_limit: 50000 }],
+                  },
+                },
+              ],
+            },
+          },
+        });
+        for (const limit of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+          expect(
+            (
+              await env.call("/api/tasks", {
+                kind: "metadata",
+                idempotency_key: `invalid-${request.kind}`,
+                request: { ...request, scan_limit: limit },
+              })
+            ).status,
+          ).toBe(400);
+          if (request.kind === "citation")
+            expect(
+              (
+                await env.call("/api/tasks", {
+                  kind: "metadata",
+                  idempotency_key: "invalid-citation-result",
+                  request: {
+                    ...request,
+                    scan_limit: 50000,
+                    result_limit: limit,
+                  },
+                })
+              ).status,
+            ).toBe(400);
+        }
+      }
+      expect((await env.call("/api/tasks")).value.tasks).toHaveLength(3);
+      expect(env.discoveryCalls).toBe(0);
+      expect(env.parseCalls).toBe(0);
+    } finally {
+      await env.close();
+    }
+  });
   it("projects current target progress for every task status group and cursor page", async () => {
     const env = await fixture();
     const repository = env.server.application.jobs!;
@@ -393,7 +474,7 @@ describe("production task workbench composition", () => {
         kind: "citation",
         seed_literature_id: FIXTURE_LITERATURE.literature_id,
         direction: "references",
-        scan_limit: 25,
+        scan_limit: 50000,
       };
       expect(
         (await env.call("/api/discovery", { ...request, direction: "invalid" }))
@@ -407,9 +488,9 @@ describe("production task workbench composition", () => {
           seed_literature_ids: [FIXTURE_LITERATURE.literature_id],
           direction: "references",
           max_depth: 1,
-          result_limit: 25,
+          result_limit: 50000,
           providers: expect.arrayContaining([
-            expect.objectContaining({ scan_limit: 25 }),
+            expect.objectContaining({ scan_limit: 50000 }),
           ]),
         }),
       );
@@ -560,7 +641,10 @@ describe("production task workbench composition", () => {
         }),
       ).toMatchObject({ status: 400 });
       expect(
-        await env.call("/api/discovery", { query: "synthetic", scan_limit: 1 }),
+        await env.call("/api/discovery", {
+          query: "synthetic",
+          scan_limit: 50000,
+        }),
       ).toMatchObject({
         status: 200,
         value: {

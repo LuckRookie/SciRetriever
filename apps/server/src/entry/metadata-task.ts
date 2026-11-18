@@ -12,12 +12,7 @@ export function prepareMetadataTask(app: Application, value: unknown) {
     throw new ContractValidationError();
   const { scan_limit, ...r } = value as Record<string, unknown>,
     limit = scan_limit ?? app.configuration.sources.metadata.limit ?? 500;
-  if (
-    typeof limit !== "number" ||
-    !Number.isSafeInteger(limit) ||
-    limit < 1 ||
-    limit > 10000
-  )
+  if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1)
     throw new ContractValidationError();
   const selection =
     r.kind === "topic"

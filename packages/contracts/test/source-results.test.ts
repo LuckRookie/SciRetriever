@@ -83,6 +83,43 @@ it("parses frozen topic, citation and lookup selections without accepting arbitr
   ])
     expect(() => parseMetadataTaskRequest(value)).toThrow();
 });
+it("accepts positive safe metadata budgets above ten thousand and rejects invalid integer boundaries", () => {
+  const citation = {
+    kind: "citation",
+    seed_literature_ids: [literature],
+    direction: "both",
+    max_depth: 2,
+    result_limit: 50000,
+    providers: [{ source: "crossref", scan_limit: 50000 }],
+  };
+  for (const limit of [1, 10001, 50000, Number.MAX_SAFE_INTEGER]) {
+    const providers = [{ source: "crossref", scan_limit: limit }];
+    for (const input of [
+      { ...request, providers },
+      { kind: "lookup", literature_ids: [literature], providers },
+      { ...citation, providers, result_limit: limit },
+    ])
+      expect(parseMetadataTaskRequest(input)).toEqual(input);
+  }
+  for (const limit of [
+    0,
+    -1,
+    1.5,
+    Number.MAX_SAFE_INTEGER + 1,
+    NaN,
+    Infinity,
+    "50000",
+  ]) {
+    const providers = [{ source: "crossref", scan_limit: limit }];
+    for (const input of [
+      { ...request, providers },
+      { kind: "lookup", literature_ids: [literature], providers },
+      { ...citation, providers },
+      { ...citation, result_limit: limit },
+    ])
+      expect(() => parseMetadataTaskRequest(input)).toThrow();
+  }
+});
 it("keeps bounded progress phase payloads and puts every reason code inside technical details", () => {
   expect(parseMetadataSourceProgress(progress)).toEqual(progress);
   const problem = {

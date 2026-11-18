@@ -160,7 +160,7 @@ it("reads identical metadata task summaries and source statistics over HTTP, CLI
       query: "synthetic",
       year_from: null,
       year_to: null,
-      providers: [{ provider_name: "crossref", scan_limit: 2 }],
+      providers: [{ provider_name: "crossref", scan_limit: 50000 }],
     });
     expect(discovered).toMatchObject({
       job_id: expect.any(String),
@@ -173,7 +173,7 @@ it("reads identical metadata task summaries and source statistics over HTTP, CLI
     )[0]!.literature_id;
     const lookedUp = await mcp("lookup_metadata", {
       literature_ids: [literatureId],
-      scan_limit: 2,
+      scan_limit: 50000,
     });
     expect(lookedUp).toMatchObject({
       source_summary: {
@@ -187,7 +187,7 @@ it("reads identical metadata task summaries and source statistics over HTTP, CLI
       .mockResolvedValueOnce(app);
     try {
       const reply = await runCli(
-        ["metadata", "lookup", literatureId, "--scan-limit", "2", "--json"],
+        ["metadata", "lookup", literatureId, "--scan-limit", "50000", "--json"],
         { home },
       );
       expect(reply.code).toBe(0);

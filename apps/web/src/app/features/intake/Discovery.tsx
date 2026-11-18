@@ -120,13 +120,15 @@ export function Discovery({
                   maxLength={8192}
                 />
               </Definition>
-              <Definition term="逐来源扫描上限" description="1–10,000 条">
+              <Definition
+                term="逐来源扫描上限"
+                description="每个来源最多扫描的原始条数，不少于 1。"
+              >
                 <NumberField
                   label="逐来源扫描上限"
                   value={limit}
                   onChange={setLimit}
                   minValue={1}
-                  maxValue={10000}
                 />
               </Definition>
               <Definition term="出版年份" description="可只填一端。">
@@ -178,13 +180,15 @@ export function Discovery({
                   ]}
                 />
               </Definition>
-              <Definition term="扫描上限" description="1–10,000 条">
+              <Definition
+                term="扫描上限"
+                description="最多扫描的原始条数，不少于 1。"
+              >
                 <NumberField
                   label="扫描上限"
                   value={limit}
                   onChange={setLimit}
                   minValue={1}
-                  maxValue={10000}
                 />
               </Definition>
             </>

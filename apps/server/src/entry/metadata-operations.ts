@@ -29,8 +29,7 @@ export function createMetadataOperations(app: Application) {
           !["references", "cited-by"].includes(String(r.direction)) ||
           typeof r.scan_limit !== "number" ||
           !Number.isSafeInteger(r.scan_limit) ||
-          r.scan_limit < 1 ||
-          r.scan_limit > 10000
+          r.scan_limit < 1
         )
           throw new ContractValidationError();
         if (!app.metadata.reference_selection.length)
@@ -64,8 +63,7 @@ export function createMetadataOperations(app: Application) {
       if (
         typeof limit !== "number" ||
         !Number.isSafeInteger(limit) ||
-        limit < 1 ||
-        limit > 10000
+        limit < 1
       )
         throw new ContractValidationError();
       const year = (value: unknown): number | null => {

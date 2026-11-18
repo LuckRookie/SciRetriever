@@ -264,7 +264,7 @@ export function parseMetadataTaskRequest(value: unknown): MetadataTaskRequest {
       shape.providers,
       (v) => {
         const p = rec(v, ["source", "scan_limit"]),
-          limit = count(p.scan_limit, 10000);
+          limit = count(p.scan_limit);
         if (!limit) fail();
         return Object.freeze({ source: source(p.source), scan_limit: limit });
       },
@@ -312,7 +312,7 @@ export function parseMetadataTaskRequest(value: unknown): MetadataTaskRequest {
         list(r.seed_literature_ids, parseLiteratureId, 1000),
         (v) => v,
       ),
-      limit = count(r.result_limit, 10000);
+      limit = count(r.result_limit);
     if (!seeds.length || !limit) fail();
     return Object.freeze({
       kind: "citation",
