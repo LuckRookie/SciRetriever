@@ -82,35 +82,41 @@ Owner 2026-11-16：“先把阅读、用户体验、元数据下载、pdf导入�
 
 ## 结果块
 
-| 块                                | 结果                                                    | 实施            | 依赖                                | 状态        |
-| --------------------------------- | ------------------------------------------------------- | --------------- | ----------------------------------- | ----------- |
-| [01](01-reader-input.md)          | 阅读页的键鼠交互：Ctrl+滚轮缩放、右键菜单、其余快捷操作 | 前端            | 规格（总设计师，依据 Fable 的设计） | Completed   |
-| [02](02-side-panel.md)            | 右侧面板：信息、批注、关联（引用数）、翻译              | 前端            | —                                   | Completed   |
-| [03](03-spine-strip-and-toc.md)   | 书脊与目录浮层                                          | 前端            | —                                   | Completed   |
-| [04](04-type-and-marks.md)        | 排版与标记                                              | 前端            | —                                   | Completed   |
-| [05](05-reader-acceptance.md)     | 阅读页验收（R2）                                        | 前端、总设计师  | 01–04                               | Completed   |
-| [06](06-cli-help.md)              | CLI 帮助补齐                                            | 后端            | —                                   | Completed   |
-| [07](07-saved-filters-storage.md) | 保存的筛选进入 catalog；schema 18                       | 后端            | —                                   | Completed   |
-| [08](08-relocation-storage.md)    | 重新定位结果的记录                                      | 后端            | 07                                  | Completed   |
-| [09](09-saved-filters-web.md)     | Web 的保存筛选与浏览器导入                              | 前端            | 07                                  | Completed   |
-| [10](10-relocation-reader.md)     | 阅读器里的重新定位                                      | 前端            | 08；02–04                           | Completed   |
-| [11](11-export.md)                | 分组与筛选的导出                                        | 后端；11.5 前端 | 07；11.5 等 09                      | Completed   |
-| [12](12-intake-web.md)            | 入库页与批次页                                          | 前端            | 12.7 等 13                          | Completed   |
-| [13](13-withdrawal.md)            | 撤回一个批次                                            | 后端            | 13.3 前补规格                       | Completed   |
-| [14](14-zotero-probe.md)          | Zotero 接口探测                                         | 总设计师、Owner | G-probe                             | In progress |
-| [15](15-zotero-adapter.md)        | Zotero 适配器                                           | 后端            | 14                                  | Pending     |
-| [16](16-extension.md)             | 扩展：弹窗与从 Zotero 导入                              | 前端            | 16.4 起等 14、15、12                | Partial     |
-| [17](17-zotero-annotations.md)    | Zotero 批注导入                                         | 后端            | 15；17.1 规格                       | Pending     |
-| [18](18-fulltext-status-read.md)  | 全文取得情况的读取                                      | 后端            | —                                   | Completed   |
-| [19](19-fulltext-status-web.md)   | Web 上的全文取得情况                                    | 前端            | 18；09 之后                         | Completed   |
-| [20](20-scale-mechanics-check.md) | 万篇机制验收                                            | 后端            | 20.6 等 18                          | Completed   |
-| [21](21-real-run.md)              | 真实获取运行                                            | 执行者、Owner   | 18、20；G-lib 等                    | Pending     |
-| [22](22-scale-follow-up.md)       | 从数字到后续                                            | 总设计师、Owner | 20；21                              | Pending     |
-| [23](23-real-checks.md)           | 真实文件、真实文献库上的核对与试用                      | 各方            | 各项单独授权                        | Pending     |
-| [25](25-web-intake-gaps.md)       | 网页上的两处入库缺口：书目待补、上传 PDF 改走补 PDF     | 前端；25.3 后端 | —                                   | Completed   |
-| [26](26-main-style-and-themes.md) | 主风格（墨色主按钮、蓝作笔迹、状态四色）与七套阅读主题  | 前端            | —                                   | Not started |
-| [27](27-sidebar-and-entries.md)   | 侧栏只留主线、加工折叠；需处理与浏览器并入任务页        | 前端            | 26 的 26.1、26.2                    | Not started |
-| [24](24-closing.md)               | 收尾：规格、指南、部署、全量                            | 总设计师、后端  | 各块                                | Pending     |
+| 块                                | 结果                                                    | 实施                  | 依赖                                | 状态        |
+| --------------------------------- | ------------------------------------------------------- | --------------------- | ----------------------------------- | ----------- |
+| [01](01-reader-input.md)          | 阅读页的键鼠交互：Ctrl+滚轮缩放、右键菜单、其余快捷操作 | 前端                  | 规格（总设计师，依据 Fable 的设计） | Completed   |
+| [02](02-side-panel.md)            | 右侧面板：信息、批注、关联（引用数）、翻译              | 前端                  | —                                   | Completed   |
+| [03](03-spine-strip-and-toc.md)   | 书脊与目录浮层                                          | 前端                  | —                                   | Completed   |
+| [04](04-type-and-marks.md)        | 排版与标记                                              | 前端                  | —                                   | Completed   |
+| [05](05-reader-acceptance.md)     | 阅读页验收（R2）                                        | 前端、总设计师        | 01–04                               | Completed   |
+| [06](06-cli-help.md)              | CLI 帮助补齐                                            | 后端                  | —                                   | Completed   |
+| [07](07-saved-filters-storage.md) | 保存的筛选进入 catalog；schema 18                       | 后端                  | —                                   | Completed   |
+| [08](08-relocation-storage.md)    | 重新定位结果的记录                                      | 后端                  | 07                                  | Completed   |
+| [09](09-saved-filters-web.md)     | Web 的保存筛选与浏览器导入                              | 前端                  | 07                                  | Completed   |
+| [10](10-relocation-reader.md)     | 阅读器里的重新定位                                      | 前端                  | 08；02–04                           | Completed   |
+| [11](11-export.md)                | 分组与筛选的导出                                        | 后端；11.5 前端       | 07；11.5 等 09                      | Completed   |
+| [12](12-intake-web.md)            | 入库页与批次页                                          | 前端                  | 12.7 等 13                          | Completed   |
+| [13](13-withdrawal.md)            | 撤回一个批次                                            | 后端                  | 13.3 前补规格                       | Completed   |
+| [14](14-zotero-probe.md)          | Zotero 接口探测                                         | 总设计师、Owner       | G-probe                             | In progress |
+| [15](15-zotero-adapter.md)        | Zotero 适配器                                           | 后端                  | 14                                  | Pending     |
+| [16](16-extension.md)             | 扩展：弹窗与从 Zotero 导入                              | 前端                  | 16.4 起等 14、15、12                | Partial     |
+| [17](17-zotero-annotations.md)    | Zotero 批注导入                                         | 后端                  | 15；17.1 规格                       | Pending     |
+| [18](18-fulltext-status-read.md)  | 全文取得情况的读取                                      | 后端                  | —                                   | Completed   |
+| [19](19-fulltext-status-web.md)   | Web 上的全文取得情况                                    | 前端                  | 18；09 之后                         | Completed   |
+| [20](20-scale-mechanics-check.md) | 万篇机制验收                                            | 后端                  | 20.6 等 18                          | Completed   |
+| [21](21-real-run.md)              | 真实获取运行                                            | 执行者、Owner         | 18、20；G-lib 等                    | Pending     |
+| [22](22-scale-follow-up.md)       | 从数字到后续                                            | 总设计师、Owner       | 20；21                              | Pending     |
+| [23](23-real-checks.md)           | 真实文件、真实文献库上的核对与试用                      | 各方                  | 各项单独授权                        | Pending     |
+| [25](25-web-intake-gaps.md)       | 网页上的两处入库缺口：书目待补、上传 PDF 改走补 PDF     | 前端；25.3 后端       | —                                   | Completed   |
+| [26](26-main-style-and-themes.md) | 主风格（墨色主按钮、蓝作笔迹、状态四色）与七套阅读主题  | 前端                  | —                                   | Not started |
+| [27](27-sidebar-and-entries.md)   | 侧栏只留主线、加工折叠；需处理与浏览器并入任务页        | 前端                  | 26 的 26.1、26.2                    | Not started |
+| [28](28-plain-words.md)           | 界面用词换成大白话                                      | 前端                  | 26.1、26.2                          | Not started |
+| [29](29-library-density.md)       | 文献库：表格显示、顶部合并、筛选、预览；去掉顶栏        | 前端                  | 27                                  | Not started |
+| [30](30-reader-page.md)           | 阅读页：书目页、顶栏、排版面板、选区与书脊              | 前端                  | 26                                  | Not started |
+| [31](31-task-states.md)           | 任务：状态用词与按钮、未启动与排队中、需处理            | 后端 31.1、31.2；前端 | —                                   | Not started |
+| [32](32-full-text-results.md)     | 全文检索的结果                                          | 前端                  | 27                                  | Not started |
+| [33](33-settings-and-dialogs.md)  | 设置重组、对话框与全站规则                              | 前端                  | 26                                  | Not started |
+| [24](24-closing.md)               | 收尾：规格、指南、部署、全量                            | 总设计师、后端        | 各块                                | Pending     |
 
 ## 先后顺序
 
@@ -160,7 +166,7 @@ Owner 2026-11-16：“先把阅读、用户体验、元数据下载、pdf导入�
 - 2026-11-18：修正元数据任务的扫描上限：规格只要求 `scan_limit`、`result_limit` 不小于 1，合同、MCP、准入与网页表单却拒绝超过 10000 的值（`7156ab38`）。Owner 授权“去掉并部署”，4174 部署 `7156ab38`，结构仍是 18、未迁移，停服 3 分 24 秒，未回退（`sandbox/reports/2026-11-18-scan-limit-deploy/`）。部署前保存的 3 个主题任务仍按每个来源 10000 冻结。
 - 2026-11-18：修正工作台侧栏在矮窗口里滚不动、点不到“设置”（侧栏格子缺 `min-height: 0`，`4ca9f197`）。4174 部署 `4ca9f197`，结构 18 未迁移，停服 1 分 59 秒，未回退（`sandbox/reports/2026-11-18-sidebar-deploy/run-2/`）。同日 Owner：以后改完直接部署，不再过问。
 - 2026-11-18：侧栏“n 进行中”与顶栏“活动 · n”只数运行中的任务，保存未启动的任务不再算作进行中（`8269c2e2`）。4174 部署 `8269c2e2`，结构 18 未迁移，停服 1 分 46 秒，未回退（`sandbox/reports/2026-11-18-task-count-deploy/`）。待 Owner 定：持久状态分不出“保存未启动”与“已启动在等空位”。
-- 2026-11-19：按 Owner 要求全面审查前端，问题清单在 `sandbox/reports/2026-11-19-frontend-audit/REPORT.md`；6 个确认的 bug 交前端实施者修。Owner 定下主风格（“印的是墨，记号才有颜色”，第三版）并要求多做几套阅读主题，已写入设计内核，新增 26 块。同日 Owner 同意侧栏入口方案，写入页面规格，新增 27 块。术语等其余设计问题待定。
+- 2026-11-19：按 Owner 要求全面审查前端，问题清单在 `sandbox/reports/2026-11-19-frontend-audit/REPORT.md`；6 个确认的 bug 交前端实施者修。Owner 定下主风格（“印的是墨，记号才有颜色”，第三版）并要求多做几套阅读主题，已写入设计内核，新增 26 块。同日 Owner 同意侧栏入口方案，写入页面规格，新增 27 块。同日第二轮审查（交互状态、设置与全文检索），Owner 同意其余方案并要求一次做完：写入设计内核规则 6、8 到 12、页面规格“界面用词”与各页目标、阅读体验 9.0，新增 28 到 33 块。26 到 33 块做完后一次部署。
 - 恢复时先读本 README 与当前块；派工说明与回执在 `sandbox/prompts/`、`sandbox/reports/`。
 
 ## 变更记录
