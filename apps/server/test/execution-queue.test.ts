@@ -36,6 +36,85 @@ async function setup() {
 }
 
 describe("execution queue recovery semantics", () => {
+  it("cancels interrupted work with a finish time while preserving accepted results and target state", async () => {
+    const env = await setup();
+    try {
+      await env.repository.updateTarget(
+        "target-queue-test",
+        "completed",
+        "completed",
+      );
+      await env.repository.appendEvent({
+        event_id: "accepted-result",
+        job_id: env.job.job_id,
+        sequence: -1,
+        kind: "processing-result",
+        payload: {
+          target_id: "target-queue-test",
+          result: { result_id: "accepted-result" },
+        },
+        created_at: "2026-11-19T00:00:00.000Z",
+      });
+      await env.repository.updateJob(env.job.job_id, "interrupted");
+      const targets = await env.repository.listTargets(env.job.job_id);
+      const events = await env.repository.listEvents(env.job.job_id);
+      const budget = await env.repository.getBudget(env.job.job_id);
+      const finishedAt = "2026-11-19T00:01:00.000Z";
+      expect(await env.queue.cancel(env.job.job_id, finishedAt)).toMatchObject({
+        status: "cancelled",
+        finished_at: finishedAt,
+      });
+      expect(await env.repository.listTargets(env.job.job_id)).toEqual(targets);
+      expect(await env.repository.listEvents(env.job.job_id)).toEqual(events);
+      expect(await env.repository.getBudget(env.job.job_id)).toEqual(budget);
+    } finally {
+      await env.database.close();
+    }
+  });
+
+  it.each(["completed", "cancelled", "failed"] as const)(
+    "rejects pause and cancel of %s jobs atomically without changing job facts",
+    async (status) => {
+      const env = await setup();
+      try {
+        const original = await env.repository.updateJob(
+          env.job.job_id,
+          status,
+          "2026-11-19T00:00:00.000Z",
+        );
+        const targets = await env.repository.listTargets(env.job.job_id);
+        for (const requested of ["paused", "cancelled"] as const) {
+          await expect(
+            env.repository.controlJob(
+              env.job.job_id,
+              requested,
+              "2026-11-19T00:01:00.000Z",
+            ),
+          ).rejects.toMatchObject({ code: "execution-job-terminal" });
+          expect(await env.repository.getJob(env.job.job_id)).toEqual(original);
+          expect(await env.repository.listTargets(env.job.job_id)).toEqual(
+            targets,
+          );
+        }
+      } finally {
+        await env.database.close();
+      }
+    },
+  );
+
+  it.each(["paused", "interrupted"] as const)(
+    "keeps the existing pause no-op for %s work",
+    async (status) => {
+      const env = await setup();
+      try {
+        const original = await env.repository.updateJob(env.job.job_id, status);
+        expect(await env.queue.pause(env.job.job_id)).toEqual(original);
+      } finally {
+        await env.database.close();
+      }
+    },
+  );
+
   it("bounds newest task history after ordering while preserving FIFO callers", async () => {
     const env = await setup();
     try {

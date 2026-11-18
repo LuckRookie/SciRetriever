@@ -10,6 +10,43 @@ import { ProcessingTaskService } from "../src/application/jobs/processing.js";
 import { WriteAdmissionError } from "../src/storage/write-admission.js";
 
 describe("durable product processing tasks", () => {
+  it("reports a terminal conflict when completion wins the race with operator control", async () => {
+    const env = await coreProcessingFixture({
+      offline: true,
+      analysisModel: false,
+    });
+    try {
+      const job = await env.app.processingTasks!.submit({
+        schema_version: 1,
+        idempotency_key: "control-completion-race",
+        operations: [
+          { operation: "parse-documents", request: env.rawParseRequest },
+        ],
+      });
+      const control = env.app.jobs!.controlJob.bind(env.app.jobs!);
+      vi.spyOn(env.app.jobs!, "controlJob").mockImplementationOnce(
+        async (...args) => {
+          await env.app.jobs!.updateJob(
+            job.job_id,
+            "completed",
+            "2026-11-19T00:00:00.000Z",
+          );
+          return control(...args);
+        },
+      );
+      await expect(
+        env.app.processingTasks!.control(job.job_id, "cancel"),
+      ).rejects.toMatchObject({ code: "processing-terminal" });
+      expect(await env.app.jobs!.getJob(job.job_id)).toMatchObject({
+        status: "completed",
+        finished_at: "2026-11-19T00:00:00.000Z",
+      });
+      expect(env.parseCalls).toBe(0);
+    } finally {
+      await env.close();
+    }
+  });
+
   it("persists a failed draft alongside successful raw profiles without failing the processing task", async () => {
     const env = await coreProcessingFixture({
       offline: true,

@@ -2906,12 +2906,14 @@ function controlExecutionJob(
   requireRuntime();
   return transaction(() => {
     if (status !== "paused" && status !== "cancelled") fail();
-    db.prepare(
-      "UPDATE execution_jobs SET status=?,finished_at=? WHERE job_id=? AND ((?='paused' AND status IN ('queued','running')) OR (?='cancelled' AND status IN ('queued','running','paused')))",
-    ).run(status, finishedAt, jobId, status, status);
+    const result = db
+      .prepare(
+        "UPDATE execution_jobs SET status=?,finished_at=? WHERE job_id=? AND ((?='paused' AND status IN ('queued','running')) OR (?='cancelled' AND status IN ('queued','running','paused','interrupted')))",
+      )
+      .run(status, finishedAt, jobId, status, status);
     const job = getExecutionJob(jobId);
     if (!job) fail();
-    return job;
+    return { job, changed: result.changes === 1 };
   });
 }
 function putExecutionTarget(target: Dynamic): Dynamic {

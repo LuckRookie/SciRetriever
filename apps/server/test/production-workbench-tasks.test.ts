@@ -253,6 +253,96 @@ async function fixture(
 }
 
 describe("production task workbench composition", () => {
+  it("cancels an interrupted task over HTTP and retains published raw parses and receipts", async () => {
+    const env = await fixture();
+    try {
+      const request = await env.seed();
+      const saved = await env.call("/api/tasks", {
+        kind: "processing",
+        request: {
+          schema_version: 1,
+          idempotency_key: "cancel-interrupted-parse",
+          operations: [{ operation: "parse-documents", request }],
+        },
+      });
+      expect(saved.status).toBe(201);
+      const id = (saved.value.task as { job_id: string }).job_id;
+      expect((await env.call(`/api/tasks/${id}/start`, {})).status).toBe(202);
+      await env.settledTask(id);
+      const before = await env.server.application.processingTasks!.read(id);
+      expect(before.job.status).toBe("completed");
+      expect(before.results).toHaveLength(1);
+      const raw = await env.server.application.rawParseStorage!.current(
+        request.asset_id,
+      );
+      expect(raw.filter((s) => s.result)).toHaveLength(2);
+      // Simulate a crash after the result was committed but before job finalization.
+      await env.server.application.jobs!.updateJob(id, "interrupted");
+      const reply = await env.call(`/api/tasks/${id}/cancel`, {});
+      expect(reply).toMatchObject({
+        status: 200,
+        value: {
+          task: {
+            job: { status: "cancelled", finished_at: expect.any(String) },
+            results: before.results,
+            targets: before.targets,
+          },
+        },
+      });
+      const task = reply.value.task as { job: { finished_at: string } };
+      expect(Number.isFinite(Date.parse(task.job.finished_at))).toBe(true);
+      expect(
+        await env.server.application.rawParseStorage!.current(request.asset_id),
+      ).toEqual(raw);
+      expect(
+        (await env.server.application.library.detail(request.literature_id))
+          .primary_pdf?.asset.sha256,
+      ).toBe(request.asset_sha256);
+    } finally {
+      await env.close();
+    }
+  }, 30000);
+
+  it.each(["completed", "cancelled", "failed"] as const)(
+    "returns HTTP 409 for pause and cancel of %s tasks",
+    async (status) => {
+      const env = await fixture();
+      try {
+        const saved = await env.call("/api/tasks", {
+          kind: "metadata",
+          idempotency_key: `terminal-${status}`,
+          request: {
+            kind: "topic",
+            query: "synthetic",
+            year_from: null,
+            year_to: null,
+          },
+        });
+        expect(saved.status).toBe(201);
+        const id = (saved.value.task as { job_id: string }).job_id;
+        const original = await env.server.application.jobs!.updateJob(
+          id,
+          status,
+          "2026-11-19T00:00:00.000Z",
+        );
+        for (const action of ["pause", "cancel"]) {
+          expect(
+            await env.call(`/api/tasks/${id}/${action}`, {}),
+          ).toMatchObject({
+            status: 409,
+            value: { code: "processing-terminal" },
+          });
+          expect(await env.server.application.jobs!.getJob(id)).toEqual(
+            original,
+          );
+        }
+        expect(env.discoveryCalls).toBe(0);
+      } finally {
+        await env.close();
+      }
+    },
+  );
+
   it("saves an unlimited citation request unchanged, runs it to exhaustion and reads nulls over HTTP", async () => {
     const source = citationLimitsSource();
     const env = await fixture(source);

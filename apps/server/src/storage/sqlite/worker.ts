@@ -107,6 +107,7 @@ export class SqliteWorkerError extends Error {
   constructor(
     readonly code:
       | "sqlite-worker"
+      | "execution-job-terminal"
       | DocumentCommitFailureCode = "sqlite-worker",
   ) {
     super("sqlite worker operation failed");
@@ -2132,14 +2133,19 @@ export class SqliteWorker {
     if (status !== "paused" && status !== "cancelled")
       throw new SqliteWorkerError();
     if (finishedAt !== null) executionText(finishedAt, 64);
-    return parseExecutionJob(
-      await this.run({
-        kind: "execution_control_job",
-        jobId,
-        status,
-        finishedAt,
-      }),
-    );
+    const controlled = await this.run<{ job: unknown; changed: boolean }>({
+      kind: "execution_control_job",
+      jobId,
+      status,
+      finishedAt,
+    });
+    const job = parseExecutionJob(controlled.job);
+    if (
+      !controlled.changed &&
+      ["completed", "cancelled", "failed"].includes(job.status)
+    )
+      throw new SqliteWorkerError("execution-job-terminal");
+    return job;
   }
   async putExecutionTarget(target: ExecutionTarget): Promise<ExecutionTarget> {
     const parsed = parseExecutionTarget(target);

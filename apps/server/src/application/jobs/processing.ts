@@ -12,7 +12,10 @@ import type { ArchiveOrchestrator } from "../../archive/orchestrator.js";
 import type { DocumentProcessingService } from "../../document/service.js";
 import type { ArticleIdentityService } from "../../parsing/article-identity.js";
 import type { ExecutionRepository } from "../../storage/execution/repository.js";
-import type { ExecutionTarget } from "../../storage/sqlite/worker.js";
+import {
+  SqliteWorkerError,
+  type ExecutionTarget,
+} from "../../storage/sqlite/worker.js";
 import { WriteAdmissionError } from "../../storage/write-admission.js";
 import {
   ExecutionQueue,
@@ -330,8 +333,17 @@ export class ProcessingTaskService {
     });
     if (action === "pause" || action === "cancel") {
       this.waiting.delete(jobId);
-      if (action === "pause") await this.queue.pause(jobId);
-      else await this.queue.cancel(jobId);
+      try {
+        if (action === "pause") await this.queue.pause(jobId);
+        else await this.queue.cancel(jobId);
+      } catch (error) {
+        if (
+          error instanceof SqliteWorkerError &&
+          error.code === "execution-job-terminal"
+        )
+          throw new ProcessingTaskError("processing-terminal");
+        throw error;
+      }
       const active = this.running.get(jobId);
       active?.controller.abort();
       if (active) await active.promise;
