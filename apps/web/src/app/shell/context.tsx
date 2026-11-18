@@ -1,7 +1,12 @@
 import { createContext, useContext } from "react";
 import type { ReaderMode } from "../data/url.js";
 import type { ReadingState } from "../../reading/state.js";
-import type { Theme } from "../data/preferences.js";
+import type {
+  Theme,
+  ThemeChoice,
+  ThemeId,
+  ThemeTime,
+} from "../data/preferences.js";
 import type { CloseKind, PaperTab } from "./paper-tabs.js";
 export interface ShellState {
   selected: ReadonlySet<string>;
@@ -37,6 +42,9 @@ export interface ShellState {
   };
   theme: Theme;
   setTheme(value: Theme): void;
+  /** The chosen theme with the day and night themes “跟随系统” uses. */
+  themes: ThemeChoice;
+  setThemeTime(time: ThemeTime, value: ThemeId): void;
 }
 /** The reader announces its first drawn screen; page warming waits for it. */
 export const READER_PAINTED = "sciretriever:reader-painted";

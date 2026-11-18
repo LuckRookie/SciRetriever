@@ -91,9 +91,6 @@
   .source-row > th {
     font-weight: 500;
   }
-  .source-row[data-missing] {
-    background: var(--mark-soft);
-  }
   .source-use[data-state="available"],
   .source-use[data-state="not-provided"] {
     color: var(--fg3);
@@ -102,8 +99,9 @@
     font-size: var(--text-secondary);
     color: var(--fg2);
   }
+  /* A missing setting needs a person (rule 5): the red ink, no row ground. */
   .source-config[data-tone="missing"] {
-    color: var(--t-yellow);
+    color: var(--status-problem);
   }
   .source-config[data-tone="optional"],
   .source-config[data-tone="none"] {

@@ -35,7 +35,7 @@ export function ResultState({
   return (
     <section aria-label="结果覆盖与版本">
       <div className="archive-inline-actions result-state-row">
-        <Badge status={freshness.state === "stale" ? "partial" : "completed"}>
+        <Badge status={freshness.state === "stale" ? "stale" : "completed"}>
           {freshness.state === "stale" ? "已过时" : "当前版本"}
         </Badge>
         {outcomes ? (

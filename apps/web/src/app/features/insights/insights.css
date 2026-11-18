@@ -186,27 +186,6 @@
     height: 10px;
     border-radius: 2px;
   }
-  :is(.proportion-bar i, .proportion-dot)[data-tone="ready"] {
-    background: var(--status-ready);
-  }
-  :is(.proportion-bar i, .proportion-dot)[data-tone="asset"] {
-    background: var(--status-asset);
-  }
-  :is(.proportion-bar i, .proportion-dot)[data-tone="archiving"] {
-    background: var(--status-archiving);
-  }
-  :is(.proportion-bar i, .proportion-dot)[data-tone="failed"] {
-    background: var(--status-failed);
-  }
-  :is(.proportion-bar i, .proportion-dot)[data-tone="unavailable"] {
-    background: var(--status-unavailable);
-  }
-  :is(.proportion-bar i, .proportion-dot)[data-tone="raw"] {
-    background: var(--line3);
-  }
-  :is(.proportion-bar i, .proportion-dot)[data-tone="excluded"] {
-    background: var(--line2);
-  }
   .citation-map {
     width: 100%;
     max-height: 520px;

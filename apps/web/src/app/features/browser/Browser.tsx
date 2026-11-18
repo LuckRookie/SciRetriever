@@ -111,12 +111,15 @@ function actionText(action: WorkbenchActionRecord) {
 const ended = (view: WorkbenchView) =>
   ["finished", "failed", "cancelled"].includes(view.state);
 type Session = WorkbenchArticleSession;
-/** Phase badge: running work is green, waiting is gray, a failed fetch is red. */
+/**
+ * Phase badge (rule 5): work in progress is grey with a ring, waiting is grey,
+ * a paper taken in is green, a failed fetch is red.
+ */
 function PhaseBadge({ session }: { session: Session }) {
   if (session.phase === "closed")
     return session.outcome?.kind === "published" ? (
       <span className="browser-badge-icon">
-        <Badge status="metadata">
+        <Badge status="completed">
           <Icon name="check" />
           已入库
         </Badge>
@@ -126,7 +129,9 @@ function PhaseBadge({ session }: { session: Session }) {
     );
   if (session.phase === "queued")
     return <Badge status="metadata">等待执行</Badge>;
-  return <Badge status="ready">{phases[session.phase] ?? session.phase}</Badge>;
+  return (
+    <Badge status="running">{phases[session.phase] ?? session.phase}</Badge>
+  );
 }
 /**
  * Platform failures read “错误”; only the three problems a person can act on get a

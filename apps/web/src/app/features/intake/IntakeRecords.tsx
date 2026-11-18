@@ -247,8 +247,8 @@ function Record({
           total={hits}
           label={`有 PDF ${pdf.has_pdf} 篇，无法获取 ${pdf.unavailable} 篇，待获取 ${pdf.pending} 篇`}
           parts={[
-            { part: "has", value: pdf.has_pdf },
-            { part: "unavailable", value: pdf.unavailable },
+            { part: "has", tone: "pdf", value: pdf.has_pdf },
+            { part: "unavailable", tone: "other", value: pdf.unavailable },
           ]}
         />
         <span className="intake-record-pdf">

@@ -7,7 +7,7 @@ import {
 } from "react-aria-components";
 import type { LiteratureSearchItem } from "@sciretriever/contracts";
 import { AnimatedPanel } from "../motion/index.js";
-import { RichTitle } from "../components/index.js";
+import { RichTitle, literatureTone } from "../components/index.js";
 import { useApi } from "../data/query.js";
 import { navigate } from "../data/url.js";
 import {
@@ -173,6 +173,11 @@ function Palette({ onClose }: { onClose: () => void }) {
                 data-state={
                   item.needs_manual_pdf ? "UNAVAILABLE" : item.literature.status
                 }
+                data-tone={literatureTone(
+                  item.needs_manual_pdf
+                    ? "UNAVAILABLE"
+                    : item.literature.status,
+                )}
               >
                 {item.needs_manual_pdf
                   ? "无法获取"

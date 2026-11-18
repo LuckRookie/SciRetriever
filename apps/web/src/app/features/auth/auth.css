@@ -20,8 +20,8 @@
     width: 32px;
     height: 32px;
     border-radius: var(--radius-sm);
-    background: var(--mark);
-    color: var(--mark-fg);
+    background: var(--brand);
+    color: var(--brand-fg);
   }
   /* One raised card on the warm page, like the dialogs inside the app. */
   .auth-main {

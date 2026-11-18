@@ -44,6 +44,7 @@ import {
   TextField,
   TechDetails,
   RichTitle,
+  literatureTone,
 } from "../../components/index.js";
 import { AnimatedPanel, Presence, LayoutGroup } from "../../motion/index.js";
 import type { ApiClient } from "../../data/api.js";
@@ -1683,6 +1684,9 @@ const LibraryRow = memo(function LibraryRow({
             data-state={
               item.needs_manual_pdf ? "UNAVAILABLE" : item.literature.status
             }
+            data-tone={literatureTone(
+              item.needs_manual_pdf ? "UNAVAILABLE" : item.literature.status,
+            )}
           >
             {item.needs_manual_pdf
               ? "无法获取"

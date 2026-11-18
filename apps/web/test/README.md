@@ -22,7 +22,7 @@
 
 `next-reader-boundaries.test.ts` 使用正常登录的合成库覆盖自动有界续读与失败恢复、稳定段落、可调栏宽、窄屏来源信息；Browser 会话空态与引用取样/迟到图查询隔离分别由 `next-live-browser.test.ts`、`next-insights.test.ts` 覆盖。
 
-React 阅读的直接行为回归在 `next-reader.test.ts` / `next-reader-boundaries.test.ts`：覆盖三视图、处理确认、总结证据往返、固定材料校验、连续加载/失败重试、资源释放、迟到响应隔离与真实 PDF.js 的 100 页合成样本。`reading-pdf-fixture.ts` 提供合成 PDF 及资源计数工具。`design-audit-fixture.ts` 与 `design-audit.test.ts` 提供可重复运行的可见控件计算样式审查；设置 `SCIRETRIEVER_DESIGN_AUDIT_OUTPUT` 才写入四主题/四宽度的截图矩阵，输出目录应位于 Git 忽略的 `sandbox/`。该报告不替代 macOS 实测或用户视觉验收，也不新增通用 CI 视觉门禁。
+React 阅读的直接行为回归在 `next-reader.test.ts` / `next-reader-boundaries.test.ts`：覆盖三视图、处理确认、总结证据往返、固定材料校验、连续加载/失败重试、资源释放、迟到响应隔离与真实 PDF.js 的 100 页合成样本。`reading-pdf-fixture.ts` 提供合成 PDF 及资源计数工具。`design-audit-fixture.ts` 与 `design-audit.test.ts` 提供可重复运行的可见控件计算样式审查；设置 `SCIRETRIEVER_DESIGN_AUDIT_OUTPUT` 才写入七主题/四宽度的截图矩阵，输出目录应位于 Git 忽略的 `sandbox/`。该报告不替代 macOS 实测或用户视觉验收，也不新增通用 CI 视觉门禁。
 
 ## React 验证
 

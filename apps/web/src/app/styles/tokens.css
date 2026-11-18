@@ -1,59 +1,71 @@
 @layer tokens, base, components, pages;
 @layer tokens {
+  /* Design core “基调”: the page is printed in ink on paper; only marks have
+     colour (the reader's pen and highlighter, the system's four status
+     colours). A theme changes the paper, the ink, the pen and the tints of
+     the status colours; every grey below is this theme's ink at an alpha, so
+     all greys share the paper's hue. The seven theme blocks follow; the
+     first, 纸墨, is also the default. */
   :root {
-    color-scheme: light;
-    --bg: #fff;
-    --side: #f7f7f5;
-    --fg: #37352f;
-    --fg2: #5f5e5a;
-    --fg3: #6b6a66;
-    --fg-quiet: #a5a49f;
-    --side-fg: #4b4a46;
-    --side-icon: #7f7e7a;
-    --line: rgba(55, 53, 47, 0.09);
-    --line2: rgba(55, 53, 47, 0.16);
-    --line3: rgba(55, 53, 47, 0.32);
-    --control-border: rgba(55, 53, 47, 0.24);
+    --surface: var(--bg);
+    --surface-sunken: var(--side);
+    --callout: var(--side);
+    --line: rgb(var(--ink-rgb) / var(--line-alpha));
+    --line2: rgb(var(--ink-rgb) / 0.16);
+    --line3: rgb(var(--ink-rgb) / 0.32);
+    --control-border: rgb(var(--ink-rgb) / 0.24);
     /* Every control shares one edge, height, radius and focus ring. What you
        press is paper with a hairline lift; what you type into is a faint
        tint that turns to paper while you write. */
-    --control-edge: rgba(55, 53, 47, 0.2);
-    --control-raise: 0 1px 2px rgba(15, 15, 15, 0.06);
-    --field-fill: rgba(55, 53, 47, 0.035);
+    --control-edge: rgb(var(--ink-rgb) / 0.2);
+    --control-raise: 0 1px 2px rgba(40, 30, 15, 0.06);
+    --field-fill: rgb(var(--ink-rgb) / 0.035);
     --focus-ring: color-mix(in srgb, var(--focus) 22%, transparent);
-    --invalid-ring: color-mix(in srgb, var(--t-red) 18%, transparent);
+    --invalid-ring: color-mix(in srgb, var(--status-problem) 18%, transparent);
     --placeholder: color-mix(in srgb, var(--fg) 52%, var(--surface));
-    --hover: rgba(55, 53, 47, 0.06);
-    --hover-soft: rgba(55, 53, 47, 0.035);
-    --active: rgba(55, 53, 47, 0.1);
-    --sel: rgba(47, 75, 168, 0.09);
-    --sel-line: rgba(47, 75, 168, 0.45);
-    --blue: #2f4ba8;
-    --blue-fg: #fff;
-    --focus: #2f4ba8;
-    --callout: #f7f7f5;
-    --pdfbg: #efeeeb;
-    --hl: rgba(247, 205, 40, 0.42);
-    --hl-current: rgba(240, 140, 20, 0.45);
-    --hl-current-line: rgba(200, 110, 0, 0.7);
-    --mark: #fbe7a1;
-    --mark-fg: #5a4505;
-    --mark-soft: rgba(247, 205, 40, 0.16);
-    --t-gray-bg: #e3e2e0;
-    --t-gray: #5a5955;
-    --t-blue-bg: #d3e5ef;
-    --t-blue: #28456c;
-    --t-green-bg: #dbeddb;
-    --t-green: #2b593f;
-    --t-yellow-bg: #fdecc8;
+    --hover: rgb(var(--ink-rgb) / 0.06);
+    --hover-soft: rgb(var(--ink-rgb) / 0.035);
+    --active: rgb(var(--ink-rgb) / 0.1);
+    /* Rule 5: a selected row is a faint ink ground; the pen marks it. */
+    --sel: rgb(var(--ink-rgb) / 0.05);
+    --sel-line: rgb(var(--ink-rgb) / 0.3);
+    /* Tags and the grey status share one ground. */
+    --tag-bg: rgb(var(--ink-rgb) / 0.07);
+    --tag-fg: var(--fg2);
+    /* A disabled primary button: grey ground, pale ink, full opacity. */
+    --disabled-bg: rgb(var(--ink-rgb) / 0.06);
+    /* Rule 5: four status colours, a tinted ground with its own dark ink.
+       Green: ready and done. Blue: has a PDF. Red: failed, needs a person.
+       Grey: the rest. Work in progress is grey with a turning ring. */
+    --status-other: var(--fg2);
+    --status-other-bg: var(--tag-bg);
+    /* Rule 4: charts are ink on a muted track; status charts and progress
+       bars take the middle tone of the same four colours. */
+    --chart-ink: rgb(var(--ink-rgb) / 0.46);
+    --chart-muted: rgb(var(--ink-rgb) / 0.12);
+    --chart-accent: var(--chart-ink);
+    /* The label colours that reader marks and danger actions borrow. Yellow
+       and purple remain only as the reader's own pen colours. */
+    --t-gray: var(--status-other);
+    --t-gray-bg: var(--status-other-bg);
+    --t-blue: var(--status-pdf);
+    --t-blue-bg: var(--status-pdf-bg);
+    --t-green: var(--status-done);
+    --t-green-bg: var(--status-done-bg);
+    --t-red: var(--status-problem);
+    --t-red-bg: var(--status-problem-bg);
     --t-yellow: #76541f;
-    --t-red-bg: #ffe2dd;
-    --t-red: #a03a33;
-    --t-purple-bg: #e8deee;
+    --t-yellow-bg: #fdecc8;
     --t-purple: #492f64;
-    --surface: var(--bg);
-    --surface-raised: var(--bg);
-    --surface-sunken: var(--side);
+    --t-purple-bg: #e8deee;
+    /* Reading page (design core “阅读页”): desk, sheet, pen, spine. PDF pages
+       keep their own colours. */
+    --pdfbg: var(--reader-desk);
+    --reader-sheet: var(--bg);
+    --reader-pen: var(--blue);
+    --reader-skeleton: rgb(var(--ink-rgb) / 0.07);
+    --reader-spine-a: rgb(var(--ink-rgb) / 0.16);
+    --reader-spine-b: rgb(var(--ink-rgb) / 0.3);
     --space-1: 4px;
     --space-2: 8px;
     --space-3: 12px;
@@ -86,9 +98,9 @@
     --serif: "Source Serif 4", "Noto Serif SC", "Songti SC", Georgia, serif;
     --mono: "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
     --shadow-1:
-      0 1px 2px rgba(15, 15, 15, 0.04), 0 3px 10px rgba(15, 15, 15, 0.05);
-    --shadow-pop: 0 5px 18px rgba(15, 15, 15, 0.14);
-    --shadow-modal: 0 16px 48px rgba(15, 15, 15, 0.2);
+      0 1px 2px rgba(40, 30, 15, 0.04), 0 3px 10px rgba(40, 30, 15, 0.05);
+    --shadow-pop: 0 5px 18px rgba(60, 45, 20, 0.13);
+    --shadow-modal: 0 16px 48px rgba(40, 30, 15, 0.2);
     --dur-1: 120ms;
     --dur-2: 180ms;
     --dur-3: 240ms;
@@ -124,106 +136,343 @@
     --lh-reading: 1.75;
     --type-section: 17px;
     --rule: var(--line2);
-    --chart-ink: rgba(55, 53, 47, 0.46);
-    --chart-muted: rgba(55, 53, 47, 0.14);
-    --chart-accent: var(--blue);
-    --status-ready: var(--t-green);
-    --status-ready-bg: var(--t-green-bg);
-    --status-asset: var(--t-blue);
-    --status-asset-bg: var(--t-blue-bg);
-    --status-archiving: var(--t-yellow);
-    --status-archiving-bg: var(--t-yellow-bg);
-    --status-failed: var(--t-red);
-    --status-failed-bg: var(--t-red-bg);
-    --status-unavailable: var(--t-purple);
-    --status-unavailable-bg: var(--t-purple-bg);
-    --status-raw: var(--t-gray);
-    --status-raw-bg: var(--t-gray-bg);
-    --status-excluded: var(--fg2);
-    --status-excluded-bg: var(--hover);
-    /* Reading page (design core "阅读页"): skeleton bars and image or PDF page placeholders. */
-    --reader-skeleton: rgba(55, 53, 47, 0.07);
-    --reader-desk: var(--pdfbg);
-    --reader-sheet: var(--bg);
-    --reader-pen: var(--blue);
-    --reader-pen-soft: rgba(47, 75, 168, 0.55);
-    --reader-spine-a: rgba(55, 53, 47, 0.16);
-    --reader-spine-b: rgba(55, 53, 47, 0.3);
-    --reader-tick-evidence: #f0c41e;
-    --reader-check-fail: #a03a33;
   }
-  :root[data-theme="dark"] {
-    color-scheme: dark;
-    --bg: #17191c;
-    --side: #1d2024;
-    --fg: #e3e5e8;
-    --fg2: #a9aeb5;
-    --fg3: #959ca4;
-    --fg-quiet: #5f656c;
-    --side-fg: #c9cdd2;
-    --side-icon: #8c939b;
-    --line: rgba(255, 255, 255, 0.09);
-    --line2: rgba(255, 255, 255, 0.16);
-    --line3: rgba(255, 255, 255, 0.36);
-    --control-border: #969fa9;
-    --control-edge: rgba(255, 255, 255, 0.22);
+  /* The two night themes: warm white ink on dark paper. */
+  :root:is([data-theme="dark"], [data-theme="candle"]) {
+    --control-border: rgb(var(--ink-rgb) / 0.42);
+    --control-edge: rgb(var(--ink-rgb) / 0.22);
     --control-raise: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --field-fill: rgba(255, 255, 255, 0.045);
-    --hover: rgba(255, 255, 255, 0.05);
-    --hover-soft: rgba(255, 255, 255, 0.035);
-    --active: rgba(255, 255, 255, 0.09);
-    --sel: rgba(142, 162, 240, 0.16);
-    --sel-line: rgba(142, 162, 240, 0.55);
-    --blue: #8ea2f0;
-    --blue-fg: #11141b;
-    --focus: #8ea2f0;
-    --callout: #1f2226;
-    --pdfbg: #111315;
-    --surface-raised: #22262b;
-    --hl: rgba(247, 205, 40, 0.32);
-    --mark: rgba(247, 213, 71, 0.22);
-    --mark-fg: #f3df8a;
-    --t-gray-bg: #373737;
-    --t-gray: #d0d0d0;
-    --t-blue-bg: #28456c;
-    --t-blue: #cfe3f5;
-    --t-green-bg: #2b593f;
-    --t-green: #cfe8d6;
-    --t-yellow-bg: #59482a;
+    --field-fill: rgb(var(--ink-rgb) / 0.045);
+    --hover: rgb(var(--ink-rgb) / 0.055);
+    --active: rgb(var(--ink-rgb) / 0.1);
+    --sel: rgb(var(--ink-rgb) / 0.06);
+    --tag-bg: rgb(var(--ink-rgb) / 0.1);
+    --disabled-bg: rgb(var(--ink-rgb) / 0.07);
+    --chart-ink: rgb(var(--ink-rgb) / 0.5);
+    --chart-muted: rgb(var(--ink-rgb) / 0.14);
     --t-yellow: #f2d79e;
-    --t-red-bg: #6e3630;
-    --t-red: #ffd5cf;
-    --t-purple-bg: #492f64;
+    --t-yellow-bg: #59482a;
     --t-purple: #e5d6f2;
-    --shadow-pop: 0 5px 18px rgba(0, 0, 0, 0.24);
-    --shadow-modal: 0 16px 48px rgba(0, 0, 0, 0.3);
-    --chart-ink: rgba(227, 229, 232, 0.5);
-    --chart-muted: rgba(255, 255, 255, 0.14);
-    --reader-skeleton: rgba(255, 255, 255, 0.06);
-    --reader-sheet: #1f2226;
-    --reader-pen-soft: rgba(142, 162, 240, 0.6);
-    --reader-spine-a: rgba(255, 255, 255, 0.16);
-    --reader-spine-b: rgba(255, 255, 255, 0.3);
+    --t-purple-bg: #492f64;
+    --reader-skeleton: rgb(var(--ink-rgb) / 0.06);
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.2), 0 3px 10px rgba(0, 0, 0, 0.18);
+    --shadow-pop: 0 5px 18px rgba(0, 0, 0, 0.4);
+    --shadow-modal: 0 16px 48px rgba(0, 0, 0, 0.45);
+  }
+  /* 纸墨（默认白天）. `data-theme-preview` lets a preview card in “设置 →
+     外观” wear a theme that is not the page's. */
+  :root,
+  [data-theme-preview="light"] {
+    color-scheme: light;
+    --ink-rgb: 55 53 47;
+    --line-alpha: 0.09;
+    --bg: #ffffff;
+    --side: #f6f5f1;
+    --fg: #37352f;
+    --fg2: #605e58;
+    --fg3: #696760;
+    --fg-quiet: #a5a4a1;
+    --side-fg: #4c4a44;
+    --side-icon: #7f7e7a;
+    --blue: #3b529b;
+    --blue-fg: #ffffff;
+    --focus: #3b529b;
+    --primary: #37352f;
+    --primary-fg: #ffffff;
+    --primary-hover: #53514c;
+    --disabled-fg: #a5a4a1;
+    --surface-raised: #ffffff;
+    --reader-desk: #efeeeb;
+    --hl: rgba(247, 205, 40, 0.42);
+    --hl-current: rgba(240, 140, 20, 0.45);
+    --hl-current-line: rgba(200, 110, 0, 0.7);
+    --mark: #fbe7a1;
+    --mark-fg: #5a4505;
+    --mark-soft: rgba(247, 205, 40, 0.16);
+    --brand: #fbe7a1;
+    --brand-fg: #5a4505;
+    --status-done: #2f5a40;
+    --status-done-bg: #dfeadd;
+    --status-pdf: #2c4a66;
+    --status-pdf-bg: #dbe6ee;
+    --status-problem: #9a3a32;
+    --status-problem-bg: #fbe1dc;
+    --chart-done: #9fc2a3;
+    --chart-pdf: #a3bdd2;
+    --chart-problem: #e6a79f;
+    --chart-other: #d6d4ce;
+    --reader-pen-soft: rgba(59, 82, 155, 0.55);
+    --reader-tick-evidence: #f0c41e;
+    --reader-check-fail: #9a3a32;
+  }
+  /* 旧书 */
+  :root[data-theme="oldbook"],
+  [data-theme-preview="oldbook"] {
+    color-scheme: light;
+    --ink-rgb: 58 49 39;
+    --line-alpha: 0.11;
+    --bg: #f8f1e3;
+    --side: #efe6d3;
+    --fg: #3a3127;
+    --fg2: #5f5345;
+    --fg3: #685c4e;
+    --fg-quiet: #a29b8e;
+    --side-fg: #4c4236;
+    --side-icon: #7e766b;
+    --blue: #3a4f8c;
+    --blue-fg: #ffffff;
+    --focus: #3a4f8c;
+    --primary: #3a3127;
+    --primary-fg: #f8f1e3;
+    --primary-hover: #554c41;
+    --disabled-fg: #a29b8e;
+    --surface-raised: #f8f1e3;
+    --reader-desk: #e9e0cd;
+    --hl: rgba(240, 190, 30, 0.45);
+    --hl-current: rgba(230, 130, 20, 0.45);
+    --hl-current-line: rgba(190, 100, 0, 0.7);
+    --mark: #ecd58d;
+    --mark-fg: #56400a;
+    --mark-soft: rgba(240, 190, 30, 0.16);
+    --brand: #ecd58d;
+    --brand-fg: #56400a;
+    --status-done: #3d5a32;
+    --status-done-bg: #dfe6cc;
+    --status-pdf: #2f4a5c;
+    --status-pdf-bg: #d9e1df;
+    --status-problem: #96392c;
+    --status-problem-bg: #f3d9cc;
+    --chart-done: #aab899;
+    --chart-pdf: #a1afb4;
+    --chart-problem: #d4a497;
+    --chart-other: #d8d0c3;
+    --reader-pen-soft: rgba(58, 79, 140, 0.55);
+    --reader-tick-evidence: #d9a816;
+    --reader-check-fail: #96392c;
+  }
+  /* 宣纸：石青作笔，藤黄作荧光，朱印作标志 */
+  :root[data-theme="xuan"],
+  [data-theme-preview="xuan"] {
+    color-scheme: light;
+    --ink-rgb: 43 42 39;
+    --line-alpha: 0.1;
+    --bg: #f9f6ee;
+    --side: #f0ece0;
+    --fg: #2b2a27;
+    --fg2: #5a574f;
+    --fg3: #646058;
+    --fg-quiet: #9c9a94;
+    --side-fg: #42403b;
+    --side-icon: #75736f;
+    --blue: #2a6478;
+    --blue-fg: #ffffff;
+    --focus: #2a6478;
+    --primary: #2b2a27;
+    --primary-fg: #f9f6ee;
+    --primary-hover: #484743;
+    --disabled-fg: #9c9a94;
+    --surface-raised: #f9f6ee;
+    --reader-desk: #e9e5da;
+    --hl: rgba(236, 180, 30, 0.45);
+    --hl-current: rgba(225, 125, 20, 0.45);
+    --hl-current-line: rgba(190, 100, 0, 0.7);
+    --mark: #f1d98a;
+    --mark-fg: #56400a;
+    --mark-soft: rgba(236, 180, 30, 0.16);
+    --brand: #b5392f;
+    --brand-fg: #ffffff;
+    --status-done: #2a5a48;
+    --status-done-bg: #d8e8dc;
+    --status-pdf: #26566a;
+    --status-pdf-bg: #d6e5e8;
+    --status-problem: #a5372a;
+    --status-problem-bg: #f6dcd3;
+    --chart-done: #9fb9ab;
+    --chart-pdf: #9cb6be;
+    --chart-problem: #dba69b;
+    --chart-other: #d6d3cc;
+    --reader-pen-soft: rgba(42, 100, 120, 0.55);
+    --reader-tick-evidence: #dca51a;
+    --reader-check-fail: #a5372a;
+  }
+  /* 豆绿 */
+  :root[data-theme="bean"],
+  [data-theme-preview="bean"] {
+    color-scheme: light;
+    --ink-rgb: 44 56 47;
+    --line-alpha: 0.11;
+    --bg: #eef3ea;
+    --side: #e3ebde;
+    --fg: #2c382f;
+    --fg2: #4d5c4c;
+    --fg3: #546353;
+    --fg-quiet: #979f96;
+    --side-fg: #3c4a3e;
+    --side-icon: #727b72;
+    --blue: #325a8c;
+    --blue-fg: #ffffff;
+    --focus: #325a8c;
+    --primary: #2c382f;
+    --primary-fg: #eef3ea;
+    --primary-hover: #475249;
+    --disabled-fg: #979f96;
+    --surface-raised: #eef3ea;
+    --reader-desk: #dde5d8;
+    --hl: rgba(245, 205, 40, 0.5);
+    --hl-current: rgba(240, 140, 20, 0.45);
+    --hl-current-line: rgba(200, 110, 0, 0.7);
+    --mark: #f3e3a0;
+    --mark-fg: #56460a;
+    --mark-soft: rgba(245, 205, 40, 0.18);
+    --brand: #f3e3a0;
+    --brand-fg: #56460a;
+    --status-done: #27543a;
+    --status-done-bg: #cfe4c8;
+    --status-pdf: #2a4a63;
+    --status-pdf-bg: #d3e3ea;
+    --status-problem: #94392f;
+    --status-problem-bg: #f2dcd4;
+    --chart-done: #98b499;
+    --chart-pdf: #9bb1bd;
+    --chart-problem: #d3a69e;
+    --chart-other: #cdd3ca;
+    --reader-pen-soft: rgba(50, 90, 140, 0.55);
+    --reader-tick-evidence: #e2b81c;
+    --reader-check-fail: #94392f;
+  }
+  /* 墨水屏：没有彩色，笔也是墨色，荧光是灰带 */
+  :root[data-theme="eink"],
+  [data-theme-preview="eink"] {
+    color-scheme: light;
+    --ink-rgb: 44 44 42;
+    --line-alpha: 0.13;
+    --bg: #edece8;
+    --side: #e3e2dd;
+    --fg: #2c2c2a;
+    --fg2: #52514d;
+    --fg3: #5c5b56;
+    --fg-quiet: #969692;
+    --side-fg: #3f3e3c;
+    --side-icon: #71716e;
+    --blue: #2c2c2a;
+    --blue-fg: #edece8;
+    --focus: #2c2c2a;
+    --primary: #2c2c2a;
+    --primary-fg: #edece8;
+    --primary-hover: #474745;
+    --disabled-fg: #969692;
+    --surface-raised: #edece8;
+    --reader-desk: #dddcd7;
+    --hl: rgba(90, 88, 80, 0.22);
+    --hl-current: rgba(44, 44, 42, 0.34);
+    --hl-current-line: rgba(44, 44, 42, 0.8);
+    --mark: #d2d1cb;
+    --mark-fg: #2c2c2a;
+    --mark-soft: rgba(90, 88, 80, 0.1);
+    --brand: #2c2c2a;
+    --brand-fg: #edece8;
+    --status-done: #33483a;
+    --status-done-bg: #d9dfd6;
+    --status-pdf: #36465a;
+    --status-pdf-bg: #d7dce0;
+    --status-problem: #7d3a33;
+    --status-problem-bg: #e6d6d2;
+    --chart-done: #a2ada3;
+    --chart-pdf: #a2aab4;
+    --chart-problem: #c3a39e;
+    --chart-other: #cccbc8;
+    --reader-pen-soft: rgba(44, 44, 42, 0.55);
+    --reader-tick-evidence: #7a7974;
+    --reader-check-fail: #7d3a33;
+  }
+  /* 夜读（默认夜里） */
+  :root[data-theme="dark"],
+  [data-theme-preview="dark"] {
+    color-scheme: dark;
+    --ink-rgb: 230 227 220;
+    --line-alpha: 0.1;
+    --bg: #1b1a18;
+    --side: #211f1d;
+    --fg: #e6e3dc;
+    --fg2: #aaa69d;
+    --fg3: #a09c93;
+    --fg-quiet: #706e6a;
+    --side-fg: #c8c4bc;
+    --side-icon: #8b8984;
+    --blue: #9fb0ec;
+    --blue-fg: #1b1a18;
+    --focus: #9fb0ec;
+    --primary: #e6e3dc;
+    --primary-fg: #1b1a18;
+    --primary-hover: #cac7c1;
+    --disabled-fg: #706e6a;
+    --surface-raised: #2b2825;
+    --reader-desk: #211f1d;
+    --hl: rgba(247, 205, 40, 0.3);
+    --hl-current: rgba(240, 140, 20, 0.45);
+    --hl-current-line: rgba(240, 160, 60, 0.8);
+    --mark: #4a4128;
+    --mark-fg: #f3df8a;
+    --mark-soft: rgba(247, 205, 40, 0.1);
+    --brand: #fbe7a1;
+    --brand-fg: #5a4505;
+    --status-done: #cfe5d3;
+    --status-done-bg: #2f4a3a;
+    --status-pdf: #cfe0ee;
+    --status-pdf-bg: #2c4359;
+    --status-problem: #f5d1cb;
+    --status-problem-bg: #5c322d;
+    --chart-done: #5d8a68;
+    --chart-pdf: #5f84a3;
+    --chart-problem: #b0655d;
+    --chart-other: #4a4742;
+    --reader-pen-soft: rgba(159, 176, 236, 0.6);
     --reader-tick-evidence: #e6c34a;
     --reader-check-fail: #f2726a;
   }
-  :root[data-theme="green"] {
-    --bg: #fbfcf8;
-    --side: #edf1e9;
-    --blue: #285b4b;
-    --blue-fg: #fff;
-    --focus: #285b4b;
-    --sel: rgba(40, 91, 75, 0.09);
-    --sel-line: rgba(40, 91, 75, 0.45);
-  }
-  :root[data-theme="warm"] {
-    --bg: #fffdf6;
-    --side: #f3efe4;
-    --blue: #35558a;
-    --blue-fg: #fff;
-    --focus: #35558a;
-    --fg: #29261f;
-    --fg2: #655d52;
-    --fg3: #6a6256;
+  /* 烛光：琥珀色的字与笔，蓝光最少 */
+  :root[data-theme="candle"],
+  [data-theme-preview="candle"] {
+    color-scheme: dark;
+    --ink-rgb: 228 211 181;
+    --line-alpha: 0.1;
+    --bg: #231d18;
+    --side: #2a231d;
+    --fg: #e4d3b5;
+    --fg2: #b7a68a;
+    --fg3: #af9e84;
+    --fg-quiet: #74695a;
+    --side-fg: #cab99c;
+    --side-icon: #8d816e;
+    --blue: #e0b36a;
+    --blue-fg: #231d18;
+    --focus: #e0b36a;
+    --primary: #e4d3b5;
+    --primary-fg: #231d18;
+    --primary-hover: #c9ba9f;
+    --disabled-fg: #74695a;
+    --surface-raised: #322a23;
+    --reader-desk: #2a231d;
+    --hl: rgba(240, 190, 60, 0.28);
+    --hl-current: rgba(240, 140, 40, 0.45);
+    --hl-current-line: rgba(240, 160, 70, 0.8);
+    --mark: #4d3d22;
+    --mark-fg: #f0d28a;
+    --mark-soft: rgba(240, 190, 60, 0.1);
+    --brand: #e0b36a;
+    --brand-fg: #231d18;
+    --status-done: #d3e3c4;
+    --status-done-bg: #36452f;
+    --status-pdf: #cddbe2;
+    --status-pdf-bg: #33414a;
+    --status-problem: #f1cfc3;
+    --status-problem-bg: #5a3027;
+    --chart-done: #6a7960;
+    --chart-pdf: #66747c;
+    --chart-problem: #8c645a;
+    --chart-other: #4f473c;
+    --reader-pen-soft: rgba(224, 179, 106, 0.6);
+    --reader-tick-evidence: #c99a45;
+    --reader-check-fail: #ee8070;
   }
 }

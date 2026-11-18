@@ -243,7 +243,7 @@
     text-decoration-color: var(--t-purple);
   }
   ::highlight(mark-hot) {
-    background-color: rgb(55 53 47 / 0.1);
+    background-color: rgb(var(--ink-rgb) / 0.1);
   }
   ::highlight(mark-flash) {
     background-color: rgb(240 140 20 / 0.35);

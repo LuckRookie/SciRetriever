@@ -71,14 +71,16 @@
   .ui-button[data-pressed]:not([data-variant="text"]) {
     transform: scale(0.98);
   }
+  /* The heaviest stroke on the page is ink, not colour (design core
+     “组件外观”): ink on paper by day, paper on ink by night. */
   .ui-button[data-variant="primary"] {
     font-weight: 500;
-    background: var(--blue);
-    color: var(--blue-fg);
+    background: var(--primary);
+    color: var(--primary-fg);
     box-shadow: 0 1px 2px rgba(15, 15, 15, 0.12);
   }
   .ui-button[data-variant="primary"][data-hovered] {
-    filter: brightness(0.94);
+    background: var(--primary-hover);
     box-shadow: 0 2px 6px rgba(15, 15, 15, 0.16);
   }
   .ui-button[data-variant="text"] {
@@ -111,6 +113,14 @@
   .ui-field[data-disabled] {
     opacity: var(--disabled-opacity);
     cursor: not-allowed;
+  }
+  /* A disabled primary button is a grey ground with pale ink at full
+     opacity, so it never reads as a faded colour. */
+  .ui-button[data-variant="primary"][data-disabled] {
+    opacity: 1;
+    background: var(--disabled-bg);
+    color: var(--disabled-fg);
+    box-shadow: none;
   }
   .ui-button-label {
     overflow: hidden;
@@ -587,8 +597,9 @@
   .ui-tab[data-hovered] {
     color: var(--fg);
   }
+  /* The current tab is ink; the pen draws only its underline. */
   .ui-tab[data-selected] {
-    color: var(--blue);
+    color: var(--fg);
     font-weight: 500;
   }
   .ui-tab[data-disabled] {
@@ -703,29 +714,47 @@
     border-radius: var(--radius-round);
     background: currentColor;
   }
-  .ui-badge[data-color="gray"] {
-    color: var(--t-gray);
-    background: var(--t-gray-bg);
+  /* Rule 5: every status label takes its colour from `data-tone`, set by
+     the one status map (`components/status.ts`). The tone also names the
+     middle tone that charts and progress bars of the same status use. */
+  [data-tone="done"] {
+    --tone-ink: var(--status-done);
+    --tone-ground: var(--status-done-bg);
+    --tone-chart: var(--chart-done);
   }
-  .ui-badge[data-color="blue"] {
-    color: var(--t-blue);
-    background: var(--t-blue-bg);
+  [data-tone="pdf"] {
+    --tone-ink: var(--status-pdf);
+    --tone-ground: var(--status-pdf-bg);
+    --tone-chart: var(--chart-pdf);
   }
-  .ui-badge[data-color="green"] {
-    color: var(--t-green);
-    background: var(--t-green-bg);
+  [data-tone="problem"] {
+    --tone-ink: var(--status-problem);
+    --tone-ground: var(--status-problem-bg);
+    --tone-chart: var(--chart-problem);
   }
-  .ui-badge[data-color="yellow"] {
-    color: var(--t-yellow);
-    background: var(--t-yellow-bg);
+  :is([data-tone="other"], [data-tone="running"]) {
+    --tone-ink: var(--status-other);
+    --tone-ground: var(--status-other-bg);
+    --tone-chart: var(--chart-other);
   }
-  .ui-badge[data-color="red"] {
-    color: var(--t-red);
-    background: var(--t-red-bg);
+  :is(.ui-badge, .paper-status, .value-check) {
+    color: var(--tone-ink, var(--status-other));
+    background: var(--tone-ground, var(--status-other-bg));
   }
-  .ui-badge[data-color="purple"] {
-    color: var(--t-purple);
-    background: var(--t-purple-bg);
+  /* Work in progress has no colour of its own: the dot turns into a ring
+     (still under reduced motion). */
+  .ui-badge[data-tone="running"] > span[aria-hidden="true"]:first-child,
+  .paper-status[data-tone="running"]::before {
+    width: 9px;
+    height: 9px;
+    border: 1.5px solid currentColor;
+    border-right-color: transparent;
+    background: transparent;
+    animation: ui-spin 1s linear infinite;
+  }
+  /* A chart part or progress fill classified by status. */
+  .ui-tone-fill[data-tone] {
+    background: var(--tone-chart);
   }
   .ui-disclosure > h3 {
     margin: 0;
@@ -1133,6 +1162,10 @@
   }
   .ui-error-notice p {
     margin: 0 0 var(--space-2);
+  }
+  /* On the red ground the explanation keeps the notice's own ink. */
+  .ui-error-notice .ui-description {
+    color: inherit;
   }
   .ui-skeleton {
     display: grid;

@@ -57,12 +57,13 @@
     line-height: var(--lh-caption);
     color: var(--fg2);
   }
+  /* Rule 5's status colours, as the line beside the note. */
   .retrieval-index[data-tone="problem"] {
-    border-left-color: var(--t-yellow);
+    border-left-color: var(--status-problem);
     color: var(--fg);
   }
   .retrieval-index[data-tone="done"] {
-    border-left-color: var(--blue);
+    border-left-color: var(--status-done);
   }
   .retrieval-index > span {
     flex: 1 1 24em;

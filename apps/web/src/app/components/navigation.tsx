@@ -6,6 +6,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
+import { badgeTones, type BadgeStatus } from "./status.js";
 import {
   Button as AriaButton,
   Dialog,
@@ -174,25 +175,18 @@ export function ChipGroup({
     </div>
   );
 }
-export type BadgeStatus =
-  | "metadata"
-  | "pdf"
-  | "ready"
-  | "running"
-  | "partial"
-  | "completed"
-  | "failed"
-  | "unavailable";
-const badges: Record<BadgeStatus, readonly [string, string]> = {
-  metadata: ["gray", "仅元数据"],
-  pdf: ["blue", "有 PDF"],
-  ready: ["green", "已就绪"],
-  running: ["yellow", "进行中"],
-  partial: ["yellow", "部分完成"],
-  completed: ["green", "完成"],
-  failed: ["red", "失败"],
-  unavailable: ["purple", "无法获取"],
+const badgeLabels: Record<BadgeStatus, string> = {
+  metadata: "仅元数据",
+  pdf: "有 PDF",
+  ready: "已就绪",
+  running: "进行中",
+  partial: "部分完成",
+  stale: "已过时",
+  completed: "完成",
+  failed: "失败",
+  unavailable: "无法获取",
 };
+/** Rule 5: the colour comes from the one status map; work in progress turns a ring. */
 export function Badge({
   status,
   children,
@@ -200,11 +194,10 @@ export function Badge({
   status: BadgeStatus;
   children?: ReactNode;
 }) {
-  const [color, label] = badges[status];
   return (
-    <span className="ui-badge" data-color={color}>
+    <span className="ui-badge" data-tone={badgeTones[status]}>
       <span aria-hidden="true" />
-      {children ?? label}
+      {children ?? badgeLabels[status]}
     </span>
   );
 }

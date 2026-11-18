@@ -36,6 +36,7 @@ import {
   TextArea,
   TextField,
   type DataColumn,
+  valueCheckTone,
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
 import type { ApiClient } from "../../data/api.js";
@@ -288,9 +289,7 @@ export function ResultList() {
                         ? processorName(row.processor_id)
                         : "已保存集合"}
                   </p>
-                  {row.freshness === "stale" ? (
-                    <Badge status="running">已过时</Badge>
-                  ) : null}
+                  {row.freshness === "stale" ? <Badge status="stale" /> : null}
                   <Button
                     variant="text"
                     onPress={() =>
@@ -700,6 +699,7 @@ function Detail({
                       key={c.pointer}
                       className="value-check"
                       data-status={c.status}
+                      data-tone={valueCheckTone(c.status)}
                       title={valueCheckReason(c.reason)}
                     >
                       {valueCheckLabels[c.status]}

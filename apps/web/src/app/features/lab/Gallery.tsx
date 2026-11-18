@@ -34,10 +34,16 @@ import {
   TextField,
   Tooltip,
   useToast,
+  literatureTone,
 } from "../../components/index.js";
 import { useMotionPreference } from "../../motion/index.js";
 import { ShellContext } from "../../shell/context.js";
-import { bindTheme, type Theme } from "../../data/preferences.js";
+import {
+  bindTheme,
+  isThemeId,
+  themeOptions,
+  type Theme,
+} from "../../data/preferences.js";
 import { statusLabels } from "../../strings.js";
 import "./lab.css";
 const samples = [
@@ -47,9 +53,10 @@ const samples = [
 ];
 export function AppearanceControls() {
   const shell = useContext(ShellContext);
-  const [localTheme, setLocalTheme] = useState<Theme>(
-    (document.documentElement.dataset.theme as Theme | undefined) ?? "light",
-  );
+  const [localTheme, setLocalTheme] = useState<Theme>(() => {
+    const current = document.documentElement.dataset.theme;
+    return isThemeId(current) ? current : "light";
+  });
   const theme = shell?.theme ?? localTheme;
   useEffect(
     () => (shell ? undefined : bindTheme(localTheme)),
@@ -65,13 +72,7 @@ export function AppearanceControls() {
           if (shell) shell.setTheme(value as Theme);
           else setLocalTheme(value as Theme);
         }}
-        options={[
-          { value: "light", label: "蓝白" },
-          { value: "dark", label: "深色" },
-          { value: "green", label: "墨绿" },
-          { value: "warm", label: "暖白" },
-          { value: "system", label: "跟随系统" },
-        ]}
+        options={themeOptions}
       />
       <Switch
         isSelected={motion.reduced}
@@ -246,11 +247,20 @@ function Foundations() {
       >
         <div className="lab-row">
           {archiveStates.map((state) => (
-            <span key={state} className="paper-status" data-state={state}>
+            <span
+              key={state}
+              className="paper-status"
+              data-state={state}
+              data-tone={literatureTone(state)}
+            >
               {state === "UNAVAILABLE" ? "无法获取" : statusLabels[state]}
             </span>
           ))}
-          <span className="paper-status" data-state="ASSET_READY">
+          <span
+            className="paper-status"
+            data-state="ASSET_READY"
+            data-tone={literatureTone("ASSET_READY")}
+          >
             有 PDF<small>待建档</small>
           </span>
         </div>
@@ -522,6 +532,7 @@ export default function Gallery() {
               "ready",
               "running",
               "partial",
+              "stale",
               "completed",
               "failed",
               "unavailable",

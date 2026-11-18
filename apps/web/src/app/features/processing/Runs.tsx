@@ -151,7 +151,7 @@ function RunRow({ run }: { run: Record<string, unknown> }) {
         <h3>
           {processorName(String(run.processor_id))}
           <span className="run-spec">{String(run.name)}</span>
-          {run.stale ? <Badge status="running">已过时</Badge> : null}
+          {run.stale ? <Badge status="stale" /> : null}
         </h3>
         <p className="run-meta">
           {first?.kind === "snapshot" ? (

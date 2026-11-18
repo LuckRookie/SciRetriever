@@ -42,9 +42,13 @@ import {
 } from "../data/url.js";
 import {
   preferences,
-  readTheme,
+  readThemeChoice,
   bindTheme,
+  themeOptions,
+  THEME_KEY,
+  THEME_TIME_KEYS,
   type Theme,
+  type ThemeChoice,
 } from "../data/preferences.js";
 import {
   emptyQuery,
@@ -274,7 +278,7 @@ export function Application() {
 function Workspace({ api }: { api: ApiClient }) {
   const notify = useToast();
   const route = useUrlState(),
-    [theme, setTheme] = useState<Theme>(readTheme),
+    [themes, setThemes] = useState<ThemeChoice>(readThemeChoice),
     [selected, setSelected] = useState<ReadonlySet<string>>(new Set()),
     [reading] = useState(createReadingState),
     // Spec 1.8.3: after a reload the open tabs come back from session storage.
@@ -298,7 +302,11 @@ function Workspace({ api }: { api: ApiClient }) {
       ? Math.max(200, Math.min(420, Number.parseInt(value)))
       : 244;
   });
-  useEffect(() => bindTheme(theme), [theme]);
+  useEffect(() => bindTheme(themes), [themes]);
+  const setTheme = (theme: Theme) => {
+    setThemes((current) => ({ ...current, theme }));
+    preferences.write(THEME_KEY, theme);
+  };
   // Pages share one scroll container; each route starts at the top and the
   // library restores its own remembered position afterwards.
   const content = useRef<HTMLElement>(null),
@@ -899,10 +907,12 @@ function Workspace({ api }: { api: ApiClient }) {
           cycle,
           openMenu: openTabMenu,
         },
-        theme,
-        setTheme: (value) => {
-          setTheme(value);
-          preferences.write("sciretriever:theme:v1", value);
+        theme: themes.theme,
+        setTheme,
+        themes,
+        setThemeTime: (time, value) => {
+          setThemes((current) => ({ ...current, [time]: value }));
+          preferences.write(THEME_TIME_KEYS[time], value);
         },
       }}
     >
@@ -1049,18 +1059,9 @@ function Workspace({ api }: { api: ApiClient }) {
         <div className="review-theme">
           <Select
             label="主题"
-            value={theme}
-            onChange={(value) => {
-              setTheme(value as Theme);
-              preferences.write("sciretriever:theme:v1", value);
-            }}
-            options={[
-              { value: "light", label: "蓝白" },
-              { value: "dark", label: "深色" },
-              { value: "green", label: "墨绿" },
-              { value: "warm", label: "暖白" },
-              { value: "system", label: "跟随系统" },
-            ]}
+            value={themes.theme}
+            onChange={(value) => setTheme(value as Theme)}
+            options={themeOptions}
           />
         </div>
       )}

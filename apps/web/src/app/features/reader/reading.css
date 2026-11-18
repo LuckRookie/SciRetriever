@@ -177,7 +177,7 @@
     min-height: 0;
     overflow: auto;
     padding: var(--space-5);
-    background: var(--pdfbg);
+    background: var(--reader-desk);
     scrollbar-gutter: stable;
     overflow-anchor: none;
   }
@@ -715,8 +715,9 @@
     border-color: var(--t-green);
     color: var(--t-green);
   }
+  /* Work in progress has no colour (rule 5): a grey turning ring. */
   .reader-step[data-state="pending"] > span {
-    border-color: var(--blue);
+    border-color: var(--fg3);
     border-right-color: transparent;
   }
   .reader-step[data-state="warning"] > span {
@@ -1246,7 +1247,7 @@
     color: var(--fg3);
   }
   .react-reader .reader-preparing-step[data-state="current"] {
-    color: var(--blue);
+    color: var(--fg);
     font-weight: 500;
   }
   .react-reader .reader-preparing-step .ui-spinner {
@@ -1652,7 +1653,7 @@
     left: 0;
     right: 0;
     box-sizing: border-box;
-    border: 1.5px solid var(--blue);
+    border: 1.5px solid var(--reader-pen);
     border-radius: 2px;
     background: color-mix(in srgb, var(--sel) 50%, transparent);
     cursor: grab;
@@ -1664,7 +1665,7 @@
     left: -3px;
     right: -3px;
     height: 3px;
-    background: var(--blue);
+    background: var(--reader-pen);
   }
   .react-reader .reader-spine-tick[data-kind="find"] {
     background: var(--reader-tick-evidence);

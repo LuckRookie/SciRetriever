@@ -61,8 +61,9 @@
   .source-bar-track > .source-bar-behind {
     background: var(--chart-muted);
   }
+  /* Rule 4: failures take the middle tone of the failure colour. */
   .source-bars li[data-tone="failed"] .source-bar-track > i {
-    background: var(--t-red);
+    background: var(--chart-problem);
   }
   .source-bar-value {
     font-size: var(--text-secondary);

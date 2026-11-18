@@ -65,7 +65,8 @@ it("records reproducible computed-style evidence on the synthetic React workspac
         );
         for (const width of output ? [1440, 1280, 1024, 390] : [1440])
           for (const theme of output
-            ? ["light", "dark", "green", "warm"]
+            ? // Design core “主题”: the seven themes.
+              ["light", "oldbook", "xuan", "bean", "eink", "dark", "candle"]
             : ["light"]) {
             await w.page.setViewportSize({ width, height: 900 });
             await w.page.evaluate((theme) => {

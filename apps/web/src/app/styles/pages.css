@@ -44,8 +44,8 @@
   .brand-mark {
     display: grid;
     place-items: center;
-    background: var(--mark);
-    color: var(--mark-fg);
+    background: var(--brand);
+    color: var(--brand-fg);
     width: 22px;
     height: 22px;
     border-radius: var(--radius-sm);
@@ -679,8 +679,6 @@
     height: 22px;
     padding: 0 7px;
     font-size: var(--text-caption);
-    background: var(--status-raw-bg);
-    color: var(--status-raw);
     border-radius: var(--radius-sm);
     white-space: nowrap;
   }
@@ -692,30 +690,7 @@
     border-radius: var(--radius-round);
     background: currentColor;
   }
-  .paper-status[data-state="UNAVAILABLE"] {
-    background: var(--status-unavailable-bg);
-    color: var(--status-unavailable);
-  }
-  .paper-status[data-state="READY"] {
-    background: var(--status-ready-bg);
-    color: var(--status-ready);
-  }
-  .paper-status[data-state="ASSET_READY"] {
-    background: var(--status-asset-bg);
-    color: var(--status-asset);
-  }
-  .paper-status[data-state="ARCHIVING"] {
-    background: var(--status-archiving-bg);
-    color: var(--status-archiving);
-  }
-  .paper-status[data-state="ARCHIVE_FAILED"] {
-    background: var(--status-failed-bg);
-    color: var(--status-failed);
-  }
-  .paper-status[data-state="EXCLUDED"] {
-    background: var(--status-excluded-bg);
-    color: var(--status-excluded);
-  }
+  /* Colours: rule 5’s status map, `data-tone` (components.css). */
   /* A catalogue search card: bibliographic fields, then classification,
      then the year range, each cell as wide as a name or a choice. */
   .library-filters {
@@ -943,14 +918,18 @@
     max-width: 100%;
     overflow-wrap: anywhere;
   }
+  /* Tags are grey (rule 5); the primary tag is set apart by weight. */
   .paper-tag.primary {
-    color: var(--t-blue);
-    background: var(--t-blue-bg);
+    color: var(--fg);
     font-weight: 500;
   }
 }
 
 @layer pages {
+  /* An action inside a status label wears the label's ink. */
+  .paper-status .ui-button[data-variant="text"] {
+    color: inherit;
+  }
   .paper-status small {
     display: inline;
     margin: 0;
@@ -1193,9 +1172,11 @@
     box-shadow: inset 0 0 0 1px var(--line2);
     font-size: var(--text-caption);
   }
+  /* A chosen term is pressed like a quick filter; yellow stays with evidence. */
   .ui-button.scope-term[aria-pressed="true"] {
-    color: var(--mark-fg);
-    background: var(--mark);
+    color: var(--fg);
+    font-weight: 500;
+    background: var(--active);
     box-shadow: none;
   }
   .scope-term-count {
@@ -1377,16 +1358,7 @@
     height: 6px;
     overflow: hidden;
     border-radius: var(--radius-sm);
-    background: var(--t-gray-bg);
-  }
-  .intake-bar > i[data-part="has"] {
-    background: var(--t-green);
-  }
-  .intake-bar > i[data-part="existing"] {
-    background: var(--t-blue);
-  }
-  .intake-bar > i[data-part="unavailable"] {
-    background: var(--t-red);
+    background: var(--chart-muted);
   }
 
   /* One batch (page specs “批次页”): its parts top to bottom. */

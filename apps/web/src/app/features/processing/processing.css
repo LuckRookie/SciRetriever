@@ -134,7 +134,7 @@
     font-variant-numeric: tabular-nums;
   }
   .run-outcomes [data-failed] b {
-    color: var(--status-failed);
+    color: var(--status-problem);
   }
   .run-actions {
     display: flex;
@@ -198,7 +198,8 @@
   .result-meta:empty {
     display: none;
   }
-  /* Six value-check states share the badge colours, as small inline labels. */
+  /* Value checks share the badge colours (rule 5's status map), as small
+     inline labels. */
   .value-check {
     display: inline-block;
     margin-left: var(--space-1);
@@ -207,24 +208,6 @@
     font-size: var(--text-caption);
     line-height: 20px;
     white-space: nowrap;
-    background: var(--status-raw-bg);
-    color: var(--status-raw);
-  }
-  .value-check[data-status="found"] {
-    background: var(--status-ready-bg);
-    color: var(--status-ready);
-  }
-  .value-check[data-status="not-found"] {
-    background: var(--status-failed-bg);
-    color: var(--status-failed);
-  }
-  .value-check[data-status="citation-unavailable"] {
-    background: var(--status-unavailable-bg);
-    color: var(--status-unavailable);
-  }
-  .value-check[data-status="derived"] {
-    background: var(--status-asset-bg);
-    color: var(--status-asset);
   }
   .result-pagination .ui-label {
     position: absolute;

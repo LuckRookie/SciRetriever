@@ -13,8 +13,19 @@ import { loginWorkbenchPage } from "../../server/test/workbench-auth-fixture.js"
 /**
  * Checks the design-core rules on every design-sample page: the fixed type
  * scale, token font families, one primary action per surface, a single tab
- * level and readable text contrast.
+ * level and readable text contrast in all seven themes, and one colour per
+ * status (rule 5) across the pages.
  */
+// Design core “主题”: 纸墨 first, as the pages open in it.
+const themes = [
+  "light",
+  "oldbook",
+  "xuan",
+  "bean",
+  "eink",
+  "dark",
+  "candle",
+] as const;
 let samples: Awaited<ReturnType<typeof startDesignSamples>>;
 let browser: Browser;
 const password = randomBytes(32).toString("base64url");
@@ -205,13 +216,78 @@ function collectReadingViolations(): Violation[] {
 }
 
 /**
+ * Runs in the page: puts a theme on the root and finishes the colour
+ * transitions it starts, so the computed colours are the theme's own.
+ */
+async function wearTheme(theme: string) {
+  // Colour transitions (kept under reduced motion) would be caught half
+  // way; for the check they take no time.
+  const instant = "sciretrieverInstantColours";
+  const root = document as Document & Record<string, unknown>;
+  if (!root[instant]) {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(
+      "*, *::before, *::after { transition-duration: 0s !important; transition-delay: 0s !important; }",
+    );
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+    root[instant] = true;
+  }
+  document.documentElement.dataset.theme = theme;
+  document.documentElement.getBoundingClientRect();
+  for (const animation of document.getAnimations())
+    if (animation instanceof CSSTransition) animation.finish();
+  await new Promise(requestAnimationFrame);
+}
+
+interface StatusColour {
+  tone: string;
+  colour: string;
+}
+/** Runs in the page: the colours each visible status label and status fill wears. */
+function collectStatusColours(): StatusColour[] {
+  const out: StatusColour[] = [];
+  for (const el of document.querySelectorAll(
+    ":is(.ui-badge, .paper-status, .value-check, .ui-tone-fill)[data-tone]",
+  )) {
+    const box = el.getBoundingClientRect();
+    if (!box.width || !box.height) continue;
+    const style = getComputedStyle(el);
+    const fill = el.classList.contains("ui-tone-fill");
+    out.push({
+      tone: `${fill ? "fill" : "label"} ${el.getAttribute("data-tone")}`,
+      colour: fill
+        ? style.backgroundColor
+        : `${style.color} on ${style.backgroundColor}`,
+    });
+  }
+  return out;
+}
+const statusColours = new Map<string, Map<string, Set<string>>>();
+
+/**
  * Known page-level violations scheduled in plan 14 block 05. Each entry must be
  * removed in the same change that fixes it; new violations fail the test.
  */
 const pending: string[] = [];
 
 async function violations(page: Page, entryId: string) {
+  // Colours still easing in (an action enabled a moment ago) settle first.
+  await page.evaluate(wearTheme, "light");
   const found = await page.evaluate(collectViolations);
+  // Contrast and status colours in every theme (design core “主题”).
+  for (const theme of themes) {
+    if (theme !== "light") {
+      await page.evaluate(wearTheme, theme);
+      for (const v of await page.evaluate(collectViolations))
+        if (v.rule === "contrast")
+          found.push({ rule: `contrast@${theme}`, detail: v.detail });
+    }
+    const seen = statusColours.get(theme) ?? new Map<string, Set<string>>();
+    statusColours.set(theme, seen);
+    for (const { tone, colour } of await page.evaluate(collectStatusColours))
+      seen.set(tone, (seen.get(tone) ?? new Set()).add(colour));
+  }
+  await page.evaluate(wearTheme, "light");
   // The full text at reading sizes 16, 20 and 32 px (design core “检查”).
   for (const size of [16, 20, 32]) {
     await page.evaluate((size) => {
@@ -264,20 +340,34 @@ it(
         report.join("\n") + "\n",
       );
     expect([...report].sort()).toEqual([...pending].sort());
+    // Rule 5: in each theme a status has one colour on every page.
+    const mixed = [...statusColours].flatMap(([theme, tones]) =>
+      [...tones]
+        .filter(([, colours]) => colours.size > 1)
+        .map(
+          ([tone, colours]) => `${theme} ${tone}: ${[...colours].join(" | ")}`,
+        ),
+    );
+    expect(mixed).toEqual([]);
+    expect(statusColours.get("light")?.size ?? 0).toBeGreaterThan(4);
   },
 );
 
-it("keeps --reader-check-fail readable on the sheet in both themes (spec 8.2 排版)", async () => {
+it("keeps --reader-check-fail readable on the sheet in all seven themes (spec 8.2 排版)", async () => {
   const tokens = await readFile(
     new URL("../src/app/styles/tokens.css", import.meta.url),
     "utf8",
   );
-  const block = (selector: string) => {
-    const at = tokens.indexOf(selector);
+  const block = (theme: string) => {
+    const at = tokens.indexOf(`[data-theme-preview="${theme}"] {`);
+    expect(at).toBeGreaterThan(0);
     return tokens.slice(at, tokens.indexOf("}", at));
   };
-  const value = (css: string, name: string): string | undefined =>
-    new RegExp(`${name}:\\s*([^;]+);`, "u").exec(css)?.[1]?.trim();
+  const value = (css: string, name: string): string => {
+    const found = new RegExp(`\\s${name}:\\s*([^;]+);`, "u").exec(css)?.[1];
+    expect(found, name).toBeDefined();
+    return found!.trim();
+  };
   const hex = (color: string) => {
     const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/iu.exec(color);
     if (!m) throw new Error(`not a hex colour: ${color}`);
@@ -290,18 +380,13 @@ it("keeps --reader-check-fail readable on the sheet in both themes (spec 8.2 排
       .map((v) => v / 255)
       .map((s) => (s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4))
       .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i]!, 0);
-  const light = block(":root"),
-    dark = block('[data-theme="dark"]');
-  for (const theme of [light, dark]) {
-    const fail =
-      value(theme, "--reader-check-fail") ??
-      value(light, "--reader-check-fail")!;
-    let sheet =
-      value(theme, "--reader-sheet") ?? value(light, "--reader-sheet")!;
-    if (sheet.startsWith("var("))
-      sheet =
-        value(theme, sheet.slice(4, -1)) ?? value(light, sheet.slice(4, -1))!;
+  // The sheet is the theme's paper (`--reader-sheet: var(--bg)`).
+  expect(tokens).toMatch(/--reader-sheet:\s*var\(--bg\);/u);
+  for (const theme of themes) {
+    const css = block(theme);
+    const fail = value(css, "--reader-check-fail");
+    const sheet = value(css, "--bg");
     const [a, b] = [lum(hex(fail)), lum(hex(sheet))].sort((x, y) => y - x);
-    expect((a! + 0.05) / (b! + 0.05)).toBeGreaterThanOrEqual(4.5);
+    expect((a! + 0.05) / (b! + 0.05), theme).toBeGreaterThanOrEqual(4.5);
   }
 });

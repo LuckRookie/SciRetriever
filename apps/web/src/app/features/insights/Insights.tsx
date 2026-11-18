@@ -13,6 +13,7 @@ import {
   Tabs,
   TechDetails,
   RichTitle,
+  literatureTone,
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
 import {
@@ -342,15 +343,16 @@ export default function Insights() {
 }
 const MISSING = "未提供";
 type Row = { label: string; count: number };
+// Rule 4: the material-state chart takes the status map's colours.
 const STATES = [
-  { id: "READY", label: "已就绪", tone: "ready" },
-  { id: "ASSET_READY", label: "有 PDF", tone: "asset" },
-  { id: "ARCHIVING", label: "建档中", tone: "archiving" },
-  { id: "ARCHIVE_FAILED", label: "建档失败", tone: "failed" },
-  { id: "unavailable", label: "无法获取", tone: "unavailable" },
-  { id: "UNREVIEWED", label: "仅元数据", tone: "raw" },
-  { id: "EXCLUDED", label: "已排除", tone: "excluded" },
-] as const;
+  { id: "READY", label: "已就绪" },
+  { id: "ASSET_READY", label: "有 PDF" },
+  { id: "ARCHIVING", label: "建档中" },
+  { id: "ARCHIVE_FAILED", label: "建档失败" },
+  { id: "unavailable", label: "无法获取" },
+  { id: "UNREVIEWED", label: "仅元数据" },
+  { id: "EXCLUDED", label: "已排除" },
+].map((state) => ({ ...state, tone: literatureTone(state.id) }));
 const percent = (count: number, total: number) =>
   total
     ? `${((count / total) * 100).toFixed(count / total < 0.1 ? 1 : 0)}%`
@@ -453,6 +455,7 @@ function Proportion({ rows }: { rows: readonly (Row & { tone: string })[] }) {
         {rows.map((row) => (
           <i
             key={row.label}
+            className="ui-tone-fill"
             data-tone={row.tone}
             style={{ flexGrow: row.count }}
           />
@@ -461,7 +464,10 @@ function Proportion({ rows }: { rows: readonly (Row & { tone: string })[] }) {
       <ul className="proportion-legend">
         {rows.map((row) => (
           <li key={row.label}>
-            <span className="proportion-dot" data-tone={row.tone} />
+            <span
+              className="proportion-dot ui-tone-fill"
+              data-tone={row.tone}
+            />
             <span>{row.label}</span>
             <b>{row.count.toLocaleString()}</b>
             <span className="proportion-share">

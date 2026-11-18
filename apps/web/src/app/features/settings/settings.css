@@ -286,8 +286,9 @@
   .settings-device-state[data-state="connected"] {
     color: var(--t-green);
   }
+  /* Rule 5: waiting is grey; yellow is kept for evidence. */
   .settings-device-state[data-state="pending"] {
-    color: var(--t-yellow);
+    color: var(--fg2);
   }
   .settings-device-state[data-state="revoked"] {
     color: var(--fg3);
@@ -358,5 +359,138 @@
     font-size: var(--text-secondary);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+  }
+  /* “设置 → 外观” (design core “主题”): one card per theme. Each preview
+     wears its theme through `data-theme-preview`, so it may use only the
+     theme's base tokens; greys are its own ink at an alpha. */
+  .theme-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+    gap: var(--space-3);
+    max-width: 600px;
+  }
+  .theme-card {
+    display: grid;
+    gap: 2px;
+    padding: var(--space-2);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    outline: none;
+    transition: var(--feedback);
+  }
+  .theme-card[data-hovered] {
+    background: var(--hover);
+  }
+  .theme-card[data-pressed] {
+    transform: scale(0.98);
+  }
+  /* The chosen card is ringed with the pen, like a ticked box. */
+  .theme-card[data-selected] {
+    box-shadow: inset 0 0 0 2px var(--blue);
+  }
+  .theme-card[data-focus-visible] {
+    box-shadow:
+      inset 0 0 0 2px var(--focus),
+      0 0 0 3px var(--focus-ring);
+  }
+  .theme-card-name {
+    margin-top: var(--space-1);
+    font-size: var(--text-control);
+    line-height: var(--lh-control);
+  }
+  .theme-card[data-selected] .theme-card-name {
+    font-weight: 500;
+  }
+  .theme-card-time {
+    font-size: var(--text-caption);
+    line-height: var(--lh-caption);
+    color: var(--fg3);
+  }
+  .theme-preview-pair {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+  .theme-preview-pair > .theme-preview {
+    border-radius: 0;
+  }
+  .theme-preview {
+    display: grid;
+    grid-template-columns: 26% minmax(0, 1fr);
+    height: 72px;
+    overflow: hidden;
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--fg);
+    box-shadow: inset 0 0 0 1px rgb(var(--ink-rgb) / 0.12);
+  }
+  .theme-preview i {
+    display: block;
+    border-radius: 2px;
+  }
+  .theme-preview-side {
+    display: grid;
+    align-content: start;
+    gap: 5px;
+    padding: 8px 6px;
+    background: var(--side);
+  }
+  .theme-preview-side > i {
+    height: 4px;
+    background: rgb(var(--ink-rgb) / 0.16);
+  }
+  .theme-preview-side > i[data-brand] {
+    width: 10px;
+    height: 10px;
+    margin-bottom: 2px;
+    background: var(--brand);
+  }
+  .theme-preview-main {
+    display: grid;
+    align-content: start;
+    justify-items: start;
+    gap: 5px;
+    padding: 6px 8px;
+    min-width: 0;
+  }
+  .theme-preview-title {
+    font: 500 var(--text-caption) / 1.3 var(--serif);
+    white-space: nowrap;
+  }
+  .theme-preview-main > i[data-line] {
+    height: 4px;
+    width: 70%;
+    background: rgb(var(--ink-rgb) / 0.2);
+  }
+  .theme-preview-main > i[data-line="title"] {
+    width: 90%;
+    background: rgb(var(--ink-rgb) / 0.55);
+  }
+  .theme-preview-main > i[data-line="badge"] {
+    width: 45%;
+    height: 8px;
+    margin-top: 4px;
+    background: var(--status-done-bg);
+    box-shadow: inset 3px 0 0 var(--status-done);
+  }
+  .theme-preview-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 5px;
+    border-radius: var(--radius-xs);
+    font-size: var(--text-caption);
+    line-height: 20px;
+    white-space: nowrap;
+    color: var(--status-done);
+    background: var(--status-done-bg);
+  }
+  .theme-preview-badge::before {
+    content: "";
+    width: 5px;
+    height: 5px;
+    border-radius: var(--radius-round);
+    background: currentColor;
   }
 }

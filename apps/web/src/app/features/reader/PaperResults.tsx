@@ -51,9 +51,7 @@ export function PaperResults({
                 <div>
                   <h3>
                     {processorName(String(r.processor_id))}
-                    {r.freshness === "stale" ? (
-                      <Badge status="running">已过时</Badge>
-                    ) : null}
+                    {r.freshness === "stale" ? <Badge status="stale" /> : null}
                   </h3>
                   <p>
                     {localTime(r.created_at)} ·{" "}

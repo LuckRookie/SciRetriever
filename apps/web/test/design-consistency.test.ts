@@ -3,7 +3,17 @@ import { expect, it } from "vitest";
 import { componentFixture } from "./component-fixture.js";
 import { writeDesignAudit } from "./design-audit-fixture.js";
 import { nextAssets } from "./next-workspace-fixture.js";
-it("uses bounded control metrics and four themes without inline style sheets or narrow-screen overflow", async () => {
+// Design core “主题”: the seven themes' root names.
+const themes = [
+  "light",
+  "oldbook",
+  "xuan",
+  "bean",
+  "eink",
+  "dark",
+  "candle",
+] as const;
+it("uses bounded control metrics and seven themes without inline style sheets or narrow-screen overflow", async () => {
   const env = await componentFixture();
   try {
     const page = env.page;
@@ -11,7 +21,7 @@ it("uses bounded control metrics and four themes without inline style sheets or 
       .getByRole("heading", { name: "组件画廊", exact: true })
       .waitFor();
     await page.emulateMedia({ reducedMotion: "reduce" });
-    for (const theme of ["light", "dark", "green", "warm"]) {
+    for (const theme of themes) {
       await page.evaluate((value) => {
         document.documentElement.dataset.theme = value;
       }, theme);
@@ -48,6 +58,116 @@ it("uses bounded control metrics and four themes without inline style sheets or 
     await env.close();
   }
 }, 30000);
+/** Runs in the page: a token's computed colour, through a probe element. */
+function tokenColour(name: string): string {
+  const probe = document.createElement("span");
+  probe.style.color = `var(${name})`;
+  document.body.append(probe);
+  const value = getComputedStyle(probe).color;
+  probe.remove();
+  return value;
+}
+it("draws the primary button in ink (paper on ink at night), a disabled one grey on grey at full opacity, and one colour per status in all seven themes", async () => {
+  const env = await componentFixture();
+  try {
+    const page = env.page;
+    await page
+      .getByRole("heading", { name: "组件画廊", exact: true })
+      .waitFor();
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    const primary = page.getByRole("button", { name: "主要操作", exact: true });
+    await primary.evaluate((el) => {
+      el.style.transitionDuration = "0s";
+    });
+    const seen = new Map<string, string>();
+    for (const theme of themes) {
+      await page.evaluate((value) => {
+        document.documentElement.dataset.theme = value;
+      }, theme);
+      await page.evaluate(() => new Promise(requestAnimationFrame));
+      const colour = (name: string) => page.evaluate(tokenColour, name);
+      const [fg, bg, ink, paper, grey, pale] = await Promise.all([
+        colour("--fg"),
+        colour("--bg"),
+        colour("--primary"),
+        colour("--primary-fg"),
+        colour("--disabled-bg"),
+        colour("--disabled-fg"),
+      ]);
+      // The primary is the theme's ink; its label is paper (white on 纸墨).
+      expect(ink).toBe(fg);
+      expect([bg, "rgb(255, 255, 255)"]).toContain(paper);
+      const style = () =>
+        primary.evaluate((el) => {
+          const s = getComputedStyle(el);
+          return {
+            background: s.backgroundColor,
+            color: s.color,
+            opacity: s.opacity,
+          };
+        });
+      expect(await style()).toEqual({
+        background: ink,
+        color: paper,
+        opacity: "1",
+      });
+      await primary.evaluate((el) => el.setAttribute("data-disabled", "true"));
+      expect(await style()).toEqual({
+        background: grey,
+        color: pale,
+        opacity: "1",
+      });
+      await primary.evaluate((el) => el.removeAttribute("data-disabled"));
+      // Rule 5: each status tone is one colour pair on every label, the
+      // four tones differ, and work in progress turns a ring.
+      const badges = await page
+        .locator(".ui-badge[data-tone], .paper-status[data-tone]")
+        .evaluateAll((elements) =>
+          elements.map((el) => {
+            const s = getComputedStyle(el);
+            return {
+              tone: el.getAttribute("data-tone")!,
+              pair: `${s.color} on ${s.backgroundColor}`,
+            };
+          }),
+        );
+      const pairs = new Map<string, Set<string>>();
+      for (const { tone, pair } of badges)
+        pairs.set(tone, (pairs.get(tone) ?? new Set()).add(pair));
+      expect([...pairs.keys()].sort()).toEqual(
+        ["done", "other", "pdf", "problem", "running"].sort(),
+      );
+      for (const set of pairs.values()) expect(set.size).toBe(1);
+      const one = (tone: string) => [...pairs.get(tone)!][0]!;
+      expect(one("running")).toBe(one("other"));
+      expect(new Set(["done", "pdf", "problem", "other"].map(one)).size).toBe(
+        4,
+      );
+      const ring = await page
+        .locator('.ui-badge[data-tone="running"] > span[aria-hidden="true"]')
+        .first()
+        .evaluate((el) => {
+          const s = getComputedStyle(el);
+          return {
+            background: s.backgroundColor,
+            ring:
+              s.borderTopStyle === "solid" && parseFloat(s.borderTopWidth) >= 1,
+            open: s.borderRightColor === "rgba(0, 0, 0, 0)",
+          };
+        });
+      expect(ring).toEqual({
+        background: "rgba(0, 0, 0, 0)",
+        ring: true,
+        open: true,
+      });
+      seen.set(theme, `${ink} ${one("done")}`);
+    }
+    expect(new Set(seen.values()).size).toBe(themes.length);
+    expect(env.errors).toEqual([]);
+  } finally {
+    await env.close();
+  }
+}, 60000);
 it("keeps design variables in CSS and avoids geometry transitions", async () => {
   for (const file of ["components.css", "tokens.css", "base.css"]) {
     const text = await readFile(

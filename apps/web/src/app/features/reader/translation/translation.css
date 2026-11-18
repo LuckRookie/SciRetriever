@@ -117,7 +117,7 @@
     font-size: var(--text-interface);
   }
   .translation-error {
-    color: var(--status-failed);
+    color: var(--status-problem);
   }
   .translation-popover footer button {
     display: inline-flex;

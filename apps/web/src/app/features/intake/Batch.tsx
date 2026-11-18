@@ -781,9 +781,21 @@ export function BatchPage({ id }: { id: string }) {
                 }
                 label={`文件：已上传 ${progress.files.uploaded}，已有 ${progress.files.existing}，冲突 ${progress.files.conflicts}，待交 ${pending}`}
                 parts={[
-                  { part: "has", value: progress.files.uploaded },
-                  { part: "existing", value: progress.files.existing },
-                  { part: "unavailable", value: progress.files.conflicts },
+                  {
+                    part: "has",
+                    tone: "done",
+                    value: progress.files.uploaded,
+                  },
+                  {
+                    part: "existing",
+                    tone: "pdf",
+                    value: progress.files.existing,
+                  },
+                  {
+                    part: "unavailable",
+                    tone: "problem",
+                    value: progress.files.conflicts,
+                  },
                 ]}
               />
               <Counts

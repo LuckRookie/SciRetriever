@@ -22,6 +22,7 @@ import {
   SearchField,
   Skeleton,
   TechDetails,
+  progressTone,
 } from "../../components/index.js";
 import { archiveQuery, rows } from "../../data/archive.js";
 import { useApi } from "../../data/query.js";
@@ -387,7 +388,11 @@ function TaskProgress({ job }: { job: JsonRecord }) {
   return (
     <span className="task-progress">
       <span className="task-progress-track" aria-hidden="true">
-        <i style={{ width: `${Math.min(100, (done / total) * 100)}%` }} />
+        <i
+          className="ui-tone-fill"
+          data-tone={progressTone(String(job.status))}
+          style={{ width: `${Math.min(100, (done / total) * 100)}%` }}
+        />
       </span>
       <span className="task-time">
         {done}/{total}

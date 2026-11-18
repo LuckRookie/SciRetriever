@@ -1,5 +1,9 @@
 import type { IntakeBatch } from "@sciretriever/contracts";
-import { Badge, type BadgeStatus } from "../../components/index.js";
+import {
+  Badge,
+  type BadgeStatus,
+  type StatusTone,
+} from "../../components/index.js";
 import { batchStateText } from "../../data/imports.js";
 
 /** A finished batch shows its result; the others their state. */
@@ -41,21 +45,30 @@ export function Counts({
   );
 }
 
-/** A thin bar of parts out of a whole, each part named for screen readers. */
+/**
+ * A thin bar of parts out of a whole, each part named for screen readers and
+ * drawn in its status's middle tone (design core rule 4).
+ */
 export function PartsBar({
   parts,
   total,
   label,
 }: {
-  parts: readonly { part: string; value: number }[];
+  parts: readonly { part: string; tone: StatusTone; value: number }[];
   total: number;
   label: string;
 }) {
   const share = (n: number) => (total ? `${(n / total) * 100}%` : "0%");
   return (
     <div className="intake-bar" role="img" aria-label={label}>
-      {parts.map(({ part, value }) => (
-        <i key={part} data-part={part} style={{ width: share(value) }} />
+      {parts.map(({ part, tone, value }) => (
+        <i
+          key={part}
+          className="ui-tone-fill"
+          data-part={part}
+          data-tone={tone}
+          style={{ width: share(value) }}
+        />
       ))}
     </div>
   );

@@ -30,7 +30,8 @@ import {
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
 import { useUrlState, registerNavigationGuard } from "../../data/url.js";
-import { preferences, type Theme } from "../../data/preferences.js";
+import { preferences } from "../../data/preferences.js";
+import { ThemePicker, ThemeTimeSelect } from "./ThemePicker.js";
 import { useShell } from "../../shell/context.js";
 import { useMotionPreference } from "../../motion/index.js";
 import { readingFont } from "../reader/input/reading-font.js";
@@ -1277,19 +1278,18 @@ function Appearance() {
     >
       <Definitions>
         <Definition term="主题">
-          <Select
-            label="主题"
-            value={shell.theme}
-            onChange={(value) => shell.setTheme(value as Theme)}
-            options={[
-              { value: "light", label: "蓝白" },
-              { value: "dark", label: "深色" },
-              { value: "green", label: "墨绿" },
-              { value: "warm", label: "暖白" },
-              { value: "system", label: "跟随系统" },
-            ]}
-          />
+          <ThemePicker />
         </Definition>
+        {shell.theme === "system" ? (
+          <>
+            <Definition term="白天" description="系统为浅色时。">
+              <ThemeTimeSelect time="day" />
+            </Definition>
+            <Definition term="夜里" description="系统为深色时。">
+              <ThemeTimeSelect time="night" />
+            </Definition>
+          </>
+        ) : null}
         <Definition term="默认阅读字号" description="阅读页可临时调整。">
           <Select
             label="默认阅读字号"

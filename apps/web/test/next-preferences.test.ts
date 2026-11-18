@@ -4,7 +4,7 @@ import { parseLibrarySearchRequest } from "@sciretriever/contracts";
 import { nextWorkspace, openSavedViews } from "./next-workspace-fixture.js";
 const prefix = "sciretriever:react:";
 afterEach(() => vi.unstubAllGlobals());
-it("reads and writes only current UI preferences without migrating old keys", () => {
+it("reads and writes only current UI preferences without migrating old keys; a retired theme name is replaced", () => {
   const values = new Map([
     ["sciretriever:theme:v1", "green"],
     ["other-app:theme", "dark"],
@@ -15,13 +15,16 @@ it("reads and writes only current UI preferences without migrating old keys", ()
   });
   expect(readTheme()).toBe("light");
   expect(preferences.read("sciretriever:theme:v1")).toBeNull();
+  preferences.write("sciretriever:theme:v1", "xuan");
+  expect(readTheme()).toBe("xuan");
+  // 暖白 is now 纸墨; the stored name is rewritten once.
   preferences.write("sciretriever:theme:v1", "warm");
-  expect(readTheme()).toBe("warm");
+  expect(readTheme()).toBe("light");
   expect(values).toEqual(
     new Map([
       ["sciretriever:theme:v1", "green"],
       ["other-app:theme", "dark"],
-      [prefix + "sciretriever:theme:v1", "warm"],
+      [prefix + "sciretriever:theme:v1", "light"],
     ]),
   );
 });
@@ -29,7 +32,7 @@ it("restores current theme, panel width and saved view through application start
   const w = await nextWorkspace();
   try {
     const values = {
-      [prefix + "sciretriever:theme:v1"]: "green",
+      [prefix + "sciretriever:theme:v1"]: "bean",
       [prefix + "sciretriever:panel:navigation:v1"]: "330px",
       [prefix + "sciretriever:library-views:v1:unbound"]: JSON.stringify([
         {
@@ -61,7 +64,7 @@ it("restores current theme, panel width and saved view through application start
       .waitFor();
     await w.page.keyboard.press("Escape");
     expect(await w.page.locator("html").getAttribute("data-theme")).toBe(
-      "green",
+      "bean",
     );
     expect(
       await w.page
@@ -84,7 +87,7 @@ it("restores current theme, panel width and saved view through application start
       .waitFor();
     await w.page.keyboard.press("Escape");
     expect(await w.page.locator("html").getAttribute("data-theme")).toBe(
-      "green",
+      "bean",
     );
     expect(w.env.modelCalls).toBe(0);
     expect(w.errors).toEqual([]);
