@@ -202,12 +202,15 @@ export function Select({
   onChange,
   options,
   placeholder = "请选择",
+  prefix,
   ...field
 }: FieldProps & {
   value: string;
   onChange: (value: string) => void;
   options: readonly SelectOption[];
   placeholder?: string;
+  /** Words shown before the value in the button, as in “排序：最近入库”. */
+  prefix?: string;
 }) {
   return (
     <AriaSelect
@@ -227,6 +230,11 @@ export function Select({
     >
       <Field {...field}>
         <Button className="ui-select">
+          {prefix ? (
+            <span className="ui-select-prefix" aria-hidden>
+              {prefix}：
+            </span>
+          ) : null}
           <SelectValue />
           <Icon name="chevron" />
         </Button>

@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from "react";
 import {
   useInfiniteQuery,
   useQuery,
-  useQueries,
   useQueryClient,
 } from "@tanstack/react-query";
 import {
@@ -17,7 +16,6 @@ import {
   FilterChip,
   Icon,
   IconButton,
-  ListRow,
   LocalTime,
   SearchField,
   Skeleton,
@@ -104,66 +102,6 @@ function useTaskName(job: JsonRecord): string {
     staleTime: 60_000,
   });
   return taskTitle(job, paper.data ? paperTitle(paper.data) : null);
-}
-export function ActivityList({ onSelect }: { onSelect: (id: string) => void }) {
-  const api = useApi();
-  const groups = [
-    { id: "active", title: "进行中" },
-    { id: "attention", title: "待处理" },
-    { id: "ended", title: "最近结束" },
-  ];
-  const results = useQueries({
-    queries: groups.map((group) => ({
-      queryKey: ["tasks", "activity-group", group.id],
-      staleTime: 0,
-      queryFn: async ({ signal }: { signal: AbortSignal }) => {
-        const value = await api.read(
-          `/api/tasks?limit=${group.id === "ended" ? 20 : 100}&status_group=${group.id}`,
-          signal,
-        );
-        if (!Array.isArray(value.tasks)) throw new Error("任务列表回执无效");
-        return value.tasks.map(jobRecord);
-      },
-      refetchInterval: 5000,
-      enabled: api.kind === "workspace",
-    })),
-  });
-  return (
-    <div className="activity-task-list">
-      {groups.map((group, index) => {
-        const result = results[index]!;
-        return (
-          <section key={group.id}>
-            <h3>{group.title}</h3>
-            {result.isPending ? (
-              <Skeleton rows={1} />
-            ) : result.isError ? (
-              <ErrorNotice
-                message={errorMessage(result.error)}
-                onRetry={async () => {
-                  await result.refetch();
-                }}
-              />
-            ) : null}
-            {result.data?.length ? (
-              result.data.map((job) => (
-                <div key={String(job.job_id)} data-task-id={String(job.job_id)}>
-                  <ListRow
-                    title={<TaskName job={job} />}
-                    bibliography={<LocalTime value={job.created_at} />}
-                    badge={<TaskBadge job={job} />}
-                    onPress={() => onSelect(String(job.job_id))}
-                  />
-                </div>
-              ))
-            ) : !result.isPending && !result.isError ? (
-              <p className="ui-description">暂无任务</p>
-            ) : null}
-          </section>
-        );
-      })}
-    </div>
-  );
 }
 export default function Tasks() {
   const api = useApi(),

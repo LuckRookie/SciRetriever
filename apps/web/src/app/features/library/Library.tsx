@@ -6,8 +6,11 @@ import {
   useState,
   useCallback,
   memo,
+  type DragEvent as ReactDragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react";
 import {
   keepPreviousData,
@@ -39,20 +42,20 @@ import {
   Menu,
   PageHeader,
   SearchField,
+  SegmentedControl,
   Select,
   Switch,
   TextField,
   TechDetails,
   RichTitle,
-  literatureTone,
 } from "../../components/index.js";
 import type { MenuOption } from "../../components/index.js";
 import { AnimatedPanel, Presence, LayoutGroup } from "../../motion/index.js";
 import type { ApiClient } from "../../data/api.js";
 import { useApi } from "../../data/query.js";
 import { useUrlState, navigate } from "../../data/url.js";
+import { preferences } from "../../data/preferences.js";
 import {
-  emptyQuery,
   paperAuthors,
   paperTitle,
   paperTitleParts,
@@ -72,7 +75,15 @@ import { archiveQuery, useArchiveAction, rows } from "../../data/archive.js";
 import { record } from "../../data/wire.js";
 import { archiveReason, errorMessage, statusLabels } from "../../strings.js";
 import { OperationDialog, download } from "./OperationDialog.js";
-import { FullTextLine, type FullTextFilter } from "./FullTextLine.js";
+import {
+  BibliographyContent,
+  MaterialBadge,
+  Venue,
+} from "../bibliography/Bibliography.js";
+import {
+  ContextMenu,
+  type ContextMenuRequest,
+} from "../reader/input/ContextMenu.js";
 import {
   MAIN_MATERIAL_STATES,
   MORE_MATERIAL_STATES,
@@ -112,6 +123,11 @@ import {
   type OperatorScope,
 } from "../processing/RunOperator.js";
 
+/** The library's two displays, remembered in this browser (page specs “文献库”). */
+type LibraryDisplay = "list" | "table";
+const DISPLAY_KEY = "sciretriever:library:display:v1";
+const readDisplay = (): LibraryDisplay =>
+  preferences.read(DISPLAY_KEY) === "table" ? "table" : "list";
 const scrollPositions = new WeakMap<ApiClient, Map<string, number>>();
 const rowMeasurements = new WeakMap<ApiClient, Map<string, VirtualItem[]>>();
 /** The draft-difference filter in words (page specs “界面用词”). */
@@ -140,7 +156,14 @@ export default function Library() {
   const archiveAction = useArchiveAction();
   const queries = useQueryClient();
   const queryString = JSON.stringify(route.query);
-  const scrollKey = `${queryString}:${route.sort}`;
+  // The list and the table keep their own scroll and row measurements.
+  const [display, setDisplay] = useState<LibraryDisplay>(readDisplay);
+  const chooseDisplay = (value: LibraryDisplay) => {
+    setDisplay(value);
+    preferences.write(DISPLAY_KEY, value);
+  };
+  const scopeKey = `${queryString}:${route.sort}`;
+  const scrollKey = `${scopeKey}:${display}`;
   if (!scrollPositions.has(api)) scrollPositions.set(api, new Map());
   if (!rowMeasurements.has(api)) rowMeasurements.set(api, new Map());
   const positions = scrollPositions.get(api)!;
@@ -152,7 +175,6 @@ export default function Library() {
   const batch = useIntakeBatch(batchId);
   const chips = Object.entries(route.query).flatMap(([key, value]) => {
     const names: Record<string, string> = {
-      text: "搜索",
       author: "作者",
       venue: "期刊",
       keywords: "作者关键词",
@@ -172,8 +194,10 @@ export default function Library() {
       has_draft_differences: DIFFERS_LABEL,
       has_image_only_pages: "含扫描页",
     };
-    // Folder and "recently read" are the page's scope, shown in its title.
+    // Folder and "recently read" are the page's scope, shown in its title;
+    // the search words stay in the search box (page specs “文献库”).
     if (
+      key === "text" ||
       key === "folder" ||
       key === "recently_opened" ||
       value === null ||
@@ -237,11 +261,14 @@ export default function Library() {
       },
     ];
   });
+  /** A search or a filter narrows the page's scope (page specs “文献库”). */
+  const narrowed = !!route.query.text || chips.length > 0;
   /** The current filter in words, for dialogs that act on all of it. */
   const scopeLabel = () =>
     [
       folderLabel ? `文件夹：${folderLabel}` : "",
       route.query.recently_opened ? "最近阅读" : "",
+      route.query.text ? `搜索：${route.query.text}` : "",
       ...chips.map((chip) => chip.label),
     ]
       .filter(Boolean)
@@ -328,6 +355,7 @@ export default function Library() {
     scope: OperatorScope;
     label: string;
   } | null>(null);
+  const [rowMenu, setRowMenu] = useState<ContextMenuRequest | null>(null);
   const next = useInfiniteQuery({
     queryKey: ["library", route.query, route.sort],
     queryFn: ({ pageParam, signal }) =>
@@ -364,6 +392,15 @@ export default function Library() {
     placeholderData: keepPreviousData,
     enabled: api.workspace.readiness === "ready",
   });
+  // The page's whole scope, before any search or filter: the library, a
+  // folder or the recently read. The plain library shares the sidebar's query.
+  const baseScope = scopeQuery(route.query);
+  const scopeCounts = useQuery({
+    queryKey: ["library", "counts", baseScope],
+    queryFn: ({ signal }) => readLibraryCounts(api, baseScope, signal),
+    placeholderData: keepPreviousData,
+    enabled: api.workspace.readiness === "ready",
+  });
   // The categories do not overlap, so their counts add up to the total
   // (page specs “界面用词”).
   const countFor = (filter: MaterialState | "") =>
@@ -382,30 +419,40 @@ export default function Library() {
   const [adding, setAdding] = useState<string[] | null>(null);
   const updateQuery = (query: LibraryQuery, sort = route.sort) =>
     navigate({ query: JSON.stringify(query), sort }, { replace: true });
-  // “主 PDF” from the full-text line selects no quick filter, not even 全部.
+  // An old address's “主 PDF” selects no quick filter, not even 全部.
   const statusFilter =
     typeof route.query.has_primary_pdf === "boolean"
       ? null
       : queryMaterialState(route.query);
+  /**
+   * How many of the current results are in one category: the quick filter
+   * selects a single category, so the others are empty.
+   */
+  const resultsIn = (state: MaterialState): number | null => {
+    if (!counts.data) return null;
+    if (statusFilter === "") return materialCount(counts.data, state);
+    if (statusFilter === null)
+      return (state === "metadata" || state === "unavailable") ===
+        !route.query.has_primary_pdf
+        ? materialCount(counts.data, state)
+        : 0;
+    return statusFilter === state ? total : 0;
+  };
   // One quick filter at a time; the scope's other conditions stay.
   const setStatusFilter = (value: MaterialState | "") =>
     updateQuery(
       parseLibrarySearchRequest({ query: materialQuery(route.query, value) })
         .query,
     );
-  // The full-text line counts by paper whether a primary PDF is in hand;
-  // its “已试完” is the category “没找到 PDF”.
-  const pickFullText = (value: FullTextFilter) =>
-    value === "pdf" || value === "metadata"
-      ? updateQuery(
-          parseLibrarySearchRequest({
-            query: {
-              ...materialQuery(route.query, ""),
-              has_primary_pdf: value === "pdf",
-            },
-          }).query,
-        )
-      : setStatusFilter(value === "failed" ? "unavailable" : "");
+  /** Drops every filter; the search stays unless `all`, the scope always. */
+  const clearConditions = (all: boolean) => {
+    setActiveView("");
+    if (all) setText("");
+    updateQuery({
+      ...scopeQuery(route.query),
+      ...(all ? {} : { text: route.query.text }),
+    });
+  };
   useEffect(() => {
     setText(route.query.text ?? "");
   }, [route.query.text]);
@@ -452,13 +499,25 @@ export default function Library() {
       setChoosing(false);
     }
   };
+  /** The current results, at most 1,000, go into a folder as fixed ids. */
+  const addResults = async () => {
+    if (choosing) return;
+    setChoosing(true);
+    try {
+      setAdding(await scopeIds(api, route.query, route.sort));
+    } catch (error) {
+      shell.notify(errorMessage(error));
+    } finally {
+      setChoosing(false);
+    }
+  };
   /** “Select all” beyond the loaded rows reads the whole scope once, statuses included. */
   const selectScope = async () => {
     if (choosing) return;
     setChoosing(true);
     try {
       const all = await scopeItems(api, route.query, route.sort);
-      setWholeScope({ key: scrollKey, size: all.length });
+      setWholeScope({ key: scopeKey, size: all.length });
       const selected = new Set(shell.selected);
       for (const item of all) {
         known.set(item.literature.literature_id, item);
@@ -503,11 +562,6 @@ export default function Library() {
           }),
       },
     );
-  const preview = useQuery({
-    queryKey: ["literature", peek],
-    queryFn: ({ signal }) => readLiterature(api, peek!, signal),
-    enabled: peek !== null,
-  });
   const onFile = useCallback(
     (id: string, file: File) =>
       setOperation({ ids: [id], kind: "upload", file }),
@@ -526,6 +580,23 @@ export default function Library() {
       else setOperation({ ids: [id], kind });
     },
     [],
+  );
+  const mutable = api.kind === "workspace";
+  /** Right-click or the keyboard's menu key on a row opens its menu there. */
+  const onRowMenu = useCallback(
+    (id: string, x: number, y: number, keyboard: boolean) => {
+      const item = known.get(id);
+      if (!item) return;
+      const title = paperTitle(item);
+      setRowMenu({
+        x,
+        y,
+        keyboard,
+        label: "文献操作",
+        items: rowMenuItems(item, (kind) => onRowAction(id, title, kind)),
+      });
+    },
+    [known, onRowAction],
   );
   const removeFromFolder = async () => {
     if (!folder) return;
@@ -561,7 +632,6 @@ export default function Library() {
     },
     [],
   );
-  const mutable = api.kind === "workspace";
   const groups = groupSelection(shell.selected, known);
   /** Each batch button counts only the papers it would actually act on. */
   const batchReason = (group: SelectionGroup, none: string) =>
@@ -582,122 +652,224 @@ export default function Library() {
   const overLimit =
     total > 1000
       ? {
+          disabled: true,
           description: `当前 ${total.toLocaleString()} 篇，超过 1,000 篇上限；请先筛选或选择。`,
         }
       : {};
+  // What the current results hold, for the batch menu: an action none of them
+  // could ever take is left out; one they cannot take yet says why (rule 12).
+  const noPdf = resultsIn("metadata"),
+    exhausted = resultsIn("unavailable"),
+    withPdf =
+      resultsIn("ASSET_READY") === null
+        ? null
+        : resultsIn("ASSET_READY")! + resultsIn("ARCHIVE_FAILED")!,
+    withText = resultsIn("READY");
+  const withoutPdf =
+    noPdf === null || exhausted === null ? null : noPdf + exhausted;
+  const batchItems: MenuOption[] = [
+    ...(noPdf !== 0 || exhausted
+      ? [
+          {
+            id: "acquire",
+            label: "获取 PDF…",
+            ...(noPdf === 0
+              ? {
+                  disabled: true,
+                  description: "这些文献的自动途径都已试过，没找到 PDF",
+                }
+              : {}),
+            onAction: () => {
+              setMobileTools(false);
+              setAcquire({
+                kind: "query",
+                query: route.query,
+                sort: route.sort,
+                label: scopeLabel(),
+              });
+            },
+          },
+        ]
+      : []),
+    // The current results go to archiving as a fixed scope, as the
+    // selection does (page specs “文献库”).
+    ...(api.workspace.capabilities.maintenance && (withPdf !== 0 || withoutPdf)
+      ? [
+          {
+            id: "archive",
+            label: "生成全文…",
+            ...(withPdf === 0
+              ? {
+                  disabled: true,
+                  description: "这些文献还没有 PDF；生成全文需要先有 PDF",
+                }
+              : overLimit),
+            onAction: () => {
+              setMobileTools(false);
+              void operate("archive", false);
+            },
+          },
+        ]
+      : []),
+    {
+      id: "folder",
+      label: "加入文件夹…",
+      ...overLimit,
+      onAction: () => {
+        setMobileTools(false);
+        void addResults();
+      },
+    },
+    {
+      id: "export",
+      label: "导出书目",
+      ...overLimit,
+      onAction: () => void operate("export", false),
+    },
+    // Running an operator and fixing a snapshot are processing: the
+    // last group (page specs “整体信息架构”).
+    processingHeading,
+    {
+      id: "run",
+      label: "运行算子…",
+      ...(withText === 0
+        ? { disabled: true, description: "这些文献还没有全文" }
+        : overLimit),
+      onAction: () => {
+        setMobileTools(false);
+        setRunner({
+          scope: { kind: "query" },
+          label: `文献库当前筛选（${total.toLocaleString()} 篇）`,
+        });
+      },
+    },
+    {
+      id: "snapshot",
+      label: "生成快照",
+      onAction: () => snapshot({ kind: "query", query: route.query }),
+    },
+  ];
+  const savedFilterMenu = (
+    <Menu
+      label="保存的筛选"
+      indicator
+      variant="text"
+      className="library-saved-filters"
+      items={[
+        ...views.map((view) => ({
+          id: `view:${view.filter_id}`,
+          label: view.name,
+          checked: view.filter_id === activeView,
+          // Spec “文献库”: a filter whose folder is gone says so.
+          ...(view.missing_folder_id ? { description: "文件夹已删除" } : {}),
+          onAction: () => {
+            setActiveView(view.filter_id);
+            updateQuery(view.query, view.sort);
+          },
+        })),
+        ...(savedFilters.error
+          ? [
+              {
+                id: "filters-error",
+                label: "暂时无法读取保存的筛选",
+                divider: views.length > 0,
+                disabled: true,
+                onAction: () => {},
+              },
+            ]
+          : []),
+        {
+          id: "save",
+          label: "保存当前筛选…",
+          divider: views.length > 0 || !!savedFilters.error,
+          onAction: () => setSaveOpen(true),
+        },
+        ...(activeView
+          ? [
+              {
+                // Spec “文献库”: the current condition and order replace
+                // this filter's; its name stays (user organization 9.1).
+                id: "update",
+                label: "用当前条件更新这项筛选",
+                onAction: () => {
+                  void updateFilter(api, activeView, {
+                    query: route.query,
+                    sort: route.sort,
+                  })
+                    .then(refreshFilters)
+                    .catch((error: unknown) =>
+                      shell.notify(errorMessage(error)),
+                    );
+                },
+              },
+              {
+                id: "delete",
+                label: "删除当前筛选",
+                onAction: () => {
+                  void deleteFilter(api, activeView)
+                    .then(() => {
+                      setActiveView("");
+                      refreshFilters();
+                    })
+                    .catch((error: unknown) =>
+                      shell.notify(errorMessage(error)),
+                    );
+                },
+              },
+            ]
+          : []),
+        {
+          // User organization 9.5: every saved filter as one file.
+          id: "export",
+          label: "导出筛选",
+          divider: true,
+          onAction: () => {
+            void exportFilters(api)
+              .then((blob) => download(blob, "sciretriever-filters.json"))
+              .catch((error: unknown) =>
+                shell.notify(`没有导出筛选。${errorMessage(error)}`),
+              );
+          },
+        },
+        // User organization 9.1: while this browser has filters not yet
+        // imported, the menu ends with the way to bring them over.
+        ...(pendingImport.length
+          ? [
+              {
+                id: "import-browser",
+                label: `导入这个浏览器里保存的筛选（${pendingImport.length} 项）`,
+                divider: true,
+                onAction: () => void importBrowserFilters(),
+              },
+            ]
+          : []),
+      ]}
+    />
+  );
   const toolbarActions = (
     <>
-      <Menu
-        label={`筛选${
+      {/* One press opens or closes the conditions (page specs “文献库”). */}
+      <Button
+        variant="text"
+        icon={<Icon name="filter" />}
+        className="library-filter-toggle"
+        aria-expanded={filters}
+        onPress={() => {
+          setFilters(!filters);
+          setMobileTools(false);
+        }}
+      >
+        {`筛选${
           activeView
             ? `：${views.find((view) => view.filter_id === activeView)?.name ?? ""}`
             : chips.length
               ? ` · ${chips.length}`
               : ""
         }`}
-        icon={<Icon name="filter" />}
-        indicator
-        variant="text"
-        items={[
-          {
-            id: "conditions",
-            label: filters ? "收起筛选条件" : "筛选条件…",
-            onAction: () => {
-              setFilters(!filters);
-              setMobileTools(false);
-            },
-          },
-          ...views.map((view, index) => ({
-            id: `view:${view.filter_id}`,
-            label: view.name,
-            divider: index === 0,
-            // Spec “文献库”: a filter whose folder is gone says so.
-            ...(view.missing_folder_id ? { description: "文件夹已删除" } : {}),
-            onAction: () => {
-              setActiveView(view.filter_id);
-              updateQuery(view.query, view.sort);
-            },
-          })),
-          ...(savedFilters.error
-            ? [
-                {
-                  id: "filters-error",
-                  label: "暂时无法读取保存的筛选",
-                  divider: true,
-                  disabled: true,
-                  onAction: () => {},
-                },
-              ]
-            : []),
-          {
-            id: "save",
-            label: "保存当前筛选…",
-            divider: views.length === 0,
-            onAction: () => setSaveOpen(true),
-          },
-          ...(activeView
-            ? [
-                {
-                  // Spec “文献库”: the current condition and order replace
-                  // this filter's; its name stays (user organization 9.1).
-                  id: "update",
-                  label: "用当前条件更新这项筛选",
-                  onAction: () => {
-                    void updateFilter(api, activeView, {
-                      query: route.query,
-                      sort: route.sort,
-                    })
-                      .then(refreshFilters)
-                      .catch((error: unknown) =>
-                        shell.notify(errorMessage(error)),
-                      );
-                  },
-                },
-                {
-                  id: "delete",
-                  label: "删除当前筛选",
-                  onAction: () => {
-                    void deleteFilter(api, activeView)
-                      .then(() => {
-                        setActiveView("");
-                        refreshFilters();
-                      })
-                      .catch((error: unknown) =>
-                        shell.notify(errorMessage(error)),
-                      );
-                  },
-                },
-              ]
-            : []),
-          {
-            // User organization 9.5: every saved filter as one file.
-            id: "export",
-            label: "导出筛选",
-            divider: true,
-            onAction: () => {
-              void exportFilters(api)
-                .then((blob) => download(blob, "sciretriever-filters.json"))
-                .catch((error: unknown) =>
-                  shell.notify(`没有导出筛选。${errorMessage(error)}`),
-                );
-            },
-          },
-          // User organization 9.1: while this browser has filters not yet
-          // imported, the menu ends with the way to bring them over.
-          ...(pendingImport.length
-            ? [
-                {
-                  id: "import-browser",
-                  label: `导入这个浏览器里保存的筛选（${pendingImport.length} 项）`,
-                  divider: true,
-                  onAction: () => void importBrowserFilters(),
-                },
-              ]
-            : []),
-        ]}
-      />
+      </Button>
       <Select
         label="排序"
+        prefix="排序"
         value={route.sort}
         onChange={(sort) =>
           updateQuery(
@@ -710,95 +882,39 @@ export default function Library() {
           label: SORT_LABELS[value],
         }))}
       />
-      {(next.data?.pages[0]?.backfillPending ?? 0) > 0 ? (
-        <p role="status">
-          此标签还有 {next.data!.pages[0]!.backfillPending} 篇待回溯。
-          <Button
-            variant="text"
-            onPress={() =>
-              navigate({
-                view: "tags",
-                literature: null,
-                tag: route.query.tags?.ids[0] ?? null,
-              })
-            }
-          >
-            查看回溯
-          </Button>
-        </p>
-      ) : null}
-      {archiveAction.error ? (
-        <ErrorNotice message={errorMessage(archiveAction.error)} />
-      ) : null}
-      {mutable ? (
-        <Menu
-          label="批量操作"
-          indicator
-          variant="text"
+      <span className="library-display">
+        <span aria-hidden>显示</span>
+        <SegmentedControl
+          label="显示方式"
+          value={display}
+          onChange={(value) => chooseDisplay(value as LibraryDisplay)}
           items={[
-            {
-              id: "acquire",
-              label: "获取 PDF…",
-              disabled: total === 0,
-              onAction: () => {
-                setMobileTools(false);
-                setAcquire({
-                  kind: "query",
-                  query: route.query,
-                  sort: route.sort,
-                  label: scopeLabel(),
-                });
-              },
-            },
-            // The current results go to archiving as a fixed scope, as the
-            // selection does (page specs “文献库”).
-            ...(api.workspace.capabilities.maintenance
-              ? [
-                  {
-                    id: "archive",
-                    label: "生成全文…",
-                    disabled: total === 0,
-                    onAction: () => {
-                      setMobileTools(false);
-                      void operate("archive", false);
-                    },
-                  },
-                ]
-              : []),
-            {
-              id: "export",
-              label: "导出书目",
-              disabled: total === 0 || total > 1000,
-              ...overLimit,
-              onAction: () => void operate("export", false),
-            },
-            // Running an operator and fixing a snapshot are processing: the
-            // last group (page specs “整体信息架构”).
-            processingHeading,
-            {
-              id: "run",
-              label: "运行算子…",
-              disabled: total === 0 || total > 1000,
-              ...overLimit,
-              onAction: () => {
-                setMobileTools(false);
-                setRunner({
-                  scope: { kind: "query" },
-                  label: `文献库当前筛选（${total.toLocaleString()} 篇）`,
-                });
-              },
-            },
-            {
-              id: "snapshot",
-              label: "生成快照",
-              disabled: total === 0,
-              onAction: () => snapshot({ kind: "query", query: route.query }),
-            },
+            { id: "list", label: "列表" },
+            { id: "table", label: "表格" },
           ]}
         />
+      </span>
+      {mutable && total > 0 ? (
+        <Menu label="批量操作" indicator variant="text" items={batchItems} />
       ) : null}
     </>
   );
+  // The table's column heads stick under the toolbar, whatever its height.
+  const controls = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const element = controls.current,
+      page = element?.parentElement;
+    if (!element || !page) return;
+    const measure = () =>
+      page.style.setProperty(
+        "--library-controls-height",
+        `${element.offsetHeight}px`,
+      );
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [api.workspace.readiness]);
   if (api.workspace.readiness !== "ready")
     return (
       <section className="library-page">
@@ -814,8 +930,52 @@ export default function Library() {
         />
       </section>
     );
+  const scopeTotal = scopeCounts.data?.total;
+  const allLoaded =
+    items.length > 0 &&
+    items.every((item) => shell.selected.has(item.literature.literature_id));
+  // In the table's head the box stands alone; its name stays.
+  const selectAll = (visible: boolean) => (
+    <Checkbox
+      {...(visible ? { label: "全选已加载" } : { "aria-label": "全选已加载" })}
+      isIndeterminate={
+        items.some((item) =>
+          shell.selected.has(item.literature.literature_id),
+        ) && !allLoaded
+      }
+      isSelected={allLoaded}
+      onChange={(checked) => {
+        const selected = new Set(shell.selected);
+        for (const item of items) {
+          if (checked) selected.add(item.literature.literature_id);
+          else selected.delete(item.literature.literature_id);
+        }
+        shell.setSelected(selected);
+      }}
+    />
+  );
+  const selectWhole =
+    allLoaded && total > items.length ? (
+      <Button
+        variant="text"
+        size="compact"
+        isPending={choosing}
+        disabledReason={
+          total > 1000
+            ? `共 ${total.toLocaleString()} 篇，超过 1,000 篇上限。获取 PDF 可用“批量操作 → 获取 PDF”整体提交。`
+            : undefined
+        }
+        onPress={selectScope}
+      >
+        选择全部 {total.toLocaleString()} 篇符合条件的文献
+      </Button>
+    ) : null;
   return (
-    <section className="library-page">
+    <section
+      className="library-page"
+      data-preview={peek !== null || undefined}
+      data-display={display}
+    >
       <PageHeader
         title={
           folderLabel ??
@@ -826,12 +986,17 @@ export default function Library() {
               : "文献库")
         }
         count={
-          counts.data
-            ? `${route.query.recently_opened ? "最近 30 天 · " : ""}${counts.data.total.toLocaleString()} 篇`
-            : undefined
+          scopeTotal === undefined || (narrowed && !next.data)
+            ? undefined
+            : `${route.query.recently_opened ? "最近 30 天 · " : ""}${
+                // The total only once, here (page specs “文献库”).
+                narrowed
+                  ? `符合 ${total.toLocaleString()} 篇 / 共 ${scopeTotal.toLocaleString()} 篇`
+                  : `${scopeTotal.toLocaleString()} 篇`
+              }`
         }
       />
-      <div className="library-controls">
+      <div className="library-controls" ref={controls}>
         <div className="library-toolbar">
           <SearchField
             label="搜索文献"
@@ -847,6 +1012,26 @@ export default function Library() {
             更多操作
           </Button>
         </div>
+        {(next.data?.pages[0]?.backfillPending ?? 0) > 0 ? (
+          <p role="status" className="library-notice">
+            此标签还有 {next.data!.pages[0]!.backfillPending} 篇待回溯。
+            <Button
+              variant="text"
+              onPress={() =>
+                navigate({
+                  view: "tags",
+                  literature: null,
+                  tag: route.query.tags?.ids[0] ?? null,
+                })
+              }
+            >
+              查看回溯
+            </Button>
+          </p>
+        ) : null}
+        {archiveAction.error ? (
+          <ErrorNotice message={errorMessage(archiveAction.error)} />
+        ) : null}
         <div className="library-quick">
           <div className="library-status-filters" aria-label="按材料状态筛选">
             {[
@@ -928,19 +1113,14 @@ export default function Library() {
                 </FilterChip>
               ))}
             </ChipGroup>
+            {/* The one “清除” (page specs “文献库”): every condition goes, the
+                search and the page's scope stay. */}
             <Button
               variant="text"
               size="compact"
-              onPress={() => {
-                setActiveView("");
-                updateQuery(
-                  route.query.folder || route.query.recently_opened
-                    ? scopeQuery(route.query)
-                    : emptyQuery(),
-                );
-              }}
+              onPress={() => clearConditions(false)}
             >
-              清除全部
+              清除
             </Button>
           </div>
         )}
@@ -953,6 +1133,7 @@ export default function Library() {
               <Filters
                 key={queryString}
                 query={route.query}
+                menu={savedFilterMenu}
                 onApply={(query) => {
                   updateQuery(query);
                   setFilters(false);
@@ -961,58 +1142,17 @@ export default function Library() {
             </AnimatedPanel>
           )}
         </Presence>
-        <FullTextLine counts={counts.data?.full_text} onPick={pickFullText} />
-        <div className="library-list-heading">
-          <Checkbox
-            label="全选已加载"
-            isIndeterminate={
-              items.some((item) =>
-                shell.selected.has(item.literature.literature_id),
-              ) &&
-              !items.every((item) =>
-                shell.selected.has(item.literature.literature_id),
-              )
-            }
-            isSelected={
-              items.length > 0 &&
-              items.every((item) =>
-                shell.selected.has(item.literature.literature_id),
-              )
-            }
-            onChange={(checked) => {
-              const selected = new Set(shell.selected);
-              for (const item of items) {
-                if (checked) selected.add(item.literature.literature_id);
-                else selected.delete(item.literature.literature_id);
-              }
-              shell.setSelected(selected);
-            }}
-          />
-          <span role="status">
-            {next.isPending
-              ? "正在读取文献…"
-              : `已显示 ${items.length.toLocaleString()} / 共 ${total.toLocaleString()} 篇`}
-          </span>
-          {items.length > 0 &&
-            total > items.length &&
-            items.every((item) =>
-              shell.selected.has(item.literature.literature_id),
-            ) && (
-              <Button
-                variant="text"
-                size="compact"
-                isPending={choosing}
-                disabledReason={
-                  total > 1000
-                    ? `共 ${total.toLocaleString()} 篇，超过 1,000 篇上限。获取 PDF 可用“批量操作 → 获取 PDF”整体提交。`
-                    : undefined
-                }
-                onPress={selectScope}
-              >
-                选择全部 {total.toLocaleString()} 篇符合条件的文献
-              </Button>
-            )}
-        </div>
+        {(display === "list" && items.length > 0) || selectWhole ? (
+          <div className="library-list-heading">
+            {display === "list" && items.length > 0 ? selectAll(true) : null}
+            {selectWhole}
+          </div>
+        ) : null}
+        {next.isPending ? (
+          <p role="status" className="library-loading">
+            正在读取文献…
+          </p>
+        ) : null}
       </div>
       <LayoutGroup className="library-results-region">
         {next.isError && (
@@ -1022,8 +1162,29 @@ export default function Library() {
           />
         )}
         <LibraryList
+          key={display}
+          display={display}
           items={items}
+          total={total}
           sort={route.sort}
+          onSort={(sort) => updateQuery(route.query, sort)}
+          selectAll={selectAll(false)}
+          empty={
+            <EmptyState
+              title="没有符合条件的文献"
+              action={
+                narrowed ? (
+                  <Button
+                    variant="text"
+                    size="compact"
+                    onPress={() => clearConditions(true)}
+                  >
+                    清除条件
+                  </Button>
+                ) : undefined
+              }
+            />
+          }
           selected={shell.selected}
           mutable={mutable}
           scrollKey={scrollKey}
@@ -1047,9 +1208,11 @@ export default function Library() {
               updateQuery({ ...route.query, text: text.trim() || null });
             shell.openPaper(...args);
           }}
+          peek={peek}
           onPreview={setPeek}
           onFile={onFile}
           onRowAction={onRowAction}
+          onRowMenu={mutable ? onRowMenu : undefined}
           onDragRow={onDragRow}
         />
       </LayoutGroup>
@@ -1085,7 +1248,7 @@ export default function Library() {
                     disabledReason={acquireReason}
                     onPress={() =>
                       setAcquire(
-                        wholeScope?.key === scrollKey &&
+                        wholeScope?.key === scopeKey &&
                           wholeScope.size === shell.selected.size
                           ? {
                               kind: "query",
@@ -1241,50 +1404,46 @@ export default function Library() {
       >
         <div className="library-mobile-tools">{toolbarActions}</div>
       </Drawer>
-      <Drawer
-        title="文献预览"
-        isOpen={peek !== null}
-        onOpenChange={(open) => {
-          if (!open) setPeek(null);
+      {peek !== null ? (
+        <LibraryPreview
+          id={peek}
+          mutable={mutable}
+          onClose={() => {
+            const id = peek;
+            setPeek(null);
+            // Focus goes back to the row the preview showed.
+            requestAnimationFrame(() =>
+              document
+                .querySelector<HTMLElement>(
+                  `.paper-row[data-literature-id="${CSS.escape(id)}"]`,
+                )
+                ?.focus(),
+            );
+          }}
+          onOpen={(id, title) => {
+            setPeek(null);
+            shell.openPaper(id, undefined, undefined, title);
+          }}
+          onAcquire={(id, title) =>
+            setAcquire({
+              kind: "literatures",
+              ids: [id],
+              label: `《${title}》`,
+            })
+          }
+        />
+      ) : null}
+      <ContextMenu
+        request={rowMenu}
+        onClose={() => setRowMenu(null)}
+        onRetarget={(event, element) => {
+          const id = element?.closest<HTMLElement>(
+            ".paper-row[data-literature-id]",
+          )?.dataset.literatureId;
+          if (id) onRowMenu(id, event.clientX, event.clientY, false);
+          else setRowMenu(null);
         }}
-      >
-        {preview.isPending ? (
-          <p role="status">正在读取…</p>
-        ) : preview.isError ? (
-          <ErrorNotice
-            message={errorMessage(preview.error)}
-            onRetry={() => void preview.refetch()}
-          />
-        ) : (
-          preview.data && (
-            <>
-              <h2>
-                <RichTitle parts={paperTitleParts(preview.data)} />
-              </h2>
-              <p>{paperAuthors(preview.data)}</p>
-              <p>
-                {preview.data.literature.metadata.abstract ?? "尚未提供摘要。"}
-              </p>
-              <Button
-                onPress={() => {
-                  shell.openPaper(
-                    peek!,
-                    undefined,
-                    undefined,
-                    paperTitle(preview.data!),
-                  );
-                  setPeek(null);
-                }}
-              >
-                打开阅读
-              </Button>
-              <TechDetails>
-                <pre>{JSON.stringify(preview.data.literature, null, 2)}</pre>
-              </TechDetails>
-            </>
-          )
-        )}
-      </Drawer>
+      />
       {operation && (
         <OperationDialog {...operation} onClose={() => setOperation(null)} />
       )}
@@ -1294,14 +1453,250 @@ export default function Library() {
     </section>
   );
 }
+/**
+ * A paper's menu (page specs “文献库”): only what this paper can use, in the
+ * order 获取 PDF, 生成全文, 加入文件夹, 导出书目, then “加工”. What it never
+ * needs is left out — 获取 PDF once it has one, 生成全文 once it has its full
+ * text; what it cannot do yet stays, disabled, saying why (rule 12).
+ */
+function rowMenuItems(
+  item: LiteratureSearchItem,
+  act: (kind: RowAction) => void,
+): MenuOption[] {
+  const status = item.literature.status;
+  const unless = (reason: string | null) =>
+    reason ? { disabled: true, description: reason } : {};
+  return [
+    ...(status === "UNREVIEWED"
+      ? [
+          {
+            id: "acquire",
+            label: "获取 PDF",
+            ...unless(
+              item.needs_manual_pdf
+                ? "自动途径都已试过，没找到 PDF；可以把 PDF 拖到这一行上传"
+                : null,
+            ),
+            onAction: () => act("acquire"),
+          },
+        ]
+      : []),
+    ...(status === "READY" || status === "EXCLUDED"
+      ? []
+      : [
+          {
+            id: "archive",
+            label: "生成全文",
+            ...unless(
+              status === "UNREVIEWED"
+                ? "需要先有 PDF"
+                : status === "ARCHIVING"
+                  ? "正在生成全文"
+                  : null,
+            ),
+            onAction: () => act("archive"),
+          },
+        ]),
+    {
+      id: "folder",
+      label: "加入文件夹…",
+      onAction: () => act("folder"),
+    },
+    {
+      id: "export",
+      label: "导出书目",
+      onAction: () => act("export"),
+    },
+    processingHeading,
+    {
+      id: "run",
+      label: "运行算子…",
+      ...unless(status === "READY" ? null : "需要先有全文"),
+      onAction: () => act("run"),
+    },
+  ];
+}
+/**
+ * The preview beside the list (page specs “文献库”): no veil over the page, so
+ * another row's preview is one press away; ↑ and ↓ move to the paper before
+ * or after; Esc or the close button returns to the row.
+ */
+function LibraryPreview({
+  id,
+  mutable,
+  onClose,
+  onOpen,
+  onAcquire,
+}: {
+  id: string;
+  mutable: boolean;
+  onClose: () => void;
+  onOpen: (id: string, title: string) => void;
+  onAcquire: (id: string, title: string) => void;
+}) {
+  const api = useApi();
+  const panel = useRef<HTMLElement>(null);
+  const preview = useQuery({
+    queryKey: ["literature", id],
+    queryFn: ({ signal }) => readLiterature(api, id, signal),
+    placeholderData: keepPreviousData,
+  });
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    panel.current?.focus();
+    const key = (event: KeyboardEvent) => {
+      if (
+        event.key === "Escape" &&
+        !event.defaultPrevented &&
+        !document.querySelector('[role="dialog"], [role="menu"]')
+      ) {
+        // The preview closes first; the selection stays.
+        event.preventDefault();
+        close.current();
+      }
+    };
+    window.addEventListener("keydown", key, true);
+    return () => window.removeEventListener("keydown", key, true);
+  }, []);
+  const item = preview.data;
+  const title = item ? paperTitle(item) : "";
+  return (
+    <aside
+      ref={panel}
+      tabIndex={-1}
+      className="library-preview"
+      role="region"
+      aria-label="文献预览"
+      aria-busy={preview.isFetching}
+    >
+      <div className="library-preview-header">
+        <span>↑ ↓ 上一篇、下一篇</span>
+        <IconButton
+          aria-label="关闭预览"
+          variant="text"
+          icon={<Icon name="close" />}
+          onPress={onClose}
+        />
+      </div>
+      {preview.isPending ? (
+        <p role="status">正在读取…</p>
+      ) : preview.isError ? (
+        <ErrorNotice
+          message={errorMessage(preview.error)}
+          onRetry={() => void preview.refetch()}
+        />
+      ) : item ? (
+        <>
+          <BibliographyContent
+            item={item}
+            actions={
+              <>
+                <Button onPress={() => onOpen(id, title)}>打开阅读</Button>
+                {mutable && item.literature.status === "UNREVIEWED" ? (
+                  <Button
+                    disabledReason={
+                      item.needs_manual_pdf
+                        ? "自动途径都已试过，没找到 PDF"
+                        : undefined
+                    }
+                    onPress={() => onAcquire(id, title)}
+                  >
+                    获取 PDF
+                  </Button>
+                ) : null}
+              </>
+            }
+          />
+          <TechDetails>
+            <pre>{JSON.stringify(item.literature, null, 2)}</pre>
+          </TechDetails>
+        </>
+      ) : null}
+    </aside>
+  );
+}
 function rowTerms(item: LiteratureSearchItem) {
   const m = item.literature.metadata;
   return (m.keywords.length ? m.keywords : m.subject_terms).slice(0, ROW_TAGS);
 }
+/** Keys a list row or the preview leaves to the field or menu that has them. */
+const KEEPS_KEYS =
+  "input, textarea, select, [contenteditable], [role='menu'], [role='listbox'], [role='dialog'], [role='tablist']";
+/**
+ * The table's column heads (page specs “文献库”): a press on 标题 or 年份 sorts
+ * by it with the service's own orders; the other columns have none.
+ */
+const TABLE_SORTS: Readonly<
+  Record<"title" | "year", { first: LibrarySort; second: LibrarySort }>
+> = {
+  title: { first: "title-asc", second: "title-desc" },
+  year: { first: "publication-year-desc", second: "publication-year-asc" },
+};
+function TableHead({
+  sort,
+  onSort,
+  selectAll,
+}: {
+  sort: LibrarySort;
+  onSort: (sort: LibrarySort) => void;
+  selectAll: ReactNode;
+}) {
+  const head = (column: keyof typeof TABLE_SORTS, label: string) => {
+    const { first, second } = TABLE_SORTS[column];
+    const on = sort === first ? "first" : sort === second ? "second" : null;
+    const ascending =
+      (on === "first") === (first === "title-asc") && on !== null;
+    return (
+      <span
+        role="columnheader"
+        className={`library-table-cell library-table-${column}`}
+        aria-sort={on ? (ascending ? "ascending" : "descending") : "none"}
+      >
+        <button
+          type="button"
+          className="library-table-sort"
+          onClick={() => onSort(on === "first" ? second : first)}
+        >
+          {label}
+          {on ? (
+            <span className="library-table-arrow" aria-hidden>
+              {ascending ? "↑" : "↓"}
+            </span>
+          ) : null}
+        </button>
+      </span>
+    );
+  };
+  return (
+    <div className="library-table-head" role="row" aria-rowindex={1}>
+      <span role="columnheader" className="paper-check">
+        {selectAll}
+      </span>
+      {head("title", "标题")}
+      <span role="columnheader" className="library-table-cell paper-author">
+        作者
+      </span>
+      <span role="columnheader" className="library-table-cell paper-venue">
+        期刊
+      </span>
+      {head("year", "年份")}
+      <span role="columnheader" className="library-table-cell">
+        材料
+      </span>
+      <span role="columnheader" className="paper-tools" aria-label="操作" />
+    </div>
+  );
+}
 /** Scroll-range updates belong to the list, not the page's forms and motion layout. */
 const LibraryList = memo(function LibraryList({
+  display,
   items,
+  total,
   sort,
+  onSort,
+  selectAll,
+  empty,
   selected,
   mutable,
   scrollKey,
@@ -1321,13 +1716,20 @@ const LibraryList = memo(function LibraryList({
   onCheckClickCapture,
   selectingRange,
   onOpen,
+  peek,
   onPreview,
   onFile,
   onRowAction,
+  onRowMenu,
   onDragRow,
 }: {
+  display: LibraryDisplay;
   items: readonly LiteratureSearchItem[];
+  total: number;
   sort: LibrarySort;
+  onSort: (sort: LibrarySort) => void;
+  selectAll: ReactNode;
+  empty: ReactNode;
   selected: ReadonlySet<string>;
   mutable: boolean;
   scrollKey: string;
@@ -1347,12 +1749,16 @@ const LibraryList = memo(function LibraryList({
   onCheckClickCapture: (event: ReactMouseEvent) => void;
   selectingRange: () => boolean;
   onOpen: ReturnType<typeof useShell>["openPaper"];
+  peek: string | null;
   onPreview: (id: string) => void;
   onFile: (id: string, file: File) => void;
   onRowAction: (id: string, title: string, kind: RowAction) => void;
+  onRowMenu: RowMenu | undefined;
   onDragRow: (id: string, data: DataTransfer, title: string) => void;
 }) {
+  const table = display === "table";
   const list = useRef<HTMLDivElement>(null);
+  const rowsBox = useRef<HTMLDivElement | null>(null);
   // The whole page scrolls; the list measures its offset inside that container.
   const scroll = useRef<HTMLElement | null>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
@@ -1366,7 +1772,7 @@ const LibraryList = memo(function LibraryList({
     const measure = () =>
       setScrollMargin(
         Math.round(
-          element.getBoundingClientRect().top -
+          (rowsBox.current ?? element).getBoundingClientRect().top -
             container.getBoundingClientRect().top +
             container.scrollTop,
         ),
@@ -1393,7 +1799,7 @@ const LibraryList = memo(function LibraryList({
     getScrollElement,
     // Keep the scroll range and row positions in the same measured commit.
     directDomUpdates: true,
-    estimateSize: estimateRowSize,
+    estimateSize: table ? estimateTableRowSize : estimateRowSize,
     overscan: 6,
     scrollMargin,
     initialOffset: initial.offset,
@@ -1442,18 +1848,67 @@ const LibraryList = memo(function LibraryList({
     container.addEventListener("scroll", remember, { passive: true });
     return () => container.removeEventListener("scroll", remember);
   }, [scrollKey, positions, measurements, virtual]);
+  // While a preview is open, moving through the rows moves the preview too.
+  const previewing = useRef(peek !== null);
+  previewing.current = peek !== null;
   const onMove = useCallback(
     (index: number) => {
       const target = Math.max(0, Math.min(items.length - 1, index));
       virtual.scrollToIndex(target);
+      if (previewing.current)
+        onPreview(items[target]!.literature.literature_id);
       requestAnimationFrame(() =>
         list.current
           ?.querySelector<HTMLElement>(`[data-index="${target}"]`)
           ?.focus(),
       );
     },
-    [virtual, items.length],
+    [virtual, items, onPreview],
   );
+  // ↑ and ↓ outside the rows (the preview, a row's buttons) step the preview.
+  useEffect(() => {
+    if (peek === null) return;
+    const key = (event: KeyboardEvent) => {
+      if (
+        (event.key !== "ArrowUp" && event.key !== "ArrowDown") ||
+        event.defaultPrevented ||
+        event.altKey ||
+        event.metaKey ||
+        event.ctrlKey
+      )
+        return;
+      const target = event.target as HTMLElement | null;
+      if (
+        target?.matches?.(".paper-row") ||
+        target?.closest?.(KEEPS_KEYS) ||
+        document.querySelector("[role='dialog'], [role='menu']")
+      )
+        return;
+      const at = items.findIndex(
+        (item) => item.literature.literature_id === peek,
+      );
+      if (at < 0) return;
+      event.preventDefault();
+      const to = Math.max(
+        0,
+        Math.min(items.length - 1, at + (event.key === "ArrowDown" ? 1 : -1)),
+      );
+      if (to === at) return;
+      virtual.scrollToIndex(to);
+      onPreview(items[to]!.literature.literature_id);
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [peek, items, virtual, onPreview]);
+  const containerRef = virtual.containerRef;
+  const setRowsBox = useCallback(
+    (element: HTMLDivElement | null) => {
+      rowsBox.current = element;
+      containerRef(element);
+    },
+    [containerRef],
+  );
+  const shown = !pending && items.length > 0;
   return (
     <div
       className="library-scroll"
@@ -1461,22 +1916,34 @@ const LibraryList = memo(function LibraryList({
       aria-label="文献列表"
       tabIndex={-1}
       aria-busy={fetching}
+      // For tests and measurement: how many rows are loaded of how many.
+      data-loaded={items.length}
+      data-total={total}
+      {...(table
+        ? { role: "table", "aria-rowcount": total + 1, "data-display": "table" }
+        : {})}
     >
-      {!pending && !items.length && (
-        <EmptyState
-          title="没有符合条件的文献"
-          description="调整筛选，或从入库添加文献。"
-        />
-      )}
-      <div className="virtual-list" ref={virtual.containerRef}>
+      {!pending && !items.length ? (
+        <div className="library-empty">{empty}</div>
+      ) : null}
+      {table && shown ? (
+        <TableHead sort={sort} onSort={onSort} selectAll={selectAll} />
+      ) : null}
+      <div
+        className="virtual-list"
+        ref={setRowsBox}
+        {...(table ? { role: "rowgroup" } : {})}
+      >
         {rows.map((row) => (
           <LibraryRow
             key={row.key}
+            display={display}
             row={row}
             offset={scrollMargin}
             item={items[row.index]!}
             sort={sort}
             selected={selected.has(items[row.index]!.literature.literature_id)}
+            previewed={peek === items[row.index]!.literature.literature_id}
             mutable={mutable}
             measure={virtual.measureElement}
             onToggle={onToggle}
@@ -1488,6 +1955,7 @@ const LibraryList = memo(function LibraryList({
             onPreview={onPreview}
             onFile={onFile}
             onRowAction={onRowAction}
+            onRowMenu={onRowMenu}
             onMove={onMove}
             onDragRow={onDragRow}
           />
@@ -1501,14 +1969,16 @@ const LibraryList = memo(function LibraryList({
   );
 });
 const estimateRowSize = () => 78;
+/** Table rows are one line, 32 px (page specs “文献库”). */
+const estimateTableRowSize = () => 32;
 type CheckPointerDown = (
   index: number,
   event: ReactPointerEvent<HTMLElement>,
 ) => void;
-type RowAction = "run" | "folder" | "acquire" | "archive";
+type RowAction = "run" | "folder" | "acquire" | "archive" | "export";
+type RowMenu = (id: string, x: number, y: number, keyboard: boolean) => void;
 /** A row shows at most three tags; the rest collapse into “+N”. */
 const ROW_TAGS = 3;
-const CJK = /[\u3400-\u9fff\uf900-\ufaff]/u;
 /** Rows list three authors at most, the way a reference list does. */
 function rowAuthors(item: LiteratureSearchItem) {
   const authors = item.literature.metadata.authors;
@@ -1521,18 +1991,30 @@ function rowAuthors(item: LiteratureSearchItem) {
     },
   })} 等`;
 }
-/** Journal names are italic in Latin script only; CJK has no true italic. */
-function Venue({ name }: { name: string | null | undefined }) {
-  if (!name) return <span className="paper-venue-missing">期刊未提供</span>;
-  return CJK.test(name) ? <span>{name}</span> : <i>{name}</i>;
+/** The table's author column: the first author, “等” for the rest. */
+function firstAuthor(item: LiteratureSearchItem) {
+  const authors = item.literature.metadata.authors;
+  if (authors.length <= 1) return paperAuthors(item);
+  return `${paperAuthors({
+    ...item,
+    literature: {
+      ...item.literature,
+      metadata: { ...item.literature.metadata, authors: authors.slice(0, 1) },
+    },
+  })} 等`;
 }
+/** Almost the whole catalog is metadata-only; only departures get a label. */
+const quietState = (item: LiteratureSearchItem) =>
+  item.literature.status === "UNREVIEWED" && !item.needs_manual_pdf;
 
 const LibraryRow = memo(function LibraryRow({
+  display,
   row,
   offset,
   item,
   sort,
   selected,
+  previewed,
   mutable,
   measure,
   onToggle,
@@ -1544,14 +2026,17 @@ const LibraryRow = memo(function LibraryRow({
   onPreview,
   onFile,
   onRowAction,
+  onRowMenu,
   onMove,
   onDragRow,
 }: {
+  display: LibraryDisplay;
   row: VirtualItem;
   offset: number;
   item: LiteratureSearchItem;
   sort: LibrarySort;
   selected: boolean;
+  previewed: boolean;
   mutable: boolean;
   measure: (element: HTMLElement | null) => void;
   onToggle: (id: string) => void;
@@ -1563,129 +2048,193 @@ const LibraryRow = memo(function LibraryRow({
   onPreview: (id: string) => void;
   onFile: (id: string, file: File) => void;
   onRowAction: (id: string, title: string, kind: RowAction) => void;
+  onRowMenu: RowMenu | undefined;
   onMove: (index: number) => void;
   onDragRow: (id: string, data: DataTransfer, title: string) => void;
 }) {
   const id = item.literature.literature_id,
-    title = paperTitle(item);
-  return (
-    <article
-      ref={measure}
-      data-literature-id={id}
-      data-index={row.index}
-      data-selected={selected || undefined}
-      className="paper-row"
-      style={{ transform: `translateY(${row.start - offset}px)` }}
-      tabIndex={0}
-      aria-label={title}
-      onKeyDown={(event) => {
-        if (event.target !== event.currentTarget) return;
-        if (event.key === " ") {
-          event.preventDefault();
-          onToggle(id);
-        } else if (event.key === "Enter")
-          onOpen(id, undefined, undefined, title);
-        else if (["ArrowDown", "ArrowUp"].includes(event.key)) {
-          event.preventDefault();
-          onMove(row.index + (event.key === "ArrowDown" ? 1 : -1));
-        }
-      }}
-      // Selected rows are picked up and dragged to a folder; a press on any
-      // other row that moves draws a marquee instead.
-      draggable={mutable && selected}
-      onPointerDown={(event) => onRowPointerDown(row.index, event)}
+    title = paperTitle(item),
+    table = display === "table";
+  const check = (
+    <span
+      className="paper-check"
+      onPointerDownCapture={(event) => onCheckPointerDown(row.index, event)}
       onClickCapture={onCheckClickCapture}
-      onDragStart={(event) => {
-        // A press on the checkbox column selects a run; it never drags the
-        // row. Anywhere else, the title included, picks the row up.
-        if (
-          selectingRange() ||
-          (event.target as Element).closest?.(".paper-check, .paper-tools")
-        )
-          event.preventDefault();
-        else onDragRow(id, event.dataTransfer, title);
-      }}
-      onDragOver={(event) => {
-        // Only a dropped file belongs to the row; folder drags go to the sidebar.
-        if (mutable && event.dataTransfer.types.includes("Files"))
-          event.preventDefault();
-      }}
-      onDrop={(event) => {
-        event.preventDefault();
-        const file = event.dataTransfer.files[0];
-        if (mutable && file) onFile(id, file);
-      }}
+      {...(table ? { role: "cell" } : {})}
     >
-      <span
-        className="paper-check"
-        onPointerDownCapture={(event) => onCheckPointerDown(row.index, event)}
-        onClickCapture={onCheckClickCapture}
-      >
-        <Checkbox
-          aria-label={`选择 ${title}`}
-          isSelected={selected}
-          onChange={() => onToggle(id)}
+      <Checkbox
+        aria-label={`选择 ${title}`}
+        isSelected={selected}
+        onChange={() => onToggle(id)}
+      />
+    </span>
+  );
+  const tools = (
+    <span className="paper-tools" {...(table ? { role: "cell" } : {})}>
+      <IconButton
+        className="paper-preview"
+        size="compact"
+        variant="text"
+        aria-label="预览"
+        icon={<Icon name="eye" />}
+        onPress={() => onPreview(id)}
+      />
+      {mutable ? (
+        <Menu
+          label="文献操作"
+          iconOnly
+          items={rowMenuItems(item, (kind) => onRowAction(id, title, kind))}
         />
-      </span>
-      <button
-        className="paper-open"
-        onClick={() => onOpen(id, undefined, undefined, title)}
-      >
-        <span className="paper-title">
-          <RichTitle parts={paperTitleParts(item)} />
+      ) : null}
+    </span>
+  );
+  const open = (children: ReactNode) => (
+    <button
+      className="paper-open"
+      onClick={() => onOpen(id, undefined, undefined, title)}
+    >
+      {children}
+    </button>
+  );
+  const shared = {
+    ref: measure,
+    "data-literature-id": id,
+    "data-index": row.index,
+    "data-selected": selected || undefined,
+    "data-previewed": previewed || undefined,
+    "data-display": display,
+    className: "paper-row",
+    style: { transform: `translateY(${row.start - offset}px)` },
+    tabIndex: 0,
+    "aria-label": title,
+    onKeyDown: (event: ReactKeyboardEvent<HTMLElement>) => {
+      if (event.target !== event.currentTarget) return;
+      if (event.key === " ") {
+        event.preventDefault();
+        onToggle(id);
+      } else if (event.key === "Enter") onOpen(id, undefined, undefined, title);
+      else if (["ArrowDown", "ArrowUp"].includes(event.key)) {
+        event.preventDefault();
+        onMove(row.index + (event.key === "ArrowDown" ? 1 : -1));
+      } else if (
+        onRowMenu &&
+        (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))
+      ) {
+        event.preventDefault();
+        const box = event.currentTarget.getBoundingClientRect();
+        onRowMenu(id, box.left + 8, box.bottom + 4, true);
+      }
+    },
+    // Right-click opens the row's menu; Shift keeps the browser's own.
+    onContextMenu: (event: ReactMouseEvent<HTMLElement>) => {
+      if (!onRowMenu || event.shiftKey) return;
+      event.preventDefault();
+      onRowMenu(id, event.clientX, event.clientY, false);
+    },
+    // Selected rows are picked up and dragged to a folder; a press on any
+    // other row that moves draws a marquee instead.
+    draggable: mutable && selected,
+    onPointerDown: (event: ReactPointerEvent<HTMLElement>) =>
+      onRowPointerDown(row.index, event),
+    onClickCapture: onCheckClickCapture,
+    onDragStart: (event: ReactDragEvent<HTMLElement>) => {
+      // A press on the checkbox column selects a run; it never drags the
+      // row. Anywhere else, the title included, picks the row up.
+      if (
+        selectingRange() ||
+        (event.target as Element).closest?.(".paper-check, .paper-tools")
+      )
+        event.preventDefault();
+      else onDragRow(id, event.dataTransfer, title);
+    },
+    onDragOver: (event: ReactDragEvent<HTMLElement>) => {
+      // Only a dropped file belongs to the row; folder drags go to the sidebar.
+      if (mutable && event.dataTransfer.types.includes("Files"))
+        event.preventDefault();
+    },
+    onDrop: (event: ReactDragEvent<HTMLElement>) => {
+      event.preventDefault();
+      const file = event.dataTransfer.files[0];
+      if (mutable && file) onFile(id, file);
+    },
+  };
+  if (table) {
+    const m = item.literature.metadata;
+    return (
+      <div {...shared} role="row" aria-rowindex={row.index + 2}>
+        {check}
+        <span role="cell" className="library-table-cell">
+          {open(
+            <span className="paper-title">
+              <RichTitle parts={paperTitleParts(item)} />
+            </span>,
+          )}
         </span>
-        <span className="paper-citation">
-          {rowAuthors(item)} · <Venue name={item.literature.metadata.venue} /> ·{" "}
-          {item.literature.metadata.publication_year ?? "年份未提供"}
-          {/* Literature materials 8.4: its bibliography still lacks parts. */}
-          {item.needs_metadata ? (
-            <span className="paper-needs-metadata"> · 书目不全</span>
-          ) : null}
+        <span role="cell" className="library-table-cell paper-author">
+          {firstAuthor(item)}
         </span>
-        {item.tags?.length ? (
-          <span className="paper-tags">
-            {item.tags.slice(0, ROW_TAGS).map((t) => (
-              <span
-                key={t.tag_id}
-                className={t.rank === 1 ? "paper-tag primary" : "paper-tag"}
-              >
-                {t.name}
-              </span>
-            ))}
-            {item.tags.length > ROW_TAGS ? (
-              <span
-                className="paper-tag-more"
-                title={item.tags
-                  .slice(ROW_TAGS)
-                  .map((t) => t.name)
-                  .join("、")}
-              >
-                +{item.tags.length - ROW_TAGS}
-              </span>
+        <span role="cell" className="library-table-cell paper-venue">
+          <Venue name={m.venue} />
+        </span>
+        <span role="cell" className="library-table-cell library-table-year">
+          {m.publication_year ?? "—"}
+        </span>
+        <span role="cell" className="library-table-cell">
+          {quietState(item) ? null : <MaterialBadge item={item} />}
+        </span>
+        {tools}
+      </div>
+    );
+  }
+  return (
+    <article {...shared}>
+      {check}
+      {open(
+        <>
+          <span className="paper-title">
+            <RichTitle parts={paperTitleParts(item)} />
+          </span>
+          <span className="paper-citation">
+            {rowAuthors(item)} · <Venue name={item.literature.metadata.venue} />{" "}
+            · {item.literature.metadata.publication_year ?? "年份未提供"}
+            {/* Literature materials 8.4: its bibliography still lacks parts. */}
+            {item.needs_metadata ? (
+              <span className="paper-needs-metadata"> · 书目不全</span>
             ) : null}
           </span>
-        ) : rowTerms(item).length ? (
-          // Without tags, the paper's own keywords (or the source's subjects) say what it is about.
-          <span className="paper-terms">{rowTerms(item).join(" · ")}</span>
-        ) : null}
-      </button>
-      {item.literature.status === "UNREVIEWED" && !item.needs_manual_pdf ? (
-        // Almost the whole catalog is metadata-only; only departures get a tag.
+          {item.tags?.length ? (
+            <span className="paper-tags">
+              {item.tags.slice(0, ROW_TAGS).map((t) => (
+                <span
+                  key={t.tag_id}
+                  className={t.rank === 1 ? "paper-tag primary" : "paper-tag"}
+                >
+                  {t.name}
+                </span>
+              ))}
+              {item.tags.length > ROW_TAGS ? (
+                <span
+                  className="paper-tag-more"
+                  title={item.tags
+                    .slice(ROW_TAGS)
+                    .map((t) => t.name)
+                    .join("、")}
+                >
+                  +{item.tags.length - ROW_TAGS}
+                </span>
+              ) : null}
+            </span>
+          ) : rowTerms(item).length ? (
+            // Without tags, the paper's own keywords (or the source's subjects) say what it is about.
+            <span className="paper-terms">{rowTerms(item).join(" · ")}</span>
+          ) : null}
+        </>,
+      )}
+      {quietState(item) ? (
         <span />
       ) : (
         <span className="paper-status-cell">
-          <span
-            className="paper-status"
-            data-state={
-              item.needs_manual_pdf ? "UNAVAILABLE" : item.literature.status
-            }
-            data-tone={literatureTone(
-              item.needs_manual_pdf ? "UNAVAILABLE" : item.literature.status,
-            )}
-          >
-            {item.needs_manual_pdf
-              ? statusLabels.UNAVAILABLE
-              : statusLabels[item.literature.status]}
+          <MaterialBadge item={item}>
             {item.literature.status === "ARCHIVING" ? (
               <small>
                 {item.missing_step
@@ -1709,7 +2258,7 @@ const LibraryRow = memo(function LibraryRow({
                 查看问题
               </Button>
             ) : null}
-          </span>
+          </MaterialBadge>
           {/* Page specs “文献库”: under the status, in small text — a long
             document, or a primary PDF whose default text is a draft. */}
           {item.literature.status === "READY" && item.long_document ? (
@@ -1730,48 +2279,7 @@ const LibraryRow = memo(function LibraryRow({
           ) : null}
         </span>
       )}
-      <span className="paper-tools">
-        <IconButton
-          className="paper-preview"
-          size="compact"
-          variant="text"
-          aria-label="预览"
-          icon={<Icon name="eye" />}
-          onPress={() => onPreview(id)}
-        />
-        {mutable ? (
-          <Menu
-            label="文献操作"
-            iconOnly
-            items={[
-              {
-                id: "acquire",
-                label: "获取 PDF",
-                onAction: () => onRowAction(id, title, "acquire"),
-              },
-              {
-                id: "archive",
-                label: "生成全文",
-                ...(item.literature.status === "UNREVIEWED"
-                  ? { disabled: true, description: "需要先有 PDF" }
-                  : {}),
-                onAction: () => onRowAction(id, title, "archive"),
-              },
-              {
-                id: "folder",
-                label: "加入文件夹…",
-                onAction: () => onRowAction(id, title, "folder"),
-              },
-              processingHeading,
-              {
-                id: "run",
-                label: "运行算子…",
-                onAction: () => onRowAction(id, title, "run"),
-              },
-            ]}
-          />
-        ) : null}
-      </span>
+      {tools}
     </article>
   );
 });
@@ -1795,11 +2303,18 @@ const FLAG_OPTIONS = [
 ];
 const flag = (value: boolean | null | undefined) =>
   value === true ? "yes" : value === false ? "no" : "";
+/**
+ * The conditions panel (page specs “文献库”): author, journal, years and tag
+ * on the first row, the rest under “更多条件”; saving and exporting filters in
+ * the menu at its top right.
+ */
 function Filters({
   query,
+  menu,
   onApply,
 }: {
   query: LibraryQuery;
+  menu: ReactNode;
   onApply: (query: LibraryQuery) => void;
 }) {
   const [from, setFrom] = useState(String(query.publication_year_from ?? "")),
@@ -1821,6 +2336,19 @@ function Filters({
     [needsMetadata, setNeedsMetadata] = useState(query.needs_metadata === true),
     [tagMode, setTagMode] = useState(query.tags?.mode ?? "any"),
     [error, setError] = useState("");
+  // Opened already when one of its conditions is in force.
+  const [more, setMore] = useState(
+    () =>
+      query.keywords.length > 0 ||
+      query.identifiers.length > 0 ||
+      query.publication_forms.length > 0 ||
+      query.article_kinds.length > 0 ||
+      query.tags?.mode === "primary" ||
+      (query.text_levels?.length ?? 0) > 0 ||
+      typeof query.has_draft_differences === "boolean" ||
+      typeof query.has_image_only_pages === "boolean" ||
+      query.needs_metadata === true,
+  );
   const api = useApi();
   const vocabulary = useQuery({
     queryKey: ["tags", "filter-options"],
@@ -1835,6 +2363,7 @@ function Filters({
   return (
     <form
       className="library-filters"
+      aria-label="筛选条件"
       onSubmit={(event) => {
         event.preventDefault();
         try {
@@ -1866,120 +2395,140 @@ function Filters({
         }
       }}
     >
-      <TextField
-        label="作者"
-        value={author}
-        onChange={setAuthor}
-        placeholder="作者姓名"
-      />
-      <TextField
-        label="期刊"
-        value={venue}
-        onChange={setVenue}
-        placeholder="期刊或会议名称"
-      />
-      <TextField
-        label="关键词"
-        value={keyword}
-        onChange={setKeyword}
-        placeholder="文献关键词"
-      />
-      <TextField label="DOI" value={doi} onChange={setDoi} placeholder="10.…" />
-      <Select
-        label="出版形式"
-        value={form}
-        onChange={setForm}
-        options={[
-          { value: "", label: "全部" },
-          ...Object.entries(PUBLICATION_FORM_LABELS).map(([value, label]) => ({
-            value,
-            label,
-          })),
-        ]}
-      />
-      <Select
-        label="文章性质"
-        value={kind}
-        onChange={setKind}
-        options={[
-          { value: "", label: "全部" },
-          ...Object.entries(ARTICLE_KIND_LABELS).map(([value, label]) => ({
-            value,
-            label,
-          })),
-        ]}
-      />
-      <Select
-        label="文献标签（包含下级）"
-        value={tag}
-        onChange={setTag}
-        options={[
-          { value: "", label: "不限标签" },
-          ...(vocabulary.data
-            ? rows(vocabulary.data).map((t) => ({
-                value: String(t.tag_id),
-                label: String(t.name_zh || t.name_en),
-              }))
-            : []),
-        ]}
-      />
-      {/* Page specs “文献库”: the primary PDF's default text. */}
-      <Select
-        label="文本等级"
-        value={level}
-        onChange={(value) => setLevel(value as TextLevel | "")}
-        options={[
-          { value: "", label: "全部" },
-          { value: "draft", label: TEXT_LEVEL_LABELS.draft },
-          { value: "proofread", label: TEXT_LEVEL_LABELS.proofread },
-        ]}
-      />
-      <Select
-        label={DIFFERS_LABEL}
-        value={differs}
-        onChange={setDiffers}
-        options={FLAG_OPTIONS}
-      />
-      <Select
-        label="含扫描页"
-        value={scanned}
-        onChange={setScanned}
-        options={FLAG_OPTIONS}
-      />
-      <Checkbox
-        label="书目不全"
-        isSelected={needsMetadata}
-        onChange={setNeedsMetadata}
-      />
-      <Select
-        label="标签范围"
-        value={tagMode}
-        onChange={(v) => setTagMode(v as "any" | "primary")}
-        options={[
-          { value: "any", label: "任一标签" },
-          { value: "primary", label: "主标签" },
-        ]}
-      />
-      <div className="library-filter-years">
-        <TextField
-          label="年份起"
-          width="short"
-          value={from}
-          onChange={setFrom}
-          placeholder="如 2015"
-        />
-        <TextField
-          label="年份止"
-          width="short"
-          value={to}
-          onChange={setTo}
-          placeholder="如 2026"
-        />
+      <div className="library-filters-top">
+        <div className="library-filter-grid">
+          <TextField
+            label="作者"
+            value={author}
+            onChange={setAuthor}
+            placeholder="作者姓名"
+          />
+          <TextField
+            label="期刊"
+            value={venue}
+            onChange={setVenue}
+            placeholder="期刊或会议名称"
+          />
+          <div className="library-filter-years">
+            <TextField
+              label="年份起"
+              width="short"
+              value={from}
+              onChange={setFrom}
+              placeholder="如 2015"
+            />
+            <TextField
+              label="年份止"
+              width="short"
+              value={to}
+              onChange={setTo}
+              placeholder="如 2026"
+            />
+          </div>
+          <Select
+            label="标签（包含下级）"
+            value={tag}
+            onChange={setTag}
+            options={[
+              { value: "", label: "不限标签" },
+              ...(vocabulary.data
+                ? rows(vocabulary.data).map((t) => ({
+                    value: String(t.tag_id),
+                    label: String(t.name_zh || t.name_en),
+                  }))
+                : []),
+            ]}
+          />
+        </div>
+        <div className="library-filters-menu">{menu}</div>
       </div>
+      {more ? (
+        <div className="library-filter-grid" aria-label="更多条件">
+          <TextField
+            label="关键词"
+            value={keyword}
+            onChange={setKeyword}
+            placeholder="文献关键词"
+          />
+          <TextField
+            label="DOI"
+            value={doi}
+            onChange={setDoi}
+            placeholder="10.…"
+          />
+          <Select
+            label="出版形式"
+            value={form}
+            onChange={setForm}
+            options={[
+              { value: "", label: "全部" },
+              ...Object.entries(PUBLICATION_FORM_LABELS).map(
+                ([value, label]) => ({ value, label }),
+              ),
+            ]}
+          />
+          <Select
+            label="文章性质"
+            value={kind}
+            onChange={setKind}
+            options={[
+              { value: "", label: "全部" },
+              ...Object.entries(ARTICLE_KIND_LABELS).map(([value, label]) => ({
+                value,
+                label,
+              })),
+            ]}
+          />
+          <Select
+            label="标签范围"
+            value={tagMode}
+            onChange={(v) => setTagMode(v as "any" | "primary")}
+            options={[
+              { value: "any", label: "任一标签" },
+              { value: "primary", label: "主标签" },
+            ]}
+          />
+          {/* Page specs “文献库”: the primary PDF's default text. */}
+          <Select
+            label="文本等级"
+            value={level}
+            onChange={(value) => setLevel(value as TextLevel | "")}
+            options={[
+              { value: "", label: "全部" },
+              { value: "draft", label: TEXT_LEVEL_LABELS.draft },
+              { value: "proofread", label: TEXT_LEVEL_LABELS.proofread },
+            ]}
+          />
+          <Select
+            label={DIFFERS_LABEL}
+            value={differs}
+            onChange={setDiffers}
+            options={FLAG_OPTIONS}
+          />
+          <Select
+            label="含扫描页"
+            value={scanned}
+            onChange={setScanned}
+            options={FLAG_OPTIONS}
+          />
+          <Checkbox
+            label="书目不全"
+            isSelected={needsMetadata}
+            onChange={setNeedsMetadata}
+          />
+        </div>
+      ) : null}
       {error && <p role="alert">{error}</p>}
       <div className="form-actions">
-        <Button variant="text" onPress={() => onApply(emptyQuery())}>
-          清除筛选
+        <Button
+          variant="text"
+          size="compact"
+          className="library-filters-more"
+          aria-expanded={more}
+          icon={<Icon name="chevron" />}
+          onPress={() => setMore(!more)}
+        >
+          更多条件
         </Button>
         <Button type="submit">应用筛选</Button>
       </div>

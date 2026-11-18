@@ -511,6 +511,20 @@
     box-shadow: none;
     color: var(--fg);
   }
+  /* “显示” and its two choices, quiet like the other toolbar controls. */
+  .library-display {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--fg3);
+    font-size: var(--text-control);
+  }
+  .library-notice,
+  .library-loading {
+    margin: var(--space-2) 0 0;
+    color: var(--fg2);
+    font-size: var(--text-secondary);
+  }
   .library-more {
     display: none;
   }
@@ -523,33 +537,6 @@
     flex-wrap: wrap;
     gap: var(--space-1);
     padding-block: var(--space-2);
-  }
-  /* The scope's full text, by paper; each number applies its quick filter. */
-  .library-full-text {
-    margin: var(--space-2) 0 0;
-    padding: 0 var(--space-2);
-    color: var(--fg2);
-    font-size: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
-  }
-  .library-full-text-link {
-    padding: 0;
-    border: 0;
-    background: transparent;
-    color: var(--blue);
-    font: inherit;
-    text-decoration: underline;
-    text-decoration-color: var(--line2);
-    text-underline-offset: 0.18em;
-    cursor: pointer;
-  }
-  .library-full-text-link:hover {
-    text-decoration-color: currentColor;
-  }
-  .library-full-text-link:focus-visible {
-    border-radius: var(--radius-sm);
-    outline: 2px solid var(--focus);
-    outline-offset: 1px;
   }
   .library-list-heading {
     display: flex;
@@ -568,12 +555,134 @@
   .library-results-region {
     display: block;
   }
-  .library-list-heading > :last-child {
+  /* “选择全部 N 篇” follows the box at the far end. */
+  .library-list-heading > :last-child:not(:first-child) {
     margin-left: auto;
   }
   .library-scroll {
     position: relative;
     outline: none;
+  }
+  /* No results: one sentence in the middle of the list, the way back below. */
+  .library-empty > .ui-empty {
+    display: grid;
+    justify-items: center;
+    gap: var(--space-2);
+    padding-block: var(--space-7);
+    text-align: center;
+  }
+  /* The row the preview shows carries a pen line at its start. */
+  .paper-row[data-previewed] {
+    box-shadow: inset 2px 0 0 var(--blue);
+  }
+  /* The table: one line a paper, 32 px, columns as in the head. */
+  .library-table-head,
+  .paper-row[data-display="table"] {
+    display: grid;
+    grid-template-columns:
+      26px minmax(0, 3fr) minmax(0, 1fr) minmax(0, 1fr) 3.5em
+      120px 64px;
+    align-items: center;
+    column-gap: var(--space-3);
+    padding: 0 var(--space-2);
+  }
+  .library-table-head {
+    position: sticky;
+    top: var(--library-controls-height, 0px);
+    z-index: 4;
+    height: 32px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--line);
+    color: var(--fg2);
+    font-size: var(--text-caption);
+  }
+  .library-table-sort {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+  .library-table-sort:hover {
+    color: var(--fg);
+  }
+  .library-table-sort:focus-visible {
+    border-radius: var(--radius-sm);
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
+  }
+  .library-table-arrow {
+    color: var(--fg);
+  }
+  .library-table-year {
+    justify-self: end;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .paper-row[data-display="table"] {
+    height: 32px;
+    min-height: 32px;
+    padding-block: 0;
+  }
+  .library-table-cell {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .paper-row[data-display="table"] .library-table-cell {
+    color: var(--fg2);
+    font-size: var(--text-caption);
+  }
+  .paper-row[data-display="table"] .paper-open {
+    display: block;
+    width: 100%;
+  }
+  .paper-row[data-display="table"] .paper-title {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--fg);
+  }
+  .paper-row[data-display="table"] .paper-tools {
+    justify-content: flex-end;
+  }
+  /* The preview beside the list: no veil, the rows stay within reach. */
+  .library-preview {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 20;
+    width: min(560px, 100%);
+    overflow-y: auto;
+    padding: var(--space-3) var(--space-5) var(--space-6);
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-pop);
+    outline: none;
+  }
+  .library-preview-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--space-2);
+    color: var(--fg3);
+    font-size: var(--text-caption);
+  }
+  .library-preview .ui-tech-details,
+  .library-preview details {
+    margin-top: var(--space-5);
+  }
+  @media (min-width: 1101px) {
+    /* Room for the preview, so it covers none of the rows. */
+    .library-page[data-preview] {
+      padding-inline-end: calc(560px + var(--space-5));
+    }
   }
   .virtual-list {
     position: relative;
@@ -711,20 +820,38 @@
     background: currentColor;
   }
   /* Colours: rule 5’s status map, `data-tone` (components.css). */
-  /* A catalogue search card: bibliographic fields, then classification,
-     then the year range, each cell as wide as a name or a choice. */
+  /* The conditions panel: the common four on the first row, label above
+     control (rule 11); “更多条件” below; the saved filters' menu at the
+     top right. */
   .library-filters {
     --field-fill: var(--surface);
     display: grid;
-    grid-template-columns: repeat(
-      auto-fill,
-      minmax(min(100%, 220px), var(--field-medium))
-    );
-    gap: var(--space-4) var(--space-5);
-    padding: var(--space-5);
+    gap: var(--space-3);
+    padding: var(--space-4);
     background: var(--surface-sunken);
     border-radius: var(--radius-md);
-    margin-block: var(--space-3);
+    margin-block: var(--space-2) var(--space-3);
+  }
+  .library-filters-top {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-4);
+  }
+  .library-filters-top > .library-filter-grid {
+    flex: 1;
+    min-width: 0;
+  }
+  .library-filters-menu {
+    flex-shrink: 0;
+  }
+  .library-filter-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 196px), 1fr));
+    gap: var(--space-3) var(--space-4);
+    align-items: end;
+  }
+  .library-filter-grid .ui-field {
+    width: 100%;
   }
   .library-filter-years {
     display: flex;
@@ -732,6 +859,14 @@
   }
   .library-filter-years > .ui-field {
     flex: 1;
+    min-width: 0;
+  }
+  .library-filters .form-actions {
+    justify-content: space-between;
+    align-items: center;
+  }
+  .library-filters-more[aria-expanded="true"] svg {
+    transform: rotate(180deg);
   }
   .form-actions {
     display: flex;
@@ -823,9 +958,6 @@
     background: var(--bg);
     padding: var(--space-2);
   }
-  .mobile-navigation-toggle {
-    display: none;
-  }
   @media (max-width: 1100px) {
     .library-page {
       padding-inline: var(--space-5);
@@ -834,6 +966,15 @@
       grid-template-columns: 26px minmax(0, 1fr) auto;
     }
     .paper-row > .paper-tools {
+      display: none;
+    }
+    .library-table-head,
+    .paper-row[data-display="table"] {
+      grid-template-columns:
+        26px minmax(0, 3fr) minmax(0, 1fr) minmax(0, 1fr) 3.5em
+        120px;
+    }
+    .library-table-head > .paper-tools {
       display: none;
     }
   }
@@ -846,9 +987,6 @@
     }
     .application-shell > .ui-split-pane > .ui-split-main {
       height: 100%;
-    }
-    .mobile-navigation-toggle {
-      display: inline-flex;
     }
     .library-page {
       padding: var(--space-5) var(--space-4) var(--space-7);
@@ -882,6 +1020,19 @@
     .paper-row {
       grid-template-columns: 24px minmax(0, 1fr);
     }
+    /* A narrow table keeps title, year and materials. */
+    .library-table-head,
+    .paper-row[data-display="table"] {
+      grid-template-columns: 24px minmax(0, 1fr) 3em 7.5em;
+    }
+    :is(.library-table-head, .paper-row[data-display="table"])
+      > :is(.paper-author, .paper-venue) {
+      display: none;
+    }
+    .library-filters-top {
+      flex-direction: column-reverse;
+      align-items: stretch;
+    }
     /* The status cell drops under the citation, aligned with the title. */
     .paper-row > .paper-status-cell {
       grid-column: 2;
@@ -891,9 +1042,6 @@
     }
     .paper-title {
       -webkit-line-clamp: 3;
-    }
-    .library-filters {
-      grid-template-columns: 1fr;
     }
     /* On a phone the bar spans the width and wraps: count and groups, then actions. */
     .selection-bar {

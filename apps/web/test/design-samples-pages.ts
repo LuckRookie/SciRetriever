@@ -169,11 +169,11 @@ export const designSamplePages: readonly DesignSamplePage[] = [
           .isVisible()
       )
         await p.getByRole("button", { name: "更多操作", exact: true }).click();
+      // One press on “筛选” opens the conditions (page specs “文献库”).
       await p
         .getByRole("button", { name: /^筛选/ })
         .filter({ visible: true })
         .click();
-      await p.getByRole("menuitem", { name: "筛选条件…", exact: true }).click();
     },
     ready: ".library-filters",
   },
@@ -197,11 +197,11 @@ export const designSamplePages: readonly DesignSamplePage[] = [
           .isVisible()
       )
         await p.getByRole("button", { name: "更多操作", exact: true }).click();
+      // One press on “筛选” opens the conditions (page specs “文献库”).
       await p
         .getByRole("button", { name: /^筛选/ })
         .filter({ visible: true })
         .click();
-      await p.getByRole("menuitem", { name: "筛选条件…", exact: true }).click();
     },
     ready: ".library-filters",
   },

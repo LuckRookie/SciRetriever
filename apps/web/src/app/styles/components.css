@@ -345,6 +345,13 @@
     flex-shrink: 0;
     color: var(--fg3);
   }
+  /* “排序：” before the value; the gap is the colon's own. */
+  .ui-select-prefix {
+    margin-inline-end: calc(-1 * var(--space-2));
+    color: var(--fg3);
+    font-weight: 400;
+    white-space: nowrap;
+  }
   .ui-select {
     justify-content: space-between;
     text-align: left;
@@ -1121,6 +1128,17 @@
     align-items: baseline;
     flex-wrap: wrap;
     gap: var(--space-3);
+  }
+  /* The navigation button joins the title only where the sidebar is hidden. */
+  .ui-page-lead {
+    display: none;
+    align-self: center;
+    margin-inline-start: calc(-1 * var(--space-2));
+  }
+  @media (max-width: 720px) {
+    .ui-page-lead {
+      display: inline-flex;
+    }
   }
   .ui-page-header h1 {
     margin: 0;

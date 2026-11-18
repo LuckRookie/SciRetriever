@@ -22,6 +22,7 @@ import {
   workbenchPdf,
 } from "../../server/src/workbench/synthetic-fixture.js";
 import { readingAssets } from "./reading-assets-fixture.js";
+import { parseLiterature } from "@sciretriever/contracts";
 
 const PASSWORD = "synthetic-browser-password";
 const PUBLIC_ORIGIN = "http://192.0.2.10:4174";
@@ -120,6 +121,19 @@ describe("IP-address HTTP login and workspace", () => {
     });
     try {
       await server.application.database.putLiterature(FIXTURE_LITERATURE);
+      // A paper without a PDF, for the row menu's “获取 PDF”.
+      await server.application.database.putLiterature(
+        parseLiterature({
+          ...FIXTURE_LITERATURE,
+          literature_id: "00000000-0000-0000-0000-000000005101",
+          meta_literature_id: "00000000-0000-0000-0000-000000005102",
+          metadata: {
+            ...FIXTURE_LITERATURE.metadata,
+            title: "Unparsed source",
+            identifiers: [],
+          },
+        }),
+      );
       await server.application.maintenance!.ingestPdf({
         literature_id: FIXTURE_LITERATURE.literature_id,
         bytes: workbenchPdf(),
@@ -154,7 +168,7 @@ describe("IP-address HTTP login and workspace", () => {
       );
       await page.locator("#login-submit").click();
       await showAllLibraryStatuses(page);
-      await page.locator(".paper-row").waitFor();
+      await page.locator(".paper-row").first().waitFor();
       expect(new URL(page.url()).searchParams.get("view")).toBe("lib");
       expect(await page.evaluate(() => document.cookie)).not.toContain(
         "sr_auth",
@@ -171,8 +185,9 @@ describe("IP-address HTTP login and workspace", () => {
         .getByRole("menuitem", { name: "HTTP saved view", exact: true })
         .waitFor();
       await page.keyboard.press("Escape");
-      // The fixture paper already has a PDF, so fetch it again from its own row menu.
-      const row = page.locator(".paper-row").first();
+      // Fetch the PDF from the row menu of the paper that has none: a paper
+      // with its PDF has no “获取 PDF” there (page specs “文献库”).
+      const row = page.locator(".paper-row", { hasText: "Unparsed source" });
       await row.hover();
       await row.getByRole("button", { name: "文献操作", exact: true }).click();
       await page
@@ -222,7 +237,10 @@ describe("IP-address HTTP login and workspace", () => {
       expect(copied.copied).toBe(true);
       expect(copied.residual).toBe(false);
       expect(copied.id).toMatch(/^[a-f0-9-]{36}$/u);
-      await page.locator(".paper-row .paper-open").first().click();
+      await page
+        .locator(".paper-row", { hasText: FIXTURE_LITERATURE.metadata.title! })
+        .locator(".paper-open")
+        .click();
       // A paper with text opens its full text (spec 6.4); this check reads the PDF.
       await page.getByRole("tab", { name: "PDF", exact: true }).click();
       await page

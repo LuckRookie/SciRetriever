@@ -21,6 +21,8 @@ import {
   EmptyState,
   IconButton,
   Menu,
+  PageHeader,
+  PageHeaderLead,
   Select,
   SplitPane,
   ToastProvider,
@@ -171,11 +173,6 @@ const Reader = page(() => import("../features/reader/Reader.js"));
 const Lab = lazy(() => import("../features/lab/Lab.js"));
 const Gallery = lazy(() => import("../features/lab/Gallery.js"));
 const Tasks = page(() => import("../features/tasks/Tasks.js"));
-const ActivityList = lazy(() =>
-  import("../features/tasks/Tasks.js").then((module) => ({
-    default: module.ActivityList,
-  })),
-);
 const Agents = page(() => import("../features/agents/Agents.js"));
 const SourceStatistics = page(
   () => import("../features/tasks/SourceStatistics.js"),
@@ -297,7 +294,6 @@ function Workspace({ api }: { api: ApiClient }) {
     [closed, setClosed] = useState<ClosedTabs[]>([]),
     [tabMenu, setTabMenu] = useState<ContextMenuRequest | null>(null),
     [mobileNav, setMobileNav] = useState(false),
-    [activity, setActivity] = useState(false),
     // The folding “加工” group, closed unless the person opened it.
     [processingOpen, setProcessingOpen] = useState(
       () => preferences.read(PROCESSING_KEY) === "open",
@@ -383,7 +379,7 @@ function Workspace({ api }: { api: ApiClient }) {
     enabled: api.kind === "workspace",
     refetchInterval: 5000,
   });
-  // “n 进行中” and “活动 · n”; the activity list still shows queued tasks.
+  // “n 进行中” beside 任务; queued tasks are not running.
   const running = runningTaskCount(tasks.data);
   // “m 需处理” beside 任务: the archive issues' total, under the archive query
   // prefix so resolving an issue refreshes it.
@@ -874,7 +870,14 @@ function Workspace({ api }: { api: ApiClient }) {
             </div>
           }
         >
-          {route.error ? <ErrorNotice message={route.error} /> : page}
+          {route.error ? (
+            <section className="page-recovery">
+              <PageHeader title={sectionLabels[route.section]} />
+              <ErrorNotice message={route.error} />
+            </section>
+          ) : (
+            page
+          )}
         </Suspense>
       </PageBoundary>
     </main>
@@ -895,6 +898,13 @@ function Workspace({ api }: { api: ApiClient }) {
     observer.observe(bar);
     return () => observer.disconnect();
   }, [readerPage]);
+  const mobileNavigationButton = (
+    <IconButton
+      aria-label="打开导航"
+      icon={<Icon name="menu" />}
+      onPress={() => setMobileNav(true)}
+    />
+  );
   const readerTopBar = (
     <header
       className="workspace-header reader-topbar"
@@ -1023,73 +1033,11 @@ function Workspace({ api }: { api: ApiClient }) {
             }
           >
             <div className="workspace-main">
-              <header className="workspace-header">
-                <span className="mobile-navigation-toggle">
-                  <IconButton
-                    aria-label="打开导航"
-                    icon={<Icon name="menu" />}
-                    onPress={() => setMobileNav(true)}
-                  />
-                </span>
-                <div
-                  className="workspace-tabs"
-                  role="navigation"
-                  aria-label="工作区与阅读标签"
-                >
-                  <Button
-                    variant="text"
-                    aria-current={!route.literature ? "page" : false}
-                    icon={<Icon name={route.section} />}
-                    onPress={() => go(route.section)}
-                  >
-                    {sectionLabels[route.section]}
-                  </Button>
-                  {tabs.map((tab) => (
-                    <div
-                      className="paper-tab"
-                      key={tab.id}
-                      title={tab.title}
-                      data-selected={route.literature === tab.id || undefined}
-                    >
-                      <Button
-                        variant="text"
-                        aria-current={
-                          route.literature === tab.id ? "page" : false
-                        }
-                        icon={<Icon name="file" />}
-                        onPress={() =>
-                          showPaper(tab.id, tab.mode, tab.source, tab.title)
-                        }
-                      >
-                        {tab.title}
-                      </Button>
-                      <IconButton
-                        size="inline"
-                        variant="text"
-                        aria-label={`关闭文献 ${tab.title}`}
-                        icon={<Icon name="close" />}
-                        onPress={() => {
-                          setTabs((items) =>
-                            items.filter((item) => item.id !== tab.id),
-                          );
-                          closeReadingState(reading, tab.id);
-                          if (route.literature === tab.id) go(route.section);
-                        }}
-                      />
-                    </div>
-                  ))}
-                </div>
-                {api.kind === "workspace" && (
-                  <Button
-                    variant="text"
-                    icon={<Icon name="activity" />}
-                    onPress={() => setActivity(true)}
-                  >
-                    {running > 0 ? `活动 · ${running}` : "活动"}
-                  </Button>
-                )}
-              </header>
-              {content_}
+              {/* No bar above the page (design core “页头”): on narrow
+                  screens the navigation button joins each page's title. */}
+              <PageHeaderLead.Provider value={mobileNavigationButton}>
+                {content_}
+              </PageHeaderLead.Provider>
             </div>
           </SplitPane>
         </div>
@@ -1105,27 +1053,6 @@ function Workspace({ api }: { api: ApiClient }) {
       </Drawer>
       <Drawer title="导航" isOpen={mobileNav} onOpenChange={setMobileNav}>
         {navigation}
-      </Drawer>
-      <Drawer title="活动" isOpen={activity} onOpenChange={setActivity}>
-        <Suspense fallback={<p role="status">正在读取活动…</p>}>
-          <ActivityList
-            onSelect={(id) => {
-              setActivity(false);
-              navigate(
-                { view: "task", literature: null, task: id },
-                { clearSource: true },
-              );
-            }}
-          />
-        </Suspense>
-        <Button
-          onPress={() => {
-            go("task");
-            setActivity(false);
-          }}
-        >
-          查看全部任务
-        </Button>
       </Drawer>
       <CommandPalette isOpen={search} onOpenChange={setSearch} />
       {(route.section === "lab" || route.section === "gallery") && (

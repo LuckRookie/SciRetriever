@@ -13,6 +13,12 @@ import { Icon } from "./icons.js";
 import { Disclosure } from "./navigation.js";
 import { AnimatedPanel, Presence } from "../motion/index.js";
 /**
+ * What the shell puts before every page title: on narrow screens the button
+ * that opens the navigation drawer, since no bar above the page carries it
+ * (design core “页头”).
+ */
+export const PageHeaderLead = createContext<ReactNode>(null);
+/**
  * Page title, an optional context figure ("35,177 篇") and at most one primary
  * action. `description` is only for internal demo pages; product pages express
  * system behaviour through their controls instead.
@@ -28,10 +34,12 @@ export function PageHeader({
   description?: string;
   action?: ReactNode;
 }) {
+  const lead = useContext(PageHeaderLead);
   return (
     <header className="ui-page-header">
       <div>
         <div className="ui-page-title">
+          {lead ? <span className="ui-page-lead">{lead}</span> : null}
           <h1>{title}</h1>
           {count === undefined || count === null ? null : (
             <span className="ui-page-count">{count}</span>

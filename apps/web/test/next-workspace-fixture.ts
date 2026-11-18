@@ -154,19 +154,33 @@ export async function runFromSnapshot(
   await dialog.getByRole("button", { name: "开始运行", exact: true }).click();
   return dialog;
 }
-/** Filter conditions and saved filters share the 筛选 menu; returns the open menu. */
-export async function openSavedViews(page: Page) {
-  await page
+/**
+ * “筛选” opens and closes the conditions panel at one press (page specs
+ * “文献库”); opens it when it is closed.
+ */
+export async function openFilterConditions(page: Page) {
+  const toggle = page
     .getByRole("button", { name: /^筛选/ })
     .filter({ visible: true })
-    .first()
+    .first();
+  if ((await toggle.getAttribute("aria-expanded")) !== "true")
+    await toggle.click();
+  await page.getByRole("form", { name: "筛选条件" }).waitFor();
+}
+/** Saved filters are in the menu at the panel's top right; returns the open menu. */
+export async function openSavedViews(page: Page) {
+  await openFilterConditions(page);
+  await page
+    .getByRole("form", { name: "筛选条件" })
+    .getByRole("button", { name: "保存的筛选", exact: true })
     .click();
   const menu = page.getByRole("menu");
   await menu.waitFor();
   return menu;
 }
-/** Opens the library's filter-conditions panel from the 筛选 menu. */
-export async function openFilterConditions(page: Page) {
-  const menu = await openSavedViews(page);
-  await menu.getByRole("menuitem", { name: "筛选条件…", exact: true }).click();
+/** Opens “更多条件” in the conditions panel when it is closed. */
+export async function openMoreConditions(page: Page) {
+  await openFilterConditions(page);
+  const more = page.getByRole("button", { name: "更多条件", exact: true });
+  if ((await more.getAttribute("aria-expanded")) !== "true") await more.click();
 }

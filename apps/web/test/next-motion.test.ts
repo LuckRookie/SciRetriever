@@ -71,14 +71,9 @@ it.each(["no-preference", "reduce"] as const)(
     const w = await nextWorkspace();
     try {
       await w.page.emulateMedia({ reducedMotion });
-      // Filter conditions open and close from the 筛选 menu.
+      // Filter conditions open and close at one press on 筛选.
       const filter = {
-        click: async () => {
-          await w.page.getByRole("button", { name: /^筛选/ }).click();
-          await w.page
-            .getByRole("menuitem", { name: /^(?:筛选条件…|收起筛选条件)$/ })
-            .click();
-        },
+        click: () => w.page.getByRole("button", { name: /^筛选/ }).click(),
       };
       await filter.click();
       await w.page

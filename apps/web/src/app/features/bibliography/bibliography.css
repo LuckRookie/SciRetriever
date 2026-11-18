@@ -1,0 +1,79 @@
+@layer pages {
+  /* A paper's bibliography, set like the first page of a journal article:
+     kind and year, title, authors, source, then the abstract and the rest. */
+  .bibliography {
+    display: grid;
+    gap: var(--space-2);
+  }
+  .bibliography > p,
+  .bibliography h3 {
+    margin: 0;
+  }
+  .bibliography-kind,
+  .bibliography-source,
+  .bibliography-authors,
+  .bibliography-terms,
+  .bibliography-material {
+    color: var(--fg2);
+    font-size: var(--text-secondary);
+    line-height: var(--lh-caption);
+  }
+  .bibliography-title {
+    margin: 0;
+    font: 500 var(--text-literature) / var(--lh-literature) var(--serif);
+    color: var(--fg);
+  }
+  .bibliography-authors {
+    color: var(--fg);
+  }
+  .bibliography-source a {
+    color: var(--blue);
+    text-underline-offset: 0.18em;
+  }
+  .bibliography-part {
+    display: grid;
+    gap: var(--space-1);
+    padding-block: var(--space-3);
+    border-block: 1px solid var(--line);
+    margin-block: var(--space-2);
+  }
+  .bibliography-part h3,
+  .bibliography-terms > span:first-child,
+  .bibliography-material > span:first-child {
+    margin: 0;
+    color: var(--fg2);
+    font-size: var(--text-caption);
+    font-weight: 600;
+  }
+  .bibliography-part p {
+    margin: 0;
+    font-size: var(--text-interface);
+    line-height: var(--lh-body);
+    overflow-wrap: anywhere;
+  }
+  .bibliography-terms > span:first-child {
+    margin-inline-end: var(--space-2);
+  }
+  .bibliography-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 6px;
+    font-size: var(--text-caption);
+  }
+  .bibliography-material {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .bibliography-note {
+    color: var(--fg3);
+  }
+  .bibliography-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: var(--space-3);
+  }
+}

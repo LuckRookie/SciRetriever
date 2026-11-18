@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import {
   libraryStatus,
+  openMoreConditions,
   openProcessingEntry,
   openSavedViews,
   showAllLibraryStatuses,
@@ -24,7 +25,7 @@ async function select(page: Page, label: string, option: string) {
     .click();
   await page.getByRole("option", { name: option, exact: true }).click();
 }
-it("opens keyboard search and live activity without starting work, and preserves filter, sort and preview interactions", async () => {
+it("opens keyboard search and the task page without starting work, and preserves filter, sort and preview interactions", async () => {
   const w = await nextWorkspace();
   try {
     const page = w.page;
@@ -52,13 +53,16 @@ it("opens keyboard search and live activity without starting work, and preserves
     await select(page, "排序", "标题：Z–A");
     expect(new URL(page.url()).searchParams.get("sort")).toBe("title-desc");
     await page.getByRole("button", { name: "预览", exact: true }).click();
-    const preview = page.getByRole("dialog", { name: "文献预览", exact: true });
+    // The preview lies beside the list, without a veil (page specs “文献库”).
+    const preview = page.getByRole("region", { name: "文献预览", exact: true });
     await preview
       .getByRole("heading", { name: "Unparsed source", exact: true })
       .waitFor();
+    expect(await page.getByRole("dialog").count()).toBe(0);
     expect(new URL(page.url()).searchParams.has("literature")).toBe(false);
     expect(w.env.modelCalls).toBe(0);
     await page.keyboard.press("Escape");
+    await preview.waitFor({ state: "detached" });
     const checked = page.getByRole("checkbox", {
       name: "全选已加载",
       exact: true,
@@ -93,17 +97,21 @@ it("opens keyboard search and live activity without starting work, and preserves
       policy: { mode: "never", max_retries: 0 },
       idempotency_key: "activity-fixture",
     });
-    await page.getByRole("button", { name: /^活动/ }).click();
-    const activity = page.getByRole("dialog", { name: "活动", exact: true });
-    await expect
-      .poll(() => activity.textContent(), { timeout: 20_000 })
-      .toContain("获取 PDF");
-    await activity
-      .getByRole("button", { name: "查看全部任务", exact: true })
+    // No “活动” panel: background work is 任务 in the sidebar and its page.
+    expect(await page.getByRole("button", { name: /^活动/ }).count()).toBe(0);
+    await page
+      .getByRole("complementary", { name: "主导航" })
+      .getByRole("button", { name: /^任务/u })
       .click();
     await expect
       .poll(() => new URL(page.url()).searchParams.get("view"))
       .toBe("task");
+    await expect
+      .poll(
+        () => page.locator(`[data-task-id="${job.job_id}"]`).textContent(),
+        { timeout: 20_000 },
+      )
+      .toContain("获取 PDF");
     expect((await w.env.app.jobs!.getJob(job.job_id))?.status).toBe("queued");
     expect(w.env.modelCalls).toBe(0);
     expect(w.env.parseCalls).toBe(w.setupCalls.parser);
@@ -515,10 +523,8 @@ it("marks draft rows, filters and sorts by the draft facts, and hands the result
       .poll(() => draftRow.locator(".paper-status-note").allInnerTexts())
       .toContain("未校对 · 扫描 0 页");
     // The filters: text level, and the two yes-or-no draft facts.
-    await page.getByRole("button", { name: /^筛选/ }).click();
-    await page
-      .getByRole("menuitem", { name: /^(?:筛选条件…|收起筛选条件)$/ })
-      .click();
+    // The draft facts are among “更多条件”.
+    await openMoreConditions(page);
     await select(page, "文本等级", "未校对");
     await select(page, "全文和 PDF 自带的文字不一样", "没有");
     await page.getByRole("button", { name: "应用筛选", exact: true }).click();

@@ -20,7 +20,7 @@ const task = (
   created_at: "2026-11-18T00:00:00.000Z",
 });
 
-it("counts only running tasks beside “任务” and in “活动 · n”; queued ones stay listed as 未启动 or 排队中 (page specs “任务”)", async () => {
+it("counts only running tasks beside “任务”, with no “活动” panel; queued ones stay listed on the task page as 未启动 or 排队中 (page specs “任务”)", async () => {
   const w = await nextWorkspace();
   try {
     const page = w.page;
@@ -42,32 +42,35 @@ it("counts only running tasks beside “任务” and in “活动 · n”; queu
     const tasks = page
       .getByRole("complementary", { name: "主导航" })
       .getByRole("button", { name: /^任务/u });
-    const activity = page.getByRole("button", { name: /^活动/u });
-    await activity.waitFor();
+    await tasks.waitFor();
     // Wait a refresh past the first answer, so the numbers had their chance.
     await page.waitForResponse(
       (r) => new URL(r.url()).searchParams.get("status_group") === "active",
     );
     expect(await tasks.textContent()).toBe("任务");
-    expect(await activity.textContent()).toBe("活动");
-    // The panel lists them all the same, each as 未启动: nobody asked them to start.
-    await activity.click();
-    const panel = page.getByRole("dialog", { name: "活动" });
-    const listed = panel.locator("[data-task-id]");
+    // The background is the sidebar's number and the task page; no “活动”.
+    expect(await page.getByRole("button", { name: /^活动/u }).count()).toBe(0);
+    // The task page's “进行中” lists them all the same, each as 未启动:
+    // nobody asked them to start.
+    await tasks.click();
+    await page
+      .locator(".tasks-page, .task-page")
+      .getByRole("button", { name: /^进行中/u })
+      .click();
+    const listed = page.locator("[data-task-id]");
     await expect.poll(() => listed.count()).toBe(3);
     expect(await listed.getByText("未启动", { exact: true }).count()).toBe(3);
-    await panel.getByRole("button", { name: "关闭抽屉" }).click();
     // One starts, one is asked to start and waits its turn (排队中), one stays 未启动.
     active = [task(1, "running"), task(2, "queued", true), task(3, "queued")];
     await expect
       .poll(() => tasks.textContent(), { timeout: 15_000 })
       .toBe("任务1 进行中");
-    expect(await activity.textContent()).toBe("活动 · 1");
-    await activity.click();
-    await expect.poll(() => listed.count()).toBe(3);
     await expect
-      .poll(() => listed.getByText("排队中", { exact: true }).count())
+      .poll(() => listed.getByText("排队中", { exact: true }).count(), {
+        timeout: 15_000,
+      })
       .toBe(1);
+    expect(await listed.count()).toBe(3);
     expect(await listed.getByText("未启动", { exact: true }).count()).toBe(1);
     expect(await listed.getByText("进行中", { exact: true }).count()).toBe(1);
     expect(w.errors).toEqual([]);

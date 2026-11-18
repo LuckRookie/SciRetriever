@@ -320,13 +320,14 @@ it("keeps the latest outline target, text settings and reading position across a
     const body = w.page.locator(".reader-engine-body");
     const top = await body.evaluate((element) => element.scrollTop);
     await readerToLibrary(w.page);
-    // Back through its tab: the shell's tabs show beside the library's section button.
-    const tabs = w.page.getByRole("navigation", { name: "工作区与阅读标签" });
-    await tabs
-      .getByRole("button", {
+    // Back to the paper from its library row: the library has no bar of
+    // tabs above it (design core “页头”); the open tab keeps its place.
+    await w.page
+      .getByRole("article", {
         name: "Synthetic literature workbench",
         exact: true,
       })
+      .locator(".paper-open")
       .click();
     await expect
       .poll(() => w.page.locator(".reading-article").textContent(), {

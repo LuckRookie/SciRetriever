@@ -227,11 +227,10 @@ describe("durable task workbench", () => {
       expect(new URL(page.url()).searchParams.get("task")).toBe(completedId);
       await page.keyboard.press("Escape");
       await drawer.waitFor({ state: "hidden" });
-      await page.getByRole("button", { name: /^活动/ }).click();
-      const activity = page.getByRole("dialog", { name: "活动", exact: true });
-      await activity
-        .locator(`[data-task-id="${completedId}"]`)
-        .getByRole("button")
+      // No “活动” panel: the task is opened again from its row on the task page.
+      expect(await page.getByRole("button", { name: /^活动/ }).count()).toBe(0);
+      await page
+        .locator(`.task-table [data-task-id="${completedId}"] .task-open`)
         .click();
       await drawer
         .getByRole("button", { name: "打开文献", exact: true })
@@ -318,14 +317,19 @@ describe("durable task workbench", () => {
         await application.queue!.cancel(
           (await createHistory(`history-fixture-${index}`)).job_id,
         );
-      await page.getByRole("button", { name: /^活动/ }).click();
-      await activity
-        .locator(`[data-task-id="${olderActive.job_id}"]`)
-        .getByRole("button")
+      // The task page's “进行中” finds the active task behind 102 newer ones.
+      const quick = (name: RegExp) =>
+        page.locator(".tasks-page").getByRole("button", { name }).first();
+      await quick(/^进行中/u).click();
+      await page
+        .locator(
+          `.task-table [data-task-id="${olderActive.job_id}"] .task-open`,
+        )
         .click();
       expect(new URL(page.url()).searchParams.get("task")).toBe(
         olderActive.job_id,
       );
+      await quick(/^全部/u).click();
       await page.getByRole("button", { name: "刷新任务", exact: true }).click();
       await expect
         .poll(() => page.locator(".task-table [data-task-id]").count())

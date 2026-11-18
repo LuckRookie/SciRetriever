@@ -378,16 +378,15 @@ describe("live workbench on the installed Cloak runtime", () => {
         await desktop
           .getByRole("searchbox", { name: "搜索文献", exact: true })
           .fill("QueryBank");
+        // The count is said once, beside the title (page specs “文献库”).
         await expect
-          .poll(() => desktop.locator(".library-page").innerText(), {
+          .poll(() => desktop.locator(".ui-page-count").innerText(), {
             timeout: 20_000,
           })
-          .toContain("共 53 篇");
-        await expect
-          .poll(() => desktop.locator(".library-page").innerText(), {
-            timeout: 20_000,
-          })
-          .toContain("已显示 50");
+          .toMatch(/^符合 53 篇 \/ 共 [\d,]+ 篇$/u);
+        const loaded = () =>
+          desktop.locator(".library-scroll").getAttribute("data-loaded");
+        await expect.poll(loaded, { timeout: 20_000 }).toBe("50");
         // The library scrolls with the page; the main container owns scrollTop.
         await desktop.locator(".workspace-content").evaluate(async (el) => {
           // Data and the virtualizer's measured scroll range settle separately.
@@ -396,11 +395,7 @@ describe("live workbench on the installed Cloak runtime", () => {
           await new Promise(requestAnimationFrame);
           el.scrollTop = el.scrollHeight;
         });
-        await expect
-          .poll(() => desktop.locator(".library-page").innerText(), {
-            timeout: 20_000,
-          })
-          .toContain("已显示 53");
+        await expect.poll(loaded, { timeout: 20_000 }).toBe("53");
         expect(await desktop.locator(".paper-row").count()).toBeLessThan(53);
         await desktop.locator(".workspace-content").evaluate((el) => {
           el.scrollTop = 0;

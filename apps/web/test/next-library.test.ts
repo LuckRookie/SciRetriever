@@ -1,5 +1,5 @@
 import {
-  openFilterConditions,
+  openMoreConditions,
   openSavedViews,
   showAllLibraryStatuses,
 } from "./next-workspace-fixture.js";
@@ -97,12 +97,15 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
   try {
     const p = w.page;
     await showAllLibraryStatuses(p);
-    await expect
-      .poll(() => p.locator(".library-list-heading").textContent())
-      .toContain("30,002");
-    expect(await p.locator(".library-list-heading").textContent()).toContain(
-      "30,002",
+    // The total is written once, beside the title (page specs “文献库”).
+    const count = p.locator(".ui-page-header .ui-page-count");
+    await expect.poll(() => count.textContent()).toBe("30,002 篇");
+    expect(await p.locator(".library-list-heading").textContent()).not.toMatch(
+      /已显示|共/u,
     );
+    // Loaded rows, from the list's measurement attributes.
+    const loaded = () =>
+      p.locator(".library-scroll").getAttribute("data-loaded");
     // Over the 1,000-paper limit, running and exporting explain the limit instead of acting.
     await p.getByRole("button", { name: "批量操作", exact: true }).click();
     expect(await p.getByRole("menu").textContent()).toContain(
@@ -131,11 +134,7 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
         await new Promise(requestAnimationFrame);
         el.scrollTop = el.scrollHeight;
       });
-      await expect
-        .poll(() => p.locator(".library-list-heading").textContent(), {
-          timeout: 20_000,
-        })
-        .toContain(`${100 + 50 * i} /`);
+      await expect.poll(loaded, { timeout: 20_000 }).toBe(String(100 + 50 * i));
     }
     await list.evaluate((el) => {
       // Follow the rendered row height so the target stays inside the window.
@@ -282,12 +281,72 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
     await p.keyboard.press("Escape");
     await p.getByRole("searchbox", { name: "搜索文献" }).fill("Paper 00001");
     await expect
-      .poll(() => p.locator(".library-list-heading").textContent())
-      .toContain("1 / 共 1");
-    await p.getByRole("button", { name: /移除搜索：Paper 00001/ }).click();
-    await expect
-      .poll(() => p.locator(".library-list-heading").textContent())
-      .toContain("30,002");
+      .poll(() => count.textContent())
+      .toBe("符合 1 篇 / 共 30,002 篇");
+    // The search words are no filter condition: no chip, no count on 筛选.
+    expect(await p.locator(".library-applied").count()).toBe(0);
+    expect(
+      await p.getByRole("button", { name: /^筛选/ }).first().textContent(),
+    ).toBe("筛选");
+    await p.getByRole("searchbox", { name: "搜索文献" }).fill("");
+    await expect.poll(() => count.textContent()).toBe("30,002 篇");
+
+    // The table pages and bounds the DOM the same way (page specs “文献库”).
+    await p.getByRole("tab", { name: "表格", exact: true }).click();
+    const tableRows = p.locator('.paper-row[data-display="table"]');
+    await tableRows.first().waitFor();
+    expect(await tableRows.count()).toBeLessThan(60);
+    expect(
+      await p.locator(".paper-row:not([data-display='table'])").count(),
+    ).toBe(0);
+    expect(
+      await tableRows
+        .first()
+        .evaluate((el) => el.getBoundingClientRect().height),
+    ).toBe(32);
+    const before50 = Number(await loaded());
+    for (let i = 1; i <= 2; i++) {
+      await list.evaluate(async (el) => {
+        await new Promise(requestAnimationFrame);
+        await new Promise(requestAnimationFrame);
+        el.scrollTop = el.scrollHeight;
+      });
+      await expect
+        .poll(loaded, { timeout: 20_000 })
+        .toBe(String(before50 + 50 * i));
+    }
+    const tableTimings = await list.evaluate(async (el) => {
+      const entries: number[] = [];
+      const observer = new PerformanceObserver((list) =>
+        entries.push(...list.getEntries().map((entry) => entry.duration)),
+      );
+      observer.observe({ type: "longtask" });
+      for (let i = 0; i < 90; i++) {
+        el.scrollTop = 2000 + i * 24;
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => resolve()),
+        );
+      }
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
+      observer.disconnect();
+      return { max: Math.max(0, ...entries) };
+    });
+    if (process.env.SCIRETRIEVER_WEB_PERFORMANCE === "1")
+      expect(tableTimings.max).toBeLessThanOrEqual(50);
+    expect(await tableRows.count()).toBeLessThan(60);
+    // The display is this browser's choice: it is still the table after a reload.
+    await p.reload();
+    await tableRows.first().waitFor();
+    expect(
+      await p
+        .getByRole("tab", { name: "表格", exact: true })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(await tableRows.count()).toBeLessThan(60);
+    await p.getByRole("tab", { name: "列表", exact: true }).click();
+    await p.locator('.paper-row[data-display="list"]').first().waitFor();
     expect(w.errors).toEqual([]);
     expect(w.env.modelCalls).toBe(0);
   } finally {
@@ -306,9 +365,10 @@ it("opens a paper from its row in the view it has: remembered, else full text, P
     )
       await readerToLibrary(w.page);
     else
+      // No bar above the page: the sidebar leads back to the library.
       await w.page
-        .getByRole("navigation", { name: "工作区与阅读标签" })
-        .getByRole("button", { name: "文献库", exact: true })
+        .getByRole("complementary", { name: "主导航" })
+        .getByRole("button", { name: /^文献库/u })
         .click();
     await w.page
       .getByRole("article", { name: title, exact: true })
@@ -401,7 +461,7 @@ it("opens a PDF without text in the PDF view, and its full text says what is mis
 const fullTextId = (n: number) =>
   `00000000-0000-0000-0019-${String(n).padStart(12, "0")}`;
 /**
- * Papers for the full-text line: one in two versions (the preprint without
+ * Papers for the scope counts: one in two versions (the preprint without
  * a PDF, the published version with one), an excluded paper with its PDF and
  * an exhausted one, beside the fixture's ready paper and its paper without a
  * PDF; a folder and an intake batch over some of them.
@@ -471,7 +531,7 @@ async function seedFullText(w: Awaited<ReturnType<typeof nextWorkspace>>) {
   return { folder, batch };
 }
 
-it("shows the scope's full text by paper above the list, each number applying its quick filter, without fetching anything (page specs “文献库”)", async () => {
+it("writes the scope's total once beside the title, “符合 n 篇 / 共 m 篇” when searched or filtered, with quick filters that add up and no full-text line (page specs “文献库”)", async () => {
   const w = await nextWorkspace();
   try {
     const page = w.page;
@@ -490,12 +550,12 @@ it("shows the scope's full text by paper above the list, each number applying it
         started.push(path);
     });
     await page.reload();
-    const line = page.getByLabel("全文取得情况");
-    // Library: 5 papers of 6 versions; the fixture's ready paper, the two
-    // versions and the excluded one have their full text.
-    await expect
-      .poll(() => line.textContent())
-      .toBe("全文已取得 3 / 总数 5，未取得 2（其中自动途径已试完 1）");
+    const count = page.locator(".ui-page-header .ui-page-count");
+    await expect.poll(() => count.textContent()).toBe("6 篇");
+    // The “全文已取得 … / 总数 …” line is gone; the total is said once.
+    expect(await page.getByLabel("全文取得情况").count()).toBe(0);
+    expect(await page.getByText(/全文已取得/u).count()).toBe(0);
+    expect(await page.getByText(/已显示/u).count()).toBe(0);
     // The quick filters count versions, as the list does, in categories
     // that do not overlap: they add up to 全部 (page specs “界面用词”).
     const chip = (name: string) =>
@@ -523,73 +583,62 @@ it("shows the scope's full text by paper above the list, each number applying it
       expect.arrayContaining(["没找到 PDF"]),
     );
     expect(number(all)).toBe(6);
-    // Switching quick filters keeps the line as it is.
+    // A quick filter narrows the results: so many of the whole.
     await chip("有全文").click();
     await expect.poll(() => page.locator(".paper-row").count()).toBe(1);
-    expect(await line.textContent()).toBe(
-      "全文已取得 3 / 总数 5，未取得 2（其中自动途径已试完 1）",
-    );
-    // “已取得” is “有 PDF”: whatever came after, excluded included.
-    const rowIds = () =>
-      page
-        .locator(".paper-row")
-        .evaluateAll((rows) =>
-          rows.map((row) => row.getAttribute("data-literature-id")).sort(),
-        );
-    await line.getByRole("button", { name: "已取得 3 篇" }).click();
-    await expect
-      .poll(rowIds)
-      .toEqual([FIXTURE_LITERATURE.literature_id, id(2), id(3)].sort());
+    await expect.poll(() => count.textContent()).toBe("符合 1 篇 / 共 6 篇");
     const query = () =>
       JSON.parse(new URL(page.url()).searchParams.get("query") ?? "{}");
-    expect(query()).toMatchObject({ has_primary_pdf: true, statuses: [] });
-    // “未取得” is its complement, by version: the preprint is listed.
-    await line.getByRole("button", { name: "未取得 2 篇" }).click();
-    await expect.poll(rowIds).toEqual([missingId, id(1), id(4)].sort());
-    expect(query().has_primary_pdf).toBe(false);
-    await line.getByRole("button", { name: "已试完 1 篇" }).click();
-    await expect.poll(() => page.locator(".paper-row").count()).toBe(1);
-    expect(query()).toMatchObject({ needs_manual_pdf: true });
-    expect(query().has_primary_pdf).toBeUndefined();
-    await line.getByRole("button", { name: "总数 5 篇" }).click();
-    await expect.poll(() => page.locator(".paper-row").count()).toBe(6);
-    // An intake batch narrows it to its papers.
+    await chip("全部").click();
+    await expect.poll(() => count.textContent()).toBe("6 篇");
+    // An intake batch is a condition of the library.
     await page
       .getByRole("group", { name: "最近入库" })
       .getByRole("button", { name: /^全文批次/u })
       .click();
-    await expect
-      .poll(() => line.textContent())
-      .toBe("全文已取得 1 / 总数 2，未取得 1（其中自动途径已试完 1）");
+    await expect.poll(() => count.textContent()).toBe("符合 2 篇 / 共 6 篇");
     expect(query().intake_batch_ids).toEqual([batch]);
-    // A folder narrows it; a link there keeps the folder.
+    // A folder is the page's scope: its own total, narrowed by a search.
     await page
       .getByRole("group", { name: "文献文件夹", exact: true })
       .getByRole("button", { name: /^全文范围/u })
       .click();
-    await expect
-      .poll(() => line.textContent())
-      .toBe("全文已取得 1 / 总数 2，未取得 1（其中自动途径已试完 1）");
-    await line.getByRole("button", { name: "已取得 1 篇" }).click();
-    await expect.poll(() => query().has_primary_pdf).toBe(true);
-    expect(query().folder).toMatchObject({ id: folder });
-    await expect.poll(() => page.locator(".paper-row").count()).toBe(1);
-    // A search narrows it too; with nothing exhausted, no parentheses.
+    await page.getByRole("heading", { name: "全文范围" }).waitFor();
+    await expect.poll(() => count.textContent()).toBe("2 篇");
     await page
       .getByRole("searchbox", { name: "搜索文献" })
       .fill("Full text two versions");
+    await expect.poll(() => count.textContent()).toBe("符合 1 篇 / 共 2 篇");
+    expect(query()).toMatchObject({ folder: { id: folder } });
     await expect
-      .poll(() => line.textContent())
-      .toBe("全文已取得 1 / 总数 1，未取得 0");
-    expect(query()).toMatchObject({
-      has_primary_pdf: true,
-      folder: { id: folder },
-    });
-    // An empty scope has no line.
+      .poll(() =>
+        page
+          .locator(".paper-row")
+          .evaluateAll((rows) =>
+            rows.map((row) => row.getAttribute("data-literature-id")),
+          ),
+      )
+      .toEqual([id(2)]);
+    // Nothing found: one sentence in the list, and the way back.
     await page
       .getByRole("searchbox", { name: "搜索文献" })
       .fill("nothing-at-all");
-    await expect.poll(() => line.count()).toBe(0);
+    const empty = page.locator(".library-empty");
+    await empty.getByText("没有符合条件的文献", { exact: true }).waitFor();
+    expect(
+      await page.getByRole("checkbox", { name: "全选已加载" }).count(),
+    ).toBe(0);
+    expect(
+      await page.getByRole("button", { name: "批量操作", exact: true }).count(),
+    ).toBe(0);
+    await empty.getByRole("button", { name: "清除条件", exact: true }).click();
+    await expect.poll(() => page.locator(".paper-row").count()).toBe(2);
+    expect(query().text ?? null).toBeNull();
+    expect(query()).toMatchObject({ folder: { id: folder } });
+    expect(
+      await page.getByRole("searchbox", { name: "搜索文献" }).inputValue(),
+    ).toBe("");
+    await expect.poll(() => count.textContent()).toBe("2 篇");
     expect(started).toEqual([]);
     expect(w.errors).toEqual([]);
   } finally {
@@ -597,7 +646,7 @@ it("shows the scope's full text by paper above the list, each number applying it
   }
 }, 90000);
 
-it("shows the full-text line for the whole library, an intake batch and a folder (plan 25 block 19 screenshots)", async (context) => {
+it("shows the title's count for the whole library, an intake batch and a folder (plan 25 block 29 screenshots)", async (context) => {
   const output = process.env.SCIRETRIEVER_WEB_FULLTEXT_SHOTS;
   if (!output) return context.skip();
   await mkdir(output, { recursive: true });
@@ -608,25 +657,25 @@ it("shows the full-text line for the whole library, an intake batch and a folder
     await page.emulateMedia({ reducedMotion: "reduce" });
     await seedFullText(w);
     await page.reload();
-    const line = page.getByLabel("全文取得情况");
+    const count = page.locator(".ui-page-header .ui-page-count");
     const shot = (name: string) =>
       page.screenshot({ path: join(output, `${name}.png`) });
-    await expect.poll(() => line.textContent()).toContain("总数 5");
-    await shot("full-text-library");
+    await expect.poll(() => count.textContent()).toBe("6 篇");
+    await shot("count-library");
     await page
       .getByRole("group", { name: "最近入库" })
       .getByRole("button", { name: /^全文批次/u })
       .click();
-    await expect.poll(() => line.textContent()).toContain("总数 2");
+    await expect.poll(() => count.textContent()).toContain("符合 2 篇");
     await page.locator(".paper-row").first().waitFor();
-    await shot("full-text-batch");
+    await shot("count-batch");
     await page
       .getByRole("group", { name: "文献文件夹", exact: true })
       .getByRole("button", { name: /^全文范围/u })
       .click();
     await page.getByRole("heading", { name: "全文范围" }).waitFor();
-    await expect.poll(() => line.textContent()).toContain("总数 2");
-    await shot("full-text-folder");
+    await expect.poll(() => count.textContent()).toBe("2 篇");
+    await shot("count-folder");
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();
@@ -669,7 +718,8 @@ it("filters the papers whose bibliography is still to complete and marks their r
       )
         searches.push(request.postDataJSON());
     });
-    await openFilterConditions(page);
+    // “书目不全” is one of “更多条件”.
+    await openMoreConditions(page);
     await page
       .locator(".library-filters")
       .getByText("书目不全", { exact: true })
