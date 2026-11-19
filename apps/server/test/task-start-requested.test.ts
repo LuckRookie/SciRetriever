@@ -1,11 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import { ProcessingTaskService } from "../src/application/jobs/processing.js";
 import { ExecutionQueue } from "../src/application/jobs/service.js";
+import { taskHttpAdapters } from "../src/bootstrap/workbench.js";
 import { ExecutionRepository } from "../src/storage/execution/repository.js";
 import { SqliteWorker } from "../src/storage/sqlite/worker.js";
 import { activityContext, withActivity } from "../src/logging/activity.js";
 import { runCli } from "../src/cli/main.js";
+import { startWorkbenchHttp } from "../src/workbench/http.js";
+import { ProductionWorkbenchSession } from "../src/workbench/production-session.js";
 import { coreProcessingFixture } from "./core-processing-fixture.js";
+import {
+  workbenchLogin,
+  workbenchTestAccess,
+} from "./workbench-auth-fixture.js";
 
 function deferred() {
   let resolve!: () => void;
@@ -160,13 +167,60 @@ describe("durable background start requests", () => {
     }
   });
 
-  it("does not record rejected starts, including missing jobs and terminal or resumable states", async () => {
-    const env = memoryFixture();
+  it("rejects explicit HTTP starts and returns false from background admission without recording requests", async () => {
+    const env = await coreProcessingFixture({
+      offline: true,
+      analysisModel: false,
+    });
+    const repository = env.app.jobs!;
+    const tasks = env.app.processingTasks!;
+    const session = new ProductionWorkbenchSession(null, undefined);
+    let server: Awaited<ReturnType<typeof startWorkbenchHttp>> | undefined;
     try {
-      await expect(env.service.start("missing-start")).rejects.toMatchObject({
-        code: "processing-not-found",
+      server = await startWorkbenchHttp({
+        ...taskHttpAdapters(env.app),
+        access: workbenchTestAccess,
+        session,
+        assets: new Map([["/", { contentType: "text/html", body: "fixture" }]]),
       });
-      expect(await env.repository.listEvents("missing-start")).toEqual([]);
+      const origin = server.origin;
+      const auth = await workbenchLogin(origin);
+      const landing = await fetch(origin, { headers: { Cookie: auth } });
+      expect(landing.status).toBe(200);
+      const headers = {
+        Cookie: `${auth}; ${landing.headers.get("set-cookie")!.split(";")[0]}`,
+        Origin: origin,
+        "Content-Type": "application/json",
+      };
+      const attached = await fetch(`${origin}/api/clients`, {
+        method: "POST",
+        headers: { ...headers, "X-Workbench-Init": "1" },
+        body: "{}",
+      });
+      expect(attached.status).toBe(201);
+      const grant = (await attached.json()) as {
+        client_id: string;
+        csrf: string;
+      };
+      const expectRefused = async (
+        jobId: string,
+        status: number,
+        code: string,
+      ) => {
+        const response = await fetch(
+          `${origin}/api/tasks/${jobId}/start?client_id=${grant.client_id}`,
+          {
+            method: "POST",
+            headers: { ...headers, "X-Workbench-Csrf": grant.csrf },
+            body: "{}",
+          },
+        );
+        expect(response.status).toBe(status);
+        expect(await response.json()).toEqual({ code });
+        expect(await tasks.start(jobId)).toBe(false);
+        expect(await repository.listEvents(jobId)).toEqual([]);
+      };
+      await expectRefused("missing-start", 404, "processing-not-found");
       for (const status of [
         "completed",
         "cancelled",
@@ -174,21 +228,30 @@ describe("durable background start requests", () => {
         "paused",
         "interrupted",
       ] as const) {
-        const job = await env.submit(`refused-${status}`);
-        await env.repository.updateJob(job.job_id, status);
-        await expect(env.service.start(job.job_id)).rejects.toMatchObject({
-          code:
-            status === "completed" || status === "cancelled"
-              ? "processing-terminal"
-              : "processing-resume-required",
+        const job = await tasks.submit({
+          schema_version: 1,
+          idempotency_key: `refused-${status}`,
+          operations: [
+            { operation: "parse-documents", request: env.rawParseRequest },
+          ],
         });
-        expect(await env.repository.listEvents(job.job_id)).toEqual([]);
-        expect((await env.service.read(job.job_id)).start_requested).toBe(
-          false,
+        await repository.updateJob(job.job_id, status);
+        await expectRefused(
+          job.job_id,
+          409,
+          status === "completed" || status === "cancelled"
+            ? "processing-terminal"
+            : "processing-resume-required",
         );
+        expect(await tasks.read(job.job_id)).toMatchObject({
+          job: { status },
+          start_requested: false,
+        });
       }
-      expect(env.execute).not.toHaveBeenCalled();
+      expect(env.parseCalls).toBe(0);
     } finally {
+      await server?.close();
+      await session.close();
       await env.close();
     }
   });
@@ -204,9 +267,7 @@ describe("durable background start requests", () => {
           return request(id);
         },
       );
-      await expect(env.service.start(job.job_id)).rejects.toMatchObject({
-        code: "processing-terminal",
-      });
+      expect(await env.service.start(job.job_id)).toBe(false);
       expect(
         (await env.repository.listEvents(job.job_id)).some(
           (e) => e.kind === "task-start-requested",
@@ -215,6 +276,7 @@ describe("durable background start requests", () => {
       expect((await env.repository.getJob(job.job_id))?.status).toBe(
         "cancelled",
       );
+      expect(env.execute).not.toHaveBeenCalled();
     } finally {
       await env.close();
     }
@@ -449,7 +511,7 @@ describe("durable background start requests", () => {
     }
   }, 60_000);
 
-  it("persists the archive entry's background request before returning a capacity-waiting job", async () => {
+  it("persists an archive start while waiting for capacity and replays the cancelled task without another start", async () => {
     const env = await coreProcessingFixture({
       offline: true,
       analysisModel: false,
@@ -471,7 +533,7 @@ describe("durable background start requests", () => {
       await vi.waitFor(() => expect(env.parseCalls).toBe(1), {
         timeout: 20_000,
       });
-      const archive = await env.app.archive.build({
+      const request = {
         schema_version: 2,
         selector: {
           kind: "literatures",
@@ -480,7 +542,8 @@ describe("durable background start requests", () => {
         mode: "full",
         from_step: null,
         idempotency_key: "archive-start-waiter",
-      });
+      };
+      const archive = await env.app.archive.build(request);
       expect(archive.members).toBe(1);
       expect(
         await env.app.processingTasks!.read(archive.job!.job_id),
@@ -492,6 +555,14 @@ describe("durable background start requests", () => {
         await env.app.jobs!.listAttempts(`${archive.job!.job_id}:0`),
       ).toEqual([]);
       await env.app.processingTasks!.control(archive.job!.job_id, "cancel");
+      const events = await env.app.jobs!.listEvents(archive.job!.job_id);
+      expect(await env.app.archive.build(request)).toMatchObject({
+        job: { job_id: archive.job!.job_id, status: "cancelled" },
+        members: 1,
+      });
+      expect(await env.app.jobs!.listEvents(archive.job!.job_id)).toEqual(
+        events,
+      );
       expect(env.modelCalls).toBe(0);
     } finally {
       await env.close();

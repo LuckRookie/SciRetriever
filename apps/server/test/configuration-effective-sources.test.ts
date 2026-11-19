@@ -11,7 +11,7 @@ import { TypeScriptConfigurationOwner } from "../src/configuration/owner.js";
 import { runCli } from "../src/cli/main.js";
 
 describe("effective metadata source configuration", () => {
-  it("uses the saved per-source limit for topic and citation discovery", async () => {
+  it("uses the saved per-source limit for topic discovery and leaves citation discovery unlimited", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-source-limit-"));
     const owner = new TypeScriptConfigurationOwner(home);
     const topic = vi
@@ -65,7 +65,7 @@ describe("effective metadata source configuration", () => {
         { provider_name: "openalex", scan_limit: 7 },
       ]);
       expect(citations.mock.calls[0]![0].providers).toEqual([
-        { provider_name: "openalex", scan_limit: 7 },
+        { provider_name: "openalex", scan_limit: null },
       ]);
       expect(topic.mock.calls[1]![0].providers).toEqual([
         { provider_name: "openalex", scan_limit: 3 },

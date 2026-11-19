@@ -248,11 +248,7 @@ export class ProcessingTaskService {
     if (this.stopped) throw new ProcessingTaskError("processing-closed");
     if (intent === "start") {
       const job = await this.repository.requestStart(jobId);
-      if (!job) throw new ProcessingTaskError("processing-not-found");
-      if (job.status === "completed" || job.status === "cancelled")
-        throw new ProcessingTaskError("processing-terminal");
-      if (!["queued", "running"].includes(job.status))
-        throw new ProcessingTaskError("processing-resume-required");
+      if (!job || !["queued", "running"].includes(job.status)) return false;
       // An accepted request remains durable if shutdown begins during its write.
       if (this.stopped) return false;
     }
