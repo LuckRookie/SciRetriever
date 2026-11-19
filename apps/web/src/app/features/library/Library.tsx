@@ -56,7 +56,11 @@ import { useApi } from "../../data/query.js";
 import { useUrlState, navigate } from "../../data/url.js";
 import { preferences } from "../../data/preferences.js";
 import {
+  CITATION_SEED_LIMIT,
+  literatureChoice,
+  metadataTitleParts,
   paperAuthors,
+  paperFirstAuthor,
   paperTitle,
   paperTitleParts,
   readLibraryCounts,
@@ -579,9 +583,27 @@ export default function Library() {
       setOperation({ ids: [id], kind: "upload", file }),
     [],
   );
+  const { expandCitations } = shell;
+  /** Seeds for citation expansion, as the library has them (page specs “入库”). */
+  const seedsOf = useCallback(
+    (ids: Iterable<string>) =>
+      [...ids].map((id) => {
+        const item = known.get(id);
+        return item
+          ? literatureChoice(item)
+          : {
+              id,
+              title: metadataTitleParts(null),
+              author: "作者未提供",
+              year: null,
+            };
+      }),
+    [known],
+  );
   const onRowAction = useCallback(
     (id: string, title: string, kind: RowAction) => {
-      if (kind === "run")
+      if (kind === "cite") expandCitations(seedsOf([id]));
+      else if (kind === "run")
         setRunner({
           scope: { kind: "literatures", ids: [id] },
           label: `《${title}》`,
@@ -591,7 +613,7 @@ export default function Library() {
         setAcquire({ kind: "literatures", ids: [id], label: `《${title}》` });
       else setOperation({ ids: [id], kind });
     },
-    [],
+    [expandCitations, seedsOf],
   );
   const mutable = api.kind === "workspace";
   /** Right-click or the keyboard's menu key on a row opens its menu there. */
@@ -1321,6 +1343,18 @@ export default function Library() {
                         onAction: () => void operate("export", true),
                       },
                       {
+                        id: "cite",
+                        label: "扩展引用…",
+                        ...(shell.selected.size > CITATION_SEED_LIMIT
+                          ? {
+                              disabled: true,
+                              description: `最多以 ${CITATION_SEED_LIMIT.toLocaleString()} 篇为种子，请减少选择。`,
+                            }
+                          : {}),
+                        onAction: () =>
+                          expandCitations(seedsOf(shell.selected)),
+                      },
+                      {
                         id: "identity",
                         label: "核验文章身份",
                         onAction: () => void operate("identity", true),
@@ -1467,7 +1501,7 @@ export default function Library() {
 }
 /**
  * A paper's menu (page specs “文献库”): only what this paper can use, in the
- * order 获取 PDF, 生成全文, 加入文件夹, 导出书目, then “加工”. What it never
+ * order 获取 PDF, 生成全文, 加入文件夹, 导出书目, 扩展引用, then “加工”. What it never
  * needs is left out — 获取 PDF once it has one, 生成全文 once it has its full
  * text; what it cannot do yet stays, disabled, saying why (rule 12).
  */
@@ -1518,6 +1552,11 @@ function rowMenuItems(
       id: "export",
       label: "导出书目",
       onAction: () => act("export"),
+    },
+    {
+      id: "cite",
+      label: "扩展引用…",
+      onAction: () => act("cite"),
     },
     processingHeading,
     {
@@ -1987,7 +2026,7 @@ type CheckPointerDown = (
   index: number,
   event: ReactPointerEvent<HTMLElement>,
 ) => void;
-type RowAction = "run" | "folder" | "acquire" | "archive" | "export";
+type RowAction = "run" | "folder" | "acquire" | "archive" | "export" | "cite";
 type RowMenu = (id: string, x: number, y: number, keyboard: boolean) => void;
 /** A row shows at most three tags; the rest collapse into “+N”. */
 const ROW_TAGS = 3;
@@ -2000,18 +2039,6 @@ function rowAuthors(item: LiteratureSearchItem) {
     literature: {
       ...item.literature,
       metadata: { ...item.literature.metadata, authors: authors.slice(0, 3) },
-    },
-  })} 等`;
-}
-/** The table's author column: the first author, “等” for the rest. */
-function firstAuthor(item: LiteratureSearchItem) {
-  const authors = item.literature.metadata.authors;
-  if (authors.length <= 1) return paperAuthors(item);
-  return `${paperAuthors({
-    ...item,
-    literature: {
-      ...item.literature,
-      metadata: { ...item.literature.metadata, authors: authors.slice(0, 1) },
     },
   })} 等`;
 }
@@ -2183,7 +2210,7 @@ const LibraryRow = memo(function LibraryRow({
           )}
         </span>
         <span role="cell" className="library-table-cell paper-author">
-          {firstAuthor(item)}
+          {paperFirstAuthor(item)}
         </span>
         <span role="cell" className="library-table-cell paper-venue">
           <Venue name={m.venue} />

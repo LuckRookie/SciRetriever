@@ -104,6 +104,35 @@ export function paperAuthors(item: LiteratureSearchItem): string {
       .join(", ") || "作者未提供"
   );
 }
+/** The first author, “等” for the rest: a table column or a one-line citation. */
+export function paperFirstAuthor(item: LiteratureSearchItem): string {
+  const authors = item.literature.metadata.authors;
+  if (authors.length <= 1) return paperAuthors(item);
+  return `${paperAuthors({
+    ...item,
+    literature: {
+      ...item.literature,
+      metadata: { ...item.literature.metadata, authors: authors.slice(0, 1) },
+    },
+  })} 等`;
+}
+/** Citation expansion takes at most this many seeds (page specs “入库”). */
+export const CITATION_SEED_LIMIT = 1000;
+/** A paper as a person recognizes it: title · first author · year. */
+export interface LiteratureChoice {
+  id: string;
+  title: TitlePart[];
+  author: string;
+  year: number | null;
+}
+export function literatureChoice(item: LiteratureSearchItem): LiteratureChoice {
+  return {
+    id: item.literature.literature_id,
+    title: paperTitleParts(item),
+    author: paperFirstAuthor(item),
+    year: item.literature.metadata.publication_year ?? null,
+  };
+}
 /** One plain-text reference: authors. Title. Venue volume(issue), pages (year). DOI link. */
 export function paperCitation(item: LiteratureSearchItem): string {
   const m = item.literature.metadata,

@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react";
 import type { ReaderMode } from "../data/url.js";
+import type { LiteratureChoice } from "../data/library.js";
 import type { ReadingState } from "../../reading/state.js";
 import type {
   Theme,
@@ -18,6 +19,15 @@ export interface ShellState {
     title?: string,
   ): void;
   notify(message: string): void;
+  /**
+   * Page specs “入库 · 检索”: papers the library hands to citation expansion
+   * as its seeds. They stay in the page, never in the address; the intake
+   * page takes them once (`takeCitationSeeds`).
+   */
+  citationSeeds: readonly LiteratureChoice[] | null;
+  /** Opens 入库 → 检索 → 引用扩展 with these papers as the seeds. */
+  expandCitations(seeds: readonly LiteratureChoice[]): void;
+  takeCitationSeeds(): void;
   /**
    * Spec 1.3: on the reader page the shell's top bar holds the navigation
    * button and the paper tabs; the reader puts its controls into this slot.

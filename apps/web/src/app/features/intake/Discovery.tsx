@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { SourceDirectory } from "@sciretriever/contracts";
 import {
@@ -14,11 +14,14 @@ import {
   TechDetails,
   TextField,
 } from "../../components/index.js";
+import type { LiteratureChoice } from "../../data/library.js";
 import { useApi } from "../../data/query.js";
 import type { ApiClient } from "../../data/api.js";
 import type { JsonRecord } from "../../data/wire.js";
 import { readIntakeReport, type IntakeReport } from "../../data/intake.js";
 import { errorMessage } from "../../strings.js";
+import { useShell } from "../../shell/context.js";
+import { addSeeds, Seeds } from "./Seeds.js";
 import {
   readSourceDirectory,
   sourceDirectoryKey,
@@ -29,11 +32,15 @@ const reports = new WeakMap<
   { name: string; report: IntakeReport }[]
 >();
 
-/** “1 层 · 不限条数”; a filled limit is written instead of “不限条数”. */
+/**
+ * “6 篇种子 · 1 层 · 不限条数”; a filled limit is written instead of
+ * “不限条数”. The seed count leads when it is given.
+ */
 export function citationScope(
   depth: number,
   resultLimit: number,
   scanLimit: number,
+  seeds?: number,
 ): string {
   const limits = [
     Number.isFinite(scanLimit)
@@ -43,9 +50,11 @@ export function citationScope(
       ? `结果最多 ${resultLimit.toLocaleString()} 条`
       : null,
   ].filter(Boolean);
-  return [`${depth} 层`, ...(limits.length ? limits : ["不限条数"])].join(
-    " · ",
-  );
+  return [
+    ...(seeds === undefined ? [] : [`${seeds.toLocaleString()} 篇种子`]),
+    `${depth} 层`,
+    ...(limits.length ? limits : ["不限条数"]),
+  ].join(" · ");
 }
 
 /**
@@ -85,13 +94,18 @@ export function Discovery({
   onRun: (running: boolean, batch: string | null) => void;
 }) {
   const api = useApi(),
-    queries = useQueryClient();
-  const [mode, setMode] = useState("topic"),
+    queries = useQueryClient(),
+    shell = useShell();
+  // Seeds handed from the library open this form on 引用扩展 with them.
+  const handed = shell.citationSeeds;
+  const [mode, setMode] = useState(() => (handed ? "cite" : "topic")),
     [query, setQuery] = useState(""),
     [limit, setLimit] = useState(200),
     [from, setFrom] = useState(""),
     [to, setTo] = useState(""),
-    [seed, setSeed] = useState(""),
+    [seeds, setSeeds] = useState<LiteratureChoice[]>(() =>
+      addSeeds([], handed ?? []),
+    ),
     [direction, setDirection] = useState("references"),
     // Citation expansion is bounded by depth; its count limits are optional
     // and left out of the request when empty, meaning no limit (ADR 0064).
@@ -108,19 +122,20 @@ export function Discovery({
   const sources = directory.data
     ? discoverySources(directory.data, mode === "cite" ? "cite" : "topic")
     : null;
+  // Page specs “入库 · 检索”: no seeds, no expansion.
+  const unseeded = mode === "cite" && !seeds.length;
   const mutation = useMutation({
     mutationFn: async () => {
       if (mode === "topic" && !query.trim())
         throw new Error("请填写研究主题或检索式。");
-      if (mode === "cite" && !seed.trim())
-        throw new Error("请填写种子文献 ID。");
+      if (mode === "cite" && !seeds.length) throw new Error("先选种子文献");
       onRun(true, null);
       const response: JsonRecord = await api.request(
         "/api/discovery",
         mode === "cite"
           ? {
               kind: "citation",
-              seed_literature_id: seed.trim(),
+              seed_literature_ids: seeds.map((seed) => seed.id),
               direction,
               max_depth: depth,
               ...(Number.isFinite(resultLimit)
@@ -154,6 +169,16 @@ export function Discovery({
     },
     onError: () => onRun(false, null),
   });
+  useEffect(() => {
+    if (!handed) return;
+    // Taken once: coming back to this page later starts empty again.
+    shell.takeCitationSeeds();
+    if (mutation.isPending) return;
+    setMode("cite");
+    setSeeds(addSeeds([], handed));
+    mutation.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handed]);
   return (
     <div className="intake-discovery">
       <SegmentedControl
@@ -231,12 +256,14 @@ export function Discovery({
             </>
           ) : (
             <>
-              <Definition term="种子文献 ID" description="从这篇文献出发扩展。">
-                <TextField
-                  label="种子文献 ID"
-                  value={seed}
-                  onChange={setSeed}
-                  isRequired
+              <Definition
+                term="种子文献"
+                description="从文献库里选，从这些文献出发扩展。"
+              >
+                <Seeds
+                  seeds={seeds}
+                  onChange={setSeeds}
+                  isDisabled={mutation.isPending}
                 />
               </Definition>
               <Definition term="方向">
@@ -285,37 +312,42 @@ export function Discovery({
             </>
           )}
         </Definitions>
-        <Button
-          variant="primary"
-          isDisabled={mutation.isPending}
-          confirm={{
-            title: "确认发现文献",
-            description:
-              "将通过下列文献来源查找并接纳元数据，不会自动获取 PDF。",
-            scope:
-              mode === "cite"
-                ? citationScope(depth, resultLimit, citeScan)
-                : `每来源最多 ${limit} 条`,
-            // Page specs “入库”: the sources this run will ask, by name.
-            service: sources
-              ? sources.length
-                ? sources.join("、")
-                : "没有在用的来源，可在“设置 · 获取 PDF”里补上配置"
-              : "已配置的文献来源",
-            confirmLabel: mode === "cite" ? "开始扩展" : "开始发现",
-          }}
-          // Discovery can take minutes; the dialog closes at once and the
-          // batch's progress shows in the records below.
-          onPress={() => {
-            mutation.mutate();
-          }}
-        >
-          {mutation.isPending
-            ? "正在发现…"
-            : mode === "cite"
-              ? "开始扩展"
-              : "开始发现"}
-        </Button>
+        <div className="intake-submit">
+          <Button
+            variant="primary"
+            isDisabled={mutation.isPending || unseeded}
+            confirm={{
+              title: "确认发现文献",
+              description:
+                "将通过下列文献来源查找并接纳元数据，不会自动获取 PDF。",
+              scope:
+                mode === "cite"
+                  ? citationScope(depth, resultLimit, citeScan, seeds.length)
+                  : `每来源最多 ${limit} 条`,
+              // Page specs “入库”: the sources this run will ask, by name.
+              service: sources
+                ? sources.length
+                  ? sources.join("、")
+                  : "没有在用的来源，可在“设置 · 获取 PDF”里补上配置"
+                : "已配置的文献来源",
+              confirmLabel: mode === "cite" ? "开始扩展" : "开始发现",
+            }}
+            // Discovery can take minutes; the dialog closes at once and the
+            // batch's progress shows in the records below.
+            onPress={() => {
+              mutation.mutate();
+            }}
+          >
+            {mutation.isPending
+              ? "正在发现…"
+              : mode === "cite"
+                ? "开始扩展"
+                : "开始发现"}
+          </Button>
+          {unseeded && !mutation.isPending ? (
+            <span className="intake-submit-note">先选种子文献</span>
+          ) : null}
+        </div>
         {mutation.isPending ? (
           <p role="status">
             正在查找，进度见下方入库记录；完成前请不要关闭本页。

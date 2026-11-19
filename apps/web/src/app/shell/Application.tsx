@@ -4,6 +4,7 @@ import {
   Suspense,
   createElement,
   lazy,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -58,6 +59,7 @@ import {
   readLibraryCounts,
   readLiterature,
   paperTitle,
+  type LiteratureChoice,
 } from "../data/library.js";
 import { recordReadingOpen } from "../data/folders.js";
 import { runningTaskCount, taskCountText } from "../data/tasks.js";
@@ -306,7 +308,19 @@ function Workspace({ api }: { api: ApiClient }) {
     [readerFocus, setReaderFocus] = useState(false),
     // In focus mode, the top bar shown over the desk for a while (spec 1.7).
     [peek, setPeek] = useState(false),
+    // Seeds handed from the library to citation expansion, page state only.
+    [citationSeeds, setCitationSeeds] = useState<
+      readonly LiteratureChoice[] | null
+    >(null),
     topBar = useRef<HTMLElement>(null);
+  const expandCitations = useCallback((seeds: readonly LiteratureChoice[]) => {
+    setCitationSeeds(seeds);
+    navigate(
+      { view: "disc", literature: null, session: null, results: null },
+      { clearSource: true },
+    );
+  }, []);
+  const takeCitationSeeds = useCallback(() => setCitationSeeds(null), []);
   const [width, setWidth] = useState(() => {
     const value = preferences.read("sciretriever:panel:navigation:v1");
     return value && /^\d+px$/.test(value)
@@ -990,6 +1004,9 @@ function Workspace({ api }: { api: ApiClient }) {
         setSelected,
         openPaper,
         notify,
+        citationSeeds,
+        expandCitations,
+        takeCitationSeeds,
         readerBar: readerPage ? readerBar : null,
         readerBarWidth: readerPage ? readerBarWidth : 0,
         readerFocus: readerPage && readerFocus,

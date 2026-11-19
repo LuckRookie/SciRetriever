@@ -1466,6 +1466,123 @@
   .intake-discovery > .intake-history {
     justify-self: stretch;
   }
+  /* Picking a paper from the library (design core rule 8). */
+  .literature-picker,
+  .literature-search {
+    display: grid;
+    gap: var(--space-2);
+    width: min(100%, 560px);
+  }
+  .literature-picker[data-chosen="true"] {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-3);
+  }
+  .literature-picker-chosen {
+    display: grid;
+    margin: 0;
+    min-width: 0;
+  }
+  .literature-picker-title {
+    font: 500 var(--text-literature) / var(--lh-literature) var(--serif);
+  }
+  .literature-picker-citation,
+  .literature-picker-empty,
+  .literature-picker-mark {
+    color: var(--fg2);
+    font-size: var(--text-caption);
+  }
+  .literature-picker-empty {
+    margin: 0;
+  }
+  .literature-picker-list {
+    margin: 0;
+    padding: var(--space-1);
+    list-style: none;
+    border-radius: var(--radius-lg);
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-pop);
+  }
+  .literature-picker-list > li {
+    display: grid;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+  .literature-picker-list > li:is(:hover, :focus-visible) {
+    background: var(--hover);
+    outline: none;
+  }
+  .literature-picker-list > li:focus-visible {
+    box-shadow: 0 0 0 2px var(--focus-ring);
+  }
+  .literature-picker-list > li[aria-selected="true"] {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .literature-picker-list
+    > li[aria-selected="true"]
+    > :not(.literature-picker-mark) {
+    grid-column: 1;
+  }
+  .literature-picker-mark {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    align-self: center;
+  }
+  /* Citation expansion's seeds: chosen one by one, listed under the search. */
+  .seed-picker {
+    display: grid;
+    gap: var(--space-3);
+    width: min(100%, 560px);
+  }
+  .seed-picker > .literature-search {
+    width: 100%;
+  }
+  .seed-list {
+    display: grid;
+    gap: var(--space-1);
+  }
+  .seed-list-head {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    margin: 0;
+    color: var(--fg2);
+    font-size: var(--text-secondary);
+  }
+  .seed-list ul {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .seed-list li {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding-block: var(--space-2);
+    border-bottom: 1px solid var(--line);
+  }
+  .seed-list li > p {
+    display: grid;
+    min-width: 0;
+    margin: 0;
+  }
+  .seed-list > .ui-button {
+    justify-self: start;
+  }
+  .intake-submit {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+  .intake-submit-note {
+    color: var(--fg2);
+    font-size: var(--text-secondary);
+  }
   .intake-drop {
     display: grid;
     gap: var(--space-2);

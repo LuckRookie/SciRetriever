@@ -77,9 +77,15 @@ it("keeps discovery and import explicit and uploads a selected PDF without hidde
       year_to: null,
     });
     await w.page.getByRole("tab", { name: "引用扩展", exact: true }).click();
+    // Seeds are picked from the library; a pasted number finds the paper.
     await w.page
-      .getByRole("textbox", { name: "种子文献 ID" })
+      .getByRole("searchbox", { name: "种子文献", exact: true })
       .fill(w.env.parseRequest.literature_id);
+    await w.page
+      .getByRole("listbox", { name: "文献候选" })
+      .getByRole("option")
+      .first()
+      .click();
     await w.page.getByRole("button", { name: "开始扩展", exact: true }).click();
     await w.page
       .getByRole("dialog", { name: "确认发现文献" })
@@ -88,7 +94,7 @@ it("keeps discovery and import explicit and uploads a selected PDF without hidde
     await expect.poll(() => discoveries.length).toBe(2);
     expect(discoveries[1]).toMatchObject({
       kind: "citation",
-      seed_literature_id: w.env.parseRequest.literature_id,
+      seed_literature_ids: [w.env.parseRequest.literature_id],
       direction: "references",
     });
     // An export file goes through its batch and the batch's report.
@@ -320,8 +326,13 @@ it("takes any scan limit of at least 1, 50,000 included, as the discovery's scan
     await page.getByRole("tab", { name: "引用扩展", exact: true }).click();
     await page.getByText("从种子往外扩展几层引用。", { exact: true }).waitFor();
     await page
-      .getByRole("textbox", { name: "种子文献 ID" })
+      .getByRole("searchbox", { name: "种子文献", exact: true })
       .fill(w.env.parseRequest.literature_id);
+    await page
+      .getByRole("listbox", { name: "文献候选" })
+      .getByRole("option")
+      .first()
+      .click();
     expect(
       await page
         .getByRole("textbox", { name: "层数", exact: true })
@@ -348,12 +359,12 @@ it("takes any scan limit of at least 1, 50,000 included, as the discovery's scan
     ).toBe(1);
     await page.getByRole("button", { name: "开始扩展", exact: true }).click();
     const expand = page.getByRole("dialog", { name: "确认发现文献" });
-    await expand.getByText("处理范围：1 层 · 不限条数").waitFor();
+    await expand.getByText("处理范围：1 篇种子 · 1 层 · 不限条数").waitFor();
     await expand.getByRole("button", { name: "开始扩展", exact: true }).click();
     await expect.poll(() => discoveries.length).toBe(2);
     expect(discoveries[1]).toEqual({
       kind: "citation",
-      seed_literature_id: w.env.parseRequest.literature_id,
+      seed_literature_ids: [w.env.parseRequest.literature_id],
       direction: "references",
       max_depth: 1,
     });
@@ -365,12 +376,14 @@ it("takes any scan limit of at least 1, 50,000 included, as the discovery's scan
     await cited.fill("50000");
     await cited.press("Tab");
     await page.getByRole("button", { name: "开始扩展", exact: true }).click();
-    await expand.getByText("处理范围：3 层 · 每来源最多 50,000 条").waitFor();
+    await expand
+      .getByText("处理范围：1 篇种子 · 3 层 · 每来源最多 50,000 条")
+      .waitFor();
     await expand.getByRole("button", { name: "开始扩展", exact: true }).click();
     await expect.poll(() => discoveries.length).toBe(3);
     expect(discoveries[2]).toEqual({
       kind: "citation",
-      seed_literature_id: w.env.parseRequest.literature_id,
+      seed_literature_ids: [w.env.parseRequest.literature_id],
       direction: "references",
       max_depth: 3,
       scan_limit: 50000,

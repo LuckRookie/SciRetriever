@@ -213,6 +213,7 @@ it("lists only what a paper can use in its menu, by what it has, and the same on
     expect(await menuContent(page)).toEqual([
       "加入文件夹…",
       "导出书目",
+      "扩展引用…",
       "[加工]",
       "运行算子…",
     ]);
@@ -228,6 +229,7 @@ it("lists only what a paper can use in its menu, by what it has, and the same on
       "生成全文（停用）",
       "加入文件夹…",
       "导出书目",
+      "扩展引用…",
       "[加工]",
       "运行算子…（停用）",
     ]);
@@ -244,6 +246,7 @@ it("lists only what a paper can use in its menu, by what it has, and the same on
       "生成全文（停用）",
       "加入文件夹…",
       "导出书目",
+      "扩展引用…",
       "[加工]",
       "运行算子…（停用）",
     ]);

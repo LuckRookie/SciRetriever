@@ -312,10 +312,11 @@ it("makes the first usable of 获取 PDF and 生成全文 the selection bar's pr
       "更多",
     ]);
     expect(await primary()).toEqual(["获取 PDF 1"]);
-    // “更多”: 导出书目, 核验文章身份, then the “加工” group.
+    // “更多”: 导出书目, 扩展引用…, 核验文章身份, then the “加工” group.
     await bar.getByRole("button", { name: "更多", exact: true }).click();
     expect(await menuContent(page)).toEqual([
       "导出书目",
+      "扩展引用…",
       "核验文章身份",
       "[加工]",
       "运行算子 0",
@@ -333,7 +334,8 @@ it("makes the first usable of 获取 PDF and 生成全文 the selection bar's pr
     expect(await primary()).toEqual([]);
     await page.getByRole("button", { name: "取消选择", exact: true }).click();
     await bar.waitFor({ state: "detached" });
-    // The row's menu: 获取 PDF, 生成全文, 加入文件夹, 导出书目, then “加工”.
+    // The row's menu: 获取 PDF, 生成全文, 加入文件夹, 导出书目, 扩展引用…,
+    // then “加工”.
     await missing.hover();
     await missing
       .getByRole("button", { name: "文献操作", exact: true })
@@ -343,6 +345,7 @@ it("makes the first usable of 获取 PDF and 生成全文 the selection bar's pr
       "生成全文",
       "加入文件夹…",
       "导出书目",
+      "扩展引用…",
       "[加工]",
       "运行算子…",
     ]);
