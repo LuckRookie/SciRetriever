@@ -389,6 +389,8 @@ IntakePageResult
 
 工作台界面地址的 `setting` 白名单包含 `devices`，`/?view=set&setting=devices` 按原 Web 登录规则进入设备设置分区；未知分区仍为 `invalid-ui-location`。这不改变 API 或设备令牌的权限。
 
+浏览器导航到无效的工作台地址（`GET /`、`Accept` 含 `text/html`、参数不合白名单）时，服务端照常返回静态的 HTML 入口，由网页显示“找不到这个页面”（[阅读体验](../web/reading-experience.md) 9.0）；参数不回显进响应。其他请求对无效地址仍返回 400 `invalid-ui-location`，API 与静态资源的校验不变。
+
 #### 2.4.3 传输：请求时长与 Content-Type
 
 本节对正式 Web 的全部 HTTP 路由生效。
