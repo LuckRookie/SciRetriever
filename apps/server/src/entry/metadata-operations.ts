@@ -20,10 +20,24 @@ export function createMetadataOperations(app: Application) {
       ) {
         const r = inputRecord(
           value,
-          ["kind", "seed_literature_id", "direction"],
-          ["max_depth", "result_limit", "scan_limit"],
+          ["kind", "direction"],
+          [
+            "seed_literature_id",
+            "seed_literature_ids",
+            "max_depth",
+            "result_limit",
+            "scan_limit",
+          ],
         );
-        const seed = parseLiteratureId(r.seed_literature_id);
+        const singleSeed = Object.hasOwn(r, "seed_literature_id");
+        if (singleSeed === Object.hasOwn(r, "seed_literature_ids"))
+          throw new ContractValidationError();
+        const seeds = singleSeed
+          ? [r.seed_literature_id]
+          : r.seed_literature_ids;
+        if (!Array.isArray(seeds) || seeds.length < 1 || seeds.length > 1000)
+          throw new ContractValidationError();
+        const seedIds = [...new Set(Array.from(seeds, parseLiteratureId))];
         if (!["references", "cited-by"].includes(String(r.direction)))
           throw new ContractValidationError();
         if (!app.metadata.reference_selection.length)
@@ -32,7 +46,7 @@ export function createMetadataOperations(app: Application) {
           app,
           {
             kind: "citation",
-            seed_literature_ids: [seed],
+            seed_literature_ids: seedIds,
             direction: r.direction as "references" | "cited-by",
             max_depth: r.max_depth,
             result_limit: r.result_limit,

@@ -1,5 +1,4 @@
 import { citationLimitsSource } from "./citation-limits-fixture.js";
-import { parseIntakeBatchId } from "@sciretriever/contracts";
 import { SCHEMA_VERSION } from "../src/storage/sqlite/schema.js";
 import { withRawParserFixture } from "./raw-parser-fixture.js";
 import {
@@ -12,6 +11,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  parseIntakeBatchId,
+  parseLiteratureId,
+  parseMetaLiteratureId,
   parseProvenance,
   parseWorkbenchView,
   sha256,
@@ -690,6 +692,105 @@ describe("production task workbench composition", () => {
       );
       expect(env.discoveryCalls).toBe(0);
       run.mockRestore();
+    } finally {
+      await env.close();
+    }
+  });
+
+  it("runs multiple citation seeds in a single task and stores them once in input order", async () => {
+    const env = await fixture();
+    try {
+      const { database, jobs } = env.server.application;
+      const first = parseLiteratureId("00000000-0000-0000-0000-000000000010");
+      const second = FIXTURE_LITERATURE.literature_id;
+      await database.putLiterature(FIXTURE_LITERATURE);
+      await database.putLiterature({
+        ...FIXTURE_LITERATURE,
+        literature_id: first,
+        meta_literature_id: parseMetaLiteratureId(randomUUID()),
+        metadata: {
+          ...FIXTURE_LITERATURE.metadata,
+          title: "Second synthetic citation seed",
+          identifiers: [{ namespace: "doi", value: "10.5555/http-seed" }],
+        },
+      });
+      const response = await env.call("/api/discovery", {
+        kind: "citation",
+        direction: "references",
+        seed_literature_ids: [first, second, first, second],
+      });
+      expect(response.status, JSON.stringify(response.value)).toBe(200);
+      const report = response.value.report as {
+        job_id: string;
+        discovery_run_id: string;
+      };
+      expect(await jobs!.listJobs()).toMatchObject([
+        {
+          job_id: report.job_id,
+          status: "completed",
+          selector: {
+            request: {
+              operations: [
+                {
+                  operation: "acquire-metadata",
+                  request: { seed_literature_ids: [first, second] },
+                },
+              ],
+            },
+          },
+        },
+      ]);
+      expect(
+        await database.getDiscovery(report.discovery_run_id),
+      ).toMatchObject({
+        run: {
+          kind: "citation",
+          status: "COMPLETED",
+          seed_literature_ids: [first, second],
+        },
+      });
+      expect((await database.snapshotCounts()).tables.discovery_runs).toBe(1);
+    } finally {
+      await env.close();
+    }
+  });
+
+  it("rejects ambiguous or invalid citation seeds without creating a task or run", async () => {
+    const env = await fixture();
+    try {
+      const seed = FIXTURE_LITERATURE.literature_id;
+      for (const [name, fields] of [
+        [
+          "both seed fields",
+          { seed_literature_id: seed, seed_literature_ids: [seed] },
+        ],
+        ["neither seed field", {}],
+        ["empty array", { seed_literature_ids: [] }],
+        ["non-array", { seed_literature_ids: seed }],
+        [
+          "more than 1000 entries",
+          { seed_literature_ids: Array.from({ length: 1001 }, () => seed) },
+        ],
+        [
+          "invalid array element",
+          { seed_literature_ids: [seed, "not a literature ID"] },
+        ],
+        ["invalid single ID", { seed_literature_id: "not a literature ID" }],
+      ] as const) {
+        expect(
+          await env.call("/api/discovery", {
+            kind: "citation",
+            direction: "references",
+            ...fields,
+          }),
+          name,
+        ).toEqual({ status: 400, value: { code: "invalid-command" } });
+      }
+      expect(await env.server.application.jobs!.listJobs()).toEqual([]);
+      expect(
+        (await env.server.application.database.snapshotCounts()).tables
+          .discovery_runs,
+      ).toBe(0);
     } finally {
       await env.close();
     }
