@@ -35,7 +35,7 @@ sciretriever storage schema-init --catalog /absolute/data/catalog.sqlite --json
 
 ## 状态投影 schema 13
 
-当前程序只打开精确匹配的 13 布局。先停止服务与 queued/running 任务、保存一致性备份，并在独立副本演练；构建服务端后，对绝对路径运行：
+这一步把库迁到 13 布局，之后依次运行 `scripts/migrate-reading-marks-v14.mjs`、`scripts/migrate-intake-v15.mjs` 与下文各节的迁移，到当前的 19；当前程序只打开 19。先停止服务与 queued/running 任务、保存一致性备份，并在独立副本演练；构建服务端后，对绝对路径运行：
 
 ```sh
 # 仅当输入还是精确匹配的 schema 11，先做固定的建档转换。
@@ -48,7 +48,7 @@ node scripts/migrate-library-state-v13.mjs /absolute/path/to/offline-copy.sqlite
 
 ## 统一入库与两级文本 schema 16、17
 
-当前程序只打开精确匹配的 17 布局。schema 15 的库依次运行两个离线迁移；先停止服务与 queued/running 任务、保存一致性备份，并在独立副本演练，构建服务端后对绝对路径运行：
+schema 15 的库先依次运行两个离线迁移到 17，再按下一节迁移到 19；先停止服务与 queued/running 任务、保存一致性备份，并在独立副本演练，构建服务端后对绝对路径运行：
 
 ```sh
 # 输入须是精确匹配的 schema 15。
@@ -67,6 +67,19 @@ sciretriever form-drafts start --request request.json
 ```
 
 请求的范围用文献库筛选写明（[文档与证据 8.11](../architecture/technical/04-document-evidence.md#811-补形成初稿的维护操作)）；它不解析、不调用模型。
+
+## 用户整理与引用上限 schema 18、19
+
+当前程序只打开精确匹配的 19 布局。schema 17 的库依次运行两个离线迁移，准备与核对同上一节：
+
+```sh
+# 输入须是精确匹配的 schema 17。
+node scripts/migrate-user-organization-v18.mjs /absolute/path/to/offline-copy.sqlite
+# 输入须是精确匹配的 schema 18。
+node scripts/migrate-citation-limits-v19.mjs /absolute/path/to/offline-copy.sqlite
+```
+
+17 → 18 加入保存的筛选、批注的重新定位与设备连接的类型；18 → 19 让引用扩展的结果上限与扫描上限可以不填，已有上限原样保留。布局见[存储技术合同](../architecture/technical/07-versioned-storage.md#41-当前-schema-与显式转换)。
 
 ## Web 守护的首次切换与程序升级
 

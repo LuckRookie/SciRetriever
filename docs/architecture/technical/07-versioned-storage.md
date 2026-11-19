@@ -12,7 +12,7 @@
 
 Catalog v6 已为单篇知识产物增加独立表与精确依赖；Catalog v7 允许版本化集合综合产物，Catalog v8 append 独立知识检索投影。正式 operator 可用本篇 §4.1.11 的精确目标 CLI 显式初始化或升级；历史单步合成门禁保留。execution 子 schema 仍单独计版本。本篇保留现有表、文件和兼容语义；文档不授权代理执行真实用户数据迁移。
 
-> 当前采用 [ADR 0037 第二版](../decisions/0037-literature-archive-and-proofread-text.md) 的原始解析、校订稿、结构、标签、建档与快照存储。唯一 schema.ts 的当前编号为 16；显式离线迁移与设备认证存储见第 8 节。打开旧库不隐式升级，正式库迁移须另行授权。
+> 当前采用 [ADR 0037 第二版](../decisions/0037-literature-archive-and-proofread-text.md) 的原始解析、校订稿、结构、标签、建档与快照存储。唯一 schema.ts 的当前编号为 19（第 4.1 节）；显式离线迁移与设备认证存储见第 8 节。打开旧库不隐式升级，正式库迁移须另行授权。
 
 本篇目录：
 
@@ -105,16 +105,16 @@ Repository 负责在这些关系行和公开 TypeScript contract/read projection
 
 外部发现使用以下表组：
 
-| 表组                                                    | 保存内容与关键约束                                                                                         |
-| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `discovery_runs`                                        | run ID、`topic`/`citation` kind、status 和开始时间；创建即 `RUNNING`，终态后不可修改                       |
-| `topic_discovery_inputs`                                | 每个 topic run 唯一的 query、year_from、year_to 普通列                                                     |
-| `citation_discovery_inputs`、`citation_discovery_seeds` | 每个 citation run 唯一的方向、max_depth、result_limit，以及按 ordinal 保存的具体 seed LiteratureId         |
-| `discovery_run_providers`                               | run 内 Provider ordinal、稳定名称和整个 Run 的 scan_limit；同一 Provider 每 run 唯一                       |
-| `discovery_source_results`                              | 每个 run/provider 唯一的 `EXHAUSTED`、`SCAN_LIMIT_REACHED` 或 `FAILED`，以及仅失败时存在的稳定脱敏 failure |
-| `discovery_results`                                     | `(discovery_run_id, meta_literature_id)` 唯一的已接纳结果                                                  |
-| `topic_discovery_causes`                                | 结果与实际 `MetadataObservation` 的类型化来源关联                                                          |
-| `citation_discovery_causes`                             | 结果与本次发现时实际 source/target Literature、正 depth 的历史原因；不以 ReferenceId 为长期外键            |
+| 表组                                                    | 保存内容与关键约束                                                                                                                                                                                                                                                            |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `discovery_runs`                                        | run ID、`topic`/`citation` kind、status 和开始时间；创建即 `RUNNING`，终态后不可修改                                                                                                                                                                                          |
+| `topic_discovery_inputs`                                | 每个 topic run 唯一的 query、year_from、year_to 普通列                                                                                                                                                                                                                        |
+| `citation_discovery_inputs`、`citation_discovery_seeds` | 每个 citation run 唯一的方向、max_depth、result_limit（NULL 为不限，[ADR 0064](../decisions/0064-citation-expansion-bounded-by-depth.md)），以及按 ordinal 保存的具体 seed LiteratureId                                                                                       |
+| `discovery_run_providers`                               | run 内 Provider ordinal、稳定名称、所属 Run 的 kind 和整个 Run 的 scan_limit；同一 Provider 每 run 唯一；scan_limit 只在 citation Run 上可为 NULL（不限），由 `CHECK(kind='citation' OR scan_limit IS NOT NULL)` 与到 `discovery_runs(discovery_run_id, kind)` 的复合外键保证 |
+| `discovery_source_results`                              | 每个 run/provider 唯一的 `EXHAUSTED`、`SCAN_LIMIT_REACHED` 或 `FAILED`，以及仅失败时存在的稳定脱敏 failure                                                                                                                                                                    |
+| `discovery_results`                                     | `(discovery_run_id, meta_literature_id)` 唯一的已接纳结果                                                                                                                                                                                                                     |
+| `topic_discovery_causes`                                | 结果与实际 `MetadataObservation` 的类型化来源关联                                                                                                                                                                                                                             |
+| `citation_discovery_causes`                             | 结果与本次发现时实际 source/target Literature、正 depth 的历史原因；不以 ReferenceId 为长期外键                                                                                                                                                                               |
 
 `DiscoveryRun` 不保存 `finished_at`、`CREATED` 或 `NO_TARGET`。零结果可以 `COMPLETED`；用户提前停止或恢复时发现遗留 `RUNNING` 后转为 `INTERRUPTED`。中断时已经完成的 source result 和已接纳 result/cause 保留，未完成 Provider 不生成 source result。Topic cause 指向长期不可变 observation；citation cause 是不可变运行历史，即使以后当前 Reference 因失去全部 support 被删除也继续存在，但它本身不是 ReferenceSupport。
 
@@ -418,7 +418,7 @@ v1 文献事实与 v2 job/attempt/event/candidate/receipt 运行事实使用显�
 
 ### 4.1 当前 schema 与显式转换
 
-`storage/sqlite/schema.ts` 是唯一当前结构定义，内部标识 18 与精确指纹共同验证；16、17 的清单冻结保留，作为迁移的精确输入。启动不自动升级旧库。15 → 16（统一入库，`scripts/migrate-import-v16.mjs`）、16 → 17（两级文本，`scripts/migrate-draft-text-v17.mjs`）与 17 → 18（用户整理与入库登记，`scripts/migrate-user-organization-v18.mjs`：加入 `saved_filters`、`reading_mark_places`、`device_connections.kind`，并按新约束重建 `intake_batch_objects`）各有专用离线迁移：精确输入布局，拒绝运行中的任务与建档，事务内重建并核对完整布局、完整性、外键与全部旧表行数，失败时库保持原布局、可以重跑；16 → 17 原地重建 `document_versions`，校订稿行、内容版本与加工结果的过时状态不变，不形成初稿（补形成见[文档与证据 8.11](04-document-evidence.md#811-补形成初稿的维护操作)）。状态投影 12 → 13 的专用离线迁移增加失效提示及索引、替换触发器和身份，并核对完整布局、完整性、全部旧表行数及外键，不改文献资产或重建正文；已运行的任务须先停止。旧 11 → 12 建档转换仍固定到 12，再显式执行状态投影转换；历史布局只作为这些离线工具的精确输入，不被运行时接受。操作步骤归[初始化与恢复指南](../../guides/upgrade.md#状态投影-schema-13)。`initializeCatalogSchema` 仅创建空目标；未知/旧结构拒绝。转换不恢复运行时 schema-v\* 兼容或逐级自动迁移。
+`storage/sqlite/schema.ts` 是唯一当前结构定义，内部标识 19 与精确指纹共同验证；16、17、18 的清单冻结保留，作为迁移的精确输入。启动不自动升级旧库。15 → 16（统一入库，`scripts/migrate-import-v16.mjs`）、16 → 17（两级文本，`scripts/migrate-draft-text-v17.mjs`）与 17 → 18（用户整理与入库登记，`scripts/migrate-user-organization-v18.mjs`：加入 `saved_filters`、`reading_mark_places`、`device_connections.kind`，并按新约束重建 `intake_batch_objects`）与 18 → 19（引用扩展上限可不填，`scripts/migrate-citation-limits-v19.mjs`：只重建 `citation_discovery_inputs` 与 `discovery_run_providers`，允许上限为 NULL，provider 行加入所属 Run 的 kind，已有数值原样保留）各有专用离线迁移：精确输入布局，拒绝运行中的任务与建档，事务内重建并核对完整布局、完整性、外键与全部旧表行数，失败时库保持原布局、可以重跑；16 → 17 原地重建 `document_versions`，校订稿行、内容版本与加工结果的过时状态不变，不形成初稿（补形成见[文档与证据 8.11](04-document-evidence.md#811-补形成初稿的维护操作)）。状态投影 12 → 13 的专用离线迁移增加失效提示及索引、替换触发器和身份，并核对完整布局、完整性、全部旧表行数及外键，不改文献资产或重建正文；已运行的任务须先停止。旧 11 → 12 建档转换仍固定到 12，再显式执行状态投影转换；历史布局只作为这些离线工具的精确输入，不被运行时接受。操作步骤归[初始化与恢复指南](../../guides/upgrade.md#状态投影-schema-13)。`initializeCatalogSchema` 仅创建空目标；未知/旧结构拒绝。转换不恢复运行时 schema-v\* 兼容或逐级自动迁移。
 
 Owner 已授权在转换副本删除旧总结、旧知识、旧算子结果和 markdown-utf8-v1 文档；VLM Markdown 经验证登记为原始解析，共享 PDF/图片不能删除。未知事实、外部回执引用等超出删除范围的依赖必须拒绝并报告。切换仍须单独确认，并先处理备份后的源库增量。
 
