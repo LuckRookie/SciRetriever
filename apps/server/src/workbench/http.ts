@@ -331,6 +331,19 @@ class WorkbenchInputError extends Error {
 function invalidInput(): never {
   throw new WorkbenchInputError();
 }
+function acceptsHtml(accept: string | undefined): boolean {
+  return (
+    accept?.split(",").some((range) => {
+      const [type, ...parameters] = range.split(";");
+      return (
+        type?.trim().toLowerCase() === "text/html" &&
+        !parameters.some((parameter) =>
+          /^\s*q\s*=\s*0(?:\.0*)?\s*$/iu.test(parameter),
+        )
+      );
+    }) ?? false
+  );
+}
 function validUiLocation(url: URL): boolean {
   const keys = [...url.searchParams.keys()];
   if (
@@ -1188,7 +1201,7 @@ export async function startWorkbenchHttp(
         equal(part, `${cookieName}=${cookie}`),
       );
       if (request.method === "GET" && pathname === "/") {
-        if (!validUiLocation(url)) {
+        if (!validUiLocation(url) && !acceptsHtml(request.headers.accept)) {
           json(response, 400, { code: "invalid-ui-location" });
           return;
         }

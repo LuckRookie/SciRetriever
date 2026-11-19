@@ -939,21 +939,38 @@ it("lets authenticated Web clients download instructions and skill with the same
   }
 }, 30000);
 
-it("accepts the devices settings deep link and keeps unknown settings rejected", async () => {
+it("serves the devices settings entry for navigation and rejects unknown settings for JSON clients", async () => {
   const f = await fixture();
   try {
-    const good = await f.send("/?view=set&setting=devices", undefined, {
-      Cookie: f.cookie,
-    });
-    expect(good.status).toBe(200);
-    expect(await good.text()).toBe("fixture");
-    const unknown = await f.send(
-      "/?view=set&setting=unknown-devices",
+    const navigationHeaders = { Cookie: f.cookie, Accept: "text/html" };
+    const good = await f.send(
+      "/?view=set&setting=devices",
       undefined,
-      { Cookie: f.cookie },
+      navigationHeaders,
     );
+    expect(good.status).toBe(200);
+    const entryBytes = Buffer.from(await good.arrayBuffer());
+    expect(entryBytes.toString()).toBe("fixture");
+
+    const probe = "unknown-devices-reflection-probe-91bc";
+    const path = `/?view=set&setting=${probe}`;
+    const unknown = await f.send(path, undefined, {
+      Cookie: f.cookie,
+      Accept: "application/json, text/html;q=0",
+    });
     expect(unknown.status).toBe(400);
     expect((await unknown.json()).code).toBe("invalid-ui-location");
+
+    const navigation = await f.send(path, undefined, navigationHeaders);
+    expect(navigation.status).toBe(200);
+    expect(navigation.headers.get("content-type")).toBe("text/html");
+    expect(navigation.headers.getSetCookie()).toEqual(
+      good.headers.getSetCookie(),
+    );
+    const navigationBytes = Buffer.from(await navigation.arrayBuffer());
+    expect(navigationBytes).toEqual(entryBytes);
+    expect(navigationBytes.toString()).not.toContain(probe);
+    expect(JSON.stringify([...navigation.headers])).not.toContain(probe);
   } finally {
     await f.close();
   }

@@ -110,6 +110,17 @@ it("authenticates the root React entry before granting the workbench cookie and 
         ).status,
       ).toBe(200);
     }
+    const navigationHeaders = {
+      Cookie: auth,
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    };
+    const entry = await fetch(server.origin, { headers: navigationHeaders });
+    expect(entry.status).toBe(200);
+    expect(entry.headers.get("content-type")).toBe("text/html");
+    expect(entry.headers.getSetCookie()).toHaveLength(1);
+    const entryBytes = Buffer.from(await entry.arrayBuffer());
+    const stableHeaders = (response: Response) =>
+      [...response.headers].filter(([name]) => name !== "date");
     for (const query of [
       "view=web&session=%2Fetc%2Fpasswd",
       "view=web&article=bad%20id",
@@ -125,13 +136,29 @@ it("authenticates the root React entry before granting the workbench cookie and 
       "region=%5B-1,0,2000,3%5D",
       "processor=unknown",
       "snapshot=bad%20id",
+      "literature=synthetic-paper&reader=text",
     ]) {
-      const response = await fetch(`${server.origin}/?${query}`, {
+      const url = `${server.origin}/?${query}`;
+      const response = await fetch(url, {
         headers: { Cookie: auth },
       });
       expect(response.status, query).toBe(400);
-      expect(await response.json()).toEqual({ code: "invalid-ui-location" });
-      expect(response.headers.has("set-cookie")).toBe(false);
+      expect(response.headers.get("content-type"), query).toBe(
+        "application/json; charset=utf-8",
+      );
+      expect(await response.json(), query).toEqual({
+        code: "invalid-ui-location",
+      });
+      expect(response.headers.has("set-cookie"), query).toBe(false);
+      const navigation = await fetch(url, {
+        headers: navigationHeaders,
+        redirect: "manual",
+      });
+      expect(navigation.status, query).toBe(200);
+      expect(stableHeaders(navigation), query).toEqual(stableHeaders(entry));
+      expect(Buffer.from(await navigation.arrayBuffer()), query).toEqual(
+        entryBytes,
+      );
     }
     expect(
       await (await fetch(server.origin, { headers: { Cookie: auth } })).text(),
