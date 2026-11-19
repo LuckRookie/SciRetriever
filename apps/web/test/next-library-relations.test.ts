@@ -42,6 +42,23 @@ it("restores search and detail history and reads more than 25 references with th
         sort: "title-asc",
       })
     ).items;
+    // The references below are served with their evidence by these routes;
+    // the stored ones have no support, so the stored details count none.
+    // The paper's details give the count the served references have, as the
+    // overview of 关联 shows only what there is (reading-experience 9.0).
+    await page.route("**/api/v1/query/read?*", async (route) => {
+      const response = await route.fetch();
+      const value = (await response.json()) as {
+        detail?: { literature: { literature_id: string } };
+      };
+      await route.fulfill({
+        response,
+        json:
+          value.detail?.literature.literature_id === id
+            ? { ...value, detail: { ...value.detail, reference_count: 27 } }
+            : value,
+      });
+    });
     const references: unknown[] = [];
     await page.route("**/api/v1/query/references?*", async (route) => {
       const request = route.request().postDataJSON() as {

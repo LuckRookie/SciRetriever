@@ -25,7 +25,7 @@ import { startQueryOnlyWorkbench } from "../src/bootstrap/workbench.js";
 import { TypeScriptParserArtifactRules } from "../src/parsing/artifact-rules.js";
 import type { ParserBackend } from "./parser-fixture-types.js";
 import { DocumentReadError } from "../src/document/read.js";
-import { readerMore, readerPanel } from "../../web/test/reader-controls.js";
+import { readerPanel, readerTool } from "../../web/test/reader-controls.js";
 import { SqliteDocumentStorage } from "../src/document/storage.js";
 import {
   FIXTURE_LITERATURE,
@@ -1298,8 +1298,8 @@ describe("bounded document and material reading", () => {
           timeout: 20_000,
         })
         .toContain("introduction without heading");
-      // The outline is in the top bar's “更多” (reading-experience 1.3).
-      await readerMore(page, "显示目录");
+      // The outline is a top bar tool, in “更多” below 760 px (plan 25 block 30).
+      await readerTool(page, "显示目录");
       expect(await page.locator(".reader-outline button").count()).toBe(0);
       await readerPanel(page);
       await page

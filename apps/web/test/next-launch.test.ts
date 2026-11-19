@@ -7,7 +7,7 @@ import { loginWorkbenchPage } from "../../server/test/workbench-auth-fixture.js"
 import { mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromium } from "playwright";
+import { chromium, type Page } from "playwright";
 import { describe, expect, it, vi } from "vitest";
 import { runCli } from "../../server/src/cli/main.js";
 import * as shippedAssets from "../../server/src/workbench/assets.js";
@@ -23,6 +23,14 @@ async function assets() {
   const result = new Map(await nextAssets());
   result.set("/", result.get("/")!);
   return result;
+}
+
+/** Settings are by section; the library files are in “文献库文件” (page specs “设置”). */
+async function pathsSection(page: Page) {
+  await page
+    .getByRole("tablist", { name: "设置分区" })
+    .getByRole("tab", { name: "文献库文件", exact: true })
+    .click();
 }
 
 describe("formal Web launch and database binding", () => {
@@ -147,6 +155,7 @@ describe("formal Web launch and database binding", () => {
           .getByLabel("主导航")
           .getByRole("button", { name: "设置", exact: true })
           .click();
+        await pathsSection(page);
         await expect
           .poll(() =>
             page
@@ -180,6 +189,7 @@ describe("formal Web launch and database binding", () => {
           code: "ENOENT",
         });
         await page.reload();
+        await pathsSection(page);
         await expect
           .poll(() =>
             page

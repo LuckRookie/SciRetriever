@@ -354,7 +354,7 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
   }
 }, 180000);
 
-it("opens a paper from its row in the view it has: remembered, else full text, PDF alone, or the bibliography with its panel (spec 6.4, 3.9)", async () => {
+it("opens a paper from its row in the view it has: remembered, else full text, PDF alone, or the bibliography page (spec 6.4, 9.0)", async () => {
   const w = await nextWorkspace({ ready: "body" });
   const openRow = async (title: string) => {
     // The reader page has no site sidebar: the library is in its navigation drawer.
@@ -379,14 +379,17 @@ it("opens a paper from its row in the view it has: remembered, else full text, P
   try {
     await w.page.goto(w.origin);
     await showAllLibraryStatuses(w.page);
-    // Only a bibliography: the empty full text, the panel open on 信息, what is missing.
+    // Only a bibliography: the bibliography page and what is missing.
     await openRow("Unparsed source");
     await w.page
-      .locator(".reader-surface .ui-empty")
-      .getByText("这份资料只有书目信息。", { exact: true })
+      .getByRole("article", { name: "书目", exact: true })
+      .getByRole("group", { name: "全文", exact: true })
+      .getByText("这篇还没有全文。", { exact: true })
       .waitFor();
     expect(view()).toBe("doc");
-    expect(await w.page.locator(".reader-information").isVisible()).toBe(true);
+    // The page says what is missing; the side panel stays as it was left
+    // (plan 25 block 30), closed by default (spec 1.4).
+    expect(await w.page.locator(".reader-information").isVisible()).toBe(false);
     expect(await w.page.locator(".reading-pdf-page").count()).toBe(0);
     // A paper with text opens its full text.
     await openRow("Synthetic literature workbench");

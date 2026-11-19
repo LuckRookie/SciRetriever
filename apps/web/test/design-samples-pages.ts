@@ -440,6 +440,13 @@ export const designSamplePages: readonly DesignSamplePage[] = [
       await p.locator('.react-reader[data-reading-ready="true"]').waitFor();
       const open = p.getByRole("button", { name: "显示信息", exact: true });
       if (await open.isVisible()) await open.click();
+      else if (!(await p.locator(".reader-steps").first().isVisible())) {
+        // Below 760 px the panel's button is in “更多” (spec 1.3).
+        await p.getByRole("button", { name: "更多", exact: true }).click();
+        await p
+          .getByRole("menuitem", { name: "显示信息", exact: true })
+          .click();
+      }
     },
     ready: ".reader-steps",
   },

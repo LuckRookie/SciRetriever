@@ -169,6 +169,19 @@ export async function readerToLibrary(page: Page) {
     .click();
 }
 /**
+ * Goes back to a paper open in the reader from another page, through the
+ * sidebar's “正在读” (plan 25 block 30: the pages have no paper tabs).
+ */
+export async function reopenPaper(page: Page, title: string) {
+  await readingNow(page)
+    .getByRole("button", { name: title, exact: true })
+    .click();
+}
+/** The sidebar's “正在读”: the papers open in the reader. */
+export function readingNow(page: Page) {
+  return page.getByRole("group", { name: "正在读", exact: true });
+}
+/**
  * Opens the side panel (reading-experience 1.4: closed by default) unless
  * it is open, and shows one of its tabs.
  */

@@ -333,6 +333,98 @@ it("sets the size, line length and spacing in “排版”, keeps them in this b
   }
 }, 90000);
 
+it("keeps the page live while “排版” is open: it scrolls, and a press outside, Esc or its button closes it, doing nothing else, the focus back on its button", async () => {
+  const w = await nextWorkspace({ ready: "body" });
+  try {
+    const page = w.page,
+      id = w.env.parseRequest.literature_id;
+    await page.setViewportSize({ width: 1440, height: 600 });
+    const typeButton = page
+      .locator(".reader-topbar-tools")
+      .getByRole("button", { name: "排版", exact: true });
+    const focusedOnButton = () =>
+      typeButton.evaluate((button) => document.activeElement === button);
+    const panel = page.getByRole("dialog", { name: "排版", exact: true });
+    // Non-modal: the PDF scrolls under the open panel, which stays open.
+    await page.goto(`${w.origin}/?literature=${id}&reader=pdf`);
+    await page
+      .locator(
+        '.reader-view:not([hidden]) .reading-pdf-page[data-rendered="true"]',
+      )
+      .first()
+      .waitFor();
+    const body = page.locator(".reader-engine-body:not([hidden])");
+    await openType(page);
+    const box = (await body.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 3, box.y + box.height / 2);
+    await page.mouse.wheel(0, 400);
+    await expect
+      .poll(() => body.evaluate((el) => el.scrollTop))
+      .toBeGreaterThan(0);
+    expect(await panel.isVisible()).toBe(true);
+    // A press on the paper closes it and does nothing else.
+    await page.mouse.click(box.x + box.width / 3, box.y + box.height / 2);
+    await panel.waitFor({ state: "detached" });
+    await expect.poll(focusedOnButton).toBe(true);
+    // In the full text, a drag across the words that closes it selects nothing.
+    await page.goto(`${w.origin}/?literature=${id}&reader=doc`);
+    await page.locator('.react-reader[data-reading-ready="true"]').waitFor();
+    const paragraph = page
+      .locator(
+        ".reader-view:not([hidden]) .reading-article section[data-byte-start] p",
+      )
+      .first();
+    await openType(page);
+    const words = (await paragraph.boundingBox())!;
+    await page.mouse.move(words.x + 2, words.y + words.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(
+      words.x + words.width - 2,
+      words.y + words.height / 2,
+      {
+        steps: 5,
+      },
+    );
+    await page.mouse.up();
+    await panel.waitFor({ state: "detached" });
+    expect(await page.evaluate(() => String(getSelection()))).toBe("");
+    await expect.poll(focusedOnButton).toBe(true);
+    // The next press reaches the page as usual: the same drag selects.
+    await page.mouse.move(words.x + 2, words.y + words.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(
+      words.x + words.width - 2,
+      words.y + words.height / 2,
+      {
+        steps: 5,
+      },
+    );
+    await page.mouse.up();
+    await expect
+      .poll(() => page.evaluate(() => String(getSelection()).length))
+      .toBeGreaterThan(0);
+    await page.evaluate(() => getSelection()?.removeAllRanges());
+    // Esc closes this layer; its button, pressed again, closes it too.
+    await openType(page);
+    await page.keyboard.press("Escape");
+    await panel.waitFor({ state: "detached" });
+    await expect.poll(focusedOnButton).toBe(true);
+    await typeButton.click();
+    await panel.waitFor();
+    // Tab moves within the panel, from one control to the next.
+    await page.keyboard.press("Tab");
+    expect(
+      await panel.evaluate((el) => el.contains(document.activeElement)),
+    ).toBe(true);
+    await typeButton.click();
+    await panel.waitFor({ state: "detached" });
+    expect(await focusedOnButton()).toBe(true);
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);
+
 it("shows translation only when asked, and not at all where it is not set up (block 30.5)", async () => {
   for (const translation of [true, false]) {
     const w = await nextWorkspace({ ready: "body", translation });

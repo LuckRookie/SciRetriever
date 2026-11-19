@@ -37,14 +37,18 @@ it(
       const page = w.page,
         id = w.env.parseRequest.literature_id;
       const beforeCalls = w.env.modelCalls;
-      await page.getByRole("button", { name: "入库", exact: true }).click();
+      // 入库 is in the sidebar (page specs “整体信息架构”).
+      await page
+        .getByRole("complementary", { name: "主导航" })
+        .getByRole("button", { name: "入库", exact: true })
+        .click();
       await page.locator(".intake-form").waitFor();
       await capture("intake");
       await page
         .getByLabel("主导航", { exact: true })
         .getByRole("button", { name: /^文献库/ })
         .click();
-      await libraryStatus(page, "已就绪");
+      await libraryStatus(page, "有全文");
       await page.locator(`[data-literature-id="${id}"]`).waitFor();
       await capture("library-filter");
       await page.locator(`[data-literature-id="${id}"] .paper-open`).click();
@@ -65,13 +69,14 @@ it(
         .getByRole("region", { name: "文献参与的全部结果", exact: true })
         .waitFor();
       await page.getByRole("tab", { name: "原文", exact: true }).click();
-      await readerMore(page, "编辑校订稿");
+      // “修改全文” is in “更多”, group “这篇文献” (reading-experience 9.0).
+      await readerMore(page, "修改全文");
       const editor = page.getByRole("region", {
-        name: "校订稿编辑",
+        name: "修改全文",
         exact: true,
       });
       const input = editor.getByRole("textbox", {
-        name: "第 1 页校订稿",
+        name: "第 1 页全文",
         exact: true,
       });
       await input.waitFor();
@@ -129,9 +134,8 @@ it(
       await next.click();
       expect(w.env.modelCalls).toBe(beforeCalls);
       await capture("operator-confirmation");
-      await dialog
-        .getByRole("button", { name: "开始运行", exact: true })
-        .click();
+      // Design core rule 9: the confirmation names the action and how many.
+      await dialog.getByRole("button", { name: /^运行 [\d,]+ 篇$/u }).click();
       await expect
         .poll(
           async () =>
@@ -204,9 +208,8 @@ it(
       await capture("result-checks");
       await page.goto(w.origin);
       await libraryStatus(page, "全部");
-      await page
-        .getByRole("button", { name: "用当前结果", exact: true })
-        .click();
+      // Fixing a snapshot is in “批量操作”, its last group “加工”.
+      await page.getByRole("button", { name: "批量操作", exact: true }).click();
       await page
         .getByRole("menuitem", { name: "生成快照", exact: true })
         .click();

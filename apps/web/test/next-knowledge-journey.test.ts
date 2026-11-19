@@ -4,6 +4,8 @@ import {
   readerNavigation,
   readerTextComplete,
   readerToLibrary,
+  readingNow,
+  reopenPaper,
 } from "./reader-controls.js";
 import {
   openProcessingEntry,
@@ -149,13 +151,7 @@ it("keeps parsing separate from document publication and reads existing verified
           asset_sha256: env.asset.sha256,
         },
       ]);
-    await page
-      .locator(".paper-tab")
-      .getByRole("button", {
-        name: "Synthetic literature workbench",
-        exact: true,
-      })
-      .click();
+    await reopenPaper(page, "Synthetic literature workbench");
     await page.getByRole("button", { name: "更多", exact: true }).click();
     expect(
       await page
@@ -216,7 +212,7 @@ it("keeps parsing separate from document publication and reads existing verified
             .textContent(),
         { timeout: 20_000 },
       )
-      .toContain("各模式的解析结果");
+      .toContain("各种解析方式的结果");
     expect(
       await page
         .getByRole("button", { name: "打开解析 PDF结果", exact: true })
@@ -256,17 +252,10 @@ it("keeps parsing separate from document publication and reads existing verified
       )
       .toBe(1);
     expect(env.modelCalls).toBe(0);
-    expect(
-      await page.locator(".workspace-tabs").textContent(),
-      page.url(),
-    ).toContain("Synthetic literature workbench");
-    await page
-      .locator(".paper-tab")
-      .getByRole("button", {
-        name: "Synthetic literature workbench",
-        exact: true,
-      })
-      .click();
+    expect(await readingNow(page).textContent(), page.url()).toContain(
+      "Synthetic literature workbench",
+    );
+    await reopenPaper(page, "Synthetic literature workbench");
     await runSummaryFromReader(page);
     await expect
       .poll(() => page.getByRole("dialog").textContent())
@@ -408,7 +397,7 @@ it.each([true, false])(
                 .textContent(),
             { timeout: 20_000 },
           )
-          .toContain("各模式的解析结果");
+          .toContain("各种解析方式的结果");
         expect(
           await w.page
             .getByRole("button", { name: "打开解析 PDF结果", exact: true })

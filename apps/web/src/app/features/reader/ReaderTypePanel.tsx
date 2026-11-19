@@ -1,4 +1,4 @@
-import { useEffect, type RefObject } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 import {
   Dialog,
   Popover as AriaPopover,
@@ -37,13 +37,46 @@ export interface TypeScale {
   }[];
 }
 
+/** The rest of one press that closed the panel: it selects, marks and clicks nothing. */
+const PRESS_REST = [
+  "mousedown",
+  "selectstart",
+  "pointerup",
+  "mouseup",
+  "click",
+  "auxclick",
+  "contextmenu",
+] as const;
+function swallowRestOfPress() {
+  const swallow = (event: Event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.type === "click" || event.type === "contextmenu") done();
+    if (event.type === "pointerup") setTimeout(done, 300);
+  };
+  const done = () => {
+    for (const type of PRESS_REST)
+      window.removeEventListener(type, swallow, true);
+  };
+  for (const type of PRESS_REST) window.addEventListener(type, swallow, true);
+  // A press without a click (dragged off, cancelled) lets go all the same.
+  setTimeout(done, 2000);
+}
+
 /**
  * “排版” (plan 25 block 30): the reading size or zoom, the line length and
  * spacing of the full text, the theme in place, and two switches. It opens
  * from its button in the top bar, or from “更多” where the bar folds it in.
+ *
+ * Non-modal: the panel is for setting while looking, so the page stays live
+ * (it scrolls, and the effect of each choice shows). A press outside it, Esc
+ * or its button again closes it; the press that closes it does nothing else
+ * (no selection, no mark), and the focus goes back to its button.
  */
 export function ReaderTypePanel({
   triggerRef,
+  toggleRef,
+  focusBack,
   isOpen,
   onOpenChange,
   scale,
@@ -59,6 +92,10 @@ export function ReaderTypePanel({
   onSources,
 }: {
   triggerRef: RefObject<Element | null>;
+  /** The button that opens it and, pressed again, closes it (its own toggle). */
+  toggleRef: RefObject<Element | null> | null;
+  /** Puts the focus back on the button it was opened from. */
+  focusBack: () => void;
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
   scale: TypeScale | null;
@@ -75,27 +112,59 @@ export function ReaderTypePanel({
   sources: boolean | null;
   onSources: (value: boolean) => void;
 }) {
-  // Esc closes it wherever the focus is: a step at the end of the scale is
-  // disabled and lets go of the focus (as the shared Popover does).
+  const popover = useRef<HTMLElement>(null);
+  const latest = useRef({ onOpenChange, focusBack });
+  latest.current = { onOpenChange, focusBack };
   useEffect(() => {
     if (!isOpen) return;
-    const dismiss = (event: KeyboardEvent) => {
+    const close = () => {
+      latest.current.onOpenChange(false);
+      requestAnimationFrame(() => latest.current.focusBack());
+    };
+    // Esc closes this layer only, wherever the focus is: a step at the end
+    // of the scale is disabled and lets go of the focus (spec 1.8.6).
+    const key = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();
-      onOpenChange(false);
+      close();
     };
-    document.addEventListener("keydown", dismiss, true);
-    return () => document.removeEventListener("keydown", dismiss, true);
-  }, [isOpen, onOpenChange]);
+    // Its button toggles it itself; any other press outside closes it.
+    const press = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        (popover.current?.contains(target) ||
+          toggleRef?.current?.contains(target))
+      )
+        return;
+      event.preventDefault();
+      event.stopPropagation();
+      swallowRestOfPress();
+      close();
+    };
+    document.addEventListener("keydown", key, true);
+    window.addEventListener("pointerdown", press, true);
+    return () => {
+      document.removeEventListener("keydown", key, true);
+      window.removeEventListener("pointerdown", press, true);
+    };
+  }, [isOpen, toggleRef]);
   return (
     <AriaPopover
+      ref={popover}
       className="ui-popover reader-type-popover"
       placement="bottom end"
       triggerRef={triggerRef}
       isOpen={isOpen}
       onOpenChange={onOpenChange}
+      isNonModal
+      // Focus moving to its own button is that button's toggle, not a leave.
+      shouldCloseOnInteractOutside={(element) =>
+        !toggleRef?.current?.contains(element)
+      }
     >
+      {/* A non-modal dialog named “排版”: the page around it stays reachable. */}
       <Dialog aria-label="排版" className="reader-type-panel">
         {scale ? (
           <div className="reader-type-row">

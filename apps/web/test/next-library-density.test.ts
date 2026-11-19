@@ -85,9 +85,16 @@ it("keeps the toolbar on one line and leaves the search words out of the filter 
     ).toBe("排序：最近入库");
     const display = toolbar.locator(".library-display");
     expect(await display.innerText()).toMatch(/^显示\s*列表\s*表格$/u);
-    await toolbar
-      .getByRole("button", { name: "批量操作", exact: true })
-      .waitFor();
+    const batch = toolbar.getByRole("button", {
+      name: "批量操作",
+      exact: true,
+    });
+    await batch.waitFor();
+    // A toolbar's menu trigger keeps the ink of “筛选”; only inline text
+    // actions take the pen's colour (design core rule 10).
+    const colour = (button: typeof batch) =>
+      button.evaluate((el) => getComputedStyle(el).color);
+    expect(await colour(batch)).toBe(await colour(filter));
     const tops = await toolbar
       .locator(
         ".ui-search, .library-filter-toggle, .ui-select, .library-display, .library-toolbar-actions > .ui-button:last-child",

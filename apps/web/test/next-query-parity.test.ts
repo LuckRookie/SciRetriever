@@ -469,14 +469,26 @@ it("reads, searches, follows references and downloads through the query-only pag
       .getByRole("article", { name: "Query reader without a PDF", exact: true })
       .locator(".paper-open")
       .click();
-    // Opened from its row: no PDF and no text, so the empty full text (spec 6.4).
-    await page.getByText("这份资料只有书目信息。", { exact: true }).waitFor();
+    // Opened from its row: no PDF and no text, so the bibliography page
+    // (spec 6.4, 9.0); the query-only entry offers no way to fetch or take in one.
+    const fullText = page
+      .getByRole("article", { name: "书目", exact: true })
+      .getByRole("group", { name: "全文", exact: true });
+    await fullText.getByText("这篇还没有全文。", { exact: true }).waitFor();
+    for (const write of ["获取 PDF", "上传 PDF"])
+      expect(
+        await page.getByRole("button", { name: write, exact: true }).count(),
+        write,
+      ).toBe(0);
     await page.getByRole("button", { name: "更多", exact: true }).click();
-    expect(
-      await page
-        .getByRole("menuitem", { name: "下载 PDF", exact: true })
-        .getAttribute("aria-disabled"),
-    ).toBe("true");
+    // Without a PDF there is none to download: “更多” shows only what can be
+    // used (spec 1.3, 9.0).
+    await page.getByRole("menu").waitFor();
+    for (const write of ["下载 PDF", "获取 PDF", "上传 PDF"])
+      expect(
+        await page.getByRole("menuitem", { name: write, exact: true }).count(),
+        write,
+      ).toBe(0);
     await page.keyboard.press("Escape");
     for (const section of ["disc", "task", "web", "set"]) {
       await page.goto(`${workbench.origin}/?view=${section}`);

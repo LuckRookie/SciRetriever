@@ -79,9 +79,21 @@ it("saves the proxy and the requesters that use it separately, tests the proxy, 
         .getByRole("textbox", { name: "代理地址", exact: true })
         .inputValue(),
     ).toBe("http://127.0.0.1:7891");
-    expect(await page.getByRole("button", { name: "保存走代理" }).count()).toBe(
-      0,
-    );
+    // Each block saves at its bottom right (page specs “设置”): the routes
+    // have nothing left to save, the address edit still does.
+    expect(
+      await page
+        .getByRole("button", { name: "保存走代理", exact: true })
+        .isDisabled(),
+    ).toBe(true);
+    expect(
+      await page
+        .getByRole("button", { name: "保存代理", exact: true })
+        .isDisabled(),
+    ).toBe(false);
+    expect(
+      await page.getByText("有未保存的改动", { exact: true }).count(),
+    ).toBe(1);
     await page
       .getByRole("textbox", { name: "代理地址", exact: true })
       .fill("http://127.0.0.1:7890");
@@ -110,7 +122,8 @@ it("saves the proxy and the requesters that use it separately, tests the proxy, 
     ).not.toContain(password);
 
     // Other sections only show which requesters use the proxy.
-    await page.getByRole("tab", { name: "文献来源", exact: true }).click();
+    // The source directory is in “获取 PDF” (page specs “设置”).
+    await page.getByRole("tab", { name: "获取 PDF", exact: true }).click();
     const row = page
       .getByRole("region", { name: "文献来源", exact: true })
       .getByRole("row")

@@ -1297,15 +1297,16 @@ export default function Reader() {
   const typePanel = (
     <ReaderTypePanel
       triggerRef={compactBar ? moreTrigger : typeTrigger}
+      toggleRef={compactBar ? null : typeTrigger}
+      // Closed, the keys go back to the button it was opened from: “排版”,
+      // or “更多” where the bar folds it in (spec 1.8.2's rule).
+      focusBack={() =>
+        (compactBar ? moreTrigger : typeTrigger).current
+          ?.querySelector("button")
+          ?.focus()
+      }
       isOpen={typeOpen}
-      onOpenChange={(open) => {
-        setTypeOpen(open);
-        // Opened from “更多”: the keys go back to it (spec 1.8.2's rule).
-        if (!open && compactBar)
-          requestAnimationFrame(() =>
-            moreTrigger.current?.querySelector("button")?.focus(),
-          );
-      }}
+      onOpenChange={setTypeOpen}
       scale={typeScale}
       measure={mode === "doc" ? lines.measure : null}
       leading={mode === "doc" ? lines.leading : null}

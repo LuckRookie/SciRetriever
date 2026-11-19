@@ -1706,12 +1706,17 @@
   /* Design core rule 10: an inline text action is written in the pen's
      colour, so it reads as something to press; the text around it stays ink
      or secondary. Text buttons that carry an icon are toolbar controls and
-     keep the ink, and so do table headers and the sidebar. */
-  .ui-button[data-variant="text"]:not(.ui-icon-button):not(:has(> svg)) {
+     keep the ink, and so do a toolbar's menu triggers (“批量操作”, “更多状态”,
+     beside “筛选” and “排序”), filter chips, table headers and the sidebar. */
+  /* The menu-trigger exclusion adds no specificity (:where), so the table
+     header rule below still wins over the pen's. */
+  .ui-button[data-variant="text"]:not(.ui-icon-button):not(:has(> svg)):not(
+      :where([aria-haspopup])
+    ) {
     color: var(--blue);
   }
-  .ui-button[data-variant="text"]:not(.ui-icon-button):not(
-      :has(> svg)
+  .ui-button[data-variant="text"]:not(.ui-icon-button):not(:has(> svg)):not(
+      :where([aria-haspopup])
     )[data-hovered] {
     color: var(--blue);
   }
