@@ -35,6 +35,11 @@ import { ThemePicker, ThemeTimeSelect } from "./ThemePicker.js";
 import { useShell } from "../../shell/context.js";
 import { useMotionPreference } from "../../motion/index.js";
 import { readingFont } from "../reader/input/reading-font.js";
+import {
+  MEASURE_LABELS,
+  readingLayout,
+  type Measure,
+} from "../reader/input/reading-layout.js";
 import { TEXT_SCALE } from "../reader/input/scale.js";
 import { record, type JsonRecord } from "../../data/wire.js";
 import { copyText, randomId } from "../../../browser-platform.js";
@@ -1392,8 +1397,11 @@ function Appearance() {
         readingFont.get,
       ),
     ),
-    [width, setWidth] = useState(
-      preferences.read("sciretriever:reading:width:v1") ?? "comfortable",
+    // The same one line length as the reader's “排版 → 行宽” (plan 25 block 30).
+    lines = useSyncExternalStore(
+      readingLayout.subscribe,
+      readingLayout.get,
+      readingLayout.get,
     );
   return (
     <Section
@@ -1428,19 +1436,16 @@ function Appearance() {
             }))}
           />
         </Definition>
-        <Definition term="默认阅读行宽">
+        <Definition term="阅读行宽">
           <Select
-            label="默认阅读行宽"
-            value={width}
-            onChange={(value) => {
-              setWidth(value);
-              preferences.write("sciretriever:reading:width:v1", value);
-            }}
-            options={[
-              { value: "comfortable", label: "舒适" },
-              { value: "wide", label: "宽" },
-              { value: "full", label: "全宽" },
-            ]}
+            label="阅读行宽"
+            value={lines.measure}
+            onChange={(value) =>
+              readingLayout.set({ measure: value as Measure })
+            }
+            options={(Object.keys(MEASURE_LABELS) as Measure[]).map(
+              (value) => ({ value, label: MEASURE_LABELS[value] }),
+            )}
           />
         </Definition>
         <Definition term="动效" description="系统的“减少动效”设置同样生效。">

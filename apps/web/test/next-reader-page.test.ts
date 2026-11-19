@@ -333,6 +333,82 @@ it("sets the size, line length and spacing in “排版”, keeps them in this b
   }
 }, 90000);
 
+it("keeps one line length: settings' “阅读行宽” and “排版 → 行宽” show and set the same choice, and the retired default width is taken once (block 30.4)", async () => {
+  const w = await nextWorkspace({ ready: "body" });
+  try {
+    const page = w.page,
+      id = w.env.parseRequest.literature_id;
+    const OLD = "sciretriever:react:sciretriever:reading:width:v1",
+      MEASURE = "sciretriever:react:sciretriever:reading:measure:v1";
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const stored = () =>
+      page.evaluate(
+        ([old, measure]) => [
+          localStorage.getItem(old!),
+          localStorage.getItem(measure!),
+        ],
+        [OLD, MEASURE],
+      );
+    const settingsWidth = page
+      .getByRole("button", { name: /阅读行宽/u })
+      .and(page.locator('[aria-haspopup="listbox"]'));
+    const panelWidth = async (name: string) => {
+      const panel = await openType(page);
+      const selected = await panel
+        .getByRole("tablist", { name: "行宽", exact: true })
+        .getByRole("tab", { name, exact: true })
+        .getAttribute("aria-selected");
+      await page.keyboard.press("Escape");
+      await panel.waitFor({ state: "detached" });
+      return selected;
+    };
+    // A line length never chosen: the retired 全宽 becomes 宽, once.
+    await page.goto(`${w.origin}/?view=set&setting=appearance`);
+    await page.evaluate(
+      ([old, measure]) => {
+        localStorage.removeItem(measure!);
+        localStorage.setItem(old!, "full");
+      },
+      [OLD, MEASURE],
+    );
+    await page.reload();
+    const shown = async () => (await settingsWidth.innerText()).trim();
+    await expect.poll(shown).toBe("宽");
+    expect(await stored()).toEqual([null, "wide"]);
+    // The old key is not read again: a stray one changes nothing.
+    await page.evaluate((old) => localStorage.setItem(old, "comfortable"), OLD);
+    await page.reload();
+    await expect.poll(shown).toBe("宽");
+    expect(await stored()).toEqual(["comfortable", "wide"]);
+    // The settings' three choices are the panel's; 窄 here is 窄 there.
+    await settingsWidth.click();
+    expect(
+      await page
+        .getByRole("listbox")
+        .getByRole("option")
+        .evaluateAll((items) => items.map((item) => item.textContent?.trim())),
+    ).toEqual(["窄", "适中", "宽"]);
+    await page.getByRole("option", { name: "窄", exact: true }).click();
+    await expect.poll(stored).toEqual(["comfortable", "narrow"]);
+    await page.goto(`${w.origin}/?literature=${id}&reader=doc`);
+    await page.locator('.react-reader[data-reading-ready="true"]').waitFor();
+    expect(await panelWidth("窄")).toBe("true");
+    // And back: 适中 in the panel is 适中 in the settings.
+    const panel = await openType(page);
+    await panel
+      .getByRole("tablist", { name: "行宽", exact: true })
+      .getByRole("tab", { name: "适中", exact: true })
+      .click();
+    await page.keyboard.press("Escape");
+    await expect.poll(stored).toEqual(["comfortable", "medium"]);
+    await page.goto(`${w.origin}/?view=set&setting=appearance`);
+    await expect.poll(shown).toBe("适中");
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);
+
 it("keeps the page live while “排版” is open: it scrolls, and a press outside, Esc or its button closes it, doing nothing else, the focus back on its button", async () => {
   const w = await nextWorkspace({ ready: "body" });
   try {

@@ -322,8 +322,9 @@
     font-size: var(--text-secondary);
     color: var(--fg2);
   }
-  /* The column is measured in em, so it widens with the reading size:
-     舒适 36em (720px at 20px), 宽 46em, 全宽 the whole pane. */
+  /* The column is measured in em, so it widens with the reading size. The
+     full text's column is the sheet's (--sheet-column, “排版 → 行宽”, under
+     spec 1.1 below); other pages keep 36em (720px at 20px). */
   .react-reader .reading-article {
     font-family: var(--serif);
     font-size: var(--reading-font-size, 20px);
@@ -338,14 +339,8 @@
   .react-reader .reading-article :lang(en) {
     hyphens: auto;
   }
-  .react-reader .reading-full .reading-article {
-    max-width: none;
-  }
   .reader-find[hidden] {
     display: none;
-  }
-  .react-reader .reading-wide .reading-article {
-    max-width: min(100%, 46em);
   }
   .react-reader .reading-article ul,
   .react-reader .reading-article ol {

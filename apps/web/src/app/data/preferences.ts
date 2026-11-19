@@ -15,6 +15,13 @@ export const preferences = {
       /* Storage is optional; controlled components retain session state. */
     }
   },
+  remove(key: string): void {
+    try {
+      localStorage.removeItem(prefix + key);
+    } catch {
+      /* Storage is optional. */
+    }
+  },
 };
 /**
  * Design core “主题”: seven reading themes. 纸墨 and 夜读 keep the ids of the

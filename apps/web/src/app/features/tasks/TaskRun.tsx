@@ -402,9 +402,9 @@ function ArchiveSteps({ value }: { value: Record<string, unknown> }) {
                 {pages && Number(pages.unreviewed) > 0 ? (
                   <span>
                     {" "}
-                    · 长文档，未逐页校订（{Number(pages.unreviewed)} 页）
+                    · 长文档，未逐页校对（{Number(pages.unreviewed)} 页）
                     {Number(pages.accepted)
-                      ? `，${Number(pages.accepted)} 页已校订`
+                      ? `，${Number(pages.accepted)} 页已校对`
                       : ""}
                   </span>
                 ) : pages && Number(pages.required) > 0 ? (

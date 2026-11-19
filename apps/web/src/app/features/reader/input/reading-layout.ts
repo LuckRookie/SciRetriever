@@ -3,7 +3,8 @@ import { preferences } from "../../../data/preferences.js";
 /**
  * “排版” (plan 25 block 30): the full text's line length and line spacing,
  * one choice each in this browser that every paper shares, as the reading
- * size is (reading-experience 4.5).
+ * size is (reading-experience 4.5). Settings → 外观 shows the same line
+ * length as “阅读行宽”.
  */
 export type Measure = "narrow" | "medium" | "wide";
 export type Leading = "tight" | "medium" | "loose";
@@ -33,12 +34,30 @@ const KEYS = {
   measure: "sciretriever:reading:measure:v1",
   leading: "sciretriever:reading:leading:v1",
 } as const;
+/** The default width that settings kept before the redesign, and its successors. */
+const RETIRED_WIDTH = "sciretriever:reading:width:v1";
+const RETIRED_MEASURE: Readonly<Record<string, Measure>> = {
+  comfortable: "medium",
+  wide: "wide",
+  full: "wide",
+};
+/** A line length never chosen takes the retired default width's place, once. */
+function migrate(): string | null {
+  const old = preferences.read(RETIRED_WIDTH);
+  if (old === null) return null;
+  preferences.remove(RETIRED_WIDTH);
+  const measure = Object.hasOwn(RETIRED_MEASURE, old)
+    ? RETIRED_MEASURE[old]!
+    : null;
+  if (measure) preferences.write(KEYS.measure, measure);
+  return measure;
+}
 export interface ReadingLayout {
   measure: Measure;
   leading: Leading;
 }
 const read = (): ReadingLayout => {
-  const measure = preferences.read(KEYS.measure),
+  const measure = preferences.read(KEYS.measure) ?? migrate(),
     leading = preferences.read(KEYS.leading);
   return {
     measure:

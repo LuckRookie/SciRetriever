@@ -17,8 +17,6 @@ export interface ReadingPosition {
   anchorRatio: number;
   loadedEnd: number;
   fontSize: number;
-  wide: boolean;
-  fullWidth?: boolean;
   outline: boolean;
   information: boolean;
   query: string;
@@ -51,7 +49,6 @@ export function readingPosition(
       blockOffset: 0,
       loadedEnd: 0,
       fontSize: 20,
-      wide: false,
       outline: false,
       // Spec 1.4: the side panel starts closed.
       information: false,

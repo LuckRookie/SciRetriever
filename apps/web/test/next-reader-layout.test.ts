@@ -242,7 +242,7 @@ it("marks a long document above the text, in the information panel and in the li
     expect(await note.innerText()).toBe(
       "长文档：按简化流程生成全文，未逐页校对，文字可能含解析错误；以 PDF 为准（294 页）",
     );
-    expect(await w.page.getByText("长文档（294 页）· 未逐页校订").count()).toBe(
+    expect(await w.page.getByText("长文档（294 页）· 未逐页校对").count()).toBe(
       1,
     );
     await w.page.goto(`${w.origin}/?view=lib`);

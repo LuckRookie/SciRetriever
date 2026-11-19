@@ -340,9 +340,6 @@ export default function Reader() {
     const existed = shell.reading.entries.has(JSON.stringify(key));
     const value = readingPosition(shell.reading, key, id);
     if (!existed) {
-      const width = preferences.read("sciretriever:reading:width:v1");
-      value.wide = width === "wide";
-      value.fullWidth = width === "full";
       // This paper's own panel, as last left in this browser (spec 4.5).
       const memory = recallReading(api.workspace.catalog, id);
       if (typeof memory.information === "boolean")
@@ -1880,7 +1877,7 @@ export default function Reader() {
             <div
               ref={body}
               data-mode={mode}
-              className={`reading-scroll reader-engine-body ${showSources ? "reading-show-sources" : ""} ${layoutPosition.fullWidth ? "reading-full" : layoutPosition.wide ? "reading-wide" : ""}`}
+              className={`reading-scroll reader-engine-body ${showSources ? "reading-show-sources" : ""}`}
               hidden={
                 mode === "know" ||
                 mode === "results" ||

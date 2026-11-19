@@ -660,7 +660,7 @@ export function ReaderInformation({
             {detail.literature.status === "READY" && detail.long_document ? (
               <p className="ui-description">
                 长文档（{detail.long_document.pages} 页）·
-                未逐页校订，文字可能含解析错误；以 PDF 为准
+                未逐页校对，文字可能含解析错误；以 PDF 为准
               </p>
             ) : null}
             {/* Reading-experience 1.4, 3.4: each part's default text, by level. */}
