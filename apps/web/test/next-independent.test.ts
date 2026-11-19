@@ -76,9 +76,15 @@ it("reuses a fixed parsed material from the React maintenance entry under its or
     );
     page.on("pageerror", (error) => errors.push(error.message));
     await page.goto(`${server.origin}/?view=set`);
+    // The paper is picked from the library; a pasted number finds it too.
     await page
-      .getByLabel("文献编号", { exact: true })
+      .getByRole("searchbox", { name: "文献", exact: true })
       .fill(env.parseRequest.literature_id);
+    await page
+      .getByRole("listbox", { name: "文献候选" })
+      .getByRole("option")
+      .first()
+      .click();
     await page
       .getByRole("button", { name: "从文献库读取当前 PDF", exact: true })
       .click();

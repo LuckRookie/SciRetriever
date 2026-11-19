@@ -162,10 +162,12 @@ it("preserves source parameters and runtime sections, rejects incomplete setting
     const saved = await owner!.read();
     expect(saved.configuration.providers).toEqual(providers);
     expect(saved.configuration.models).toEqual(models);
-    await tab("解析与浏览器");
+    // The browser lives with getting PDFs, the parser with the full text.
     await page
       .getByRole("textbox", { name: "浏览器个人资料", exact: true })
       .fill("web-fixture");
+    await save("保存浏览器设置");
+    await tab("生成全文");
     await page
       .getByRole("textbox", { name: "MinerU 服务地址", exact: true })
       .fill("http://127.0.0.1:8000");
@@ -173,7 +175,7 @@ it("preserves source parameters and runtime sections, rejects incomplete setting
     await page
       .getByRole("textbox", { name: "MinerU 模型", exact: true })
       .fill("synthetic-parser");
-    await save("保存运行配置");
+    await save("保存解析服务");
     const runtime = await owner!.read();
     expect(runtime.configuration).toMatchObject({
       browser: { profile: "web-fixture" },
@@ -195,11 +197,12 @@ it("preserves source parameters and runtime sections, rejects incomplete setting
       runtime.revision,
       ["browser"],
     );
+    await tab("获取 PDF");
     await page
       .getByRole("textbox", { name: "浏览器个人资料", exact: true })
       .fill("draft-after-conflict");
     await page
-      .getByRole("button", { name: "保存运行配置", exact: true })
+      .getByRole("button", { name: "保存浏览器设置", exact: true })
       .click();
     await expect
       .poll(() => page.getByRole("alert").allTextContents())
@@ -223,29 +226,42 @@ it("preserves source parameters and runtime sections, rejects incomplete setting
       });
     });
     const beforeProbe = (await owner!.read()).revision;
-    for (const name of ["测试 解析服务", "测试 浏览器模型"]) {
+    // The parser is tested under 生成全文, the browser model under 获取 PDF.
+    const results: string[] = [];
+    for (const [section, name] of [
+      ["生成全文", "测试 解析服务"],
+      ["获取 PDF", "测试 浏览器模型"],
+    ] as const) {
+      await tab(section);
       await page.getByRole("button", { name, exact: true }).click();
       await page
         .getByRole("dialog", { name: "测试连接" })
-        .getByRole("button", { name: "确认测试", exact: true })
+        .getByRole("button", { name: "测试", exact: true })
         .click();
+      await expect
+        .poll(() => page.locator(".configuration-probe [role=status]").count())
+        .toBe(1);
+      results.push(
+        (await page
+          .locator(".configuration-probe [role=status]")
+          .textContent())!,
+      );
     }
-    await expect.poll(() => probes.length).toBe(2);
     expect(probes).toEqual([
       { owner: "parse", target: null, image: false },
       { owner: "browser-model", target: null, image: true },
     ]);
-    await expect
-      .poll(() => page.getByRole("status").allTextContents())
-      .toEqual(
-        expect.arrayContaining([
-          "测试通过，连接正常。",
-          "测试结果：失败。模型服务拒绝了 API key，请在凭据中检查这个模型服务的密钥。",
-        ]),
-      );
+    expect(results).toEqual([
+      "测试通过，连接正常。",
+      "测试结果：失败。模型服务拒绝了 API key，请在“模型服务”里检查这个服务的密钥。",
+    ]);
     expect((await owner!.read()).revision).toBe(beforeProbe);
-    await page.getByRole("button", { name: "刷新配置", exact: true }).click();
+    await tab("高级");
+    await page
+      .getByRole("button", { name: "重新读取配置", exact: true })
+      .click();
     await page.getByRole("button", { name: "读取保存值", exact: true }).click();
+    await tab("获取 PDF");
     await expect
       .poll(() =>
         page

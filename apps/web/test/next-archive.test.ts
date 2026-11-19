@@ -105,7 +105,7 @@ it("archives a paper straight from its PDF, then exposes ready state and metadat
       .getByRole("button", { name: /^生成全文 \d+$/ })
       .click();
     const build = p.getByRole("dialog", { name: "生成全文", exact: true });
-    await build.getByRole("button", { name: "确认启动", exact: true }).click();
+    await build.getByRole("button", { name: /^生成全文 \d+ 篇$/u }).click();
     await build.getByRole("button", { name: "关闭", exact: true }).click();
     await expect
       .poll(async () => (await w.env.app.archive.status(missingId)).status, {

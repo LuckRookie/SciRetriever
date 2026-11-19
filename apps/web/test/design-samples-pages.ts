@@ -143,6 +143,19 @@ async function openSettings(p: Page, name: string) {
     await p.getByRole("option", { name, exact: true }).click();
   }
 }
+/** Searches the sample library once its index is current. */
+async function searchSample(p: Page, text: string) {
+  await p.locator('input[placeholder="输入要查找的问题或关键词"]').fill(text);
+  await p
+    .getByTestId("retrieval-index")
+    .waitFor({ state: "hidden", timeout: 15_000 })
+    .catch(() => undefined);
+  await p
+    .getByRole("main")
+    .getByRole("button", { name: "检索", exact: true })
+    .click();
+  await p.locator(".retrieval-result").first().waitFor();
+}
 export const designSamplePages: readonly DesignSamplePage[] = [
   {
     id: "intake",
@@ -254,7 +267,7 @@ export const designSamplePages: readonly DesignSamplePage[] = [
       "lib",
       `&sort=title-asc&query=${query({ statuses: ["ARCHIVE_FAILED"] })}`,
     ),
-    interaction: "在全文生成失败的文献里勾选两篇，点“生成全文”",
+    interaction: "在全文生成失败的文献里勾选两篇，点“生成全文”，展开技术详情",
     prepare: async (p) => {
       const rows = p.locator(".paper-row");
       await rows.nth(1).waitFor();
@@ -266,6 +279,11 @@ export const designSamplePages: readonly DesignSamplePage[] = [
       await p
         .getByRole("region", { name: "文献选择" })
         .getByRole("button", { name: "生成全文 2", exact: true })
+        .click();
+      // Calls and tokens sit in the dialog's technical details (rule 8).
+      await p
+        .getByRole("dialog")
+        .getByRole("button", { name: "技术详情：预计用量", exact: true })
         .click();
     },
     ready: '[aria-label="启动前用量预估"] table',
@@ -412,6 +430,18 @@ export const designSamplePages: readonly DesignSamplePage[] = [
       if (await close.isVisible()) await close.click();
     },
     ready: '.react-reader[data-reading-ready="true"]',
+  },
+  {
+    id: "reader-information",
+    name: "阅读 · 信息栏",
+    route: reader("doc"),
+    interaction: "显示信息栏，看“材料”一节与时间",
+    prepare: async (p) => {
+      await p.locator('.react-reader[data-reading-ready="true"]').waitFor();
+      const open = p.getByRole("button", { name: "显示信息", exact: true });
+      if (await open.isVisible()) await open.click();
+    },
+    ready: ".reader-steps",
   },
   {
     id: "reader-draft",
@@ -641,7 +671,7 @@ export const designSamplePages: readonly DesignSamplePage[] = [
         if (found) await p.locator(".retrieval-result").first().waitFor();
         else
           await p
-            .getByText(/当前没有可显示的片段/)
+            .getByText(/没有找到与/)
             .first()
             .waitFor();
       },
@@ -842,14 +872,14 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     ready: '.task-page.archive-page [aria-label="需处理的问题列表"]',
   },
   ...[
-    "文献库位置",
-    "文献来源",
-    "模型",
-    "解析与浏览器",
-    "生成全文",
-    "凭据",
-    "运行状态",
     "外观",
+    "模型服务",
+    "获取 PDF",
+    "生成全文",
+    "设备连接",
+    "网络",
+    "文献库文件",
+    "运行状态",
     "高级",
   ].map(
     (name, i): DesignSamplePage => ({
@@ -859,18 +889,20 @@ export const designSamplePages: readonly DesignSamplePage[] = [
       interaction: `切换到${name}`,
       prepare: (p) => openSettings(p, name),
       ready:
-        name === "文献来源"
+        name === "获取 PDF"
           ? ".source-table"
-          : ".settings-content .ui-section, .maintenance-page",
+          : name === "高级"
+            ? ".maintenance-page"
+            : ".settings-content .ui-section",
     }),
   ),
   {
     id: "settings-sources-expanded",
     name: "设置 · 文献来源 · 展开配置",
     route: route("set"),
-    interaction: "展开缺联系邮箱的 Unpaywall",
+    interaction: "在“获取 PDF”里展开缺联系邮箱的 Unpaywall",
     prepare: async (p) => {
-      await openSettings(p, "文献来源");
+      await openSettings(p, "获取 PDF");
       await p
         .locator(".source-row", { hasText: "Unpaywall" })
         .locator(".source-config-toggle")
@@ -889,6 +921,82 @@ export const designSamplePages: readonly DesignSamplePage[] = [
       await field.fill("12");
     },
     ready: '.settings-content .ui-button[data-variant="primary"]',
+  },
+  {
+    id: "retrieval-unfolded",
+    name: "全文检索 · 展开同一篇的其余命中",
+    route: route("ask"),
+    interaction: "检索“spectroscopy”，展开第一篇的其余命中",
+    prepare: async (p) => {
+      await searchSample(p, "spectroscopy");
+      await p
+        .getByRole("button", { name: /^展开另外 \d+ 条$/u })
+        .first()
+        .click();
+    },
+    ready: '[data-testid="retrieval-group"] .retrieval-more',
+  },
+  {
+    id: "retrieval-context",
+    name: "全文检索 · 选了片段后的上下文",
+    route: route("ask"),
+    interaction: "检索“spectroscopy”，把第一条命中加入上下文",
+    prepare: async (p) => {
+      await searchSample(p, "spectroscopy");
+      await p.getByTestId("retrieval-basket").first().click();
+    },
+    ready: '[aria-label="上下文"]',
+  },
+  ...[false, true].map(
+    (advanced): DesignSamplePage => ({
+      id: advanced ? "acquire-dialog-advanced" : "acquire-dialog",
+      name: `获取 PDF · 对话框${advanced ? "（高级选项展开）" : ""}`,
+      // Papers with only a bibliography: the ones a PDF can still be got for.
+      route: route(
+        "lib",
+        `&sort=title-asc&query=${query({ statuses: ["UNREVIEWED"] })}`,
+      ),
+      interaction: `在只有书目的文献里勾选前两行，点“获取 PDF”${advanced ? "，展开高级选项" : ""}`,
+      prepare: async (p) => {
+        const rows = p.locator(".paper-row");
+        await rows.nth(1).waitFor();
+        for (const n of [0, 1]) {
+          await rows.nth(n).focus();
+          await p.keyboard.press("Space");
+        }
+        await p
+          .getByRole("region", { name: "文献选择" })
+          .getByRole("button", { name: /^获取 PDF/u })
+          .click();
+        if (advanced)
+          await p
+            .getByRole("dialog")
+            .getByRole("button", { name: "高级选项", exact: true })
+            .click();
+      },
+      ready: advanced
+        ? '[role="dialog"] .acquire-advanced'
+        : '[role="dialog"] .acquire-scope',
+    }),
+  ),
+  {
+    id: "discovery-confirm",
+    name: "入库 · 确认发现文献",
+    route: route("disc"),
+    interaction: "填写主题后点“开始发现”",
+    prepare: async (p) => {
+      await p
+        .getByRole("textbox", { name: "主题或检索式" })
+        .fill("synthetic spectroscopy");
+      await p.getByRole("button", { name: "开始发现", exact: true }).click();
+    },
+    ready: '[role="dialog"]',
+  },
+  {
+    id: "invalid-address",
+    name: "地址无效",
+    route: () => "/?view=lib&reader=not-a-view",
+    ready: ".page-not-found",
   },
   {
     id: "login",

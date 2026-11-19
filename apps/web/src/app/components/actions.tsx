@@ -139,7 +139,7 @@ export function Button({
         }
         {...(confirmation?.scope ? { scope: confirmation.scope } : {})}
         {...(confirmation?.service ? { service: confirmation.service } : {})}
-        confirmLabel={confirmation?.confirmLabel ?? "确认执行"}
+        confirmLabel={confirmation?.confirmLabel ?? "执行"}
         isPending={pending}
         errorMessage={error}
         onConfirm={perform}
@@ -235,7 +235,7 @@ export function ConfirmDialog({
   isOpen,
   onOpenChange,
   onConfirm,
-  confirmLabel = "确认执行",
+  confirmLabel = "执行",
   isPending = false,
   errorMessage,
 }: ConfirmOptions & {

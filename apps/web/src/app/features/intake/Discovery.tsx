@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { SourceDirectory } from "@sciretriever/contracts";
 import {
   Badge,
   Button,
@@ -18,6 +19,10 @@ import type { ApiClient } from "../../data/api.js";
 import type { JsonRecord } from "../../data/wire.js";
 import { readIntakeReport, type IntakeReport } from "../../data/intake.js";
 import { errorMessage } from "../../strings.js";
+import {
+  readSourceDirectory,
+  sourceDirectoryKey,
+} from "../sources/SourceDirectory.js";
 
 const reports = new WeakMap<
   ApiClient,
@@ -41,6 +46,31 @@ export function citationScope(
   return [`${depth} 层`, ...(limits.length ? limits : ["不限条数"])].join(
     " · ",
   );
+}
+
+/**
+ * The sources a discovery run will ask, by name (page specs “入库”): those in
+ * use for topic search, or for citations. Without a bound runtime the saved,
+ * ready selection is the best answer, as in the source directory.
+ */
+export function discoverySources(
+  directory: SourceDirectory,
+  mode: "topic" | "cite",
+): string[] {
+  const bound = directory.runtime !== null;
+  return directory.rows
+    .filter((row) => {
+      const cell =
+        mode === "cite" ? row.uses.reference_query : row.uses.topic_search;
+      return (
+        cell.state === "active" ||
+        (!bound &&
+          cell.state === "available" &&
+          cell.pending_selected &&
+          cell.ready)
+      );
+    })
+    .map((row) => row.name);
 }
 
 /**
@@ -69,6 +99,15 @@ export function Discovery({
     [resultLimit, setResultLimit] = useState(Number.NaN),
     [citeScan, setCiteScan] = useState(Number.NaN),
     [history, setHistory] = useState(() => reports.get(api) ?? []);
+  const directory = useQuery({
+    queryKey: sourceDirectoryKey,
+    queryFn: ({ signal }) => readSourceDirectory(api, signal),
+    enabled: api.kind === "workspace",
+    retry: false,
+  });
+  const sources = directory.data
+    ? discoverySources(directory.data, mode === "cite" ? "cite" : "topic")
+    : null;
   const mutation = useMutation({
     mutationFn: async () => {
       if (mode === "topic" && !query.trim())
@@ -157,6 +196,7 @@ export function Discovery({
                   value={limit}
                   onChange={setLimit}
                   minValue={1}
+                  stepper={false}
                 />
               </Definition>
               <Definition term="出版年份" description="可只填一端。">
@@ -171,6 +211,7 @@ export function Discovery({
                     maxValue={9999}
                     placeholder="例如 2020"
                     formatOptions={{ useGrouping: false }}
+                    stepper={false}
                   />
                   <span aria-hidden="true">–</span>
                   <NumberField
@@ -183,6 +224,7 @@ export function Discovery({
                     maxValue={9999}
                     placeholder="例如 2026"
                     formatOptions={{ useGrouping: false }}
+                    stepper={false}
                   />
                 </div>
               </Definition>
@@ -249,13 +291,18 @@ export function Discovery({
           confirm={{
             title: "确认发现文献",
             description:
-              "将通过已配置的文献来源查找并接纳元数据，不会自动获取 PDF。",
+              "将通过下列文献来源查找并接纳元数据，不会自动获取 PDF。",
             scope:
               mode === "cite"
                 ? citationScope(depth, resultLimit, citeScan)
                 : `每来源最多 ${limit} 条`,
-            service: "已配置的文献来源",
-            ...(mode === "cite" ? { confirmLabel: "开始扩展" } : {}),
+            // Page specs “入库”: the sources this run will ask, by name.
+            service: sources
+              ? sources.length
+                ? sources.join("、")
+                : "没有在用的来源，可在“设置 · 获取 PDF”里补上配置"
+              : "已配置的文献来源",
+            confirmLabel: mode === "cite" ? "开始扩展" : "开始发现",
           }}
           // Discovery can take minutes; the dialog closes at once and the
           // batch's progress shows in the records below.

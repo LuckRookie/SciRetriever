@@ -60,7 +60,7 @@ it("preserves drafts across section publications and conflicts, explains restart
       sourceOperation: (operation, value, signal) =>
         executeConfiguration(owner, operation, value, signal),
     }),
-    ...{ ready: 'label:has-text("文献库文件")' },
+    ...{ ready: ".settings-content" },
   });
   try {
     const page = w.page;
@@ -94,11 +94,10 @@ it("preserves drafts across section publications and conflicts, explains restart
     const runtime = page.locator(".settings-runtime[data-state]");
     await expect.poll(() => runtime.textContent()).toContain("core");
     expect(await runtime.getAttribute("data-state")).toBe("restart-required");
-    await page.getByRole("tab", { name: "解析与浏览器", exact: true }).click();
+    await page.getByRole("tab", { name: "获取 PDF", exact: true }).click();
     await page
       .getByRole("textbox", { name: "浏览器个人资料", exact: true })
       .fill("synthetic-unsaved-profile");
-    await page.getByRole("tab", { name: "文献来源", exact: true }).click();
     await page
       .getByRole("textbox", { name: "元数据结果上限", exact: true })
       .fill("501");
@@ -112,13 +111,13 @@ it("preserves drafts across section publications and conflicts, explains restart
     expect((await owner!.read()).configuration.sources.metadata.limit).toBe(
       501,
     );
-    await page.getByRole("tab", { name: "解析与浏览器", exact: true }).click();
+    await page.getByRole("tab", { name: "运行状态", exact: true }).click();
+    await page.getByRole("tab", { name: "获取 PDF", exact: true }).click();
     expect(
       await page
         .getByRole("textbox", { name: "浏览器个人资料", exact: true })
         .inputValue(),
     ).toBe("synthetic-unsaved-profile");
-    await page.getByRole("tab", { name: "文献来源", exact: true }).click();
     const saved = await owner!.read(),
       changed = structuredClone(saved.configuration);
     const updated = {
@@ -151,8 +150,12 @@ it("preserves drafts across section publications and conflicts, explains restart
     await page.getByRole("dialog", { name: "保留未保存的修改？" }).waitFor();
     await page.getByRole("button", { name: "继续编辑", exact: true }).click();
     expect(new URL(page.url()).searchParams.get("view")).toBe("set");
-    await page.getByRole("button", { name: "刷新配置", exact: true }).click();
+    await page.getByRole("tab", { name: "高级", exact: true }).click();
+    await page
+      .getByRole("button", { name: "重新读取配置", exact: true })
+      .click();
     await page.getByRole("button", { name: "读取保存值", exact: true }).click();
+    await page.getByRole("tab", { name: "获取 PDF", exact: true }).click();
     await expect
       .poll(() =>
         page
@@ -160,18 +163,16 @@ it("preserves drafts across section publications and conflicts, explains restart
           .inputValue(),
       )
       .toBe("88");
-    // Source credentials live in the source directory; only model services stay under 凭据.
-    await page.getByRole("tab", { name: "凭据", exact: true }).click();
-    await page.getByRole("button", { name: /凭据类型/ }).click();
+    // There is no “凭据” section: keys sit beside their services and sources.
     expect(
-      await page.getByRole("option", { name: "文献来源 API key" }).count(),
+      await page.getByRole("tab", { name: "凭据", exact: true }).count(),
     ).toBe(0);
-    await page.keyboard.press("Escape");
     // The configuration changed outside this page above; wait for the directory to be read again.
     const reread = page.waitForResponse((r) =>
       r.url().includes("/api/configuration/sources"),
     );
-    await page.getByRole("tab", { name: "文献来源", exact: true }).click();
+    await page.getByRole("tab", { name: "运行状态", exact: true }).click();
+    await page.getByRole("tab", { name: "获取 PDF", exact: true }).click();
     await reread;
     const directory = page.getByRole("region", {
       name: "文献来源",

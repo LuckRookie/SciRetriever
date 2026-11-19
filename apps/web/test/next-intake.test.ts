@@ -51,7 +51,7 @@ it("keeps discovery and import explicit and uploads a selected PDF without hidde
     await w.page.getByRole("button", { name: "开始发现", exact: true }).click();
     await w.page
       .getByRole("dialog", { name: "确认发现文献" })
-      .getByRole("button", { name: "确认执行", exact: true })
+      .getByRole("button", { name: "开始发现", exact: true })
       .click();
     await expect.poll(() => discoveries.length).toBe(1);
     // The dialog closes at once; the running batch is followed in the records.
@@ -113,7 +113,7 @@ it("keeps discovery and import explicit and uploads a selected PDF without hidde
       buffer: Buffer.from(workbenchPdf("10.1234/intake-test")),
     });
     expect((await w.env.app.library.detail(missingId)).primary_pdf).toBeNull();
-    await w.page.getByRole("button", { name: "确认上传", exact: true }).click();
+    await w.page.getByRole("button", { name: "上传 PDF", exact: true }).click();
     // Background work started here can outlast the 1 s poll default under Full load.
     await expect
       .poll(
@@ -186,6 +186,8 @@ it("records each import as a batch, narrows it by its keywords and gets PDFs for
     await expect
       .poll(() => dialog.locator(".acquire-scope").textContent())
       .toContain("1 篇超出本次上限");
+    // Rarely changed parameters sit under the folded “高级选项”.
+    await dialog.getByRole("button", { name: "高级选项", exact: true }).click();
     await dialog
       .getByRole("checkbox", { name: "保存后立即执行", exact: true })
       .press("Space");
@@ -307,7 +309,7 @@ it("takes any scan limit of at least 1, 50,000 included, as the discovery's scan
     await page.getByRole("button", { name: "开始发现", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "确认发现文献" });
     await dialog.getByText("每来源最多 50000 条").waitFor();
-    await dialog.getByRole("button", { name: "确认执行", exact: true }).click();
+    await dialog.getByRole("button", { name: "开始发现", exact: true }).click();
     await expect.poll(() => discoveries.length).toBe(1);
     expect(discoveries[0]).toMatchObject({
       query: "halide",

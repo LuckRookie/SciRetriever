@@ -3,7 +3,14 @@ import { jobRecord } from "../../data/wire.js";
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { ProcessingOperation } from "@sciretriever/contracts";
-import { Button, Dialog, Select, TextArea } from "../../components/index.js";
+import {
+  Button,
+  Dialog,
+  FilePicker,
+  Select,
+  TechDetails,
+  TextArea,
+} from "../../components/index.js";
 import { useApi } from "../../data/query.js";
 import { archiveWrite } from "../../data/archive.js";
 import {
@@ -67,6 +74,7 @@ function MaterialDialog({ ids, kind, file, onClose }: OperationProps) {
     [done, setDone] = useState(false);
   const guard = useRef(false);
   const controller = useRef(new AbortController());
+  const count = new Set(ids).size.toLocaleString();
   const changed = () => {
     for (const queryKey of [
       ["tasks"],
@@ -222,56 +230,58 @@ function MaterialDialog({ ids, kind, file, onClose }: OperationProps) {
           </Button>
           {!done && (
             <Button
-              variant={kind === "export" ? "primary" : "process"}
-              confirm={false}
+              variant="primary"
               isPending={mutation.isPending}
               onPress={submit}
             >
+              {/* Design core rule 9: the action and how many, never “确认”. */}
               {kind === "export"
-                ? "导出"
+                ? `导出 ${count} 篇`
                 : kind === "upload"
-                  ? "确认上传"
-                  : "确认启动"}
+                  ? "上传 PDF"
+                  : `${labels[kind] ?? "处理"} ${count} 篇`}
             </Button>
           )}
         </>
       }
     >
-      {(kind === "archive" || kind === "analyze") && !done ? (
-        <UsageEstimate
-          request={
-            kind === "archive"
-              ? {
-                  kind: "archive",
-                  request: {
-                    selector: {
-                      kind: "literatures",
-                      literature_ids: [...new Set(ids)],
-                    },
-                  },
-                }
-              : {
-                  kind: "processor",
-                  request: {
-                    schema_version: 1,
-                    idempotency_key: "estimate",
-                    name: "文献总结",
-                    processor: { id: "summary", version: "2" },
-                    spec: {
-                      purpose,
-                      question: purpose === "question" ? question : null,
-                    },
-                    inputs: [...new Set(ids)].map((literature_id) => ({
-                      kind: "literature",
-                      literature_id,
-                    })),
-                  },
-                }
-          }
-        />
-      ) : null}
-
       <p>范围已固定：{ids.length} 篇文献。</p>
+      {(kind === "archive" || kind === "analyze") && !done ? (
+        // Model calls and tokens are internal numbers (rule 8): technical details.
+        <TechDetails title="技术详情：预计用量">
+          <UsageEstimate
+            request={
+              kind === "archive"
+                ? {
+                    kind: "archive",
+                    request: {
+                      selector: {
+                        kind: "literatures",
+                        literature_ids: [...new Set(ids)],
+                      },
+                    },
+                  }
+                : {
+                    kind: "processor",
+                    request: {
+                      schema_version: 1,
+                      idempotency_key: "estimate",
+                      name: "文献总结",
+                      processor: { id: "summary", version: "2" },
+                      spec: {
+                        purpose,
+                        question: purpose === "question" ? question : null,
+                      },
+                      inputs: [...new Set(ids)].map((literature_id) => ({
+                        kind: "literature",
+                        literature_id,
+                      })),
+                    },
+                  }
+            }
+          />
+        </TechDetails>
+      ) : null}
       <p className="muted">
         {kind === "export"
           ? "导出已有书目信息，不改动文献库。"
@@ -293,18 +303,13 @@ function MaterialDialog({ ids, kind, file, onClose }: OperationProps) {
         />
       )}
       {kind === "upload" && (
-        <label className="file-field">
-          PDF 文件
-          <input
-            className="ui-file"
-            type="file"
-            accept="application/pdf,.pdf"
-            onChange={(event) =>
-              setSelectedFile(event.target.files?.[0] ?? null)
-            }
-          />
-          {selectedFile && <span>{selectedFile.name}</span>}
-        </label>
+        <FilePicker
+          label="PDF 文件"
+          accept="application/pdf,.pdf"
+          buttonLabel="选择 PDF"
+          file={selectedFile}
+          onChange={setSelectedFile}
+        />
       )}
       {kind === "analyze" && (
         <>

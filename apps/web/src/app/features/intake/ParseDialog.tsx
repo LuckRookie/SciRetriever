@@ -90,8 +90,7 @@ export function ParseDialog({
               取消
             </Button>
             <Button
-              variant="process"
-              confirm={false}
+              variant="primary"
               isPending={submit.isPending}
               disabledReason={
                 count === 0 ? "这一批没有需要解析的 PDF。" : undefined

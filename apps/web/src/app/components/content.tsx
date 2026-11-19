@@ -148,11 +148,14 @@ export function Section({
   title,
   description,
   action,
+  footer,
   children,
 }: {
   title: string;
   description?: string;
   action?: ReactNode;
+  /** The block's last row, at its bottom right: a section's save and its note. */
+  footer?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -164,7 +167,10 @@ export function Section({
         </div>
         {action}
       </header>
-      <div className="ui-block">{children}</div>
+      <div className="ui-block">
+        {children}
+        {footer ? <div className="ui-block-footer">{footer}</div> : null}
+      </div>
     </section>
   );
 }

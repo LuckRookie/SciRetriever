@@ -454,6 +454,13 @@
   .application-loading {
     padding: var(--space-7);
   }
+  .page-not-found > p {
+    margin: 0 0 var(--space-2);
+    color: var(--fg2);
+  }
+  .page-not-found > .ui-button {
+    margin-left: calc(-1 * var(--space-3));
+  }
   .library-page {
     position: relative;
     display: flex;
@@ -1442,6 +1449,11 @@
   }
   .acquire-limit > .muted {
     padding-bottom: 8px;
+  }
+  .acquire-advanced {
+    display: grid;
+    gap: var(--space-3);
+    justify-items: start;
   }
 
   /* Intake page (page specs “入库”): the four ways in, then the records. */

@@ -41,7 +41,7 @@ it("uploads a PDF from the reader's “更多” through intake: streamed, over 
       buffer: bytes,
     });
     expect((await w.env.app.library.detail(missingId)).primary_pdf).toBeNull();
-    await page.getByRole("button", { name: "确认上传", exact: true }).click();
+    await page.getByRole("button", { name: "上传 PDF", exact: true }).click();
     await page
       .getByText("PDF 已上传，归入今天的“补充文件”批次；原有材料保留。")
       .first()
@@ -82,7 +82,7 @@ it("says why a supplement was refused and keeps the paper as it was", async () =
       mimeType: "application/pdf",
       buffer: Buffer.from("<html>Sign in to read</html>"),
     });
-    await page.getByRole("button", { name: "确认上传", exact: true }).click();
+    await page.getByRole("button", { name: "上传 PDF", exact: true }).click();
     await page.getByText("这个文件不是可接受的 PDF。").waitFor();
     expect(sent.map((r) => r.path)).toEqual([
       `/api/v1/intake/literatures/${missingId}/pdf`,
@@ -102,7 +102,15 @@ it("accepts a PDF from the workspace's advanced tools through intake as well", a
   try {
     const page = w.page;
     const sent = uploads(page);
-    await page.getByLabel("文献编号", { exact: true }).fill(missingId);
+    // The paper is picked from the library; a pasted number finds it too.
+    await page
+      .getByRole("searchbox", { name: "文献", exact: true })
+      .fill(missingId);
+    await page
+      .getByRole("listbox", { name: "文献候选" })
+      .getByRole("option")
+      .first()
+      .click();
     const bytes = large();
     await page.locator("#maintenance-pdf").setInputFiles({
       name: "paper.pdf",

@@ -90,7 +90,7 @@ async function labels(page: Page) {
 async function submit(page: Page) {
   await next(page);
   await runner(page)
-    .getByRole("button", { name: "开始运行", exact: true })
+    .getByRole("button", { name: /^运行 [\d,]+ 篇$/u })
     .click();
 }
 /** Leave and come back: the dialog reopens on the retained draft. */

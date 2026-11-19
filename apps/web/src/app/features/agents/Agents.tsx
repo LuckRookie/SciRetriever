@@ -16,6 +16,7 @@ import {
   Skeleton,
   Switch,
   TechDetails,
+  LocalTime,
 } from "../../components/index.js";
 import { archiveQuery, rows } from "../../data/archive.js";
 import { readAgentConversation } from "../../data/agent-conversation.js";
@@ -27,7 +28,6 @@ import {
   agentRoleName,
   agentEventName,
   errorMessage,
-  localTime,
   statusLabels,
 } from "../../strings.js";
 import { RegionPreview } from "../archive/RegionPreview.js";
@@ -120,7 +120,7 @@ export default function Agents() {
                     ).toLocaleString()}{" "}
                     token
                     <br />
-                    {localTime(s.started_at)}
+                    <LocalTime value={s.started_at} />
                   </>
                 }
               />
@@ -219,8 +219,16 @@ function SessionDetail({ id }: { id: string }) {
         {Number(s.output_tokens).toLocaleString()} token
       </p>
       <p className="ui-description">
-        发起会话：{first.session.actor_label} · {localTime(s.started_at)}
-        {s.finished_at ? ` 至 ${localTime(s.finished_at)}` : " · 进行中"}
+        发起会话：{first.session.actor_label} ·{" "}
+        <LocalTime value={s.started_at} />
+        {s.finished_at ? (
+          <>
+            {" 至 "}
+            <LocalTime value={s.finished_at} />
+          </>
+        ) : (
+          " · 进行中"
+        )}
       </p>
       <div className="form-actions">
         {s.literature_id ? (
@@ -317,7 +325,7 @@ function Message({ message }: { message: AgentConversationEvent }) {
     <li className="agent-message" data-role={message.role}>
       <header>
         <strong>{ROLE_NAMES[message.role]}</strong>
-        <span className="ui-description">{localTime(message.timestamp)}</span>
+        <LocalTime className="ui-description" value={message.timestamp} />
         {message.truncated ? (
           <span className="ui-description">内容过长，已截断</span>
         ) : null}

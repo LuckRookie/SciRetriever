@@ -198,6 +198,9 @@ describe("IP-address HTTP login and workspace", () => {
         exact: true,
       });
       await acquire
+        .getByRole("button", { name: "高级选项", exact: true })
+        .click();
+      await acquire
         .getByRole("checkbox", { name: "保存后立即执行", exact: true })
         .focus();
       await page.keyboard.press("Space");

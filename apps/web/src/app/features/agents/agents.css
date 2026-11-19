@@ -40,20 +40,13 @@
     padding: 0;
     list-style: none;
   }
+  /* Every entry is the same kind of box: a sunken block, no frame, whatever
+     its role (the role is named in its header). */
   .agent-message,
   .agent-hook {
     padding: var(--space-3) var(--space-4);
     border-radius: var(--radius-md);
-    background: var(--surface);
-    border: 1px solid var(--line);
-  }
-  .agent-message[data-role="assistant"] {
     background: var(--surface-sunken);
-    border-color: transparent;
-  }
-  .agent-message[data-role="system"],
-  .agent-message[data-role="context"] {
-    border-style: dashed;
   }
   .agent-message > header {
     display: flex;
@@ -85,7 +78,7 @@
   .agent-raw > .agent-text {
     padding: var(--space-2) var(--space-3);
     border-radius: var(--radius-sm);
-    background: var(--surface-sunken);
+    background: var(--surface);
     max-height: 480px;
     overflow: auto;
   }

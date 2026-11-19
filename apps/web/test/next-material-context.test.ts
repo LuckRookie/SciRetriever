@@ -149,16 +149,10 @@ it("rebuilds the v4 index explicitly and searches Context in the real browser pa
     await page
       .getByRole("searchbox", { name: "问题或关键词", exact: true })
       .fill("synthetic");
+    // The context column appears only with the first chosen hit.
     expect(
-      await page
-        .getByRole("button", { name: "复制为 Markdown", exact: true })
-        .isDisabled(),
-    ).toBe(true);
-    expect(
-      await page
-        .getByRole("button", { name: "导出 JSON", exact: true })
-        .isDisabled(),
-    ).toBe(true);
+      await page.getByRole("complementary", { name: "上下文" }).count(),
+    ).toBe(0);
     await page
       .getByRole("main")
       .getByRole("button", { name: "检索", exact: true })
@@ -172,13 +166,11 @@ it("rebuilds the v4 index explicitly and searches Context in the real browser pa
     expect(await page.locator(".retrieval-page").textContent()).not.toContain(
       "此版本的库尚不提供知识检索",
     );
-    const document = page.locator('[data-testid="retrieval-result"]').filter({
-      has: page
-        .locator('[data-testid="retrieval-kind"]')
-        .filter({ hasText: "原文" }),
-    });
+    const document = page.locator(
+      '[data-testid="retrieval-result"][data-kind="source"]',
+    );
     await document
-      .getByRole("button", { name: "固定来源", exact: true })
+      .getByRole("button", { name: "记下出处", exact: true })
       .click();
     await expect
       .poll(() => document.locator(".fixed-source").textContent())

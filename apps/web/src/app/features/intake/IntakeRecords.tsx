@@ -17,7 +17,7 @@ import type { DeviceConnection } from "../../data/devices.js";
 import { openBatch } from "../library/Folders.js";
 import { navigate } from "../../data/url.js";
 import { useDevices } from "../settings/Devices.js";
-import { errorMessage, localTime } from "../../strings.js";
+import { errorMessage, shortTime } from "../../strings.js";
 import { BatchBadge, Counts, PartsBar } from "./batch-parts.js";
 
 /** What the batch covered, in a few words: years, direction, file, sources. */
@@ -33,8 +33,8 @@ export function requestText(batch: IntakeBatch) {
   ].filter(Boolean);
 }
 export function timeText(batch: IntakeBatch) {
-  if (batch.kind !== "legacy") return localTime(batch.created_at);
-  return `${localTime(batch.created_at).slice(0, 10)} 起`;
+  if (batch.kind !== "legacy") return shortTime(batch.created_at);
+  return `${shortTime(batch.created_at)} 起`;
 }
 /** Who started it; the batch formed from earlier papers names that instead. */
 export function startedBy(

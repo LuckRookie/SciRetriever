@@ -20,7 +20,7 @@ import {
 import { useApi } from "../../data/query.js";
 import { ApiError } from "../../data/api.js";
 import { intakeRoute as route } from "../../data/imports.js";
-import { errorMessage, localTime } from "../../strings.js";
+import { errorMessage, shortTime } from "../../strings.js";
 import { Counts } from "./batch-parts.js";
 
 /** The reasons a paper stays (literature materials 6.4.11), in the spec's words. */
@@ -387,7 +387,7 @@ export function Withdrawn({ batch }: { batch: IntakeBatch }) {
     <>
       <div className="intake-withdrawn" role="status">
         <span>
-          {report ? `这一批已于 ${localTime(report.at)} 撤回` : "这一批已撤回"}
+          {report ? `这一批已于 ${shortTime(report.at)} 撤回` : "这一批已撤回"}
         </span>
         <Button onPress={() => setRestoring(true)}>恢复这一批</Button>
       </div>

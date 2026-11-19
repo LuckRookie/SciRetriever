@@ -29,9 +29,9 @@ import { randomId } from "../../../browser-platform.js";
 import {
   errorMessage,
   archiveStrings,
-  localTime,
   processorName,
   sectionRoleNames,
+  shortTime,
 } from "../../strings.js";
 import { readProcessorResult } from "../../data/processor-results.js";
 import { renameSnapshot } from "../../data/snapshots.js";
@@ -42,7 +42,7 @@ import "./archive.css";
 const name = (s: Record<string, unknown>) =>
   typeof s.name === "string" && s.name
     ? s.name
-    : `${localTime(s.created_at)} · ${s.member_count} 篇`;
+    : `${shortTime(s.created_at)} · ${s.member_count} 篇`;
 export default function Snapshots() {
   const api = useApi(),
     shell = useShell(),
@@ -234,7 +234,7 @@ export default function Snapshots() {
             title={definition ? name(definition) : archiveStrings.snapshot}
             {...(definition
               ? {
-                  description: `${localTime(definition.created_at)} 创建 · ${
+                  description: `${shortTime(definition.created_at)} 创建 · ${
                     definition.name_source === "manual"
                       ? "名称已手动修改"
                       : "名称按定义自动生成"
@@ -670,7 +670,7 @@ export default function Snapshots() {
                         : "—"}
                     </td>
                     <td className="snapshot-time">
-                      {localTime(item.created_at)}
+                      {shortTime(item.created_at)}
                     </td>
                   </tr>
                 ))}

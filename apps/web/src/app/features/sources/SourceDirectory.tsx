@@ -19,6 +19,7 @@ import {
   Button,
   Checkbox,
   ErrorNotice,
+  Icon,
   SegmentedControl,
   Select,
   Skeleton,
@@ -101,7 +102,11 @@ function configurationSummary(row: SourceDirectoryRow) {
   return { tone: "none", text: "无需配置" };
 }
 
-/** Without a bound runtime (CLI-like reads), the saved selection is the best answer to “在用”. */
+/**
+ * Without a bound runtime (CLI-like reads), the saved selection is the best
+ * answer to “在用”. States are words, not circles that read as radio buttons
+ * (design core rule 10).
+ */
 const mark = (cell: SourceUseCell | SourcePdfCell, bound: boolean) =>
   cell.state === "active" ||
   (!bound &&
@@ -109,9 +114,9 @@ const mark = (cell: SourceUseCell | SourcePdfCell, bound: boolean) =>
     "pending_selected" in cell &&
     cell.pending_selected &&
     cell.ready)
-    ? { symbol: "●", label: "在用" }
+    ? { symbol: "在用", label: "在用" }
     : cell.state === "available"
-      ? { symbol: "○", label: "能用，未启用" }
+      ? { symbol: "未启用", label: "能用，未启用" }
       : cell.state === "hint"
         ? { symbol: "线索", label: "只提供 PDF 链接" }
         : { symbol: "—", label: "不提供" };
@@ -392,7 +397,7 @@ export function SourceDirectoryPanel() {
                         onClick={() => setExpanded(open ? null : row.source)}
                       >
                         {summary.text}
-                        <span aria-hidden="true"> ›</span>
+                        <Icon name="chevron" />
                       </button>
                     ) : (
                       summary.text

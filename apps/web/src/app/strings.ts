@@ -209,7 +209,7 @@ export const valueCheckBasisLabels: Readonly<Record<ProofreadBasis, string>> = {
 
 const probeReasons: Readonly<Record<string, string>> = {
   "model-authentication-rejected":
-    "模型服务拒绝了 API key，请在凭据中检查这个模型服务的密钥。",
+    "模型服务拒绝了 API key，请在“模型服务”里检查这个服务的密钥。",
   "model-quota-limited": "模型服务限流或额度已用完，稍后再试或检查账户余额。",
   "model-provider-unavailable": "模型服务出错（5xx），稍后再试。",
   "model-request-rejected":

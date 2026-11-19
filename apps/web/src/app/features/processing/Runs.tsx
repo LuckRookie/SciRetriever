@@ -17,8 +17,8 @@ import { navigate } from "../../data/url.js";
 import {
   archiveStrings,
   errorMessage,
-  localTime,
   processorName,
+  shortTime,
 } from "../../strings.js";
 export function Runs() {
   const api = useApi(),
@@ -49,7 +49,7 @@ export function Runs() {
       label:
         typeof s.name === "string" && s.name
           ? s.name
-          : `${Number(s.member_count)} 篇 · ${localTime(s.created_at)}`,
+          : `${Number(s.member_count)} 篇 · ${shortTime(s.created_at)}`,
       description: `快照 · ${Number(s.member_count)} 篇`,
     }))
     .filter(
@@ -177,7 +177,7 @@ function RunRow({ run }: { run: Record<string, unknown> }) {
             </span>
           ) : null}
           {count > 1 ? <span>等 {count} 个输入</span> : null}
-          <span>{localTime(run.created_at)}</span>
+          <span>{shortTime(run.created_at)}</span>
           <span>{String(run.actor_label ?? "未记录发起方")}</span>
         </p>
         <p className="run-outcomes">

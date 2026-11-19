@@ -136,6 +136,9 @@ describe("durable task workbench", () => {
           name: "获取 PDF",
           exact: true,
         });
+        await form
+          .getByRole("button", { name: "高级选项", exact: true })
+          .click();
         await form.getByLabel("尝试上限", { exact: true }).fill("12");
         await form.getByLabel("重试上限", { exact: true }).fill("1");
         await form.getByRole("button", { name: /受阻时/ }).click();

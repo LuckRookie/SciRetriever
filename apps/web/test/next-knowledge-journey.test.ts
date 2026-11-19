@@ -315,7 +315,7 @@ it("keeps parsing separate from document publication and reads existing verified
       };
     });
     await readerOperation(page, "核对是不是这篇");
-    await page.getByRole("button", { name: "确认启动", exact: true }).click();
+    await page.getByRole("button", { name: /^核验文章身份 \d+ 篇$/u }).click();
     await expect
       .poll(() => page.getByRole("dialog").textContent())
       .toContain("已提交 1 项");

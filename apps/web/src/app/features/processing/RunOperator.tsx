@@ -14,6 +14,7 @@ import {
   Button,
   Dialog,
   Disclosure,
+  TechDetails,
   ErrorNotice,
   Radio,
   RadioGroup,
@@ -28,7 +29,7 @@ import { navigate, useUrlState } from "../../data/url.js";
 import { jobRecord, record } from "../../data/wire.js";
 import { paperTitle, readLiterature, scopeIds } from "../../data/library.js";
 import { useShell } from "../../shell/context.js";
-import { localTime, processorName, sectionRoleNames } from "../../strings.js";
+import { processorName, sectionRoleNames, shortTime } from "../../strings.js";
 import { randomId } from "../../../browser-platform.js";
 import {
   FormProblem,
@@ -380,7 +381,7 @@ export function RunOperatorDialog({
     : scope.kind === "snapshot"
       ? `快照「${String(
           snapshots.data?.find((s) => s.snapshot_id === scope.id)?.name ??
-            localTime(
+            shortTime(
               snapshots.data?.find((s) => s.snapshot_id === scope.id)
                 ?.created_at,
             ),
@@ -439,7 +440,10 @@ export function RunOperatorDialog({
                 isDisabled={!mutable || !resolved.data}
                 onPress={() => void submit.mutateAsync().catch(() => {})}
               >
-                开始运行
+                {/* Design core rule 9: the action and how many. */}
+                {resolved.data
+                  ? `运行 ${resolved.data.ids.length.toLocaleString()} 篇`
+                  : "运行"}
               </Button>
             ) : (
               <Button
@@ -497,7 +501,7 @@ export function RunOperatorDialog({
               onChange={(id) => setScope({ kind: "snapshot", id })}
               options={snapshots.data.map((s) => ({
                 value: String(s.snapshot_id),
-                label: `${String(s.name ?? localTime(s.created_at))} · ${Number(s.member_count)} 篇`,
+                label: `${String(s.name ?? shortTime(s.created_at))} · ${Number(s.member_count)} 篇`,
               }))}
             />
           ) : null}
@@ -653,7 +657,10 @@ export function RunOperatorDialog({
           </dl>
           <ScopeStatus resolved={resolved} listOnly />
           {!outcome ? (
-            <UsageEstimate request={confirmRequest(request)} />
+            // Model calls and tokens are internal numbers (rule 8).
+            <TechDetails title="技术详情：预计用量">
+              <UsageEstimate request={confirmRequest(request)} />
+            </TechDetails>
           ) : null}
           <p className="ui-description">
             开始后会调用已配置的模型；完整匹配的已有结果会复用，缺少材料的文献保留为缺口。

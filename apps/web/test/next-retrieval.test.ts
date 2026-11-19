@@ -212,11 +212,29 @@ async function search(page: Page, query: string, kind = "all") {
       .getByRole("button", { name: "检索", exact: true })
       .click(),
   ]);
+  // Hits are counted on the status line; no hits show the empty state instead.
   await expect
-    .poll(() => page.locator('[data-testid="retrieval-status"]').textContent())
-    .toMatch(/条结果/u);
+    .poll(
+      async () =>
+        `${await page.locator('[data-testid="retrieval-status"]').textContent()}${await page.getByRole("region", { name: "检索结果" }).textContent()}`,
+    )
+    .toMatch(/条结果|没有找到与/u);
 }
 
+/** The kind of every shown hit: source, metadata, knowledge or synthesis. */
+const kindsOf = (page: Page) =>
+  page
+    .locator('[data-testid="retrieval-result"]')
+    .evaluateAll((items) =>
+      items.map((item) => (item as HTMLElement).dataset.kind),
+    );
+/** A paper shows three hits at first; open the rest of every group. */
+async function expandAll(page: Page) {
+  for (const more of await page
+    .getByRole("button", { name: /^展开另外 \d+ 条$/u })
+    .all())
+    await more.click();
+}
 async function choose(page: Page, label: string, option: string) {
   const trigger = page.getByRole("button", { name: new RegExp(label) });
   if (!(await trigger.isVisible()))
@@ -235,31 +253,32 @@ it("searches source and knowledge in all three modes, paginates, and explains Ch
       "document",
       "knowledge",
     ]);
-    expect(
-      await w.page.locator('[data-testid="retrieval-kind"]').allTextContents(),
-    ).toEqual(expect.arrayContaining(["原文", "知识"]));
-    // Page specs “全文检索”: each text hit first names its version's level.
-    const kinds = await w.page
-      .locator('[data-testid="retrieval-kind"]')
-      .allTextContents();
+    await expandAll(w.page);
+    expect(await kindsOf(w.page)).toEqual(
+      expect.arrayContaining(["source", "knowledge"]),
+    );
+    // Page specs “全文检索”: each text hit names its version's level.
+    const kinds = await kindsOf(w.page);
     expect(
       await w.page.locator('[data-testid="retrieval-level"]').allTextContents(),
     ).toEqual(
-      kinds.filter((kind) => kind === "原文").map(() => "全文 · 已校对"),
+      kinds.filter((kind) => kind === "source").map(() => "全文 · 已校对"),
     );
     await search(w.page, "nanocrystal", "source");
     expect(w.requests.at(-1)?.kinds).toEqual(["metadata", "document"]);
-    expect(
-      await w.page.locator('[data-testid="retrieval-kind"]').allTextContents(),
-    ).not.toContain("知识");
+    expect(await kindsOf(w.page)).not.toContain("knowledge");
     await choose(w.page, "每页结果", "5 条");
     await search(w.page, "nanocrystal", "source");
+    await expandAll(w.page);
     expect(
       await w.page.locator('[data-testid="retrieval-result"]').count(),
     ).toBe(5);
     await w.page.getByRole("button", { name: "继续查找", exact: true }).click();
     await expect
-      .poll(() => w.page.locator('[data-testid="retrieval-result"]').count())
+      .poll(async () => {
+        await expandAll(w.page);
+        return w.page.locator('[data-testid="retrieval-result"]').count();
+      })
       .toBeGreaterThan(5);
     expect(w.requests.at(-1)?.continuation).toBeTruthy();
     await search(w.page, "纳米晶", "knowledge");
@@ -272,20 +291,23 @@ it("searches source and knowledge in all three modes, paginates, and explains Ch
         .locator('input[placeholder="输入要查找的问题或关键词"]')
         .inputValue(),
     ).toBe("纳米晶");
-    expect(
-      await w.page.locator('[data-testid="retrieval-kind"]').allTextContents(),
-    ).toEqual(["知识"]);
+    expect(await kindsOf(w.page)).toEqual(["knowledge"]);
     await search(w.page, "纳米晶", "source");
     expect(
       await w.page.locator('[data-testid="retrieval-text"]').allTextContents(),
     ).toEqual(["纳米晶 合成 nanocrystal."]);
     await search(w.page, "钙钛矿", "source");
+    // No hits: one sentence and one suggestion, in the results' own place.
+    await expect
+      .poll(() =>
+        w.page.getByRole("region", { name: "检索结果" }).textContent(),
+      )
+      .toBe(
+        "没有找到与“钙钛矿”匹配的片段。可以换成原文里的用词，或在高级检索选项里放宽范围。",
+      );
     expect(
       await w.page.locator('[data-testid="retrieval-result"]').count(),
     ).toBe(0);
-    expect(
-      await w.page.locator('[data-testid="retrieval-status"]').textContent(),
-    ).toContain("关键词");
     await search(w.page, "钙钛矿纳米晶合成", "source");
     expect(
       await w.page.locator('[data-testid="retrieval-result"]').count(),
@@ -300,6 +322,86 @@ it("searches source and knowledge in all three modes, paginates, and explains Ch
   }
 }, 60000);
 
+it("groups hits by paper with their place in it, folds after three, opens the context column with the first chosen hit, and says one thing when nothing matches", async () => {
+  const w = await workspace();
+  try {
+    const context = w.page.getByRole("complementary", { name: "上下文" });
+    await search(w.page, "observation", "source");
+    // One paper, one group: its title and its bibliography line.
+    const groups = w.page.getByTestId("retrieval-group");
+    expect(await groups.count()).toBe(1);
+    expect(
+      await groups.first().getByTestId("retrieval-citation").textContent(),
+    ).toMatch(/ · .+ · /u);
+    // Every hit names where it sits: the section it is in.
+    const locations = await w.page
+      .getByTestId("retrieval-location")
+      .allTextContents();
+    expect(locations.length).toBe(3);
+    for (const location of locations) expect(location).toMatch(/^Study \d/u);
+    // The hit's text does not repeat the heading its location already names.
+    for (const text of await w.page
+      .getByTestId("retrieval-text")
+      .allTextContents())
+      expect(text).not.toMatch(/^Study \d/u);
+    // More than three hits in one paper: the rest wait behind one button.
+    const more = w.page.getByRole("button", { name: /^展开另外 (\d+) 条$/u });
+    const hidden = Number(/\d+/u.exec((await more.textContent())!)![0]);
+    const total = Number(
+      /^(\d+) 条结果/u.exec(
+        (await w.page.getByTestId("retrieval-status").textContent())!,
+      )![1],
+    );
+    expect(hidden).toBe(total - 3);
+    await more.click();
+    expect(await w.page.getByTestId("retrieval-result").count()).toBe(
+      3 + hidden,
+    );
+    // Notes in the secondary colour, actions in the pen's.
+    const first = w.page.getByTestId("retrieval-result").first();
+    const [note, action] = await Promise.all([
+      first
+        .getByTestId("retrieval-location")
+        .evaluate((el) => getComputedStyle(el).color),
+      first
+        .getByRole("button", { name: "在原文中查看", exact: true })
+        .evaluate((el) => getComputedStyle(el).color),
+    ]);
+    expect(note).not.toBe(action);
+    expect(
+      await first
+        .getByRole("button", { name: "记下出处", exact: true })
+        .count(),
+    ).toBe(1);
+    expect(await first.getByRole("button", { name: "固定来源" }).count()).toBe(
+      0,
+    );
+    // No context column until a hit is chosen.
+    expect(await context.count()).toBe(0);
+    await first.getByTestId("retrieval-basket").click();
+    await context.waitFor();
+    expect(await context.textContent()).toContain("已选择 1 条片段");
+    await first
+      .getByRole("button", { name: "移出上下文", exact: true })
+      .click();
+    await context.waitFor({ state: "detached" });
+    // Nothing found: one sentence and one suggestion, nothing else.
+    await search(w.page, "nonexistentfixtureword", "source");
+    await expect
+      .poll(() =>
+        w.page.getByRole("region", { name: "检索结果" }).textContent(),
+      )
+      .toBe(
+        "没有找到与“nonexistentfixtureword”匹配的片段。可以换成原文里的用词，或在高级检索选项里放宽范围。",
+      );
+    expect(
+      (await w.page.getByTestId("retrieval-status").textContent())!.trim(),
+    ).toBe("");
+  } finally {
+    await w.close();
+  }
+}, 60000);
+
 it("opens a synthesis hit as its own fixed artifact and returns to the same query", async () => {
   const w = await workspace(true);
   try {
@@ -309,9 +411,7 @@ it("opens a synthesis hit as its own fixed artifact and returns to the same quer
     ).toBe(2);
     await w.page
       .locator('[data-testid="retrieval-result"]')
-      .filter({
-        has: w.page.getByTestId("retrieval-kind").filter({ hasText: "综合" }),
-      })
+      .and(w.page.locator('[data-kind="synthesis"]'))
       .locator('[data-testid="retrieval-source"]')
       .click();
     expect(new URL(w.page.url()).searchParams.get("view")).toBe("ext");
@@ -393,9 +493,7 @@ it("keeps late or failed searches from replacing a newer page and permits an exp
         .locator('input[placeholder="输入要查找的问题或关键词"]')
         .inputValue(),
     ).toBe("纳米晶");
-    expect(
-      await w.page.locator('[data-testid="retrieval-kind"]').allTextContents(),
-    ).toEqual(["知识"]);
+    expect(await kindsOf(w.page)).toEqual(["knowledge"]);
     await w.page.route(
       "**/api/v1/query/knowledge-context?*",
       async (route) => {
@@ -564,9 +662,7 @@ it("explains an unavailable material index while retaining result searches witho
     expect(
       await w.page.locator('[data-testid="retrieval-status"]').textContent(),
     ).toBe("1 条结果");
-    expect(
-      await w.page.locator('[data-testid="retrieval-kind"]').allTextContents(),
-    ).toEqual(["知识"]);
+    expect(await kindsOf(w.page)).toEqual(["knowledge"]);
   } finally {
     await w.close();
   }

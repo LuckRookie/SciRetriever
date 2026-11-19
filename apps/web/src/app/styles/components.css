@@ -1210,10 +1210,13 @@
   .ui-skeleton > span:last-child {
     width: 60%;
   }
+  /* A card is a block (design core rule 1): a soft sunken ground, no frame
+     and no shadow; only floating things are white with a shadow. */
   .ui-card {
-    border: 1px solid var(--line2);
+    --field-fill: var(--surface);
     border-radius: var(--radius-lg);
-    padding: var(--space-5);
+    padding: var(--space-4) var(--space-5);
+    background: var(--surface-sunken);
   }
   .ui-card > header {
     display: flex;
@@ -1422,9 +1425,11 @@
     display: grid;
     margin: 0;
   }
+  /* Design core rule 11: the name column is at most 240 px and the control
+     follows right after it, with no stretch of empty space between. */
   .ui-definition {
     display: grid;
-    grid-template-columns: minmax(200px, 2fr) minmax(0, 3fr);
+    grid-template-columns: minmax(160px, 240px) minmax(0, 1fr);
     gap: var(--space-2) var(--space-6);
     padding-block: var(--space-4);
     border-bottom: 1px solid var(--line);
@@ -1695,5 +1700,89 @@
     clip-path: inset(50%);
     white-space: nowrap;
     border: 0;
+  }
+}
+@layer components {
+  /* Design core rule 10: an inline text action is written in the pen's
+     colour, so it reads as something to press; the text around it stays ink
+     or secondary. Text buttons that carry an icon are toolbar controls and
+     keep the ink, and so do table headers and the sidebar. */
+  .ui-button[data-variant="text"]:not(.ui-icon-button):not(:has(> svg)) {
+    color: var(--blue);
+  }
+  .ui-button[data-variant="text"]:not(.ui-icon-button):not(
+      :has(> svg)
+    )[data-hovered] {
+    color: var(--blue);
+  }
+  .ui-data-table th .ui-button[data-variant="text"] {
+    color: inherit;
+  }
+  .ui-data-table th .ui-button[data-variant="text"][data-hovered] {
+    color: var(--fg);
+  }
+  /* Header cells line up whether or not they hold a sort button. */
+  .ui-data-table thead th {
+    vertical-align: middle;
+  }
+  /* A section's save sits at the bottom right of its block, with the note
+     of unsaved changes beside it (page specs “设置”). */
+  .ui-block-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-3);
+    padding-block: var(--space-3) var(--space-4);
+    border-top: 1px solid var(--line);
+  }
+  .ui-block-footer-note {
+    color: var(--fg2);
+    font-size: var(--text-caption);
+  }
+  /* A file is chosen with the site's own button, in Chinese. */
+  .ui-file-picker {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+  .ui-file-picker-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--fg2);
+    font-size: var(--text-secondary);
+  }
+  /* One disclosure arrow across the site: native details wear the same
+     chevron as the shared disclosure, turned right while closed. */
+  details > summary {
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    cursor: pointer;
+  }
+  details > summary::-webkit-details-marker {
+    display: none;
+  }
+  /* Drawn with two strokes: the site's CSP admits no data images. */
+  details > summary::before {
+    content: "";
+    flex-shrink: 0;
+    box-sizing: border-box;
+    width: 7px;
+    height: 7px;
+    margin: 0 4.5px 0 3.5px;
+    border-right: 1.75px solid currentColor;
+    border-bottom: 1.75px solid currentColor;
+    opacity: 0.7;
+    transform: translateX(-1px) rotate(-45deg);
+    transition: transform var(--dur-2) var(--ease-out);
+  }
+  details[open] > summary::before {
+    transform: translateY(-2px) rotate(45deg);
   }
 }

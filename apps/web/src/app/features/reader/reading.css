@@ -704,31 +704,40 @@
     gap: var(--space-2);
     align-items: start;
   }
+  /* A step's state is a mark, not a box or a circle that reads as a control
+     (design core rule 10): a green tick, the turning ring of work in
+     progress, a red warning, or a short grey dash for not yet. */
   .reader-step > span {
     display: grid;
     place-items: center;
     width: 16px;
     height: 16px;
     margin-top: 0.25em;
-    border-radius: 50%;
-    border: 1.5px solid var(--fg3);
   }
   .reader-step > span svg {
-    width: 12px;
-    height: 12px;
+    width: 14px;
+    height: 14px;
   }
   .reader-step[data-state="done"] > span {
-    border-color: var(--t-green);
     color: var(--t-green);
   }
-  /* Work in progress has no colour (rule 5): a grey turning ring. */
-  .reader-step[data-state="pending"] > span {
-    border-color: var(--fg3);
+  .reader-step[data-state="pending"] > span::before {
+    content: "";
+    width: 10px;
+    height: 10px;
+    box-sizing: border-box;
+    border-radius: 50%;
+    border: 1.5px solid var(--fg3);
     border-right-color: transparent;
+    animation: ui-spin 0.9s linear infinite;
+  }
+  .reader-step[data-state="todo"] > span::before {
+    content: "";
+    width: 8px;
+    height: 0;
+    border-top: 1.5px solid var(--fg-quiet);
   }
   .reader-step[data-state="warning"] > span {
-    border: 0;
-    border-radius: 0;
     color: var(--t-red);
   }
   .reader-step[data-state="warning"] > span svg {
@@ -1923,8 +1932,7 @@
     width: var(--sheet-width);
     min-height: 100%;
     margin-left: var(--sheet-left);
-    padding: 0 var(--sheet-margin-right) var(--space-7)
-      var(--sheet-margin-left);
+    padding: 0 var(--sheet-margin-right) var(--space-7) var(--sheet-margin-left);
     background: var(--reader-sheet);
     box-shadow: var(--shadow-1);
   }

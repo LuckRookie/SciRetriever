@@ -69,7 +69,7 @@ it("registers an empty model catalog, binds and probes the saved Browser model, 
   };
   const w = await nextWorkspace({
     path: "/?view=set",
-    ready: 'label:has-text("文献库文件")',
+    ready: ".settings-content",
     setup: async (env) => {
       owner = new TypeScriptConfigurationOwner(env.home);
       const initial = await owner.read();
@@ -126,11 +126,11 @@ it("registers an empty model catalog, binds and probes the saved Browser model, 
       await page.getByRole("button", { name, exact: true }).click();
       expect((await response).status()).toBe(200);
     };
-    await tab("文献来源");
+    await tab("获取 PDF");
     await page
       .getByRole("textbox", { name: "元数据结果上限", exact: true })
       .fill("777");
-    await tab("模型");
+    await tab("模型服务");
     await page
       .getByRole("button", { name: "添加模型服务", exact: true })
       .click();
@@ -140,7 +140,7 @@ it("registers an empty model catalog, binds and probes the saved Browser model, 
     await page
       .getByRole("textbox", { name: "模型服务 1 服务地址", exact: true })
       .fill("https://provider.example.test/v1");
-    await page.getByRole("button", { name: "添加 Model", exact: true }).click();
+    await page.getByRole("button", { name: "添加模型", exact: true }).click();
     await page
       .getByRole("textbox", { name: "模型 1 远程名称", exact: true })
       .fill("remote-vision");
@@ -164,19 +164,19 @@ it("registers an empty model catalog, binds and probes the saved Browser model, 
       },
     });
     expect(registered.configuration.sources.metadata.limit).toBe(500);
-    await tab("文献来源");
+    await tab("获取 PDF");
     expect(
       await page
         .getByRole("textbox", { name: "元数据结果上限", exact: true })
         .inputValue(),
     ).toBe("777");
-    await tab("解析与浏览器");
+    await tab("获取 PDF");
     await select(page, "浏览器模型", "vision-fixture/remote-vision");
     await check(page, "启用浏览器", true, "switch");
     await page
       .getByRole("textbox", { name: "浏览器个人资料", exact: true })
       .fill("synthetic-profile");
-    await save("保存运行配置");
+    await save("保存浏览器设置");
     await message("运行配置已保存");
     expect((await owner!.read()).configuration.browser).toMatchObject({
       enabled: true,
@@ -195,7 +195,7 @@ it("registers an empty model catalog, binds and probes the saved Browser model, 
       expect(calls.length).toBe(beforeProbe);
       await page
         .getByRole("dialog", { name: "测试连接", exact: true })
-        .getByRole("button", { name: "确认测试", exact: true })
+        .getByRole("button", { name: "测试", exact: true })
         .click();
       await expect.poll(() => calls.length).toBe(beforeProbe + 1);
       await message("测试通过，连接正常。");
@@ -210,7 +210,7 @@ it("registers an empty model catalog, binds and probes the saved Browser model, 
     });
     expect(await page.content()).not.toContain(key);
     expect(JSON.stringify(await owner!.read())).not.toContain(key);
-    await tab("模型");
+    await tab("模型服务");
     const duplicateRevision = (await owner!.read()).revision;
     await page
       .getByRole("button", { name: "添加模型服务", exact: true })
@@ -226,8 +226,13 @@ it("registers an empty model catalog, binds and probes the saved Browser model, 
       .click();
     await message("模型服务名称重复");
     expect((await owner!.read()).revision).toBe(duplicateRevision);
-    await page.getByRole("button", { name: "刷新配置", exact: true }).click();
+    // Reading the saved values again is a maintenance tool now (高级).
+    await tab("高级");
+    await page
+      .getByRole("button", { name: "重新读取配置", exact: true })
+      .click();
     await page.getByRole("button", { name: "读取保存值", exact: true }).click();
+    await tab("模型服务");
     await expect
       .poll(() =>
         page.getByRole("textbox", { name: /模型服务 \d 名称/ }).count(),
@@ -261,7 +266,7 @@ it("registers an empty model catalog, binds and probes the saved Browser model, 
     await select(page, "浏览器模型", "vision-fixture/remote-vision-v2");
     await save("保存角色绑定");
     await message("运行配置已保存");
-    await tab("解析与浏览器");
+    await tab("获取 PDF");
     beforeProbe = 1;
     await probe();
     expect(calls[1]).toEqual({
@@ -269,8 +274,8 @@ it("registers an empty model catalog, binds and probes the saved Browser model, 
       model: "remote-vision-v2",
       authorization: `Bearer ${key}`,
     });
-    await tab("模型");
-    await page.getByRole("button", { name: "移除 Model", exact: true }).click();
+    await tab("模型服务");
+    await page.getByRole("button", { name: "移除模型", exact: true }).click();
     await message("模型仍有角色绑定");
     await page
       .getByRole("button", { name: "移除模型服务", exact: true })
@@ -282,7 +287,7 @@ it("registers an empty model catalog, binds and probes the saved Browser model, 
     await select(page, "浏览器模型", "未选择");
     await save("保存角色绑定");
     await message("运行配置已保存");
-    await page.getByRole("button", { name: "移除 Model", exact: true }).click();
+    await page.getByRole("button", { name: "移除模型", exact: true }).click();
     await save("保存模型服务");
     await message("模型服务已保存");
     expect((await owner!.read()).configuration.models).toEqual({});

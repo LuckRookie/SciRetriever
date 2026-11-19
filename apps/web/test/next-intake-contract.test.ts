@@ -124,7 +124,7 @@ it(
         );
         await page
           .getByRole("dialog", { name: "确认发现文献", exact: true })
-          .getByRole("button", { name: "确认执行", exact: true })
+          .getByRole("button", { name: "开始发现", exact: true })
           .click();
         const result = await response;
         const receipt = await result.json();

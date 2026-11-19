@@ -14,16 +14,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { randomId } from "../../../browser-platform.js";
 import {
   Button,
-  Card,
   Checkbox,
   ErrorNotice,
+  FilePicker,
   PageHeader,
+  Section,
+  SegmentedControl,
   Select,
-  Tabs,
   TechDetails,
   TextArea,
   TextField,
 } from "../../components/index.js";
+import type { ReactNode } from "react";
+import { LiteraturePicker } from "./LiteraturePicker.js";
 import { readLiterature, scopeIds } from "../../data/library.js";
 import {
   createTask,
@@ -35,7 +38,6 @@ import { navigate, useUrlState } from "../../data/url.js";
 import { record } from "../../data/wire.js";
 import { useShell } from "../../shell/context.js";
 import { errorMessage } from "../../strings.js";
-import Snapshots from "../archive/Snapshots.js";
 import { boundedResponseBytes, extractionTransport } from "./delivery.js";
 import "./maintenance.css";
 import {
@@ -48,18 +50,25 @@ import { maintain } from "./transport.js";
 
 export default function Maintenance({
   deliveryOnly = false,
+  embedded = false,
 }: {
   deliveryOnly?: boolean;
+  /** Inside the settings page, which already has its title. */
+  embedded?: boolean;
 }) {
   const api = useApi(),
     shell = useShell(),
     route = useUrlState();
   const [tab, setTab] = useState(deliveryOnly ? "delivery" : "materials");
   return (
-    <section className="maintenance-page">
-      <PageHeader title={deliveryOnly ? "规范与交付" : "高级维护"} />
+    <section className="maintenance-page" data-embedded={embedded}>
+      {/* In settings the page already has its title; the tools need no other. */}
+      {embedded ? null : (
+        <PageHeader title={deliveryOnly ? "规范与交付" : "高级维护"} />
+      )}
       {!deliveryOnly && api.kind !== "query" ? (
-        <Tabs
+        // A second level under the settings sections: a segmented control.
+        <SegmentedControl
           label="维护功能"
           value={tab}
           onChange={setTab}
@@ -96,6 +105,14 @@ export default function Maintenance({
         <Indexes />
       )}
     </section>
+  );
+}
+/** One maintenance tool: a titled section on a soft block, no framed card. */
+function Tool({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <Section title={title}>
+      <div className="maintenance-tool">{children}</div>
+    </Section>
   );
 }
 function Delivery({ onUseSelected }: { onUseSelected: () => Promise<string> }) {
@@ -161,7 +178,7 @@ function Delivery({ onUseSelected }: { onUseSelected: () => Promise<string> }) {
   };
   return (
     <div className="maintenance-grid">
-      <Card title="准备提取输入">
+      <Tool title="准备提取输入">
         <p>这里只读取已经接纳的资料。缺少的能力会作为缺口返回。</p>
         <Button
           isDisabled={busy}
@@ -237,9 +254,9 @@ function Delivery({ onUseSelected }: { onUseSelected: () => Promise<string> }) {
         >
           检查规范并固定输入
         </Button>
-      </Card>
+      </Tool>
       {write ? (
-        <Card title="提取候选交付">
+        <Tool title="提取候选交付">
           <p>
             回执保留检查摘要和证据保护；领域接纳由下游负责，不托管历史候选载荷。
           </p>
@@ -367,7 +384,7 @@ function Delivery({ onUseSelected }: { onUseSelected: () => Promise<string> }) {
           >
             清理最多 100 项过期记录
           </Button>
-        </Card>
+        </Tool>
       ) : null}
       <div className="maintenance-output" data-testid="delivery-feedback">
         <p role="status">{status}</p>
@@ -459,9 +476,9 @@ function Materials() {
   };
   return (
     <div className="maintenance-grid">
-      <Card title="接纳与解析材料">
-        <TextField
-          label="文献编号"
+      <Tool title="接纳与解析材料">
+        {/* Chosen from the library, not typed as a machine number. */}
+        <LiteraturePicker
           value={literature}
           onChange={(value) => {
             setLiterature(value);
@@ -469,19 +486,26 @@ function Materials() {
           }}
           isDisabled={!!active}
         />
-        <label className="ui-label" htmlFor="maintenance-pdf">
-          PDF 文件
-        </label>
-        <input
+        <FilePicker
           id="maintenance-pdf"
-          className="ui-file"
-          type="file"
+          label="PDF 文件"
           accept="application/pdf,.pdf"
-          onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-          disabled={!!active}
+          buttonLabel="选择 PDF"
+          file={file}
+          onChange={setFile}
+          isDisabled={!!active}
         />
         <Button
-          isDisabled={!!active || !file || !literature}
+          disabledReason={
+            active
+              ? undefined
+              : !literature
+                ? "先选择一篇文献。"
+                : !file
+                  ? "先选择 PDF 文件。"
+                  : undefined
+          }
+          isDisabled={!!active}
           confirm={{
             title: "接纳这个 PDF？",
             description: "文件将接纳到选定文献，已有资产保留。",
@@ -544,7 +568,8 @@ function Materials() {
           接纳 PDF
         </Button>
         <Button
-          isDisabled={!!active || !literature}
+          isDisabled={!!active}
+          disabledReason={!literature ? "先选择一篇文献。" : undefined}
           onPress={() =>
             run(async (signal) => {
               const detail = await readLiterature(
@@ -629,10 +654,10 @@ function Materials() {
         >
           解析 PDF
         </Button>
-      </Card>
-      <Card title="DSH 单篇分析">
+      </Tool>
+      <Tool title="DSH 单篇分析">
         <p>
-          使用所选文献已校对的全文。DSH
+          使用上面所选文献已校对的全文。DSH
           持续读取正文和图片；调用模型必须显式确认。
         </p>
         <Select
@@ -716,8 +741,7 @@ function Materials() {
         >
           启动单篇分析
         </Button>
-      </Card>
-      <Snapshots />
+      </Tool>
       <div className="maintenance-output">
         <p role="status">{status}</p>
         {active ? (
@@ -767,7 +791,7 @@ function IndexCard() {
   else if (index?.index_state === "corrupt")
     text = "全文索引已损坏，需要重建。";
   return (
-    <Card title="全文索引">
+    <Tool title="全文索引">
       <p>
         从已保存的元数据和原文重新建立全文索引，不下载
         PDF、解析材料或调用模型。平时索引会随文献变化自动更新，只在索引缺失、损坏或检索结果明显不对时需要重建。
@@ -788,7 +812,7 @@ function IndexCard() {
         重建全文索引
       </Button>
       <p role="status">{text}</p>
-    </Card>
+    </Tool>
   );
 }
 
@@ -802,7 +826,7 @@ function Indexes() {
     <div className="maintenance-grid">
       <IndexCard />
       {api.kind === "workspace" ? (
-        <Card title="提交加工请求 JSON">
+        <Tool title="提交加工请求 JSON">
           <p>
             高级入口遵循同一 ProcessingTaskRequest
             合同；不会绕过模型或解析的配置与校验。
@@ -864,7 +888,7 @@ function Indexes() {
               </TechDetails>
             </>
           ) : null}
-        </Card>
+        </Tool>
       ) : null}
     </div>
   );

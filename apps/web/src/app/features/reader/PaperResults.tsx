@@ -10,7 +10,7 @@ import { archiveQuery, rows } from "../../data/archive.js";
 import { useApi } from "../../data/query.js";
 import { record } from "../../data/wire.js";
 import { navigate } from "../../data/url.js";
-import { processorName, errorMessage, localTime } from "../../strings.js";
+import { processorName, errorMessage, shortTime } from "../../strings.js";
 export function PaperResults({
   id,
   onOpenSummary,
@@ -54,7 +54,7 @@ export function PaperResults({
                     {r.freshness === "stale" ? <Badge status="stale" /> : null}
                   </h3>
                   <p>
-                    {localTime(r.created_at)} ·{" "}
+                    {shortTime(r.created_at)} ·{" "}
                     {Number(r.complete) ? "完整" : "部分完成"} ·{" "}
                     {Number(r.literature_count) > 1
                       ? `${r.literature_count} 篇共同参与`

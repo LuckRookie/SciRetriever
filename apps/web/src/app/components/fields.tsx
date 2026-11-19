@@ -543,3 +543,54 @@ export function Switch({
     </AriaSwitch>
   );
 }
+/**
+ * A file chooser in the site's own button and words: no native “Choose File”.
+ * The input stays in the page, hidden, under its label, so assistive tools
+ * and tests reach it as the field it is.
+ */
+export function FilePicker({
+  label,
+  id,
+  accept,
+  file,
+  onChange,
+  isDisabled = false,
+  buttonLabel = "选择文件",
+}: {
+  label: string;
+  id?: string;
+  accept?: string;
+  file: File | null;
+  onChange: (file: File | null) => void;
+  isDisabled?: boolean;
+  buttonLabel?: string;
+}) {
+  const input = useRef<HTMLInputElement>(null);
+  return (
+    <span className="ui-file-picker">
+      <input
+        ref={input}
+        {...(id ? { id } : {})}
+        className="ui-visually-hidden"
+        type="file"
+        aria-label={label}
+        tabIndex={-1}
+        {...(accept ? { accept } : {})}
+        disabled={isDisabled}
+        onChange={(event) => onChange(event.target.files?.[0] ?? null)}
+      />
+      <Button
+        className="ui-button"
+        data-variant="secondary"
+        data-size="normal"
+        isDisabled={isDisabled}
+        onPress={() => input.current?.click()}
+      >
+        <span className="ui-button-label">{buttonLabel}</span>
+      </Button>
+      <span className="ui-file-picker-name">
+        {file ? file.name : "未选择文件"}
+      </span>
+    </span>
+  );
+}

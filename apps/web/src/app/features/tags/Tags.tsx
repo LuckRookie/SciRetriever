@@ -1,5 +1,5 @@
 import { UsageEstimate } from "../processing/UsageEstimate.js";
-import { serviceMessage } from "../../strings.js";
+import { serviceMessage, shortTime } from "../../strings.js";
 import { Fragment, useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { parseTag, parseTagListItem, type Tag } from "@sciretriever/contracts";
@@ -24,7 +24,7 @@ import { processingTask } from "../../data/operations.js";
 import { TagEditor } from "./TagEditor.js";
 import { navigate, useUrlState } from "../../data/url.js";
 import { useShell } from "../../shell/context.js";
-import { errorMessage, archiveStrings, localTime } from "../../strings.js";
+import { errorMessage, archiveStrings } from "../../strings.js";
 import { randomId } from "../../../browser-platform.js";
 import "../archive/archive.css";
 const tagName = (t: Tag) => t.name_zh || t.name_en;
@@ -401,7 +401,7 @@ export default function Tags() {
               </strong>
               <p>
                 <time dateTime={String(c.created_at)}>
-                  {localTime(c.created_at)}
+                  {shortTime(c.created_at)}
                 </time>
               </p>
               <p>

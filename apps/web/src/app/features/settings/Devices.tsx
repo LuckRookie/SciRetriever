@@ -8,6 +8,7 @@ import {
   ErrorNotice,
   Section,
   TextField,
+  LocalTime,
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
 import { ApiError, type ApiClient } from "../../data/api.js";
@@ -29,7 +30,7 @@ import {
   type Pairing,
 } from "../../data/devices.js";
 import { copyText } from "../../../browser-platform.js";
-import { errorMessage, localTime } from "../../strings.js";
+import { errorMessage } from "../../strings.js";
 
 export const devicesKey = ["device-connections"] as const;
 
@@ -177,14 +178,18 @@ export function DeviceConnections() {
                 id: "created",
                 header: "连接于",
                 value: (device) => device.created_at,
-                render: (device) => localTime(device.created_at),
+                render: (device) => <LocalTime value={device.created_at} />,
               },
               {
                 id: "used",
                 header: "最近使用",
                 value: (device) => device.last_used_at,
                 render: (device) =>
-                  device.last_used_at ? localTime(device.last_used_at) : "—",
+                  device.last_used_at ? (
+                    <LocalTime value={device.last_used_at} />
+                  ) : (
+                    "—"
+                  ),
               },
               {
                 id: "state",

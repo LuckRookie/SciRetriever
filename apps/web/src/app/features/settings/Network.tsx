@@ -127,7 +127,7 @@ export function NetworkSettings({
       <Section
         title="代理"
         description="只支持 HTTP CONNECT。填写地址不改变任何请求，哪些服务走代理在下一节选择。"
-        action={proxyAction}
+        footer={proxyAction}
       >
         <Definitions>
           <Definition
@@ -169,7 +169,7 @@ export function NetworkSettings({
       <Section
         title="走代理"
         description="选中的服务经代理连接，其余直连。本机或局域网上的服务始终直连，不在这里列出。"
-        action={routesAction}
+        footer={routesAction}
       >
         {savedProxy ? (
           <Definitions>

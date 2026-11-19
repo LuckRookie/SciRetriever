@@ -871,9 +871,24 @@ function Workspace({ api }: { api: ApiClient }) {
           }
         >
           {route.error ? (
-            <section className="page-recovery">
-              <PageHeader title={sectionLabels[route.section]} />
-              <ErrorNotice message={route.error} />
+            // Reading experience 9.0 “地址无效”: one page, one sentence, the
+            // way back; the invalid parameters themselves are never shown.
+            <section className="page-recovery page-not-found">
+              <PageHeader title="找不到这个页面" />
+              <p>地址可能写错了，或者这项内容已经不在了。</p>
+              <Button
+                variant="text"
+                onPress={() =>
+                  navigate({
+                    ...Object.fromEntries(
+                      [...route.parameters.keys()].map((key) => [key, null]),
+                    ),
+                    view: "lib",
+                  })
+                }
+              >
+                回到文献库
+              </Button>
             </section>
           ) : (
             page

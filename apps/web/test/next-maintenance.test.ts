@@ -196,9 +196,15 @@ it("selects the current Library PDF and validates the raw parsing receipt in Chr
       .toContain("请求失败");
     expect(await page.getByTestId("delivery-result").count()).toBe(0);
     await page.getByRole("tab", { name: "材料与分析", exact: true }).click();
+    // The paper is picked from the library; a pasted number finds it too.
     await page
-      .getByLabel("文献编号", { exact: true })
+      .getByRole("searchbox", { name: "文献", exact: true })
       .fill(FIXTURE_LITERATURE.literature_id);
+    await page
+      .getByRole("listbox", { name: "文献候选" })
+      .getByRole("option")
+      .first()
+      .click();
     await page
       .getByRole("button", { name: "从文献库读取当前 PDF", exact: true })
       .click();
@@ -316,9 +322,15 @@ it("accepts a selected PDF in Chromium, reads the same fact, and reports rejecti
         routes.push(path);
     });
     await page.goto(`${workbench.origin}/?view=set`);
+    // The paper is picked from the library; a pasted number finds it too.
     await page
-      .getByLabel("文献编号", { exact: true })
+      .getByRole("searchbox", { name: "文献", exact: true })
       .fill(FIXTURE_LITERATURE.literature_id);
+    await page
+      .getByRole("listbox", { name: "文献候选" })
+      .getByRole("option")
+      .first()
+      .click();
     await page.locator("#maintenance-pdf").setInputFiles({
       name: "wrong.pdf",
       mimeType: "application/pdf",
@@ -395,9 +407,15 @@ it("accepts a selected PDF in Chromium, reads the same fact, and reports rejecti
     );
 
     await page.goto(`${workbench.origin}/?view=set`);
+    // The paper is picked from the library; a pasted number finds it too.
     await page
-      .getByLabel("文献编号", { exact: true })
+      .getByRole("searchbox", { name: "文献", exact: true })
       .fill(FIXTURE_LITERATURE.literature_id);
+    await page
+      .getByRole("listbox", { name: "文献候选" })
+      .getByRole("option")
+      .first()
+      .click();
     await page.locator("#maintenance-pdf").setInputFiles({
       name: "paper.pdf",
       mimeType: "application/pdf",

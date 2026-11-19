@@ -4,15 +4,33 @@
     gap: var(--space-5);
     padding: var(--space-5);
   }
+  /* Inside settings the tools follow the sections, without a page's margin. */
+  .maintenance-page[data-embedded="true"] {
+    padding: 0;
+    gap: var(--space-3);
+  }
   .maintenance-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
-    gap: var(--space-5);
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
     align-items: start;
   }
-  .maintenance-grid .ui-card {
+  /* One tool: its fields and buttons down the block, each its own width. */
+  .maintenance-tool {
     display: grid;
+    justify-items: start;
     gap: var(--space-3);
+    padding-block: var(--space-4);
+  }
+  .maintenance-tool > p {
+    margin: 0;
+    color: var(--fg2);
+    font-size: var(--text-secondary);
+  }
+  .maintenance-tool > .ui-field-full,
+  .maintenance-tool > .ui-disclosure,
+  .maintenance-tool > .usage-estimate {
+    justify-self: stretch;
   }
   .maintenance-actions {
     display: flex;
@@ -21,9 +39,59 @@
   }
   .maintenance-output {
     grid-column: 1 / -1;
+    margin-top: var(--space-3);
   }
   .maintenance-page pre {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+  }
+  /* Picking a paper from the library (design core rule 8). */
+  .literature-picker {
+    display: grid;
+    gap: var(--space-2);
+    width: min(100%, 560px);
+  }
+  .literature-picker[data-chosen="true"] {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-3);
+  }
+  .literature-picker-chosen {
+    display: grid;
+    margin: 0;
+    min-width: 0;
+  }
+  .literature-picker-title {
+    font: 500 var(--text-literature) / var(--lh-literature) var(--serif);
+  }
+  .literature-picker-citation,
+  .literature-picker-empty {
+    color: var(--fg2);
+    font-size: var(--text-caption);
+  }
+  .literature-picker-empty {
+    margin: 0;
+  }
+  .literature-picker-list {
+    margin: 0;
+    padding: var(--space-1);
+    list-style: none;
+    border-radius: var(--radius-lg);
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-pop);
+  }
+  .literature-picker-list > li {
+    display: grid;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+  .literature-picker-list > li:is(:hover, :focus-visible) {
+    background: var(--hover);
+    outline: none;
+  }
+  .literature-picker-list > li:focus-visible {
+    box-shadow: 0 0 0 2px var(--focus-ring);
   }
 }

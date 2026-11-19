@@ -181,11 +181,6 @@
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
     gap: var(--space-4);
   }
-  .browser-sessions .ui-card {
-    border-color: transparent;
-    background: var(--surface-raised);
-    box-shadow: var(--shadow-1);
-  }
   .browser-sessions .ui-card h2 {
     font-family: var(--title-face);
     font-weight: 600;

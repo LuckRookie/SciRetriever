@@ -40,7 +40,7 @@ import { navigate } from "../../data/url.js";
 import { titleParts } from "../../../reading/title.js";
 import { useShell } from "../../shell/context.js";
 import { record } from "../../data/wire.js";
-import { errorMessage, localTime, statusLabels } from "../../strings.js";
+import { errorMessage, statusLabels, shortTime } from "../../strings.js";
 import type { ReaderResourceEntry } from "../../../reading/contract.js";
 import { copyText } from "../../../browser-platform.js";
 import { EvidencePreview } from "./SummaryView.js";
@@ -755,7 +755,7 @@ export function ReaderInformation({
               <dt>人工修改</dt>
               <dd>
                 {reading.data.last_manual_edit
-                  ? `${reading.data.last_manual_edit.actor_label}，${localTime(reading.data.last_manual_edit.at)}`
+                  ? `${reading.data.last_manual_edit.actor_label}，${shortTime(reading.data.last_manual_edit.at)}`
                   : "尚无"}
               </dd>
             </div>
@@ -834,7 +834,7 @@ export function ReaderInformation({
               {observation.metadata.venue} ·{" "}
               {observation.metadata.publication_year}
             </p>
-            <p>采集于 {localTime(observation.provenance.observed_at)}</p>
+            <p>采集于 {shortTime(observation.provenance.observed_at)}</p>
             {observation.metadata.abstract && (
               <Disclosure title="此来源的摘要">
                 <p>{observation.metadata.abstract}</p>

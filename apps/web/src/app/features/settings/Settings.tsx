@@ -45,6 +45,8 @@ import {
   runtimeStatus,
 } from "./configuration-data.js";
 import { ApplyConfiguration } from "../sources/ApplyConfiguration.js";
+import { SETTINGS_SECTIONS, settingsSection } from "./sections.js";
+import { SecretField } from "./SecretField.js";
 import { NetworkSettings, networkOf } from "./Network.js";
 import { DeviceConnections } from "./Devices.js";
 import {
@@ -54,19 +56,37 @@ import {
 import "./settings.css";
 
 const Maintenance = lazy(() => import("../maintenance/Maintenance.js"));
-const tabs = [
-  { id: "paths", label: "文献库位置" },
-  { id: "sources", label: "文献来源" },
-  { id: "models", label: "模型" },
-  { id: "parser", label: "解析与浏览器" },
-  { id: "network", label: "网络" },
-  { id: "devices", label: "设备连接" },
-  { id: "archive", label: "生成全文" },
-  { id: "cred", label: "凭据" },
-  { id: "status", label: "运行状态" },
-  { id: "appearance", label: "外观" },
-  { id: "advanced", label: "高级" },
-];
+/**
+ * Runtime settings saved field by field: each group is one block with its own
+ * save, and a save publishes only that block's fields (page specs “设置”).
+ */
+const GROUPS = {
+  roles: [
+    ["analyze", "model"],
+    ["proofread", "model"],
+    ["tags", "model"],
+    ["tags", "consolidation_model"],
+    ["tags", "backfill_model"],
+    ["browser", "model"],
+  ],
+  browser: [
+    ["browser", "enabled"],
+    ["browser", "profile"],
+    ["browser", "model"],
+  ],
+  parser: [
+    ["parsing", "base_url"],
+    ["parsing", "connection_mode"],
+    ["parsing", "model_identity"],
+  ],
+  params: [
+    ["tags", "max_per_literature"],
+    ["tags", "candidate_k"],
+    ["tags", "backfill_batch"],
+  ],
+} as const satisfies Record<string, readonly (readonly [string, string])[]>;
+type Group = keyof typeof GROUPS;
+const RUNTIME_SECTIONS = ["browser", "parsing", "analyze", "tags", "proofread"];
 const str = (value: unknown) => (typeof value === "string" ? value : "");
 /** The network section saves its two halves separately; each has its own mark. */
 const networkMarks = { proxy: "network-proxy", via_proxy: "network-routes" };
@@ -118,9 +138,21 @@ export default function Settings() {
     shell = useShell(),
     queries = useQueryClient(),
     route = useUrlState();
-  const [section, setSection] = useState(
-      route.parameters.get("setting") ??
-        (api.kind === "workspace" ? "paths" : "appearance"),
+  const sectionTabs =
+    api.kind === "workspace"
+      ? SETTINGS_SECTIONS
+      : SETTINGS_SECTIONS.filter(
+          (tab) =>
+            tab.id === "appearance" ||
+            (api.kind === "maintenance" && tab.id === "advanced"),
+        );
+  // Addresses of the earlier sections (`setting=sources`, `cred`, …) land on
+  // their new homes; the first section, 外观, is the default.
+  const [section, setSection] = useState(() =>
+      settingsSection(
+        route.parameters.get("setting") ?? route.parameters.get("section"),
+        sectionTabs.map((tab) => tab.id),
+      ),
     ),
     [draft, setDraft] = useState<JsonRecord | null>(null),
     [snapshot, setSnapshot] = useState<JsonRecord | null>(null),
@@ -133,9 +165,26 @@ export default function Settings() {
   const [leaveConfirm, setLeaveConfirm] = useState(false);
   const dirtyNow = useRef(dirty);
   dirtyNow.current = dirty;
+  const savedNow = snapshot
+    ? record(snapshot.configuration, "saved configuration")
+    : null;
+  /** A runtime group differs from what is saved: its block has unsaved edits. */
+  const groupDirty = (group: Group) =>
+    !!draft &&
+    !!savedNow &&
+    GROUPS[group].some(
+      ([name, key]) =>
+        JSON.stringify(record(draft[name], name)[key] ?? null) !==
+        JSON.stringify(record(savedNow[name], name)[key] ?? null),
+    );
+  // Runtime sections are judged by their groups, so a saved group never
+  // leaves a stale mark; the other sections by their marks.
+  const unsaved =
+    [...dirty].some((name) => !RUNTIME_SECTIONS.includes(name)) ||
+    (Object.keys(GROUPS) as Group[]).some(groupDirty);
   const leaveDecision = useRef<((allow: boolean) => void) | null>(null);
   useEffect(() => {
-    if (!dirty.size) return;
+    if (!unsaved) return;
     return registerNavigationGuard(
       () =>
         new Promise<boolean>((resolve) => {
@@ -143,7 +192,7 @@ export default function Settings() {
           setLeaveConfirm(true);
         }),
     );
-  }, [dirty.size]);
+  }, [unsaved]);
   const decideLeave = (allow: boolean) => {
     setLeaveConfirm(false);
     leaveDecision.current?.(allow);
@@ -227,14 +276,14 @@ export default function Settings() {
     if (read.data) onRead.current(read.data);
   }, [read.data, read.dataUpdatedAt]);
   useEffect(() => {
-    if (!dirty.size) return;
+    if (!unsaved) return;
     const before = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = "";
     };
     window.addEventListener("beforeunload", before);
     return () => window.removeEventListener("beforeunload", before);
-  }, [dirty.size]);
+  }, [unsaved]);
   const mark = (name: string) => setDirty((value) => new Set([...value, name]));
   const edit = (name: string, key: string, value: unknown) => {
     setDraft((current) =>
@@ -257,6 +306,8 @@ export default function Settings() {
       configuration: JsonRecord;
       /** Draft marks this save settles; the sections themselves by default. */
       marks?: string[];
+      /** A group save: only these fields were published; the rest keep the draft. */
+      fields?: readonly (readonly [string, string])[];
     }) => {
       if (!snapshot) throw new Error("请先读取当前配置。");
       return api.request("/api/configuration/publish-json", {
@@ -270,11 +321,27 @@ export default function Settings() {
         config = record(saved.configuration, "configuration");
       setSnapshot(saved);
       setRuntime(result);
-      const marks = variables.marks ?? variables.sections;
+      // A group save settles no section mark: its blocks compare with the save.
+      const marks = variables.fields
+        ? []
+        : (variables.marks ?? variables.sections);
       setDraft((current) => {
         const next = { ...(current ?? config) };
         for (const name of variables.sections)
-          next[name] = structuredClone(config[name]);
+          next[name] =
+            variables.fields && current
+              ? {
+                  ...record(current[name], name),
+                  ...Object.fromEntries(
+                    variables.fields
+                      .filter(([section]) => section === name)
+                      .map(([, key]) => [
+                        key,
+                        structuredClone(record(config[name], name)[key]),
+                      ]),
+                  ),
+                }
+              : structuredClone(config[name]);
         // The half of the network section that was not saved keeps its draft.
         if (current && variables.sections.includes("network"))
           for (const [field, part] of Object.entries(networkMarks))
@@ -456,32 +523,47 @@ export default function Settings() {
     }
   };
   const changed = (...names: string[]) => names.some((name) => dirty.has(name));
-  /** A section's save button exists only while that section has unsaved edits. */
+  /**
+   * A block's last row (page specs “设置”): its save at the bottom right, with
+   * “有未保存的改动” beside it while there is something to save.
+   */
+  const saveFooter = (isDirty: boolean, label: string, onPress: () => void) => (
+    <>
+      {isDirty ? (
+        <span className="ui-block-footer-note">有未保存的改动</span>
+      ) : null}
+      <Button
+        variant={isDirty ? "primary" : "secondary"}
+        isPending={isDirty && publish.isPending}
+        disabledReason={isDirty ? undefined : "还没有改动"}
+        onPress={onPress}
+      >
+        {label}
+      </Button>
+    </>
+  );
   const saveButton = (
     names: string[],
     label: string,
     onPress: () => void = () => save(names),
-  ) =>
-    changed(...names) ? (
-      <Button variant="primary" isPending={publish.isPending} onPress={onPress}>
-        {label}
-      </Button>
-    ) : undefined;
-  const runtimeSections = [
-    "browser",
-    "parsing",
-    "analyze",
-    "tags",
-    "proofread",
-  ];
-  const sectionTabs =
-    api.kind === "workspace"
-      ? tabs
-      : tabs.filter(
-          (tab) =>
-            tab.id === "appearance" ||
-            (api.kind === "maintenance" && tab.id === "advanced"),
-        );
+  ) => saveFooter(changed(...names), label, onPress);
+  /** Publishes only one group's fields; everything else keeps its saved value. */
+  const saveGroup = (group: Group) => {
+    if (!draft || !savedNow) return;
+    const configuration = structuredClone(savedNow);
+    for (const [name, key] of GROUPS[group])
+      configuration[name] = {
+        ...record(configuration[name], name),
+        [key]: record(draft[name], name)[key] ?? null,
+      };
+    const sections = [...new Set(GROUPS[group].map(([name]) => name))];
+    if (guard.current) return;
+    guard.current = true;
+    setMessage("正在校验并保存…");
+    publish.mutate({ sections, configuration, fields: GROUPS[group] });
+  };
+  const groupFooter = (group: Group, label: string) =>
+    saveFooter(groupDirty(group), label, () => saveGroup(group));
   const pathValue = (path: string | null | undefined, label: string) =>
     path ? (
       <span className="settings-path">
@@ -499,23 +581,297 @@ export default function Settings() {
     ) : (
       "当前进程未提供"
     );
+  const credentials = readiness.data?.credentials;
+  /** Whether a key is saved for this service; the value itself never comes back. */
+  const keySaved = (name: string) =>
+    credentials?.models.some(
+      (item) => item.target.toLowerCase() === name.trim().toLowerCase(),
+    ) === true &&
+    credentials.models.find(
+      (item) => item.target.toLowerCase() === name.trim().toLowerCase(),
+    )!.present;
+  const savedProviders = savedNow
+    ? record(savedNow.providers, "providers")
+    : {};
+  const onCredential = (result: JsonRecord) => {
+    setRuntime(result);
+    void readiness.refetch();
+  };
+  const updateModel = (id: string, patch: Partial<ModelRow>) => {
+    setModels(
+      models.map((item) => (item.id === id ? { ...item, ...patch } : item)),
+    );
+    mark("models");
+  };
+  const providerBlock = (row: ProviderRow, index: number) => {
+    const own = models
+      .map((model, position) => ({ model, position }))
+      .filter(({ model }) => model.provider === row.name);
+    const stored =
+      !!row.name.trim() &&
+      Object.hasOwn(savedProviders, row.name.trim()) &&
+      !changed("providers");
+    return (
+      <div
+        className="settings-provider"
+        key={row.id}
+        role="group"
+        aria-label={`模型服务 ${index + 1}`}
+      >
+        <h3>
+          {row.name.trim() || `模型服务 ${index + 1}`}
+          {proxied.providers.includes(row.name) ? (
+            <span className="settings-egress">经代理</span>
+          ) : null}
+        </h3>
+        <Definitions>
+          <Definition
+            term="名称"
+            description="在模型选择和角色绑定里用这个名字指代它。"
+          >
+            <TextField
+              label={`模型服务 ${index + 1} 名称`}
+              value={row.name}
+              onChange={(name) => {
+                setProviders(
+                  providers.map((item) =>
+                    item.id === row.id ? { ...item, name } : item,
+                  ),
+                );
+                // The service's models follow its new name.
+                if (row.name)
+                  setModels(
+                    models.map((model) =>
+                      model.provider === row.name
+                        ? { ...model, provider: name }
+                        : model,
+                    ),
+                  );
+                mark("providers");
+                mark("models");
+              }}
+            />
+          </Definition>
+          <Definition term="协议" description="服务使用的接口；要与服务一致。">
+            <Select
+              label={`模型服务 ${index + 1} 协议`}
+              value={row.api}
+              onChange={(api) => {
+                setProviders(
+                  providers.map((item) =>
+                    item.id === row.id ? { ...item, api } : item,
+                  ),
+                );
+                mark("providers");
+              }}
+              options={MODEL_APIS}
+            />
+          </Definition>
+          <Definition
+            term="地址"
+            description="服务的 Base URL。密钥只发往这个地址。"
+          >
+            <TextField
+              label={`模型服务 ${index + 1} 服务地址`}
+              width="long"
+              value={row.url}
+              onChange={(url) => {
+                setProviders(
+                  providers.map((item) =>
+                    item.id === row.id ? { ...item, url } : item,
+                  ),
+                );
+                mark("providers");
+              }}
+            />
+          </Definition>
+          <Definition term="密钥" description="保存后只显示“已保存”，不回显。">
+            <SecretField
+              label={`${row.name.trim() || `模型服务 ${index + 1}`} 的密钥`}
+              saved={keySaved(row.name)}
+              namespace="model"
+              target={row.name.trim()}
+              baseline={str(snapshot?.revision)}
+              disabledReason={
+                stored ? undefined : "先保存这个模型服务，再填密钥。"
+              }
+              onResult={onCredential}
+            />
+          </Definition>
+          <Definition
+            term="模型"
+            description="这个服务上可用的模型：远程名称、推理强度与能力。"
+          >
+            <div className="settings-models">
+              {own.map(({ model, position }) => (
+                <div className="settings-model" key={model.id}>
+                  <div className="settings-grid">
+                    <TextField
+                      label={`模型 ${position + 1} 远程名称`}
+                      value={model.name}
+                      onChange={(name) => updateModel(model.id, { name })}
+                    />
+                    <Select
+                      label={`模型 ${position + 1} 推理强度`}
+                      value={model.reasoning}
+                      onChange={(reasoning) =>
+                        updateModel(model.id, { reasoning })
+                      }
+                      options={MODEL_REASONING.map((value) => ({
+                        value,
+                        label: value,
+                      }))}
+                    />
+                    <div className="settings-choices">
+                      <Checkbox
+                        label={`模型 ${position + 1} 支持图像`}
+                        isSelected={model.image}
+                        onChange={(image) => updateModel(model.id, { image })}
+                      />
+                      <Checkbox
+                        label={`模型 ${position + 1} 流式输出`}
+                        isSelected={model.stream}
+                        onChange={(stream) => updateModel(model.id, { stream })}
+                      />
+                    </div>
+                  </div>
+                  <div className="settings-record-actions">
+                    <Probe
+                      owner="model"
+                      target={`${model.provider}/${model.name}`}
+                      image={model.image}
+                    />
+                    <Button
+                      variant="text"
+                      onPress={() => {
+                        const ref = `${model.provider}/${model.name}`;
+                        if (
+                          value("browser", "model") === ref ||
+                          value("analyze", "model") === ref
+                        ) {
+                          setMessage(
+                            "模型仍有角色绑定，请先调整并保存角色绑定。",
+                          );
+                          return;
+                        }
+                        setModels(
+                          models.filter((item) => item.id !== model.id),
+                        );
+                        mark("models");
+                      }}
+                    >
+                      移除模型
+                    </Button>
+                  </div>
+                </div>
+              ))}
+              <Button
+                size="compact"
+                isDisabled={!row.name.trim()}
+                onPress={() => {
+                  setModels([
+                    ...models,
+                    {
+                      id: randomId(),
+                      provider: row.name,
+                      name: "",
+                      reasoning: "default",
+                      image: false,
+                      stream: true,
+                    },
+                  ]);
+                  mark("models");
+                }}
+              >
+                添加模型
+              </Button>
+            </div>
+          </Definition>
+        </Definitions>
+        <Button
+          variant="text"
+          onPress={() => {
+            if (models.some((model) => model.provider === row.name)) {
+              setMessage("这个模型服务仍有模型引用，请先移除或调整模型。");
+              return;
+            }
+            setProviders(providers.filter((item) => item.id !== row.id));
+            mark("providers");
+          }}
+        >
+          移除模型服务
+        </Button>
+      </div>
+    );
+  };
+  const rolesSection = (
+    <Section
+      title="角色绑定"
+      description="每类工作用哪个模型。"
+      footer={groupFooter("roles", "保存角色绑定")}
+    >
+      <Definitions>
+        <Definition
+          term="分析模型"
+          description="单篇总结、补全书目与判断章节时使用；标签任务没有单独指定时也用它。"
+        >
+          <Select
+            label="分析模型"
+            value={str(value("analyze", "model"))}
+            onChange={(value) => edit("analyze", "model", value || null)}
+            options={modelOptions}
+          />
+        </Definition>
+        <Definition
+          term="校订矫正模型"
+          description="逐页校订全文时使用，须支持图片与工具；不选则沿用分析模型。"
+        >
+          <Select
+            label="校订矫正模型"
+            value={str(value("proofread", "model"))}
+            onChange={(v) => edit("proofread", "model", v || null)}
+            options={modelOptions}
+          />
+        </Definition>
+        {[
+          ["model", "文献打标模型", "给每篇文献打标签；不选则沿用分析模型。"],
+          ["consolidation_model", "词表整理模型", "合并、整理标签词表。"],
+          ["backfill_model", "标签回溯模型", "给已有文献补打新加的标签。"],
+        ].map(([key, label, description]) => (
+          <Definition key={key} term={label!} description={description!}>
+            <Select
+              label={label!}
+              value={str(value("tags", key!))}
+              onChange={(v) => edit("tags", key!, v || null)}
+              options={modelOptions}
+            />
+          </Definition>
+        ))}
+        <Definition
+          term="浏览器模型"
+          description="Browser Agent 看网页、找 PDF 时使用，须支持图像。"
+        >
+          <Select
+            label="浏览器模型"
+            value={str(value("browser", "model"))}
+            onChange={(value) => edit("browser", "model", value || null)}
+            options={modelOptions.map((option) => ({
+              ...option,
+              disabled:
+                !!option.value &&
+                record(record(draft?.models, "models")[option.value], "model")
+                  .image !== true,
+            }))}
+          />
+        </Definition>
+      </Definitions>
+    </Section>
+  );
   return (
     <section className="settings-page">
       <PageHeader
         title="设置"
-        action={
-          <>
-            {api.kind === "workspace" ? <ApplyConfiguration /> : null}
-            <Button
-              isDisabled={publish.isPending}
-              onPress={() =>
-                dirty.size ? setRefreshConfirm(true) : void refresh()
-              }
-            >
-              刷新配置
-            </Button>
-          </>
-        }
+        action={api.kind === "workspace" ? <ApplyConfiguration /> : undefined}
       />
       <div className="settings-layout">
         <nav className="settings-navigation" aria-label="设置分区导航">
@@ -524,7 +880,7 @@ export default function Settings() {
             orientation="vertical"
             value={section}
             onChange={setSection}
-            items={sectionTabs}
+            items={[...sectionTabs]}
           />
           <div className="settings-navigation-narrow">
             <Select
@@ -538,15 +894,36 @@ export default function Settings() {
             />
           </div>
         </nav>
-        <div className="settings-content">
+        <div className="settings-content" data-section={section}>
           {section === "appearance" ? (
             <Appearance />
           ) : section === "devices" ? (
             <DeviceConnections />
           ) : section === "advanced" ? (
-            <Suspense fallback={<p role="status">正在打开高级工具…</p>}>
-              <Maintenance />
-            </Suspense>
+            <>
+              {api.kind === "workspace" ? (
+                <Section title="配置">
+                  <Definitions>
+                    <Definition
+                      term="重新读取配置"
+                      description="从配置文件读回已保存的值；本页未保存的改动会被替换。"
+                    >
+                      <Button
+                        isDisabled={publish.isPending}
+                        onPress={() =>
+                          unsaved ? setRefreshConfirm(true) : void refresh()
+                        }
+                      >
+                        重新读取配置
+                      </Button>
+                    </Definition>
+                  </Definitions>
+                </Section>
+              ) : null}
+              <Suspense fallback={<p role="status">正在打开高级工具…</p>}>
+                <Maintenance embedded />
+              </Suspense>
+            </>
           ) : read.isPending ? (
             <p role="status">正在读取配置…</p>
           ) : read.isError ? (
@@ -554,76 +931,51 @@ export default function Settings() {
           ) : (
             draft && (
               <>
-                {section === "paths" && (
+                {section === "models" && (
                   <>
                     <Section
-                      title="文献库位置"
-                      action={saveButton(["paths"], "保存文献库位置")}
+                      title="模型服务"
+                      description="每个服务一块：地址、密钥、模型与测试都在这里。"
+                      footer={saveButton(
+                        ["providers", "models"],
+                        "保存模型服务",
+                        saveModels,
+                      )}
                     >
-                      <Definitions>
-                        <Definition
-                          term="文献库文件"
-                          description="修改后重启服务生效，已有文件不会移动。"
-                          value={pathValue(api.workspace.catalog, "数据库路径")}
+                      {providers.length ? null : (
+                        <p className="settings-empty">还没有模型服务。</p>
+                      )}
+                      {providers.map(providerBlock)}
+                      <div className="settings-provider-add">
+                        <Button
+                          onPress={() => {
+                            setProviders([
+                              ...providers,
+                              {
+                                id: randomId(),
+                                name: "",
+                                api: "openai-responses",
+                                url: "",
+                              },
+                            ]);
+                            mark("providers");
+                          }}
                         >
-                          <TextField
-                            label="文献库文件"
-                            width="long"
-                            value={str(value("paths", "catalog_path"))}
-                            onChange={(value) =>
-                              edit("paths", "catalog_path", value || null)
-                            }
-                          />
-                        </Definition>
-                        <Definition
-                          term="文件存放位置"
-                          description="PDF、解析材料与全文存放的位置。"
-                          value={pathValue(
-                            api.workspace.artifacts,
-                            "文件存放位置",
-                          )}
-                        >
-                          <TextField
-                            label="文件存放位置"
-                            width="long"
-                            value={str(value("paths", "artifact_root"))}
-                            onChange={(value) =>
-                              edit("paths", "artifact_root", value || null)
-                            }
-                          />
-                        </Definition>
-                      </Definitions>
+                          添加模型服务
+                        </Button>
+                      </div>
                     </Section>
-                    <Section title="当前登录">
-                      <Definitions>
-                        <Definition
-                          term="退出登录"
-                          description="释放当前浏览器连接；已提交的后台任务继续运行。"
-                        >
-                          <Button
-                            onPress={() =>
-                              void api
-                                .logout()
-                                .catch((error: unknown) =>
-                                  setMessage(errorMessage(error)),
-                                )
-                            }
-                          >
-                            退出登录
-                          </Button>
-                        </Definition>
-                      </Definitions>
-                    </Section>
+                    {rolesSection}
                   </>
                 )}
-                {section === "sources" && (
+                {section === "acquire" && (
                   <>
                     <Section title="文献来源">
                       <SourceDirectoryPanel />
                     </Section>
                     <Section
                       title="主题检索"
-                      action={saveButton(["sources"], "保存来源配置", () => {
+                      footer={saveButton(["sources"], "保存来源配置", () => {
                         const limit = Number(
                           record(
                             record(draft.sources, "sources").metadata,
@@ -638,7 +990,7 @@ export default function Settings() {
                       <Definitions>
                         <Definition
                           term="元数据结果上限"
-                          description="每个来源每次检索最多读取的条数。"
+                          description="每个来源每次检索最多读取的条数。调大找得更全，但更慢、更占来源的配额。"
                         >
                           <TextField
                             label="元数据结果上限"
@@ -667,391 +1019,15 @@ export default function Settings() {
                         </Definition>
                       </Definitions>
                     </Section>
-                  </>
-                )}
-                {section === "models" && (
-                  <>
                     <Section
-                      title="模型服务"
-                      description="模型服务写明连接协议与地址，模型记录远程名称与能力；凭据在“凭据”分区保存。"
-                      action={saveButton(
-                        ["providers", "models"],
-                        "保存模型服务",
-                        saveModels,
-                      )}
-                    >
-                      <div className="settings-registry">
-                        <h3>模型服务</h3>
-                        {providers.map((row, index) => (
-                          <fieldset key={row.id}>
-                            <legend>
-                              模型服务 {index + 1}
-                              {proxied.providers.includes(row.name) ? (
-                                <span className="settings-egress">经代理</span>
-                              ) : null}
-                            </legend>
-                            <div className="settings-grid">
-                              <TextField
-                                label={`模型服务 ${index + 1} 名称`}
-                                value={row.name}
-                                onChange={(name) => {
-                                  setProviders(
-                                    providers.map((item) =>
-                                      item.id === row.id
-                                        ? { ...item, name }
-                                        : item,
-                                    ),
-                                  );
-                                  mark("providers");
-                                }}
-                              />
-                              <Select
-                                label={`模型服务 ${index + 1} 协议`}
-                                value={row.api}
-                                onChange={(api) => {
-                                  setProviders(
-                                    providers.map((item) =>
-                                      item.id === row.id
-                                        ? { ...item, api }
-                                        : item,
-                                    ),
-                                  );
-                                  mark("providers");
-                                }}
-                                options={MODEL_APIS}
-                              />
-                              <TextField
-                                label={`模型服务 ${index + 1} 服务地址`}
-                                width="long"
-                                value={row.url}
-                                onChange={(url) => {
-                                  setProviders(
-                                    providers.map((item) =>
-                                      item.id === row.id
-                                        ? { ...item, url }
-                                        : item,
-                                    ),
-                                  );
-                                  mark("providers");
-                                }}
-                              />
-                              <Button
-                                variant="text"
-                                onPress={() => {
-                                  if (
-                                    models.some(
-                                      (model) => model.provider === row.name,
-                                    )
-                                  ) {
-                                    setMessage(
-                                      "这个模型服务仍有模型引用，请先移除或调整模型。",
-                                    );
-                                    return;
-                                  }
-                                  setProviders(
-                                    providers.filter(
-                                      (item) => item.id !== row.id,
-                                    ),
-                                  );
-                                  mark("providers");
-                                }}
-                              >
-                                移除模型服务
-                              </Button>
-                            </div>
-                          </fieldset>
-                        ))}
-                        <Button
-                          onPress={() => {
-                            setProviders([
-                              ...providers,
-                              {
-                                id: randomId(),
-                                name: "",
-                                api: "openai-responses",
-                                url: "",
-                              },
-                            ]);
-                            mark("providers");
-                          }}
-                        >
-                          添加模型服务
-                        </Button>
-                        <h3>模型</h3>
-                        {models.map((row, index) => (
-                          <fieldset key={row.id}>
-                            <legend>模型 {index + 1}</legend>
-                            <div className="settings-grid">
-                              <Select
-                                label={`模型 ${index + 1} 所属服务`}
-                                value={row.provider}
-                                onChange={(provider) => {
-                                  setModels(
-                                    models.map((item) =>
-                                      item.id === row.id
-                                        ? { ...item, provider }
-                                        : item,
-                                    ),
-                                  );
-                                  mark("models");
-                                }}
-                                options={[
-                                  { value: "", label: "请选择" },
-                                  ...providers
-                                    .filter((provider) => provider.name)
-                                    .map((provider) => ({
-                                      value: provider.name,
-                                      label: provider.name,
-                                    })),
-                                ]}
-                              />
-                              <TextField
-                                label={`模型 ${index + 1} 远程名称`}
-                                value={row.name}
-                                onChange={(name) => {
-                                  setModels(
-                                    models.map((item) =>
-                                      item.id === row.id
-                                        ? { ...item, name }
-                                        : item,
-                                    ),
-                                  );
-                                  mark("models");
-                                }}
-                              />
-                              <Select
-                                label={`模型 ${index + 1} 推理强度`}
-                                value={row.reasoning}
-                                onChange={(reasoning) => {
-                                  setModels(
-                                    models.map((item) =>
-                                      item.id === row.id
-                                        ? { ...item, reasoning }
-                                        : item,
-                                    ),
-                                  );
-                                  mark("models");
-                                }}
-                                options={MODEL_REASONING.map((value) => ({
-                                  value,
-                                  label: value,
-                                }))}
-                              />
-                              <div className="settings-choices">
-                                <Checkbox
-                                  label={`模型 ${index + 1} 支持图像`}
-                                  isSelected={row.image}
-                                  onChange={(image) => {
-                                    setModels(
-                                      models.map((item) =>
-                                        item.id === row.id
-                                          ? { ...item, image }
-                                          : item,
-                                      ),
-                                    );
-                                    mark("models");
-                                  }}
-                                />
-                                <Checkbox
-                                  label={`模型 ${index + 1} 流式输出`}
-                                  isSelected={row.stream}
-                                  onChange={(stream) => {
-                                    setModels(
-                                      models.map((item) =>
-                                        item.id === row.id
-                                          ? { ...item, stream }
-                                          : item,
-                                      ),
-                                    );
-                                    mark("models");
-                                  }}
-                                />
-                              </div>
-                            </div>
-                            <div className="settings-record-actions">
-                              <Probe
-                                owner="model"
-                                target={`${row.provider}/${row.name}`}
-                                image={row.image}
-                              />
-                              <Button
-                                variant="text"
-                                onPress={() => {
-                                  const ref = `${row.provider}/${row.name}`;
-                                  if (
-                                    value("browser", "model") === ref ||
-                                    value("analyze", "model") === ref
-                                  ) {
-                                    setMessage(
-                                      "模型仍有角色绑定，请先调整并保存角色绑定。",
-                                    );
-                                    return;
-                                  }
-                                  setModels(
-                                    models.filter((item) => item.id !== row.id),
-                                  );
-                                  mark("models");
-                                }}
-                              >
-                                移除 Model
-                              </Button>
-                            </div>
-                          </fieldset>
-                        ))}
-                        <Button
-                          onPress={() => {
-                            setModels([
-                              ...models,
-                              {
-                                id: randomId(),
-                                provider: providers[0]?.name ?? "",
-                                name: "",
-                                reasoning: "default",
-                                image: false,
-                                stream: true,
-                              },
-                            ]);
-                            mark("models");
-                          }}
-                        >
-                          添加 Model
-                        </Button>
-                      </div>
-                    </Section>
-                    <Section
-                      title="角色绑定"
-                      description="标签任务未单独指定时使用分析模型；元数据与章节角色也使用分析模型。"
-                      action={saveButton(runtimeSections, "保存角色绑定")}
-                    >
-                      <Definitions>
-                        <Definition
-                          term="分析模型"
-                          description="单篇处理、元数据与章节角色。"
-                        >
-                          <Select
-                            label="分析模型"
-                            value={str(value("analyze", "model"))}
-                            onChange={(value) =>
-                              edit("analyze", "model", value || null)
-                            }
-                            options={modelOptions}
-                          />
-                        </Definition>
-                        <Definition
-                          term="校订矫正模型"
-                          description="未指定时沿用分析模型，须支持图片与工具。"
-                        >
-                          <Select
-                            label="校订矫正模型"
-                            value={str(value("proofread", "model"))}
-                            onChange={(v) =>
-                              edit("proofread", "model", v || null)
-                            }
-                            options={modelOptions}
-                          />
-                        </Definition>
-                        {[
-                          ["model", "文献打标模型"],
-                          ["consolidation_model", "词表整理模型"],
-                          ["backfill_model", "标签回溯模型"],
-                        ].map(([key, label]) => (
-                          <Definition key={key} term={label!}>
-                            <Select
-                              label={label!}
-                              value={str(value("tags", key!))}
-                              onChange={(v) => edit("tags", key!, v || null)}
-                              options={modelOptions}
-                            />
-                          </Definition>
-                        ))}
-                        <Definition
-                          term="浏览器模型"
-                          description="须支持图像。"
-                        >
-                          <Select
-                            label="浏览器模型"
-                            value={str(value("browser", "model"))}
-                            onChange={(value) =>
-                              edit("browser", "model", value || null)
-                            }
-                            options={modelOptions.map((option) => ({
-                              ...option,
-                              disabled:
-                                !!option.value &&
-                                record(
-                                  record(draft.models, "models")[option.value],
-                                  "model",
-                                ).image !== true,
-                            }))}
-                          />
-                        </Definition>
-                      </Definitions>
-                    </Section>
-                  </>
-                )}
-                {section === "archive" && (
-                  <Section
-                    title="生成全文与标签"
-                    description="元数据和章节判定使用“模型”分区的分析模型。"
-                    action={saveButton(
-                      ["tags", "proofread"],
-                      "保存生成全文的设置",
-                    )}
-                  >
-                    {readiness.data?.diagnostics?.some(
-                      (d) => d.code === "configuration-option-removed",
-                    ) ? (
-                      <PageNote>
-                        配置文件里还有已删除的“每篇矫正调用上限”（
-                        <code>proofread.max_calls_per_document</code>
-                        ）。它不再生效：整理与校订在同一校验错误连续出现 3
-                        次，或连续 8
-                        次调用没有进展时停下。可以从配置文件中删去这一行。
-                      </PageNote>
-                    ) : null}
-                    <Definitions>
-                      {[
-                        ["max_per_literature", "每篇标签上限", 1, 32],
-                        ["candidate_k", "候选检索数量", 1, 64],
-                        ["backfill_batch", "回溯批量", 1, 64],
-                      ].map(([key, label, min, max]) => (
-                        <Definition
-                          key={String(key)}
-                          term={String(label)}
-                          description={`${String(min)}–${String(max)}`}
-                        >
-                          <NumberField
-                            live
-                            label={String(label)}
-                            minValue={Number(min)}
-                            maxValue={Number(max)}
-                            value={Number(value("tags", String(key)) ?? min)}
-                            onChange={(v) => edit("tags", String(key), v)}
-                          />
-                        </Definition>
-                      ))}
-                      <Definition
-                        term="解析方式"
-                        description="部署配置，只读。"
-                      >
-                        <span className="settings-readonly">
-                          {str(value("parsing", "archive_profile")) ||
-                            "vlm-engine"}
-                        </span>
-                      </Definition>
-                    </Definitions>
-                  </Section>
-                )}
-                {section === "parser" && (
-                  <>
-                    <Section
-                      title="浏览器"
-                      action={saveButton(runtimeSections, "保存运行配置")}
+                      title="受控浏览器"
+                      description="自动途径拿不到 PDF 时，Browser Agent 用它打开出版社页面。"
+                      footer={groupFooter("browser", "保存浏览器设置")}
                     >
                       <Definitions>
                         <Definition
                           term="启用浏览器"
-                          description="获取 PDF 时可以打开受控浏览器。"
+                          description="关闭后获取 PDF 只走 API 与公开网站，不打开浏览器。"
                         >
                           <Switch
                             isSelected={value("browser", "enabled") === true}
@@ -1062,7 +1038,10 @@ export default function Settings() {
                             启用浏览器
                           </Switch>
                         </Definition>
-                        <Definition term="浏览器个人资料">
+                        <Definition
+                          term="浏览器个人资料"
+                          description="浏览器保存登录与 Cookie 的目录；用已登录机构账号的资料能拿到更多全文。"
+                        >
                           <TextField
                             label="浏览器个人资料"
                             width="long"
@@ -1074,7 +1053,7 @@ export default function Settings() {
                         </Definition>
                         <Definition
                           term="浏览器模型"
-                          description="与“模型”分区的角色绑定相同。"
+                          description="与“模型服务”里的角色绑定是同一项，须支持图像。"
                         >
                           <Select
                             label="浏览器模型"
@@ -1087,15 +1066,26 @@ export default function Settings() {
                         </Definition>
                         <Definition
                           term="连接测试"
-                          description="使用已保存的配置和凭据，可能消耗模型额度。"
+                          description="用已保存的配置和密钥试一次，可能消耗模型额度。"
                         >
                           <Probe owner="browser-model" image />
                         </Definition>
                       </Definitions>
                     </Section>
-                    <Section title="MinerU 解析">
+                  </>
+                )}
+                {section === "fulltext" && (
+                  <>
+                    <Section
+                      title="解析服务"
+                      description="MinerU 把 PDF 读成版面与文字，是生成全文的第一步。"
+                      footer={groupFooter("parser", "保存解析服务")}
+                    >
                       <Definitions>
-                        <Definition term="服务地址">
+                        <Definition
+                          term="地址"
+                          description="MinerU 服务的地址。"
+                        >
                           <TextField
                             label="MinerU 服务地址"
                             width="long"
@@ -1105,7 +1095,10 @@ export default function Settings() {
                             }
                           />
                         </Definition>
-                        <Definition term="连接模式">
+                        <Definition
+                          term="连接方式"
+                          description="本机服务走 loopback；远程服务须用 HTTPS 并填访问令牌。"
+                        >
                           <Select
                             label="MinerU 连接模式"
                             value={str(value("parsing", "connection_mode"))}
@@ -1119,7 +1112,10 @@ export default function Settings() {
                             ]}
                           />
                         </Definition>
-                        <Definition term="模型">
+                        <Definition
+                          term="模型"
+                          description="MinerU 使用的解析模型名称。"
+                        >
                           <TextField
                             label="MinerU 模型"
                             value={str(value("parsing", "model_identity"))}
@@ -1129,14 +1125,135 @@ export default function Settings() {
                           />
                         </Definition>
                         <Definition
+                          term="访问令牌"
+                          description="远程 MinerU 要求时填写；保存后只显示“已保存”，不回显。"
+                        >
+                          <SecretField
+                            label="MinerU 访问令牌"
+                            saved={credentials?.mineru === true}
+                            namespace="mineru"
+                            target="mineru"
+                            baseline={str(snapshot?.revision)}
+                            onResult={onCredential}
+                          />
+                        </Definition>
+                        <Definition
                           term="连接测试"
-                          description="使用已保存的配置访问解析服务。"
+                          description="用已保存的配置访问解析服务。"
                         >
                           <Probe owner="parse" />
                         </Definition>
                       </Definitions>
                     </Section>
+                    <Section
+                      title="参数"
+                      footer={groupFooter("params", "保存生成全文的设置")}
+                    >
+                      {readiness.data?.diagnostics?.some(
+                        (d) => d.code === "configuration-option-removed",
+                      ) ? (
+                        <PageNote>
+                          配置文件里还有已删除的“每篇矫正调用上限”（
+                          <code>proofread.max_calls_per_document</code>
+                          ）。它不再生效：整理与校订在同一校验错误连续出现 3
+                          次，或连续 8
+                          次调用没有进展时停下。可以从配置文件中删去这一行。
+                        </PageNote>
+                      ) : null}
+                      <Definitions>
+                        {(
+                          [
+                            [
+                              "max_per_literature",
+                              "每篇标签上限",
+                              1,
+                              32,
+                              "每篇文献最多打几个标签。调大标签更细，也更杂。",
+                            ],
+                            [
+                              "candidate_k",
+                              "候选检索数量",
+                              1,
+                              64,
+                              "打标签前先从词表里挑出多少个候选。调大更不易漏，但每次调用更长、更贵。",
+                            ],
+                            [
+                              "backfill_batch",
+                              "回溯批量",
+                              1,
+                              64,
+                              "补打新标签时一次处理几篇。调大更快完成，单次失败影响的篇数也更多。",
+                            ],
+                          ] as const
+                        ).map(([key, label, min, max, description]) => (
+                          <Definition
+                            key={key}
+                            term={label}
+                            description={`${description}（${min}–${max}）`}
+                          >
+                            <NumberField
+                              live
+                              label={label}
+                              minValue={min}
+                              maxValue={max}
+                              value={Number(value("tags", key) ?? min)}
+                              onChange={(v) => edit("tags", key, v)}
+                            />
+                          </Definition>
+                        ))}
+                        <Definition
+                          term="解析方式"
+                          description="部署时选定的解析流程，只读。"
+                        >
+                          <span className="settings-readonly">
+                            {str(value("parsing", "archive_profile")) ||
+                              "vlm-engine"}
+                          </span>
+                        </Definition>
+                      </Definitions>
+                    </Section>
                   </>
+                )}
+                {section === "paths" && (
+                  <Section
+                    title="文献库文件"
+                    description="改动后要重启服务才生效；已有文件不会移动。"
+                    footer={saveButton(["paths"], "保存文献库位置")}
+                  >
+                    <Definitions>
+                      <Definition
+                        term="文献库文件"
+                        description="保存书目、文件夹与任务记录的数据库文件。"
+                        value={pathValue(api.workspace.catalog, "数据库路径")}
+                      >
+                        <TextField
+                          label="文献库文件"
+                          width="long"
+                          value={str(value("paths", "catalog_path"))}
+                          onChange={(value) =>
+                            edit("paths", "catalog_path", value || null)
+                          }
+                        />
+                      </Definition>
+                      <Definition
+                        term="文件存放位置"
+                        description="PDF、解析材料与全文存放的目录。"
+                        value={pathValue(
+                          api.workspace.artifacts,
+                          "文件存放位置",
+                        )}
+                      >
+                        <TextField
+                          label="文件存放位置"
+                          width="long"
+                          value={str(value("paths", "artifact_root"))}
+                          onChange={(value) =>
+                            edit("paths", "artifact_root", value || null)
+                          }
+                        />
+                      </Definition>
+                    </Definitions>
+                  </Section>
                 )}
                 {section === "network" && savedConfiguration && (
                   <NetworkSettings
@@ -1158,19 +1275,7 @@ export default function Settings() {
                     )}
                     onProxy={(proxy) => editNetwork("proxy", proxy)}
                     onRoutes={(routes) => editNetwork("via_proxy", routes)}
-                    onCredential={(result) => {
-                      setRuntime(result);
-                      void readiness.refetch();
-                    }}
-                  />
-                )}
-                {section === "cred" && (
-                  <Credential
-                    baseline={str(snapshot?.revision)}
-                    onResult={(result) => {
-                      setRuntime(result);
-                      void readiness.refetch();
-                    }}
+                    onCredential={onCredential}
                   />
                 )}
                 {section === "status" && (
@@ -1213,19 +1318,32 @@ export default function Settings() {
               </>
             )
           )}
-          {dirty.size > 0 && (
-            <p className="settings-draft-note" role="status">
-              有未保存的修改；切换设置分区会保留草稿。
-            </p>
-          )}
           <p role={publish.isError ? "alert" : "status"}>{message}</p>
-          {snapshot && (
+          {snapshot && section !== "appearance" ? (
             <TechDetails>
               <p>
                 配置版本：<code>{str(snapshot.revision)}</code>
               </p>
             </TechDetails>
-          )}
+          ) : null}
+          {api.kind === "workspace" ? (
+            // Signing out belongs to no section: the page's last line.
+            <div className="settings-logout">
+              <Button
+                variant="text"
+                onPress={() =>
+                  void api
+                    .logout()
+                    .catch((error: unknown) => setMessage(errorMessage(error)))
+                }
+              >
+                退出登录
+              </Button>
+              <span className="ui-description">
+                释放当前浏览器连接；已提交的后台任务继续运行。
+              </span>
+            </div>
+          ) : null}
         </div>
       </div>
       <Dialog
@@ -1372,7 +1490,7 @@ function Probe({
           title: "测试连接",
           description:
             "会使用当前已保存的配置和凭据访问外部服务，可能消耗模型额度。尚未保存的草稿不会参与测试。",
-          confirmLabel: "确认测试",
+          confirmLabel: "测试",
         }}
         isPending={probe.isPending}
         onPress={() => probe.mutate()}
@@ -1408,103 +1526,3 @@ const probeOutcomes: Readonly<Record<string, string>> = {
   skipped: "已跳过",
   unavailable: "不可用",
 };
-function Credential({
-  baseline,
-  onResult,
-}: {
-  baseline: string;
-  onResult: (result: JsonRecord) => void;
-}) {
-  const api = useApi();
-  const [namespace, setNamespace] = useState("model"),
-    [target, setTarget] = useState(""),
-    [message, setMessage] = useState("");
-  const secret = useRef<HTMLInputElement>(null),
-    busy = useRef(false);
-  const [pending, setPending] = useState(false);
-  const save = async () => {
-    if (busy.current) return;
-    const value = secret.current?.value ?? "";
-    if (secret.current) secret.current.value = "";
-    if (!value || !target.trim()) {
-      setMessage("请选择凭据类型，并填写目标与凭据值。");
-      return;
-    }
-    busy.current = true;
-    setPending(true);
-    try {
-      const edit =
-        namespace === "source"
-          ? {
-              namespace,
-              target: target.trim(),
-              kind: "set",
-              fields: { api_key: value },
-            }
-          : { namespace, target: target.trim(), kind: "set", value };
-      const result = await api.request("/api/configuration/credential", {
-        edit,
-        baseline,
-      });
-      onResult(result);
-      setMessage(
-        "凭据已保存且不回显；已组装能力的下一次外部请求会重新核验授权。",
-      );
-    } catch (error) {
-      setMessage(
-        `凭据保存失败：${errorMessage(error)}。值已从页面清除，请重新输入。`,
-      );
-    } finally {
-      busy.current = false;
-      setPending(false);
-      if (secret.current) secret.current.value = "";
-    }
-  };
-  return (
-    <Section
-      title="凭据"
-      description="凭据只在提交时传给服务端，不保存在界面状态或本机偏好中，保存后不回显。"
-      action={
-        <Button
-          variant="primary"
-          isPending={pending}
-          onPress={() => void save()}
-        >
-          保存凭据
-        </Button>
-      }
-    >
-      <Definitions>
-        <Definition term="凭据类型">
-          <Select
-            label="凭据类型"
-            value={namespace}
-            onChange={setNamespace}
-            options={[
-              { value: "model", label: "模型服务" },
-              { value: "mineru", label: "MinerU 访问令牌" },
-            ]}
-          />
-        </Definition>
-        <Definition
-          term="目标名称"
-          description="模型服务名称或 MinerU。文献来源的凭据在“文献来源”里配置。"
-        >
-          <TextField label="目标名称" value={target} onChange={setTarget} />
-        </Definition>
-        <Definition term="凭据值">
-          <span className="credential-field">
-            <input
-              ref={secret}
-              className="ui-input"
-              aria-label="凭据值"
-              type="password"
-              autoComplete="new-password"
-            />
-          </span>
-        </Definition>
-      </Definitions>
-      <p role="status">{message}</p>
-    </Section>
-  );
-}

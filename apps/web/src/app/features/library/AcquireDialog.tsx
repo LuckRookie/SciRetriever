@@ -11,6 +11,7 @@ import {
   Button,
   Checkbox,
   Dialog,
+  Disclosure,
   ErrorNotice,
   Select,
   TextField,
@@ -157,8 +158,7 @@ export function AcquireDialog({
               取消
             </Button>
             <Button
-              variant="process"
-              confirm={false}
+              variant="primary"
               isPending={submit.isPending}
               disabledReason={
                 limitInvalid
@@ -237,33 +237,40 @@ export function AcquireDialog({
               将使用配置的文献来源获取 PDF，必要时调用 Browser
               Agent；成员在提交时固定，之后入库的文献不会加入。
             </p>
-            <Select
-              label="受阻时"
-              value={policy}
-              onChange={setPolicy}
-              options={[
-                { value: "never", label: "自动处理" },
-                { value: "notify", label: "通知并继续" },
-                { value: "pause", label: "暂停等待人工" },
-              ]}
-            />
-            <TextField
-              label="尝试上限"
-              width="short"
-              value={attempts}
-              onChange={setAttempts}
-            />
-            <TextField
-              label="重试上限"
-              width="short"
-              value={retries}
-              onChange={setRetries}
-            />
-            <Checkbox
-              label="保存后立即执行"
-              isSelected={start}
-              onChange={setStart}
-            />
+            {/* Design core rule 9: rarely changed parameters, folded. */}
+            <Disclosure title="高级选项">
+              <div className="acquire-advanced">
+                <Select
+                  label="受阻时"
+                  value={policy}
+                  onChange={setPolicy}
+                  options={[
+                    { value: "never", label: "自动处理" },
+                    { value: "notify", label: "通知并继续" },
+                    { value: "pause", label: "暂停等待人工" },
+                  ]}
+                />
+                <TextField
+                  label="尝试上限"
+                  width="short"
+                  value={attempts}
+                  onChange={setAttempts}
+                  description="每篇最多尝试几个来源。调小会更快结束，但可能错过后面的来源。"
+                />
+                <TextField
+                  label="重试上限"
+                  width="short"
+                  value={retries}
+                  onChange={setRetries}
+                  description="同一来源出错后再试几次。调大更耐心，也更慢。"
+                />
+                <Checkbox
+                  label="保存后立即执行"
+                  isSelected={start}
+                  onChange={setStart}
+                />
+              </div>
+            </Disclosure>
           </>
         )}
       </div>

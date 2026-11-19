@@ -51,7 +51,7 @@ import { emptyQuery } from "../../data/library.js";
 import { openBatch } from "../library/Folders.js";
 import { AcquireDialog } from "../library/AcquireDialog.js";
 import { useDevices } from "../settings/Devices.js";
-import { errorMessage, localTime } from "../../strings.js";
+import { errorMessage, shortTime } from "../../strings.js";
 import { BatchBadge, Counts, PartsBar } from "./batch-parts.js";
 import { unrecognized } from "./Dropzone.js";
 import { ParseDialog } from "./ParseDialog.js";
@@ -195,14 +195,16 @@ function FolderPicker({ onPick }: { onPick: (files: File[]) => void }) {
     // Folder selection is a non-standard attribute React does not type.
     input.current?.setAttribute("webkitdirectory", "");
   }, []);
+  // The site's own button opens the folder chooser; no native “Choose Files”.
   return (
-    <label className="ui-field">
-      <span className="ui-label">选择文件夹</span>
+    <span className="ui-file-picker">
       <input
         ref={input}
-        className="ui-file"
+        className="ui-visually-hidden"
         type="file"
         multiple
+        tabIndex={-1}
+        aria-label="选择文件夹"
         onChange={(event) =>
           onPick(
             [...(event.target.files ?? [])].filter((file) =>
@@ -211,7 +213,8 @@ function FolderPicker({ onPick }: { onPick: (files: File[]) => void }) {
           )
         }
       />
-    </label>
+      <Button onPress={() => input.current?.click()}>选择文件夹</Button>
+    </span>
   );
 }
 
@@ -623,7 +626,7 @@ export function BatchPage({ id }: { id: string }) {
             batch.kind === "legacy"
               ? "迁移前已有，没有逐次记录"
               : initiator(batch, devices),
-            localTime(batch.created_at),
+            shortTime(batch.created_at),
           ].join(" · ")}
         </p>
         {rename.isError ? (

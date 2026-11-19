@@ -87,6 +87,10 @@
   .source-use {
     width: 3.5em;
     text-align: center;
+    white-space: nowrap;
+  }
+  .source-use[data-state] {
+    font-size: var(--text-caption);
   }
   .source-row > th {
     font-weight: 500;
@@ -119,9 +123,17 @@
   .source-config-toggle:hover {
     text-decoration: underline;
   }
-  .source-row[data-open] .source-config-toggle > span {
-    display: inline-block;
-    transform: rotate(90deg);
+  /* The site's one disclosure chevron: right while closed, down when open. */
+  .source-config-toggle > svg {
+    width: 14px;
+    height: 14px;
+    margin-left: 2px;
+    vertical-align: -0.15em;
+    transform: rotate(-90deg);
+    transition: transform var(--dur-2) var(--ease-out);
+  }
+  .source-row[data-open] .source-config-toggle > svg {
+    transform: rotate(0);
   }
   .source-test-cell {
     display: inline-flex;

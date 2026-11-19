@@ -138,7 +138,7 @@ export async function runSummaryFromReader(page: Page) {
   await expect.poll(() => next.isEnabled()).toBe(true);
   await next.click();
   await next.click();
-  await dialog.getByRole("button", { name: "开始运行", exact: true }).click();
+  await dialog.getByRole("button", { name: /^运行 [\d,]+ 篇$/u }).click();
 }
 /** Run an operator on the open snapshot through the four-step dialog. */
 export async function runFromSnapshot(
@@ -154,7 +154,7 @@ export async function runFromSnapshot(
   await next.click();
   await spec?.(dialog);
   await next.click();
-  await dialog.getByRole("button", { name: "开始运行", exact: true }).click();
+  await dialog.getByRole("button", { name: /^运行 [\d,]+ 篇$/u }).click();
   return dialog;
 }
 /**

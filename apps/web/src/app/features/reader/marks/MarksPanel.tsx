@@ -15,7 +15,7 @@ import {
   Icon,
   SearchField,
 } from "../../../components/index.js";
-import { localTime } from "../../../strings.js";
+import { shortTime } from "../../../strings.js";
 
 type Kind = "all" | "highlight" | "note" | "region";
 const KINDS: readonly [Kind, string][] = [
@@ -269,7 +269,7 @@ export function MarksPanel({
                       )}
                     </button>
                     {m.note.trim() ? <NoteText text={m.note} /> : null}
-                    <p className="mark-card-time">{localTime(m.updated_at)}</p>
+                    <p className="mark-card-time">{shortTime(m.updated_at)}</p>
                   </article>
                 );
               })}
