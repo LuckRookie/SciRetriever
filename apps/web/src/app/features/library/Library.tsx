@@ -173,7 +173,7 @@ export default function Library() {
       ? route.query.intake_batch_ids[0]!
       : null;
   const batch = useIntakeBatch(batchId);
-  const chips = Object.entries(route.query).flatMap(([key, value]) => {
+  const conditions = Object.entries(route.query).flatMap(([key, value]) => {
     const names: Record<string, string> = {
       author: "作者",
       venue: "期刊",
@@ -261,15 +261,27 @@ export default function Library() {
       },
     ];
   });
+  /**
+   * The quick filter selected (“有 PDF”) shows as its selected chip alone:
+   * no condition chip repeats it and “筛选 · n” does not count it, as the
+   * search words stay in the search box (plan 25 block 30).
+   */
+  const quickFields: ReadonlySet<string> =
+    typeof route.query.has_primary_pdf !== "boolean" &&
+    queryMaterialState(route.query)
+      ? new Set(["statuses", "needs_manual_pdf"])
+      : new Set();
+  const chips = conditions.filter((chip) => !quickFields.has(chip.key));
   /** A search or a filter narrows the page's scope (page specs “文献库”). */
-  const narrowed = !!route.query.text || chips.length > 0;
+  const narrowed =
+    !!route.query.text || chips.length > 0 || quickFields.size > 0;
   /** The current filter in words, for dialogs that act on all of it. */
   const scopeLabel = () =>
     [
       folderLabel ? `文件夹：${folderLabel}` : "",
       route.query.recently_opened ? "最近阅读" : "",
       route.query.text ? `搜索：${route.query.text}` : "",
-      ...chips.map((chip) => chip.label),
+      ...conditions.map((chip) => chip.label),
     ]
       .filter(Boolean)
       .join("；") || "全部文献";

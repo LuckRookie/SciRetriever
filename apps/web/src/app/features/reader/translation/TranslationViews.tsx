@@ -292,19 +292,13 @@ export function TranslationPanel({
       </section>
       <div className="translation-options">
         <Checkbox
-          isSelected={settings.auto}
-          onChange={(auto) => setSettings({ auto })}
-        >
-          选中文字后自动翻译
-        </Checkbox>
-        <Checkbox
           isSelected={settings.popup}
           onChange={(popup) => setSettings({ popup })}
         >
           在选区旁显示划词翻译
         </Checkbox>
         <p className="ui-description">
-          只在用选择工具选中文字时翻译，高亮笔不翻译。同一句话再次翻译直接取缓存。
+          选中文字后，点工具条上的“翻译”。同一句话再次翻译直接取缓存。
         </p>
       </div>
       <div className="translation-copy" role="group" aria-label="复制">

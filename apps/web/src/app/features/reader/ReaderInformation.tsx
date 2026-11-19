@@ -188,6 +188,15 @@ export function ReaderRelations({ detail }: { detail: LiteratureDetail }) {
       library: null,
     },
   ];
+  // Plan 25 block 30: no citation data at all is said in one sentence, not
+  // as a table of dashes and noughts.
+  if (!detail.reference_count && !detail.cited_by_count)
+    return (
+      <section className="reader-relations-overview" aria-label="库内概况">
+        <h3>库内概况</h3>
+        <p className="reader-relations-empty">还没有这篇的引用数据。</p>
+      </section>
+    );
   return (
     <section className="reader-relations-overview" aria-label="库内概况">
       <h3>库内概况</h3>

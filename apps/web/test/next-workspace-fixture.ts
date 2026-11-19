@@ -73,6 +73,8 @@ export async function nextWorkspace(
     configuration?: NonNullable<
       Parameters<typeof workspace>[2]
     >["configuration"];
+    /** Serve reader translation; false for a deployment without it. */
+    translation?: boolean;
   } = {},
 ) {
   return workspace(options.analysisModel ?? true, options.setup, {
@@ -80,6 +82,7 @@ export async function nextWorkspace(
     path: options.path ?? "/",
     ready: options.ready ?? '[aria-label="文献列表"] .paper-row:first-child',
     ...(options.configuration ? { configuration: options.configuration } : {}),
+    ...(options.translation === false ? { translation: false } : {}),
   });
 }
 afterAll(async () => {

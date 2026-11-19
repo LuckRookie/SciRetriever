@@ -144,6 +144,20 @@
   .folder-navigation[data-drop] {
     background: var(--sel);
   }
+  /* “正在读”: the papers open in the reader, above “最近阅读”. */
+  .reading-now {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
+    margin-bottom: var(--space-2);
+  }
+  .reading-now > .folder-heading {
+    margin-top: var(--space-1);
+  }
+  .navigation .folder-navigation .ui-button.reading-now-more {
+    padding-left: calc(var(--space-2) + 16px + var(--space-2));
+    color: var(--fg2);
+  }
   .folder-tree {
     display: grid;
     gap: 1px;
@@ -410,10 +424,19 @@
   .reader-topbar-tools > .ui-segmented {
     margin-inline-end: var(--space-2);
   }
-  /* The side panel's button shows it is open, as the marking tools did. */
-  .reader-topbar-tools .ui-icon-button[aria-pressed="true"] {
+  /* The reader's tools in the secondary ink, not the quietest grey (plan 25
+     block 30); a tool that is on (the side panel, the pen) is selected. */
+  .reader-topbar-tools .ui-icon-button {
+    color: var(--fg2);
+  }
+  .reader-topbar-tools .ui-icon-button[aria-pressed="true"],
+  .reader-topbar-tools .ui-icon-button.reader-pen-on {
     background: var(--sel);
-    color: var(--blue);
+    color: var(--fg);
+  }
+  .reader-type-trigger,
+  .reader-more-trigger {
+    display: inline-flex;
   }
   .reader-type-icon {
     font-family: var(--serif);

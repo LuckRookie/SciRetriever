@@ -815,6 +815,9 @@ export async function startDesignSamples(options: {
         ),
       },
       assets: options.assets,
+      // Translation as the sample configuration has it (plan 25 block 30):
+      // the reader reads whether it is set up.
+      translation: app.translation,
       configuration: {
         runtime_revision: (await owner.read()).revision,
         read: owner.read.bind(owner),

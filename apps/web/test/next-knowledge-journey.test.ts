@@ -1,5 +1,6 @@
 import {
   readerMore,
+  readerTool,
   readerNavigation,
   readerTextComplete,
   readerToLibrary,
@@ -118,7 +119,7 @@ it("keeps parsing separate from document publication and reads existing verified
     expect(await env.app.jobs!.listJobs(10)).toHaveLength(0);
     await page.getByRole("button", { name: "更多", exact: true }).click();
     const download = page.waitForEvent("download");
-    await page.getByRole("menuitem", { name: "下载已核验的原始 PDF" }).click();
+    await page.getByRole("menuitem", { name: "下载 PDF" }).click();
     expect((await download).suggestedFilename()).toMatch(/\.pdf$/u);
     // Choose this paper in the library, then hand its fixed scope to external delivery.
     await readerToLibrary(page);
@@ -231,7 +232,7 @@ it("keeps parsing separate from document publication and reads existing verified
     await expect
       .poll(() => readerTextComplete(page), { timeout: 20_000 })
       .toBe(true);
-    await readerMore(page, "显示目录");
+    await readerTool(page, "显示目录");
     await page.locator(".reader-outline button").first().click();
     expect(await page.locator(".reader-engine-body").textContent()).toContain(
       "A synthetic finding.",
@@ -313,7 +314,7 @@ it("keeps parsing separate from document publication and reads existing verified
         ],
       };
     });
-    await readerOperation(page, "核验文章身份");
+    await readerOperation(page, "核对是不是这篇");
     await page.getByRole("button", { name: "确认启动", exact: true }).click();
     await expect
       .poll(() => page.getByRole("dialog").textContent())

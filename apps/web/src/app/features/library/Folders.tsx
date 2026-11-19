@@ -178,6 +178,56 @@ export function IntakeBatches({ onNavigate }: { onNavigate: () => void }) {
 }
 
 /** The library's folder tree in the sidebar: recent papers, folders, management. */
+/** At most this many open papers are listed; the rest are counted. */
+const READING_SHOWN = 5;
+/**
+ * “正在读” (plan 25 block 30): the papers open in the reader, so they can be
+ * gone back to from any page. Each title on one line; past five, “另外 n
+ * 篇” opens the next one in the reader. Absent while none is open.
+ */
+function ReadingNow({ onNavigate }: { onNavigate: () => void }) {
+  const shell = useShell(),
+    route = useUrlState();
+  const open = shell.tabs.list;
+  if (!open.length) return null;
+  const shown = open.slice(0, READING_SHOWN),
+    more = open.length - shown.length;
+  const go = (id: string) => {
+    shell.tabs.show(id);
+    onNavigate();
+  };
+  return (
+    <div className="reading-now" role="group" aria-label="正在读">
+      <div className="folder-heading">
+        <span className="navigation-group-name">正在读</span>
+      </div>
+      {shown.map((tab) => (
+        <Button
+          key={tab.id}
+          variant="text"
+          className="folder-open reading-now-paper"
+          aria-current={route.literature === tab.id ? "page" : false}
+          icon={<Icon name="file" />}
+          onPress={() => go(tab.id)}
+        >
+          <span className="folder-name" title={tab.title}>
+            {tab.title}
+          </span>
+        </Button>
+      ))}
+      {more > 0 ? (
+        <Button
+          variant="text"
+          className="folder-open reading-now-more"
+          onPress={() => go(open[READING_SHOWN]!.id)}
+        >
+          另外 {more} 篇
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
   const api = useApi(),
     route = useUrlState(),
@@ -461,6 +511,7 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
         if (event.target === event.currentTarget) drop(null)(event);
       }}
     >
+      <ReadingNow onNavigate={onNavigate} />
       <Button
         variant="text"
         className="folder-open folder-recent"

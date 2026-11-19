@@ -327,7 +327,8 @@
   .react-reader .reading-article {
     font-family: var(--serif);
     font-size: var(--reading-font-size, 20px);
-    line-height: 1.85;
+    /* “排版 → 行距” scales spec 2.2's line height (plan 25 block 30). */
+    line-height: calc(1.85 * var(--reading-leading, 1));
     max-width: min(100%, 36em);
     margin: 0 auto;
     color: var(--fg);
@@ -573,6 +574,11 @@
   }
   .reader-information .reader-relations-table th[scope="col"] {
     color: var(--fg2);
+  }
+  .reader-information .reader-relations-empty {
+    margin: 0;
+    color: var(--fg2);
+    font-size: var(--text-caption);
   }
   .reader-information {
     height: 100%;
@@ -1459,6 +1465,13 @@
     box-shadow: var(--shadow-1);
     clip-path: inset(-12px -12px 0 -12px);
   }
+  /* Its one line hangs below the rule, over the first page: not clipped
+     (its ground covers the shadow there). */
+  .react-reader
+    .reading-pdf-pages
+    > .reader-page-header:has(> .reader-page-header-line) {
+    clip-path: inset(-12px -12px -48px -12px);
+  }
   .react-reader .reader-page-header-source {
     min-width: 0;
     overflow: hidden;
@@ -1625,37 +1638,43 @@
 }
 
 @layer pages {
-  /* The spine (reading-experience 1.5): beside the sheet, 16 px wide. */
+  /* The spine (reading-experience 1.5, thinned by plan 25 block 30): a
+     4 px strip beside the sheet in the two lightest greys, what shows a
+     short stroke of ink; no frame, no ground of its own. */
   .react-reader .reader-spine {
     position: absolute;
     z-index: 4;
-    width: 16px;
+    width: 4px;
     border-radius: 2px;
-    background: var(--reader-sheet);
-    box-shadow: var(--shadow-1);
   }
   .react-reader .reader-spine-part {
     position: absolute;
-    left: 4px;
-    right: 4px;
+    left: 0;
+    right: 0;
+    border-radius: 2px;
     background: var(--reader-spine-a);
     cursor: pointer;
   }
   .react-reader .reader-spine-part[data-alt] {
     background: var(--reader-spine-b);
   }
-  .react-reader .reader-spine-part[data-hover] {
-    background: var(--fg2);
+  /* The pointer finds a 4 px strip by a wider band around it. */
+  .react-reader .reader-spine-part::before {
+    content: "";
+    position: absolute;
+    inset: 0 -5px;
   }
-  /* What shows: a 1.5 px ink-blue frame over half the selection's tint. */
+  .react-reader .reader-spine-part[data-hover] {
+    background: var(--fg3);
+  }
+  /* What shows: a stroke of ink over the parts. */
   .react-reader .reader-spine-window {
     position: absolute;
     left: 0;
     right: 0;
     box-sizing: border-box;
-    border: 1.5px solid var(--reader-pen);
     border-radius: 2px;
-    background: color-mix(in srgb, var(--sel) 50%, transparent);
+    background: var(--fg);
     cursor: grab;
     touch-action: none;
   }
@@ -1744,7 +1763,7 @@
   .react-reader .reading-article p[data-script="latin"] {
     margin: 0.9em 0 0;
     font-size: 0.975em;
-    line-height: 1.7;
+    line-height: calc(1.7 * var(--reading-leading, 1));
     text-indent: 0;
     text-align: left;
     hyphens: auto;
@@ -1881,5 +1900,210 @@
   }
   ::highlight(find-current) {
     background-color: var(--hl-current);
+  }
+}
+
+/* Plan 25 block 30: the bibliography page, the summary and the results on the
+   desk's sheet; the page header on a narrow sheet; the “排版” panel. */
+@layer pages {
+  .react-reader .reader-bibliography-scroll,
+  .react-reader .reader-desk-scroll {
+    height: 100%;
+    box-sizing: border-box;
+    padding: 20px 0 48px;
+    background: var(--reader-desk);
+  }
+  .react-reader [data-sheet="full"] .reader-bibliography-scroll,
+  .react-reader [data-sheet="full"] > .reader-desk-scroll {
+    padding: 0;
+  }
+  .react-reader .reader-bibliography-sheet,
+  .react-reader .reader-plain-sheet {
+    box-sizing: border-box;
+    width: var(--sheet-width);
+    min-height: 100%;
+    margin-left: var(--sheet-left);
+    padding: 0 var(--sheet-margin-right) var(--space-7)
+      var(--sheet-margin-left);
+    background: var(--reader-sheet);
+    box-shadow: var(--shadow-1);
+  }
+  .react-reader [data-sheet="full"] .reader-bibliography-sheet,
+  .react-reader [data-sheet="full"] .reader-plain-sheet {
+    box-shadow: none;
+  }
+  .react-reader .reader-plain-sheet {
+    padding-top: var(--space-6);
+  }
+  .react-reader .reader-bibliography-sheet > .reader-page-header {
+    position: static;
+    margin: 0 calc(-1 * var(--sheet-margin-right)) 0
+      calc(-1 * var(--sheet-margin-left));
+  }
+  .react-reader .reader-bibliography-column,
+  .react-reader .reader-plain-sheet > * {
+    box-sizing: border-box;
+    width: var(--sheet-column);
+    max-width: none;
+    margin: 0;
+  }
+  .react-reader .reader-bibliography-column {
+    padding-top: var(--space-6);
+  }
+  .react-reader .reader-bibliography-sheet .bibliography {
+    gap: var(--space-2);
+  }
+  .react-reader .reader-bibliography-sheet .bibliography-title {
+    margin-bottom: var(--space-1);
+    font: 600 var(--type-page) / 1.3 var(--serif);
+    text-wrap: balance;
+  }
+  .react-reader .reader-bibliography-sheet .bibliography-authors {
+    font-size: var(--text-interface);
+  }
+  /* The abstract between two --line3 rules (spec 2.3), the author's words in serif. */
+  .react-reader .reader-bibliography-sheet .bibliography-part {
+    margin-block: var(--space-4) var(--space-2);
+    padding-block: var(--space-4);
+    border-color: var(--line3);
+  }
+  .react-reader .reader-bibliography-sheet .bibliography-part p {
+    font: 400 var(--text-literature) / 1.75 var(--serif);
+  }
+  .react-reader .reader-bibliography-fulltext {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: var(--space-6);
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-md);
+    background: var(--side);
+    font-size: var(--text-secondary);
+  }
+  .react-reader .reader-bibliography-fulltext > p {
+    margin: 0 var(--space-2) 0 0;
+    color: var(--fg);
+  }
+  .react-reader .reader-bibliography-publisher {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    margin-left: auto;
+    color: var(--blue);
+    text-underline-offset: 0.18em;
+  }
+  .react-reader .reader-bibliography-publisher > svg {
+    width: 13px;
+    height: 13px;
+  }
+  /* Results on the sheet: a list between hairlines, no ground of its own. */
+  .react-reader .reader-plain-sheet .paper-results {
+    padding: 0;
+  }
+  .react-reader .reader-plain-sheet .paper-result-list {
+    padding: 0;
+    background: none;
+    border-radius: 0;
+  }
+  /* The summary is machine-written: left-aligned, unindented (spec 2.2, R9). */
+  .react-reader .reader-summary p {
+    text-align: left;
+    text-indent: 0;
+    hyphens: manual;
+  }
+  /* A sheet narrower than 420 px keeps only the view and page on its header. */
+  .react-reader .reader-page-header {
+    container-type: inline-size;
+  }
+  @container (max-width: 419px) {
+    .react-reader .reader-page-header-source {
+      display: none;
+    }
+  }
+
+  /* “排版”: the scale, line length and spacing, the theme, two switches. */
+  .reader-type-popover {
+    width: 300px;
+    max-width: calc(100vw - 16px);
+  }
+  .reader-type-panel {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    outline: none;
+    font-size: var(--text-control);
+  }
+  .reader-type-row {
+    display: grid;
+    grid-template-columns: 40px minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-3);
+  }
+  .reader-type-label {
+    color: var(--fg2);
+    font-size: var(--text-caption);
+  }
+  .reader-type-scale {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1);
+  }
+  .reader-type-scale-value {
+    min-width: 5.5em;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+  .reader-type-reset[aria-pressed="true"] {
+    background: var(--sel);
+  }
+  .reader-type-row > .ui-segmented {
+    justify-self: start;
+  }
+  .reader-type-themes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+  .reader-theme-swatch {
+    display: inline-grid;
+    border-radius: var(--radius-round);
+    outline: none;
+    cursor: pointer;
+  }
+  .reader-theme-swatch-paper {
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    box-sizing: border-box;
+    border-radius: var(--radius-round);
+    border: 1px solid var(--line2);
+    background: var(--bg);
+    transition: box-shadow var(--dur-out) var(--ease-out);
+  }
+  .reader-theme-swatch-paper > i {
+    width: 8px;
+    height: 8px;
+    border-radius: var(--radius-round);
+    background: var(--fg);
+  }
+  .reader-theme-swatch[data-hovered] .reader-theme-swatch-paper {
+    box-shadow: 0 0 0 2px var(--hover);
+  }
+  .reader-theme-swatch[data-selected] .reader-theme-swatch-paper {
+    box-shadow:
+      0 0 0 2px var(--surface-raised),
+      0 0 0 3.5px var(--fg2);
+  }
+  .reader-theme-swatch[data-focus-visible] .reader-theme-swatch-paper {
+    box-shadow: 0 0 0 3px var(--focus-ring);
+  }
+  .reader-type-switches {
+    display: grid;
+    gap: var(--space-2);
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--line);
   }
 }

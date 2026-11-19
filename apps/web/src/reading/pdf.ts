@@ -308,9 +308,12 @@ export async function renderPdf(
     const n = Math.max(1, Math.min(pdf.numPages, Math.trunc(page) || 1));
     state.anchorPage = n;
     state.anchorRatio = ratio;
-    if (hidden) return;
+    // Opened but its pages not laid out yet (the first page is still being
+    // read): the place is kept in `state` and taken once they are.
+    const target = placeholders[n - 1];
+    if (hidden || !target) return;
     frame.body.scrollTop += placeDelta(
-      placeholders[n - 1]!.getBoundingClientRect(),
+      target.getBoundingClientRect(),
       ratio,
       line(),
     );
@@ -612,8 +615,8 @@ export async function renderPdf(
     state.page = Math.max(1, Math.min(pdf.numPages, Math.trunc(page) || 1));
     state.pageOffset = offset;
     // Hidden: remember the place; `show` scrolls there.
-    if (hidden) return;
-    const target = placeholders[state.page - 1]!;
+    const target = placeholders[state.page - 1];
+    if (hidden || !target) return;
     // The first page's top is the column's top: the sheet as it opens (spec 3.5).
     if (state.page === 1 && offset === 0) frame.body.scrollTop = 0;
     else
@@ -838,8 +841,9 @@ export async function renderPdf(
     delete frame.queuedFollow;
   }
   frame.follow = (anchor) => {
-    // Before the document is open the place waits; the promise settles once it is taken.
-    if (!pdf)
+    // Before the document is open and its pages are laid out the place
+    // waits; the promise settles once it is taken.
+    if (!pdf || !placeholders.length)
       return new Promise<void>((done) => {
         pendingFollow = { anchor, done };
       });

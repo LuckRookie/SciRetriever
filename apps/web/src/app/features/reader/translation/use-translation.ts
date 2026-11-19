@@ -14,14 +14,11 @@ import { useApi } from "../../../data/query.js";
 import { record } from "../../../data/wire.js";
 
 const SETTINGS_KEY = "sciretriever:translation:v1";
-/** How long a selection must rest before it is translated; the popup shows at once. */
-const SETTLE_MS = 150;
-
 export interface TranslationSettings {
   /** A model from the catalog; null follows the service default. */
   readonly model: string | null;
   readonly language: TranslationLanguage;
-  /** Translate a selection as soon as it settles. */
+  /** Kept from the earlier “选中文字后自动翻译”; a selection no longer translates by itself. */
   readonly auto: boolean;
   /** Show the translation in a floating card beside the selection. */
   readonly popup: boolean;
@@ -118,12 +115,15 @@ const parseResult = (value: unknown): TranslationResult => {
 export function useReaderTranslation(literatureId: string, enabled: boolean) {
   const api = useApi();
   const [settings, setSettingsState] = useState(readSettings);
-  // The model list is read when the 翻译 tab opens or a translation starts, not with every reader.
-  const [wanted, setWanted] = useState(false);
+  // Plan 25 block 30: the model list says whether translation is set up at
+  // all, which decides whether “翻译” shows; read once a session.
+  const [, setWanted] = useState(false);
   const catalog = useQuery({
     queryKey: ["translation-catalog"],
-    enabled: enabled && wanted,
+    enabled,
     staleTime: Infinity,
+    // Not set up (503) or unreadable: “翻译” stays away, no retries.
+    retry: false,
     queryFn: async ({ signal }) => {
       const value = record(
         (await api.read("/api/translation", signal)).catalog,
@@ -228,25 +228,22 @@ export function useReaderTranslation(literatureId: string, enabled: boolean) {
     [api],
   );
   /**
-   * A selection in the reader fills the source box; with auto on it is
-   * translated after a short rest, and the card shows "翻译中" at once.
+   * A selection in the reader fills the source box, and nothing more: a
+   * translation shows only once “翻译” is pressed (plan 25 block 30).
    */
-  const selected = useCallback(
+  const selected = useCallback((text: string) => {
+    setSource(text.trim());
+    // A card left open belongs to the selection before.
+    setPopupOpen(false);
+  }, []);
+  /** “翻译” pressed on a selection: the card opens on it, “翻译中” at once. */
+  const show = useCallback(
     (text: string, page: number | null) => {
       const trimmed = text.trim();
+      if (!trimmed) return;
       setSource(trimmed);
-      if (!latest.current.settings.auto || !trimmed) return;
-      if (pending.current) {
-        clearTimeout(pending.current.timer);
-        pending.current.abort.abort();
-      }
-      setCurrent({ text: trimmed, page, status: "loading" });
       setPopupOpen(true);
-      const abort = new AbortController();
-      pending.current = {
-        abort,
-        timer: window.setTimeout(() => void run(trimmed, page), SETTLE_MS),
-      };
+      void run(trimmed, page);
     },
     [run],
   );
@@ -258,8 +255,18 @@ export function useReaderTranslation(literatureId: string, enabled: boolean) {
     setPopupAt(null);
   }, []);
   const load = useCallback(() => setWanted(true), []);
+  /**
+   * Translation is set up: the service answers with at least one model. Null
+   * while that is being read; false when it is not set up (503) or has no model.
+   */
+  const available = catalog.data
+    ? catalog.data.models.length > 0
+    : catalog.isError
+      ? false
+      : null;
   return {
     load,
+    available,
     settings,
     setSettings,
     catalog: catalog.data ?? null,
@@ -273,6 +280,7 @@ export function useReaderTranslation(literatureId: string, enabled: boolean) {
     setPopupAt,
     translate: run,
     selected,
+    show,
     dismiss,
     close,
   };

@@ -82,7 +82,7 @@ export function useReaderMarks({
   notify: (message: string) => void;
   /** Reader translation (ADR 0049): selections translate while the select tool is on. */
   translation?: ReaderTranslation;
-  /** The 翻译 button on the selection bar, used when the popup is off. */
+  /** The 翻译 button on the selection bar, when the popup is off: the panel shows it. */
   onTranslate?: () => void;
 }) {
   const id = detail?.literature.literature_id ?? "";
@@ -274,7 +274,7 @@ export function useReaderMarks({
         if (latest.current.tool === "pen") highlight(latest.current.pen, true);
         else {
           setBar({ kind: "selection" });
-          t?.selected(next.quote, next.pdf?.page ?? null);
+          t?.selected(next.quote);
         }
       },
       region(next) {
@@ -658,18 +658,22 @@ export function useReaderMarks({
           >
             引用
           </MarkBarButton>
-          {translation && !translation.settings.popup ? (
+          {/* Plan 25 block 30: a translation shows only once asked for, and
+              “翻译” only where translation is set up. */}
+          {translation?.available ? (
             <MarkBarButton
               icon="translate"
               label="翻译选中文字"
               onPress={() => {
-                // With auto on the selection is already being translated.
-                if (draft.current && !translation.settings.auto)
-                  void translation.translate(
-                    draft.current.quote,
-                    draft.current.pdf?.page ?? null,
-                  );
-                onTranslate?.();
+                const selected = draft.current;
+                if (!selected) return;
+                const page = selected.pdf?.page ?? null;
+                if (translation.settings.popup)
+                  translation.show(selected.quote, page);
+                else {
+                  void translation.translate(selected.quote, page);
+                  onTranslate?.();
+                }
               }}
             >
               翻译

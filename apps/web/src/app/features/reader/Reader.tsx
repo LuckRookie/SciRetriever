@@ -78,6 +78,13 @@ import { useReaderTranslation } from "./translation/use-translation.js";
 import { type FullTextLayer } from "./translation/fulltext-layer.js";
 import { FullTextControls } from "./translation/FullTextControls.js";
 import { ReaderOutline } from "./ReaderOutline.js";
+import { ReaderBibliography } from "./ReaderBibliography.js";
+import { ReaderTypePanel, type TypeScale } from "./ReaderTypePanel.js";
+import {
+  MEASURE_EM,
+  LEADING_SCALE,
+  readingLayout,
+} from "./input/reading-layout.js";
 import { ReaderSpine } from "./ReaderSpine.js";
 import { DraftDoubt } from "./DraftDoubt.js";
 import {
@@ -99,6 +106,8 @@ import { useReadingScale } from "./input/use-reading-scale.js";
 import { useReaderInput } from "./input/use-reader-input.js";
 import {
   commandItem,
+  commandKeys,
+  commandLabel,
   commandTable,
   type CommandId,
   type CommandTable,
@@ -273,8 +282,11 @@ export default function Reader() {
     if (chosen || !detail.data || detail.isPlaceholderData) return null;
     const remembered = recallReading(catalog, id).view,
       hasPdf = !!detail.data.primary_pdf;
-    if (remembered === "doc") return "doc";
     if (remembered === "pdf" && hasPdf) return "pdf";
+    // Plan 25 block 30: with a PDF and no full text the PDF opens, even
+    // where the full text was last left (it may have been generated since).
+    if (remembered === "doc" && (!hasPdf || sources.data?.document))
+      return "doc";
     if (!hasPdf || source.value?.kind === "metadata" || source.error)
       return hasPdf ? "pdf" : "doc";
     if (sources.isError) return "pdf";
@@ -346,6 +358,12 @@ export default function Reader() {
   );
   const fontSizeRef = useRef(fontSize);
   fontSizeRef.current = fontSize;
+  // “排版”: line length and spacing, one choice in this browser (block 30).
+  const lines = useSyncExternalStore(
+    readingLayout.subscribe,
+    readingLayout.get,
+    readingLayout.get,
+  );
   const refresh = () => retry((value) => value + 1);
   const notify = (message: string) => readerActions.current.notify(message);
   const translation = useReaderTranslation(
@@ -471,13 +489,10 @@ export default function Reader() {
   // The view is picked: it goes into the address, in place of the open.
   useLayoutEffect(() => {
     if (!picked) return;
-    // Only a bibliography: the information panel says what is missing (spec 3.9).
-    if (!detail.data?.primary_pdf && !layoutPosition.information) {
-      layoutPosition.information = true;
-      setLayout((value) => value + 1);
-    }
+    // Only a bibliography: the bibliography page says it all (plan 25
+    // block 30); the side panel stays as the person left it.
     navigate({ reader: picked }, { replace: true });
-  }, [picked, detail.data, layoutPosition]);
+  }, [picked]);
   // No PDF: the paper does not open in the PDF view (spec 6.4), unless a fixed source names one.
   useLayoutEffect(() => {
     if (
@@ -495,8 +510,8 @@ export default function Reader() {
     if (chosen) engines.view(viewOf(mode));
   }, [engines, mode, chosen]);
   // Spec 1.1: the sheet's geometry follows the desk's width and the reading
-  // size; there is no separate width setting (spec 1.3).
-  const columnEm = 34;
+  // size; “排版 → 行宽” sets the column (34 em is 适中, plan 25 block 30).
+  const columnEm = MEASURE_EM[lines.measure];
   /** Lays the sheet out for a reading size at once, in this frame (spec 1.8.1). */
   const geometry = useRef<(size: number) => void>(() => {});
   useLayoutEffect(() => {
@@ -506,11 +521,13 @@ export default function Reader() {
     const apply = (size = fontSizeRef.current) => {
       // Without the shell's top bar, the page's own width decides (spec 1.2).
       setNarrowTop(page.clientWidth > 0 && page.clientWidth < 640);
-      const desk = scroller.clientWidth;
+      const surface = scroller.parentElement ?? scroller;
+      // The summary and the results lie on the same desk while the text's
+      // scroll area is hidden (plan 25 block 30).
+      const desk = scroller.clientWidth || surface.clientWidth;
       if (!desk) return;
       // On the surface: the scroll area and the skeleton over it share it.
       const g = sheetGeometry(desk, size, columnEm),
-        surface = scroller.parentElement ?? scroller,
         style = surface.style;
       style.setProperty("--sheet-width", `${g.sheet}px`);
       style.setProperty("--sheet-left", `${g.left}px`);
@@ -528,7 +545,7 @@ export default function Reader() {
     observer.observe(scroller);
     observer.observe(page);
     return () => observer.disconnect();
-  }, [fontSize, columnEm, layout, detailReady]);
+  }, [fontSize, columnEm, layout, detailReady, mode]);
   /**
    * Spec 6.1: the side panel slides in from the right (--dur-3, --ease-out)
    * and out (--dur-2, --ease-in), and the sheet moves to its new place on
@@ -654,6 +671,11 @@ export default function Reader() {
     source.value?.kind === "document" && mode === "doc"
       ? "高亮为证据所在段落；无可靠 PDF 页码"
       : "";
+  // Plan 25 block 30: the PDF of a paper without full text says so, with
+  // the way to make it where this deployment can.
+  const withoutText =
+    mode === "pdf" && !!sources.data?.material && !sources.data.document;
+  const canArchive = !!api.workspace.capabilities.maintenance;
   const headerLine = useMemo(
     (): HeaderLine | null =>
       note
@@ -670,8 +692,21 @@ export default function Reader() {
                 text: `正在查看固定来源，阅读不会修改材料。${evidenceNote ? `${evidenceNote}。` : ""}`,
                 action: { label: fromWhere, run: () => backRef.current() },
               }
-            : null,
-    [note, update, fromWhere, evidenceNote],
+            : withoutText
+              ? {
+                  transient: false,
+                  text: "还没有全文",
+                  ...(canArchive
+                    ? {
+                        action: {
+                          label: "生成全文",
+                          run: () => setOperation("archive"),
+                        },
+                      }
+                    : {}),
+                }
+              : null,
+    [note, update, fromWhere, evidenceNote, withoutText, canArchive],
   );
   useLayoutEffect(() => {
     const material = sources.data;
@@ -741,6 +776,10 @@ export default function Reader() {
   const input = useReaderInput();
   const table = useRef<CommandTable>(new Map());
   const [pageEdit, setPageEdit] = useState(0);
+  // “排版” (block 30): a panel from its button, or from “更多” when folded.
+  const [typeOpen, setTypeOpen] = useState(false);
+  const typeTrigger = useRef<HTMLSpanElement>(null),
+    moreTrigger = useRef<HTMLSpanElement>(null);
   // The term last looked for: Enter again goes on to the next match (spec 1.8.5).
   const findAsked = useRef("");
   // A tab or view switch closes the context menu without acting (spec 1.8.2).
@@ -897,6 +936,19 @@ export default function Reader() {
               : ("bibliography" as const)
             : null
       : null;
+  /**
+   * Plan 25 block 30: a paper without a PDF opens as its bibliography page;
+   * known from its details at once, or from what the reader resolved.
+   */
+  const bibliographyPage =
+    (mode === "doc" || mode === "pdf") &&
+    source.value?.kind !== "metadata" &&
+    (lacking === "bibliography" ||
+      (detailReady &&
+        !detail.data?.primary_pdf &&
+        !sources.data?.material &&
+        !route.parameters.has("asset") &&
+        !route.parameters.has("document")));
   // Spec 6.2 and 6.3: the view asked for is not on screen, or not drawn yet.
   const wanted =
     source.value?.kind === "metadata" || !detail.data ? null : viewOf(mode);
@@ -905,6 +957,7 @@ export default function Reader() {
     !issue &&
     !sources.error &&
     !lacking &&
+    !bibliographyPage &&
     !(shown?.id === id && shown.kind === wanted && prepared);
   // Shown only past 300 ms: what is ready sooner replaces the old picture directly.
   const preparingKey = preparing ? `${id}|${wanted}|${revision}` : null;
@@ -997,12 +1050,15 @@ export default function Reader() {
   const compactBar = barLayout.tools === "more",
     narrowBar = barLayout.views === "menu";
   const hasPdf = !!detail.data.primary_pdf || !!sources.data?.material;
+  // The summary and the results are a cell of the views while open (block 30).
   const views = [
     { id: "doc", label: "原文" },
     ...(hasPdf ? [{ id: "pdf", label: "PDF" }] : []),
+    ...(mode === "know" ? [{ id: "know", label: "总结" }] : []),
+    ...(mode === "results" ? [{ id: "results", label: "结果" }] : []),
   ];
   // Editing the proofread text is not one of the views: leaving it is choosing one.
-  const viewValue = mode === "pdf" ? "pdf" : mode === "doc" ? "doc" : "";
+  const viewValue = mode === "edit" ? "" : mode;
   const findDisabled = mode === "results" || (mode !== "know" && !ready);
   const toggleFind = () => setFindOpen((value) => !value);
   const toggleOutline = () =>
@@ -1193,46 +1249,82 @@ export default function Reader() {
     const command = commands.get(id);
     return command ? [commandItem(command, more)] : [];
   };
-  // “排版” (spec 1.3): the scale group under its title, then the two switches.
-  const typeItems: MenuOption[] = [
-    ...(scalable
-      ? [
-          {
-            id: "scale-title",
-            label: `比例 ${pdfZoom ? scale.percent() : textPercent(fontSize)}`,
-            heading: true,
-            onAction: () => {},
-          },
-          ...item("zoom-in"),
-          ...item("zoom-out"),
-          ...item("zoom-reset"),
-          ...item("zoom-actual"),
-        ]
-      : []),
-    {
-      id: "key-sentences",
-      label: "标出关键句",
-      checked: keySentences,
-      divider: true,
-      onAction: () => {
-        setKeySentences(!keySentences);
-        rememberReading(catalog, id, { keySentences: !keySentences });
-      },
-    },
-    ...(mode === "doc"
-      ? [
-          {
-            id: "sources",
-            label: "显示核对依据",
-            checked: showSources,
-            onAction: () => {
-              setShowSources(!showSources);
-              rememberReading(catalog, id, { sources: !showSources });
-            },
-          },
-        ]
-      : []),
-  ];
+  /** A change of the text's lines keeps the reading position (spec 4.2). */
+  const relayout = (action: () => void) => {
+    const restore = mode === "doc" ? frame.current?.beforeLayout() : undefined;
+    action();
+    if (restore) requestAnimationFrame(restore);
+  };
+  // “排版” (plan 25 block 30): the reading size or the PDF's zoom, the full
+  // text's line length and spacing, the theme, and the two switches. The
+  // scale's steps are the operations of the table, with their keys.
+  const scaleCommand = (commandId: CommandId) => {
+    const command = commands.get(commandId);
+    return {
+      enabled: !!command && command.enabled !== false,
+      keys: commandKeys(commandId),
+      run: () => void command?.run(),
+    };
+  };
+  const typeScale: TypeScale | null = scalable
+    ? {
+        label: pdfZoom ? "比例" : "字号",
+        value: pdfZoom ? scale.percent() : textPercent(fontSize),
+        zoomIn: scaleCommand("zoom-in"),
+        zoomOut: scaleCommand("zoom-out"),
+        resets: [
+          ...(commands.get("zoom-reset")
+            ? [
+                {
+                  label: commandLabel(commands.get("zoom-reset")!),
+                  keys: commandKeys("zoom-reset"),
+                  ...(pdfZoom ? { current: pdf?.zoom === "fit" } : {}),
+                  run: () => void commands.get("zoom-reset")!.run(),
+                },
+              ]
+            : []),
+          ...(commands.get("zoom-actual")
+            ? [
+                {
+                  label: "实际大小",
+                  run: () => void commands.get("zoom-actual")!.run(),
+                },
+              ]
+            : []),
+        ],
+      }
+    : null;
+  const typePanel = (
+    <ReaderTypePanel
+      triggerRef={compactBar ? moreTrigger : typeTrigger}
+      isOpen={typeOpen}
+      onOpenChange={(open) => {
+        setTypeOpen(open);
+        // Opened from “更多”: the keys go back to it (spec 1.8.2's rule).
+        if (!open && compactBar)
+          requestAnimationFrame(() =>
+            moreTrigger.current?.querySelector("button")?.focus(),
+          );
+      }}
+      scale={typeScale}
+      measure={mode === "doc" ? lines.measure : null}
+      leading={mode === "doc" ? lines.leading : null}
+      onMeasure={(measure) => relayout(() => readingLayout.set({ measure }))}
+      onLeading={(leading) => relayout(() => readingLayout.set({ leading }))}
+      theme={shell.themes.theme}
+      onTheme={shell.setTheme}
+      keySentences={keySentences}
+      onKeySentences={(value) => {
+        setKeySentences(value);
+        rememberReading(catalog, id, { keySentences: value });
+      }}
+      sources={mode === "doc" ? showSources : null}
+      onSources={(value) => {
+        setShowSources(value);
+        rememberReading(catalog, id, { sources: value });
+      }}
+    />
+  );
   const partItems =
     mode !== "results" && (parts.data?.length ?? 0) > 1
       ? parts.data!.map((p, index) => ({
@@ -1255,17 +1347,45 @@ export default function Reader() {
             ),
         }))
       : [];
+  /** A titled group of “更多”, left out when it has nothing (design core “菜单”). */
+  const group = (
+    groupId: string,
+    label: string,
+    items: MenuOption[],
+  ): MenuOption[] =>
+    items.length
+      ? [{ id: groupId, label, heading: true, onAction: () => {} }, ...items]
+      : [];
+  const maintenance = !!api.workspace.capabilities.maintenance;
+  // Reading-experience 3.4: a draft takes no edits; there is no proofread
+  // text to edit until it is archived.
+  const editable = !!sources.data?.material && !draftText;
+  // The marking tools (spec 1.3): the pen, the region (PDF) and its colour;
+  // the keys V, H, R and 1–5 still choose them.
+  const markingItems: MenuOption[] = [
+    ...item("tool-pen"),
+    ...item("tool-region"),
+    ...item("mark-color"),
+  ];
+  const marking = canMark && !bibliographyPage && markingItems.length > 0;
+  /**
+   * “更多” (plan 25 block 30): what is seldom used, in three groups — this
+   * paper, export, processing — then the keyboard shortcuts. What a paper
+   * can never use is not there (“获取 PDF” once it has a PDF).
+   */
   const moreItems: MenuOption[] = [
-    // Below 760 px the icon buttons fold in here (spec 1.3).
+    // Below 760 px the top bar's tools fold in here (spec 1.3).
     ...(compactBar
       ? [
-          ...item("find"),
+          ...(bibliographyPage ? [] : item("outline")),
+          ...(bibliographyPage ? [] : item("find")),
+          ...(marking ? markingItems : []),
           {
             id: "type",
             label: "排版",
-            onAction: () => {},
-            submenu: typeItems,
+            onAction: () => setTypeOpen(true),
           },
+          ...item("focus"),
           {
             id: "information",
             label: informationShown ? "收起信息" : "显示信息",
@@ -1273,113 +1393,111 @@ export default function Reader() {
           },
         ]
       : []),
-    // Reading-experience 3.4: a draft takes no edits; there is no proofread
-    // text to edit until it is archived.
-    ...(sources.data?.material && !draftText
-      ? [
-          {
-            id: "edit",
-            label: "修改全文",
-            checked: mode === "edit",
-            divider: compactBar,
-            onAction: () => changeMode(mode === "edit" ? "doc" : "edit"),
-          },
-        ]
-      : []),
-    ...item("outline", {
-      divider: compactBar && !(sources.data?.material && !draftText),
-    }),
-    ...item("focus"),
-    // The marking tools (spec 1.3); the keys V, H, R and 1–5 still choose them.
-    ...item("tool-pen", { divider: true }),
-    ...item("tool-region"),
-    ...item("mark-color"),
-    ...(partItems.length
-      ? [
-          {
-            id: "parts",
-            label: "阅读部分",
-            divider: true,
-            onAction: () => {},
-            submenu: partItems,
-          },
-        ]
-      : []),
-    ...(api.workspace.capabilities.maintenance
-      ? [
-          {
-            id: "acquire",
-            label: "获取 PDF",
-            divider: true,
-            onAction: () => setOperation("acquire"),
-          },
-          {
-            id: "upload",
-            label: "上传 PDF",
-            onAction: () => setOperation("upload"),
-          },
-          {
-            id: "identity",
-            label: "核验文章身份",
-            disabled: !detail.data.primary_pdf,
-            onAction: () => setOperation("identity"),
-          },
-        ]
-      : []),
-    ...(api.kind === "workspace"
-      ? [
-          {
-            id: "bibliography",
-            label: "导出书目",
-            divider: !api.workspace.capabilities.maintenance,
-            onAction: () => setOperation("export"),
-          },
-        ]
-      : []),
-    {
-      id: "pdf",
-      label: "下载已核验的原始 PDF",
-      disabled: !pdfUrl,
-      onAction: () => {
-        const a = document.createElement("a");
-        a.href = pdfUrl;
-        a.download = `${id}.pdf`;
-        a.click();
+    ...group("paper", "这篇文献", [
+      ...(maintenance && !hasPdf
+        ? [
+            {
+              id: "acquire",
+              label: "获取 PDF",
+              onAction: () => setOperation("acquire"),
+            },
+          ]
+        : []),
+      ...(maintenance
+        ? [
+            {
+              id: "upload",
+              label: "上传 PDF",
+              onAction: () => setOperation("upload"),
+            },
+          ]
+        : []),
+      ...(editable
+        ? [
+            {
+              id: "edit",
+              label: "修改全文",
+              checked: mode === "edit",
+              onAction: () => changeMode(mode === "edit" ? "doc" : "edit"),
+            },
+          ]
+        : []),
+      ...(maintenance && hasPdf
+        ? [
+            {
+              id: "identity",
+              label: "核对是不是这篇",
+              onAction: () => setOperation("identity"),
+            },
+          ]
+        : []),
+      ...(partItems.length
+        ? [
+            {
+              id: "parts",
+              label: "阅读部分",
+              onAction: () => {},
+              submenu: partItems,
+            },
+          ]
+        : []),
+    ]),
+    ...group("export", "导出", [
+      ...(api.kind === "workspace"
+        ? [
+            {
+              id: "bibliography",
+              label: "导出书目",
+              onAction: () => setOperation("export"),
+            },
+          ]
+        : []),
+      ...(hasPdf
+        ? [
+            {
+              id: "pdf",
+              label: "下载 PDF",
+              disabled: !pdfUrl,
+              onAction: () => {
+                const a = document.createElement("a");
+                a.href = pdfUrl;
+                a.download = `${id}.pdf`;
+                a.click();
+              },
+            },
+          ]
+        : []),
+      ...(sources.data?.document
+        ? [
+            {
+              id: "markdown",
+              label: "下载全文",
+              onAction: () => {
+                void downloadMarkdown().catch((error) =>
+                  shell.notify(errorMessage(error)),
+                );
+              },
+            },
+          ]
+        : []),
+    ]),
+    // “加工”, the last group of actions (page specs “整体信息架构”).
+    ...group("processing", "加工", [
+      ...(api.kind === "workspace"
+        ? [
+            {
+              id: "run",
+              label: "运行算子…",
+              onAction: () => setRunner(true),
+            },
+          ]
+        : []),
+      {
+        id: "results",
+        label: "加工结果",
+        onAction: () => changeMode("results"),
       },
-    },
-    {
-      id: "markdown",
-      label: "下载全文 Markdown",
-      disabled: !sources.data?.document,
-      onAction: () => {
-        void downloadMarkdown().catch((error) =>
-          shell.notify(errorMessage(error)),
-        );
-      },
-    },
-    // “加工”, the last group of actions (page specs “整体信息架构”): running an
-    // operator and, until block 09, the results (they also enter from the
-    // information panel).
-    {
-      id: "processing",
-      label: "加工",
-      heading: true,
-      onAction: () => {},
-    },
-    ...(api.kind === "workspace"
-      ? [
-          {
-            id: "run",
-            label: "运行算子…",
-            onAction: () => setRunner(true),
-          },
-        ]
-      : []),
-    {
-      id: "results",
-      label: "加工结果",
-      onAction: () => changeMode("results"),
-    },
+    ]),
     ...item("shortcuts", { divider: true }),
   ];
   input.bind({
@@ -1393,7 +1511,8 @@ export default function Reader() {
     marks: canMark || marks.active ? marks.menu : null,
     abilities: {
       canMark,
-      canTranslate: api.kind === "workspace",
+      // Only where translation is set up (plan 25 block 30).
+      canTranslate: api.kind === "workspace" && translation.available === true,
       otherView:
         viewKind === "doc" ? views4 : views3 && !!sources.data?.document,
     },
@@ -1419,7 +1538,7 @@ export default function Reader() {
     notify,
     cite: (quote, page) => marks.menu.cite(quote, page),
     translate: (text, page) => {
-      if (!translation.settings.auto) void translation.translate(text, page);
+      void translation.translate(text, page);
       setSideTab("translation");
       if (!informationShown) toggleInformation();
     },
@@ -1428,11 +1547,42 @@ export default function Reader() {
     otherView: () => changeMode(viewKind === "doc" ? "pdf" : "doc"),
     animate: () => !reduced,
   });
+  /** A tool of the top bar: its operation's name, and its keys in the hint. */
+  const tool = (
+    commandId: CommandId,
+    icon: Parameters<typeof Icon>[0]["name"],
+    more: { pressed?: boolean; tip?: string } = {},
+  ) => {
+    const command = commands.get(commandId);
+    if (!command) return null;
+    return (
+      <IconButton
+        aria-label={commandLabel(command)}
+        tip={more.tip}
+        shortcut={commandKeys(commandId)}
+        isDisabled={command.enabled === false}
+        {...(more.pressed !== undefined
+          ? { "aria-pressed": more.pressed }
+          : {})}
+        onPress={() => void command.run()}
+      >
+        <Icon name={icon} />
+      </IconButton>
+    );
+  };
+  const penOn =
+    commands.get("tool-pen")?.checked === true ||
+    commands.get("tool-region")?.checked === true;
+  /**
+   * Spec 1.3 as plan 25 block 30 sets it: the views, then 目录, 查找, 高亮,
+   * 排版, 专注, the side panel and “更多”, in the secondary ink, each hint
+   * with its keys. A bibliography page has no views and nothing to look in.
+   */
   const topBarTools = (
     <>
-      {narrowBar ? (
+      {bibliographyPage ? null : narrowBar ? (
         <Menu
-          label={`视图：${views.find((v) => v.id === viewValue)?.label ?? "加工结果"}`}
+          label={`视图：${views.find((v) => v.id === viewValue)?.label ?? "修改全文"}`}
           variant="text"
           indicator
           className="reader-view-menu"
@@ -1454,30 +1604,53 @@ export default function Reader() {
       )}
       {compactBar ? null : (
         <>
-          <IconButton
-            aria-label="查找…"
-            isDisabled={findDisabled}
-            aria-expanded={findOpen}
-            onPress={toggleFind}
-          >
-            <Icon name="search" />
-          </IconButton>
-          <Menu
-            label="排版"
-            iconOnly
-            icon={<span className="reader-type-icon">Aa</span>}
-            items={typeItems}
-          />
+          {bibliographyPage
+            ? null
+            : tool("outline", "outline", { tip: "目录" })}
+          {bibliographyPage ? null : (
+            <IconButton
+              aria-label="查找…"
+              tip="查找"
+              shortcut={commandKeys("find")}
+              isDisabled={findDisabled}
+              aria-expanded={findOpen}
+              onPress={toggleFind}
+            >
+              <Icon name="search" />
+            </IconButton>
+          )}
+          {marking ? (
+            <Menu
+              label="高亮"
+              iconOnly
+              className={penOn ? "reader-pen-on" : "reader-pen"}
+              icon={<Icon name="highlighter" />}
+              items={markingItems}
+            />
+          ) : null}
+          <span ref={typeTrigger} className="reader-type-trigger">
+            <IconButton
+              aria-label="排版"
+              aria-expanded={typeOpen}
+              onPress={() => setTypeOpen((open) => !open)}
+            >
+              <span className="reader-type-icon">Aa</span>
+            </IconButton>
+          </span>
+          {tool("focus", "focus", { tip: "专注" })}
           <IconButton
             aria-label={informationShown ? "收起信息" : "显示信息"}
+            tip="右侧面板"
             aria-pressed={informationShown}
             onPress={toggleInformation}
           >
-            <Icon name="book" />
+            <Icon name="panel" />
           </IconButton>
         </>
       )}
-      <Menu label="更多" iconOnly items={moreItems} />
+      <span ref={moreTrigger} className="reader-more-trigger">
+        <Menu label="更多" iconOnly items={moreItems} />
+      </span>
     </>
   );
   // Spec 1.2: opened from a fixed source, the line under the page header says
@@ -1496,7 +1669,10 @@ export default function Reader() {
       ? [{ id: "marks", label: marks.count ? `批注 ${marks.count}` : "批注" }]
       : []),
     { id: "relations", label: "关联" },
-    ...(marks.active ? [{ id: "translation", label: "翻译" }] : []),
+    // Only where translation is set up (plan 25 block 30).
+    ...(marks.active && translation.available === true
+      ? [{ id: "translation", label: "翻译" }]
+      : []),
   ];
   const tabShown = sideTabs.some((tab) => tab.id === sideTab)
     ? sideTab
@@ -1634,6 +1810,7 @@ export default function Reader() {
       </span>
       {input.contextMenu}
       {input.shortcutsDialog}
+      {typePanel}
       <SplitPane
         label={mode === "edit" ? "全文编辑区宽度" : "文献信息栏宽度"}
         edge="left"
@@ -1711,14 +1888,28 @@ export default function Reader() {
               style={
                 {
                   "--reading-font-size": `${fontSize}px`,
+                  "--reading-leading": LEADING_SCALE[lines.leading],
                 } as CSSProperties
               }
             />
-            {/* Spec 1.5, 1.6: the spine beside the sheet; the outline opens by it. */}
+            {/* Spec 1.5, 1.6: the spine beside the sheet; the outline opens by
+                it. A bibliography page has none (plan 25 block 30). */}
             <ReaderSpine
-              body={mode === "doc" || mode === "pdf" ? body.current : null}
+              body={
+                (mode === "doc" || mode === "pdf") && !bibliographyPage
+                  ? body.current
+                  : null
+              }
               header={headerHost}
-              view={mode === "doc" ? "doc" : mode === "pdf" ? "pdf" : null}
+              view={
+                bibliographyPage
+                  ? null
+                  : mode === "doc"
+                    ? "doc"
+                    : mode === "pdf"
+                      ? "pdf"
+                      : null
+              }
               outline={outline}
               pdf={pdf}
               marks={marks.active ? marks.list : []}
@@ -1825,50 +2016,48 @@ export default function Reader() {
                 />
               </div>
             ) : null}
-            {lacking === "bibliography" ? (
-              <div className="reading-scroll reader-lacking">
-                <EmptyState
-                  title="这份资料只有书目信息。"
-                  {...(api.workspace.capabilities.maintenance
-                    ? {
-                        action: (
-                          <div className="reader-lacking-actions">
-                            <Button onPress={() => setOperation("acquire")}>
-                              获取 PDF
-                            </Button>
-                            <Button onPress={() => setOperation("upload")}>
-                              上传 PDF
-                            </Button>
-                          </div>
-                        ),
-                      }
-                    : {})}
+            {bibliographyPage && lacking !== "text" ? (
+              <div className="reader-lacking">
+                <ReaderBibliography
+                  item={detail.data}
+                  canAct={!!api.workspace.capabilities.maintenance}
+                  onAcquire={() => setOperation("acquire")}
+                  onUpload={() => setOperation("upload")}
                 />
               </div>
             ) : null}
+            {/* Plan 25 block 30: the results and the summary on the desk's
+                sheet, as the full text is. */}
             {mode === "results" ? (
-              <div className="reading-scroll" data-mode="results">
-                <PaperResults
-                  id={id}
-                  onOpenSummary={() => changeMode("know")}
-                />
+              <div
+                className="reading-scroll reader-desk-scroll"
+                data-mode="results"
+              >
+                <div className="reader-plain-sheet">
+                  <PaperResults
+                    id={id}
+                    onOpenSummary={() => changeMode("know")}
+                  />
+                </div>
               </div>
             ) : null}
             {mode === "know" && (
               <div
-                className={`reading-scroll reader-summary-scroll ${layoutPosition.fullWidth ? "reading-full" : layoutPosition.wide ? "reading-wide" : ""}`}
+                className="reading-scroll reader-summary-scroll reader-desk-scroll"
                 style={
                   {
                     "--reading-font-size": `${fontSize}px`,
                   } as CSSProperties
                 }
               >
-                <SummaryView
-                  id={id}
-                  source={source.value}
-                  search={search}
-                  position={position}
-                />
+                <div className="reader-plain-sheet">
+                  <SummaryView
+                    id={id}
+                    source={source.value}
+                    search={search}
+                    position={position}
+                  />
+                </div>
               </div>
             )}
           </div>

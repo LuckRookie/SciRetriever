@@ -1,5 +1,5 @@
 import type { Page } from "playwright";
-import { readerType } from "./reader-controls.js";
+import { openType, readerType } from "./reader-controls.js";
 import type { DesignSampleIds } from "./design-samples-fixture.js";
 import { doubtfulDraft, doubtfulFacts } from "./draft-doubts.js";
 
@@ -368,7 +368,6 @@ export const designSamplePages: readonly DesignSamplePage[] = [
         .waitFor();
       // Spec 1.8.1: 实际大小 (100%), then 缩小 by tens to 50%.
       await readerType(p, "50%");
-      await p.locator(".ui-menu").waitFor({ state: "detached" });
       await p.waitForTimeout(600);
     },
     ready: '.reading-pdf-page[data-rendered="true"]',
@@ -425,16 +424,7 @@ export const designSamplePages: readonly DesignSamplePage[] = [
       await doubtfulDraft(p);
       await p.reload();
       await p.locator('.react-reader[data-reading-ready="true"]').waitFor();
-      const type = p.getByRole("button", { name: "排版", exact: true });
-      if (await type.isVisible()) await type.click();
-      else {
-        await p.getByRole("button", { name: "更多", exact: true }).click();
-        await p.getByRole("menuitem", { name: "排版", exact: true }).click();
-      }
-      await p
-        .getByRole("menuitem", { name: "显示核对依据", exact: true })
-        .click();
-      await p.locator(".ui-menu").waitFor({ state: "detached" });
+      await readerType(p, "显示核对依据");
       // The popover closes when the text scrolls: bring the mark in first.
       const doubt = p.locator("button.reading-doubt").first();
       await doubt.scrollIntoViewIfNeeded();
@@ -457,11 +447,51 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     ready: ".reader-surface .ui-empty",
   },
   {
+    id: "reader-pdf-default",
+    name: "阅读 · 有 PDF 没有全文（默认 PDF）",
+    // Opened without a view: the PDF, and “还没有全文 · 生成全文” under the page header (plan 25 block 30).
+    route: (ids) => `/?literature=${ids.pdfOnly}`,
+    ready: '.reader-page-header-line:has-text("还没有全文")',
+  },
+  {
     id: "reader-metadata-only",
-    name: "阅读 · 只有书目",
-    // Opened without a view: the reader picks the empty full text and the information panel (spec 6.4).
+    name: "阅读 · 书目页",
+    // Opened without a view: the bibliography set on the sheet (plan 25 block 30).
     route: (ids) => `/?literature=${ids.metadataOnly}`,
-    ready: '.reader-surface .ui-empty:has-text("只有书目信息")',
+    ready: ".reader-bibliography-sheet .bibliography-title",
+  },
+  {
+    id: "reader-metadata-not-found",
+    name: "阅读 · 书目页（没找到 PDF）",
+    route: (ids) => `/?literature=${ids.metadataOnly}`,
+    // The automatic routes exhausted (三篇样例里的“没找到 PDF”), served for this paper.
+    interaction: "把这篇的详情标为“没找到 PDF”后打开",
+    prepare: async (p, ids) => {
+      await p.route(
+        (url) => url.pathname === "/api/v1/query/read",
+        async (route) => {
+          const response = await route.fetch();
+          const value = await response.json();
+          const detail = value.detail ?? value.result?.detail;
+          if (detail?.literature?.literature_id === ids.metadataOnly)
+            detail.needs_manual_pdf = true;
+          await route.fulfill({ response, json: value });
+        },
+      );
+      await p.reload();
+    },
+    ready: '.reader-bibliography-fulltext:has-text("自动找过")',
+  },
+  {
+    id: "reader-type-panel",
+    name: "阅读 · 排版面板",
+    route: reader("doc"),
+    interaction: "点开“排版”",
+    prepare: async (p) => {
+      await p.locator('.react-reader[data-reading-ready="true"]').waitFor();
+      await openType(p);
+    },
+    ready: ".reader-type-panel",
   },
   ...(
     [

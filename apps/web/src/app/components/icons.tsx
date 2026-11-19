@@ -31,7 +31,10 @@ export type IconName =
   | "note"
   | "translate"
   | "trash"
-  | "tag";
+  | "tag"
+  | "outline"
+  | "focus"
+  | "panel";
 const paths: Record<IconName, string> = {
   search: "m16 16 5 5 M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0",
   close: "m6 6 12 12 M18 6 6 18",
@@ -68,6 +71,9 @@ const paths: Record<IconName, string> = {
     "M3 5h10 M8 3v2 M5 9c1.5 3 4 5 7 6 M11 5c-1 4.5-3.5 8-7 10 M13 21l4-9 4 9 M14.3 18h5.4",
   trash: "M4 7h16 M10 7V4h4v3 M6 7l1 13h10l1-13",
   tag: "M3 12V3h9l9 9-9 9z M7.5 7.5h.01",
+  outline: "M9 6h11 M9 12h11 M9 18h11 M4.5 6h.01 M4.5 12h.01 M4.5 18h.01",
+  focus: "M4 9V4h5 M15 4h5v5 M20 15v5h-5 M9 20H4v-5",
+  panel: "M3 5h18v14H3z M15 5v14",
 };
 export function Icon({
   name,

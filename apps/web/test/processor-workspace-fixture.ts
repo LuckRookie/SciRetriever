@@ -38,6 +38,8 @@ export async function workspace(
     configuration?: (
       env: Awaited<ReturnType<typeof coreProcessingFixture>>,
     ) => NonNullable<WorkbenchHttpOptions["configuration"]>;
+    /** Reader translation is served (its models from the fixture's configuration); default true. */
+    translation?: boolean;
   },
 ) {
   if (!options?.assets)
@@ -111,6 +113,10 @@ export async function workspace(
       ...(options?.configuration
         ? { configuration: options.configuration(env) }
         : {}),
+      // As the application serves it; a selection is never translated unasked.
+      ...(options?.translation === false
+        ? {}
+        : { translation: env.app.translation }),
     });
     dispose.push(() => server.close());
     const browser = await chromium.launch({

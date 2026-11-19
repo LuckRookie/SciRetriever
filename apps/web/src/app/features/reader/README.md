@@ -8,6 +8,8 @@ PDF.js、连续 Markdown/KaTeX 与字节校验保留在 [reading](../../../readi
 
 `reading.css` 位于 `pages` 层，定义案头与纸页、正文（阅读字号 16–32 px，本机一个值）、视图切换与侧栏的过渡和窄屏布局；共用的控件与浮层继续由 [components](../../components/README.md) 提供。加工按钮进入既有 `OperationDialog` 确认，不由阅读组件调用解析器或模型。
 
+计划 25 的 30 块：没有 PDF 的文献打开为书目页（`ReaderBibliography.tsx`，复用 `BibliographyContent`），不显示视图切换与书脊；“排版”是面板（`ReaderTypePanel.tsx`：字号或比例、行宽、行距、主题色块、两个开关），行宽与行距存本机偏好（`input/reading-layout.ts`），主题与“设置 → 外观”同一偏好；总结与结果是视图切换里临时多出的一格，排在案头的纸页上。翻译是否可用读 `GET /api/translation` 的模型列表，选中文字只填原文框，点“翻译”才出浮框。
+
 [上级功能目录](../README.md) · [应用源码](../../README.md)
 
 证据预览复用安全 Markdown/公式渲染，在阅读区边界内采用浮层；窄屏保留核对依据与校订入口。总结的逐值核对以折叠标记呈现，原因由共享 strings 映射为中文，展开后可查看每个来源的固定原文。

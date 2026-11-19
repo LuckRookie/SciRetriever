@@ -12,7 +12,7 @@ import { nextWorkspace } from "./next-workspace-fixture.js";
 import { missingId } from "./processor-workspace-fixture.js";
 import { syntheticReadingPdf } from "./reading-pdf-fixture.js";
 import {
-  readerMore,
+  readerTool,
   readerPageNumber,
   readerTextComplete,
   readerToLibrary,
@@ -267,7 +267,7 @@ it("keeps the latest outline target, text settings and reading position across a
     w.page.on("request", (request) => requests.push(request.url()));
     await open(w, "doc");
     await w.page.locator(".reading-article").waitFor();
-    await readerMore(w.page, "显示目录");
+    await readerTool(w.page, "显示目录");
     let arrived: () => void = () => {};
     const held = new Promise<void>((resolve) => {
       release = resolve;
@@ -286,7 +286,7 @@ it("keeps the latest outline target, text settings and reading position across a
       .click();
     await started;
     // Choosing an entry closed the outline (spec 1.6): open it again.
-    await readerMore(w.page, "显示目录");
+    await readerTool(w.page, "显示目录");
     await w.page
       .locator(".reader-outline")
       .getByRole("button", { name: "Section 300", exact: true })
@@ -446,10 +446,11 @@ it("keeps encrypted PDF rejection at ingestion and reports no accepted PDF", asy
     // Navigation only loads the shell. Source resolution starts after the
     // literature receipt; do not spend the assertion window on application startup.
     await (await detailRead).finished();
-    // Without a PDF the paper does not open in the PDF view (spec 6.4, 3.9).
+    // Without a PDF the paper does not open in the PDF view (spec 6.4): it
+    // opens as its bibliography page (plan 25 block 30).
     await w.page
-      .locator(".reader-surface .ui-empty")
-      .getByText("这份资料只有书目信息。", { exact: true })
+      .locator(".reader-bibliography-fulltext")
+      .getByText("这篇还没有全文。", { exact: true })
       .waitFor();
     expect(new URL(w.page.url()).searchParams.get("reader")).toBe("doc");
     expect(await w.page.locator("canvas").count()).toBe(0);
@@ -473,7 +474,7 @@ it("keeps a verified PDF download available when its worker fails and supports r
     await w.page.getByRole("button", { name: "更多", exact: true }).click();
     expect(
       await w.page
-        .getByRole("menuitem", { name: "下载已核验的原始 PDF", exact: true })
+        .getByRole("menuitem", { name: "下载 PDF", exact: true })
         .getAttribute("aria-disabled"),
     ).not.toBe("true");
     await w.page.keyboard.press("Escape");
@@ -677,12 +678,15 @@ it.each(["no-preference", "reduce"] as const)(
       await more.press("Enter");
       const type = w.page.getByRole("menuitem", { name: "排版", exact: true });
       await type.focus();
-      await type.press("ArrowRight");
-      await w.page
-        .getByRole("menuitem", { name: "放大", exact: true })
-        .waitFor();
+      await type.press("Enter");
+      // The panel (plan 25 block 30) takes the keys; Esc gives them back to “更多”.
+      const panel = w.page.getByRole("dialog", { name: "排版", exact: true });
+      await panel.getByRole("button", { name: "放大", exact: true }).waitFor();
+      await expect
+        .poll(() => panel.evaluate((el) => el.contains(document.activeElement)))
+        .toBe(true);
       await w.page.keyboard.press("Escape");
-      await w.page.keyboard.press("Escape");
+      await panel.waitFor({ state: "detached" });
       await expect
         .poll(() => more.evaluate((el) => el === document.activeElement))
         .toBe(true);

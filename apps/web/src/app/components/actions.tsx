@@ -150,8 +150,16 @@ export function Button({
 export function IconButton({
   "aria-label": label,
   children,
+  shortcut,
+  tip,
   ...props
-}: ButtonProps & { "aria-label": string }) {
+}: ButtonProps & {
+  "aria-label": string;
+  /** Its keys, written after the name in the hint (design core “提示”). */
+  shortcut?: string | undefined;
+  /** The hint's words when they are not the button's name. */
+  tip?: string | undefined;
+}) {
   return (
     <TooltipTrigger delay={500} closeDelay={0}>
       <Button
@@ -162,7 +170,8 @@ export function IconButton({
         {children}
       </Button>
       <AriaTooltip className="ui-tooltip" placement="bottom">
-        {label}
+        {tip ?? label}
+        {shortcut ? <kbd className="ui-tooltip-keys">{shortcut}</kbd> : null}
       </AriaTooltip>
     </TooltipTrigger>
   );

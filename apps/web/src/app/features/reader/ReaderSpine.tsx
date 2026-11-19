@@ -27,9 +27,9 @@ import {
 } from "./spine.js";
 
 const VIEW = ".reader-engine:not([hidden]) .reader-view:not([hidden])";
-/** Spec 1.5: 8 px from the sheet, 16 px wide. */
+/** Spec 1.5 as plan 25 block 30 thinned it: 8 px from the sheet, 4 px wide. */
 const GAP = 8,
-  WIDTH = 16,
+  WIDTH = 4,
   TIP_DELAY = 500;
 let tipShownAt = -Infinity;
 
@@ -371,6 +371,18 @@ export function ReaderSpine({
           <div
             className="reader-spine-window"
             style={{ top: window_.top, height: window_.height }}
+            // The stroke lies over the parts: it names the one under the pointer too.
+            onPointerMove={(event) => {
+              const y =
+                event.clientY -
+                (spine.current?.getBoundingClientRect().top ?? 0);
+              const under = segments.find(
+                (s) => y >= s.top && y <= s.top + s.height,
+              );
+              if ((under?.index ?? null) !== (tip?.index ?? null))
+                hover(under?.index ?? null);
+            }}
+            onPointerLeave={() => hover(null)}
             onPointerDown={(event) => {
               if (event.button !== 0 || !body) return;
               event.preventDefault();

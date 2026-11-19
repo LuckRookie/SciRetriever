@@ -441,7 +441,7 @@ describe("live workbench on the installed Cloak runtime", () => {
           .click();
         const downloading = desktop.waitForEvent("download");
         await desktop
-          .getByRole("menuitem", { name: "下载已核验的原始 PDF", exact: true })
+          .getByRole("menuitem", { name: "下载 PDF", exact: true })
           .click();
         const download = await downloading;
         expect(await sha256(await readFile((await download.path())!))).toBe(

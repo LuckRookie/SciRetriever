@@ -394,9 +394,7 @@ it("reads, searches, follows references and downloads through the query-only pag
       await page.getByRole("button", { name: "更多", exact: true }).click();
       const [download] = await Promise.all([
         page.waitForEvent("download"),
-        page
-          .getByRole("menuitem", { name: "下载已核验的原始 PDF", exact: true })
-          .click(),
+        page.getByRole("menuitem", { name: "下载 PDF", exact: true }).click(),
       ]);
       expect(await readFile((await download.path())!)).toEqual(
         Buffer.from(expectedPdf),
@@ -435,7 +433,7 @@ it("reads, searches, follows references and downloads through the query-only pag
     await page.getByRole("button", { name: "更多", exact: true }).click();
     expect(
       await page
-        .getByRole("menuitem", { name: "下载已核验的原始 PDF", exact: true })
+        .getByRole("menuitem", { name: "下载 PDF", exact: true })
         .getAttribute("aria-disabled"),
     ).toBe("true");
     await page.keyboard.press("Escape");
@@ -476,7 +474,7 @@ it("reads, searches, follows references and downloads through the query-only pag
     await page.getByRole("button", { name: "更多", exact: true }).click();
     expect(
       await page
-        .getByRole("menuitem", { name: "下载已核验的原始 PDF", exact: true })
+        .getByRole("menuitem", { name: "下载 PDF", exact: true })
         .getAttribute("aria-disabled"),
     ).toBe("true");
     await page.keyboard.press("Escape");

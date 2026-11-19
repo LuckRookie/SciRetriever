@@ -120,7 +120,7 @@ it.each(["no-preference", "reduce"] as const)(
       await more.click();
       // “排版” sits in “更多” only below 760 px; here “更多” itself opens and closes.
       await w.page
-        .getByRole("menuitem", { name: "下载已核验的原始 PDF", exact: true })
+        .getByRole("menuitem", { name: "下载 PDF", exact: true })
         .waitFor();
       await w.page.keyboard.press("Escape");
       await expect

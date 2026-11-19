@@ -43,31 +43,42 @@ export function MaterialBadge({
   );
 }
 
+/** What kind of paper and when: “期刊论文 · 2024”. */
+export function paperKind(item: LiteratureSearchItem): string {
+  const m = item.literature.metadata;
+  return [
+    m.publication_form ? PUBLICATION_FORM_LABELS[m.publication_form] : null,
+    m.publication_year,
+  ]
+    .filter((part) => part !== null && part !== undefined)
+    .join(" · ");
+}
 /**
  * A paper's bibliography as one block: what kind and when, the title, its
  * authors, where it appeared, the abstract, keywords, tags and what the
  * library holds of it, then the caller's actions. The library's preview shows
- * it; the reader's bibliography page is meant to show the same.
+ * it; the reader's bibliography page shows the same (plan 25 block 30).
  */
 export function BibliographyContent({
   item,
   actions,
   heading = "h2",
+  kind: showKind = true,
+  holdings = true,
 }: {
   item: LiteratureSearchItem;
   /** “打开阅读”, “获取 PDF”: what the place showing it lets one do. */
   actions?: ReactNode;
   /** The title's heading level where the block sits. */
   heading?: "h1" | "h2";
+  /** The kind and year line; the reader's page header carries it instead. */
+  kind?: boolean;
+  /** Tags and what the library holds; the reader's page says that its own way. */
+  holdings?: boolean;
 }) {
   const m = item.literature.metadata;
   const doi = m.identifiers.find((id) => id.namespace === "doi")?.value;
-  const kind = [
-    m.publication_form ? PUBLICATION_FORM_LABELS[m.publication_form] : null,
-    m.publication_year,
-  ]
-    .filter((part) => part !== null && part !== undefined)
-    .join(" · ");
+  const kind = paperKind(item);
   const issue = [
     m.volume ? `${m.volume} 卷` : null,
     m.issue ? `${m.issue} 期` : null,
@@ -77,7 +88,7 @@ export function BibliographyContent({
   const Title = heading;
   return (
     <div className="bibliography">
-      {kind ? <p className="bibliography-kind">{kind}</p> : null}
+      {kind && showKind ? <p className="bibliography-kind">{kind}</p> : null}
       <Title className="bibliography-title">
         <RichTitle parts={paperTitleParts(item)} />
       </Title>
@@ -109,7 +120,7 @@ export function BibliographyContent({
           {terms.join(" · ")}
         </p>
       ) : null}
-      {item.tags?.length ? (
+      {holdings && item.tags?.length ? (
         <p className="bibliography-tags" aria-label="标签">
           {item.tags.map((tag) => (
             <span
@@ -121,18 +132,20 @@ export function BibliographyContent({
           ))}
         </p>
       ) : null}
-      <p className="bibliography-material">
-        <span>材料</span>
-        <MaterialBadge item={item} />
-        {item.text_level ? (
-          <span className="bibliography-note">
-            {item.text_level === "draft" ? "全文 · 未校对" : "全文 · 已校对"}
-          </span>
-        ) : null}
-        {item.needs_metadata ? (
-          <span className="bibliography-note">书目不全</span>
-        ) : null}
-      </p>
+      {holdings ? (
+        <p className="bibliography-material">
+          <span>材料</span>
+          <MaterialBadge item={item} />
+          {item.text_level ? (
+            <span className="bibliography-note">
+              {item.text_level === "draft" ? "全文 · 未校对" : "全文 · 已校对"}
+            </span>
+          ) : null}
+          {item.needs_metadata ? (
+            <span className="bibliography-note">书目不全</span>
+          ) : null}
+        </p>
+      ) : null}
       {actions ? <div className="bibliography-actions">{actions}</div> : null}
     </div>
   );

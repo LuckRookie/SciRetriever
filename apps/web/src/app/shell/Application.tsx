@@ -983,6 +983,10 @@ function Workspace({ api }: { api: ApiClient }) {
         tabs: {
           list: tabs,
           current: route.literature ?? null,
+          show: (id) => {
+            const tab = tabs.find((item) => item.id === id);
+            if (tab) showPaper(tab.id, tab.mode, tab.source, tab.title);
+          },
           close: (kind, on) =>
             void closeTabs(kind, on ?? route.literature ?? ""),
           reopen: () => reopen(),

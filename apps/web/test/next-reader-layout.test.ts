@@ -1,8 +1,9 @@
 import { expect, it } from "vitest";
 import {
-  readerMore,
+  openType,
   readerPanel,
   readerToLibrary,
+  readerTool,
   readerType,
   readerView,
 } from "./reader-controls.js";
@@ -174,7 +175,7 @@ it("folds article information, lays out figure groups and footnotes, and names u
     // The Markdown carries no layout markers: the body text is the paper's own.
     expect(await article.innerText()).not.toMatch(/mktero|<!--|:::/);
     // An untitled section is listed by its role, marked as such.
-    await readerMore(w.page, "显示目录");
+    await readerTool(w.page, "显示目录");
     const entry = w.page.locator(".reader-outline-entry[data-untitled]");
     await entry.waitFor();
     expect(await entry.innerText()).toBe("引言");
@@ -418,7 +419,7 @@ it("returns from an outline jump with Alt+← and reopens a paper where it was l
     await w.page.waitForTimeout(400);
     const before = await atLine();
     // Jump far away through the outline.
-    await readerMore(w.page, "显示目录");
+    await readerTool(w.page, "显示目录");
     await w.page
       .locator(".reader-outline-entry", { hasText: "Conclusion" })
       .click();
@@ -623,35 +624,104 @@ it("puts the reader under one top bar: navigation in a drawer, the views, find, 
     await drawer.waitFor();
     await w.page.mouse.click(1400, 450);
     await drawer.waitFor({ state: "detached" });
-    // Every operation of the old toolbar has a place (spec 1.3).
-    const more = await menuItems("更多");
-    for (const item of [
-      "运行算子…",
-      "修改全文",
+    // Plan 25 block 30: after the views, 目录, 查找, 高亮, 排版, 专注, the
+    // side panel and “更多”, in the secondary ink; hints carry their keys.
+    const tools = w.page.locator(".reader-topbar-tools");
+    expect(
+      await tools
+        .locator(":scope > .ui-icon-button, :scope > span > .ui-icon-button")
+        .evaluateAll((buttons) =>
+          buttons.map((button) => button.getAttribute("aria-label")),
+        ),
+    ).toEqual([
       "显示目录",
+      "查找…",
+      "高亮",
+      "排版",
       "进入专注模式",
-      "高亮笔",
-      "笔颜色",
-      "获取 PDF",
+      "显示信息",
+      "更多",
+    ]);
+    const ink = await w.page.evaluate(() => {
+      const probe = document.createElement("span");
+      probe.style.color = "var(--fg2)";
+      document.body.append(probe);
+      const colour = getComputedStyle(probe).color;
+      probe.remove();
+      return colour;
+    });
+    for (const name of ["显示目录", "查找…", "进入专注模式"])
+      expect(
+        await tools
+          .getByRole("button", { name, exact: true })
+          .evaluate((el) => getComputedStyle(el).color),
+        name,
+      ).toBe(ink);
+    for (const [name, hint] of [
+      ["显示目录", "目录O"],
+      ["查找…", "查找Ctrl+F"],
+      ["进入专注模式", "专注F"],
+    ] as const) {
+      await tools.getByRole("button", { name, exact: true }).hover();
+      await expect
+        .poll(() => w.page.locator(".ui-tooltip").innerText())
+        .toBe(hint);
+      await w.page.mouse.move(700, 600);
+      await w.page.locator(".ui-tooltip").waitFor({ state: "detached" });
+    }
+    // “高亮”: the pen, the colour; the region only in the PDF.
+    expect(await menuItems("高亮")).toEqual(["高亮笔", "笔颜色"]);
+    // “更多”: this paper, export, processing, then the keys; a paper with a
+    // PDF has no “获取 PDF”.
+    const headings = async () => {
+      await w.page.getByRole("button", { name: "更多", exact: true }).click();
+      const names = await w.page
+        .locator(".ui-menu .ui-menu-heading")
+        .allInnerTexts();
+      await w.page.keyboard.press("Escape");
+      await w.page.locator(".ui-menu").waitFor({ state: "detached" });
+      return names;
+    };
+    expect(await headings()).toEqual(["这篇文献", "导出", "加工"]);
+    const more = await menuItems("更多");
+    expect(more).toEqual([
       "上传 PDF",
-      "核验文章身份",
+      "修改全文",
+      "核对是不是这篇",
       "导出书目",
-      "下载已核验的原始 PDF",
-      "下载全文 Markdown",
+      "下载 PDF",
+      "下载全文",
+      "运行算子…",
       "加工结果",
-    ])
-      expect(more, item).toContain(item);
+      "键盘快捷键",
+    ]);
+    expect(more).not.toContain("获取 PDF");
     expect(more).not.toContain("复制引用");
     expect(more.some((item) => item.includes("解析"))).toBe(false);
-    expect(more).not.toContain("框选区域");
-    // Spec 1.3: the scale group (放大, 缩小, 恢复默认), then the two switches.
-    expect(await menuItems("排版")).toEqual([
-      "放大",
-      "缩小",
-      "恢复默认",
+    // “排版”: the reading size, the line length and spacing, the themes and two switches.
+    const type = await openType(w.page);
+    expect(await type.locator(".reader-type-label").allInnerTexts()).toEqual([
+      "字号",
+      "行宽",
+      "行距",
+      "主题",
+    ]);
+    expect(
+      await type
+        .getByRole("button")
+        .evaluateAll((items) =>
+          items.map(
+            (item) => item.getAttribute("aria-label") ?? item.textContent,
+          ),
+        ),
+    ).toEqual(["缩小", "放大", "恢复默认"]);
+    expect(await type.getByRole("radio").count()).toBe(7);
+    expect(await type.locator(".ui-choice").allInnerTexts()).toEqual([
       "标出关键句",
       "显示核对依据",
     ]);
+    await w.page.keyboard.press("Escape");
+    await type.waitFor({ state: "detached" });
     // Shortcuts outside text fields: Alt+4 the PDF, Alt+3 back, O the outline, ⌘/Ctrl+F find.
     await w.page
       .locator(".reader-engine-body")
@@ -666,14 +736,23 @@ it("puts the reader under one top bar: navigation in a drawer, the views, find, 
       )
       .first()
       .waitFor();
-    expect(await menuItems("更多")).toContain("框选区域");
-    // Spec 1.3: the PDF's scale group, with “实际大小”.
-    expect((await menuItems("排版")).slice(0, 4)).toEqual([
-      "放大",
-      "缩小",
-      "适合宽度",
-      "实际大小",
-    ]);
+    expect(await menuItems("高亮")).toContain("框选区域");
+    // The PDF's scale: 适合宽度 and 实际大小; no line length or spacing.
+    const pdfType = await openType(w.page);
+    expect(
+      await pdfType
+        .getByRole("button")
+        .evaluateAll((items) =>
+          items.map(
+            (item) => item.getAttribute("aria-label") ?? item.textContent,
+          ),
+        ),
+    ).toEqual(["缩小", "放大", "适合宽度", "实际大小"]);
+    expect(await pdfType.locator(".reader-type-label").allInnerTexts()).toEqual(
+      ["比例", "主题"],
+    );
+    await w.page.keyboard.press("Escape");
+    await pdfType.waitFor({ state: "detached" });
     await w.page.keyboard.press("Alt+3");
     await expect
       .poll(() => new URL(w.page.url()).searchParams.get("reader"))
@@ -830,7 +909,7 @@ it("lays the PDF on the sheet's desk, one sheet per page, and folds the top bar 
       .toBe("visible");
     await w.page.locator(".reader-information").waitFor();
     // “更多 → 专注模式” enters it too; F leaves it.
-    await readerMore(w.page, "进入专注模式");
+    await readerTool(w.page, "进入专注模式");
     await expect
       .poll(() => bar.evaluate((el) => getComputedStyle(el).visibility))
       .toBe("hidden");
@@ -916,10 +995,9 @@ it("opens the side panel closed by default, docked from a 1440 px window and flo
       await panel.getByRole("tab", { name: "关联", exact: true }).click();
       const overview = panel.getByRole("region", { name: "库内概况" });
       await overview.waitFor();
-      expect(await overview.getByRole("rowheader").allInnerTexts()).toEqual([
-        "被引用",
-        "引用",
-      ]);
+      // This paper has no citation data: one sentence, no table of dashes (block 30).
+      expect(await overview.innerText()).toContain("还没有这篇的引用数据。");
+      expect(await overview.getByRole("rowheader").count()).toBe(0);
       await w.page
         .getByRole("button", { name: "收起信息", exact: true })
         .click();
@@ -1018,7 +1096,8 @@ it("draws the spine 8 px beside the sheet, keeps it there with the panel docked,
     await w.page.goto(`${w.origin}/?literature=${id}&reader=doc`);
     await w.page.locator('.react-reader[data-reading-ready="true"]').waitFor();
     await spine.waitFor();
-    expect(await gap()).toEqual({ gap: 8, width: 16 });
+    // Plan 25 block 30: 4 px wide.
+    expect(await gap()).toEqual({ gap: 8, width: 4 });
     // One part per top-level heading of the outline; the window frames what shows.
     await w.page.keyboard.press("o");
     const tops = await w.page

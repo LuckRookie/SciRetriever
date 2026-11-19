@@ -838,7 +838,9 @@ it("reads a draft as the default text: its level, its note, no editing, its doub
       .poll(() => w.page.locator(".mark-card-level").allInnerTexts())
       .toEqual(["未校对的全文上"]);
     await w.page.getByRole("tab", { name: "信息", exact: true }).click();
-    // “显示核对依据”: the draft's three values, and the doubts in the left margin.
+    // “显示核对依据”: only the segments that differ from the PDF's own text
+    // or have none to check carry a mark; agreeing ones carry nothing (plan
+    // 25 block 30). The doubts stand in the left margin.
     await readerType(w.page, "显示核对依据");
     expect(doubtful.size).toBe(2);
     const sources = await w.page
@@ -846,11 +848,14 @@ it("reads a draft as the default text: its level, its note, no editing, its doub
       .allInnerTexts();
     expect(sources).toEqual(
       expect.arrayContaining([
-        "和 PDF 自带的文字一致",
         "和 PDF 自带的文字不一样",
         "没有 PDF 自带的文字可以对照",
       ]),
     );
+    expect(sources).not.toContain("和 PDF 自带的文字一致");
+    expect(
+      await w.page.locator(`${shown} section[data-byte-start]:has(p)`).count(),
+    ).toBeGreaterThan(sources.length);
     expect(
       await w.page.locator(`${shown} .reading-doubt`).allInnerTexts(),
     ).toEqual(["疑点", "无自带文字"]);

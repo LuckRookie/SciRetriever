@@ -60,7 +60,7 @@ export function useAnchored(
   return place;
 }
 
-/** The dark ink bar over a selection or a mark: colour, note, cite and the rest. */
+/** The floating bar over a selection or a mark: colour, note, cite and the rest. */
 export function MarkBar({
   anchor,
   scroller,

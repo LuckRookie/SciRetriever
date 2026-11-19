@@ -33,6 +33,8 @@ export interface ShellState {
   tabs: {
     list: readonly PaperTab[];
     current: string | null;
+    /** Goes back to an open tab, in the view it was left in. */
+    show(id: string): void;
     /** Closes from tab `on` (the current one when absent). */
     close(kind: CloseKind, on?: string): void;
     reopen(): void;

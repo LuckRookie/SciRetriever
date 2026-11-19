@@ -1046,7 +1046,8 @@ it("PDF zoom (5.3)", async () => {
     // The synthetic pages are 612 pt wide: 612 px at 实际大小 (100%), one change of zoom.
     await r.page.evaluate(() => rs().sample("pdf", 612));
     await r.page
-      .getByRole("menuitem", { name: "实际大小", exact: true })
+      .getByRole("dialog", { name: "排版", exact: true })
+      .getByRole("button", { name: "实际大小", exact: true })
       .click();
     await r.page.waitForFunction(() => rs().sharp(612), undefined, {
       timeout: TIMEOUT,

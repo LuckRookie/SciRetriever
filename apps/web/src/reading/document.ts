@@ -116,13 +116,26 @@ export async function renderDocument(
   article.className = "reading-article library-reading-text";
   // Folded front-page article information (ADR 0054); session state only.
   article.dataset.articleInfo = "collapsed";
+  let documentTitle: HTMLElement | null = null;
   if (frame.documentTitle) {
     const title = document.createElement("h1");
     title.className = "reading-document-title";
     title.dataset.origin = "author";
     appendTitle(title, titleParts(frame.documentTitle));
     article.append(title);
+    documentTitle = title;
   }
+  /** Titles compared as a reader sees them: case, spacing, a final stop aside. */
+  const sameTitle = (a: string, b: string) => {
+    const plain = (text: string) =>
+      text
+        .normalize("NFKC")
+        .replace(/\s+/gu, " ")
+        .trim()
+        .replace(/[.。:：]$/u, "")
+        .toLowerCase();
+    return !!plain(a) && plain(a) === plain(b);
+  };
   // Reading-experience 3.4: the text's level; a draft and a long document
   // (ADR 0055) say so above the text, scrolling with it, never dismissed.
   const level = described.text_level ?? "proofread";
@@ -698,7 +711,10 @@ export async function renderDocument(
         el.dataset.page = String(segment.page);
         if (segment.region) el.dataset.region = segment.region.join(",");
       }
-      if (segment && frame.onSegment) {
+      // A draft segment that agrees with the PDF's own text carries nothing:
+      // only differences and segments with nothing to check are marked
+      // (plan 25 block 30).
+      if (segment && frame.onSegment && segment.basis !== "text-layer-match") {
         const source = document.createElement("button");
         source.className = "reading-block-source";
         source.type = "button";
@@ -756,6 +772,23 @@ export async function renderDocument(
           presentation.replaceChildren(...heading.childNodes);
           heading.replaceWith(presentation);
         }
+      }
+      // Plan 25 block 30: the text's first heading the same as the paper's
+      // title is printed once — the heading, in the title's place and size.
+      const heading = el.querySelector<HTMLElement>("h1,h2,h3,h4,h5,h6");
+      if (
+        documentTitle &&
+        heading &&
+        !rendered
+          .slice(0, index)
+          .some((r) => r.element.querySelector("h1,h2,h3,h4,h5,h6"))
+      ) {
+        const same = sameTitle(
+          heading.textContent ?? "",
+          documentTitle.textContent ?? "",
+        );
+        if (same) heading.classList.add("reading-document-title");
+        documentTitle.hidden = same;
       }
       if (
         source?.kind === "document" &&
