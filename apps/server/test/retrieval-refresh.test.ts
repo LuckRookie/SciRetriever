@@ -129,6 +129,65 @@ it("durably schedules without awaiting a builder and collapses pending revisions
   }
 });
 
+it("persists the completed refresh and schedules a later source revision without another request", async () => {
+  const root = await mkdtemp(join(tmpdir(), "sciretriever-index-refresh-")),
+    catalog = join(root, "catalog.sqlite"),
+    path = `${catalog}.index-refresh.json`;
+  const nextRound = deferred();
+  let revision = 1;
+  const service = new IndexRefreshService(
+    catalog,
+    {
+      refresh: async () => {
+        const scanned = revision;
+        revision = 2;
+        return generation(scanned);
+      },
+      build: async () => generation(revision),
+    },
+    async () => {
+      // Read the settled state before the next attempt marks it running.
+      if ((await IndexRefreshStateStore.read(path)).indexed_revision === 1)
+        await nextRound.promise;
+      return revision;
+    },
+  );
+  try {
+    await service.schedule();
+    await vi.waitFor(
+      async () => {
+        expect((await IndexRefreshStateStore.read(path)).indexed_revision).toBe(
+          1,
+        );
+      },
+      { timeout: 20_000 },
+    );
+    expect(await IndexRefreshStateStore.read(path)).toMatchObject({
+      status: "scheduled",
+      requested_revision: 2,
+      indexed_revision: 1,
+      request_sequence: 1,
+      last_refresh_ms: expect.any(Number),
+    });
+    nextRound.resolve();
+    await vi.waitFor(
+      async () => {
+        expect(await IndexRefreshStateStore.read(path)).toMatchObject({
+          status: "updated",
+          requested_revision: 2,
+          indexed_revision: 2,
+          request_sequence: 1,
+        });
+      },
+      { timeout: 20_000 },
+    );
+  } finally {
+    nextRound.resolve();
+    await service.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 it("persists failure across reopen, leaves a retry available, and resumes an interrupted request", async () => {
   const root = await mkdtemp(
       join(tmpdir(), "sciretriever-index-refresh-reopen-"),

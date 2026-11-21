@@ -887,26 +887,28 @@ export class RetrievalStorageEngine {
       throw error;
     }
   }
-  finishIncremental(
-    generation: string,
-    revision: number,
-  ): RetrievalGeneration | null {
+  finishIncremental(generation: string, revision: number): RetrievalGeneration {
     this.refreshReader();
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      if (this.active()?.generation_id !== generation)
+      const active = this.active();
+      if (
+        !active ||
+        active.generation_id !== generation ||
+        !Number.isSafeInteger(revision) ||
+        revision < active.source_revision ||
+        revision > this.revision()
+      )
         throw new RetrievalStorageError("index-stale");
-      if (this.revision() !== revision) {
-        this.db.exec("ROLLBACK");
-        return null;
-      }
+      // Only the completed scan is covered. Publications after its snapshot
+      // may still need indexing in the next round.
       this.db
         .prepare(
           "UPDATE retrieval_generations SET source_revision=? WHERE generation_id=?",
         )
         .run(revision, generation);
       this.db.exec("COMMIT");
-      return this.active();
+      return { ...active, source_revision: revision };
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;

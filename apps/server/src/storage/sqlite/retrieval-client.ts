@@ -115,7 +115,7 @@ export class RetrievalStorageClient {
     id: string,
     revision: number,
     signal?: AbortSignal,
-  ): Promise<RetrievalGeneration | null> {
+  ): Promise<RetrievalGeneration> {
     return this.worker.retrieval("finishIncremental", [id, revision], signal);
   }
   verificationEntries(

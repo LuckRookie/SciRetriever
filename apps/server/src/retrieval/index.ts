@@ -223,90 +223,80 @@ export class RetrievalIndexService {
     progress?: (pending: number) => Promise<void>,
   ): Promise<RetrievalGeneration> {
     return this.track(async (active) => {
-      let generation = await this.store.ensureActive(active);
+      const generation = await this.store.ensureActive(active);
       await this.pruneRetired(active);
-      for (;;) {
-        check(active);
-        const scan = await this.store.scanChanges();
-        if (scan.generation?.generation_id !== generation.generation_id)
-          throw new RetrievalStorageError("index-stale");
-        await progress?.(scan.literature_ids.length);
-        for (const [ordinal, id] of scan.literature_ids.entries()) {
-          for (;;) {
-            check(active);
-            const source = await this.store.literatureSources(id);
-            let staged: string | null = null;
-            try {
-              staged = await this.store.beginLiteratureUpdate(active);
-              let batch: RetrievalEntry[] = [],
-                bytes = 0,
-                total = 0;
-              const flush = async () => {
-                if (!batch.length) return;
-                check(active);
-                await this.store.insertEntries(staged!, batch, 0, active);
-                batch = [];
-                bytes = 0;
-                await yieldToEventLoop();
-              };
-              for await (const entry of this.literatureEntries(
-                source,
-                active,
-              )) {
-                const size =
-                  Buffer.byteLength(entry.title) +
-                  Buffer.byteLength(entry.body);
-                if (
-                  total + size > MAX_SOURCE_FTS_BYTES ||
-                  size > MAX_SPOOL_BATCH_BYTES
-                )
-                  throw new RetrievalIndexError("index-limit");
-                if (
-                  batch.length &&
-                  (batch.length >= BATCH ||
-                    bytes + size > MAX_SPOOL_BATCH_BYTES)
-                )
-                  await flush();
-                batch.push(entry);
-                bytes += size;
-                total += size;
-              }
-              await flush();
-              if (
-                await this.store.commitLiteratureUpdate(
-                  generation.generation_id,
-                  staged,
-                  id,
-                  source.fingerprint,
-                  active,
-                )
-              ) {
-                staged = null;
-                break;
-              }
-            } catch (error) {
+      check(active);
+      const scan = await this.store.scanChanges();
+      if (scan.generation?.generation_id !== generation.generation_id)
+        throw new RetrievalStorageError("index-stale");
+      await progress?.(scan.literature_ids.length);
+      for (const [ordinal, id] of scan.literature_ids.entries()) {
+        for (;;) {
+          check(active);
+          const source = await this.store.literatureSources(id);
+          let staged: string | null = null;
+          try {
+            staged = await this.store.beginLiteratureUpdate(active);
+            let batch: RetrievalEntry[] = [],
+              bytes = 0,
+              total = 0;
+            const flush = async () => {
+              if (!batch.length) return;
               check(active);
-              // Only this paper's changed source needs another reading/attempt.
+              await this.store.insertEntries(staged!, batch, 0, active);
+              batch = [];
+              bytes = 0;
+              await yieldToEventLoop();
+            };
+            for await (const entry of this.literatureEntries(source, active)) {
+              const size =
+                Buffer.byteLength(entry.title) + Buffer.byteLength(entry.body);
               if (
-                (await this.store.literatureSources(id)).fingerprint ===
-                source.fingerprint
+                total + size > MAX_SOURCE_FTS_BYTES ||
+                size > MAX_SPOOL_BATCH_BYTES
               )
-                throw error;
-            } finally {
-              if (staged) await this.store.discardLiteratureUpdate(staged);
+                throw new RetrievalIndexError("index-limit");
+              if (
+                batch.length &&
+                (batch.length >= BATCH || bytes + size > MAX_SPOOL_BATCH_BYTES)
+              )
+                await flush();
+              batch.push(entry);
+              bytes += size;
+              total += size;
             }
+            await flush();
+            if (
+              await this.store.commitLiteratureUpdate(
+                generation.generation_id,
+                staged,
+                id,
+                source.fingerprint,
+                active,
+              )
+            ) {
+              staged = null;
+              break;
+            }
+          } catch (error) {
+            check(active);
+            // Only this paper's changed source needs another reading/attempt.
+            if (
+              (await this.store.literatureSources(id)).fingerprint ===
+              source.fingerprint
+            )
+              throw error;
+          } finally {
+            if (staged) await this.store.discardLiteratureUpdate(staged);
           }
-          await progress?.(scan.literature_ids.length - ordinal - 1);
         }
-        const result = await this.store.finishIncremental(
-          generation.generation_id,
-          scan.revision,
-          active,
-        );
-        if (result) return result;
-        // Other publications arrived: the next cheap comparison retains accepted papers.
-        generation = (await this.store.active())!;
+        await progress?.(scan.literature_ids.length - ordinal - 1);
       }
+      return this.store.finishIncremental(
+        generation.generation_id,
+        scan.revision,
+        active,
+      );
     }, signal);
   }
   private async pruneRetired(signal: AbortSignal): Promise<void> {

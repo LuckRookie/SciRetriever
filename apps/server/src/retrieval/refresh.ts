@@ -300,16 +300,24 @@ export class IndexRefreshService {
                         }));
                       },
                     );
+              // A different process can publish without requesting a refresh.
+              const sourceRevision =
+                operation === "refresh" ? await this.revision() : null;
               await this.store.update((latest) => {
                 const settled =
                   operation === "rebuild"
                     ? Math.max(latest.rebuild_settled ?? 0, rebuildSequence)
                     : (latest.rebuild_settled ?? 0);
+                const requestedRevision =
+                  sourceRevision === null
+                    ? latest.requested_revision
+                    : Math.max(latest.requested_revision ?? 0, sourceRevision);
                 const pending =
                   (latest.rebuild_requested ?? 0) > settled ||
-                  (latest.requested_revision ?? 0) > generation.source_revision;
+                  (requestedRevision ?? 0) > generation.source_revision;
                 return {
                   ...latest,
+                  requested_revision: requestedRevision,
                   indexed_revision: generation.source_revision,
                   rebuild_settled: settled,
                   status: pending ? "scheduled" : "updated",

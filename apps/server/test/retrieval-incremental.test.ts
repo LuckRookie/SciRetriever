@@ -214,6 +214,7 @@ describe("incremental material indexing", () => {
           },
         }),
       );
+      const scanned = await env.store.revision();
       const insert = env.store.insertEntries.bind(env.store);
       vi.spyOn(env.store, "insertEntries").mockImplementationOnce(
         async (...args) => {
@@ -239,7 +240,7 @@ describe("incremental material indexing", () => {
       );
       release.resolve();
       expect(await pending).toMatchObject({
-        source_revision: await env.store.revision(),
+        source_revision: scanned,
       });
       expect((await env.store.active())?.generation_id).toBe(
         previous.generation_id,
@@ -260,6 +261,7 @@ describe("incremental material indexing", () => {
       release = deferred();
     let pending: Promise<unknown> | undefined;
     try {
+      const scanned = await env.store.revision();
       const page = env.store.literatureSources.bind(env.store);
       vi.spyOn(env.store, "literatureSources").mockImplementationOnce(
         async (...args) => {
@@ -282,8 +284,10 @@ describe("incremental material indexing", () => {
       );
       release.resolve();
       expect(await pending).toMatchObject({
-        source_revision: await env.store.revision(),
+        source_revision: scanned,
       });
+      expect((await env.store.scanChanges()).literature_ids).toEqual([]);
+      await env.index.refresh();
       expect((await env.store.active())?.source_revision).toBe(
         await env.store.revision(),
       );

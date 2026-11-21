@@ -36,6 +36,10 @@ B4 的决定（已定，见 [ADR 0065](../../architecture/decisions/0065-scale-r
 - [ ] **7.3 相关度截断**：相关度排序只取前 1,000 条，合同与界面写明。
 - [ ] **7.4 测试**：增量刷新与全量重建的一致性；百万篇上每秒写入 100 篇时的索引落后；搜索耗时。
 
+## 进度
+
+- 2026-11-21：修复一个缺陷（不属于 7.1–7.4）：持续写入时增量刷新永不收尾。原来收尾要求扫描以来源修订号不变，CLI 引用扩展不停写入时每轮作废重来，正式库的 `indexed_revision` 从 10:00 起停在 1,834,870。现在每轮处理完扫描名单后把水位推进到扫描时点，之后的写入留给下一轮。后端实施者实现，修复前两条新测试失败、修复后通过；总设计师复跑 retrieval-delta 10、retrieval-incremental 6、retrieval-refresh 12、retrieval-stale-serving 6、index-background 3、archive-index-refresh 2，`pnpm build` 通过。报告 `sandbox/reports/2026-11-21-index-refresh-livelock/REPORT.md`。每轮仍是全库比对，由 7.1、7.2 解决。
+
 ## 退出条件
 
 14.2 中，持续写入时索引落后在目标范围内，没有长期满载的线程；相关度搜索达到目标耗时。

@@ -7,6 +7,7 @@ import { RetrievalStorage } from "../src/retrieval/storage.js";
 import { MaterialContextService } from "../src/retrieval/query.js";
 import { RetrievalStorageClient } from "../src/storage/sqlite/retrieval-client.js";
 import { inspectCatalogRetrieval } from "../src/storage/sqlite/catalog-schema.js";
+import { SqliteWorker } from "../src/storage/sqlite/worker.js";
 import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
 import { coreProcessingFixture } from "./core-processing-fixture.js";
 
@@ -67,6 +68,73 @@ function rows(catalog: string) {
   }
 }
 
+it("advances to each scanned revision while another connection keeps publishing", async () => {
+  const e = await fixture(),
+    writer = new SqliteWorker(e.catalog, e.app.writes),
+    context = new MaterialContextService(
+      e.store,
+      e.app.documentRead,
+      e.app.library,
+    );
+  try {
+    const before = await e.index.refresh();
+    await writer.putLiterature(paper(30));
+
+    const publications = [40, 50, 60];
+    const scannedRevisions: number[] = [];
+    const scanChanges = e.store.scanChanges.bind(e.store);
+    vi.spyOn(e.store, "scanChanges").mockImplementation(async () => {
+      const scan = await scanChanges();
+      const next = publications[scannedRevisions.length];
+      scannedRevisions.push(scan.revision);
+      // Write after the snapshot is taken on each of the first three scans.
+      // Bounding the writes lets the old implementation return its wrong watermark.
+      if (next !== undefined) await writer.putLiterature(paper(next));
+      return scan;
+    });
+
+    let indexed = before.source_revision;
+    for (const [round, published] of publications.entries()) {
+      const generation = await e.index.refresh();
+      expect(generation.source_revision).toBe(scannedRevisions[round]);
+      expect(generation.source_revision).toBeGreaterThan(indexed);
+      expect(scannedRevisions).toHaveLength(round + 1);
+      expect(await e.store.active()).toEqual(generation);
+      indexed = generation.source_revision;
+      const stale = await context.search(request());
+      expect(stale).toMatchObject({
+        coverage: "index-stale",
+        indexed_revision: indexed,
+        source_revision: await e.store.revision(),
+      });
+      expect(stale.source_revision!).toBeGreaterThan(indexed);
+      const found = stale.items.map((item) => item.literature_id);
+      expect(found).toContain(id(published - 10));
+      expect(found).not.toContain(id(published));
+    }
+
+    const final = await e.index.refresh();
+    expect(final.source_revision).toBe(await e.store.revision());
+    expect(final.source_revision).toBeGreaterThan(indexed);
+    const incremental = await context.search(request());
+    expect(incremental.indexed_revision).toBe(incremental.source_revision);
+    expect(incremental.items.map((item) => item.literature_id)).toContain(
+      id(60),
+    );
+    const indexedRows = rows(e.catalog);
+    await e.index.build();
+    expect(rows(e.catalog)).toEqual(indexedRows);
+    const rebuilt = await context.search(request());
+    expect(rebuilt.items).toEqual(incremental.items);
+    expect(rebuilt.coverage).toBe(incremental.coverage);
+    expect(rebuilt.gaps).toEqual(incremental.gaps);
+  } finally {
+    await context.close();
+    await writer.close();
+    await e.close();
+  }
+});
+
 it("retains accepted papers across later publications, invalidates the old cursor and matches a full rebuild", async () => {
   const e = await fixture(),
     entered = gate(),
@@ -85,6 +153,7 @@ it("retains accepted papers across later publications, invalidates the old curso
     expect(first.continuation).not.toBeNull();
     await e.app.database.putLiterature(paper(30, "Changed synthetic thirty"));
     await e.app.database.putLiterature(paper(40, "Changed synthetic forty"));
+    const scanned = await e.store.revision();
     const accepted: string[] = [],
       read = vi.spyOn(e.app.library, "detail"),
       commit = e.store.commitLiteratureUpdate.bind(e.store);
@@ -112,6 +181,15 @@ it("retains accepted papers across later publications, invalidates the old curso
     release.resolve();
     const after = await work;
     expect(after).toMatchObject({
+      generation_id: before.generation_id,
+      source_revision: scanned,
+    });
+    expect(accepted).toEqual([id(30), id(40)]);
+    const newer = await context.search({ ...request(), query: "latest" });
+    expect(newer.coverage).toBe("index-stale");
+    expect(newer.items.map((item) => item.literature_id)).toEqual([id(40)]);
+    const settled = await e.index.refresh();
+    expect(settled).toMatchObject({
       generation_id: before.generation_id,
       source_revision: await e.store.revision(),
     });
