@@ -18,7 +18,7 @@
 
 ## 进入条件
 
-B8 的决定（已定，见 [ADR 0065](../../architecture/decisions/0065-scale-rules.md) 第 5 节）。
+B8 的决定（已定，见 [ADR 0065](../../architecture/decisions/0065-scale-rules.md) 第 6 节）。
 
 ## 责任边界
 
@@ -26,7 +26,7 @@ B8 的决定（已定，见 [ADR 0065](../../architecture/decisions/0065-scale-r
 
 ## Tasks
 
-做法见 [ADR 0065](../../architecture/decisions/0065-scale-rules.md) 第 5 节第 8 条与第 2 节第 5 条。
+做法见 [ADR 0065](../../architecture/decisions/0065-scale-rules.md) 第 6 节第 8 条与第 3 节第 5 条。
 
 - [ ] **11.1 规格**：迁移规则写进版本化存储：加表、加列、加索引；后台回填；回填完成后切换读取；例外的登记与审批。
 - [ ] **11.2 旧版本兼容**：旧版本打开带有新增表的库时照常工作；查明现有的 schema 指纹检查哪里会拒绝打开，按规则放宽，并有测试。

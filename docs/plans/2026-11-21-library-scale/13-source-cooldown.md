@@ -17,7 +17,7 @@ Semantic Scholar 与 CORE 被限流一次后，整个任务剩下的时间都不
 
 ## 进入条件
 
-B10 的决定（已定，见 [ADR 0065](../../architecture/decisions/0065-scale-rules.md) 第 5 节）。冷却状态若要跨中断保存，并入 12。
+B10 的决定（已定，见 [ADR 0065](../../architecture/decisions/0065-scale-rules.md) 第 6 节）。冷却状态若要跨中断保存，并入 12。
 
 ## 责任边界
 
@@ -25,7 +25,7 @@ B10 的决定（已定，见 [ADR 0065](../../architecture/decisions/0065-scale-
 
 ## Tasks
 
-做法见 [ADR 0065](../../architecture/decisions/0065-scale-rules.md) 第 5 节第 10 条。
+做法见 [ADR 0065](../../architecture/decisions/0065-scale-rules.md) 第 6 节第 10 条。
 
 - [ ] **13.1 冷却与重试**：替换 `recordCitationFailure` 的“一次即停用”；按 `Retry-After` 或 1、5、15、60 分钟冷却，最多重试 6 次。
 - [ ] **13.2 保存**：冷却状态随 12 的进度一起存，中断后不丢。

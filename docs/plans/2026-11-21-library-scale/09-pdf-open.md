@@ -19,7 +19,7 @@
 
 ## 进入条件
 
-02.1 的分段测量；B6 的决定（已定，见 [ADR 0065](../../architecture/decisions/0065-scale-rules.md) 第 5 节）。不需要迁移。
+02.1 的分段测量；B6 的决定（已定，见 [ADR 0065](../../architecture/decisions/0065-scale-rules.md) 第 6 节）。不需要迁移。
 
 ## 责任边界
 
@@ -27,7 +27,7 @@
 
 ## Tasks
 
-做法见 [ADR 0065](../../architecture/decisions/0065-scale-rules.md) 第 5 节第 6 条。按 02.1 的分段测量决定先做哪一项。
+做法见 [ADR 0065](../../architecture/decisions/0065-scale-rules.md) 第 6 节第 6 条。按 02.1 的分段测量决定先做哪一项。
 
 - [ ] **9.1 分段读取（后端）**：PDF 字节接口支持 HTTP Range，并按内容地址给出可长期缓存的响应头。
 - [ ] **9.2 边下载边显示（前端）**：pdf.js 按段请求，第一页先显示；完整 SHA-256 在后台计算。

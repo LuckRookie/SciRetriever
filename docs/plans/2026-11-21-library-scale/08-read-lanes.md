@@ -19,7 +19,7 @@
 
 ## 进入条件
 
-B5 的决定（已定，见 [ADR 0065](../../architecture/decisions/0065-scale-rules.md) 第 5 节）。不需要迁移。
+B5 的决定（已定，见 [ADR 0065](../../architecture/decisions/0065-scale-rules.md) 第 6 节）。不需要迁移。
 
 ## 责任边界
 
@@ -27,7 +27,7 @@ B5 的决定（已定，见 [ADR 0065](../../architecture/decisions/0065-scale-r
 
 ## Tasks
 
-做法见 [ADR 0065](../../architecture/decisions/0065-scale-rules.md) 第 5 节第 5 条。
+做法见 [ADR 0065](../../architecture/decisions/0065-scale-rules.md) 第 6 节第 5 条。
 
 - [ ] **8.1 请求分类**：列出所有读请求，分为短请求与长请求，写进规格。
 - [ ] **8.2 分道**：长请求另走只读工作线程；短请求的线程上不再执行长请求。

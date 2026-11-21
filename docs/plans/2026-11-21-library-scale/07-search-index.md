@@ -21,7 +21,7 @@
 
 ## 进入条件
 
-B4 的决定（已定，见 [ADR 0065](../../architecture/decisions/0065-scale-rules.md) 第 5 节）。变更记录要加表，上线方式同 04。
+B4 的决定（已定，见 [ADR 0065](../../architecture/decisions/0065-scale-rules.md) 第 6 节）。变更记录要加表，上线方式同 04。
 
 ## 责任边界
 
@@ -29,7 +29,7 @@ B4 的决定（已定，见 [ADR 0065](../../architecture/decisions/0065-scale-r
 
 ## Tasks
 
-做法见 [ADR 0065](../../architecture/decisions/0065-scale-rules.md) 第 5 节第 4 条。
+做法见 [ADR 0065](../../architecture/decisions/0065-scale-rules.md) 第 6 节第 4 条。
 
 - [ ] **7.1 变更记录**：由触发器把影响索引的变更记进库里（现有触发器已维护源修订号，在此基础上记下文献 ID）；按 11 的方式加表。
 - [ ] **7.2 刷新**：`scanChanges` 改为读取上次索引位置之后的变更；全量比对只留给重建与 `verify`。
