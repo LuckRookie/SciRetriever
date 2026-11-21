@@ -3858,6 +3858,7 @@ export * from "./archive-text.js";
 export * from "./archive-publication.js";
 
 export * from "./source-configuration.js";
+export * from "./source-problem-details.js";
 export * from "./source-results.js";
 
 export * from "./screencast.js";

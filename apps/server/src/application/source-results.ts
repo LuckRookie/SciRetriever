@@ -1,10 +1,5 @@
 import {
-  ACQUISITION_STAGES,
   ContractValidationError,
-  parseAcquisitionAttempt,
-  parseMetadataSourceProgress,
-  parseMetadataSourceRecord,
-  parsePdfSourceResult,
   parseTaskSourceResults,
   parseSourceStatistics,
   type AcquisitionAttempt,
@@ -14,7 +9,6 @@ import {
   type PdfSourceResult,
   type PdfSourceSummary,
   type SourceProblem,
-  type SourceRatio,
   type SourceStatisticsRequest,
   type SourceStatistics,
   type TaskSourceResults,
@@ -25,31 +19,27 @@ import {
   sourceProblem,
   combineSourceDetails,
 } from "../providers/shared/source-problem.js";
+import {
+  comparePdfSources,
+  pdfAttemptFacts,
+  readMetadataProgress,
+  readPdfEvent,
+  sourceRatio,
+  startMetadataRecord,
+  updateMetadataRecord,
+} from "../storage/execution/source-result-events.js";
 
-export function sourceRatio(
-  numerator: number,
-  denominator: number,
-): SourceRatio {
-  return {
-    numerator,
-    denominator,
-    ratio: denominator === 0 ? null : numerator / denominator,
-  };
+export { sourceRatio } from "../storage/execution/source-result-events.js";
+
+function groupItem<K, V>(groups: Map<K, V[]>, key: K, value: V) {
+  const group = groups.get(key);
+  if (group) group.push(value);
+  else groups.set(key, [value]);
 }
-const record = (value: unknown): Record<string, unknown> => {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new ContractValidationError();
-  return value as Record<string, unknown>;
-};
-const identifier = (value: unknown) => {
-  if (typeof value !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/u.test(value))
-    throw new ContractValidationError();
-  return value;
-};
+
 function problemList(values: readonly (SourceProblem | null)[]) {
   const grouped = new Map<SourceProblem["display"], SourceProblem[]>();
-  for (const p of values)
-    if (p) grouped.set(p.display, [...(grouped.get(p.display) ?? []), p]);
+  for (const p of values) if (p) groupItem(grouped, p.display, p);
   return [...grouped].map(([display, ps]) => ({
     display,
     technical_details: combineSourceDetails(ps),
@@ -71,15 +61,13 @@ interface PdfState {
   terminal: boolean;
   legacyHit: AcquisitionAttempt | null;
 }
-/** The same reducer owns task totals and historical statistics. It never queries library facts. */
+/** Full replay for historical statistics and comparison with incremental task reads. */
 export class SourceResultAggregation {
   private readonly metadata = new Map<string, MetadataState>();
   private readonly pdf = new Map<string, PdfState>();
   accept(event: Pick<ExecutionEvent, "job_id" | "kind" | "payload">) {
     if (event.kind === "metadata-source") {
-      const p = record(event.payload),
-        progress = parseMetadataSourceProgress(p.progress),
-        target = identifier(p.target_id),
+      const { progress, target } = readMetadataProgress(event.payload),
         key = event.job_id + ":" + progress.record_id;
       const existing = this.metadata.get(key);
       if (progress.phase === "started") {
@@ -87,63 +75,29 @@ export class SourceResultAggregation {
         this.metadata.set(key, {
           job: event.job_id,
           target,
-          row: {
-            record_id: progress.record_id,
-            source: progress.source,
-            purpose: progress.purpose,
-            role: progress.role,
-            unit_id: progress.unit_id,
-            started_at: progress.at,
-            finished_at: null,
-            requested: false,
-            returned: 0,
-            included: 0,
-            rejected: 0,
-            result: "running",
-            problem: null,
-          },
+          row: startMetadataRecord(progress),
           included: new Set(),
           created: new Set(),
           matched: new Set(),
         });
         return;
       }
-      if (
-        !existing ||
-        existing.target !== target ||
-        existing.row.source !== progress.source ||
-        existing.row.purpose !== progress.purpose ||
-        existing.row.role !== progress.role ||
-        existing.row.unit_id !== progress.unit_id ||
-        existing.row.finished_at !== null ||
-        Date.parse(progress.at) < Date.parse(existing.row.started_at)
-      )
-        throw new ContractValidationError();
-      let patch: Partial<MetadataSourceRecord> = {};
-      if (progress.phase === "requested") patch = { requested: true };
-      if (progress.phase === "returned")
-        patch = { returned: existing.row.returned + progress.count };
-      if (progress.phase === "rejected")
-        patch = { rejected: existing.row.rejected + progress.count };
-      if (progress.phase === "included") {
-        existing.included.add(progress.result_id);
-        patch = { included: existing.included.size };
-      }
+      if (!existing) throw new ContractValidationError();
+      const row = updateMetadataRecord(
+        existing.row,
+        existing.target === target,
+        progress,
+        (id) => existing.included.add(id).size,
+      );
       if (progress.phase === "observed") {
         if (progress.disposition === "created")
           existing.created.add(progress.result_id);
         if (progress.disposition === "matched")
           existing.matched.add(progress.result_id);
       }
-      if (progress.phase === "finished")
-        patch = {
-          result: progress.result,
-          finished_at: progress.at,
-          problem: progress.problem,
-        };
       this.metadata.set(key, {
         ...existing,
-        row: parseMetadataSourceRecord({ ...existing.row, ...patch }),
+        row,
       });
       return;
     }
@@ -152,23 +106,13 @@ export class SourceResultAggregation {
       event.kind !== "pdf-source-result"
     )
       return;
-    const p = record(event.payload),
-      final =
-        event.kind === "pdf-source-result"
-          ? parsePdfSourceResult(p.result)
-          : null,
-      // A MetaLiterature target may try multiple candidate versions. It is still
-      // one requested paper and one final delivery channel in this task.
-      literature =
-        p.target_id === undefined
-          ? (final?.literature_id ?? identifier(p.literature_id))
-          : identifier(p.target_id),
-      key = event.job_id + ":" + literature;
+    const { target, attempt, final } = readPdfEvent(event),
+      key = event.job_id + ":" + target;
     let state = this.pdf.get(key);
     if (!state) {
       state = {
         job: event.job_id,
-        literature,
+        literature: target,
         attempts: [],
         published: null,
         terminal: false,
@@ -180,10 +124,7 @@ export class SourceResultAggregation {
       state.terminal = true;
       // Later cleanup/attempt failures cannot revoke a recorded publication.
       if (final.result === "obtained") state.published = final;
-    } else {
-      const attempt = parseAcquisitionAttempt(p.attempt);
-      // This is metadata evidence preparation, not a PDF delivery channel.
-      if (attempt.source === "doi-resolution") return;
+    } else if (attempt) {
       state.attempts.push(attempt);
       if (attempt.result === "hit") state.legacyHit = attempt;
     }
@@ -200,8 +141,7 @@ export class SourceResultAggregation {
       for (const id of s.matched) matched.add(s.job + ":" + id);
     }
     const bySource = new Map<string, MetadataState[]>();
-    for (const s of states)
-      bySource.set(s.row.source, [...(bySource.get(s.row.source) ?? []), s]);
+    for (const s of states) groupItem(bySource, s.row.source, s);
     const sources: MetadataSourceCounts[] = [...bySource].map(
       ([source, items]) => {
         const ids = new Set(
@@ -287,26 +227,13 @@ export class SourceResultAggregation {
       const unit = d.job + ":" + d.literature;
       for (const a of d.attempts) {
         const r = row(a.source, a.stage);
-        if (
-          a.requested &&
-          !["not-enabled", "cooldown", "escalated"].includes(a.result)
-        ) {
+        const facts = pdfAttemptFacts(a);
+        if (facts.requested) {
           r.attempts.add(unit);
           r.requests++;
-          if (
-            ["failed", "rejected"].includes(a.result) &&
-            !["execution-cancelled", "browser-flow-cancelled"].includes(
-              a.code ?? "",
-            )
-          )
-            r.errors++;
+          if (facts.error) r.errors++;
         }
-        if (
-          ["failed", "rejected", "unavailable"].includes(a.result) &&
-          !["execution-cancelled", "browser-flow-cancelled"].includes(
-            a.code ?? "",
-          )
-        )
+        if (facts.problem)
           r.problems.push(
             a.problem ?? sourceProblem(a.code ?? "pdf-source-failed", "pdf"),
           );
@@ -344,16 +271,7 @@ export class SourceResultAggregation {
             technical_details: combineSourceDetails(problems),
           };
         })
-        .sort(
-          (a, b) =>
-            ACQUISITION_STAGES.indexOf(a.stage) -
-              ACQUISITION_STAGES.indexOf(b.stage) ||
-            (a.source === "doi-landing"
-              ? -1
-              : b.source === "doi-landing"
-                ? 1
-                : 0),
-        ),
+        .sort(comparePdfSources),
     };
   }
   task(): TaskSourceResults {
@@ -375,7 +293,7 @@ export class SourceResultAggregation {
       groups = new Map<string, MetadataState[]>(),
       topicScopes = new Map<string, Set<string>>();
     for (const s of states) {
-      groups.set(s.row.source, [...(groups.get(s.row.source) ?? []), s]);
+      groupItem(groups, s.row.source, s);
       if (s.row.purpose === "topic-search" && s.row.role === "primary") {
         const scope = s.job + ":" + s.target,
           ids = topicScopes.get(scope) ?? new Set<string>();

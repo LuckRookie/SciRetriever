@@ -190,6 +190,16 @@ const reviewModule = await import(
     import.meta.url,
   ).href
 );
+const { TaskDetailCache }: typeof import("./task-detail-engine.js") =
+  await import(
+    new URL(
+      import.meta.url.endsWith(".ts")
+        ? "./task-detail-engine.ts"
+        : "./task-detail-engine.js",
+      import.meta.url,
+    ).href
+  );
+const taskDetails = new TaskDetailCache();
 const proofreadModule = await import(
   new URL(
     import.meta.url.endsWith(".ts")
@@ -4809,6 +4819,7 @@ port.on("message", (message: WorkerMessage) => {
   try {
     queryCheckpoint();
     if (message.command.kind === "close") {
+      taskDetails.clear();
       retrievalEngine?.close();
       db?.close();
       port.postMessage({ id: message.id, ok: true, value: true });
@@ -4890,10 +4901,11 @@ port.on("message", (message: WorkerMessage) => {
       const current = Number(
         db.prepare("PRAGMA data_version").get().data_version,
       );
-      if (
-        current !== observedDataVersion ||
-        openedCatalogIdentity !== catalogIdentity()
-      ) {
+      const catalogChanged = openedCatalogIdentity !== catalogIdentity();
+      if (current !== observedDataVersion || catalogChanged) {
+        // A refresh of the same catalog keeps the task cache. Task reads
+        // validate its event prefix against their new SQLite snapshot.
+        if (catalogChanged) taskDetails.clear();
         db.close();
         db = undefined;
         queryPreflight = null;
@@ -5475,6 +5487,23 @@ port.on("message", (message: WorkerMessage) => {
           message.command.acquisitionOnly ?? false,
         );
         break;
+      case "execution_task_detail_events": {
+        const { jobId, through, withActivity } = message.command;
+        const identity = openedCatalogIdentity;
+        if (identity === null) fail();
+        requireRuntime();
+        const read = () =>
+          taskDetails.read(
+            db,
+            identity,
+            jobId,
+            through,
+            withActivity,
+            queryCheckpoint,
+          );
+        value = db.isTransaction ? read() : readTransaction(read);
+        break;
+      }
       case "execution_put_intervention":
         value = putExecutionIntervention(message.command.intervention);
         break;

@@ -9,7 +9,6 @@ async function readRecords(
   repository: ExecutionRepository,
   request: SourceStatisticsRequest,
   through: string,
-  jobId: string | null,
   signal?: AbortSignal,
 ) {
   const totals = new SourceResultAggregation(),
@@ -23,7 +22,7 @@ async function readRecords(
   for (;;) {
     signal?.throwIfAborted();
     const page = await repository.sourceRecordPage({
-      job_id: jobId,
+      job_id: null,
       from,
       through,
       after,
@@ -53,22 +52,7 @@ export async function sourceStatistics(
       repository,
       request,
       through,
-      null,
       signal,
     );
   return totals.statistics(request, through, recordedSince);
-}
-export async function taskSourceResults(
-  repository: ExecutionRepository,
-  jobId: string,
-  signal?: AbortSignal,
-) {
-  const { totals } = await readRecords(
-    repository,
-    { range: "all" },
-    new Date().toISOString(),
-    jobId,
-    signal,
-  );
-  return totals.task();
 }

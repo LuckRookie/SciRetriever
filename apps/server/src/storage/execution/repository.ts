@@ -334,6 +334,14 @@ export class ExecutionRepository {
     };
   }
 
+  taskDetailEvents(jobId: string, withActivity: boolean) {
+    return this.database.taskDetailEvents(
+      jobId,
+      new Date().toISOString(),
+      withActivity,
+    );
+  }
+
   putIntervention(
     intervention: ExecutionIntervention,
   ): Promise<ExecutionIntervention> {

@@ -1,7 +1,7 @@
 import { activityContext, withActivity } from "../../logging/activity.js";
-import { taskSourceResults } from "../source-statistics.js";
 import {
   canonicalJsonBytes,
+  ContractValidationError,
   parseProcessingTaskRequest,
   sha256,
   type ProcessingOperation,
@@ -17,6 +17,7 @@ import {
   type ExecutionTarget,
 } from "../../storage/sqlite/worker.js";
 import { WriteAdmissionError } from "../../storage/write-admission.js";
+import { SOURCE_RESULT_KINDS } from "../../storage/execution/source-result-events.js";
 import {
   ExecutionQueue,
   QueueInterruptedError,
@@ -60,16 +61,7 @@ export async function processingEvents(
   let after = -1;
   for (;;) {
     const page = await repository.listEvents(jobId, after, 1000);
-    events.push(
-      ...page.filter(
-        (e) =>
-          ![
-            "metadata-source",
-            "pdf-source-result",
-            "acquisition-attempt",
-          ].includes(e.kind),
-      ),
-    );
+    events.push(...page.filter((e) => !SOURCE_RESULT_KINDS.has(e.kind)));
     if (page.length < 1000) return events;
     if (events.length >= 100000)
       throw new ProcessingTaskError("processing-result-budget");
@@ -80,17 +72,35 @@ export async function readProcessingTask(
   repository: ExecutionRepository,
   jobId: string,
 ) {
+  return (await readProcessingTaskWithEvents(repository, jobId, false)).task;
+}
+
+export async function readProcessingTaskWithEvents(
+  repository: ExecutionRepository,
+  jobId: string,
+  withActivity: boolean,
+) {
   const job = await repository.getJob(jobId);
   if (!job) throw new ProcessingTaskError("processing-not-found");
   const targets = await repository.listTargets(jobId, 10000, true);
-  const events = await processingEvents(repository, jobId);
-  return {
+  const result = await repository.taskDetailEvents(jobId, withActivity);
+  if (result.status !== "ok") {
+    if (result.status === "invalid-source") throw new ContractValidationError();
+    throw new ProcessingTaskError(
+      result.status === "not-found"
+        ? "processing-not-found"
+        : "processing-result-budget",
+    );
+  }
+  const { processing, source_results, acquisition, technical } = result.detail;
+  const events = processing.events;
+  const task = {
     job,
     start_requested: events.some(
       (event) => event.kind === "task-start-requested",
     ),
     targets,
-    source_results: await taskSourceResults(repository, jobId),
+    source_results,
     archive: {
       schema_version: 2,
       steps: [
@@ -103,9 +113,8 @@ export async function readProcessingTask(
             }),
         ).values(),
       ],
-      events_truncated: events.length >= 1000,
-      next_event_cursor:
-        events.length >= 1000 ? (events[0]?.sequence ?? null) : null,
+      events_truncated: processing.first_sequence !== null,
+      next_event_cursor: processing.first_sequence,
     },
     results: events
       .filter((e) => e.kind === "processing-result")
@@ -138,6 +147,7 @@ export async function readProcessingTask(
       )
       .map((e) => e.payload),
   };
+  return { task, acquisition, technical };
 }
 
 function hasFailure(payload: unknown): boolean {

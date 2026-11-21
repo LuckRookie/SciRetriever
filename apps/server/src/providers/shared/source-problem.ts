@@ -1,10 +1,12 @@
-import type {
-  AcquisitionAttempt,
-  SourceProblem,
-  SourceTechnicalDetails,
+import {
+  combineSourceDetails,
+  sourceProblemForCode,
+  type AcquisitionAttempt,
+  type SourceProblem,
 } from "@sciretriever/contracts";
 import { AuthorizedProviderError } from "./authorized-pdf.js";
 import { isProxyUnavailable } from "../../network/egress.js";
+export { combineSourceDetails } from "@sciretriever/contracts";
 
 /** Stable facts only: never use a vendor message, URL, header or response body. */
 export function sourceProblem(
@@ -13,21 +15,7 @@ export function sourceProblem(
   error?: unknown,
 ): SourceProblem {
   if (isProxyUnavailable(error)) code = "proxy-unavailable";
-  let display: SourceProblem["display"] =
-    scope !== "runtime" &&
-    [
-      "missing-credential",
-      "credential-missing",
-      "missing-provider-configuration",
-      "metadata-provider-credential-unavailable",
-      "metadata-provider-not-configured",
-      "metadata-source-credential-missing",
-      "metadata-source-configuration-missing",
-    ].includes(code)
-      ? "not-configured"
-      : scope === "metadata" && code === "metadata-provider-authentication"
-        ? "credential-invalid"
-        : "error";
+  let display: SourceProblem["display"] | undefined;
   let http_status: number | undefined;
   for (
     let current = error, i = 0;
@@ -42,35 +30,7 @@ export function sourceProblem(
     else if (f.http_status === 401 || f.authentication === "rejected")
       display = "credential-invalid";
   }
-  const safe = /^[a-z][a-z0-9-]{0,95}$/u.test(code)
-    ? code
-    : "source-request-failed";
-  return {
-    display,
-    technical_details: {
-      diagnostics: [
-        {
-          code: safe,
-          scope,
-          ...(http_status === undefined ? {} : { http_status }),
-        },
-      ],
-    },
-  };
-}
-export function combineSourceDetails(
-  problems: readonly SourceProblem[],
-  extra: readonly SourceTechnicalDetails[] = [],
-): SourceTechnicalDetails {
-  return {
-    diagnostics: [
-      ...new Map(
-        [...problems.map((p) => p.technical_details), ...extra]
-          .flatMap((d) => d.diagnostics)
-          .map((d) => [JSON.stringify(d), d]),
-      ).values(),
-    ].slice(0, 32),
-  };
+  return sourceProblemForCode(code, scope, display, http_status);
 }
 
 /** Historical codes remain readable; display DTOs put them only in technical details. */

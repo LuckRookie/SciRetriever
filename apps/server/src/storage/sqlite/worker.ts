@@ -589,6 +589,12 @@ export type SqliteCommand =
       readonly limit: number;
     }
   | {
+      readonly kind: "execution_task_detail_events";
+      readonly jobId: string;
+      readonly through: string;
+      readonly withActivity: boolean;
+    }
+  | {
       readonly kind: "execution_put_intervention";
       readonly intervention: ExecutionIntervention;
     }
@@ -1311,6 +1317,7 @@ export class SqliteWorker {
       "execution_list_attempts",
       "execution_get_target",
       "execution_list_events",
+      "execution_task_detail_events",
       "execution_get_policy",
       "execution_get_budget",
       "execution_list_interventions",
@@ -2316,6 +2323,15 @@ export class SqliteWorker {
     });
     if (!Array.isArray(value)) throw new SqliteWorkerError();
     return Object.freeze(value as ExecutionEvent[]);
+  }
+  taskDetailEvents(jobId: string, through: string, withActivity: boolean) {
+    executionText(jobId);
+    return this.run<import("./task-detail-engine.js").TaskDetailRead>({
+      kind: "execution_task_detail_events",
+      jobId,
+      through,
+      withActivity,
+    });
   }
   async putExecutionIntervention(
     intervention: ExecutionIntervention,
