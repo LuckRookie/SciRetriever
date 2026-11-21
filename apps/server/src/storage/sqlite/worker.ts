@@ -2525,6 +2525,8 @@ export class SqliteWorker {
         "metadata-source",
         "citation-write-checkpoint",
         "citation-response-replaced",
+        "citation-source-cooldown",
+        "citation-source-deferred",
       ].includes(event.kind)
     )
       throw new SqliteWorkerError();

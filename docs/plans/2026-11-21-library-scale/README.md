@@ -106,7 +106,7 @@ Owner 2026-11-21：
 | [10](10-intake-throughput.md)       | 入库吞吐                                     | 后端                 | 10.1 无；10.3 起等 B7                  | Done（待部署） |
 | [11](11-online-migration.md)        | 不停服的迁移方式                             | 后端                 | B8                                     | Pending        |
 | [12](12-discovery-resume.md)        | 引用扩展从断点续跑                           | 后端                 | B9                                     | Done（待部署） |
-| [13](13-source-cooldown.md)         | 来源限流后冷却重试                           | 后端                 | B10                                    | Pending        |
+| [13](13-source-cooldown.md)         | 来源限流后冷却重试                           | 后端                 | B10                                    | 后端 Done（待部署） |
 | [14](14-closing.md)                 | 规模检查、复测、迁移上线、规格同步           | 总设计师、后端       | 01–13                                  | Pending        |
 
 ## 先后顺序

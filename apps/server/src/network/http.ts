@@ -13,6 +13,7 @@ import {
 } from "./connection.js";
 import {
   createBudgetUsage,
+  isQuotaRejection,
   NetworkBudgetCoordinator,
   type BudgetLimits,
   type BudgetPermit,
@@ -356,14 +357,26 @@ export async function requestOnce(
           if (options.budget) {
             try {
               const budget = options.budget;
-              const value = res.headers["retry-after"];
+              const header = (name: string) => {
+                const value = res.headers[name];
+                return typeof value === "string" ? value : undefined;
+              };
+              const quota = budget.limits.quotaHeaders;
+              const rateLimited = isQuotaRejection(
+                res.statusCode,
+                header,
+                quota,
+              );
+              const value =
+                header("retry-after") ??
+                (rateLimited && quota ? header(quota.retryAfter) : undefined);
               const delay =
                 typeof value === "string"
                   ? budget.coordinator.retryAfterMilliseconds(
                       value,
                       budget.limits,
                     )
-                  : res.statusCode === 429
+                  : rateLimited
                     ? budget.limits.rateLimitBackoffMs
                     : res.statusCode !== undefined && res.statusCode >= 500
                       ? budget.limits.serverErrorBackoffMs
@@ -560,6 +573,9 @@ export function createAgentTransport(
         ...(options.maxRetries !== undefined
           ? { maxRetries: options.maxRetries }
           : {}),
+        ...(input.retry_rate_limited === undefined
+          ? {}
+          : { retryRateLimited: input.retry_rate_limited }),
         ...(options.allowRedirect
           ? { allowRedirect: options.allowRedirect }
           : {}),
@@ -585,6 +601,7 @@ export async function requestFollowingRedirects(
   options: HttpRequestOptions & {
     readonly maxRedirects?: number;
     readonly maxRetries?: number;
+    readonly retryRateLimited?: boolean;
     readonly allowRedirect?: (from: URL, to: URL) => boolean;
   } = {},
 ): Promise<HttpResponse> {
@@ -649,9 +666,13 @@ export async function requestFollowingRedirects(
           ...(budget ? { budget } : {}),
         },
       );
-      const retryAfter = response.headers.find(
-        ([name]) => name === "retry-after",
-      )?.[1];
+      const header = (key: string) =>
+        response.headers.find(([name]) => name === key)?.[1];
+      const quota = budget?.limits.quotaHeaders;
+      const rateLimited = isQuotaRejection(response.status, header, quota);
+      const retryAfter =
+        header("retry-after") ??
+        (rateLimited && quota ? header(quota.retryAfter) : undefined);
       let retryDelayMs: number | undefined;
       if (retryAfter !== undefined) {
         const parser = budget?.coordinator ?? new NetworkBudgetCoordinator();
@@ -670,7 +691,7 @@ export async function requestFollowingRedirects(
         );
       }
       if (
-        response.status === 429 &&
+        rateLimited &&
         retryDelayMs === undefined &&
         budget?.limits.rateLimitBackoffMs !== undefined
       ) {
@@ -697,6 +718,7 @@ export async function requestFollowingRedirects(
           : undefined);
       if (
         [408, 425, 429, 500, 502, 503, 504].includes(response.status) &&
+        (response.status !== 429 || options.retryRateLimited !== false) &&
         retries < retryLimit &&
         (attemptDelayMs === undefined ||
           attemptDelayMs < (options.timeoutMs ?? 10_000))

@@ -13,4 +13,6 @@
 
 各厂商响应与 URL 规则在 providers/<provider>/；文献身份与合并由 literature 决定；主题/种子任务编排在 entry。
 
+来源限流的扫描结果可携带响应头声明的 `retry_after_ms`。引用任务在调用范围内接管 429 的重试，所有供应商请求继续使用共享 Network 准入。
+
 [上级目录](../README.md)

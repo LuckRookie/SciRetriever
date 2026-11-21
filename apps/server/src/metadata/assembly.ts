@@ -50,6 +50,7 @@ import {
   type MetadataCapability,
   type MetadataRegistry,
 } from "./registry.js";
+import { hasMetadataRateLimitHandling } from "./service.js";
 
 type ProviderName = string;
 
@@ -307,6 +308,9 @@ function providerTransport(
           endpoint: url,
           method: "GET",
           timeout_ms: METADATA_HTTP_TIMEOUT_MS,
+          ...(hasMetadataRateLimitHandling()
+            ? { retry_rate_limited: false as const }
+            : {}),
           headers: Object.entries({
             accept:
               LITERATURE_PROVIDERS[provider]?.metadataFormat === "atom"
@@ -323,6 +327,7 @@ function providerTransport(
         LITERATURE_PROVIDERS[provider]?.metadataFormat === "atom"
           ? "atom"
           : "json",
+        metadataService(provider, url).policy.quotaHeaders,
       );
     },
   };

@@ -17,6 +17,7 @@ import {
   assembleMetadataRegistry,
   type MetadataAssemblyOptions,
 } from "../src/metadata/assembly.js";
+import { withMetadataRateLimitHandling } from "../src/metadata/service.js";
 import { NetworkBudgetCoordinator } from "../src/network/budget.js";
 import type { MetadataTransport } from "../src/providers/shared/metadata-transport.js";
 
@@ -257,6 +258,19 @@ describe("metadata provider assembly", () => {
       expect(limited.failure?.reason).toContain("Retry-After is 0 ms");
       expect(requests).toHaveLength(5);
       expect(JSON.stringify(limited)).not.toContain("vendor-private-message");
+      const owned = await withMetadataRateLimitHandling(() =>
+        registry.service.searchTopicProvider(
+          "crossref",
+          { query: "limited fixture", year_from: null, year_to: null },
+          1,
+        ),
+      );
+      expect(owned).toMatchObject({
+        outcome: "FAILED",
+        retry_after_ms: 0,
+        failure: { code: "metadata-provider-rate-limited" },
+      });
+      expect(requests).toHaveLength(6);
     } finally {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));

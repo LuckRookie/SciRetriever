@@ -194,8 +194,18 @@ export class MetadataSourceRun {
         "The resumed provider response did not contain the previously partially written citation item. Its committed relations were retained.",
     });
   }
+  citationSourceCooldown(fields: Record<string, unknown>) {
+    return this.append("citation-source-cooldown", fields);
+  }
+  citationSourceDeferred(fields: Record<string, unknown>) {
+    return this.append("citation-source-deferred", fields);
+  }
   private append(
-    kind: "citation-write-checkpoint" | "citation-response-replaced",
+    kind:
+      | "citation-write-checkpoint"
+      | "citation-response-replaced"
+      | "citation-source-cooldown"
+      | "citation-source-deferred",
     fields: Record<string, unknown>,
   ) {
     return this.repository.appendMetadataEvent({

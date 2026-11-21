@@ -4,9 +4,11 @@ import { MetadataService } from "../src/metadata/service.js";
 import { NetworkConnectionError } from "../src/network/connection.js";
 import { NetworkHttpError } from "../src/network/http.js";
 import { CrossrefRestAdapter } from "../src/providers/crossref/metadata.js";
+import { services as coreServices } from "../src/providers/core/definition.js";
 import {
   createMetadataTransport,
   metadataTransportFailure,
+  requestMetadataResponse,
 } from "../src/providers/shared/metadata-transport.js";
 
 describe("metadata transport failure semantics", () => {
@@ -54,8 +56,60 @@ describe("metadata transport failure semantics", () => {
       });
       expect(result.failure?.reason).toContain(`HTTP ${status}`);
       expect(result.failure?.reason).toContain("Retry-After is 2000 ms");
+      expect(result.retry_after_ms).toBeUndefined();
       expect(JSON.stringify(result)).not.toContain("vendor-private-message");
       expect(result.failure?.reason).not.toContain("invalid record");
+    },
+  );
+
+  it("propagates the provider's Retry-After separately from Network's bounded delay", async () => {
+    const adapter = new CrossrefRestAdapter({
+      transport: createMetadataTransport(async () => ({
+        status: 429,
+        headers: [["Retry-After", "180"]],
+        retry_after_ms: 120_000,
+        body: new Uint8Array(),
+      })),
+    });
+    const result = await new MetadataService({
+      topic_search_ports: [adapter],
+    }).searchTopicProvider("crossref", topicSearchQuery("fixture"), 10);
+    expect(result).toMatchObject({
+      outcome: "FAILED",
+      retry_after_ms: 180_000,
+      failure: { code: "metadata-provider-rate-limited" },
+    });
+  });
+
+  it.each([
+    [403, "0", "metadata-provider-rate-limited", 240_000],
+    [403, "1", "metadata-provider-authorization", undefined],
+    [401, "0", "metadata-provider-authentication", undefined],
+  ] as const)(
+    "recognizes explicit CORE quota evidence on HTTP %s with %s remaining",
+    async (status, remaining, code, delay) => {
+      await expect(
+        requestMetadataResponse(
+          async () => ({
+            status,
+            headers: [
+              ["X-RateLimit-Remaining", remaining],
+              ["X-RateLimit-Retry-After", "240"],
+            ],
+            body: new Uint8Array(),
+          }),
+          {
+            endpoint: "https://api.core.ac.uk/v3/works/1",
+            headers: [],
+            body: new Uint8Array(),
+          },
+          "json",
+          coreServices["core-v3"].policy.quotaHeaders,
+        ),
+      ).rejects.toMatchObject({
+        retry_after_ms: delay,
+        failure: { code },
+      });
     },
   );
 

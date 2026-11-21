@@ -18,6 +18,10 @@ export const services = Object.freeze({
     {
       minimumIntervalMs: 6000,
       windows: [{ requests: 10, durationMs: MINUTE }],
+      quotaHeaders: {
+        retryAfter: "x-ratelimit-retry-after",
+        remaining: "x-ratelimit-remaining",
+      },
     },
   ),
 });

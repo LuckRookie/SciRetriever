@@ -80,12 +80,15 @@ export interface ReferenceQueryPort {
 
 export class MetadataProviderFailure extends Error {
   readonly code = "metadata-provider" as const;
+  readonly retry_after_ms?: number;
   constructor(
     readonly failure: StableFailure,
-    options: ErrorOptions = {},
+    options: ErrorOptions & { readonly retry_after_ms?: number } = {},
   ) {
     super("metadata provider call failed", options);
     this.name = "MetadataProviderFailure";
+    if (options.retry_after_ms !== undefined)
+      this.retry_after_ms = options.retry_after_ms;
   }
 }
 
@@ -96,6 +99,7 @@ export interface MetadataProviderInvocation {
   readonly raw_item_count: number;
   readonly outcome: ProviderInvocationOutcome;
   readonly failure: StableFailure | null;
+  readonly retry_after_ms?: number;
 }
 /** One scanned raw record, or the final provider outcome; consumers may stop early. */
 export type MetadataScanEvent =
@@ -103,6 +107,7 @@ export type MetadataScanEvent =
       readonly kind: "item";
       readonly item: NeutralMetadataItem;
       readonly failure: StableFailure | null;
+      readonly retry_after_ms?: number;
       readonly buffered_next?: boolean;
       readonly end_follows?: boolean;
     }
@@ -112,6 +117,7 @@ export type MetadataScanEvent =
       readonly raw_item_count: number;
       readonly outcome: ProviderInvocationOutcome;
       readonly failure: StableFailure | null;
+      readonly retry_after_ms?: number;
     };
 export interface MetadataProviderResult
   extends Omit<MetadataProviderInvocation, "outcome"> {

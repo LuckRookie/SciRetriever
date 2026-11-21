@@ -122,6 +122,8 @@ export type AgentTransport = (request: {
   readonly method?: string;
   readonly timeout_ms?: number;
   readonly timeout_mode?: "total" | "idle";
+  /** The request owner will schedule any rate-limited retry. */
+  readonly retry_rate_limited?: false;
   readonly headers: readonly (readonly [string, string])[];
   /** Credentials that a legacy provider requires in the request query. */
   readonly credential_query?: readonly (readonly [string, string])[];

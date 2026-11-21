@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   NetworkBudgetCoordinator,
   NetworkBudgetError,
+  retryAfterDelay,
 } from "../src/network/budget.js";
 
 const limits = {
@@ -17,6 +18,12 @@ describe("bounded retry-after policy", () => {
     const coordinator = new NetworkBudgetCoordinator();
     expect(coordinator.retryAfterMilliseconds("2", limits)).toBe(100);
     expect(coordinator.retryAfterMilliseconds("0", limits)).toBe(0);
+    expect(
+      retryAfterDelay(
+        "Sun, 22 Nov 2026 01:00:00 GMT",
+        Date.parse("2026-11-22T00:00:00Z"),
+      ),
+    ).toBe(3_600_000);
     expect(() => coordinator.retryAfterMilliseconds("-1", limits)).toThrow(
       NetworkBudgetError,
     );

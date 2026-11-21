@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type {
   MetadataObservation,
   ProviderLiteratureKey,
@@ -20,6 +21,18 @@ import {
   type TopicSearchPort,
   type TopicSearchQuery,
 } from "./ports.js";
+
+// A citation task owns the retry schedule for its calls. Other Metadata
+// callers keep their transport retries and all callers keep Network admission.
+const externalRateLimitHandling = new AsyncLocalStorage<true>();
+
+export function withMetadataRateLimitHandling<T>(action: () => T): T {
+  return externalRateLimitHandling.run(true, action);
+}
+
+export function hasMetadataRateLimitHandling() {
+  return externalRateLimitHandling.getStore() === true;
+}
 
 function providerName(value: string): string {
   const normalized = value.normalize("NFC").trim();
@@ -144,13 +157,31 @@ async function* scanItems(
           error instanceof MetadataProviderFailure
             ? error.failure
             : failure("metadata-record-invalid");
+        const retryAfter =
+          error instanceof MetadataProviderFailure
+            ? error.retry_after_ms
+            : undefined;
+        const rateLimited = detail.code === "metadata-provider-rate-limited";
         firstFailure ??= detail;
         yield {
           kind: "item",
           item: { observations: [], relations: [] },
           failure: detail,
+          ...(retryAfter === undefined ? {} : { retry_after_ms: retryAfter }),
           ...batch,
+          ...(rateLimited ? { end_follows: true } : {}),
         };
+        if (rateLimited) {
+          yield {
+            kind: "end",
+            provider_name,
+            raw_item_count,
+            outcome: "FAILED",
+            failure: detail,
+            ...(retryAfter === undefined ? {} : { retry_after_ms: retryAfter }),
+          };
+          return;
+        }
       }
       if (delivery.source_exhausted_after) break;
     }
@@ -165,6 +196,10 @@ async function* scanItems(
       raw_item_count,
       outcome: "FAILED",
       failure: detail,
+      ...(error instanceof MetadataProviderFailure &&
+      error.retry_after_ms !== undefined
+        ? { retry_after_ms: error.retry_after_ms }
+        : {}),
     };
     return;
   }
@@ -199,6 +234,9 @@ async function collectScan(
         raw_item_count: event.raw_item_count,
         outcome: event.outcome,
         failure: event.failure,
+        ...(event.retry_after_ms === undefined
+          ? {}
+          : { retry_after_ms: event.retry_after_ms }),
         observations,
         relations,
       };

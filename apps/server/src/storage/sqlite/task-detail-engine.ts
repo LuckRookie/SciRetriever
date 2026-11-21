@@ -8,6 +8,7 @@ import { rmSync } from "node:fs";
 import { dirname } from "node:path";
 import {
   ContractValidationError,
+  type StableFailure,
   type TaskSourceResults,
 } from "@sciretriever/contracts";
 import type { ExecutionEvent } from "./worker.js";
@@ -56,6 +57,31 @@ type ProcessingDetailEvent = SourceEvent & {
 };
 const processingDetailKinds = new Set<string>(PROCESSING_DETAIL_KINDS);
 
+interface CitationSourceTransition {
+  readonly target_id: string;
+  readonly run_id: string;
+  readonly source: string;
+  readonly status: "cooling" | "disabled" | "recovered" | "retry-ended";
+  readonly retries: number;
+  readonly next_retry_at: string | null;
+  readonly reason: StableFailure | null;
+}
+interface CitationPendingSample {
+  readonly literature_id: string;
+  readonly purpose: "reference-query" | "lookup";
+  readonly relation_id?: string;
+}
+interface CitationBacklogChange extends CitationPendingSample {
+  readonly source: string;
+  readonly work_id: string;
+  readonly action: "queued" | "settled";
+}
+export interface CitationSourceDetail extends CitationSourceTransition {
+  readonly pending_count: number;
+  readonly pending_sample: readonly CitationPendingSample[];
+  readonly pending_truncated: boolean;
+}
+
 export interface TaskDetailEvents {
   readonly source_results: TaskSourceResults;
   readonly processing: {
@@ -67,6 +93,10 @@ export interface TaskDetailEvents {
     readonly truncated: boolean;
   };
   readonly technical: readonly ExecutionEvent[];
+  readonly citation_cooldowns: {
+    readonly sources: readonly CitationSourceDetail[];
+    readonly truncated: boolean;
+  };
 }
 
 export type TaskDetailRead = { readonly rows_read: number } & (
@@ -84,6 +114,16 @@ const PROCESSING_PAGE_SIZE = 1000;
 const PROCESSING_LIMIT = 100_000;
 const ACQUISITION_LIMIT = 10_000;
 const TECHNICAL_LIMIT = 1000;
+const CITATION_SOURCE_LIMIT = 32;
+const CITATION_PENDING_SAMPLE = 20;
+
+function citationScope(...parts: string[]) {
+  return Buffer.from(JSON.stringify(parts)).toString("base64url");
+}
+
+function pendingCitationPrefix(target: string, run: string, source: string) {
+  return `citation-pending|${citationScope(target, run, source)}|`;
+}
 
 /** Private working storage. SQLite spills to disk and unlinks on close. */
 class TaskScratch implements TaskResultScratch {
@@ -391,6 +431,7 @@ class TaskHistory {
       }
       this.head = snapshot;
       const source_results = (this.sourceResults ??= this.totals.summary());
+      const citationSources = withActivity ? this.citationSources() : [];
       return {
         source_results,
         processing: {
@@ -411,6 +452,10 @@ class TaskHistory {
           truncated: this.acquisitionCount > ACQUISITION_LIMIT,
         },
         technical: withActivity ? this.technical(jobId) : [],
+        citation_cooldowns: {
+          sources: citationSources.slice(0, CITATION_SOURCE_LIMIT),
+          truncated: citationSources.length > CITATION_SOURCE_LIMIT,
+        },
       };
     });
   }
@@ -449,7 +494,36 @@ class TaskHistory {
     const kind = String(row.kind);
     const sequence = Number(row.sequence);
     this.processed++;
-    if (!SOURCE_RESULT_KINDS.has(kind)) {
+    if (kind === "citation-source-cooldown") {
+      const event = JSON.parse(
+        String(row.payload_json),
+      ) as CitationSourceTransition;
+      this.scratch.write(
+        "citation-source|" + citationScope(event.target_id, event.source),
+        event,
+      );
+    } else if (kind === "citation-source-deferred") {
+      const event = JSON.parse(String(row.payload_json)) as {
+        target_id: string;
+        run_id: string;
+        changes: readonly CitationBacklogChange[];
+      };
+      for (const { source, work_id, action, ...pending } of event.changes) {
+        const prefix = pendingCitationPrefix(
+          event.target_id,
+          event.run_id,
+          source,
+        );
+        const key = prefix + citationScope(work_id);
+        const had = this.scratch.has(key);
+        if ((action === "queued") === had) continue;
+        const countKey = "citation-count|" + prefix;
+        const count = this.scratch.read<number>(countKey) ?? 0;
+        if (action === "queued") this.scratch.write(key, pending);
+        else this.scratch.delete(key);
+        this.scratch.write(countKey, count + (action === "queued" ? 1 : -1));
+      }
+    } else if (!SOURCE_RESULT_KINDS.has(kind)) {
       this.firstProcessing ??= sequence;
       this.processingCount++;
       if (processingDetailKinds.has(kind))
@@ -472,6 +546,33 @@ class TaskHistory {
       this.processingCount >= PROCESSING_LIMIT
     )
       throw new ProcessingBudgetExceeded();
+  }
+
+  private citationSources(): CitationSourceDetail[] {
+    return this.scratch
+      .values<CitationSourceTransition>(
+        "citation-source|",
+        CITATION_SOURCE_LIMIT + 1,
+      )
+      .map((event) => {
+        const prefix = pendingCitationPrefix(
+          event.target_id,
+          event.run_id,
+          event.source,
+        );
+        const pending_count =
+          this.scratch.read<number>("citation-count|" + prefix) ?? 0;
+        const pending_sample = this.scratch.values<CitationPendingSample>(
+          prefix,
+          CITATION_PENDING_SAMPLE,
+        );
+        return {
+          ...event,
+          pending_count,
+          pending_sample,
+          pending_truncated: pending_count > pending_sample.length,
+        };
+      });
   }
 
   private acceptSource(

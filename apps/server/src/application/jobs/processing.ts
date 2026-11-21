@@ -61,7 +61,14 @@ export async function processingEvents(
   let after = -1;
   for (;;) {
     const page = await repository.listEvents(jobId, after, 1000);
-    events.push(...page.filter((e) => !SOURCE_RESULT_KINDS.has(e.kind)));
+    events.push(
+      ...page.filter(
+        (e) =>
+          !SOURCE_RESULT_KINDS.has(e.kind) &&
+          e.kind !== "citation-source-cooldown" &&
+          e.kind !== "citation-source-deferred",
+      ),
+    );
     if (page.length < 1000) return events;
     if (events.length >= 100000)
       throw new ProcessingTaskError("processing-result-budget");
@@ -92,7 +99,13 @@ export async function readProcessingTaskWithEvents(
         : "processing-result-budget",
     );
   }
-  const { processing, source_results, acquisition, technical } = result.detail;
+  const {
+    processing,
+    source_results,
+    acquisition,
+    technical,
+    citation_cooldowns,
+  } = result.detail;
   const events = processing.events;
   const task = {
     job,
@@ -147,7 +160,7 @@ export async function readProcessingTaskWithEvents(
       )
       .map((e) => e.payload),
   };
-  return { task, acquisition, technical };
+  return { task, acquisition, technical, citation_cooldowns };
 }
 
 function hasFailure(payload: unknown): boolean {

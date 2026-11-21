@@ -16,6 +16,10 @@ export interface AccessRatePolicy {
   }[];
   /** Backoff when a service returns 429 without Retry-After. */
   readonly rateLimitBackoffMs?: number;
+  readonly quotaHeaders?: {
+    readonly retryAfter: string;
+    readonly remaining: string;
+  };
   /** Local shared backoff for HTTP 5xx without Retry-After; not server rate feedback. */
   readonly serverErrorBackoffMs?: number;
 }
@@ -95,6 +99,38 @@ interface State {
 
 function invalid(): never {
   throw new NetworkBudgetError();
+}
+
+/** Parse the server delay before applying a caller's local waiting policy. */
+export function retryAfterDelay(value: string, now = Date.now()): number {
+  if (typeof value !== "string" || /[\r\n]/u.test(value)) invalid();
+  const trimmed = value.trim();
+  let milliseconds: number;
+  if (/^\d+$/u.test(trimmed)) {
+    milliseconds = Number(trimmed) * 1000;
+  } else if (
+    /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/u.test(
+      trimmed,
+    )
+  ) {
+    milliseconds = Math.max(0, Date.parse(trimmed) - now);
+  } else invalid();
+  if (!Number.isSafeInteger(milliseconds)) invalid();
+  return milliseconds;
+}
+
+export function isQuotaRejection(
+  status: number | undefined,
+  header: (name: string) => string | undefined,
+  quota?: AccessRatePolicy["quotaHeaders"],
+): boolean {
+  return (
+    status === 429 ||
+    (status === 403 &&
+      quota !== undefined &&
+      header(quota.remaining)?.trim() === "0" &&
+      header(quota.retryAfter) !== undefined)
+  );
 }
 function checkName(value: string): void {
   if (
@@ -332,25 +368,10 @@ export class NetworkBudgetCoordinator {
     now = this.clock.now(),
   ): number {
     const checked = checkLimits(limits);
-    if (typeof value !== "string" || /[\r\n]/u.test(value)) invalid();
-    const trimmed = value.trim();
-    let milliseconds: number;
-    if (/^\d+$/u.test(trimmed)) {
-      const seconds = Number(trimmed);
-      if (!Number.isSafeInteger(seconds)) invalid();
-      milliseconds = seconds * 1000;
-    } else if (
-      /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/u.test(
-        trimmed,
-      )
-    ) {
-      const timestamp = Date.parse(trimmed);
-      if (!Number.isFinite(timestamp)) invalid();
-      milliseconds = timestamp - now;
-      if (milliseconds < 0) milliseconds = 0;
-    } else invalid();
-    if (!Number.isSafeInteger(milliseconds)) invalid();
-    return Math.min(milliseconds, checked.maxRetryAfterMs ?? 120_000);
+    return Math.min(
+      retryAfterDelay(value, now),
+      checked.maxRetryAfterMs ?? 120_000,
+    );
   }
 
   private canGrant(state: State, waiter: Waiter): boolean {

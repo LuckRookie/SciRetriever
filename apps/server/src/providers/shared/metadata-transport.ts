@@ -15,7 +15,12 @@ import type {
   TopicSearchQuery,
 } from "../../metadata/ports.js";
 import { MetadataProviderFailure } from "../../metadata/ports.js";
-import { NetworkBudgetError } from "../../network/budget.js";
+import {
+  isQuotaRejection,
+  NetworkBudgetError,
+  retryAfterDelay,
+  type AccessRatePolicy,
+} from "../../network/budget.js";
 import { NetworkConnectionError } from "../../network/connection.js";
 import { NetworkHttpError } from "../../network/http.js";
 import { NetworkPolicyError } from "../../network/policy.js";
@@ -83,6 +88,7 @@ export async function requestMetadataResponse(
   transport: AgentTransport,
   request: Parameters<AgentTransport>[0],
   format: "json" | "atom" = "json",
+  quota?: AccessRatePolicy["quotaHeaders"],
 ): Promise<unknown> {
   let response: Awaited<ReturnType<AgentTransport>>;
   try {
@@ -92,28 +98,40 @@ export async function requestMetadataResponse(
   }
   if (response.status < 200 || response.status >= 300) {
     const status = response.status;
-    const category =
-      status === 429
-        ? "rate-limited"
-        : status === 401
-          ? "authentication"
-          : status === 403
-            ? "authorization"
-            : status >= 500
-              ? "unavailable"
-              : "http";
-    const retryAfter = response.retry_after_ms;
-    throw new MetadataProviderFailure({
-      code: `metadata-provider-${category}`,
-      reason: `The metadata provider returned HTTP ${status}.${retryAfter === undefined ? "" : ` Retry-After is ${retryAfter} ms.`}`,
-      action:
-        category === "authentication" || category === "authorization"
-          ? "Check the provider credential and permitted access before retrying."
-          : category === "rate-limited"
-            ? "Wait for the provider cooldown and retry the request."
-            : "Check the provider request and availability before retrying.",
-      retryable: status === 429 || status >= 500 || [408, 425].includes(status),
-    });
+    const header = (key: string) =>
+      response.headers.find(([name]) => name.toLowerCase() === key)?.[1];
+    const rateLimited = isQuotaRejection(status, header, quota);
+    const category = rateLimited
+      ? "rate-limited"
+      : status === 401
+        ? "authentication"
+        : status === 403
+          ? "authorization"
+          : status >= 500
+            ? "unavailable"
+            : "http";
+    // Network's delay may be a local fallback or capped. Only a response
+    // header can replace the task's retry schedule.
+    const retryHeader = rateLimited
+      ? (header("retry-after") ?? (quota && header(quota.retryAfter)))
+      : undefined;
+    const declared =
+      retryHeader === undefined ? undefined : retryAfterDelay(retryHeader);
+    const retryAfter = declared ?? response.retry_after_ms;
+    throw new MetadataProviderFailure(
+      {
+        code: `metadata-provider-${category}`,
+        reason: `The metadata provider returned HTTP ${status}.${retryAfter === undefined ? "" : ` Retry-After is ${retryAfter} ms.`}`,
+        action:
+          category === "authentication" || category === "authorization"
+            ? "Check the provider credential and permitted access before retrying."
+            : category === "rate-limited"
+              ? "Wait for the provider cooldown and retry the request."
+              : "Check the provider request and availability before retrying.",
+        retryable: rateLimited || status >= 500 || [408, 425].includes(status),
+      },
+      declared === undefined ? {} : { retry_after_ms: declared },
+    );
   }
   if (format === "atom") return response.body;
   try {

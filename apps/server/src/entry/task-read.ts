@@ -20,13 +20,17 @@ import { presentAcquisitionAttempt } from "../providers/shared/source-problem.js
 /** Read-only task projections; no recovery or runtime lock is started. */
 export function createTaskReader(repository: ExecutionRepository) {
   const read = async (id: string) => {
-    const [{ task, acquisition, technical }, interventions, policy, budget] =
-      await Promise.all([
-        readProcessingTaskWithEvents(repository, id, true),
-        repository.listInterventions(id, 1000),
-        repository.getPolicy(id),
-        repository.getBudget(id),
-      ]);
+    const [
+      { task, acquisition, technical, citation_cooldowns },
+      interventions,
+      policy,
+      budget,
+    ] = await Promise.all([
+      readProcessingTaskWithEvents(repository, id, true),
+      repository.listInterventions(id, 1000),
+      repository.getPolicy(id),
+      repository.getBudget(id),
+    ]);
     const traces = new Map<
       string,
       {
@@ -70,6 +74,12 @@ export function createTaskReader(repository: ExecutionRepository) {
       acquisition_traces_truncated: acquisition.truncated,
       events: technical,
       events_truncated: (technical[0]?.sequence ?? 0) > 0,
+      ...(citation_cooldowns.sources.length
+        ? { citation_source_cooldowns: citation_cooldowns.sources }
+        : {}),
+      ...(citation_cooldowns.truncated
+        ? { citation_source_cooldowns_truncated: true }
+        : {}),
       interventions,
       policy,
       budget,

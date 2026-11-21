@@ -365,7 +365,6 @@ it("resolves a missing target through a later source without leaking native IDs 
 it.each([
   "metadata-provider-authentication",
   "metadata-provider-authorization",
-  "metadata-provider-rate-limited",
 ])(
   "continues with independent sources after %s without retrying the suspended source",
   async (code) => {

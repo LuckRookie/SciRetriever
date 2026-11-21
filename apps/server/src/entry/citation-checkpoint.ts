@@ -11,8 +11,16 @@ import {
 } from "@sciretriever/contracts";
 import type { MetadataScanEvent } from "../metadata/ports.js";
 import type { MetadataSourceRun } from "../application/jobs/metadata-progress.js";
-import type { CitationProgress } from "../storage/sqlite/citation-progress.js";
+import type {
+  CitationDeferredChanges,
+  CitationDeferredEntry,
+  CitationProgress,
+} from "../storage/sqlite/citation-progress.js";
 import type { DiscoveryPublication } from "../storage/sqlite/worker.js";
+import {
+  isCitationRateLimit,
+  MAX_CITATION_RETRIES,
+} from "./citation-cooldown.js";
 
 export type CitationCause = DiscoveryPublication["citation_causes"][number];
 export type CitationItem = Extract<MetadataScanEvent, { kind: "item" }>;
@@ -23,6 +31,12 @@ export interface CitationProviderState {
   attempted: boolean;
   terminal: "SCAN_LIMIT_REACHED" | "FAILED" | null;
   failure: StableFailure | null;
+  cooldown?: {
+    readonly retries: number;
+    /** Null means disabled. An absent deadline retains the count after a different failure. */
+    readonly until?: number | null;
+    readonly failure: StableFailure;
+  };
 }
 export interface CitationQueryProgress {
   failure: StableFailure | null;
@@ -43,6 +57,27 @@ export interface CitationPendingItem {
   readonly relations: readonly SourceIdentity[];
 }
 
+type DeferredAnchor = CitationDeferredEntry & {
+  readonly source_id: string;
+  readonly depth: number;
+};
+export type DeferredReference = DeferredAnchor & {
+  readonly kind: "reference-query";
+  readonly active_query: CitationQueryProgress | null;
+};
+export type DeferredLookup = DeferredAnchor & {
+  readonly kind: "lookup";
+  readonly relation_id: string;
+  readonly reference_provider: string;
+  readonly outgoing: boolean;
+  readonly unresolved: boolean;
+};
+export type CitationDeferredWork = DeferredReference | DeferredLookup;
+
+export function referenceQueryId(sourceId: string, provider: string) {
+  return JSON.stringify(["reference-query", sourceId, provider]);
+}
+
 export interface CitationCheckpoint {
   readonly version: 1;
   readonly run_id: string;
@@ -56,11 +91,46 @@ export interface CitationCheckpoint {
   readonly raw_items: readonly string[];
   readonly causes: readonly CitationCause[];
   readonly providers: readonly CitationProviderState[];
+  readonly deferred?: CitationDeferredChanges<CitationDeferredWork>;
   readonly closed: "COMPLETED" | "PARTIAL" | "FAILED" | null;
 }
 
 const nonnegative = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+function validateQuery(query: CitationQueryProgress | null) {
+  const invalid = () => new Error("invalid citation checkpoint");
+  if (query === null) return;
+  if (
+    !query ||
+    typeof query.returnedRelations !== "boolean" ||
+    typeof query.incomplete !== "boolean" ||
+    !nonnegative(query.usableRelations)
+  )
+    throw invalid();
+  if (query.failure !== null) parseStableFailure(query.failure);
+  if (query.pending_item === null) return;
+  const pending = query.pending_item;
+  const validIdentities = (value: readonly SourceIdentity[]) =>
+    Array.isArray(value) &&
+    value.every(
+      (identity) =>
+        Array.isArray(identity) &&
+        identity.length === 3 &&
+        identity.every(
+          (field) => typeof field === "string" && field.length > 0,
+        ),
+    );
+  if (
+    !pending ||
+    !/^[a-f0-9]{64}$/u.test(pending.key) ||
+    !nonnegative(pending.next_relation) ||
+    !validIdentities(pending.observations) ||
+    !validIdentities(pending.relations) ||
+    pending.next_relation >= pending.relations.length
+  )
+    throw invalid();
+}
 
 export function parseCitationCheckpoint(input: unknown): CitationCheckpoint {
   const invalid = () => new Error("invalid citation checkpoint");
@@ -82,44 +152,13 @@ export function parseCitationCheckpoint(input: unknown): CitationCheckpoint {
     ) ||
     !Array.isArray(row.causes) ||
     !Array.isArray(row.providers) ||
+    row.raw_provider >= row.providers.length ||
     ![null, "COMPLETED", "PARTIAL", "FAILED"].includes(row.closed)
   )
     throw invalid();
   parseIntakeBatchId(row.batch_id);
   if (row.source_id !== null) parseLiteratureId(row.source_id);
-  if (row.active_query !== null) {
-    const query = row.active_query;
-    if (
-      !query ||
-      typeof query.returnedRelations !== "boolean" ||
-      typeof query.incomplete !== "boolean" ||
-      !nonnegative(query.usableRelations)
-    )
-      throw invalid();
-    if (query.failure !== null) parseStableFailure(query.failure);
-    if (query.pending_item !== null) {
-      const pending = query.pending_item;
-      const validIdentities = (value: readonly SourceIdentity[]) =>
-        Array.isArray(value) &&
-        value.every(
-          (identity) =>
-            Array.isArray(identity) &&
-            identity.length === 3 &&
-            identity.every(
-              (field) => typeof field === "string" && field.length > 0,
-            ),
-        );
-      if (
-        !pending ||
-        !/^[a-f0-9]{64}$/u.test(pending.key) ||
-        !nonnegative(pending.next_relation) ||
-        !validIdentities(pending.observations) ||
-        !validIdentities(pending.relations) ||
-        pending.next_relation >= pending.relations.length
-      )
-        throw invalid();
-    }
-  }
+  validateQuery(row.active_query);
   for (const state of row.providers) {
     if (
       !state ||
@@ -134,6 +173,57 @@ export function parseCitationCheckpoint(input: unknown): CitationCheckpoint {
     )
       throw invalid();
     if (state.failure !== null) parseStableFailure(state.failure);
+    if (state.cooldown !== undefined) {
+      const { retries, until, failure } = state.cooldown;
+      if (
+        !nonnegative(retries) ||
+        retries > MAX_CITATION_RETRIES ||
+        (until === undefined
+          ? retries === 0
+          : until === null
+            ? retries !== MAX_CITATION_RETRIES || state.terminal !== "FAILED"
+            : !nonnegative(until) ||
+              !Number.isFinite(new Date(until).getTime()) ||
+              retries >= MAX_CITATION_RETRIES) ||
+        !isCitationRateLimit(parseStableFailure(failure))
+      )
+        throw invalid();
+    }
+  }
+  if (row.deferred !== undefined) {
+    const { added, completed } = row.deferred;
+    if (
+      !Array.isArray(added) ||
+      (completed !== null && (typeof completed !== "string" || !completed))
+    )
+      throw invalid();
+    for (const work of added as readonly CitationDeferredWork[]) {
+      if (
+        !work ||
+        !nonnegative(work.depth) ||
+        !row.providers.some(
+          (state) => state.provider_name === work.provider_name,
+        )
+      )
+        throw invalid();
+      parseLiteratureId(work.source_id);
+      if (work.kind === "reference-query") {
+        if (work.id !== referenceQueryId(work.source_id, work.provider_name))
+          throw invalid();
+        validateQuery(work.active_query);
+      } else if (
+        work.kind !== "lookup" ||
+        typeof work.relation_id !== "string" ||
+        !work.relation_id ||
+        !row.providers.some(
+          (state) => state.provider_name === work.reference_provider,
+        ) ||
+        typeof work.outgoing !== "boolean" ||
+        typeof work.unresolved !== "boolean" ||
+        work.id !== lookupWorkId(work.relation_id, work.provider_name)
+      )
+        throw invalid();
+    }
   }
   for (const cause of row.causes) {
     parseMetaLiteratureId(cause.meta_literature_id);
@@ -152,12 +242,41 @@ export function parseCitationCheckpoint(input: unknown): CitationCheckpoint {
   return row;
 }
 
+export function lookupWorkId(relationId: string, provider: string) {
+  return JSON.stringify(["lookup", relationId, provider]);
+}
+
+export function applyCitationCheckpoint(
+  progress: CitationProgress<CitationDeferredWork>,
+  checkpoint: CitationCheckpoint,
+) {
+  const { source_id, raw_provider, deferred } = checkpoint;
+  const id =
+    source_id === null || raw_provider < 0
+      ? undefined
+      : referenceQueryId(
+          source_id,
+          checkpoint.providers[raw_provider]!.provider_name,
+        );
+  const retain =
+    checkpoint.active_query !== null ||
+    deferred?.added.some((work) => work.id === id);
+  progress.record(
+    checkpoint.causes,
+    checkpoint.checked ? source_id : null,
+    deferred,
+    id === undefined
+      ? undefined
+      : { id, items: retain ? checkpoint.raw_items : null },
+  );
+}
+
 /** A cause is enqueued at its first committed occurrence in event order. */
 export async function restoreCitationProgress(
   source: Pick<MetadataSourceRun, "checkpoints">,
   resume: CitationCheckpoint | undefined,
   through: number,
-  progress: CitationProgress,
+  progress: CitationProgress<CitationDeferredWork>,
 ) {
   for (let after = -1; after < through; ) {
     const page = await source.checkpoints(after, through);
@@ -171,16 +290,7 @@ export async function restoreCitationProgress(
         checkpoint.started_at !== resume.started_at
       )
         throw new Error("citation checkpoint belongs to another run");
-      progress.record(
-        checkpoint.causes,
-        checkpoint.checked ? checkpoint.source_id : null,
-        !resume.checked &&
-          resume.active_query &&
-          checkpoint.source_id === resume.source_id &&
-          checkpoint.raw_provider === resume.next_provider
-          ? checkpoint.raw_items
-          : [],
-      );
+      applyCitationCheckpoint(progress, checkpoint);
     }
     after = page.at(-1)!.sequence;
   }

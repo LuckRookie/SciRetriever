@@ -511,6 +511,7 @@ export interface ApplicationOptions {
   };
   /** Optional resolver/loopback seam for the shared production metadata Network. */
   readonly metadataAssembly?: MetadataAssemblyOptions;
+  readonly citationClock?: import("../entry/citation-cooldown.js").CitationClock;
   readonly acquisitionAssembly?: PublicAcquisitionAssemblyOptions;
   /**
    * Deferred controlled-Browser host construction. Bootstrap is the only owner: it
@@ -1939,6 +1940,7 @@ async function createApplicationOwned(
       observations,
       references,
       database,
+      options.citationClock,
     );
     let executionRecovery: Application["executionRecovery"] = null;
     let recoveryEntered = false;
