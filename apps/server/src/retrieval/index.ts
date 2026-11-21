@@ -27,9 +27,6 @@ import { RetrievalStorageClient } from "../storage/sqlite/retrieval-client.js";
 export const RETRIEVAL_UNIT_RULE = "markdown-context-v1";
 const PAGE = 64;
 const BATCH = 128;
-const MAX_SOURCES = 100_000;
-const MAX_ENTRIES = 2_000_000;
-const MAX_FTS_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_SOURCE_FTS_BYTES = 64 * 1024 * 1024;
 const MAX_SPOOL_BATCH_BYTES = 1024 * 1024;
 const FTS_CHUNK_BYTES = 32 * 1024;
@@ -150,10 +147,12 @@ export class RetrievalIndexError extends Error {
     readonly code:
       | "index-v4-required"
       | "index-limit"
+      | "index-storage-full"
       | "index-cancelled"
       | "index-source-invalid",
+    options?: ErrorOptions,
   ) {
-    super(code);
+    super(code, options);
   }
 }
 function check(signal?: AbortSignal): void {
@@ -509,13 +508,9 @@ export class RetrievalIndexService {
         await progress?.({ done: 0, total });
         const spool = await open(spoolPath, "wx", 0o600);
         let sourceCount = 0;
-        let entryCount = 0;
-        let ftsBytes = 0;
         const collect = async (entries: AsyncIterable<RetrievalEntry>) => {
           check(signal);
           sourceCount++;
-          if (sourceCount > MAX_SOURCES)
-            throw new RetrievalIndexError("index-limit");
           let sourceBytes = 0;
           let title = "";
           let titleBytes = 0;
@@ -540,11 +535,7 @@ export class RetrievalIndexService {
               titleBytes = encoder.encode(title).length;
             }
             const bytes = titleBytes + encoder.encode(entry.body).length;
-            if (
-              entryCount + 1 > MAX_ENTRIES ||
-              ftsBytes + bytes > MAX_FTS_BYTES ||
-              sourceBytes + bytes > MAX_SOURCE_FTS_BYTES
-            )
+            if (sourceBytes + bytes > MAX_SOURCE_FTS_BYTES)
               throw new RetrievalIndexError("index-limit");
             if (
               batch.length &&
@@ -552,8 +543,6 @@ export class RetrievalIndexService {
                 batchBytes + bytes > MAX_SPOOL_BATCH_BYTES)
             )
               await flush();
-            entryCount++;
-            ftsBytes += bytes;
             sourceBytes += bytes;
             batch.push(entry);
             batchBytes += bytes;
@@ -719,6 +708,16 @@ export class RetrievalIndexService {
         await this.pruneRetired(combined);
         return published;
       } catch (error) {
+        // The spool uses the filesystem's actual space and quota. A size
+        // estimate cannot reserve either while other processes are writing.
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          (error.code === "ENOSPC" ||
+            error.code === "EDQUOT" ||
+            error.code === "EFBIG")
+        )
+          throw new RetrievalIndexError("index-storage-full", { cause: error });
         if (
           error instanceof RetrievalIndexError &&
           error.code === "index-source-invalid" &&

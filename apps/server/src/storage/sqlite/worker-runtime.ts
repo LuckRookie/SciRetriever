@@ -299,6 +299,7 @@ const { readCatalogIdentity } = await import(
 );
 const {
   catalogCorruption,
+  sqliteStorageFull,
   throwCatalogCorruption,
   DocumentCommitError,
   isDocumentCommitFailureCode,
@@ -4883,8 +4884,9 @@ port.on("message", (message: WorkerMessage) => {
         if (message.command.operation === "verifyCatalog") throw error;
         value = {
           ok: false,
-          code:
-            error && typeof error === "object" && "code" in error
+          code: sqliteStorageFull(error)
+            ? "index-storage-full"
+            : error && typeof error === "object" && "code" in error
               ? error.code
               : "index-corrupt",
         };

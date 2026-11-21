@@ -16,12 +16,13 @@ const { SCHEMA_VERSION }: typeof Schema = await import(
     import.meta.url,
   ).href
 );
-const { CatalogCorruptionError, catalogCorruption } = await import(
-  new URL(
-    import.meta.url.endsWith(".ts") ? "./errors.ts" : "./errors.js",
-    import.meta.url,
-  ).href
-);
+const { CatalogCorruptionError, catalogCorruption, sqliteStorageFull } =
+  await import(
+    new URL(
+      import.meta.url.endsWith(".ts") ? "./errors.ts" : "./errors.js",
+      import.meta.url,
+    ).href
+  );
 
 export interface RetrievalSchemaConfig {
   readonly schema_version: typeof SCHEMA_VERSION;
@@ -228,7 +229,7 @@ function inspectCatalogSnapshot(
         )?.integrity_check !== "ok"
       )
         fail();
-      if (db.prepare(`PRAGMA foreign_key_check(${table})`).all().length) fail();
+      if (db.prepare(`PRAGMA foreign_key_check(${table})`).get()) fail();
     }
   } else {
     if (
@@ -239,7 +240,7 @@ function inspectCatalogSnapshot(
       )?.integrity_check !== "ok"
     )
       fail();
-    if (db.prepare("PRAGMA foreign_key_check").all().length) fail();
+    if (db.prepare("PRAGMA foreign_key_check").get()) fail();
   }
   const execution = db
     .prepare(
@@ -450,15 +451,21 @@ export interface RetrievalChangeScan {
 function stamps(rows: readonly SourceStamp[]) {
   return JSON.stringify(rows);
 }
+/** The SELECTs order each literature's rows together in both streams. */
+function* groupStamps(rows: Iterable<SourceStamp>) {
+  let group: SourceStamp[] = [];
+  for (const row of rows) {
+    if (group.length && group[0]![0] !== row[0]) {
+      yield { id: group[0]![0], fingerprint: stamps(group) };
+      group = [];
+    }
+    group.push(row);
+  }
+  if (group.length) yield { id: group[0]![0], fingerprint: stamps(group) };
+}
 export class RetrievalStorageError extends Error {
-  readonly code:
-    | "index-unavailable"
-    | "index-corrupt"
-    | "index-stale"
-    | "index-limit";
-  constructor(
-    code: "index-unavailable" | "index-corrupt" | "index-stale" | "index-limit",
-  ) {
+  readonly code: "index-unavailable" | "index-corrupt" | "index-stale";
+  constructor(code: RetrievalStorageError["code"]) {
     super(code);
     this.code = code;
   }
@@ -499,6 +506,8 @@ export class RetrievalStorageEngine {
     const db = new DatabaseSync(this.path, { readOnly: this.readOnly });
     db.exec("PRAGMA foreign_keys=ON");
     db.exec("PRAGMA busy_timeout=5000");
+    // Fingerprint and posting order may require SQLite to sort the corpus.
+    db.exec("PRAGMA temp_store=FILE");
     prepareRetrievalVocab(db);
     if (this.readOnly) db.exec("PRAGMA query_only=ON");
     return db;
@@ -535,7 +544,8 @@ export class RetrievalStorageEngine {
   private validate(sourceOnly: boolean): void {
     try {
       inspectCatalogWithRetrieval(this.db, this.config, undefined, sourceOnly);
-    } catch {
+    } catch (error) {
+      if (sqliteStorageFull(error)) throw error;
       throw new RetrievalStorageError("index-corrupt");
     }
   }
@@ -576,8 +586,8 @@ export class RetrievalStorageEngine {
     );
   }
   /** Only indexed scalar fingerprints: no artifact, body or FTS access. */
-  private sourceStamps(literature?: string): SourceStamp[] {
-    return this.db
+  private *sourceStamps(literature?: string): Generator<SourceStamp> {
+    const rows = this.db
       .prepare(
         `
       SELECT l.literature_id,l.meta_literature_id,m.metadata_revision,m.metadata_sha256,'metadata' AS kind,NULL AS document_version_id,NULL AS representation_sha256,NULL AS source_asset_id,NULL AS source_asset_sha256,1 AS is_default
@@ -588,19 +598,19 @@ export class RetrievalStorageEngine {
       ORDER BY literature_id,kind,document_version_id
     `,
       )
-      .all(...(literature === undefined ? [] : [literature, literature]))
-      .map((row) => Object.values(row) as unknown as SourceStamp);
+      .iterate(...(literature === undefined ? [] : [literature, literature]));
+    for (const row of rows) yield Object.values(row) as unknown as SourceStamp;
   }
-  private indexedStamps(
+  private *indexedStamps(
     generation: string,
     literature?: string,
-  ): SourceStamp[] {
-    return this.db
+  ): Generator<SourceStamp> {
+    const rows = this.db
       .prepare(
         `SELECT DISTINCT literature_id,meta_literature_id,metadata_revision,metadata_sha256,kind,document_version_id,representation_sha256,source_asset_id,source_asset_sha256,is_default FROM retrieval_entries WHERE generation_id=? ${literature === undefined ? "" : "AND kind IN ('metadata','document') AND literature_id=?"} ORDER BY literature_id,kind,document_version_id`,
       )
-      .all(generation, ...(literature === undefined ? [] : [literature]))
-      .map((row) => Object.values(row) as unknown as SourceStamp);
+      .iterate(generation, ...(literature === undefined ? [] : [literature]));
+    for (const row of rows) yield Object.values(row) as unknown as SourceStamp;
   }
   scanChanges(): RetrievalChangeScan {
     this.refreshReader();
@@ -608,30 +618,44 @@ export class RetrievalStorageEngine {
     try {
       const generation = this.active(),
         revision = this.revision();
-      const group = (rows: readonly SourceStamp[]) => {
-        const result = new Map<string, SourceStamp[]>();
-        for (const row of rows) {
-          const items = result.get(row[0]) ?? [];
-          items.push(row);
-          result.set(row[0], items);
-        }
-        return result;
-      };
-      const current = group(this.sourceStamps()),
-        indexed = group(
+      const current = groupStamps(this.sourceStamps()),
+        indexed = groupStamps(
           generation ? this.indexedStamps(generation.generation_id) : [],
         );
-      const ids = [...new Set([...current.keys(), ...indexed.keys()])].sort();
-      return {
-        generation,
-        revision,
-        literature_ids: ids.filter(
-          (id) =>
-            stamps(current.get(id) ?? []) !== stamps(indexed.get(id) ?? []),
-        ),
-      };
+      const literature_ids: string[] = [];
+      try {
+        let source = current.next(),
+          projected = indexed.next();
+        while (!source.done && !projected.done) {
+          if (source.value.id === projected.value.id) {
+            if (source.value.fingerprint !== projected.value.fingerprint)
+              literature_ids.push(source.value.id);
+            source = current.next();
+            projected = indexed.next();
+          } else if (
+            Buffer.compare(
+              Buffer.from(source.value.id),
+              Buffer.from(projected.value.id),
+            ) < 0
+          ) {
+            literature_ids.push(source.value.id);
+            source = current.next();
+          } else {
+            literature_ids.push(projected.value.id);
+            projected = indexed.next();
+          }
+        }
+        for (; !source.done; source = current.next())
+          literature_ids.push(source.value.id);
+        for (; !projected.done; projected = indexed.next())
+          literature_ids.push(projected.value.id);
+      } finally {
+        current.return(undefined);
+        indexed.return(undefined);
+      }
+      return { generation, revision, literature_ids: literature_ids.sort() };
     } finally {
-      this.db.exec("RELEASE retrieval_change_scan");
+      if (this.db.isTransaction) this.db.exec("RELEASE retrieval_change_scan");
     }
   }
   literatureSources(literature: string) {
@@ -639,14 +663,16 @@ export class RetrievalStorageEngine {
     this.db.exec("SAVEPOINT retrieval_literature_sources");
     try {
       const metadata = this.metadataSource(literature);
-      const documents = this.documentPage(null, 100_001, literature);
+      // SQLite LIMIT -1 includes every version of this literature in the snapshot.
+      const documents = this.documentPage(null, -1, literature);
       return {
-        fingerprint: stamps(this.sourceStamps(literature)),
+        fingerprint: stamps([...this.sourceStamps(literature)]),
         metadata,
         documents,
       };
     } finally {
-      this.db.exec("RELEASE retrieval_literature_sources");
+      if (this.db.isTransaction)
+        this.db.exec("RELEASE retrieval_literature_sources");
     }
   }
   /** A ready empty projection lets the first refresh use the same incremental path. */
@@ -673,7 +699,7 @@ export class RetrievalStorageEngine {
       this.db.exec("COMMIT");
       return this.active()!;
     } catch (error) {
-      this.db.exec("ROLLBACK");
+      if (this.db.isTransaction) this.db.exec("ROLLBACK");
       throw error;
     }
   }
@@ -797,7 +823,7 @@ export class RetrievalStorageEngine {
         done: !pending,
       };
     } catch (error) {
-      this.db.exec("ROLLBACK");
+      if (this.db.isTransaction) this.db.exec("ROLLBACK");
       throw error;
     }
   }
@@ -812,13 +838,12 @@ export class RetrievalStorageEngine {
     try {
       if (this.active()?.generation_id !== active)
         throw new RetrievalStorageError("index-stale");
-      if (stamps(this.sourceStamps(literature)) !== fingerprint) {
+      if (stamps([...this.sourceStamps(literature)]) !== fingerprint) {
         this.db.exec("ROLLBACK");
         return false;
       }
-      const oldSources = this.indexedStamps(active, literature).length;
-      const newSources = this.indexedStamps(staged, literature).length;
-      const activeHeader = this.active()!;
+      const oldSources = [...this.indexedStamps(active, literature)].length;
+      const newSources = [...this.indexedStamps(staged, literature)].length;
       const oldCount = Number(
         this.db
           .prepare(
@@ -832,12 +857,6 @@ export class RetrievalStorageEngine {
         )
         .get(staged);
       if (!stage || stage.entry_count !== stage.fts_count) fail();
-      if (
-        activeHeader.entry_count + Number(stage.entry_count) - oldCount >
-          2_000_000 ||
-        activeHeader.source_count + newSources - oldSources > 100_000
-      )
-        throw new RetrievalStorageError("index-limit");
       if (
         this.db
           .prepare(
@@ -883,7 +902,7 @@ export class RetrievalStorageEngine {
       this.db.exec("COMMIT");
       return true;
     } catch (error) {
-      this.db.exec("ROLLBACK");
+      if (this.db.isTransaction) this.db.exec("ROLLBACK");
       throw error;
     }
   }
@@ -910,7 +929,7 @@ export class RetrievalStorageEngine {
       this.db.exec("COMMIT");
       return { ...active, source_revision: revision };
     } catch (error) {
-      this.db.exec("ROLLBACK");
+      if (this.db.isTransaction) this.db.exec("ROLLBACK");
       throw error;
     }
   }
@@ -1043,7 +1062,8 @@ export class RetrievalStorageEngine {
     let repairing = false;
     try {
       inspectCatalogWithRetrieval(this.db, this.config);
-    } catch {
+    } catch (error) {
+      if (sqliteStorageFull(error)) throw error;
       // The source schema passed validation. Only an explicit rebuild may
       // replace a damaged, derived retrieval projection.
       repairing = true;
@@ -1070,7 +1090,7 @@ export class RetrievalStorageEngine {
         .run(id, sourceRevision, new Date().toISOString());
       this.db.exec("COMMIT");
     } catch (error) {
-      if (transaction) this.db.exec("ROLLBACK");
+      if (transaction && this.db.isTransaction) this.db.exec("ROLLBACK");
       repairText?.close();
       throw error;
     }
@@ -1141,9 +1161,10 @@ export class RetrievalStorageEngine {
       }
       this.db.exec("COMMIT");
     } catch (error) {
-      this.db.exec("ROLLBACK");
-      if (repairTransaction) repair!.exec("ROLLBACK");
-      else if (repair) {
+      if (this.db.isTransaction) this.db.exec("ROLLBACK");
+      if (repairTransaction) {
+        if (repair!.isTransaction) repair!.exec("ROLLBACK");
+      } else if (repair) {
         // If the main commit failed after temporary staging committed, remove
         // only this batch. It must never be mistaken for published input.
         const remove = repair.prepare(
@@ -1242,7 +1263,7 @@ export class RetrievalStorageEngine {
         source_count: row.source_count,
       };
     } catch (error) {
-      this.db.exec("ROLLBACK");
+      if (this.db.isTransaction) this.db.exec("ROLLBACK");
       throw error;
     }
     if (repairing) {

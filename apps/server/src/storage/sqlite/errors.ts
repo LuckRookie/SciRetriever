@@ -61,3 +61,14 @@ export function throwCatalogCorruption(error: unknown): void {
   const failure = catalogCorruption(error);
   if (failure) throw failure;
 }
+
+/** SQLITE_FULL, including extended codes, means SQLite could not allocate space. */
+export function sqliteStorageFull(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "errcode" in error &&
+    typeof error.errcode === "number" &&
+    (error.errcode & 255) === 13
+  );
+}

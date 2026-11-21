@@ -47,6 +47,7 @@ export class IndexRefreshService {
   private readonly owner: CatalogWriteAdmission;
   private readonly stop = new AbortController();
   private work: Promise<void> | undefined;
+  private started = false;
   private stopped = false;
   private failure: string | null = null;
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -87,6 +88,9 @@ export class IndexRefreshService {
   }
   async status(): Promise<IndexRefreshStatus> {
     await this.checkLag();
+    return this.readStatus();
+  }
+  private async readStatus(): Promise<IndexRefreshStatus> {
     const value = await readIndexRefreshStatus(
       this.store.path,
       this.activeIndex,
@@ -100,7 +104,10 @@ export class IndexRefreshService {
       : value;
   }
   async start() {
-    const state = await this.status();
+    const firstStart = !this.started;
+    this.started = true;
+    await this.checkLag(firstStart);
+    const state = await this.readStatus();
     if (state.status === "scheduled" || state.status === "running") this.kick();
     if (this.monitor && !this.timer && !this.stopped) {
       this.timer = setInterval(() => {
@@ -110,7 +117,7 @@ export class IndexRefreshService {
     }
   }
   /** Coalesced scalar-only observation; query-only applications do not own it. */
-  private checkLag(): Promise<void> {
+  private checkLag(firstStart = false): Promise<void> {
     if (!this.monitor || this.stopped) return Promise.resolve();
     if (this.observing) return this.observing;
     this.observing = (async () => {
@@ -123,7 +130,14 @@ export class IndexRefreshService {
       const state = await IndexRefreshStateStore.status(this.store.path);
       if (state.technical_details.code === "index-refresh-state-invalid")
         return;
+      // A previous process may have hit the retired aggregate limits.
+      // Retry once on startup; an oversized single source can still fail.
+      const retryLimitFailure =
+        firstStart &&
+        state.status === "failed" &&
+        state.technical_details.code === "index-limit";
       if (
+        !retryLimitFailure &&
         ["scheduled", "running", "failed"].includes(state.status) &&
         (state.requested_revision ?? -1) >= snapshot.source_revision
       ) {

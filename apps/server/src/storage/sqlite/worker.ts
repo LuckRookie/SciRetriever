@@ -1458,7 +1458,7 @@ export class SqliteWorker {
       if (!reply.ok)
         throw new RetrievalStorageError(
           reply.code === "index-stale" ||
-          reply.code === "index-limit" ||
+          reply.code === "index-storage-full" ||
           reply.code === "index-unavailable"
             ? reply.code
             : "index-corrupt",

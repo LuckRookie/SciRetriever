@@ -6,6 +6,7 @@ import {
   parseIndexVerificationResult,
   parseIndexRefreshRequest,
   parseIndexRebuildRequest,
+  parseRetrievalGenerationReceipt,
 } from "../src/index.js";
 
 it("accepts optional incremental queue metrics and rejects invalid counters or verification receipts", () => {
@@ -43,6 +44,28 @@ it("accepts optional incremental queue metrics and rejects invalid counters or v
     expect(() =>
       parseIndexVerificationResult({ ...receipt, ...extra }),
     ).toThrow();
+});
+it("accepts index receipt counts beyond the former corpus bounds", () => {
+  const receipt = {
+    generation_id: "00000000-0000-0000-0000-000000000101",
+    source_revision: 5,
+    entry_count: 24_000_000,
+    source_count: 11_100_002,
+  };
+  expect(parseRetrievalGenerationReceipt(receipt)).toEqual(receipt);
+  const verified = {
+    ...receipt,
+    schema_version: 1,
+    status: "verified",
+    elapsed_ms: 3,
+  };
+  expect(parseIndexVerificationResult(verified)).toEqual(verified);
+  expect(() =>
+    parseRetrievalGenerationReceipt({
+      ...receipt,
+      source_count: Number.MAX_SAFE_INTEGER + 1,
+    }),
+  ).toThrow();
 });
 it("accepts optional live index state and rebuild progress while retaining old sidecars", () => {
   const old = idleIndexRefreshStatus();

@@ -66,6 +66,66 @@ const generation = (revision: number) => ({
   source_count: 1,
 });
 
+it.each([false, true])(
+  "requeues a persisted index-limit failure once at startup (retry still fails: %s)",
+  async (fails) => {
+    const root = await mkdtemp(join(tmpdir(), "sciretriever-index-limit-"));
+    const catalog = join(root, "catalog.sqlite");
+    const state = new IndexRefreshStateStore(catalog);
+    const source = 8;
+    let indexed = 3;
+    const refresh = vi.fn(async () => {
+      if (fails)
+        throw Object.assign(new Error("single source exceeds budget"), {
+          code: "index-limit",
+        });
+      indexed = source;
+      return generation(indexed);
+    });
+    const service = new IndexRefreshService(
+      catalog,
+      { refresh, build: async () => generation(source) },
+      async () => source,
+      {
+        interval_ms: 20,
+        inspect: async () => ({
+          source_revision: source,
+          generation: generation(indexed),
+        }),
+      },
+    );
+    try {
+      await state.update((old) => ({
+        ...old,
+        status: "failed",
+        request_sequence: 1,
+        requested_revision: source,
+        indexed_revision: indexed,
+        operation: "refresh",
+        technical_details: { code: "index-limit" },
+      }));
+      await service.start();
+      await vi.waitFor(
+        async () =>
+          expect(await state.read()).toMatchObject({
+            status: fails ? "failed" : "updated",
+            request_sequence: 2,
+            indexed_revision: fails ? 3 : source,
+            technical_details: { code: fails ? "index-limit" : null },
+          }),
+        { timeout: 20_000 },
+      );
+      await service.start();
+      expect(await service.status()).toMatchObject({ request_sequence: 2 });
+      expect(refresh).toHaveBeenCalledTimes(1);
+    } finally {
+      await service.close();
+      await state.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
 it("durably schedules without awaiting a builder and collapses pending revisions into one latest refresh", async () => {
   const root = await mkdtemp(join(tmpdir(), "sciretriever-index-refresh-")),
     catalog = join(root, "catalog.sqlite");

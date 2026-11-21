@@ -79,8 +79,8 @@ export function parseRetrievalGenerationReceipt(
   return Object.freeze({
     generation_id: uuid(r.generation_id),
     source_revision: integer(r.source_revision, 0, Number.MAX_SAFE_INTEGER),
-    entry_count: integer(r.entry_count, 0, 2_000_000),
-    source_count: integer(r.source_count, 0, 100_000),
+    entry_count: integer(r.entry_count, 0, Number.MAX_SAFE_INTEGER),
+    source_count: integer(r.source_count, 0, Number.MAX_SAFE_INTEGER),
   });
 }
 export type MaterialContextVersions =

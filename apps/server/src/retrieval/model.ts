@@ -6,10 +6,8 @@ export class RetrievalStorageError extends Error {
     | "index-unavailable"
     | "index-corrupt"
     | "index-stale"
-    | "index-limit";
-  constructor(
-    code: "index-unavailable" | "index-corrupt" | "index-stale" | "index-limit",
-  ) {
+    | "index-storage-full";
+  constructor(code: RetrievalStorageError["code"]) {
     super(code);
     this.code = code;
   }
