@@ -1,7 +1,7 @@
 import { execFile, fork } from "node:child_process";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { backup, DatabaseSync } from "node:sqlite";
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
@@ -38,12 +38,26 @@ async function cli(
   args: string[],
   timeout = deadline,
   onStart?: (pid: number) => Promise<void>,
+  probe?: { module: string; output: string },
 ) {
   const start = now();
   const running = exec(
     process.execPath,
-    ["--experimental-strip-types", script, "cli", library.home, ...args],
-    { env, timeout, maxBuffer: 4 * 1024 * 1024 },
+    [
+      "--experimental-strip-types",
+      ...(probe ? ["--import", pathToFileURL(resolve(probe.module)).href] : []),
+      script,
+      "cli",
+      library.home,
+      ...args,
+    ],
+    {
+      env: probe
+        ? { ...env, SCIRETRIEVER_SCALE_LIBRARY_INDEX_PROFILE: probe.output }
+        : env,
+      timeout,
+      maxBuffer: 4 * 1024 * 1024,
+    },
   );
   const result = running.catch((error: unknown) => {
     if (error instanceof Error && "stdout" in error)
@@ -70,12 +84,22 @@ async function cli(
 function launch<T extends object>(
   library: ScaleLibrary,
   kind: "serve" | "writer",
+  firstWrite?: number,
 ) {
-  const child = fork(script, [kind, library.home, library.catalog], {
-    execArgv: ["--experimental-strip-types"],
-    env,
-    stdio: ["ignore", "ignore", "pipe", "ipc"],
-  });
+  const child = fork(
+    script,
+    [
+      kind,
+      library.home,
+      library.catalog,
+      ...(firstWrite === undefined ? [] : [String(firstWrite)]),
+    ],
+    {
+      execArgv: ["--experimental-strip-types"],
+      env,
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
+    },
+  );
   let stderr = "";
   child.stderr!.on("data", (bytes: Buffer) => {
     stderr = (stderr + bytes.toString()).slice(-6000);
@@ -112,6 +136,8 @@ function launch<T extends object>(
     },
     async close() {
       let timer: ReturnType<typeof setTimeout> | undefined;
+      // A scale Workbench can be finishing a full fingerprint scan after abort.
+      const closeTimeout = kind === "serve" ? 180_000 : 30_000;
       try {
         if (child.exitCode === null && child.signalCode === null)
           child.kill("SIGTERM");
@@ -121,7 +147,7 @@ function launch<T extends object>(
             timer = setTimeout(() => {
               child.kill("SIGKILL");
               reject(new Error(`Scale ${kind} shutdown timed out`));
-            }, 30_000);
+            }, closeTimeout);
           }),
         ]);
         if (code !== 0)
@@ -423,47 +449,100 @@ async function reads(
     } finally {
       await child.close();
     }
-    return;
+    return [];
   }
+  const writeWindows: {
+    writes_before: number;
+    writes_after: number;
+    write_window_ms: number;
+  }[] = [];
+  const measure = async <T>(run: () => Promise<T>) => {
+    if (!concurrent) return { attempt: await run() };
+    // Overlap writes with the timed requests. Start and authenticate the cold
+    // server before the writer, and close it after the writer has drained.
+    const writer = launch<{ ready: true }>(
+      library,
+      "writer",
+      writerCount(library) + 1,
+    );
+    try {
+      await writer.ready;
+      const writes_before = writerCount(library);
+      const start = now();
+      const attempt = await run();
+      const window = {
+        writes_before,
+        write_window_ms: now() - start,
+        writes_after: writerCount(library),
+      };
+      writeWindows.push(window);
+      return { attempt, ...window };
+    } finally {
+      await writer.close();
+    }
+  };
   const prefix = concurrent ? "concurrent" : "idle";
-  for (const operation of operations) {
+  const only = concurrent
+    ? process.env.SCIRETRIEVER_SCALE_LIBRARY_CONCURRENT_ONLY?.split(",")
+    : undefined;
+  const cliName = "running_task_cli";
+  if (
+    only?.some(
+      (name) => name !== cliName && !operations.some((op) => op.name === name),
+    )
+  )
+    throw new Error("Invalid scale library concurrent operation");
+  const selected = (name: string) => only === undefined || only.includes(name);
+  for (const operation of operations.filter((op) => selected(op.name))) {
     const start = now();
     const child = launch<{ origin: string }>(library, "serve");
+    let failure: unknown;
     try {
       const { origin } = await child.ready;
       const startup_ms = now() - start;
       const client = await workbench(origin);
-      const writesBefore = concurrent ? writerCount(library) : null;
-      const pair = await readPair(client, operation);
+      const result = await measure(() => readPair(client, operation));
       await save(`${prefix}-${operation.name}`, {
         startup_ms,
         origin,
-        attempt: pair,
-        ...(writesBefore === null
-          ? {}
-          : {
-              writes_before: writesBefore,
-              writes_after: writerCount(library),
-            }),
+        ...result,
         load: loadavg(),
       });
+    } catch (error) {
+      failure = error;
+      throw error;
     } finally {
-      await child.close();
+      await child.close().catch((error: unknown) => {
+        if (failure === undefined) throw error;
+        throw new AggregateError(
+          [failure, error],
+          `Scale ${operation.name} read and cleanup failed`,
+          { cause: failure },
+        );
+      });
     }
   }
-  if (depth) {
-    const attempts = [];
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const result = await cli(library, ["jobs", "show", library.jobs.running]);
-      if (result.response.status !== "running")
-        throw new Error("CLI returned a different task status");
-      attempts.push(result);
-    }
-    await save(`${prefix}-running_task_cli`, {
-      attempt: attempts,
+  if (depth && selected(cliName)) {
+    const result = await measure(async () => {
+      const attempts = [];
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const result = await cli(library, [
+          "jobs",
+          "show",
+          library.jobs.running,
+        ]);
+        if (result.response.status !== "running")
+          throw new Error("CLI returned a different task status");
+        attempts.push(result);
+      }
+      return attempts;
+    });
+    await save(`${prefix}-${cliName}`, {
+      ...result,
       load: loadavg(),
     });
   }
+  return writeWindows;
 }
 
 async function concurrentReads(
@@ -510,19 +589,27 @@ async function concurrentReads(
   });
   const runtime = await acquireExecutionRuntime(catalog);
   try {
-    const writer = launch<{ ready: true }>(clone, "writer");
     const started = now();
+    let windows: Awaited<ReturnType<typeof reads>> = [];
     try {
-      await writer.ready;
-      await reads(clone, false, true, save);
+      windows = await reads(clone, false, true, save);
     } finally {
-      await writer.close();
-      const elapsed_ms = now() - started;
-      const written = writerCount(clone);
+      const window_ms = windows.reduce(
+        (ms, row) => ms + row.write_window_ms,
+        0,
+      );
+      const written_during_reads = windows.reduce(
+        (total, row) => total + row.writes_after - row.writes_before,
+        0,
+      );
       await save("concurrent-writes", {
-        elapsed_ms,
-        written,
-        papers_per_second: (written * 1000) / elapsed_ms,
+        elapsed_ms: now() - started,
+        written: writerCount(clone),
+        window_ms,
+        written_during_reads,
+        papers_per_second: window_ms
+          ? (written_during_reads * 1000) / window_ms
+          : null,
         ...sourceRevisions(clone),
       });
     }
@@ -534,7 +621,7 @@ async function concurrentReads(
 export async function measureScaleLibrary(
   library: ScaleLibrary,
   reports: string,
-  stage: "all" | "index" | "reads" | "memory",
+  stage: "all" | "index" | "reads" | "memory" | "concurrent",
 ) {
   const write = (name: string, value: unknown) =>
     writeFile(
@@ -546,7 +633,7 @@ export async function measureScaleLibrary(
   // runtime lock a real executor owns, so CLI and Workbench skip recovery.
   const runtime = await acquireExecutionRuntime(library.catalog);
   try {
-    if (stage === "reads" || stage === "memory") {
+    if (stage === "reads" || stage === "memory" || stage === "concurrent") {
       const saved = JSON.parse(
         await readFile(join(reports, "rebuild-index.json"), "utf8"),
       ) as {
@@ -574,6 +661,7 @@ export async function measureScaleLibrary(
       );
       await write("verify-catalog", verification);
       const timeout = (library.papers === 1_000_000 ? 9 : 4) * 60 * minute;
+      const probe = process.env.SCIRETRIEVER_SCALE_LIBRARY_INDEX_PROBE;
       const rebuild = await cli(
         library,
         ["maintenance", "rebuild-index"],
@@ -585,6 +673,9 @@ export async function measureScaleLibrary(
             timeout_ms: timeout,
             load: loadavg(),
           }),
+        probe
+          ? { module: probe, output: join(reports, "rebuild-profile.json") }
+          : undefined,
       );
       const revisions = sourceRevisions(library);
       await write("rebuild-index", { ...rebuild, ...revisions });
@@ -610,6 +701,10 @@ export async function measureScaleLibrary(
     }
 
     if (stage === "index") return;
+    if (stage === "concurrent") {
+      await concurrentReads(library, write);
+      return;
+    }
     if (stage === "memory") {
       await reads(library, library.papers === 10_000_000, false, write, true);
       return;

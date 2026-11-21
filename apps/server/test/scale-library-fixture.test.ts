@@ -133,7 +133,17 @@ it.runIf(selectedScale !== undefined)(
     const papers = SCALE_LIBRARY_SIZES[selectedScale];
     const name = `${selectedScale}-${seed}`;
     const directory = resolve("sandbox/scale-libraries", name);
-    const reports = resolve("sandbox/reports/2026-11-21-scale-library", name);
+    const reportRun = process.env.SCIRETRIEVER_SCALE_LIBRARY_REPORT_RUN;
+    if (
+      reportRun !== undefined &&
+      !/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(reportRun)
+    )
+      throw new Error("Invalid scale library report run name");
+    const reports = resolve(
+      "sandbox/reports/2026-11-21-scale-library",
+      name,
+      reportRun ?? "",
+    );
     const reuse = process.env.SCIRETRIEVER_SCALE_LIBRARY_REUSE === "1";
     const stage =
       process.env.SCIRETRIEVER_SCALE_LIBRARY_STAGE ?? (reuse ? "reads" : "all");
@@ -142,6 +152,7 @@ it.runIf(selectedScale !== undefined)(
       stage !== "generate" &&
       stage !== "index" &&
       stage !== "reads" &&
+      stage !== "concurrent" &&
       stage !== "memory"
     )
       throw new Error("Invalid scale library stage");

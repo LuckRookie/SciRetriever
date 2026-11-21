@@ -8,6 +8,8 @@
 
 CLI 引用扩展稳定在每秒 2 到 3 条、CPU 满载，约每条 0.4 s CPU。照这个速度，一百万篇要四天多，一千万篇要一个多月。可能的原因：入库时的身份匹配、合并，或每次写入后的状态与索引维护。写入越慢、越重，04、07 的负担越大。
 
+已知的一项（14.1 第 3 轮）：写入一篇文献时，`apps/server/src/storage/sqlite/worker-runtime.ts` 约 619–627 行按 `literature_id` 查询、删除 `literature_search_fts` 的旧条目，`intake-withdrawal-engine.ts` 约 266 行同样删除。这一列声明为 `UNINDEXED`，两条语句都是全表扫描：1 万篇约 10 ms，1 百万篇约 0.94 s，千万篇约 10 s。性质：缺陷，违反 ADR 0065 第 3 节“写入只与本次的量有关”。改法需要文献到 FTS 行的映射（新表，或让 FTS 的 rowid 与文献的整数键对齐），属于结构变化，并入 14.3 的迁移。证据：`sandbox/reports/2026-11-21-scale-library/1m-20261121/round-3/concurrent-writer-fts-probe.json`。
+
 ## Outcome
 
 - 一份剖析报告：CPU 按函数分布；每个热点的原因与性质。
