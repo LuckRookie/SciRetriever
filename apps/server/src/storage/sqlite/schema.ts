@@ -635,7 +635,7 @@ export const SCHEMA_FINGERPRINT_V18 = createHash("sha256")
   .update(JSON.stringify(SCHEMA_MANIFEST_V18))
   .digest("hex");
 
-export const SCHEMA_MANIFEST = SCHEMA_MANIFEST_V18.map((sql) => {
+export const SCHEMA_MANIFEST_V19 = SCHEMA_MANIFEST_V18.map((sql) => {
   if (sql.startsWith("CREATE TABLE citation_discovery_inputs("))
     return sql.replace(
       "result_limit INTEGER NOT NULL CHECK(typeof(result_limit)='integer' AND result_limit>=1)",
@@ -653,6 +653,25 @@ export const SCHEMA_MANIFEST = SCHEMA_MANIFEST_V18.map((sql) => {
       );
   return sql.replace("CHECK(schema_version=18)", "CHECK(schema_version=19)");
 });
+export const SCHEMA_FINGERPRINT_V19 = createHash("sha256")
+  .update(JSON.stringify(SCHEMA_MANIFEST_V19))
+  .digest("hex");
+
+export const INTAKE_LOOKUP_INDEXES = [
+  // FTS5's internal-content format stores the FTS rowid as id INTEGER PRIMARY
+  // KEY and the first declared column (literature_id) as c0. SQLite's c0
+  // index already carries id as rowid, covering the lookup in rowid order.
+  "CREATE INDEX literature_search_fts_content_owner ON literature_search_fts_content(c0)",
+  "CREATE INDEX topic_discovery_cause_actual_lookup ON topic_discovery_causes(actual_literature_id)",
+  "CREATE INDEX citation_discovery_cause_actual_lookup ON citation_discovery_causes(actual_literature_id)",
+] as const;
+
+// The existing identity table constrains its version to 19. The fingerprint
+// distinguishes the additive layout without replacing any existing object.
+export const SCHEMA_MANIFEST = [
+  ...SCHEMA_MANIFEST_V19,
+  ...INTAKE_LOOKUP_INDEXES,
+] as const;
 export const SCHEMA_FINGERPRINT = createHash("sha256")
   .update(JSON.stringify(SCHEMA_MANIFEST))
   .digest("hex");

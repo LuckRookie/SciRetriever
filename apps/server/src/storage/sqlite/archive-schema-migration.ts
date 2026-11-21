@@ -24,7 +24,7 @@ function refuse(): never {
     code: "archive-schema-migration-refused",
   });
 }
-export function verifyOfflineLayout(
+export function verifySchemaObjects(
   db: DatabaseSync,
   manifest: readonly string[],
   fail: () => never = refuse,
@@ -53,6 +53,14 @@ export function verifyOfflineLayout(
       .some((row) => !names.has(String(row.name)))
   )
     fail();
+}
+
+export function verifyOfflineLayout(
+  db: DatabaseSync,
+  manifest: readonly string[],
+  fail: () => never = refuse,
+) {
+  verifySchemaObjects(db, manifest, fail);
   if (db.prepare("PRAGMA foreign_key_check").all().length) fail();
   for (const sql of manifest) {
     const table = /^CREATE TABLE ([a-z_][a-z0-9_]*)/u.exec(sql)?.[1];

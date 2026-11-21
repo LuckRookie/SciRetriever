@@ -1,4 +1,5 @@
 import { migrateCitationLimitsSchema } from "../src/storage/sqlite/citation-limits-schema-migration.js";
+import { migrateLiteratureSearchSchema } from "../src/storage/sqlite/literature-search-schema-migration.js";
 import { DatabaseSync } from "node:sqlite";
 import { copyFile, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -221,6 +222,7 @@ it("migrates a populated exact 16 without rewriting corrected documents, content
       to_version: 19,
       foreign_key_violations: 0,
     });
+    await migrateLiteratureSearchSchema(f.path);
     await copyFile(f.path, join(f.env.home, "catalog.sqlite"));
     await f.env.reopen();
     expect(

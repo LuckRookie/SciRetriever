@@ -1,4 +1,5 @@
 import { migrateCitationLimitsSchema } from "../src/storage/sqlite/citation-limits-schema-migration.js";
+import { migrateLiteratureSearchSchema } from "../src/storage/sqlite/literature-search-schema-migration.js";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
@@ -151,6 +152,7 @@ it("migrates 14 to 15 with legacy and discovery cohorts, correct keyword layers,
     expect((await migrateCitationLimitsSchema(path)).to_version).toBe(
       SCHEMA_VERSION,
     );
+    await migrateLiteratureSearchSchema(path);
     const app = await createQueryApplication(home);
     try {
       const page = parseIntakeBatchPage(

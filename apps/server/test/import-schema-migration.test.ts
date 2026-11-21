@@ -1,4 +1,5 @@
 import { migrateCitationLimitsSchema } from "../src/storage/sqlite/citation-limits-schema-migration.js";
+import { migrateLiteratureSearchSchema } from "../src/storage/sqlite/literature-search-schema-migration.js";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
@@ -239,6 +240,7 @@ it("migrates exact schema 15 to 16 atomically, preserves all facts and enables d
       to_version: 19,
       foreign_key_violations: 0,
     });
+    await migrateLiteratureSearchSchema(path);
     expect((await inspectCatalogSchema(path)).schema_version).toBe(
       SCHEMA_VERSION,
     );

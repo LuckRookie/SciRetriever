@@ -297,6 +297,14 @@ const { readCatalogIdentity } = await import(
     import.meta.url,
   ).href
 );
+const literatureSearchRows = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./literature-search-rows.ts"
+      : "./literature-search-rows.js",
+    import.meta.url,
+  ).href
+);
 const {
   catalogCorruption,
   sqliteStorageFull,
@@ -613,19 +621,19 @@ function writeMetadataAtRevision(
 }
 function indexMetadata(literatureId: Dynamic, m: Dynamic): Dynamic {
   if (visibilityModule.literatureWithdrawn(db, literatureId)) return;
+  const rowIds = literatureSearchRows.literatureSearchRowIds(db, literatureId);
+  const first = rowIds[0];
   const contentBody =
-    db
-      .prepare(
-        "SELECT content_body FROM literature_search_fts WHERE literature_id=?",
-      )
-      .get(literatureId)?.content_body || "";
-  db.prepare("DELETE FROM literature_search_fts WHERE literature_id=?").run(
-    literatureId,
-  );
+    first === undefined
+      ? ""
+      : db
+          .prepare(
+            "SELECT content_body FROM literature_search_fts WHERE rowid=?",
+          )
+          .get(first)?.content_body || "";
+  literatureSearchRows.deleteLiteratureSearchRows(db, rowIds);
   const index = (value: string): string => ftsIndexText(value || "");
-  db.prepare(
-    "INSERT INTO literature_search_fts(literature_id,title,abstract,authors,affiliations,identifiers,keywords,venue,publisher,volume,issue,pages,content_body) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-  ).run(
+  db.prepare(literatureSearchRows.INSERT_LITERATURE_SEARCH_ROW).run(
     literatureId,
     index(m.title),
     index(m.abstract),

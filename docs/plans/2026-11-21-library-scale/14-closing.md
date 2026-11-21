@@ -44,3 +44,5 @@
 ## 退出条件
 
 14.1–14.5 完成。
+
+- 并入 14.3：10.3 的三个索引（FTS 内容表的 `c0`、两张发现原因表的 `actual_literature_id`），用 `scripts/migrate-literature-search-indexes.mjs` 迁移；1 百万篇约 1.2 s。部署 10.3 之后的任何版本都要先做这一步。

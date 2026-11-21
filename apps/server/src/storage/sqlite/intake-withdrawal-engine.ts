@@ -35,6 +35,18 @@ const { literatureWithdrawn }: typeof import("./intake-visibility.js") =
       import.meta.url,
     ).href
   );
+const {
+  INSERT_LITERATURE_SEARCH_ROW,
+  deleteLiteratureSearchRows,
+  literatureSearchRowIds,
+}: typeof import("./literature-search-rows.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./literature-search-rows.ts"
+      : "./literature-search-rows.js",
+    import.meta.url,
+  ).href
+);
 
 type ObjectKind =
   | "literature"
@@ -263,10 +275,8 @@ function plan(
 function restoreFts(db: DatabaseSync, id: string) {
   const m = readMetadataRow(db, "literature", id);
   const text = (s: string | null) => ftsIndexText(s ?? "");
-  db.prepare("DELETE FROM literature_search_fts WHERE literature_id=?").run(id);
-  db.prepare(
-    "INSERT INTO literature_search_fts(literature_id,title,abstract,authors,affiliations,identifiers,keywords,venue,publisher,volume,issue,pages,content_body) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-  ).run(
+  deleteLiteratureSearchRows(db, literatureSearchRowIds(db, id));
+  db.prepare(INSERT_LITERATURE_SEARCH_ROW).run(
     id,
     text(m.title),
     text(m.abstract),
@@ -410,9 +420,15 @@ export function runIntakeWithdrawal(
           command.batch_id,
           command.at,
         );
-      db.prepare(
-        "DELETE FROM literature_search_fts WHERE literature_id IN (SELECT object_id FROM intake_withdrawn_objects WHERE batch_id=? AND object_kind='literature')",
-      ).run(command.batch_id);
+      for (const row of db
+        .prepare(
+          "SELECT object_id FROM intake_withdrawn_objects WHERE batch_id=? AND object_kind='literature'",
+        )
+        .iterate(command.batch_id))
+        deleteLiteratureSearchRows(
+          db,
+          literatureSearchRowIds(db, String(row.object_id)),
+        );
       db.exec(
         "UPDATE retrieval_source_revision SET revision=revision+1 WHERE singleton=1",
       );

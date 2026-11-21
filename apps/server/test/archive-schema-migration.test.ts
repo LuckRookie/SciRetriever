@@ -1,4 +1,5 @@
 import { migrateCitationLimitsSchema } from "../src/storage/sqlite/citation-limits-schema-migration.js";
+import { migrateLiteratureSearchSchema } from "../src/storage/sqlite/literature-search-schema-migration.js";
 import { migrateImportSchema } from "../src/storage/sqlite/import-schema-migration.js";
 import { migrateDraftTextSchema } from "../src/storage/sqlite/draft-text-schema-migration.js";
 import { migrateUserOrganizationSchema } from "../src/storage/sqlite/user-organization-schema-migration.js";
@@ -106,6 +107,7 @@ it("explicitly migrates 11 to 12 without changing row counts, keys or historical
       to_version: 19,
       foreign_key_violations: 0,
     });
+    await migrateLiteratureSearchSchema(path);
     expect(await inspectCatalogSchema(path)).toMatchObject({
       status: "ready",
       schema_version: 19,

@@ -9,8 +9,8 @@ import {
 import {
   SCHEMA_MANIFEST_V18,
   SCHEMA_FINGERPRINT_V18,
-  SCHEMA_MANIFEST,
-  SCHEMA_FINGERPRINT,
+  SCHEMA_MANIFEST_V19,
+  SCHEMA_FINGERPRINT_V19,
 } from "./schema.js";
 import {
   EXECUTION_SCHEMA_VERSION,
@@ -79,7 +79,7 @@ export async function migrateCitationLimitsSchema(path: string) {
       ]) {
         db.exec(`DROP TABLE ${table}`);
         db.exec(
-          SCHEMA_MANIFEST.find((sql) =>
+          SCHEMA_MANIFEST_V19.find((sql) =>
             sql.startsWith(`CREATE TABLE ${table}(`),
           )!,
         );
@@ -108,25 +108,25 @@ export async function migrateCitationLimitsSchema(path: string) {
         "CREATE TEMP TABLE citation_limits_identity AS SELECT * FROM schema_identity;DROP TABLE schema_identity",
       );
       db.exec(
-        SCHEMA_MANIFEST.find((sql) =>
+        SCHEMA_MANIFEST_V19.find((sql) =>
           sql.startsWith("CREATE TABLE schema_identity("),
         )!,
       );
       db.prepare(
         "INSERT INTO schema_identity SELECT singleton,product,19,?,created_at FROM citation_limits_identity",
-      ).run(SCHEMA_FINGERPRINT);
+      ).run(SCHEMA_FINGERPRINT_V19);
       db.exec("DROP TABLE citation_limits_identity");
       const after = offlineTableCounts(db, refuse);
       for (const [table, count] of Object.entries(before))
         if (after[table] !== count) refuse();
-      verifyOfflineLayout(db, SCHEMA_MANIFEST, refuse);
+      verifyOfflineLayout(db, SCHEMA_MANIFEST_V19, refuse);
       if (db.prepare("PRAGMA integrity_check").get()?.integrity_check !== "ok")
         refuse();
       db.exec("COMMIT;PRAGMA foreign_keys=ON");
       return {
         from_version: 18,
         to_version: 19,
-        schema_fingerprint: SCHEMA_FINGERPRINT,
+        schema_fingerprint: SCHEMA_FINGERPRINT_V19,
         before,
         after,
         foreign_key_violations: 0,

@@ -24,6 +24,9 @@ import {
   SCHEMA_MANIFEST_V16,
   SCHEMA_MANIFEST_V17,
   SCHEMA_MANIFEST_V18,
+  SCHEMA_MANIFEST_V19,
+  SCHEMA_FINGERPRINT_V19,
+  INTAKE_LOOKUP_INDEXES,
   SCHEMA_FINGERPRINT_V18,
   SCHEMA_FINGERPRINT_V17,
   SCHEMA_FINGERPRINT_V16,
@@ -34,10 +37,13 @@ const digest = async (path: string) =>
   createHash("sha256")
     .update(await readFile(path))
     .digest("hex");
-it("pins frozen 16 and verifies the frozen 17 and frozen 18 and exact current 19 manifest and version-specific column checks", () => {
+it("pins the frozen 16–19 manifests, current additive layout and version-specific checks", () => {
   expect(SCHEMA_VERSION).toBe(19);
-  expect(SCHEMA_FINGERPRINT).toBe(
+  expect(SCHEMA_FINGERPRINT_V19).toBe(
     "a605840d3d19206f08551c2cb5b78199d5c4190b93673c9502d5fb412b1cd88c",
+  );
+  expect(SCHEMA_FINGERPRINT).toBe(
+    "9bab69bb545756269749bbba675478132a098f3bd19ddb6444f3de74b5a2cd38",
   );
   expect(SCHEMA_FINGERPRINT_V18).toBe(
     "a95b796f5f8dd69839748571476a8bcc0f3d38ed1547d8f8aab25c38b1e2d8cf",
@@ -47,7 +53,11 @@ it("pins frozen 16 and verifies the frozen 17 and frozen 18 and exact current 19
       .update(JSON.stringify(SCHEMA_MANIFEST_V18))
       .digest("hex"),
   ).toBe(SCHEMA_FINGERPRINT_V18);
-  expect(SCHEMA_MANIFEST).toHaveLength(SCHEMA_MANIFEST_V18.length);
+  expect(SCHEMA_MANIFEST_V19).toHaveLength(SCHEMA_MANIFEST_V18.length);
+  expect(SCHEMA_MANIFEST).toEqual([
+    ...SCHEMA_MANIFEST_V19,
+    ...INTAKE_LOOKUP_INDEXES,
+  ]);
   expect(SCHEMA_FINGERPRINT_V17).toBe(
     "b8c82c83c57f6f4826e9ed8fdb4080942b1acc863b10581a45221abc3441de91",
   );
@@ -56,7 +66,7 @@ it("pins frozen 16 and verifies the frozen 17 and frozen 18 and exact current 19
       .update(JSON.stringify(SCHEMA_MANIFEST_V17))
       .digest("hex"),
   ).toBe(SCHEMA_FINGERPRINT_V17);
-  expect(SCHEMA_MANIFEST).toHaveLength(SCHEMA_MANIFEST_V17.length + 2);
+  expect(SCHEMA_MANIFEST_V19).toHaveLength(SCHEMA_MANIFEST_V17.length + 2);
   expect(SCHEMA_MANIFEST_V16).toHaveLength(378);
   expect(SCHEMA_FINGERPRINT_V16).toBe(
     "8545637a22c2341066427f71195eec5465e4c906f3dabd2c2cbad2a4c512f0f8",

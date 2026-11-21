@@ -2,7 +2,7 @@
 
 类型：计划（结果块）
 负责：查清入库每条约 0.4 s CPU 花在哪里，把入库吞吐提到 B7 的目标
-状态：In progress（10.1、10.2 完成）
+状态：In progress（10.1–10.3 完成）
 
 ## 现状（待查）
 
@@ -27,12 +27,7 @@ CLI 引用扩展稳定在每秒 2 到 3 条、CPU 满载，约每条 0.4 s CPU�
 
 - [x] **10.1 剖析**：在一百万篇合成库上入库 1,000 条引用扩展结果，用 `--cpu-prof` 或等价办法输出火焰图与前十个热点；并在一万篇库上做同样的入库，比较每条 CPU 是否随总篇数增长。
 - [x] **10.2 结论**：每个热点写明原因、性质与建议去处；缺陷写成本块的修复任务，设计问题交 Owner。
-- [ ] **10.3 去掉随总篇数增长的两处**（缺陷，结构变化并入 14.3）：
-  - 加文献到 `literature_search_fts` 行的映射表和一个回填位置：rowid 不超过这个位置的行都已在映射里。新代码写 FTS 时在同一事务里维护映射与位置。
-  - 查找一篇的旧条目：先按映射取行并核对它属于这篇文献；取不到或不符时，只扫描 rowid 大于回填位置的行，任何时候都不扫全表。
-  - 旧版本进程写 FTS 不维护映射，写入的行落在回填位置之后，仍能被找到（ADR 0065 第 6 节第 8 条）。
-  - 回填在后台从回填位置往后按 rowid 分批推进，回填期间照常写入，不需要停服（第 3 节第 5 条）。
-  - `topic_discovery_causes`、`citation_discovery_causes` 加按 `actual_literature_id` 的索引。
+- [x] **10.3 去掉随总篇数增长的两处**（缺陷，结构变化并入 14.3）：在 FTS5 的内容表 `literature_search_fts_content` 的 `c0`（即 `literature_id`）上建索引，按文献找旧条目改为索引查找，读旧正文、删旧条目都按 rowid；两张发现原因表各加按 `actual_literature_id` 的索引。只加三个索引，任何写入者（包括旧版本）写 FTS 时 SQLite 都会维护索引，不需要映射表或后台回填。
 - [ ] **10.4 按批写入**：做法见 [ADR 0065](../../architecture/decisions/0065-scale-rules.md) 第 6 节第 7 条。Provider 返回一批后，取一次写许可、开一个事务写完这一批（数百篇），批内复用预编译语句；进度、来源关系等事件仍逐条记录，只是同批提交。中途失败时这一批整体回滚，从批首重做。
 - [ ] **10.5 测试**：百万篇合成库上入库吞吐每秒至少 100 篇，且与一万篇上的吞吐相近；未达到时给出剩余热点，交 Owner 决定。
 
@@ -48,3 +43,4 @@ CLI 引用扩展稳定在每秒 2 到 3 条、CPU 满载，约每条 0.4 s CPU�
   - 身份匹配（DOI、稳定标识、标题指纹、Provider 记录）都走索引，两种规模的查询计划相同。
   - 估算：去掉 FTS 扫描并按批写入后约每秒 40–68 篇，仍低于 100，10.5 实测后再看剩余热点。
   - 报告 `sandbox/reports/2026-11-22-intake-profile/REPORT.md`。
+- 2026-11-22：10.3 完成（后端实施者，两轮）。第 1 轮照原定做法加了映射表与后台回填，同时在 FTS 内容表上建了索引；总设计师核实单靠这个索引就够（建索引 20 万行 58 ms，FTS5 的 `rebuild`、`optimize`、`integrity-check` 之后正常），第 2 轮去掉映射表，只留三个索引。每条入库：1 万篇 158 → 132 ms，1 百万篇 1,271 → 140 ms，CPU 1,291 → 81 ms。1 百万篇副本上建三个索引用时 1.2 s。迁移是显式的（`scripts/migrate-literature-search-indexes.mjs`），结构号仍是 19，指纹改变：新版本要先迁移才能打开正式库；旧版本 `56d843ab` 打不开迁移后的库（`catalog-layout-not-current`），归 11。总设计师复跑 literature-search-rows 2、literature-search-schema-migration 1、catalog-schema 8、intake-withdrawal 19、discovery-citation 1、discovery-topic 2、intake-batches 5、library-pagination 1、citation-limits-schema-migration 4、openalex-top-concepts-cleanup 4，`pnpm build` 通过。报告 `sandbox/reports/2026-11-22-intake-fts-map/REPORT.md`。

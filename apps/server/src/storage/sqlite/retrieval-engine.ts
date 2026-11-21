@@ -206,10 +206,14 @@ function inspectCatalogSnapshot(
   if (sourceOnly || config.schema_version === SCHEMA_VERSION) {
     // The global integrity pragma invokes FTS5's integrity hook. Repair must
     // still be able to read sound source facts when only that index is damaged.
-    for (const sql of config.schema_manifest) {
-      const table = /^CREATE (?:VIRTUAL )?TABLE ([a-z_][a-z0-9_]*)/.exec(
-        sql,
-      )?.[1];
+    const tables = config.schema_manifest.map(
+      (sql) => /^CREATE (?:VIRTUAL )?TABLE ([a-z_][a-z0-9_]*)/.exec(sql)?.[1],
+    );
+    // A table-specific check of the FTS virtual table invokes the FTS5 hook.
+    // Check the shadow table as well to cover its ordinary SQLite index.
+    if (names.has("literature_search_fts_content_owner"))
+      tables.push("literature_search_fts_content");
+    for (const table of tables) {
       if (
         !table ||
         (sourceOnly && table.startsWith("retrieval_")) ||

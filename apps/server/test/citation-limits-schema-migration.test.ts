@@ -7,10 +7,11 @@ import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { expect, it, vi } from "vitest";
 import { migrateCitationLimitsSchema } from "../src/storage/sqlite/citation-limits-schema-migration.js";
+import { migrateLiteratureSearchSchema } from "../src/storage/sqlite/literature-search-schema-migration.js";
 import { verifyOfflineLayout } from "../src/storage/sqlite/archive-schema-migration.js";
 import {
-  SCHEMA_MANIFEST,
-  SCHEMA_FINGERPRINT,
+  SCHEMA_MANIFEST_V19,
+  SCHEMA_FINGERPRINT_V19,
   SCHEMA_MANIFEST_V18,
   SCHEMA_FINGERPRINT_V18,
 } from "../src/storage/sqlite/schema.js";
@@ -123,21 +124,21 @@ it("migrates exact populated 18 to exact 19, preserving all old values and incom
     expect(SCHEMA_FINGERPRINT_V18).toBe(
       "a95b796f5f8dd69839748571476a8bcc0f3d38ed1547d8f8aab25c38b1e2d8cf",
     );
-    expect(SCHEMA_FINGERPRINT).toBe(
+    expect(SCHEMA_FINGERPRINT_V19).toBe(
       "a605840d3d19206f08551c2cb5b78199d5c4190b93673c9502d5fb412b1cd88c",
     );
     const receipt = await migrateCitationLimitsSchema(path);
     expect(receipt).toMatchObject({
       from_version: 18,
       to_version: 19,
-      schema_fingerprint: SCHEMA_FINGERPRINT,
+      schema_fingerprint: SCHEMA_FINGERPRINT_V19,
       foreign_key_violations: 0,
       integrity_check: "ok",
     });
     expect(receipt.after).toEqual(receipt.before);
     const db = new DatabaseSync(path);
     try {
-      verifyOfflineLayout(db, SCHEMA_MANIFEST);
+      verifyOfflineLayout(db, SCHEMA_MANIFEST_V19);
       const after = rows(db);
       // Only the schema identity and the new provider kind differ in old rows.
       after.schema_identity = after.schema_identity!.map((r) =>
@@ -326,8 +327,12 @@ it(
       expect(JSON.parse(result.stdout)).toMatchObject({
         from_version: 18,
         to_version: 19,
-        schema_fingerprint: SCHEMA_FINGERPRINT,
+        schema_fingerprint: SCHEMA_FINGERPRINT_V19,
       });
+      await expect(inspectCatalogSchema(path)).rejects.toMatchObject({
+        reason: "catalog-layout-not-current",
+      });
+      await migrateLiteratureSearchSchema(path);
       await expect(inspectCatalogSchema(path)).resolves.toMatchObject({
         schema_version: 19,
       });

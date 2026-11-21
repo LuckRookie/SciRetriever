@@ -14,6 +14,10 @@ import {
   readMetadataFields,
   writeMetadataFields,
 } from "./metadata-field-storage.js";
+import {
+  INSERT_LITERATURE_SEARCH_ROW,
+  literatureSearchRowIds,
+} from "./literature-search-rows.js";
 
 /** Only used by the explicit offline migration; source response hashes are never changed. */
 export function migrateKeywordLayers(db: DatabaseSync) {
@@ -27,21 +31,33 @@ export function migrateKeywordLayers(db: DatabaseSync) {
   db.exec(
     `DELETE FROM metadata_observation_keywords WHERE observation_id IN (${old}); DELETE FROM metadata_observation_declared_keywords WHERE observation_id IN (${old})`,
   );
-  return reprojectKeywordLayers(db);
+  // Frozen v14 -> v15 predates the FTS content index.
+  const statement = db.prepare(
+    "SELECT rowid,literature_id FROM literature_search_fts",
+  );
+  statement.setReadBigInts(true);
+  const legacyRows = new Map(
+    statement
+      .all()
+      .map((row) => [String(row.literature_id), row.rowid as bigint]),
+  );
+  return reprojectKeywords(db, undefined, legacyRows);
 }
 
 /** Shared by explicit offline maintenance; the caller owns the single transaction. */
 export function reprojectKeywordLayers(
   db: DatabaseSync,
-  literatureIds?: readonly string[],
+  literatureIds: readonly string[],
+) {
+  return reprojectKeywords(db, literatureIds);
+}
+
+function reprojectKeywords(
+  db: DatabaseSync,
+  literatureIds: readonly string[] | undefined,
+  legacyRows?: ReadonlyMap<string, bigint>,
 ) {
   if (literatureIds?.length === 0) return 0;
-  const ftsIds = new Map(
-    db
-      .prepare("SELECT rowid,literature_id FROM literature_search_fts")
-      .all()
-      .map((r) => [String(r.literature_id), r.rowid!]),
-  );
   let projected = 0;
   for (const row of db
     .prepare(
@@ -102,7 +118,9 @@ export function reprojectKeywordLayers(
       ...states.filter((s) => s.field !== "keywords"),
       ...keywordsState,
     ]);
-    const ftsId = ftsIds.get(id);
+    const ftsId = legacyRows
+      ? legacyRows.get(id)
+      : literatureSearchRowIds(db, id).at(-1);
     const keywordsText = ftsIndexText(
       [...next.keywords, ...next.subject_terms].join(" "),
     );
@@ -111,9 +129,7 @@ export function reprojectKeywordLayers(
         "UPDATE literature_search_fts SET keywords=? WHERE rowid=?",
       ).run(keywordsText, ftsId);
     else
-      db.prepare(
-        "INSERT INTO literature_search_fts(literature_id,title,abstract,authors,affiliations,identifiers,keywords,venue,publisher,volume,issue,pages,content_body) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-      ).run(
+      db.prepare(INSERT_LITERATURE_SEARCH_ROW).run(
         id,
         ftsIndexText(next.title ?? ""),
         ftsIndexText(next.abstract ?? ""),
