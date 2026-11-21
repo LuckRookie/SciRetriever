@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { createInterface } from "node:readline";
 import { backup, DatabaseSync } from "node:sqlite";
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { loadavg } from "node:os";
@@ -13,6 +14,7 @@ import {
 } from "@sciretriever/contracts";
 import { queryFingerprint } from "../src/literature/query.js";
 import { acquireExecutionRuntime } from "../src/storage/execution/runtime-owner.js";
+import { SLOW_SHORT_READ } from "../src/storage/sqlite/read-lanes.js";
 import { directoryBytes } from "./scale-fixture.js";
 import {
   scaleLibraryStorage,
@@ -32,6 +34,8 @@ const exec = promisify(execFile);
 const deadline = 240_000;
 const minute = 60_000;
 const now = () => Math.round(performance.now());
+const isSlowShortRead = (line: string) =>
+  line.split(" ").includes(`code=${SLOW_SHORT_READ}`);
 
 async function cli(
   library: ScaleLibrary,
@@ -71,6 +75,11 @@ async function cli(
     result,
     running.child.pid === undefined ? undefined : onStart?.(running.child.pid),
   ]);
+  const slowShortRead = command.stderr.split("\n").find(isSlowShortRead);
+  if (slowShortRead)
+    throw new Error(
+      `Scale CLI exceeded the short-read budget: ${slowShortRead}`,
+    );
   return {
     elapsed_ms: now() - start,
     response: JSON.parse(command.stdout) as {
@@ -103,6 +112,10 @@ function launch<T extends object>(
   let stderr = "";
   child.stderr!.on("data", (bytes: Buffer) => {
     stderr = (stderr + bytes.toString()).slice(-6000);
+  });
+  let slowShortRead: string | undefined;
+  createInterface({ input: child.stderr! }).on("line", (line) => {
+    if (isSlowShortRead(line)) slowShortRead ??= line;
   });
   const exit = new Promise<number | null>((resolve) =>
     child.once("close", resolve),
@@ -152,6 +165,10 @@ function launch<T extends object>(
         ]);
         if (code !== 0)
           throw new Error(`Scale ${kind} shutdown failed (${code}): ${stderr}`);
+        if (slowShortRead)
+          throw new Error(
+            `Scale ${kind} exceeded the short-read budget: ${slowShortRead}`,
+          );
       } finally {
         clearTimeout(timer);
       }

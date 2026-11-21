@@ -54,6 +54,17 @@ import {
 } from "@sciretriever/contracts";
 import { Worker } from "node:worker_threads";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createLogger, type Logger } from "../../logging/index.js";
+import { sqliteReadRequest, SLOW_SHORT_READ } from "./read-lanes.js";
+import type {
+  TaskDetailRead,
+  TaskDetailProbe,
+  TaskDetailReplay,
+  TaskHistoryTransfer,
+} from "./task-detail-engine.js";
 import type { CandidateCleanupSnapshot } from "../files/reclamation.js";
 import { SnapshotError } from "../../analysis/snapshots.js";
 import {
@@ -611,6 +622,18 @@ export type SqliteCommand =
       readonly jobId: string;
       readonly through: string;
       readonly withActivity: boolean;
+      readonly incrementalOnly?: true;
+    }
+  | {
+      readonly kind: "execution_task_detail_replay";
+      readonly jobId: string;
+      readonly through: string;
+      readonly withActivity: boolean;
+      readonly scratchPath: string;
+    }
+  | {
+      readonly kind: "execution_task_detail_install";
+      readonly transfer: TaskHistoryTransfer;
     }
   | {
       readonly kind: "execution_put_intervention";
@@ -677,6 +700,7 @@ export type SqliteCommand =
     }
   | { readonly kind: "pending_receipts" }
   | { readonly kind: "close" }
+  | { readonly kind: "idle_wal_checkpoint" }
   | { readonly kind: "schema" }
   | { readonly kind: "query_preflight" }
   | {
@@ -1256,9 +1280,11 @@ export class SqliteWorker {
     {
       resolve: (value: unknown) => void;
       reject: (error: Error) => void;
+      cancel?: () => void;
     }
   >();
   private closed = false;
+  private closing: Promise<void> | undefined;
   private failed = false;
 
   private initialized = false;
@@ -1267,15 +1293,13 @@ export class SqliteWorker {
   private readonly executionRuntime: ExecutionRuntimeOwner;
   private readonly metadataWrites = new AsyncLocalStorage<MetadataWriteScope>();
   private metadataWrite: MetadataWriteScope | undefined;
+  private readonly readLogger: Pick<Logger, "warn">;
+  private readonly stopReads = new AbortController();
 
   constructor(
-    path = ":memory:",
+    private readonly path = ":memory:",
     private readonly admission?: CatalogWriteAdmission,
-    options: {
-      readonly readOnly?: boolean;
-      readonly maxTags?: number;
-      readonly archiveProfile?: "pipeline" | "vlm-engine";
-    } = {},
+    private readonly options: SqliteWorkerOptions = {},
   ) {
     if (
       typeof path !== "string" ||
@@ -1284,7 +1308,12 @@ export class SqliteWorker {
       throw new SqliteWorkerError();
     this.readOnly = options.readOnly ?? false;
     this.snapshotReader = () =>
-      new SqliteWorker(path, undefined, { ...options, readOnly: true });
+      new SqliteWorker(path, undefined, {
+        readOnly: true,
+        maxTags: options.maxTags,
+        archiveProfile: options.archiveProfile,
+      });
+    this.readLogger = options.readLogger ?? createLogger("sqlite-read");
     this.executionRuntime = new ExecutionRuntimeOwner(() =>
       path === ":memory:"
         ? Promise.resolve({ release: async () => {} })
@@ -1303,6 +1332,7 @@ export class SqliteWorker {
       workerData: {
         path,
         read_only: this.readOnly,
+        long_read_lane: options.longReadWorker === true,
         max_tags: options.maxTags ?? 6,
         archive_profile: options.archiveProfile ?? "vlm-engine",
         case_fold: CASE_FOLD,
@@ -1366,72 +1396,8 @@ export class SqliteWorker {
       return this.send<T>(command);
     }
     const copy = structuredClone(command);
-    const readOnly = new Set<string>([
-      "draft_text_read",
-      "intake_read",
-      "intake_withdrawal_read",
-      "intake_withdrawn",
-      "library_facets",
-      "acquire_pdf_selection",
-      "parse_document_selection",
-      "metadata_fields_read",
-      "article_identity_get",
-      "article_identity_current",
-      "schema",
-      "execution_runtime_inspect",
-      "execution_restore_check",
-      "execution_get_job",
-      "execution_list_jobs",
-      "execution_list_requested_jobs",
-      "execution_list_targets",
-      "execution_list_attempts",
-      "execution_get_target",
-      "execution_list_events",
-      "citation_checkpoints",
-      "execution_task_detail_events",
-      "execution_get_policy",
-      "execution_get_budget",
-      "execution_list_interventions",
-      "get_literature",
-      "begin_read_snapshot",
-      "literature_bibliographies",
-      "list_literature",
-      "get_literature_ids",
-      "find_literature_by_identifiers",
-      "identity_read",
-      "import_read",
-      "capture_read",
-      "get_asset",
-      "get_observation",
-      "get_provider_relation",
-      "get_discovery",
-      "reference_snapshot",
-      "snapshot_counts",
-      "get_candidate",
-      "get_receipt_intent",
-      "get_receipt_result",
-      "list_candidates",
-      "current_facts",
-      "read_automatic_pdf_exhaustion",
-      "literature_detail_snapshot",
-      "asset_by_hash",
-      "locate_artifact",
-      "pending_receipts",
-      "reference_query_snapshot",
-      "library_snapshot",
-      "library_search_page",
-      "library_counts",
-      "artifact_reclamation_snapshot",
-      "candidate_cleanup_snapshot",
-      "query_preflight",
-      "document_parts",
-      "document_material",
-      "document_input",
-      "document_version",
-      "document_default",
-    ]);
-    if (this.readOnly && !readOnly.has(copy.kind))
-      return Promise.reject(new SqliteWorkerError());
+    const read = sqliteReadRequest(copy);
+    if (this.readOnly && !read) return Promise.reject(new SqliteWorkerError());
     const cancellableQuery = [
       "library_counts",
       "library_search_page",
@@ -1446,16 +1412,27 @@ export class SqliteWorker {
             ? new DOMException("Library query cancelled", "AbortError")
             : new WriteAdmissionError("write-admission-cancelled"),
         );
-      return this.send<T>(copy, cancellableQuery ? signal : undefined);
+      return this.dispatch<T>(
+        copy,
+        read,
+        cancellableQuery ? signal : undefined,
+      );
     };
     // A running Entry operation retains catalog write admission for its whole
     // frozen scope. Operator pause/cancel must still reach the same SQLite
     // worker immediately; its single-threaded, transactional command is the
     // control lane that can stop later target admission.
-    if (copy.kind === "execution_control_job") return send();
-    if (this.admission && (!this.initialized || !readOnly.has(copy.kind)))
-      return this.admission.run(send, signal);
-    return send();
+    if (
+      copy.kind === "execution_control_job" ||
+      copy.kind === "idle_wal_checkpoint"
+    )
+      return send();
+    return this.timeRead(read, () =>
+      this.admission &&
+      (!read || (!this.initialized && !this.longReader(copy, read)))
+        ? this.admission.run(send, signal)
+        : send(),
+    );
   }
   async writeMetadataSegment<T>(
     write: (expired: () => boolean) => Promise<T>,
@@ -1509,6 +1486,72 @@ export class SqliteWorker {
     return this.run({ kind: "citation_checkpoints", jobId, targetId });
   }
   private send<T>(command: SqliteCommand, signal?: AbortSignal): Promise<T> {
+    const policy = sqliteReadRequest(command);
+    return this.timeRead(policy, () =>
+      this.dispatch<T>(command, policy, signal),
+    );
+  }
+
+  private longReader(
+    command: SqliteCommand,
+    policy: ReturnType<typeof sqliteReadRequest>,
+  ): SqliteReadLane | undefined {
+    if (
+      policy?.lane === "long" &&
+      this.path !== ":memory:" &&
+      command.kind !== "begin_read_snapshot" &&
+      !this.admission?.ownsWriteAdmission
+    )
+      return this.options.readLane;
+    return undefined;
+  }
+
+  private dispatch<T>(
+    command: SqliteCommand,
+    policy: ReturnType<typeof sqliteReadRequest>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    if (this.closed || this.failed)
+      return Promise.reject(new SqliteWorkerError());
+    const lane = this.longReader(command, policy);
+    if (lane) {
+      const send = async () => {
+        if (this.closed || this.failed) throw new SqliteWorkerError();
+        return lane
+          .reader(this.path, this.options)
+          .sendLocal<T>(command, signal, this.stopReads.signal);
+      };
+      if (this.initialized || this.readOnly) return send();
+      const open = () => this.sendLocal({ kind: "schema" });
+      return (this.admission ? this.admission.run(open, signal) : open()).then(
+        send,
+      );
+    }
+    return this.sendLocal<T>(command, signal);
+  }
+
+  private timeRead<T>(
+    policy: ReturnType<typeof sqliteReadRequest>,
+    send: () => Promise<T>,
+  ): Promise<T> {
+    if (!policy || policy.limit_ms === null) return send();
+    const { name, limit_ms } = policy;
+    const started = performance.now();
+    return send().finally(() => {
+      const elapsed = performance.now() - started;
+      if (elapsed > limit_ms)
+        this.readLogger.warn("Short SQLite read exceeded its budget", {
+          code: SLOW_SHORT_READ,
+          operation: name,
+          elapsed_ms: Math.round(elapsed),
+        });
+    });
+  }
+  private sendLocal<T>(
+    command: SqliteCommand,
+    callerSignal?: AbortSignal,
+    ownerStop?: AbortSignal,
+  ): Promise<T> {
     if (this.closed || this.failed)
       return Promise.reject(new SqliteWorkerError());
     const scope = this.metadataWrites.getStore();
@@ -1519,19 +1562,32 @@ export class SqliteWorker {
       )
         return Promise.reject(new SqliteWorkerError());
     } else if (this.metadataWrite) {
-      return this.metadataWrite.done.then(() => this.send(command, signal));
+      return this.metadataWrite.done.then(() =>
+        this.sendLocal(command, callerSignal, ownerStop),
+      );
     }
+    const signal =
+      ownerStop && callerSignal
+        ? AbortSignal.any([ownerStop, callerSignal])
+        : (ownerStop ?? callerSignal);
     return new Promise<T>((resolve, reject) => {
       const id = this.nextId++;
       const cancellation = signal
         ? new Int32Array(new SharedArrayBuffer(4))
         : undefined;
+      const flag = () => {
+        if (cancellation) Atomics.store(cancellation, 0, 1);
+      };
       const cleanup = () => signal?.removeEventListener("abort", abort);
       const abort = () => {
-        Atomics.store(cancellation!, 0, 1);
+        flag();
         this.pending.delete(id);
         cleanup();
-        reject(new DOMException("Library query cancelled", "AbortError"));
+        reject(
+          ownerStop?.aborted
+            ? new SqliteWorkerError()
+            : new DOMException("Library query cancelled", "AbortError"),
+        );
       };
       if (signal?.aborted) {
         abort();
@@ -1539,6 +1595,7 @@ export class SqliteWorker {
       }
       signal?.addEventListener("abort", abort, { once: true });
       this.pending.set(id, {
+        cancel: flag,
         resolve: (value) => {
           cleanup();
           this.initialized = true;
@@ -2468,14 +2525,47 @@ export class SqliteWorker {
     if (!Array.isArray(value)) throw new SqliteWorkerError();
     return Object.freeze(value as ExecutionEvent[]);
   }
-  taskDetailEvents(jobId: string, through: string, withActivity: boolean) {
+  async taskDetailEvents(
+    jobId: string,
+    through: string,
+    withActivity: boolean,
+  ): Promise<TaskDetailRead> {
     executionText(jobId);
-    return this.run<import("./task-detail-engine.js").TaskDetailRead>({
+    const incrementalOnly =
+      this.options.readLane &&
+      this.path !== ":memory:" &&
+      !this.admission?.ownsWriteAdmission;
+    const detail = await this.run<TaskDetailProbe>({
       kind: "execution_task_detail_events",
       jobId,
       through,
       withActivity,
+      ...(incrementalOnly ? { incrementalOnly: true as const } : {}),
     });
+    if (detail.status !== "replay-required") return detail;
+    const directory = await mkdtemp(
+      join(tmpdir(), "sciretriever-task-history-"),
+    );
+    const scratchPath = join(directory, "history.sqlite");
+    let installed = false;
+    try {
+      const { result, transfer } = await this.send<TaskDetailReplay>({
+        kind: "execution_task_detail_replay",
+        jobId,
+        through,
+        withActivity,
+        scratchPath,
+      });
+      if (transfer) {
+        installed = await this.sendLocal<boolean>({
+          kind: "execution_task_detail_install",
+          transfer,
+        });
+      }
+      return result;
+    } finally {
+      if (!installed) await rm(directory, { recursive: true, force: true });
+    }
   }
   async putExecutionIntervention(
     intervention: ExecutionIntervention,
@@ -3487,9 +3577,16 @@ export class SqliteWorker {
     return this.run({ kind: "snapshot_counts" });
   }
 
-  async close(): Promise<void> {
-    if (this.closed) return;
+  idleWalCheckpoint(): Promise<boolean> {
+    return this.run({ kind: "idle_wal_checkpoint" });
+  }
+
+  close(): Promise<void> {
+    return (this.closing ??= this.closeWorker());
+  }
+  private async closeWorker(): Promise<void> {
     this.closed = true;
+    this.stopReads.abort();
     this.rejectAll();
     if (this.failed) {
       await this.worker.terminate();
@@ -3507,8 +3604,40 @@ export class SqliteWorker {
   }
 
   private rejectAll(): void {
-    for (const pending of this.pending.values())
+    for (const pending of this.pending.values()) {
+      pending.cancel?.();
       pending.reject(new SqliteWorkerError());
+    }
     this.pending.clear();
+  }
+}
+
+interface SqliteWorkerOptions {
+  readonly readOnly?: boolean;
+  readonly maxTags?: number | undefined;
+  readonly archiveProfile?: "pipeline" | "vlm-engine" | undefined;
+  readonly readLane?: SqliteReadLane;
+  readonly longReadWorker?: boolean;
+  readonly readLogger?: Pick<Logger, "warn">;
+}
+/** Shared by the two application graphs of one Workbench, created on demand. */
+export class SqliteReadLane {
+  private worker: SqliteWorker | undefined;
+  private catalog: string | undefined;
+  private closed = false;
+  reader(path: string, options: SqliteWorkerOptions) {
+    if (this.closed || (this.catalog !== undefined && this.catalog !== path))
+      throw new SqliteWorkerError();
+    this.catalog = path;
+    return (this.worker ??= new SqliteWorker(path, undefined, {
+      readOnly: true,
+      longReadWorker: true,
+      maxTags: options.maxTags,
+      archiveProfile: options.archiveProfile,
+    }));
+  }
+  async close() {
+    this.closed = true;
+    await this.worker?.close();
   }
 }

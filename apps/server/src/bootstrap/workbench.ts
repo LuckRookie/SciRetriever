@@ -17,6 +17,7 @@ import {
   initializeCatalogSchema,
   catalogNeedsInitialization,
 } from "../storage/sqlite/catalog-schema.js";
+import { SqliteReadLane } from "../storage/sqlite/worker.js";
 import {
   validateWorkbenchAccess,
   type WorkbenchAccessOptions,
@@ -303,9 +304,8 @@ export async function startMaintenanceWorkbench(options: {
   readonly application: Application;
   close(): Promise<void>;
 }> {
-  const application = await createApplication(options.home, {
-    importSessions: { maintain: true },
-  });
+  const readLane = new SqliteReadLane();
+  let application: Application | undefined;
   let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
   let http: Awaited<ReturnType<typeof startQueryOnlyHttp>> | undefined;
   let closing: Promise<void> | undefined;
@@ -319,7 +319,7 @@ export async function startMaintenanceWorkbench(options: {
     });
     void (async () => {
       const failures: unknown[] = [];
-      for (const resource of [http, query, application]) {
+      for (const resource of [http, query, application, readLane]) {
         try {
           await resource?.close();
         } catch (error) {
@@ -333,9 +333,14 @@ export async function startMaintenanceWorkbench(options: {
     return closing;
   };
   try {
+    application = await createApplication(options.home, {
+      importSessions: { maintain: true },
+      readLane,
+      maintainWal: true,
+    });
     if (!application.maintenance)
       throw new Error("maintenance intake unavailable");
-    query = await createQueryApplication(options.home);
+    query = await createQueryApplication(options.home, { readLane });
     if (query.readiness.status !== "ready")
       throw new Error("maintenance query unavailable");
     http = await startQueryOnlyHttp({
@@ -415,6 +420,7 @@ async function startProductionWorkbenchOwned(
     new TypeScriptConfigurationOwner(options.home);
   if (configurationOwner.home !== resolve(options.home))
     throw new Error("workbench configuration identity mismatch");
+  const readLane = new SqliteReadLane();
   let application: Application | undefined;
   let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
   const session = new ProductionWorkbenchSession(literatureId, undefined);
@@ -447,6 +453,11 @@ async function startProductionWorkbenchOwned(
       ]);
       for (const result of settled)
         if (result.status === "rejected") failures.push(result.reason);
+      try {
+        await readLane.close();
+      } catch (error) {
+        failures.push(error);
+      }
       if (failures.length)
         reject(
           new AggregateError(failures, "production workbench shutdown failed"),
@@ -471,6 +482,8 @@ async function startProductionWorkbenchOwned(
     void _permit;
     application = await createApplication(options.home, {
       ...applicationOptions,
+      readLane,
+      maintainWal: true,
       restoreRequestedTasks: true,
       importSessions: { maintain: true, ...applicationOptions.importSessions },
       configurationOwner,
@@ -508,6 +521,7 @@ async function startProductionWorkbenchOwned(
       app.configuration.paths.artifact_root ?? join(app.home, "artifacts"),
     );
     query = await createQueryApplication(options.home, {
+      readLane,
       catalog_path: catalogPath,
       artifact_root: artifactRoot,
     });

@@ -58,6 +58,17 @@ export function runDeviceStorage(db: DatabaseSync, r: DeviceStorageCommand) {
       ? { code: "device-revoked" }
       : { connection: safe(d) };
   }
+  if (r.kind === "list") {
+    const rows = db
+      .prepare(
+        "SELECT * FROM device_connections WHERE connection_id>? ORDER BY connection_id LIMIT 201",
+      )
+      .all(r.after ?? "");
+    return {
+      items: rows.slice(0, 200).map(safe),
+      next_cursor: rows.length > 200 ? String(rows[199]!.connection_id) : null,
+    };
+  }
   db.exec("BEGIN IMMEDIATE");
   try {
     let result: unknown;
@@ -141,17 +152,6 @@ export function runDeviceStorage(db: DatabaseSync, r: DeviceStorageCommand) {
         ).run(r.now, d.connection_id!);
         result = { connection: safe({ ...d, last_used_at: r.now }) };
       } else result = { connection: safe(d) };
-    } else if (r.kind === "list") {
-      const rows = db
-        .prepare(
-          "SELECT * FROM device_connections WHERE connection_id>? ORDER BY connection_id LIMIT 201",
-        )
-        .all(r.after ?? "");
-      result = {
-        items: rows.slice(0, 200).map(safe),
-        next_cursor:
-          rows.length > 200 ? String(rows[199]!.connection_id) : null,
-      };
     } else {
       const d = db
         .prepare("SELECT * FROM device_connections WHERE connection_id=?")

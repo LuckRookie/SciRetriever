@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import type * as Archive from "./archive-engine.js";
 import type * as State from "../../literature/state.js";
 import type * as DraftFacts from "./draft-facts.js";
@@ -24,6 +24,80 @@ const { deriveCurrentState }: typeof State = await import(
     import.meta.url,
   ).href
 );
+
+export function readLiteratureStatus(
+  db: DatabaseSync,
+  id: string,
+  maxTags: number,
+  profile: "pipeline" | "vlm-engine",
+  checkpoint: () => void,
+) {
+  const fact = archiveStates(db, id, checkpoint, false).get(id);
+  return fact ? deriveCurrentState(fact, maxTags, profile).status : null;
+}
+
+export function scopedLiteratureStates(
+  db: DatabaseSync,
+  ids: readonly string[],
+  maxTags: number,
+  profile: "pipeline" | "vlm-engine",
+  checkpoint: () => void,
+) {
+  const states = new Map<string, ReturnType<typeof deriveCurrentState>>();
+  for (const [id, facts] of archiveStates(db, ids, checkpoint, false))
+    states.set(id, deriveCurrentState(facts, maxTags, profile));
+  return states;
+}
+
+/** Disk-backed projection for operations that require one mutable-fact snapshot. */
+export function materializeLiteratureStates(
+  db: DatabaseSync,
+  maxTags: number,
+  profile: "pipeline" | "vlm-engine",
+  checkpoint: () => void,
+) {
+  const scratch = new DatabaseSync("");
+  try {
+    scratch.exec(`
+      PRAGMA cache_size=-1024;
+      PRAGMA journal_mode=OFF;
+      CREATE TABLE states(id TEXT PRIMARY KEY,status TEXT NOT NULL,missing_step TEXT) WITHOUT ROWID;
+      BEGIN;
+    `);
+    const page = db.prepare(
+      "SELECT literature_id FROM literature_metadata WHERE literature_id>? ORDER BY literature_id LIMIT 1000",
+    );
+    const put = scratch.prepare("INSERT INTO states VALUES(?,?,?)");
+    let after = "";
+    for (;;) {
+      checkpoint();
+      const ids = page
+        .all(after)
+        .map(({ literature_id }) => String(literature_id));
+      if (!ids.length) break;
+      for (const [id, state] of scopedLiteratureStates(
+        db,
+        ids,
+        maxTags,
+        profile,
+        checkpoint,
+      ))
+        put.run(id, state.status, state.missing_step);
+      after = ids.at(-1)!;
+    }
+    scratch.exec("COMMIT");
+    const get = scratch.prepare(
+      "SELECT status,missing_step FROM states WHERE id=?",
+    );
+    return {
+      get: (id: string) => get.get(id),
+      close: () => scratch.close(),
+    };
+  } catch (error) {
+    scratch.close();
+    throw error;
+  }
+}
 
 /** One complete projection per committed input revision; used inside the caller's read transaction. */
 export class LibraryStateCache {

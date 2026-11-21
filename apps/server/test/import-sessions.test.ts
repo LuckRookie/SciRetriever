@@ -368,6 +368,45 @@ it("replaces numbered parts, keeps preview read-only and rechecks the library on
   }
 }, 30000);
 
+it("reports exhausted PDF acquisition for members of the selected import batch", async () => {
+  const f = await fixture();
+  try {
+    const first = await f.create();
+    await f.app.importSessions.putData(
+      first.batch_id,
+      0,
+      data([record("scope-a"), record("scope-b")]),
+    );
+    await f.app.importSessions.confirm(first.batch_id);
+    const second = await f.create();
+    await f.app.importSessions.putData(
+      second.batch_id,
+      0,
+      data([record("scope-c")]),
+    );
+    await f.app.importSessions.confirm(second.batch_id);
+    for (const id of [first.batch_id, second.batch_id]) {
+      const report = await f.app.importSessions.report(id);
+      const literature = report.items[0]?.literature_id;
+      if (!literature) throw new Error("Expected an admitted import member");
+      await f.app.database.setAutomaticPdfExhaustion(literature);
+    }
+    const status = await f.app.importSessions.status(first.batch_id);
+    expect(status.pdf).toEqual({ has_pdf: 0, unavailable: 1, pending: 1 });
+    expect(status.full_text).toEqual({
+      total: 2,
+      obtained: 0,
+      exhausted: 1,
+      missing: 2,
+    });
+    expect((await f.app.importSessions.report(first.batch_id)).batch).toEqual(
+      status,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
 it("resumes persisted sessions and obeys seven-day cancellation/finish rules without retaining raw data", async () => {
   const f = await fixture();
   try {

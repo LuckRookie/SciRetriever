@@ -316,6 +316,8 @@ Storage 还实现 Literature 拥有的 artifact read Port。输入只接受已�
 
 网络、浏览器、parser、LLM 和文件 staging 都发生在 SQLite 事务外。
 
+**读请求分道**：读请求分为短请求与长请求两道，各由一个 SQLite worker 执行，长请求不排在短请求前面。每个读请求属于哪一道、短请求的上限（排队加执行合计 5 s），只由 `apps/server/src/storage/sqlite/read-lanes.ts` 的分类表规定；只读 worker 拒绝表里没有的请求。短请求超过上限时记录 `sqlite-short-read-slow`，按缺陷处理，规模性能检查把它当作失败。长请求能分段的按段执行，每段一个读事务，段之间释放快照（任务详情首读每段最多 1,000 条事件，普通计数每段 512 篇）。承诺同一快照的长请求（流式导出、显式校验）在长请求道上持有一个读事务直到结束，结束后 WAL 照常收缩。服务进程每 10 s 检查 WAL，空闲 15 s 后做 PASSIVE checkpoint，帧已全部写回且 WAL 未再变化时以零等待做 TRUNCATE，不挡其他进程的写入。
+
 ## 3. 事务、发布、并发与恢复
 
 ### 3.1 整体事务

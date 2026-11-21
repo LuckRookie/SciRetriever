@@ -9,6 +9,7 @@ type Dynamic = ReturnType<typeof JSON.parse>;
 interface WorkerRuntimeData {
   readonly path: string;
   readonly read_only: boolean;
+  readonly long_read_lane: boolean;
   readonly max_tags: number;
   readonly archive_profile: "pipeline" | "vlm-engine";
   readonly case_fold: Readonly<Record<string, string>>;
@@ -28,7 +29,12 @@ interface WorkerMessage {
   readonly cancellation?: SharedArrayBuffer;
 }
 const data = workerData as WorkerRuntimeData;
-const { LibraryStateCache }: typeof StateCache = await import(
+const {
+  LibraryStateCache,
+  readLiteratureStatus,
+  scopedLiteratureStates,
+  materializeLiteratureStates,
+}: typeof StateCache = await import(
   new URL(
     import.meta.url.endsWith(".ts")
       ? "./library-state-cache.ts"
@@ -37,6 +43,13 @@ const { LibraryStateCache }: typeof StateCache = await import(
   ).href
 );
 const libraryStateCache = new LibraryStateCache();
+let closeLibraryProjection: (() => void) | undefined;
+const { needsLibraryState }: typeof import("./read-lanes.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts") ? "./read-lanes.ts" : "./read-lanes.js",
+    import.meta.url,
+  ).href
+);
 const draftFactsModule = await import(
   new URL(
     import.meta.url.endsWith(".ts") ? "./draft-facts.ts" : "./draft-facts.js",
@@ -190,15 +203,17 @@ const reviewModule = await import(
     import.meta.url,
   ).href
 );
-const { TaskDetailCache }: typeof import("./task-detail-engine.js") =
-  await import(
-    new URL(
-      import.meta.url.endsWith(".ts")
-        ? "./task-detail-engine.ts"
-        : "./task-detail-engine.js",
-      import.meta.url,
-    ).href
-  );
+const {
+  TaskDetailCache,
+  replayTaskDetail,
+}: typeof import("./task-detail-engine.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./task-detail-engine.ts"
+      : "./task-detail-engine.js",
+    import.meta.url,
+  ).href
+);
 const taskDetails = new TaskDetailCache();
 const proofreadModule = await import(
   new URL(
@@ -437,6 +452,7 @@ function initializeConnection(): Dynamic {
     return;
   }
   db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA wal_autocheckpoint = 1000");
   db.exec("PRAGMA synchronous = FULL");
   const existingTable = db
     .prepare(
@@ -1095,7 +1111,7 @@ function librarySnapshot(
     validateDiscoveryCauses(discoveryRunIds);
     let scopeMatches: Set<string> | null = null;
     if (scope) {
-      registerLibraryStates();
+      if (needsLibraryState(scope)) registerLibraryStates();
       scopeMatches = new Set(
         libraryPageModule
           .libraryPageIds(db, {
@@ -1292,18 +1308,9 @@ function librarySnapshot(
     throw error;
   }
 }
-function registerLibraryStates() {
-  const identity = JSON.stringify([
-    db.prepare("PRAGMA schema_version").get().schema_version,
-    catalogIdentity(),
-  ]);
-  const states = libraryStateCache.read(
-    db,
-    identity,
-    data.max_tags,
-    data.archive_profile,
-    queryCheckpoint,
-  );
+function registerLibraryStateLookup(states: {
+  get(id: string): { status?: unknown; missing_step?: unknown } | undefined;
+}) {
   db.function("sr_status", { deterministic: true }, (id: Dynamic) => {
     queryCheckpoint();
     return states.get(id)?.status ?? null;
@@ -1313,17 +1320,138 @@ function registerLibraryStates() {
     return states.get(id)?.missing_step ?? null;
   });
 }
+function registerLibraryStates() {
+  if (data.long_read_lane) {
+    const projection = materializeLiteratureStates(
+      db,
+      data.max_tags,
+      data.archive_profile,
+      queryCheckpoint,
+    );
+    closeLibraryProjection = projection.close;
+    registerLibraryStateLookup(projection);
+    return;
+  }
+  const identity = JSON.stringify([
+    db.prepare("PRAGMA schema_version").get().schema_version,
+    catalogIdentity(),
+  ]);
+  registerLibraryStateLookup(
+    libraryStateCache.read(
+      db,
+      identity,
+      data.max_tags,
+      data.archive_profile,
+      queryCheckpoint,
+    ),
+  );
+}
+function registerIntakeStatus() {
+  // readIntakeBatch calls this function only for exhausted members without
+  // a primary PDF. A status request should not prepare every literature.
+  db.function("sr_status", { deterministic: true }, (id: string) =>
+    readLiteratureStatus(
+      db,
+      id,
+      data.max_tags,
+      data.archive_profile,
+      queryCheckpoint,
+    ),
+  );
+}
+type LibraryCountsCommand = Extract<SqliteCommand, { kind: "library_counts" }>;
+const LIBRARY_COUNT_SEGMENT = 512;
+
+function pagedLibraryCounts({ query, ftsQuery }: LibraryCountsCommand) {
+  // FTS ranking and the global recently opened window cannot be applied
+  // independently to ranges of MetaLiterature IDs.
+  if (
+    ftsQuery !== null ||
+    query.recently_opened ||
+    query.discovery_run_ids.length
+  )
+    return null;
+  const version = db.prepare("PRAGMA data_version");
+  const initial = version.get().data_version;
+  const recentCutoff = String(
+    db.prepare(`SELECT ${libraryPageModule.RECENT_CUTOFF_SQL} AS cutoff`).get()
+      .cutoff,
+  );
+  const page = db.prepare(
+    "SELECT meta_literature_id FROM meta_literatures WHERE meta_literature_id>? ORDER BY meta_literature_id LIMIT ?",
+  );
+  const members = db.prepare(
+    "SELECT l.literature_id FROM json_each(?) scope CROSS JOIN literatures l ON l.meta_literature_id=scope.value",
+  );
+  let after = "";
+  let counts: ReturnType<typeof libraryPageModule.libraryCounts> | undefined;
+  for (;;) {
+    queryCheckpoint();
+    const part = readTransaction(() => {
+      const ids: string[] = page
+        .all(after, LIBRARY_COUNT_SEGMENT)
+        .map((row: Dynamic) => String(row.meta_literature_id));
+      const literatureIds: string[] = members
+        .all(JSON.stringify(ids))
+        .map((row: Dynamic) => String(row.literature_id));
+      registerLibraryStateLookup(
+        scopedLiteratureStates(
+          db,
+          literatureIds,
+          data.max_tags,
+          data.archive_profile,
+          queryCheckpoint,
+        ),
+      );
+      return {
+        ids,
+        counts: libraryPageModule.libraryCounts(
+          db,
+          query,
+          null,
+          ids,
+          recentCutoff,
+        ),
+      };
+    }) as {
+      ids: string[];
+      counts: ReturnType<typeof libraryPageModule.libraryCounts>;
+    };
+    // Mutable query facts have no common domain revision. Discard all parts
+    // if any writer committed and use one exact read snapshot in that case.
+    if (
+      version.get().data_version !== initial ||
+      catalogIdentity() !== openedCatalogIdentity
+    )
+      return null;
+    if (!counts) counts = part.counts;
+    else {
+      const next = part.counts;
+      for (const [status, count] of Object.entries(next.statuses))
+        counts.statuses[status] = (counts.statuses[status] ?? 0) + count;
+      counts.total += next.total;
+      counts.unavailable_pdf += next.unavailable_pdf;
+      counts.recently_opened = Math.min(
+        100,
+        counts.recently_opened + next.recently_opened,
+      );
+      counts.with_primary_pdf += next.with_primary_pdf;
+      counts.full_text = {
+        total: counts.full_text.total + next.full_text.total,
+        obtained: counts.full_text.obtained + next.full_text.obtained,
+        missing: counts.full_text.missing + next.full_text.missing,
+        exhausted: counts.full_text.exhausted + next.full_text.exhausted,
+      };
+    }
+    if (part.ids.length < LIBRARY_COUNT_SEGMENT) return counts;
+    after = part.ids.at(-1)!;
+  }
+}
 function librarySearchPage(request: Dynamic): Dynamic {
   return readTransaction(() => {
     validateDiscoveryCauses(request.query.discovery_run_ids);
     const q = request.query;
-    if (
-      q.statuses.length ||
-      q.missing_steps.length ||
-      q.needs_manual_pdf === true
-    ) {
-      registerLibraryStates();
-    }
+    if (needsLibraryState(q)) registerLibraryStates();
     const page = libraryPageModule.libraryPageIds(db, request);
     const textLevels = primaryDocumentTexts(
       page.rows.map((row: Dynamic) => String(row.literature_id)),
@@ -4854,6 +4982,35 @@ function counts(): Dynamic {
     );
   return { tables: result };
 }
+function idleWalCheckpoint(): boolean {
+  if (data.read_only) fail();
+  if (data.path === ":memory:") return false;
+  const wal = () => statSync(data.path + "-wal", { throwIfNoEntry: false });
+  const before = wal();
+  if (!before?.size || Date.now() - before.mtimeMs < 15_000) return false;
+  // PASSIVE can flush a backlog without waiting on foreign readers or writers.
+  // Only truncate a fully checkpointed, idle WAL, with a zero busy timeout.
+  const maintenance = new DatabaseSync(data.path);
+  try {
+    maintenance.exec("PRAGMA busy_timeout=0");
+    const passive = maintenance
+      .prepare("PRAGMA wal_checkpoint(PASSIVE)")
+      .get()!;
+    const after = wal();
+    if (
+      passive.busy !== 0 ||
+      passive.log !== passive.checkpointed ||
+      after?.mtimeMs !== before.mtimeMs ||
+      after.size !== before.size
+    )
+      return false;
+    return (
+      maintenance.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()!.busy === 0
+    );
+  } finally {
+    maintenance.close();
+  }
+}
 port.on("message", (message: WorkerMessage) => {
   cancellation = message.cancellation
     ? new Int32Array(message.cancellation)
@@ -4865,6 +5022,11 @@ port.on("message", (message: WorkerMessage) => {
       retrievalEngine?.close();
       db?.close();
       port.postMessage({ id: message.id, ok: true, value: true });
+      return;
+    }
+    if (message.command.kind === "idle_wal_checkpoint") {
+      const value = idleWalCheckpoint();
+      port.postMessage({ id: message.id, ok: true, value });
       return;
     }
     if (message.command.kind === "retrieval") {
@@ -5055,7 +5217,7 @@ port.on("message", (message: WorkerMessage) => {
                       command.action.op === "report-snapshot" ||
                       command.action.op === "sessions"
                     )
-                      registerLibraryStates();
+                      registerIntakeStatus();
                     return importModule.readImportStorage(
                       db,
                       command.action,
@@ -5585,7 +5747,8 @@ port.on("message", (message: WorkerMessage) => {
         );
         break;
       case "execution_task_detail_events": {
-        const { jobId, through, withActivity } = message.command;
+        const { jobId, through, withActivity, incrementalOnly } =
+          message.command;
         const identity = openedCatalogIdentity;
         if (identity === null) fail();
         requireRuntime();
@@ -5597,8 +5760,35 @@ port.on("message", (message: WorkerMessage) => {
             through,
             withActivity,
             queryCheckpoint,
+            incrementalOnly === true,
           );
         value = db.isTransaction ? read() : readTransaction(read);
+        break;
+      }
+      case "execution_task_detail_replay": {
+        if (!data.read_only || !data.long_read_lane || db.isTransaction) fail();
+        const identity = openedCatalogIdentity;
+        requireRuntime();
+        const { jobId, through, withActivity, scratchPath } = message.command;
+        value = replayTaskDetail(
+          db,
+          () => {
+            const current = catalogIdentity();
+            if (current !== identity) fail();
+            return current;
+          },
+          jobId,
+          through,
+          withActivity,
+          scratchPath,
+          queryCheckpoint,
+        );
+        break;
+      }
+      case "execution_task_detail_install": {
+        const identity = openedCatalogIdentity;
+        if (identity === null || data.long_read_lane) fail();
+        value = taskDetails.install(db, identity, message.command.transfer);
         break;
       }
       case "execution_put_intervention":
@@ -5650,21 +5840,23 @@ port.on("message", (message: WorkerMessage) => {
         break;
       case "library_counts": {
         const command = message.command;
-        value = readTransaction(() => {
-          validateDiscoveryCauses(command.query.discovery_run_ids);
-          registerLibraryStates();
-          return libraryPageModule.libraryCounts(
-            db,
-            command.query,
-            command.ftsQuery,
-          );
-        });
+        value =
+          (data.long_read_lane && pagedLibraryCounts(command)) ||
+          readTransaction(() => {
+            validateDiscoveryCauses(command.query.discovery_run_ids);
+            registerLibraryStates();
+            return libraryPageModule.libraryCounts(
+              db,
+              command.query,
+              command.ftsQuery,
+            );
+          });
         break;
       }
       case "intake_read": {
         const c = message.command;
         const read = () => {
-          registerLibraryStates();
+          registerIntakeStatus();
           return intakeModule.queryIntakeBatches(
             db,
             c.value,
@@ -5682,12 +5874,7 @@ port.on("message", (message: WorkerMessage) => {
       case "library_facets": {
         const c = message.command;
         value = readTransaction(() => {
-          if (
-            c.request.statuses.length ||
-            c.request.missing_steps.length ||
-            c.request.needs_manual_pdf === true
-          )
-            registerLibraryStates();
+          if (needsLibraryState(c.request)) registerLibraryStates();
           return libraryPageModule.libraryFacets(
             db,
             c.request,
@@ -5700,7 +5887,10 @@ port.on("message", (message: WorkerMessage) => {
       case "acquire_pdf_selection": {
         const c = message.command;
         value = readTransaction(() => {
-          registerLibraryStates();
+          const selector = c.request.selector;
+          if (selector.kind === "query" && needsLibraryState(selector.query))
+            registerLibraryStates();
+          else registerIntakeStatus();
           return libraryPageModule.acquirePdfSelection(db, c.request);
         });
         break;
@@ -5708,7 +5898,9 @@ port.on("message", (message: WorkerMessage) => {
       case "parse_document_selection": {
         const c = message.command;
         value = readTransaction(() => {
-          registerLibraryStates();
+          const selector = c.request.selector;
+          if (selector.kind === "query" && needsLibraryState(selector.query))
+            registerLibraryStates();
           return libraryPageModule.parseDocumentSelection(
             db,
             c.request,
@@ -5732,7 +5924,7 @@ port.on("message", (message: WorkerMessage) => {
         );
         break;
       case "candidate_cleanup_snapshot":
-        value = transaction(candidateCleanupSnapshot);
+        value = readTransaction(candidateCleanupSnapshot);
         break;
       case "artifact_reclamation_snapshot":
         value = artifactReclamationSnapshot(message.command.reference);
@@ -5954,5 +6146,7 @@ port.on("message", (message: WorkerMessage) => {
     });
   } finally {
     cancellation = undefined;
+    closeLibraryProjection?.();
+    closeLibraryProjection = undefined;
   }
 });

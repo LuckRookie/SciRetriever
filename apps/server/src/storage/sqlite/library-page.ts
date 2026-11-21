@@ -47,7 +47,9 @@ const HAS_PRIMARY_PDF_SQL = `EXISTS(SELECT 1 FROM literature_assets pdf WHERE pd
 
 export const OPENED_SQL =
   "(SELECT last_opened_at FROM reading_history h WHERE h.literature_id=l.literature_id)";
-const RECENT_SQL = `${OPENED_SQL} >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-30 days')`;
+export const RECENT_CUTOFF_SQL =
+  "strftime('%Y-%m-%dT%H:%M:%fZ','now','-30 days')";
+const RECENT_SQL = `${OPENED_SQL} >= ${RECENT_CUTOFF_SQL}`;
 /** Earliest known observation, not publication date or the last metadata refresh. */
 export const INTAKE_SQL =
   "(SELECT intake_at FROM literature_intake WHERE literature_id=l.literature_id)";
@@ -65,12 +67,13 @@ function libraryFilter(
   q: LibraryQuery,
   ftsQuery: string | null,
   intakeOrder = false,
+  metaIds?: readonly string[],
 ) {
   const terms: string[] = [
       "sr_query_continue()",
       visibleLiteratureSql("l.literature_id"),
     ],
-    args: SQLInputValue[] = [];
+    args: SQLInputValue[] = metaIds ? [JSON.stringify(metaIds)] : [];
   const add = (sql: string, ...values: SQLInputValue[]) => {
     terms.push(sql);
     args.push(...values);
@@ -174,10 +177,23 @@ function libraryFilter(
       add(`${primaryDraftFactSql(field)} ${q[key] ? ">" : "="} 0`);
   }
   if (ftsQuery !== null) add("literature_search_fts MATCH ?", ftsQuery);
-  const base = intakeOrder
-    ? "literature_intake li INDEXED BY literature_intake_order CROSS JOIN literatures l ON l.literature_id=li.literature_id"
+  const base = metaIds
+    ? "json_each(?) scope CROSS JOIN literatures l ON l.meta_literature_id=scope.value"
     : "literatures l";
-  const from = `FROM ${base} JOIN literature_metadata m ON m.literature_id=l.literature_id${ftsQuery === null ? "" : " JOIN literature_search_fts ON literature_search_fts.literature_id=l.literature_id"}`;
+  const metadata =
+    "JOIN literature_metadata m ON m.literature_id=l.literature_id";
+  // Counting uses the same joins and duplicate check. Let SQLite walk the
+  // covering ID indexes instead of forcing a lookup per row in intake order.
+  const from = `FROM ${base} ${metadata}${
+    intakeOrder
+      ? " JOIN literature_intake li ON l.literature_id=li.literature_id"
+      : ftsQuery === null
+        ? ""
+        : " JOIN literature_search_fts ON literature_search_fts.literature_id=l.literature_id"
+  }`;
+  const orderedFrom = intakeOrder
+    ? `FROM literature_intake li INDEXED BY literature_intake_order CROSS JOIN literatures l ON l.literature_id=li.literature_id ${metadata}`
+    : from;
   let where = terms.length ? `WHERE ${terms.join(" AND ")}` : "";
   if (q.recently_opened)
     where = `WHERE l.literature_id IN (SELECT l.literature_id ${from} ${where} ORDER BY ${OPENED_SQL} DESC,l.literature_id LIMIT 100)`;
@@ -186,18 +202,22 @@ function libraryFilter(
     where += " AND literature_search_fts MATCH ?";
     args.push(ftsQuery);
   }
-  return { from, where, args, tagIds };
+  return { from, orderedFrom, where, args, tagIds };
 }
 export function libraryCounts(
   db: DatabaseSync,
   query: LibraryQuery,
   ftsQuery: string | null,
+  metaIds?: readonly string[],
+  recentCutoff?: string,
 ) {
   // Quick-filter counts ignore both quick selections, but retain all other facets.
   const { from, where, args } = libraryFilter(
     db,
     { ...query, statuses: [], needs_manual_pdf: null },
     ftsQuery,
+    false,
+    metaIds,
   );
   // Status is a per-row function; materialize it so each row computes it once.
   const rows = db
@@ -219,9 +239,9 @@ export function libraryCounts(
   }
   const recent = db
     .prepare(
-      `SELECT count(*) AS n ${from} ${where ? where + " AND " : "WHERE "} ${RECENT_SQL}`,
+      `SELECT count(*) AS n ${from} ${where ? where + " AND " : "WHERE "} ${recentCutoff === undefined ? RECENT_SQL : `${OPENED_SQL} >= ?`}`,
     )
-    .get(...args)!;
+    .get(...args, ...(recentCutoff === undefined ? [] : [recentCutoff]))!;
   return {
     total,
     statuses,
@@ -236,7 +256,7 @@ export function libraryCounts(
 }
 export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
   const { query: q, sort, after, limit, ftsQuery } = request;
-  const { from, where, args, tagIds } = libraryFilter(
+  const { from, orderedFrom, where, args, tagIds } = libraryFilter(
     db,
     q,
     ftsQuery,
@@ -340,7 +360,7 @@ export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
     }
     const rows = db
       .prepare(
-        `SELECT l.literature_id,${relevance} AS relevance ${from} ${where} ${cursor} ORDER BY li.intake_at DESC,li.literature_id ASC LIMIT ?`,
+        `SELECT l.literature_id,${relevance} AS relevance ${orderedFrom} ${where} ${cursor} ORDER BY li.intake_at DESC,li.literature_id ASC LIMIT ?`,
       )
       .all(...pageArgs, limit + 1);
     return {
@@ -524,7 +544,7 @@ export function acquirePdfSelection(
   const ids = selectionIds(db, request);
   const facts = db
     .prepare(
-      `SELECT l.literature_id,l.version_role,EXISTS(SELECT 1 FROM literature_assets a WHERE a.literature_id=l.literature_id AND a.role='primary-pdf') AS has_pdf,EXISTS(SELECT 1 FROM automatic_pdf_acquisition_exhaustions ex WHERE ex.literature_id=l.literature_id) AND sr_status(l.literature_id)='UNREVIEWED' AS unavailable FROM literatures l WHERE ${visibleLiteratureSql("l.literature_id")} AND l.literature_id IN (SELECT value FROM json_each(?))`,
+      `SELECT l.literature_id,l.version_role,EXISTS(SELECT 1 FROM literature_assets a WHERE a.literature_id=l.literature_id AND a.role='primary-pdf') AS has_pdf,CASE WHEN EXISTS(SELECT 1 FROM automatic_pdf_acquisition_exhaustions ex WHERE ex.literature_id=l.literature_id) THEN sr_status(l.literature_id)='UNREVIEWED' ELSE 0 END AS unavailable FROM literatures l WHERE ${visibleLiteratureSql("l.literature_id")} AND l.literature_id IN (SELECT value FROM json_each(?))`,
     )
     .all(JSON.stringify(ids));
   if (facts.length !== ids.length)

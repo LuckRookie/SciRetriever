@@ -235,7 +235,7 @@ import {
   ReferenceRepository,
 } from "../storage/sqlite/repositories.js";
 import { RetrievalStorageClient } from "../storage/sqlite/retrieval-client.js";
-import { SqliteWorker } from "../storage/sqlite/worker.js";
+import { SqliteReadLane, SqliteWorker } from "../storage/sqlite/worker.js";
 import { SqliteAnnotationStorage } from "../storage/structure-annotations.js";
 import {
   CatalogWriteAdmission,
@@ -455,6 +455,7 @@ export interface QueryApplication {
   close(): Promise<void>;
 }
 export interface QueryApplicationOptions {
+  readonly readLane?: SqliteReadLane;
   readonly proofreadPages?: PdfPages;
   readonly catalog_path?: string;
   readonly artifact_root?: string;
@@ -488,6 +489,8 @@ export type ApplicationStage =
   | "agents"
   | "schema";
 export interface ApplicationOptions {
+  readonly readLane?: SqliteReadLane;
+  readonly maintainWal?: boolean;
   /** Long-lived execution hosts opt in; one-shot Applications leave requested work queued. */
   readonly restoreRequestedTasks?: boolean;
   readonly capture?: CaptureOptions;
@@ -837,6 +840,8 @@ async function createApplicationOwned(
   let retrievalIndex: RetrievalIndexService | null = null;
   let indexDatabase: SqliteWorker | undefined;
   let indexRefresh: IndexRefreshService | null = null;
+  let walTimer: ReturnType<typeof setInterval> | undefined;
+  let walCheck: Promise<void> | undefined;
   const catalogPath =
     configuration.paths.catalog_path ?? join(home, "catalog.sqlite");
   const networkBudget = options.networkBudget ?? new NetworkBudgetCoordinator();
@@ -890,6 +895,10 @@ async function createApplicationOwned(
         () => regionRenderer?.close(),
         () => pageImages?.close(),
 
+        async () => {
+          clearInterval(walTimer);
+          await walCheck;
+        },
         () => indexRefresh?.close(),
         () => retrievalIndex?.close(),
         () => indexDatabase?.close(),
@@ -921,6 +930,7 @@ async function createApplicationOwned(
   };
   try {
     database = new SqliteWorker(catalogPath, writes, {
+      ...(options.readLane ? { readLane: options.readLane } : {}),
       maxTags: configuration.tags.max_per_literature,
       archiveProfile: configuration.parsing.archive_profile,
     });
@@ -1420,8 +1430,9 @@ async function createApplicationOwned(
     let taskService: ExecutionTaskService | null = null;
     let interventions: InterventionService | null = null;
     {
-      const runtime = await database.inspectExecutionRuntime();
-      if (!runtime.migrated) throw new Error("execution-runtime-integrity");
+      // Opening validates both execution schema identities. Counts belong to
+      // explicit inspection and are unnecessary to assemble the runtime.
+      await database.schema();
       jobs = new ExecutionRepository(database, admission);
       queue = new ExecutionQueue(jobs);
       interventions = new InterventionService(jobs, admission);
@@ -1642,6 +1653,23 @@ async function createApplicationOwned(
       maxTags: configuration.tags.max_per_literature,
       archiveProfile: configuration.parsing.archive_profile,
     });
+    if (options.maintainWal) {
+      const checkWal = indexDatabase.idleWalCheckpoint.bind(indexDatabase);
+      walTimer = setInterval(() => {
+        if (walCheck) return;
+        walCheck = checkWal()
+          .then(() => {})
+          .catch(() =>
+            logger.warn("Idle catalog checkpoint failed", {
+              code: "wal-checkpoint-failed",
+            }),
+          )
+          .finally(() => {
+            walCheck = undefined;
+          });
+      }, 10_000);
+      walTimer.unref();
+    }
     retrievalIndex = new RetrievalIndexService(
       new RetrievalStorageClient(indexDatabase),
       documentRead,
@@ -1912,7 +1940,6 @@ async function createApplicationOwned(
       references,
       database,
     );
-    await database.schema();
     let executionRecovery: Application["executionRecovery"] = null;
     let recoveryEntered = false;
     try {
@@ -2303,7 +2330,9 @@ export async function createQueryApplication(
   }
   if (!catalogStat.isFile() || catalogStat.isSymbolicLink())
     return unavailable();
+  const readLane = options.readLane ?? new SqliteReadLane();
   const database = new SqliteWorker(catalogPath, undefined, {
+    readLane,
     readOnly: true,
     maxTags: configuration.tags.max_per_literature,
     archiveProfile: configuration.parsing.archive_profile,
@@ -2340,6 +2369,7 @@ export async function createQueryApplication(
         async () => rawParseRead?.close(),
         async () => files?.close(),
         () => database.close(),
+        () => (options.readLane ? undefined : readLane.close()),
       ]) {
         try {
           await release();
@@ -2445,6 +2475,7 @@ export async function createQueryApplication(
     const retrievalStorage = new RetrievalStorageClient(
       (retrievalDatabase = new SqliteWorker(catalogPath, undefined, {
         readOnly: true,
+        readLane,
         maxTags: configuration.tags.max_per_literature,
         archiveProfile: configuration.parsing.archive_profile,
       })),

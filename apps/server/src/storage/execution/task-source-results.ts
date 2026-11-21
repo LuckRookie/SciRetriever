@@ -44,20 +44,26 @@ const comparePosition = (a: Position, b: Position) =>
   a[0] - b[0] || a[1] - b[1];
 type Diagnostic = SourceProblem["technical_details"]["diagnostics"][number];
 
+type SourceProblemGroups = Map<
+  SourceProblem["display"],
+  {
+    first: Position;
+    diagnostics: {
+      key: string;
+      at: Position;
+      offset: number;
+      value: Diagnostic;
+    }[];
+  }
+>;
+
 /** Keep the first 32 unique diagnostics per display, in full replay order. */
 class SourceProblems {
-  private readonly groups = new Map<
-    SourceProblem["display"],
-    {
-      first: Position;
-      diagnostics: {
-        key: string;
-        at: Position;
-        offset: number;
-        value: Diagnostic;
-      }[];
-    }
-  >();
+  readonly groups: SourceProblemGroups;
+
+  constructor(groups: SourceProblemGroups = new Map()) {
+    this.groups = groups;
+  }
 
   add(problem: SourceProblem, at: Position) {
     let group = this.groups.get(problem.display);
@@ -120,11 +126,26 @@ interface OpenRecord {
   readonly row: MetadataSourceRecord;
 }
 
+interface MetadataTotalsState {
+  readonly sources: [
+    string,
+    Omit<MetadataTally, "problems"> & { problems: SourceProblemGroups },
+  ][];
+  readonly samples: MetadataSourceRecord[];
+  readonly open: Map<string, OpenRecord>;
+  readonly count: number;
+  readonly returned: number;
+  readonly rejected: number;
+  readonly merged: number;
+  readonly created: number;
+  readonly matched: number;
+}
+
 class MetadataTotals {
   private readonly scratch: TaskResultScratch;
   private readonly sources = new Map<string, MetadataTally>();
-  private readonly samples: MetadataSourceRecord[] = [];
-  private readonly open = new Map<string, OpenRecord>();
+  private readonly samples: MetadataSourceRecord[];
+  private readonly open: Map<string, OpenRecord>;
   private count = 0;
   private returned = 0;
   private rejected = 0;
@@ -132,8 +153,40 @@ class MetadataTotals {
   private created = 0;
   private matched = 0;
 
-  constructor(scratch: TaskResultScratch) {
+  constructor(scratch: TaskResultScratch, state?: MetadataTotalsState) {
     this.scratch = scratch;
+    this.samples = state?.samples ?? [];
+    this.open = state?.open ?? new Map();
+    if (state) {
+      for (const [name, source] of state.sources)
+        this.sources.set(name, {
+          ...source,
+          problems: new SourceProblems(source.problems),
+        });
+      this.count = state.count;
+      this.returned = state.returned;
+      this.rejected = state.rejected;
+      this.merged = state.merged;
+      this.created = state.created;
+      this.matched = state.matched;
+    }
+  }
+
+  state(): MetadataTotalsState {
+    return {
+      sources: [...this.sources].map(([name, source]) => [
+        name,
+        { ...source, problems: source.problems.groups },
+      ]),
+      samples: this.samples,
+      open: this.open,
+      count: this.count,
+      returned: this.returned,
+      rejected: this.rejected,
+      merged: this.merged,
+      created: this.created,
+      matched: this.matched,
+    };
   }
 
   private saveOpen(key: string, record: OpenRecord) {
@@ -308,6 +361,13 @@ interface PdfTally {
   withoutRequest: number;
 }
 
+interface PdfTotalsState {
+  readonly documents: number;
+  readonly obtained: number;
+  readonly notObtained: number;
+  readonly problems: [string, SourceProblemGroups][];
+}
+
 /** A retry can add requests or replace a publication for an earlier target. */
 class PdfTotals {
   private readonly scratch: TaskResultScratch;
@@ -316,8 +376,24 @@ class PdfTotals {
   private notObtained = 0;
   private readonly problems = new Map<string, SourceProblems>();
 
-  constructor(scratch: TaskResultScratch) {
+  constructor(scratch: TaskResultScratch, state?: PdfTotalsState) {
     this.scratch = scratch;
+    if (state) {
+      this.documents = state.documents;
+      this.obtained = state.obtained;
+      this.notObtained = state.notObtained;
+      for (const [name, group] of state.problems)
+        this.problems.set(name, new SourceProblems(group));
+    }
+  }
+
+  state(): PdfTotalsState {
+    return {
+      documents: this.documents,
+      obtained: this.obtained,
+      notObtained: this.notObtained,
+      problems: [...this.problems].map(([name, group]) => [name, group.groups]),
+    };
   }
 
   private source(name: string): PdfTally {
@@ -470,9 +546,16 @@ export class TaskSourceAggregation {
   private readonly metadata: MetadataTotals;
   private readonly pdf: PdfTotals;
 
-  constructor(scratch: TaskResultScratch) {
-    this.metadata = new MetadataTotals(scratch);
-    this.pdf = new PdfTotals(scratch);
+  constructor(
+    scratch: TaskResultScratch,
+    state?: { metadata: MetadataTotalsState; pdf: PdfTotalsState },
+  ) {
+    this.metadata = new MetadataTotals(scratch, state?.metadata);
+    this.pdf = new PdfTotals(scratch, state?.pdf);
+  }
+
+  state() {
+    return { metadata: this.metadata.state(), pdf: this.pdf.state() };
   }
 
   accept(event: Pick<ExecutionEvent, "kind" | "payload">, position: number) {

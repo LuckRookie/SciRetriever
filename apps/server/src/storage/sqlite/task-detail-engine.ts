@@ -1,8 +1,11 @@
 import {
   DatabaseSync,
+  type SQLInputValue,
   type SQLOutputValue,
   type StatementSync,
 } from "node:sqlite";
+import { rmSync } from "node:fs";
+import { dirname } from "node:path";
 import {
   ContractValidationError,
   type TaskSourceResults,
@@ -70,6 +73,12 @@ export type TaskDetailRead = { readonly rows_read: number } & (
   | { readonly status: "ok"; readonly detail: TaskDetailEvents }
   | { readonly status: "invalid-source" | "budget-exceeded" | "not-found" }
 );
+export type TaskDetailProbe =
+  | TaskDetailRead
+  | {
+      readonly status: "replay-required";
+      readonly rows_read: number;
+    };
 
 const PROCESSING_PAGE_SIZE = 1000;
 const PROCESSING_LIMIT = 100_000;
@@ -78,7 +87,8 @@ const TECHNICAL_LIMIT = 1000;
 
 /** Private working storage. SQLite spills to disk and unlinks on close. */
 class TaskScratch implements TaskResultScratch {
-  private readonly db = new DatabaseSync("");
+  private readonly db: DatabaseSync;
+  private readonly path: string | undefined;
   private readonly insert: StatementSync;
   private readonly get: StatementSync;
   private readonly upsert: StatementSync;
@@ -87,13 +97,18 @@ class TaskScratch implements TaskResultScratch {
   private readonly first: StatementSync;
   private readonly range: StatementSync;
 
-  constructor() {
+  constructor(path?: string, restored = false) {
+    this.path = path;
+    this.db = new DatabaseSync(path ?? "");
     this.db.exec(`
       PRAGMA temp_store=FILE;
       PRAGMA cache_size=-512;
       PRAGMA journal_mode=OFF;
-      CREATE TABLE entries(key TEXT PRIMARY KEY, value TEXT) WITHOUT ROWID
     `);
+    if (!restored)
+      this.db.exec(
+        "CREATE TABLE entries(key TEXT PRIMARY KEY, value TEXT) WITHOUT ROWID",
+      );
     this.insert = this.db.prepare(
       "INSERT OR IGNORE INTO entries VALUES(?,NULL)",
     );
@@ -152,8 +167,13 @@ class TaskScratch implements TaskResultScratch {
     this.db.exec("COMMIT");
     return result;
   }
-  close() {
-    this.db.close();
+  close(keep = false) {
+    try {
+      this.db.close();
+    } finally {
+      if (this.path && !keep)
+        rmSync(dirname(this.path), { recursive: true, force: true });
+    }
   }
 }
 
@@ -164,6 +184,46 @@ interface EventHead {
   readonly position: number;
   readonly sequence: number;
   readonly id: string;
+}
+
+interface HistoryState {
+  readonly totals: ReturnType<
+    InstanceType<typeof TaskSourceAggregation>["state"]
+  >;
+  readonly processed: number;
+  readonly storedEvents: number;
+  readonly processingCount: number;
+  readonly firstProcessing: number | null;
+  readonly acquisitionCount: number;
+  readonly head: EventHead | null;
+}
+export interface TaskHistoryTransfer {
+  readonly path: string;
+  readonly jobId: string;
+  readonly identity: string;
+  readonly schemaVersion: number;
+  readonly through: string;
+  readonly created: string;
+  readonly state: HistoryState;
+}
+export interface TaskDetailReplay {
+  readonly result: TaskDetailRead;
+  readonly transfer?: TaskHistoryTransfer;
+}
+
+/** Materialize a bounded page, then aggregate without a live catalog snapshot. */
+function* eventPages(
+  query: StatementSync,
+  params: readonly SQLInputValue[],
+  cursor: number,
+  key: "sequence" | "position",
+) {
+  for (;;) {
+    const page = query.all(...params, cursor, PROCESSING_PAGE_SIZE);
+    yield* page;
+    if (page.length < PROCESSING_PAGE_SIZE) return;
+    cursor = Number(page.at(-1)![key]);
+  }
 }
 
 function eventHead(
@@ -179,8 +239,8 @@ function eventHead(
 }
 
 class TaskHistory {
-  private readonly scratch = new TaskScratch();
-  private readonly totals = new TaskSourceAggregation(this.scratch);
+  private readonly scratch: TaskScratch;
+  private readonly totals: InstanceType<typeof TaskSourceAggregation>;
   private sourceResults: TaskSourceResults | undefined;
   private processed = 0;
   private storedEvents = 0;
@@ -190,12 +250,37 @@ class TaskHistory {
   head: EventHead | null = null;
   deferred = false;
 
+  constructor(path?: string, state?: HistoryState) {
+    this.scratch = new TaskScratch(path, state !== undefined);
+    this.totals = new TaskSourceAggregation(this.scratch, state?.totals);
+    if (state) {
+      this.processed = state.processed;
+      this.storedEvents = state.storedEvents;
+      this.processingCount = state.processingCount;
+      this.firstProcessing = state.firstProcessing;
+      this.acquisitionCount = state.acquisitionCount;
+      this.head = state.head;
+    }
+  }
+
+  state(): HistoryState {
+    return {
+      totals: this.totals.state(),
+      processed: this.processed,
+      storedEvents: this.storedEvents,
+      processingCount: this.processingCount,
+      firstProcessing: this.firstProcessing,
+      acquisitionCount: this.acquisitionCount,
+      head: this.head,
+    };
+  }
+
   get eventCount() {
     return this.storedEvents;
   }
 
-  close() {
-    this.scratch.close();
+  close(keep = false) {
+    this.scratch.close(keep);
   }
 
   read(
@@ -207,6 +292,8 @@ class TaskHistory {
     mode: "append" | "full" | "rowid",
     onRow: () => void,
     withActivity: boolean,
+    paged = false,
+    checkpoint = onRow,
   ): TaskDetailEvents {
     return this.scratch.batch(() => {
       const appendTechnical =
@@ -215,23 +302,21 @@ class TaskHistory {
         !!this.head &&
         snapshot.sequence - this.head.sequence <= TECHNICAL_LIMIT;
       if (snapshot) {
-        const rows = db
-          .prepare(
-            `
+        const query = db.prepare(
+          `
           SELECT rowid AS position, sequence, kind, payload_json,
                  ${mode === "append" ? "event_id, created_at," : ""}
                  julianday(created_at)<=julianday(?) AS in_range
           FROM execution_events
-          WHERE job_id=? AND sequence>? AND sequence<=?
-          ORDER BY sequence
+          WHERE job_id=? AND sequence<=? AND sequence>?
+          ORDER BY sequence LIMIT ?
         `,
-          )
-          .iterate(
-            through,
-            jobId,
-            this.head?.sequence ?? -1,
-            snapshot.sequence,
-          );
+        );
+        const params = [through, jobId, snapshot.sequence] as const;
+        const after = this.head?.sequence ?? -1;
+        const rows = paged
+          ? eventPages(query, params, after, "sequence")
+          : query.iterate(...params, after, -1);
         let sequence = this.head?.sequence ?? -1;
         let position = this.head?.position ?? 0;
         for (const row of rows) {
@@ -254,18 +339,21 @@ class TaskHistory {
         }
         if (sequence !== snapshot.sequence) throw new ReplayRequired();
         if (mode === "rowid" && jobInRange) {
-          for (const row of db
-            .prepare(
-              `
+          const query = db.prepare(
+            `
             SELECT rowid AS position, kind, payload_json, 1 AS in_range
-            FROM execution_events
-            WHERE job_id=? AND rowid>0 AND kind IN (
+            FROM execution_events ${paged ? "NOT INDEXED" : ""}
+            WHERE job_id=? AND sequence<=? AND kind IN (
               'metadata-source', 'acquisition-attempt', 'pdf-source-result'
-            ) AND julianday(created_at)<=julianday(?)
-            ORDER BY rowid
+            ) AND julianday(created_at)<=julianday(?) AND rowid>?
+            ORDER BY rowid LIMIT ?
           `,
-            )
-            .iterate(jobId, through)) {
+          );
+          const params = [jobId, snapshot.sequence, through] as const;
+          const rows = paged
+            ? eventPages(query, params, 0, "position")
+            : query.iterate(...params, 0, -1);
+          for (const row of rows) {
             onRow();
             this.acceptSource(row, true);
           }
@@ -273,21 +361,38 @@ class TaskHistory {
       }
       if (!appendTechnical && snapshot) {
         let ordinal = this.processed - 1;
-        for (const row of db
-          .prepare(
-            `
+        const query = db.prepare(
+          `
             SELECT event_id, sequence, kind, payload_json, created_at
-            FROM execution_events WHERE job_id=? AND sequence<=? AND kind<>'citation-write-checkpoint'
+            FROM execution_events WHERE job_id=? AND sequence<=? AND sequence<?
+              ${paged ? "" : "AND kind<>'citation-write-checkpoint'"}
             ORDER BY sequence DESC LIMIT ?
           `,
-          )
-          .iterate(jobId, snapshot.sequence, TECHNICAL_LIMIT))
+        );
+        const rows = paged
+          ? eventPages(
+              query,
+              [jobId, snapshot.sequence],
+              snapshot.sequence + 1,
+              "sequence",
+            )
+          : query.iterate(
+              jobId,
+              snapshot.sequence,
+              snapshot.sequence + 1,
+              TECHNICAL_LIMIT,
+            );
+        for (const row of rows) {
+          if (paged) checkpoint();
+          if (row.kind === "citation-write-checkpoint") continue;
           this.storeTechnical(row, ordinal--);
+          if (this.processed - ordinal - 1 === TECHNICAL_LIMIT) break;
+        }
       }
       this.head = snapshot;
-      this.sourceResults ??= this.totals.summary();
+      const source_results = (this.sourceResults ??= this.totals.summary());
       return {
-        source_results: this.sourceResults,
+        source_results,
         processing: {
           events: this.scratch.values<ProcessingDetailEvent>(
             "processing|",
@@ -407,6 +512,57 @@ export class TaskDetailCache {
     this.schemaVersion = undefined;
   }
 
+  private establishIdentity(identity: string, schemaVersion: number) {
+    if (
+      this.catalogIdentity !== identity ||
+      this.schemaVersion !== schemaVersion
+    ) {
+      this.clear();
+      this.catalogIdentity = identity;
+      this.schemaVersion = schemaVersion;
+    }
+  }
+
+  private remember(
+    jobId: string,
+    history: TaskHistory,
+    through: string,
+    created: string,
+  ) {
+    this.entries.set(jobId, { history, through, created });
+    if (this.entries.size > 32) {
+      const [oldest, entry] = this.entries.entries().next().value!;
+      entry.history.close();
+      this.entries.delete(oldest);
+    }
+  }
+
+  install(
+    db: DatabaseSync,
+    identity: string,
+    value: TaskHistoryTransfer,
+  ): boolean {
+    const cookie = Number(
+      db.prepare("PRAGMA schema_version").get()!.schema_version,
+    );
+    this.establishIdentity(identity, cookie);
+    if (identity !== value.identity || cookie !== value.schemaVersion)
+      return false;
+    const previous = this.entries.get(value.jobId);
+    if (
+      previous &&
+      (previous.through > value.through ||
+        (previous.history.head?.sequence ?? -1) >
+          (value.state.head?.sequence ?? -1))
+    )
+      return false;
+    const history = new TaskHistory(value.path, value.state);
+    previous?.history.close();
+    this.entries.delete(value.jobId);
+    this.remember(value.jobId, history, value.through, value.created);
+    return true;
+  }
+
   read(
     db: DatabaseSync,
     catalogIdentity: string,
@@ -414,7 +570,26 @@ export class TaskDetailCache {
     through: string,
     withActivity: boolean,
     checkpoint: () => void,
-  ): TaskDetailRead {
+    incrementalOnly?: false,
+  ): TaskDetailRead;
+  read(
+    db: DatabaseSync,
+    catalogIdentity: string,
+    jobId: string,
+    through: string,
+    withActivity: boolean,
+    checkpoint: () => void,
+    incrementalOnly: boolean,
+  ): TaskDetailProbe;
+  read(
+    db: DatabaseSync,
+    catalogIdentity: string,
+    jobId: string,
+    through: string,
+    withActivity: boolean,
+    checkpoint: () => void,
+    incrementalOnly = false,
+  ): TaskDetailProbe {
     const job = db
       .prepare(
         "SELECT created_at, julianday(created_at)<=julianday(?) AS in_range FROM execution_jobs WHERE job_id=?",
@@ -424,14 +599,7 @@ export class TaskDetailCache {
       db.prepare("PRAGMA schema_version").get()!.schema_version,
     );
     // Device and inode detect file replacement or restore. The schema cookie detects DDL.
-    if (
-      this.catalogIdentity !== catalogIdentity ||
-      this.schemaVersion !== schemaVersion
-    ) {
-      this.clear();
-      this.catalogIdentity = catalogIdentity;
-      this.schemaVersion = schemaVersion;
-    }
+    this.establishIdentity(catalogIdentity, schemaVersion);
     const cached = this.entries.get(jobId);
     this.entries.delete(jobId);
     if (!job) {
@@ -482,9 +650,15 @@ export class TaskDetailCache {
       checkpoint();
       rows++;
     };
-    const modes = canAppend
-      ? (["append", "full", "rowid"] as const)
-      : (["full", "rowid"] as const);
+    if (incrementalOnly && !canAppend) {
+      cached?.history.close();
+      return { status: "replay-required", rows_read: 0 };
+    }
+    const modes = incrementalOnly
+      ? (["append"] as const)
+      : canAppend
+        ? (["append", "full", "rowid"] as const)
+        : (["full", "rowid"] as const);
     if (!canAppend) cached?.history.close();
     for (const mode of modes) {
       const history = mode === "append" ? cached!.history : new TaskHistory();
@@ -500,12 +674,7 @@ export class TaskDetailCache {
           withActivity,
         );
         if (!history.deferred && mode !== "rowid") {
-          this.entries.set(jobId, { history, through, created });
-          if (this.entries.size > 32) {
-            const [oldest, entry] = this.entries.entries().next().value!;
-            entry.history.close();
-            this.entries.delete(oldest);
-          }
+          this.remember(jobId, history, through, created);
         } else history.close();
         return { status: "ok", detail, rows_read: rows };
       } catch (error) {
@@ -516,8 +685,11 @@ export class TaskDetailCache {
           mode !== "rowid" &&
           (error instanceof ReplayRequired ||
             error instanceof ContractValidationError)
-        )
+        ) {
+          if (incrementalOnly)
+            return { status: "replay-required", rows_read: rows };
           continue;
+        }
         if (error instanceof ContractValidationError)
           return { status: "invalid-source", rows_read: rows };
         throw error;
@@ -525,4 +697,151 @@ export class TaskDetailCache {
     }
     throw new Error("task event replay failed");
   }
+}
+
+function taskBoundary(
+  db: DatabaseSync,
+  jobId: string,
+  through: string,
+  previous?: EventHead | null,
+) {
+  db.exec("BEGIN");
+  try {
+    const job = db
+      .prepare(
+        "SELECT created_at,julianday(created_at)<=julianday(?) AS in_range FROM execution_jobs WHERE job_id=?",
+      )
+      .get(through, jobId);
+    if (!job) return null;
+    const head =
+      previous === undefined
+        ? eventHead(
+            db
+              .prepare(
+                "SELECT rowid AS position,sequence,event_id FROM execution_events WHERE job_id=? ORDER BY sequence DESC LIMIT 1",
+              )
+              .get(jobId),
+          )
+        : previous &&
+          eventHead(
+            db
+              .prepare(
+                "SELECT rowid AS position,sequence,event_id FROM execution_events WHERE job_id=? AND sequence=?",
+              )
+              .get(jobId, previous.sequence),
+          );
+    const count = head
+      ? Number(
+          db
+            .prepare(
+              "SELECT count(*) AS n FROM execution_events WHERE job_id=? AND sequence<=?",
+            )
+            .get(jobId, head.sequence)!.n,
+        )
+      : 0;
+    const schemaVersion = Number(
+      db.prepare("PRAGMA schema_version").get()!.schema_version,
+    );
+    return {
+      created: String(job.created_at),
+      inRange: job.in_range === 1,
+      head,
+      count,
+      schemaVersion,
+    };
+  } finally {
+    db.exec("COMMIT");
+  }
+}
+
+/** A captured append-only prefix is equivalent to one read snapshot. The
+ * position, job lifetime and range count also detect concurrent deletion. */
+export function replayTaskDetail(
+  db: DatabaseSync,
+  catalogIdentity: () => string,
+  jobId: string,
+  through: string,
+  withActivity: boolean,
+  path: string,
+  checkpoint: () => void,
+): TaskDetailReplay {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const identity = catalogIdentity();
+    const boundary = taskBoundary(db, jobId, through);
+    if (!boundary) return { result: { status: "not-found", rows_read: 0 } };
+    let rows = 0;
+    const onRow = () => {
+      checkpoint();
+      rows++;
+    };
+    let changed = false;
+    for (const mode of ["full", "rowid"] as const) {
+      checkpoint();
+      const history = new TaskHistory(path);
+      let keep = false;
+      try {
+        const detail = history.read(
+          db,
+          jobId,
+          through,
+          boundary.inRange,
+          boundary.head,
+          mode,
+          onRow,
+          withActivity,
+          true,
+          checkpoint,
+        );
+        const after = taskBoundary(db, jobId, through, boundary.head);
+        if (
+          catalogIdentity() !== identity ||
+          JSON.stringify(after) !== JSON.stringify(boundary)
+        ) {
+          changed = true;
+          break;
+        }
+        const result = { status: "ok" as const, detail, rows_read: rows };
+        if (history.deferred || mode === "rowid") return { result };
+        keep = true;
+        return {
+          result,
+          transfer: {
+            path,
+            jobId,
+            identity,
+            schemaVersion: boundary.schemaVersion,
+            through,
+            created: boundary.created,
+            state: history.state(),
+          },
+        };
+      } catch (error) {
+        checkpoint();
+        const after = taskBoundary(db, jobId, through, boundary.head);
+        if (
+          catalogIdentity() !== identity ||
+          JSON.stringify(after) !== JSON.stringify(boundary)
+        ) {
+          changed = true;
+          break;
+        }
+        if (error instanceof ProcessingBudgetExceeded)
+          return { result: { status: "budget-exceeded", rows_read: rows } };
+        if (
+          mode === "full" &&
+          (error instanceof ReplayRequired ||
+            error instanceof ContractValidationError)
+        )
+          continue;
+        if (error instanceof ContractValidationError)
+          return { result: { status: "invalid-source", rows_read: rows } };
+        throw error;
+      } finally {
+        history.close(true);
+        if (!keep) rmSync(path, { force: true });
+      }
+    }
+    if (!changed) break;
+  }
+  throw new Error("task event replay snapshot changed");
 }

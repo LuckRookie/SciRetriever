@@ -7,6 +7,7 @@
 - [catalog-schema.ts](catalog-schema.ts)：Catalog 版本与准入。
 - [repositories.ts](repositories.ts)：文献等事实仓库。
 - [worker.ts](worker.ts)：Worker 调用边界；`withReadSnapshot` 为多次关联读取创建独立只读连接，消费结束或失败时关闭，不占用普通查询连接的事务。
+- [read-lanes.ts](read-lanes.ts) 列出读取的分道与耗时上限。工作台的查询与应用对象共用一个只读长请求线程。许可内的读取继续随原写入处理。短读排队及执行合计超过 5 秒时记录 `sqlite-short-read-slow`。
 - [literature-bibliographies.ts](literature-bibliographies.ts)：文献公开批量书目读取的存储适配，只取当前标识、题名与年份；与文件夹导出共享同一快照，不读取正文或状态。
 - [worker-runtime.ts](worker-runtime.ts)：SQLite worker 运行实现。
 - [literature-search-rows.ts](literature-search-rows.ts) 使用内容表的 `c0` 覆盖索引按文献 ID 找到书目 FTS 的 rowid，供改写和撤回使用。FTS5 内部内容表的文件格式规定 `id` 为 rowid，`c0` 为第一个声明列，此处是 `literature_id`。SQLite 随每次 FTS 写入维护该索引。
@@ -58,7 +59,11 @@
 
 ## 文献库查询投影与取消
 
-`library-state-cache.ts` 在只读事务中复用完整的状态映射，键包含 catalog 文件身份、SQLite `schema_version`、标签上限和部署解析 profile。事务内触发器维护 `library_state_revision` 与按篇的 `library_state_changes`，少量已定位变更只重新读取并推导对应文献；未知归属、大批量、身份或配置变化退回全量。不同连接独立记录已消费水位，不删除其它连接仍需的提示；删除文献保留失效 tombstone。候选 Map 和水位同时发布，取消或失败不改旧 Map。
+纯 SQL 文献库计数按 512 个 MetaLiterature 分段，因此各版本的全文计数仍按同一篇合并。各段释放 catalog 读事务。发现并发提交时改用单一快照，FTS 筛选和最近打开窗口也使用单一快照。长线程需要的完整状态投影保存在临时 SQLite 文件，状态计算每批装入最多 1,000 个文献 ID，返回结果后关闭文件。导入批次状态按受影响文献推算。
+
+任务详情首次扫描固定事件尾部，按序号分段读，每段最多 1,000 条。扫描结束复核任务身份、尾锚及前缀条数。短线程读缓存位置之后的新增事件，使用最多 32 个任务的聚合缓存。工作台每 10 秒检查 WAL。空闲 15 秒后尝试 PASSIVE，只有全部帧已写回且 WAL 未继续变化才以零等待尝试 TRUNCATE。
+
+本地连接需要复用状态时，`library-state-cache.ts` 使用只读事务中的完整状态映射，键包含 catalog 文件身份、SQLite `schema_version`、标签上限和部署解析 profile。事务内触发器维护 `library_state_revision` 与按篇的 `library_state_changes`，少量已定位变更只重新读取并推导对应文献；未知归属、大批量、身份或配置变化退回全量。不同连接独立记录已消费水位，不删除其它连接仍需的提示；删除文献保留失效 tombstone。候选 Map 和水位同时发布，取消或失败不改旧 Map。
 
 状态输入包括：文献与元数据完整性、作者存在性、文献资产角色与 PDF 类型/hash、当前原始解析与 pin、校订版本/当前指针/人工 revision、固定文档与默认指针、结构注释及当前指针、建档 run 与对应 job 状态、步骤、问题处置、标签数量和描述头。完整表集合与 INSERT/UPDATE/DELETE 触发器由 `schema.ts` 的 `LIBRARY_STATE_INPUT_TABLES` 定义。获取失败记录不改变六态，仍在每次计数/筛选的同一快照中读取；阅读历史和文件夹不改变状态缓存版本。结果引用不改变六态，但会改变初稿事实：`library-state-cache.ts` 在同一快照按版本索引比较各篇 PDF 默认初稿的事实摘要，只失效事实变化的文献；不在结果发布事务或冻结结构中另加触发器。内部仅推导就绪状态时不重复聚合事实。
 

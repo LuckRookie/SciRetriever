@@ -241,6 +241,9 @@ export class CatalogWriteAdmission {
   get hasQueuedWrites(): boolean {
     return this.waiting > 0;
   }
+  get ownsWriteAdmission(): boolean {
+    return this.context.getStore()?.active === true;
+  }
   private async lock(check: () => void, signal?: AbortSignal) {
     const deadline = Date.now() + (this.options.waitMs ?? 0);
     for (let pause = 20; ; pause = Math.min(pause * 2, 500)) {

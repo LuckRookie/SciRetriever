@@ -47,7 +47,7 @@ B4 的决定（已定，见 [ADR 0065](../../architecture/decisions/0065-scale-r
 - 2026-11-22：7.1–7.4 完成（后端实施者，一轮）。做法写进[查询技术篇](../../architecture/technical/06-retrieval-context.md)的逐篇增量刷新一节与 `LibrarySearchPage` 一节。迁移与 10.3 的三个索引合成一步，共用 `scripts/migrate-literature-search-indexes.mjs`：先建表与触发器，再用 `--reconcile` 做一次全量比对补齐。1m 上建表 1.1–1.5 s，补齐 13–16 s。1m 副本上另一个进程以每秒约 100 篇持续写入 610 s：索引落后 P95 73.8 s、最大 95.8 s（目标 2 分钟），刷新线程 CPU P95 为单核的 25.7%，停写后追平。材料检索高频词 3.5 s → 0.6 s；有待索引写入时关闭 15.4 s → 0.05 s。总设计师复跑见提交说明，`pnpm build` 通过。报告 `sandbox/reports/2026-11-22-search-index/REPORT.md`。
 - 残余：
   - 文献库高频词搜索（1m，137,487 篇命中）仍是 1.49／1.61 s：精确总数约 0.7 s，归 05 的截断计数；相关度前 1,000 条仍要给全部命中算 bm25，约 0.7 s。千万篇时后者约是十倍，超过 1.5 s 目标。这是设计问题，待和 Owner 讨论。
-  - 启动后的一次 `import_read` 52.8 s、`state` 47.8 s，关闭要等它们，归 08 查明。
+  - 启动后的一次 `import_read` 52.8 s、`state` 47.8 s，关闭要等它们，归 08 查明。（08 已修好。）
 
 ## 退出条件
 
