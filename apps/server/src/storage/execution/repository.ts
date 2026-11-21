@@ -276,6 +276,12 @@ export class ExecutionRepository {
   appendEvent(event: ExecutionEvent): Promise<ExecutionEvent> {
     return this.database.appendExecutionEvent(event);
   }
+  appendMetadataEvent(event: ExecutionEvent): Promise<void> {
+    return this.database.appendMetadataEvent(event);
+  }
+  citationCheckpoints(jobId: string, targetId: string) {
+    return this.database.citationCheckpoints(jobId, targetId);
+  }
   sourceRecordPage(request: {
     job_id: string | null;
     from: string | null;

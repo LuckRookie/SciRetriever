@@ -259,6 +259,7 @@ export class OpenCitationsRestAdapter
         if (index >= items.length) return null;
         return {
           raw_item: items[index++]!,
+          buffered_next: index < items.length,
           source_exhausted_after: index === items.length,
         };
       },

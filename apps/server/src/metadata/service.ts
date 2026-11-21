@@ -110,6 +110,13 @@ async function* scanItems(
       const delivery = await session.pull_raw_item();
       if (delivery === null) break;
       raw_item_count += 1;
+      const batch = referenceQuery
+        ? {
+            buffered_next: delivery.buffered_next === true,
+            end_follows:
+              delivery.source_exhausted_after || raw_item_count === scan_limit,
+          }
+        : {};
       try {
         const item: NeutralMetadataItem = await session.convert_raw_item(
           delivery.raw_item,
@@ -131,7 +138,7 @@ async function* scanItems(
           throw new MetadataProviderFailure(
             failure("metadata-reference-direction"),
           );
-        yield { kind: "item", item, failure: null };
+        yield { kind: "item", item, failure: null, ...batch };
       } catch (error) {
         const detail =
           error instanceof MetadataProviderFailure
@@ -142,6 +149,7 @@ async function* scanItems(
           kind: "item",
           item: { observations: [], relations: [] },
           failure: detail,
+          ...batch,
         };
       }
       if (delivery.source_exhausted_after) break;

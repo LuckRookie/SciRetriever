@@ -1833,6 +1833,7 @@ async function createApplicationOwned(
                   registry: metadata,
                   identity,
                   library,
+                  database: database!,
                   repository: jobs!,
                   topic: topicDiscovery,
                   citations: citationDiscovery,

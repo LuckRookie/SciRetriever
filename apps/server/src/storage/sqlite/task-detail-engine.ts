@@ -183,6 +183,7 @@ class TaskHistory {
   private readonly totals = new TaskSourceAggregation(this.scratch);
   private sourceResults: TaskSourceResults | undefined;
   private processed = 0;
+  private storedEvents = 0;
   private processingCount = 0;
   private firstProcessing: number | null = null;
   private acquisitionCount = 0;
@@ -190,7 +191,7 @@ class TaskHistory {
   deferred = false;
 
   get eventCount() {
-    return this.processed;
+    return this.storedEvents;
   }
 
   close() {
@@ -208,6 +209,11 @@ class TaskHistory {
     withActivity: boolean,
   ): TaskDetailEvents {
     return this.scratch.batch(() => {
+      const appendTechnical =
+        mode === "append" &&
+        !!snapshot &&
+        !!this.head &&
+        snapshot.sequence - this.head.sequence <= TECHNICAL_LIMIT;
       if (snapshot) {
         const rows = db
           .prepare(
@@ -240,10 +246,11 @@ class TaskHistory {
             throw new ReplayRequired();
           sequence = next;
           position = nextPosition;
+          this.storedEvents++;
+          if (row.kind === "citation-write-checkpoint") continue;
           this.acceptActivity(row);
           if (mode !== "rowid") this.acceptSource(row, jobInRange);
-          if (mode === "append" && next > snapshot.sequence - TECHNICAL_LIMIT)
-            this.storeTechnical(row, this.processed - 1);
+          if (appendTechnical) this.storeTechnical(row, this.processed - 1);
         }
         if (sequence !== snapshot.sequence) throw new ReplayRequired();
         if (mode === "rowid" && jobInRange) {
@@ -264,13 +271,13 @@ class TaskHistory {
           }
         }
       }
-      if (mode !== "append" && snapshot) {
+      if (!appendTechnical && snapshot) {
         let ordinal = this.processed - 1;
         for (const row of db
           .prepare(
             `
             SELECT event_id, sequence, kind, payload_json, created_at
-            FROM execution_events WHERE job_id=? AND sequence<=?
+            FROM execution_events WHERE job_id=? AND sequence<=? AND kind<>'citation-write-checkpoint'
             ORDER BY sequence DESC LIMIT ?
           `,
           )

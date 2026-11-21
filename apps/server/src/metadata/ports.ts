@@ -50,6 +50,8 @@ export interface NeutralMetadataItem {
 export interface RawItemDelivery {
   readonly raw_item: unknown;
   readonly source_exhausted_after: boolean;
+  /** Another item is already buffered by this provider response. */
+  readonly buffered_next?: boolean;
 }
 export interface RawItemSession {
   pull_raw_item(): RawItemDelivery | null | Promise<RawItemDelivery | null>;
@@ -101,6 +103,8 @@ export type MetadataScanEvent =
       readonly kind: "item";
       readonly item: NeutralMetadataItem;
       readonly failure: StableFailure | null;
+      readonly buffered_next?: boolean;
+      readonly end_follows?: boolean;
     }
   | {
       readonly kind: "end";

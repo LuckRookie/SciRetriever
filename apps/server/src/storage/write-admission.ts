@@ -232,11 +232,15 @@ interface Scope {
 export class CatalogWriteAdmission {
   private readonly context = new AsyncLocalStorage<Scope>();
   private tail: Promise<unknown> = Promise.resolve();
+  private waiting = 0;
   private closed = false;
   constructor(
     readonly catalogPath: string,
     private readonly options: { readonly waitMs?: number } = {},
   ) {}
+  get hasQueuedWrites(): boolean {
+    return this.waiting > 0;
+  }
   private async lock(check: () => void, signal?: AbortSignal) {
     const deadline = Date.now() + (this.options.waitMs ?? 0);
     for (let pause = 20; ; pause = Math.min(pause * 2, 500)) {
@@ -274,7 +278,9 @@ export class CatalogWriteAdmission {
         return Promise.reject(error);
       }
     }
+    this.waiting++;
     const pending = this.tail.then(async () => {
+      this.waiting--;
       check();
       const lock = await this.lock(check, signal);
       const scope = { active: true };

@@ -60,7 +60,7 @@ export class MetadataSourceRecorder {
     this.pending = this.pending.then(async () => {
       if (this.failed) return;
       try {
-        await this.repository.appendEvent({
+        await this.repository.appendMetadataEvent({
           event_id: randomUUID(),
           job_id: this.jobId,
           sequence: -1,
@@ -76,6 +76,13 @@ export class MetadataSourceRecorder {
   private async flush() {
     await this.pending;
     if (this.failed) throw new MetadataProgressError(this.failed.cause);
+  }
+  async dispatched() {
+    if (!this.requested) {
+      this.requested = true;
+      this.enqueue({ phase: "requested" });
+    }
+    await this.flush();
   }
   async start() {
     this.enqueue({ phase: "started" });
@@ -158,6 +165,38 @@ export class MetadataSourceRun {
     private readonly jobId: string,
     private readonly targetId: string,
   ) {}
+  checkpoints() {
+    return this.repository.citationCheckpoints(this.jobId, this.targetId);
+  }
+  checkpoint(fields: Record<string, unknown>) {
+    return this.append("citation-write-checkpoint", fields);
+  }
+  citationResponseReplaced(
+    literatureId: string,
+    providerName: string,
+    committedRelations: number,
+  ) {
+    return this.append("citation-response-replaced", {
+      literature_id: literatureId,
+      provider_name: providerName,
+      committed_relations: committedRelations,
+      reason:
+        "The resumed provider response did not contain the previously partially written citation item. Its committed relations were retained.",
+    });
+  }
+  private append(
+    kind: "citation-write-checkpoint" | "citation-response-replaced",
+    fields: Record<string, unknown>,
+  ) {
+    return this.repository.appendMetadataEvent({
+      event_id: randomUUID(),
+      job_id: this.jobId,
+      sequence: -1,
+      kind,
+      payload: { ...fields, target_id: this.targetId },
+      created_at: new Date().toISOString(),
+    });
+  }
   begin(
     source: string,
     purpose: MetadataSourcePurpose,

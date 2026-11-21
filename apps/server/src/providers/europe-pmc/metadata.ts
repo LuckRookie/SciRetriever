@@ -491,6 +491,7 @@ export class EuropePmcRestAdapter
           const raw_item = items[index++]!;
           return {
             raw_item,
+            buffered_next: index < items.length,
             source_exhausted_after: exhausted && index === items.length,
           };
         }
@@ -533,6 +534,7 @@ export class EuropePmcRestAdapter
           } else offset += this.size;
           return {
             raw_item: items[index++]!,
+            buffered_next: index < items.length,
             source_exhausted_after: exhausted && index === items.length,
           };
         }

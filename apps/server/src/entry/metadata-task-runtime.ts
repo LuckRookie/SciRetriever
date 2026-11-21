@@ -16,6 +16,8 @@ import type {
   CitationDiscoveryService,
 } from "./discovery.js";
 import { sourceProblem } from "../providers/shared/source-problem.js";
+import type { SqliteWorker } from "../storage/sqlite/worker.js";
+import { writeMetadataItems } from "./metadata-write.js";
 
 function presentDiscoveryReport(
   report:
@@ -36,6 +38,7 @@ export async function executeMetadataTask(
     registry: MetadataRegistry;
     identity: LiteratureIdentityService;
     library: LiteratureQueryService;
+    database: SqliteWorker;
     repository: ExecutionRepository;
     topic: TopicDiscoveryService;
     citations: CitationDiscoveryService;
@@ -146,30 +149,34 @@ export async function executeMetadataTask(
         break;
       }
       let hit = false;
-      for (const observation of result.observations) {
-        const matches =
-          observation.provenance.source_name === provider.provider_name &&
-          ((key.record_id !== null &&
-            key.record_id === observation.provenance.source_record_id) ||
-            key.identifiers.some((i) =>
-              observation.metadata.identifiers.some(
-                (other) =>
-                  i.namespace === other.namespace && i.value === other.value,
-              ),
-            ));
-        if (!matches) {
-          await record.rejected();
-          continue;
-        }
-        hit = true;
-        const decision = await ports.identity.observe(observation);
-        if (decision.disposition !== "accepted") {
-          await record.rejected();
-          continue;
-        }
-        await record.observed(decision.meta_literature_id, decision.created);
-        await record.included(decision.meta_literature_id);
-      }
+      await writeMetadataItems(
+        ports.database,
+        result.observations,
+        async (observation) => {
+          const matches =
+            observation.provenance.source_name === provider.provider_name &&
+            ((key.record_id !== null &&
+              key.record_id === observation.provenance.source_record_id) ||
+              key.identifiers.some((i) =>
+                observation.metadata.identifiers.some(
+                  (other) =>
+                    i.namespace === other.namespace && i.value === other.value,
+                ),
+              ));
+          if (!matches) {
+            await record.rejected();
+            return;
+          }
+          hit = true;
+          const decision = await ports.identity.observe(observation);
+          if (decision.disposition !== "accepted") {
+            await record.rejected();
+            return;
+          }
+          await record.observed(decision.meta_literature_id, decision.created);
+          await record.included(decision.meta_literature_id);
+        },
+      );
       if (hit) matched++;
       if (result.failure) {
         errors++;

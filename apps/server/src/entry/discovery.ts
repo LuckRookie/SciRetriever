@@ -4,9 +4,11 @@ import {
   type IntakeOrigin,
 } from "../literature/intake.js";
 import { randomUUID } from "node:crypto";
+import { writeMetadataItems } from "./metadata-write.js";
 import {
   parseReference,
   parseLiteratureDetail,
+  type IntakeBatchId,
   type MetadataObservation,
   type ProviderLiteratureKey,
   type StableFailure,
@@ -21,6 +23,17 @@ import {
   MetadataProgressError,
   type MetadataSourceRun,
 } from "../application/jobs/metadata-progress.js";
+import { observeNetworkRequests } from "../network/request-activity.js";
+import {
+  citationItemKey,
+  parseCitationCheckpoint,
+  pendingCitationItem,
+  restoreCitationItem,
+  type CitationCause,
+  type CitationCheckpoint,
+  type CitationItem,
+  type CitationProviderState,
+} from "./citation-checkpoint.js";
 import type { MetadataScanEvent } from "../metadata/ports.js";
 import type { LiteratureIdentityService } from "../literature/identity.js";
 import type { ObservationRepository } from "../storage/sqlite/repositories.js";
@@ -83,15 +96,6 @@ const providerFailure = (reason: string): StableFailure => ({
   retryable: true,
 });
 
-interface CitationProviderState {
-  readonly provider_name: string;
-  readonly scan_limit: number | null;
-  raw_item_count: number;
-  attempted: boolean;
-  terminal: "SCAN_LIMIT_REACHED" | "FAILED" | null;
-  failure: StableFailure | null;
-}
-
 function citationScanLimitReached(state: CitationProviderState): boolean {
   return state.scan_limit !== null && state.raw_item_count >= state.scan_limit;
 }
@@ -152,6 +156,60 @@ function observationMatches(
       ))
   );
 }
+
+type ReferencePage = {
+  readonly items: readonly CitationItem[];
+  readonly end?: Extract<MetadataScanEvent, { kind: "end" }>;
+};
+
+/** Only drain records already buffered by the current provider response. */
+async function* citationPages(
+  stream: AsyncGenerator<MetadataScanEvent>,
+): AsyncGenerator<ReferencePage> {
+  let items: CitationItem[] = [];
+  for await (const event of stream) {
+    if (event.kind === "end") {
+      yield { items, end: event };
+      return;
+    }
+    items.push(event);
+    if (
+      !event.end_follows &&
+      (!event.buffered_next || event.failure || items.length >= 128)
+    ) {
+      yield { items };
+      items = [];
+    }
+  }
+}
+
+type CitationLookup = { readonly requested: boolean } & (
+  | { readonly result: MetadataProviderInvocation }
+  | { readonly error: unknown }
+);
+
+// A lookup is a provider call. Roll back the provisional segment before calling
+// out, then replay it using the actual receipt and the same event order.
+class CitationLookupNeeded extends Error {
+  constructor(
+    readonly key: string,
+    readonly lookup: () => Promise<MetadataProviderInvocation>,
+  ) {
+    super("citation lookup must run outside the catalog write");
+  }
+  async fetch(): Promise<CitationLookup> {
+    let requested = false;
+    try {
+      const result = await observeNetworkRequests(() => {
+        requested = true;
+      }, this.lookup);
+      return { requested, result };
+    } catch (error) {
+      return { requested, error };
+    }
+  }
+}
+class CitationPaused extends Error {}
 
 export class TopicDiscoveryService {
   constructor(
@@ -253,50 +311,63 @@ export class TopicDiscoveryService {
           outcome: invocation.outcome,
           failure: invocation.failure,
         });
-        for (const relation of invocation.relations) {
-          await this.observations.publishProviderRelation(relation);
-        }
-        for (const observation of invocation.observations) {
-          const year = observation.metadata.publication_year;
-          if (
-            (query.year_from !== null || query.year_to !== null) &&
-            (year === null ||
-              (query.year_from !== null && year < query.year_from) ||
-              (query.year_to !== null && year > query.year_to))
-          ) {
-            await progress?.rejected();
-            continue;
-          }
-          const decision = await this.identity.observe(observation, {
-            intake_batch_id: batchId,
-          });
-          if (decision.disposition !== "accepted" || !decision.literature_id) {
-            await progress?.rejected();
-            continue;
-          }
-          accepted += decision.created ? 1 : 0;
-          matched += decision.created ? 0 : 1;
-          const literature = await this.database.getLiterature(
-            decision.literature_id,
-          );
-          if (!literature)
-            throw new Error("discovery identity refers to missing Literature");
-          await progress?.observed(
-            literature.meta_literature_id,
-            decision.created,
-          );
-          await progress?.included(literature.meta_literature_id);
-          if (!results.has(literature.meta_literature_id)) {
-            results.set(literature.meta_literature_id, {
-              meta_literature_id: literature.meta_literature_id,
+        await writeMetadataItems(
+          this.database,
+          invocation.relations,
+          async (relation) => {
+            await this.observations.publishProviderRelation(relation);
+          },
+        );
+        await writeMetadataItems(
+          this.database,
+          invocation.observations,
+          async (observation) => {
+            const year = observation.metadata.publication_year;
+            if (
+              (query.year_from !== null || query.year_to !== null) &&
+              (year === null ||
+                (query.year_from !== null && year < query.year_from) ||
+                (query.year_to !== null && year > query.year_to))
+            ) {
+              await progress?.rejected();
+              return;
+            }
+            const decision = await this.identity.observe(observation, {
+              intake_batch_id: batchId,
             });
-          }
-          topicCauses.push({
-            meta_literature_id: literature.meta_literature_id,
-            metadata_observation_id: observation.observation_id,
-            actual_literature_id: literature.literature_id,
-          });
-        }
+            if (
+              decision.disposition !== "accepted" ||
+              !decision.literature_id
+            ) {
+              await progress?.rejected();
+              return;
+            }
+            accepted += decision.created ? 1 : 0;
+            matched += decision.created ? 0 : 1;
+            const literature = await this.database.getLiteratureIds(
+              decision.literature_id,
+            );
+            if (!literature)
+              throw new Error(
+                "discovery identity refers to missing Literature",
+              );
+            await progress?.observed(
+              literature.meta_literature_id,
+              decision.created,
+            );
+            await progress?.included(literature.meta_literature_id);
+            if (!results.has(literature.meta_literature_id)) {
+              results.set(literature.meta_literature_id, {
+                meta_literature_id: literature.meta_literature_id,
+              });
+            }
+            topicCauses.push({
+              meta_literature_id: literature.meta_literature_id,
+              metadata_observation_id: observation.observation_id,
+              actual_literature_id: literature.literature_id,
+            });
+          },
+        );
         if (invocation.failure)
           await progress?.failure(invocation.failure.code);
         else
@@ -405,122 +476,263 @@ export class CitationDiscoveryService {
     const seeds = [...new Set(request.seed_literature_ids)];
     const frontier = new Map<string, number>(seeds.map((id) => [id, 0]));
     const visited = new Set(seeds);
-    const runId = randomUUID();
-    const seedTitle =
-      (await this.database.getLiterature(seeds[0]!))?.metadata.title ??
-      seeds[0]!;
-    const batchId = await startIntake(
-      this.database,
-      "citation",
-      `${seedTitle} · ${request.direction}`,
-      {
-        ...(seeds.length === 1 ? { seed_literature_id: seeds[0]! } : {}),
-        ...(request.direction === "both"
-          ? {}
-          : { direction: request.direction }),
-        providers: request.providers.map((p) => p.provider_name),
-      },
-      request.origin,
+    const seenEdges = new Set<string>();
+    const results = new Map<string, { meta_literature_id: string }>();
+    const causes: CitationCause[] = [];
+    const remember = (cause: CitationCause) => {
+      causes.push(cause);
+      seenEdges.add(
+        cause.source_literature_id + "\u0000" + cause.target_literature_id,
+      );
+      results.set(cause.meta_literature_id, {
+        meta_literature_id: cause.meta_literature_id,
+      });
+      const target = cause.actual_literature_id;
+      if (cause.depth < request.max_depth && !visited.has(target)) {
+        visited.add(target);
+        frontier.set(target, cause.depth);
+      }
+    };
+    const saved = ((await request.source_run?.checkpoints()) ?? []).map(
+      parseCitationCheckpoint,
     );
+    const latest = saved.at(-1);
+    const resume = latest?.closed === "FAILED" ? undefined : latest;
+    const history = resume
+      ? saved.filter((checkpoint) => checkpoint.run_id === resume.run_id)
+      : [];
+    const runId = resume?.run_id ?? randomUUID();
+    const startedAt = resume?.started_at ?? new Date().toISOString();
+    let batchId: IntakeBatchId;
+    if (resume) {
+      if (
+        resume.providers.length !== states.size ||
+        resume.providers.some(
+          (state) =>
+            states.get(state.provider_name)?.scan_limit !== state.scan_limit,
+        )
+      )
+        throw new Error(
+          "citation checkpoint does not match the saved providers",
+        );
+      for (const state of resume.providers)
+        states.set(state.provider_name, { ...state });
+      for (const checkpoint of history) {
+        if (
+          checkpoint.batch_id !== resume.batch_id ||
+          checkpoint.started_at !== startedAt
+        )
+          throw new Error("citation checkpoint belongs to another run");
+        for (const cause of checkpoint.causes) remember(cause);
+        if (checkpoint.checked && checkpoint.source_id)
+          frontier.delete(checkpoint.source_id);
+      }
+    }
+    const sourceResults = (): CitationDiscoveryReport["source_results"] =>
+      request.providers
+        .filter((provider) => states.get(provider.provider_name)!.attempted)
+        .map((provider) => {
+          const state = states.get(provider.provider_name)!;
+          return {
+            provider_name: provider.provider_name,
+            outcome: state.failure ? "FAILED" : (state.terminal ?? "EXHAUSTED"),
+            failure: state.failure,
+          };
+        });
+    const report = (
+      status: CitationDiscoveryReport["status"],
+    ): CitationDiscoveryReport =>
+      Object.freeze({
+        intake_batch_id: batchId,
+        discovery_run_id: runId,
+        status,
+        result_count: results.size,
+        source_results: Object.freeze(sourceResults()),
+      });
+    const save = async (
+      fields: Partial<
+        Omit<
+          CitationCheckpoint,
+          "version" | "run_id" | "batch_id" | "started_at" | "providers"
+        >
+      > = {},
+    ) => {
+      if (!request.source_run) return;
+      await request.source_run.checkpoint({
+        version: 1,
+        run_id: runId,
+        batch_id: batchId,
+        started_at: startedAt,
+        providers: [...states.values()],
+        source_id: null,
+        checked: false,
+        next_provider: 0,
+        active_query: null,
+        raw_provider: -1,
+        raw_items: [],
+        causes: [],
+        closed: null,
+        ...fields,
+      });
+    };
+    if (resume) {
+      batchId = resume.batch_id;
+      if (resume.closed) return report(resume.closed);
+      await this.database.writeIntake({
+        operation: "resume-citation",
+        batch_id: batchId,
+        discovery_run_id: runId,
+        owner_pid: process.pid,
+      });
+    } else {
+      const seedTitle =
+        (await this.database.getLiterature(seeds[0]!))?.metadata.title ??
+        seeds[0]!;
+      batchId = await this.database.writeMetadataSegment(async () => {
+        batchId = await startIntake(
+          this.database,
+          "citation",
+          seedTitle + " · " + request.direction,
+          {
+            ...(seeds.length === 1 ? { seed_literature_id: seeds[0]! } : {}),
+            ...(request.direction === "both"
+              ? {}
+              : { direction: request.direction }),
+            providers: request.providers.map((p) => p.provider_name),
+          },
+          request.origin,
+        );
+        await save();
+        return batchId;
+      });
+    }
     let settled = false;
+    let interrupted = request.signal?.aborted ?? false;
+    const partMetas = new Set<string>();
+    const resultLimitReached = () =>
+      request.result_limit !== null &&
+      results.size + partMetas.size >= request.result_limit;
     try {
-      const seenEdges = new Set<string>();
-      const results = new Map<string, { meta_literature_id: string }>();
-      const resultLimitReached = () =>
-        request.result_limit !== null && results.size >= request.result_limit;
-      const causes: Array<DiscoveryPublication["citation_causes"][number]> = [];
-      let interrupted = request.signal?.aborted ?? false;
-      while (frontier.size && !interrupted && !resultLimitReached()) {
-        const current = [...frontier.entries()];
-        frontier.clear();
-        for (const [sourceId, depth] of current) {
-          if (depth >= request.max_depth || resultLimitReached()) continue;
-          const source = await this.database.getLiterature(sourceId);
-          if (!source)
-            throw new Error("citation seed Literature was not found");
-          // Provider-native record IDs can be required even when a DOI is known
-          // (for example, a provider's reverse-citation query). Keep both forms.
-          const snapshot =
-            await this.database.literatureDetailSnapshot(sourceId);
-          const sourceObservations = snapshot
-            ? (await parseLiteratureDetail(snapshot.detail))
-                .metadata_observations
-            : [];
-          for (const provider of request.providers) {
-            if (resultLimitReached() || interrupted) break;
-            const state = states.get(provider.provider_name)!;
-            if (state.terminal !== null) continue;
+      for (const [sourceId, depth] of frontier) {
+        if (interrupted || resultLimitReached()) break;
+        if (depth >= request.max_depth) continue;
+        const sourceResume =
+          resume?.source_id === sourceId && !resume.checked ? resume : null;
+        let sourceChecked = false;
+        const source = await this.database.getLiterature(sourceId);
+        if (!source) throw new Error("citation seed Literature was not found");
+        // Provider-native record IDs can be required even when a DOI is known
+        // (for example, a provider's reverse-citation query). Keep both forms.
+        const snapshot = await this.database.literatureDetailSnapshot(sourceId);
+        const sourceObservations = snapshot
+          ? (await parseLiteratureDetail(snapshot.detail)).metadata_observations
+          : [];
+        for (
+          let providerIndex = sourceResume?.next_provider ?? 0;
+          providerIndex < request.providers.length;
+          providerIndex++
+        ) {
+          const provider = request.providers[providerIndex]!;
+          if (resultLimitReached() || interrupted) break;
+          const state = states.get(provider.provider_name)!;
+          if (
+            state.terminal !== null &&
+            !(
+              sourceResume?.next_provider === providerIndex &&
+              sourceResume.active_query?.pending_item
+            )
+          )
+            continue;
+          if (request.signal?.aborted) {
+            interrupted = true;
+            break;
+          }
+          const key: ProviderLiteratureKey = {
+            record_id:
+              sourceObservations.find(
+                (item) =>
+                  item.provenance.source_name === provider.provider_name,
+              )?.provenance.source_record_id ?? null,
+            identifiers: source.metadata.identifiers,
+          };
+          const progress = await request.source_run?.begin(
+            provider.provider_name,
+            "reference-query",
+            sourceId,
+          );
+          const activeQuery =
+            sourceResume?.next_provider === providerIndex
+              ? sourceResume.active_query
+              : null;
+          let sourceFailure = activeQuery?.failure ?? null,
+            referenceListProvided = activeQuery?.returnedRelations ?? false;
+          let complete = false;
+          let usableRelations = activeQuery?.usableRelations ?? 0;
+          let incomplete = activeQuery?.incomplete ?? false;
+          const replayed = new Map<string, number>();
+          const pendingItem = activeQuery?.pending_item ?? null;
+          let pendingMatched = pendingItem === null;
+          let replayCount = pendingItem ? 1 : 0;
+          if (activeQuery)
+            for (const checkpoint of history) {
+              if (
+                checkpoint.source_id !== sourceId ||
+                checkpoint.raw_provider !== providerIndex
+              )
+                continue;
+              for (const key of checkpoint.raw_items) {
+                replayed.set(key, (replayed.get(key) ?? 0) + 1);
+                replayCount++;
+              }
+            }
+          let stream: AsyncGenerator<MetadataScanEvent>;
+          state.attempted = true;
+          try {
+            stream = this.metadata.streamReferencesProvider(
+              request.direction,
+              provider.provider_name,
+              [key],
+              state.scan_limit === null
+                ? null
+                : state.scan_limit - state.raw_item_count + replayCount,
+              request.signal,
+            );
+          } catch (error) {
+            if (error instanceof MetadataProgressError) throw error;
             if (request.signal?.aborted) {
+              await progress?.finish("cancelled");
               interrupted = true;
               break;
             }
-            const key: ProviderLiteratureKey = {
-              record_id:
-                sourceObservations.find(
-                  (item) =>
-                    item.provenance.source_name === provider.provider_name,
-                )?.provenance.source_record_id ?? null,
-              identifiers: source.metadata.identifiers,
-            };
-            const progress = await request.source_run?.begin(
-              provider.provider_name,
-              "reference-query",
-              sourceId,
-            );
-            let sourceFailure: StableFailure | null = null,
-              referenceListProvided = false;
-            let complete = false;
-            let usableRelations = 0;
-            let incomplete = false;
-            let stream: AsyncGenerator<MetadataScanEvent>;
-            state.attempted = true;
-            try {
-              stream = this.metadata.streamReferencesProvider(
-                request.direction,
-                provider.provider_name,
-                [key],
-                state.scan_limit === null
-                  ? null
-                  : state.scan_limit - state.raw_item_count,
-                request.signal,
-              );
-            } catch (error) {
-              if (error instanceof MetadataProgressError) throw error;
-              if (request.signal?.aborted) {
-                await progress?.finish("cancelled");
-                interrupted = true;
-                break;
-              }
-              const failure =
-                error instanceof MetadataProviderFailure
-                  ? error.failure
-                  : providerFailure(
-                      "The citation provider could not complete expansion.",
-                    );
+            const failure =
+              error instanceof MetadataProviderFailure
+                ? error.failure
+                : providerFailure(
+                    "The citation provider could not complete expansion.",
+                  );
+            await this.database.writeMetadataSegment(async () => {
               await progress?.failure(failure.code, error);
               recordCitationFailure(state, failure);
-              continue;
-            }
-            for await (const event of progress
-              ? progress.stream(stream)
-              : stream) {
-              if (event.kind === "end") {
-                if (event.outcome === "INTERRUPTED" || request.signal?.aborted)
-                  interrupted = true;
-                if (event.failure && !interrupted) {
-                  sourceFailure ??= event.failure;
-                  recordCitationFailure(state, event.failure);
-                  incomplete = true;
-                }
-                complete = event.outcome === "EXHAUSTED";
-                break;
-              }
+              await save({
+                source_id: sourceId,
+                next_provider: providerIndex + 1,
+              });
+            });
+            continue;
+          }
+          const partEdges = new Set<string>();
+          const partCauses: CitationCause[] = [];
+          const lookups = new Map<string, CitationLookup>();
+          let wroteLookup = false;
+          const applyItem = async (
+            event: CitationItem,
+            nextRelation: number | null,
+            expired: () => boolean,
+          ): Promise<number | null> => {
+            if (nextRelation === null) {
               state.raw_item_count += 1;
               await progress?.returned(1);
-              if (request.signal?.aborted) {
-                interrupted = true;
-                break;
-              }
+              if (request.signal?.aborted) throw new CitationPaused();
               if (event.failure) {
                 sourceFailure ??= event.failure;
                 await progress?.rejected();
@@ -536,7 +748,7 @@ export class CitationDiscoveryService {
                 ) {
                   const decision = await this.identity.observe(observation);
                   if (decision.disposition === "accepted") {
-                    const accepted = await this.database.getLiterature(
+                    const accepted = await this.database.getLiteratureIds(
                       decision.literature_id,
                     );
                     if (accepted)
@@ -546,238 +758,258 @@ export class CitationDiscoveryService {
                       );
                   }
                 }
-              for (const relation of event.item.relations) {
-                await this.observations.publishProviderRelation(relation);
-                const sourceMatches =
-                  (key.record_id !== null &&
-                    key.record_id === relation.citing.record_id) ||
-                  relation.citing.identifiers.some((item) =>
-                    key.identifiers.some(
-                      (candidate) =>
-                        candidate.namespace === item.namespace &&
-                        candidate.value === item.value,
-                    ),
-                  );
-                const citedMatches =
-                  (key.record_id !== null &&
-                    key.record_id === relation.cited.record_id) ||
-                  relation.cited.identifiers.some((item) =>
-                    key.identifiers.some(
-                      (candidate) =>
-                        candidate.namespace === item.namespace &&
-                        candidate.value === item.value,
-                    ),
-                  );
-                const outgoing =
-                  sourceMatches &&
-                  (request.direction === "references" ||
-                    request.direction === "both");
-                const incoming =
-                  citedMatches &&
-                  (request.direction === "cited-by" ||
-                    request.direction === "both");
-                const targetKey = outgoing
-                  ? relation.cited
-                  : incoming
-                    ? relation.citing
-                    : null;
-                if (!targetKey) continue;
-                const targetIdentifiers = targetKey.identifiers;
-                const local = targetIdentifiers.length
-                  ? await this.database.findLiteratureByIdentifiers(
-                      targetIdentifiers,
-                    )
-                  : [];
-                if (local.length > 1) {
-                  incomplete = true;
-                  recordCitationFailure(
-                    state,
-                    providerFailure(
-                      "A citation target matched multiple local literatures.",
-                    ),
-                  );
-                  continue;
-                }
-                let targetLiterature = local[0] ?? null;
-                const inline = event.item.observations.filter((observation) =>
-                  observationMatches(
-                    observation,
-                    provider.provider_name,
-                    targetKey,
+            }
+            const firstRelation = nextRelation ?? 0;
+            for (let i = firstRelation; i < event.item.relations.length; i++) {
+              if (request.signal?.aborted) throw new CitationPaused();
+              if (i > firstRelation && (wroteLookup || expired())) return i;
+              const relation = event.item.relations[i]!;
+              await this.observations.publishProviderRelation(relation);
+              const sourceMatches =
+                (key.record_id !== null &&
+                  key.record_id === relation.citing.record_id) ||
+                relation.citing.identifiers.some((item) =>
+                  key.identifiers.some(
+                    (candidate) =>
+                      candidate.namespace === item.namespace &&
+                      candidate.value === item.value,
                   ),
                 );
-                for (const observation of inline) {
-                  const decision = await this.identity.observe(observation, {
-                    intake_batch_id: batchId,
-                    intake_exclude_ids: seeds,
-                  });
-                  if (
-                    decision.disposition === "accepted" &&
-                    decision.literature_id
-                  ) {
-                    targetLiterature = await this.database.getLiterature(
-                      decision.literature_id,
+              const citedMatches =
+                (key.record_id !== null &&
+                  key.record_id === relation.cited.record_id) ||
+                relation.cited.identifiers.some((item) =>
+                  key.identifiers.some(
+                    (candidate) =>
+                      candidate.namespace === item.namespace &&
+                      candidate.value === item.value,
+                  ),
+                );
+              const outgoing =
+                sourceMatches &&
+                (request.direction === "references" ||
+                  request.direction === "both");
+              const incoming =
+                citedMatches &&
+                (request.direction === "cited-by" ||
+                  request.direction === "both");
+              const targetKey = outgoing
+                ? relation.cited
+                : incoming
+                  ? relation.citing
+                  : null;
+              if (!targetKey) continue;
+              const targetIdentifiers = targetKey.identifiers;
+              const local = targetIdentifiers.length
+                ? await this.database.findLiteratureIdsByIdentifiers(
+                    targetIdentifiers,
+                  )
+                : [];
+              if (local.length > 1) {
+                incomplete = true;
+                recordCitationFailure(
+                  state,
+                  providerFailure(
+                    "A citation target matched multiple local literatures.",
+                  ),
+                );
+                continue;
+              }
+              let targetLiterature = local[0] ?? null;
+              let intakeMemberRecorded = false;
+              const inline = event.item.observations.filter((observation) =>
+                observationMatches(
+                  observation,
+                  provider.provider_name,
+                  targetKey,
+                ),
+              );
+              for (const observation of inline) {
+                const decision = await this.identity.observe(observation, {
+                  intake_batch_id: batchId,
+                  intake_exclude_ids: seeds,
+                });
+                if (
+                  decision.disposition === "accepted" &&
+                  decision.literature_id
+                ) {
+                  targetLiterature = await this.database.getLiteratureIds(
+                    decision.literature_id,
+                  );
+                  intakeMemberRecorded = targetLiterature !== null;
+                  if (targetLiterature)
+                    await progress?.observed(
+                      targetLiterature.meta_literature_id,
+                      decision.created,
                     );
-                    if (targetLiterature)
-                      await progress?.observed(
-                        targetLiterature.meta_literature_id,
-                        decision.created,
-                      );
-                  }
                 }
-                if (!targetLiterature) {
-                  // Native record IDs belong to the relation's provider. Only
-                  // neutral identifiers can cross into a fallback provider.
-                  const lookupProviders = [
-                    provider,
-                    ...request.providers.filter(
-                      (candidate) =>
-                        candidate.provider_name !== provider.provider_name,
-                    ),
-                  ];
-                  for (const candidate of lookupProviders) {
-                    if (request.signal?.aborted) {
-                      interrupted = true;
-                      break;
-                    }
-                    const lookupState = states.get(candidate.provider_name)!;
-                    if (
-                      lookupState.terminal !== null ||
-                      citationScanLimitReached(lookupState)
-                    )
-                      continue;
-                    const lookupKey =
-                      candidate === provider
-                        ? targetKey
-                        : {
-                            record_id: null,
-                            identifiers: targetKey.identifiers,
-                          };
-                    if (!lookupKey.record_id && !lookupKey.identifiers.length)
-                      continue;
-                    let lookup: MetadataProviderInvocation;
-                    const lookupProgress = await request.source_run?.begin(
-                      candidate.provider_name,
-                      "lookup",
-                      sourceId + ":" + relation.observation_id,
-                      "supporting",
+              }
+              if (!targetLiterature) {
+                // Native record IDs belong to the relation's provider. Only
+                // neutral identifiers can cross into a fallback provider.
+                const lookupProviders = [
+                  provider,
+                  ...request.providers.filter(
+                    (candidate) =>
+                      candidate.provider_name !== provider.provider_name,
+                  ),
+                ];
+                for (const candidate of lookupProviders) {
+                  if (request.signal?.aborted) {
+                    interrupted = true;
+                    break;
+                  }
+                  const lookupState = states.get(candidate.provider_name)!;
+                  if (
+                    lookupState.terminal !== null ||
+                    citationScanLimitReached(lookupState)
+                  )
+                    continue;
+                  const lookupKey =
+                    candidate === provider
+                      ? targetKey
+                      : {
+                          record_id: null,
+                          identifiers: targetKey.identifiers,
+                        };
+                  if (!lookupKey.record_id && !lookupKey.identifiers.length)
+                    continue;
+                  const cacheKey = JSON.stringify([
+                    relation.observation_id,
+                    candidate.provider_name,
+                    lookupKey,
+                  ]);
+                  const answer = lookups.get(cacheKey);
+                  if (!answer)
+                    throw new CitationLookupNeeded(cacheKey, () =>
+                      this.metadata.lookupProvider(
+                        {
+                          provider_name: candidate.provider_name,
+                          key: lookupKey,
+                          scan_limit: 1,
+                        },
+                        request.signal,
+                      ),
                     );
-                    lookupState.attempted = true;
-                    try {
-                      const invoke = () =>
-                        this.metadata.lookupProvider(
-                          {
-                            provider_name: candidate.provider_name,
-                            key: lookupKey,
-                            scan_limit: 1,
-                          },
-                          request.signal,
-                        );
-                      lookup = lookupProgress
-                        ? await lookupProgress.run(invoke)
-                        : await invoke();
-                    } catch (error) {
-                      if (error instanceof MetadataProgressError) throw error;
-                      if (request.signal?.aborted) {
-                        await lookupProgress?.finish("cancelled");
-                        interrupted = true;
-                        break;
-                      }
-                      const failure =
-                        error instanceof MetadataProviderFailure
-                          ? error.failure
-                          : providerFailure(
-                              "The citation provider could not resolve a relation target.",
-                            );
-                      await lookupProgress?.failure(failure.code, error);
-                      recordCitationFailure(lookupState, failure);
-                      continue;
-                    }
-                    await lookupProgress?.returned(lookup.raw_item_count);
-                    consumeCitationInvocation(lookupState, lookup);
-                    if (
-                      lookup.outcome === "INTERRUPTED" ||
-                      request.signal?.aborted
-                    ) {
+                  wroteLookup = true;
+                  const lookupProgress = await request.source_run?.begin(
+                    candidate.provider_name,
+                    "lookup",
+                    sourceId + ":" + relation.observation_id,
+                    "supporting",
+                  );
+                  lookupState.attempted = true;
+                  if (answer.requested) await lookupProgress?.dispatched();
+                  if ("error" in answer) {
+                    const error = answer.error;
+                    if (error instanceof MetadataProgressError) throw error;
+                    if (request.signal?.aborted) {
                       await lookupProgress?.finish("cancelled");
                       interrupted = true;
                       break;
                     }
-                    const targetObservation = lookup.observations.find(
-                      (observation) =>
-                        observationMatches(
-                          observation,
-                          candidate.provider_name,
-                          lookupKey,
-                        ),
-                    );
-                    if (!targetObservation) {
-                      if (lookup.failure)
-                        await lookupProgress?.failure(lookup.failure.code);
-                      else await lookupProgress?.finish("miss");
-                      continue;
-                    }
-                    const decision = await this.identity.observe(
-                      targetObservation,
-                      { intake_batch_id: batchId, intake_exclude_ids: seeds },
-                    );
-                    if (
-                      decision.disposition !== "accepted" ||
-                      !decision.literature_id
-                    ) {
-                      await lookupProgress?.rejected();
-                      await lookupProgress?.finish("hit");
-                      continue;
-                    }
-                    targetLiterature = await this.database.getLiterature(
-                      decision.literature_id,
-                    );
-                    if (targetLiterature)
-                      await lookupProgress?.observed(
-                        targetLiterature.meta_literature_id,
-                        decision.created,
-                      );
+                    const failure =
+                      error instanceof MetadataProviderFailure
+                        ? error.failure
+                        : providerFailure(
+                            "The citation provider could not resolve a relation target.",
+                          );
+                    await lookupProgress?.failure(failure.code, error);
+                    recordCitationFailure(lookupState, failure);
+                    continue;
+                  }
+                  const lookup = answer.result;
+                  await lookupProgress?.returned(lookup.raw_item_count);
+                  consumeCitationInvocation(lookupState, lookup);
+                  if (
+                    lookup.outcome === "INTERRUPTED" ||
+                    request.signal?.aborted
+                  ) {
+                    await lookupProgress?.finish("cancelled");
+                    interrupted = true;
+                    break;
+                  }
+                  const targetObservation = lookup.observations.find(
+                    (observation) =>
+                      observationMatches(
+                        observation,
+                        candidate.provider_name,
+                        lookupKey,
+                      ),
+                  );
+                  if (!targetObservation) {
                     if (lookup.failure)
                       await lookupProgress?.failure(lookup.failure.code);
-                    else await lookupProgress?.finish("hit");
-                    if (targetLiterature) break;
+                    else await lookupProgress?.finish("miss");
+                    continue;
                   }
-                }
-                if (interrupted) break;
-                if (!targetLiterature) {
-                  incomplete = true;
-                  if (!citationScanLimitReached(state))
-                    recordCitationFailure(
-                      state,
-                      providerFailure(
-                        "A citation target could not be identified within the selected sources and limits.",
-                      ),
+                  const decision = await this.identity.observe(
+                    targetObservation,
+                    { intake_batch_id: batchId, intake_exclude_ids: seeds },
+                  );
+                  if (
+                    decision.disposition !== "accepted" ||
+                    !decision.literature_id
+                  ) {
+                    await lookupProgress?.rejected();
+                    await lookupProgress?.finish("hit");
+                    continue;
+                  }
+                  targetLiterature = await this.database.getLiteratureIds(
+                    decision.literature_id,
+                  );
+                  intakeMemberRecorded = targetLiterature !== null;
+                  if (targetLiterature)
+                    await lookupProgress?.observed(
+                      targetLiterature.meta_literature_id,
+                      decision.created,
                     );
-                  continue;
+                  if (lookup.failure)
+                    await lookupProgress?.failure(lookup.failure.code);
+                  else await lookupProgress?.finish("hit");
+                  if (targetLiterature) break;
                 }
-                const edgeSource = outgoing
-                  ? sourceId
-                  : targetLiterature.literature_id;
-                const edgeTarget = outgoing
-                  ? targetLiterature.literature_id
-                  : sourceId;
-                if (edgeSource === edgeTarget) continue;
-                usableRelations += 1;
-                const edgeKey = `${edgeSource}\u0000${edgeTarget}`;
-                const referenceId = randomUUID();
-                await this.references.publishWithProviderObservation(
-                  parseReference({
-                    reference_id: referenceId,
-                    source_literature_id: edgeSource,
-                    target_literature_id: edgeTarget,
-                  }),
-                  relation.observation_id,
-                );
-                if (!seeds.includes(targetLiterature.literature_id))
-                  await progress?.included(targetLiterature.meta_literature_id);
-                if (seenEdges.has(edgeKey)) continue;
-                seenEdges.add(edgeKey);
-                if (seeds.includes(targetLiterature.literature_id)) continue;
+              }
+              if (interrupted) break;
+              if (!targetLiterature) {
+                incomplete = true;
+                if (!citationScanLimitReached(state))
+                  recordCitationFailure(
+                    state,
+                    providerFailure(
+                      "A citation target could not be identified within the selected sources and limits.",
+                    ),
+                  );
+                continue;
+              }
+              const edgeSource = outgoing
+                ? sourceId
+                : targetLiterature.literature_id;
+              const edgeTarget = outgoing
+                ? targetLiterature.literature_id
+                : sourceId;
+              if (edgeSource === edgeTarget) continue;
+              usableRelations += 1;
+              const edgeKey = `${edgeSource}\u0000${edgeTarget}`;
+              const referenceId = randomUUID();
+              await this.references.publishWithProviderObservation(
+                parseReference({
+                  reference_id: referenceId,
+                  source_literature_id: edgeSource,
+                  target_literature_id: edgeTarget,
+                }),
+                relation.observation_id,
+              );
+              if (!seeds.includes(targetLiterature.literature_id))
+                await progress?.included(targetLiterature.meta_literature_id);
+              if (
+                seenEdges.has(edgeKey) ||
+                partEdges.has(edgeKey) ||
+                seeds.includes(targetLiterature.literature_id)
+              )
+                continue;
+              partEdges.add(edgeKey);
+              if (!intakeMemberRecorded)
                 await this.database.writeIntake({
                   operation: "member",
                   member: {
@@ -786,101 +1018,270 @@ export class CitationDiscoveryService {
                     disposition: "matched",
                   },
                 });
-                results.set(targetLiterature.meta_literature_id, {
-                  meta_literature_id: targetLiterature.meta_literature_id,
-                });
-                causes.push({
-                  meta_literature_id: targetLiterature.meta_literature_id,
-                  source_literature_id: edgeSource,
-                  target_literature_id: edgeTarget,
-                  actual_literature_id: targetLiterature.literature_id,
-                  depth: depth + 1,
-                });
-                if (
-                  depth + 1 < request.max_depth &&
-                  !visited.has(targetLiterature.literature_id)
-                ) {
-                  visited.add(targetLiterature.literature_id);
-                  frontier.set(targetLiterature.literature_id, depth + 1);
-                }
-                if (resultLimitReached()) break;
-              }
-              if (citationScanLimitReached(state) && state.terminal === null)
-                state.terminal = "SCAN_LIMIT_REACHED";
-              if (
-                interrupted ||
-                state.terminal !== null ||
-                resultLimitReached()
-              )
-                break;
+              if (!results.has(targetLiterature.meta_literature_id))
+                partMetas.add(targetLiterature.meta_literature_id);
+              partCauses.push({
+                meta_literature_id: targetLiterature.meta_literature_id,
+                source_literature_id: edgeSource,
+                target_literature_id: edgeTarget,
+                actual_literature_id: targetLiterature.literature_id,
+                depth: depth + 1,
+              });
+              if (resultLimitReached()) break;
             }
-            if (interrupted) await progress?.finish("cancelled");
-            else if (sourceFailure) await progress?.failure(sourceFailure.code);
-            else await progress?.finish(referenceListProvided ? "hit" : "miss");
-            // Exhaust this source's pages first. Empty, partial or unresolved
-            // responses fall through; success short-circuits only this node.
-            if (complete && usableRelations > 0 && !incomplete) break;
+            if (citationScanLimitReached(state) && state.terminal === null)
+              state.terminal = "SCAN_LIMIT_REACHED";
+            if (interrupted || request.signal?.aborted)
+              throw new CitationPaused();
+            return null;
+          };
+          let ended = false;
+          try {
+            for await (const page of citationPages(
+              progress ? progress.stream(stream) : stream,
+            )) {
+              // The pending item already consumed its raw scan slot. The
+              // replay allowance cannot pay for a different item.
+              const replayOnly =
+                pendingItem !== null && citationScanLimitReached(state);
+              const fresh = page.items.flatMap<{
+                event: CitationItem;
+                key: string | null;
+                nextRelation: number | null;
+              }>((event) => {
+                const key = request.source_run ? citationItemKey(event) : null;
+                const remaining = key === null ? 0 : (replayed.get(key) ?? 0);
+                if (key !== null && remaining > 0) {
+                  replayed.set(key, remaining - 1);
+                  return [];
+                }
+                if (!pendingMatched && pendingItem && key === pendingItem.key) {
+                  pendingMatched = true;
+                  return [
+                    {
+                      event: restoreCitationItem(event, pendingItem),
+                      key,
+                      nextRelation: pendingItem.next_relation,
+                    },
+                  ];
+                }
+                return replayOnly ? [] : [{ event, key, nextRelation: null }];
+              });
+              let offset = 0;
+              let nextRelation: number | null = null;
+              while ((offset < fresh.length || page.end) && !ended) {
+                if (request.signal?.aborted) throw new CitationPaused();
+                const start = offset;
+                const relationStart: number | null = nextRelation;
+                const before: {
+                  states: CitationProviderState[];
+                  sourceFailure: StableFailure | null;
+                  referenceListProvided: boolean;
+                  usableRelations: number;
+                  incomplete: boolean;
+                  complete: boolean;
+                  ended: boolean;
+                  sourceChecked: boolean;
+                } = {
+                  states: [...states.values()].map((item) => ({ ...item })),
+                  sourceFailure,
+                  referenceListProvided,
+                  usableRelations,
+                  incomplete,
+                  complete,
+                  ended,
+                  sourceChecked,
+                };
+                partCauses.length = 0;
+                partEdges.clear();
+                partMetas.clear();
+                wroteLookup = false;
+                try {
+                  await this.database.writeMetadataSegment(async (expired) => {
+                    while (
+                      offset < fresh.length &&
+                      (offset === start || !expired()) &&
+                      (state.terminal === null ||
+                        nextRelation !== null ||
+                        fresh[offset]!.nextRelation !== null) &&
+                      !resultLimitReached()
+                    ) {
+                      if (request.signal?.aborted) throw new CitationPaused();
+                      const item = fresh[offset]!;
+                      nextRelation = await applyItem(
+                        item.event,
+                        nextRelation ?? item.nextRelation,
+                        expired,
+                      );
+                      if (nextRelation !== null) break;
+                      offset++;
+                      if (wroteLookup) break;
+                    }
+                    ended =
+                      (state.terminal !== null && nextRelation === null) ||
+                      resultLimitReached();
+                    if (!ended && page.end && offset === fresh.length) {
+                      ended = true;
+                      if (
+                        page.end.outcome === "INTERRUPTED" ||
+                        request.signal?.aborted
+                      )
+                        throw new CitationPaused();
+                      if (page.end.failure) {
+                        sourceFailure ??= page.end.failure;
+                        recordCitationFailure(state, page.end.failure);
+                        incomplete = true;
+                      }
+                      complete = page.end.outcome === "EXHAUSTED";
+                    }
+                    if (ended) {
+                      if (
+                        pendingItem &&
+                        !pendingMatched &&
+                        page.end?.outcome !== "INTERRUPTED"
+                      ) {
+                        if (
+                          state.terminal === null &&
+                          citationScanLimitReached(state)
+                        )
+                          state.terminal = "SCAN_LIMIT_REACHED";
+                        await request.source_run?.citationResponseReplaced(
+                          sourceId,
+                          provider.provider_name,
+                          pendingItem.next_relation,
+                        );
+                      }
+                      if (sourceFailure)
+                        await progress?.failure(sourceFailure.code);
+                      else
+                        await progress?.finish(
+                          referenceListProvided ? "hit" : "miss",
+                        );
+                      sourceChecked =
+                        (complete && usableRelations > 0 && !incomplete) ||
+                        resultLimitReached() ||
+                        !request.providers
+                          .slice(providerIndex + 1)
+                          .some(
+                            (p) =>
+                              states.get(p.provider_name)!.terminal === null,
+                          );
+                    }
+                    await save({
+                      source_id: sourceId,
+                      checked: sourceChecked,
+                      next_provider: ended ? providerIndex + 1 : providerIndex,
+                      active_query: ended
+                        ? null
+                        : {
+                            failure: sourceFailure,
+                            returnedRelations: referenceListProvided,
+                            usableRelations,
+                            incomplete,
+                            pending_item:
+                              nextRelation === null || !request.source_run
+                                ? null
+                                : pendingCitationItem(
+                                    fresh[offset]!.event,
+                                    fresh[offset]!.key!,
+                                    nextRelation,
+                                  ),
+                          },
+                      raw_provider: providerIndex,
+                      raw_items: fresh
+                        .slice(start, offset)
+                        .flatMap(({ key }) => (key === null ? [] : [key])),
+                      causes: partCauses,
+                    });
+                  });
+                } catch (error) {
+                  partMetas.clear();
+                  for (const item of before.states)
+                    Object.assign(states.get(item.provider_name)!, item);
+                  ({
+                    sourceFailure,
+                    referenceListProvided,
+                    usableRelations,
+                    incomplete,
+                    complete,
+                    ended,
+                    sourceChecked,
+                  } = before);
+                  offset = start;
+                  nextRelation = relationStart;
+                  if (!(error instanceof CitationLookupNeeded)) throw error;
+                  const answer = await error.fetch();
+                  lookups.set(error.key, answer);
+                  continue;
+                }
+                for (const cause of partCauses) remember(cause);
+                partMetas.clear();
+              }
+              lookups.clear();
+              if (ended) break;
+            }
+          } catch (error) {
+            partMetas.clear();
+            if (!(error instanceof CitationPaused)) throw error;
+            await progress?.finish("cancelled");
+            interrupted = true;
+            break;
           }
+          if (sourceChecked) break;
+        }
+        if (!interrupted) {
+          if (!sourceChecked)
+            await save({ source_id: sourceId, checked: true });
+          frontier.delete(sourceId);
         }
       }
       if (request.signal?.aborted) interrupted = true;
-      const sourceResults: Array<
-        DiscoveryPublication["source_results"][number]
-      > = request.providers
-        .filter((provider) => states.get(provider.provider_name)!.attempted)
-        .map((provider) => {
-          const state = states.get(provider.provider_name)!;
-          return {
-            provider_name: provider.provider_name,
-            outcome: state.failure ? "FAILED" : (state.terminal ?? "EXHAUSTED"),
-            failure: state.failure,
-          };
-        });
+      const outcomes = sourceResults();
       const status: CitationDiscoveryReport["status"] = interrupted
         ? "INTERRUPTED"
-        : sourceResults.length > 0 &&
+        : outcomes.length > 0 &&
             results.size === 0 &&
-            sourceResults.every((item) => item.outcome === "FAILED")
+            outcomes.every((item) => item.outcome === "FAILED")
           ? "FAILED"
-          : sourceResults.some((item) => item.outcome === "FAILED")
+          : outcomes.some((item) => item.outcome === "FAILED")
             ? "PARTIAL"
             : "COMPLETED";
-      await this.database.putDiscovery({
-        run: {
-          discovery_run_id: runId,
-          kind: "citation",
-          status,
-          started_at: new Date().toISOString(),
-          direction: request.direction,
-          max_depth: request.max_depth,
-          result_limit: request.result_limit,
-          seed_literature_ids: seeds,
-        },
-        providers: request.providers,
-        source_results: sourceResults,
-        results: [...results.values()],
-        topic_causes: [],
-        citation_causes: causes,
+      await this.database.writeMetadataSegment(async () => {
+        await this.database.putDiscovery(
+          {
+            run: {
+              discovery_run_id: runId,
+              kind: "citation",
+              status,
+              started_at: startedAt,
+              direction: request.direction,
+              max_depth: request.max_depth,
+              result_limit: request.result_limit,
+              seed_literature_ids: seeds,
+            },
+            providers: request.providers,
+            source_results: outcomes,
+            results: [...results.values()],
+            topic_causes: [],
+            citation_causes: causes,
+          },
+          resume !== undefined,
+        );
+        await finishIntake(
+          this.database,
+          batchId,
+          status.toLowerCase() as
+            | "completed"
+            | "partial"
+            | "failed"
+            | "interrupted",
+          runId,
+          outcomes.filter((s) => s.outcome !== "EXHAUSTED").length,
+        );
+        if (status !== "INTERRUPTED") await save({ closed: status });
       });
-      await finishIntake(
-        this.database,
-        batchId,
-        status.toLowerCase() as
-          | "completed"
-          | "partial"
-          | "failed"
-          | "interrupted",
-        runId,
-        sourceResults.filter((s) => s.outcome !== "EXHAUSTED").length,
-      );
       settled = true;
-      return Object.freeze({
-        intake_batch_id: batchId,
-        discovery_run_id: runId,
-        status,
-        result_count: results.size,
-        source_results: Object.freeze(sourceResults),
-      });
+      return report(status);
     } finally {
       if (!settled) await finishIntake(this.database, batchId, "interrupted");
     }

@@ -27,6 +27,7 @@ import {
   parseMetadataFieldState,
   parseMetadataObservation,
   parseMetaLiterature,
+  parseMetaLiteratureId,
   parseReference,
   parseReferenceDetail,
   parseTaskProgress,
@@ -52,6 +53,7 @@ import {
   type TaskProgress,
 } from "@sciretriever/contracts";
 import { Worker } from "node:worker_threads";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { CandidateCleanupSnapshot } from "../files/reclamation.js";
 import { SnapshotError } from "../../analysis/snapshots.js";
 import {
@@ -299,6 +301,18 @@ function parseDiscoveryPublication(value: unknown): DiscoveryPublication {
 }
 
 export type SqliteCommand =
+  | {
+      readonly kind: "metadata_write_begin" | "metadata_write_rollback";
+    }
+  | {
+      readonly kind: "metadata_write_commit";
+      readonly events: readonly ExecutionEvent[];
+    }
+  | {
+      readonly kind: "citation_checkpoints";
+      readonly jobId: string;
+      readonly targetId: string;
+    }
   | { readonly kind: "intake_withdrawn"; readonly literature_id: string }
   | {
       readonly kind: "intake_withdrawal_read" | "intake_withdrawal_write";
@@ -684,6 +698,7 @@ export type SqliteCommand =
       readonly fallbackIdentitySha256: string | null;
     }
   | { readonly kind: "get_literature"; readonly literatureId: string }
+  | { readonly kind: "get_literature_ids"; readonly literatureId: string }
   | { readonly kind: "begin_read_snapshot" }
   | {
       readonly kind: "literature_bibliographies";
@@ -692,6 +707,7 @@ export type SqliteCommand =
   | {
       readonly kind: "find_literature_by_identifiers";
       readonly identifiers: readonly Identifier[];
+      readonly idsOnly?: boolean;
     }
   | {
       readonly kind: "list_literature";
@@ -760,6 +776,7 @@ export type SqliteCommand =
   | {
       readonly kind: "put_discovery";
       readonly publication: DiscoveryPublication;
+      readonly resumeCitation?: boolean;
     }
   | { readonly kind: "get_discovery"; readonly discoveryRunId: string }
   | { readonly kind: "snapshot_counts" };
@@ -1188,6 +1205,45 @@ function sqliteWorkerRuntimeEntry(): {
   };
 }
 
+// Only the catalog operations used by a metadata segment can share its SQLite
+// transaction. Unrelated reads and control commands wait for it to settle.
+const METADATA_WRITE_COMMANDS = new Set<string>([
+  "metadata_write_begin",
+  "metadata_write_commit",
+  "metadata_write_rollback",
+  "identity_read",
+  "publish_identity_observation",
+  "get_literature_ids",
+  "find_literature_by_identifiers",
+  "put_provider_relation",
+  "publish_provider_reference",
+  "intake_write",
+  "put_discovery",
+]);
+// Leave room for the last indivisible record and the durable commit.
+const METADATA_WRITE_BUDGET_MS = 150;
+type MetadataWriteScope = {
+  readonly done: Promise<void>;
+  readonly events: ExecutionEvent[];
+};
+
+function validateExecutionEvent(event: ExecutionEvent): void {
+  if (
+    !event ||
+    typeof event.event_id !== "string" ||
+    typeof event.job_id !== "string" ||
+    !Number.isSafeInteger(event.sequence) ||
+    event.sequence < -1 ||
+    typeof event.kind !== "string" ||
+    typeof event.created_at !== "string"
+  )
+    throw new SqliteWorkerError();
+  executionText(event.event_id);
+  executionText(event.job_id);
+  executionText(event.kind);
+  executionText(event.created_at, 64);
+}
+
 export class SqliteWorker {
   private readonly worker: Worker;
   private nextId = 1;
@@ -1205,6 +1261,8 @@ export class SqliteWorker {
   private readonly readOnly: boolean;
   private readonly snapshotReader: () => SqliteWorker;
   private readonly executionRuntime: ExecutionRuntimeOwner;
+  private readonly metadataWrites = new AsyncLocalStorage<MetadataWriteScope>();
+  private metadataWrite: MetadataWriteScope | undefined;
 
   constructor(
     path = ":memory:",
@@ -1295,6 +1353,14 @@ export class SqliteWorker {
     // A closed, never-used worker must reject before trying its first admission.
     if (this.closed || this.failed)
       return Promise.reject(new SqliteWorkerError());
+    if (this.metadataWrites.getStore()) {
+      if (signal?.aborted)
+        return Promise.reject(
+          new WriteAdmissionError("write-admission-cancelled"),
+        );
+      // postMessage takes the snapshot immediately inside the admitted segment.
+      return this.send<T>(command);
+    }
     const copy = structuredClone(command);
     const readOnly = new Set<string>([
       "draft_text_read",
@@ -1317,6 +1383,7 @@ export class SqliteWorker {
       "execution_list_attempts",
       "execution_get_target",
       "execution_list_events",
+      "citation_checkpoints",
       "execution_task_detail_events",
       "execution_get_policy",
       "execution_get_budget",
@@ -1325,6 +1392,7 @@ export class SqliteWorker {
       "begin_read_snapshot",
       "literature_bibliographies",
       "list_literature",
+      "get_literature_ids",
       "find_literature_by_identifiers",
       "identity_read",
       "import_read",
@@ -1385,9 +1453,70 @@ export class SqliteWorker {
       return this.admission.run(send, signal);
     return send();
   }
+  async writeMetadataSegment<T>(
+    write: (expired: () => boolean) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const admission = this.admission;
+    if (this.readOnly || !admission || this.metadataWrites.getStore())
+      throw new SqliteWorkerError();
+    return admission.run(async () => {
+      if (this.metadataWrite) throw new SqliteWorkerError();
+      let release!: () => void;
+      const done = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const scope: MetadataWriteScope = { done, events: [] };
+      this.metadataWrite = scope;
+      try {
+        return await this.metadataWrites.run(scope, async () => {
+          const deadline = performance.now() + METADATA_WRITE_BUDGET_MS;
+          await this.send({ kind: "metadata_write_begin" });
+          try {
+            // Incoming foreground writes get the next slot without waiting
+            // for the remainder of the time budget.
+            const result = await write(
+              () => admission.hasQueuedWrites || performance.now() >= deadline,
+            );
+            await this.send({
+              kind: "metadata_write_commit",
+              events: scope.events,
+            });
+            return result;
+          } catch (error) {
+            await this.send({ kind: "metadata_write_rollback" }).catch(() => {
+              this.failed = true;
+              this.rejectAll();
+              void this.worker.terminate();
+            });
+            throw error;
+          }
+        });
+      } finally {
+        this.metadataWrite = undefined;
+        release();
+      }
+    }, signal);
+  }
+  citationCheckpoints(
+    jobId: string,
+    targetId: string,
+  ): Promise<readonly unknown[]> {
+    return this.run({ kind: "citation_checkpoints", jobId, targetId });
+  }
   private send<T>(command: SqliteCommand, signal?: AbortSignal): Promise<T> {
     if (this.closed || this.failed)
       return Promise.reject(new SqliteWorkerError());
+    const scope = this.metadataWrites.getStore();
+    if (scope) {
+      if (
+        scope !== this.metadataWrite ||
+        !METADATA_WRITE_COMMANDS.has(command.kind)
+      )
+        return Promise.reject(new SqliteWorkerError());
+    } else if (this.metadataWrite) {
+      return this.metadataWrite.done.then(() => this.send(command, signal));
+    }
     return new Promise<T>((resolve, reject) => {
       const id = this.nextId++;
       const cancellation = signal
@@ -2281,24 +2410,32 @@ export class SqliteWorker {
     return parseExecutionAttempt(value);
   }
   async appendExecutionEvent(event: ExecutionEvent): Promise<ExecutionEvent> {
-    if (
-      !event ||
-      typeof event.event_id !== "string" ||
-      typeof event.job_id !== "string" ||
-      !Number.isSafeInteger(event.sequence) ||
-      event.sequence < -1 ||
-      typeof event.kind !== "string" ||
-      typeof event.created_at !== "string"
-    )
-      throw new SqliteWorkerError();
-    executionText(event.event_id);
-    executionText(event.job_id);
-    executionText(event.kind);
-    executionText(event.created_at, 64);
+    validateExecutionEvent(event);
     return (await this.run({
       kind: "execution_append_event",
       event,
     })) as ExecutionEvent;
+  }
+  async appendMetadataEvent(event: ExecutionEvent): Promise<void> {
+    const scope = this.metadataWrites.getStore();
+    if (!scope) {
+      await this.appendExecutionEvent(event);
+      return;
+    }
+    validateExecutionEvent(event);
+    if (
+      scope !== this.metadataWrite ||
+      event.sequence !== -1 ||
+      ![
+        "metadata-source",
+        "citation-write-checkpoint",
+        "citation-response-replaced",
+      ].includes(event.kind)
+    )
+      throw new SqliteWorkerError();
+    // These events cannot be observed before commit. The worker inserts each
+    // event in its original order, after the segment's writes have succeeded.
+    scope.events.push(structuredClone(event));
   }
   async listExecutionEvents(
     jobId: string,
@@ -2852,10 +2989,15 @@ export class SqliteWorker {
   }
   async putDiscovery(
     publication: DiscoveryPublication,
+    resumeCitation = false,
   ): Promise<DiscoveryPublication> {
     const parsed = parseDiscoveryPublication(publication);
     return parseDiscoveryPublication(
-      await this.run({ kind: "put_discovery", publication: parsed }),
+      await this.run({
+        kind: "put_discovery",
+        publication: parsed,
+        resumeCitation,
+      }),
     );
   }
   async getDiscovery(
@@ -3087,18 +3229,45 @@ export class SqliteWorker {
   getLiterature(literatureId: string): Promise<Literature | null> {
     return this.run({ kind: "get_literature", literatureId });
   }
-  async findLiteratureByIdentifiers(
+  private parseLiteratureIds(value: unknown) {
+    if (!value || typeof value !== "object") throw new SqliteWorkerError();
+    const row = value as Record<string, unknown>;
+    return {
+      literature_id: parseLiteratureId(row.literature_id),
+      meta_literature_id: parseMetaLiteratureId(row.meta_literature_id),
+    };
+  }
+  async getLiteratureIds(literatureId: string) {
+    const result = await this.run<unknown>({
+      kind: "get_literature_ids",
+      literatureId,
+    });
+    return result === null ? null : this.parseLiteratureIds(result);
+  }
+  private async readIdentityMatches(
     values: readonly Identifier[],
-  ): Promise<readonly Literature[]> {
+    idsOnly: boolean,
+  ) {
     if (!Array.isArray(values) || values.length > 128)
       throw new SqliteWorkerError();
     const identifiers = values.map(parseIdentifier);
     const result = await this.run<unknown>({
       kind: "find_literature_by_identifiers",
       identifiers,
+      idsOnly,
     });
     if (!Array.isArray(result)) throw new SqliteWorkerError();
-    return result.map(parseLiterature);
+    return result;
+  }
+  async findLiteratureByIdentifiers(
+    values: readonly Identifier[],
+  ): Promise<readonly Literature[]> {
+    return (await this.readIdentityMatches(values, false)).map(parseLiterature);
+  }
+  async findLiteratureIdsByIdentifiers(values: readonly Identifier[]) {
+    return (await this.readIdentityMatches(values, true)).map((value) =>
+      this.parseLiteratureIds(value),
+    );
   }
   async listLiterature(
     afterCursor: string | null,

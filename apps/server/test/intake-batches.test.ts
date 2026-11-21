@@ -158,15 +158,15 @@ it("counts distinct created, enriched and matched members, supports rename/reset
 it("persists accepted members when discovery stops before publication and identifies a dead owner", () =>
   fixture(async (app) => {
     const one = intakeObservation("kept"),
-      two = intakeObservation("interrupted");
+      two = intakeObservation("interrupted", { source: "fixture-next" });
     const service = new TopicDiscoveryService(
       {
-        searchTopicProvider: async () => ({
-          provider_name: "fixture",
+        searchTopicProvider: async (provider_name) => ({
+          provider_name,
           outcome: "EXHAUSTED",
-          observations: [one, two],
+          observations: [provider_name === "fixture" ? one : two],
           relations: [],
-          raw_item_count: 2,
+          raw_item_count: 1,
           failure: null,
         }),
       },
@@ -189,7 +189,10 @@ it("persists accepted members when discovery stops before publication and identi
     await expect(
       service.run({
         query: "interrupted\nAND scope",
-        providers: [{ provider_name: "fixture", scan_limit: 10 }],
+        providers: [
+          { provider_name: "fixture", scan_limit: 10 },
+          { provider_name: "fixture-next", scan_limit: 10 },
+        ],
       }),
     ).rejects.toThrow("synthetic interruption");
     const page = parseIntakeBatchPage(

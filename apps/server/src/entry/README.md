@@ -32,6 +32,8 @@ CLI/MCP/HTTP 只适配请求；供应商协议、材料验收和事实写入仍�
 
 `metadata-task.ts` 在准入时冻结来源并保存/运行现有加工任务；`metadata-task-runtime.ts` 编排主题、引用与逐篇补全，只由身份 owner 接纳观察，来源计数不成为另一份文献事实。
 
+`discovery.ts` 在来源回包后按段接纳书目与关系。引用扩展在段内记下已提交的结果和本篇检查位置，只有末段结算本篇。任务恢复从原批次与 Run 继续。 [检查点实现](citation-checkpoint.ts)
+
 入库批次读取（intake-batches）、批次改名（intake-batch-rename）、范围词频（library-facets）与 PDF 预览（acquire-pdf-preview）复用 Literature/SQLite owner。PDF 任务创建在 catalog admission 内固定成员：query 按筛选、排序排除已有/无法获取项并应用 limit；literatures 保留全部显式 ID，包括已有 PDF 和无法获取项，并在执行时允许清除无法获取标记后重试。scope 保存原选择器与 disjoint 计数；任务详情和列表读取同一 scope。
 
 批次和报告的 full_text 按论文现算，estimates 给出获取 PDF 与解析的版本数；不写入批次事实。create_task 的 parse-documents 包装复用既有解析目标与队列，只选择有主 PDF、缺当前部署 profile 原始解析的版本；创建不执行、不另建入库批次。HTTP 列文件夹调用 FolderService 的 list，不套用批次归属。

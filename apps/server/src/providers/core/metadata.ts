@@ -190,6 +190,7 @@ export class CoreRestAdapter
           const raw_item = items[index++]!;
           return {
             raw_item,
+            buffered_next: index < items.length,
             source_exhausted_after: exhausted && index === items.length,
           };
         }
@@ -232,6 +233,7 @@ export class CoreRestAdapter
         const raw_item = items[index++]!;
         return {
           raw_item,
+          buffered_next: index < items.length,
           source_exhausted_after: exhausted && index === items.length,
         };
       },

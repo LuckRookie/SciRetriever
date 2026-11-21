@@ -1,0 +1,919 @@
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { setTimeout as delay } from "node:timers/promises";
+import { expect, it, vi } from "vitest";
+import {
+  EMPTY_METADATA,
+  parseMetadataObservation,
+  type ProviderLiteratureKey,
+} from "@sciretriever/contracts";
+import { processingJobId } from "../src/application/jobs/processing.js";
+import {
+  createApplication,
+  type Application,
+} from "../src/bootstrap/application.js";
+import { startProductionWorkbench } from "../src/bootstrap/workbench.js";
+import {
+  citationItemKey,
+  pendingCitationItem,
+  restoreCitationItem,
+} from "../src/entry/citation-checkpoint.js";
+import { runMetadataTask } from "../src/entry/metadata-task.js";
+import { createTaskReader } from "../src/entry/task-read.js";
+import { finishIntake, startIntake } from "../src/literature/intake.js";
+import { IntakeWithdrawalService } from "../src/literature/intake-withdrawal.js";
+import { withActivity } from "../src/logging/activity.js";
+import type {
+  NeutralMetadataItem,
+  ReferenceQueryPort,
+} from "../src/metadata/ports.js";
+import { ExecutionRepository } from "../src/storage/execution/repository.js";
+import {
+  workbenchLogin,
+  workbenchTestAccess,
+} from "./workbench-auth-fixture.js";
+
+const uuid = (kind: number, n: number) =>
+  `c0400000-${String(kind).padStart(4, "0")}-4000-8000-${String(n).padStart(12, "0")}`;
+const doi = (n: number) => `10.5555/intake-segments-${n}`;
+function observation(n: number, revision = 0) {
+  return parseMetadataObservation({
+    source_type: null,
+    source_type_mapping_version: null,
+    observation_id: uuid(1, n * 10 + revision),
+    provenance: {
+      provenance_id: uuid(2, n * 10 + revision),
+      source_kind: "metadata-provider",
+      source_name: "fixture",
+      source_record_id: String(n),
+      observed_at: "2026-11-22T00:00:00Z",
+      input_sha256: "a".repeat(64),
+      parameters_sha256: null,
+    },
+    metadata: {
+      ...EMPTY_METADATA,
+      title: `Synthetic study ${n}`,
+      volume: revision ? "Supplement" : null,
+      identifiers: [{ namespace: "doi", value: doi(n) }],
+    },
+    version_role: "published",
+    version_links: [],
+    declared_keywords: [],
+    reference_texts: [],
+    reference_count: null,
+    cited_by_count: null,
+    asset_hints: [],
+  });
+}
+
+function groupedCitationItem(
+  anchor: ProviderLiteratureKey,
+  works: readonly number[],
+): NeutralMetadataItem {
+  const hash = createHash("sha256").update(JSON.stringify(works)).digest("hex");
+  const observations = works.map((work) => {
+    const observationValue = observation(work);
+    return parseMetadataObservation({
+      ...observationValue,
+      observation_id: randomUUID(),
+      provenance: {
+        ...observationValue.provenance,
+        provenance_id: randomUUID(),
+        input_sha256: hash,
+      },
+    });
+  });
+  return {
+    observations,
+    relations: observations.map((o) => ({
+      observation_id: randomUUID(),
+      provenance: o.provenance,
+      citing: anchor,
+      cited: {
+        record_id: o.provenance.source_record_id,
+        identifiers: o.metadata.identifiers,
+      },
+    })),
+  };
+}
+
+type Row = readonly [work: number, revision?: number];
+function source(
+  graph: ReadonlyMap<number, readonly Row[]>,
+  pageSize: number,
+  calls: number[] = [],
+): ReferenceQueryPort {
+  return {
+    provider_name: "fixture",
+    open_reference_query(context) {
+      const anchor = context.keys[0]!;
+      const seed = Number(anchor.record_id);
+      calls.push(seed);
+      const rows = graph.get(seed) ?? [];
+      let next = 0;
+      return {
+        pull_raw_item() {
+          if (next === rows.length) return null;
+          return {
+            raw_item: next++,
+            source_exhausted_after: next === rows.length,
+            buffered_next: next < rows.length && next % pageSize !== 0,
+          };
+        },
+        convert_raw_item(index) {
+          const [work, revision] = rows[Number(index)]!;
+          const o = observation(work, revision);
+          return {
+            observations: [o],
+            relations: [
+              {
+                observation_id: uuid(3, seed * 10000 + Number(index) + 1),
+                provenance: o.provenance,
+                citing: anchor,
+                cited: {
+                  record_id: String(work),
+                  identifiers: o.metadata.identifiers,
+                },
+              },
+            ],
+          };
+        },
+      };
+    },
+  };
+}
+const options = (port: ReferenceQueryPort) => ({
+  metadata: { reference_query_ports: [port], lookup_ports: [] },
+  indexRefreshIntervalMs: null,
+  browserHost: () => null,
+});
+async function fixture(port: ReferenceQueryPort) {
+  const home = await mkdtemp(join(tmpdir(), "sciretriever-intake-segments-"));
+  const app = await createApplication(home, options(port));
+  return {
+    home,
+    app,
+    async close() {
+      try {
+        await app.close();
+      } finally {
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  };
+}
+async function add(app: Application, n: number) {
+  const result = await app.identity.observe(observation(n));
+  if (result.disposition !== "accepted") throw new Error(result.reason);
+  return result.literature_id;
+}
+async function run(
+  app: Application,
+  seeds: string[],
+  key: string,
+  signal?: AbortSignal,
+  scanLimit: number | null = null,
+) {
+  const result = await withActivity({ actor: "cli:intake-segments" }, () =>
+    runMetadataTask(
+      app,
+      {
+        kind: "citation",
+        seed_literature_ids: seeds,
+        direction: "references",
+        max_depth: 1,
+        result_limit: null,
+        providers: [{ source: "fixture", scan_limit: scanLimit }],
+      },
+      signal,
+      key,
+    ),
+  );
+  return result as typeof result & {
+    discovery_run_id: string;
+    intake_batch_id: string;
+    result_count: number;
+  };
+}
+function inspect<T>(home: string, read: (db: DatabaseSync) => T): T {
+  const db = new DatabaseSync(join(home, "catalog.sqlite"), { readOnly: true });
+  try {
+    return read(db);
+  } finally {
+    db.close();
+  }
+}
+function checkpoints(home: string, jobId: string) {
+  return inspect(home, (db) =>
+    db
+      .prepare(
+        "SELECT payload_json FROM execution_events WHERE job_id=? AND kind='citation-write-checkpoint' ORDER BY sequence",
+      )
+      .all(jobId)
+      .map(
+        (row) =>
+          JSON.parse(String(row.payload_json)) as {
+            source_id: string | null;
+            checked: boolean;
+            raw_items: string[];
+            causes: { actual_literature_id: string }[];
+          },
+      ),
+  );
+}
+
+function snapshot(home: string, runId: string, batchId: string) {
+  return inspect(home, (db) => {
+    const aliases = new Map<string, string>([
+      [runId, "run"],
+      [batchId, "batch"],
+    ]);
+    for (const row of db
+      .prepare(
+        "SELECT l.literature_id,m.meta_literature_id,i.value FROM literatures l JOIN literature_metadata_identifiers i USING(literature_id) JOIN meta_literatures m USING(meta_literature_id) WHERE i.namespace='doi'",
+      )
+      .all()) {
+      aliases.set(String(row.literature_id), `paper:${row.value}`);
+      aliases.set(String(row.meta_literature_id), `work:${row.value}`);
+    }
+    for (const edge of db.prepare("SELECT * FROM literature_references").all())
+      aliases.set(
+        String(edge.reference_id),
+        `edge:${aliases.get(String(edge.source_literature_id))}:${aliases.get(String(edge.target_literature_id))}`,
+      );
+    const execution = db
+      .prepare(
+        "SELECT kind,payload_json,created_at FROM execution_events WHERE kind IN('metadata-source','processing-result') ORDER BY sequence",
+      )
+      .all();
+    for (const row of execution) {
+      const value = JSON.parse(String(row.payload_json));
+      if (value.progress?.phase === "started")
+        aliases.set(value.progress.record_id, `record:${aliases.size}`);
+    }
+    // Randomly generated IDs are compared by their owners. Wall-clock stamps
+    // and physical execution sequence numbers vary with segment boundaries.
+    const normalize = (value: unknown, field = ""): unknown => {
+      if (typeof value === "string") {
+        if (["at", "created_at", "started_at", "finished_at"].includes(field))
+          return "<clock>";
+        if (field.endsWith("_json")) return normalize(JSON.parse(value));
+        return aliases.get(value) ?? value;
+      }
+      if (Array.isArray(value)) return value.map((item) => normalize(item));
+      if (value && typeof value === "object")
+        return Object.fromEntries(
+          Object.entries(value).map(([key, item]) => [
+            key,
+            normalize(item, key),
+          ]),
+        );
+      return value;
+    };
+    const names = db
+      .prepare(
+        "SELECT name FROM sqlite_schema WHERE type='table' AND (name='literatures' OR name='meta_literatures' OR name='provenances' OR name GLOB 'literature_metadata*' OR name GLOB 'metadata_observation*' OR name GLOB 'provider_relation*' OR name='literature_references' OR name GLOB 'discovery_*' OR name GLOB 'citation_discovery_*' OR name GLOB 'intake_batch*' OR name='literature_search_fts')",
+      )
+      .all()
+      .map((row) => String(row.name));
+    return {
+      tables: Object.fromEntries(
+        names.map((name) => [
+          name,
+          db
+            .prepare(`SELECT * FROM "${name}"`)
+            .all()
+            .map((row) => JSON.stringify(normalize(row)))
+            .sort(),
+        ]),
+      ),
+      events: execution.map((row) => normalize(row)),
+    };
+  });
+}
+
+it("preserves fields and visible event order for new intake, match, enrichment and replay", async () => {
+  const graph = new Map<number, readonly Row[]>([[0, [[1], [2, 1], [3], [1]]]]);
+  async function take(pageSize: number) {
+    const f = await fixture(source(graph, pageSize));
+    try {
+      const seed = await add(f.app, 0);
+      await add(f.app, 2);
+      await add(f.app, 3);
+      const result = await run(f.app, [seed], "parity");
+      expect(result.result_count).toBe(3);
+      return snapshot(f.home, result.discovery_run_id, result.intake_batch_id);
+    } finally {
+      await f.close();
+    }
+  }
+  expect(await take(64)).toEqual(await take(1));
+});
+
+it("rolls back the segment on a write failure and retries from its first item", async () => {
+  const f = await fixture(source(new Map([[0, [[1], [2], [3]]]]), 64));
+  try {
+    const seed = await add(f.app, 0);
+    const observe = f.app.identity.observe.bind(f.app.identity);
+    const fault = vi
+      .spyOn(f.app.identity, "observe")
+      .mockImplementation(async (value, given) => {
+        const result = await observe(value, given);
+        if (
+          (value as { observation_id: string }).observation_id ===
+          observation(2).observation_id
+        )
+          throw new Error("injected failure after identity write");
+        return result;
+      });
+    try {
+      await expect(run(f.app, [seed], "rollback")).rejects.toThrow();
+    } finally {
+      fault.mockRestore();
+    }
+    expect((await f.app.database.snapshotCounts()).tables).toMatchObject({
+      literatures: 1,
+      provider_relation_observations: 0,
+      literature_references: 0,
+    });
+    const jobId = await processingJobId("rollback");
+    expect(checkpoints(f.home, jobId).flatMap((item) => item.causes)).toEqual(
+      [],
+    );
+    await f.app.processingTasks!.control(jobId, "retry");
+    const result = await run(f.app, [seed], "rollback");
+    expect(result.result_count).toBe(3);
+    expect(
+      (await f.app.database.getDiscovery(result.discovery_run_id))
+        ?.citation_causes,
+    ).toHaveLength(3);
+    expect(
+      (await f.app.database.referenceSnapshot()).map(
+        (row) => row.supports.length,
+      ),
+    ).toEqual([1, 1, 1]);
+    const clean = await fixture(source(new Map([[0, [[1], [2], [3]]]]), 64));
+    try {
+      const expected = await run(clean.app, [await add(clean.app, 0)], "clean");
+      expect(
+        snapshot(f.home, result.discovery_run_id, result.intake_batch_id)
+          .tables,
+      ).toEqual(
+        snapshot(
+          clean.home,
+          expected.discovery_run_id,
+          expected.intake_batch_id,
+        ).tables,
+      );
+    } finally {
+      await clean.close();
+    }
+  } finally {
+    await f.close();
+  }
+});
+
+it("rolls back catalog rows when writing the checked event fails at commit", async () => {
+  const f = await fixture(source(new Map([[0, [[1], [2]]]]), 64));
+  try {
+    const seed = await add(f.app, 0);
+    const append = f.app.database.appendMetadataEvent.bind(f.app.database);
+    const fault = vi
+      .spyOn(f.app.database, "appendMetadataEvent")
+      .mockImplementation(async (event) => {
+        await append(event);
+        if (
+          event.kind === "citation-write-checkpoint" &&
+          (event.payload as { checked: boolean }).checked
+        )
+          await append(event);
+      });
+    try {
+      await expect(run(f.app, [seed], "checked-failure")).rejects.toThrow();
+    } finally {
+      fault.mockRestore();
+    }
+    const id = await processingJobId("checked-failure");
+    expect(
+      checkpoints(f.home, id).filter((row) => row.source_id === seed),
+    ).toEqual([]);
+    expect((await f.app.database.snapshotCounts()).tables).toMatchObject({
+      literatures: 1,
+      provider_relation_observations: 0,
+      literature_references: 0,
+    });
+    await f.app.processingTasks!.control(id, "retry");
+    const result = await run(f.app, [seed], "checked-failure");
+    expect(result.result_count).toBe(2);
+    expect(checkpoints(f.home, id).some((row) => row.checked)).toBe(true);
+    await f.app.database.withExecutionRuntime(async () => {
+      const repo = new ExecutionRepository(f.app.database);
+      expect(
+        (await repo.listEvents(id)).some(
+          (event) => event.kind === "citation-write-checkpoint",
+        ),
+      ).toBe(false);
+      const detail = await repo.taskDetailEvents(id, true);
+      expect(detail.status).toBe("ok");
+      if (detail.status === "ok")
+        expect(
+          detail.detail.technical.some(
+            (event) => event.kind === "citation-write-checkpoint",
+          ),
+        ).toBe(false);
+    });
+  } finally {
+    await f.close();
+  }
+});
+
+it("records a withdrawn citation target as restored when it reenters intake", async () => {
+  const f = await fixture(source(new Map([[0, [[1]]]]), 64));
+  try {
+    const seed = await add(f.app, 0);
+    const prior = await startIntake(
+      f.app.database,
+      "topic",
+      "Previous intake",
+      {},
+      "cli",
+    );
+    const picked = await f.app.identity.observe(observation(1), {
+      intake_batch_id: prior,
+    });
+    if (picked.disposition !== "accepted") throw new Error(picked.reason);
+    await finishIntake(f.app.database, prior, "completed");
+    await new IntakeWithdrawalService(f.app.database).withdraw(prior);
+    expect(await f.app.database.getLiterature(picked.literature_id)).toBeNull();
+    const result = await run(f.app, [seed], "restore");
+    expect(result.result_count).toBe(1);
+    expect(
+      await f.app.database.getLiterature(picked.literature_id),
+    ).not.toBeNull();
+    expect(
+      inspect(f.home, (db) =>
+        db
+          .prepare(
+            "SELECT literature_id,disposition FROM intake_batch_members WHERE batch_id=?",
+          )
+          .all(result.intake_batch_id),
+      ),
+    ).toEqual([
+      { literature_id: picked.literature_id, disposition: "restored" },
+    ]);
+  } finally {
+    await f.close();
+  }
+});
+
+it("reopens the catalog and repeats only the unfinished source, keeping its committed prefix", async () => {
+  const calls: number[] = [];
+  const port = source(
+    new Map([
+      [0, [[1]]],
+      [9, [[2], [3], [4], [5]]],
+    ]),
+    2,
+    calls,
+  );
+  const f = await fixture(port);
+  let reopened: Application | undefined;
+  try {
+    const a = await add(f.app, 0);
+    const b = await add(f.app, 9);
+    const abort = new AbortController();
+    const observe = f.app.identity.observe.bind(f.app.identity);
+    const fault = vi
+      .spyOn(f.app.identity, "observe")
+      .mockImplementation(async (value, given) => {
+        const result = await observe(value, given);
+        if (
+          (value as { observation_id: string }).observation_id ===
+          observation(4).observation_id
+        )
+          abort.abort();
+        return result;
+      });
+    try {
+      await expect(
+        run(f.app, [a, b], "resume", abort.signal),
+      ).rejects.toThrow();
+    } finally {
+      fault.mockRestore();
+    }
+    const job = await processingJobId("resume");
+    const prior = checkpoints(f.home, job);
+    expect(
+      prior.filter((item) => item.checked).map((item) => item.source_id),
+    ).toEqual([a]);
+    expect(
+      prior
+        .filter((item) => item.source_id === b)
+        .flatMap((item) => item.causes),
+    ).toHaveLength(2);
+    await f.app.close();
+    reopened = await createApplication(f.home, options(port));
+    await reopened.processingTasks!.control(job, "resume");
+    const result = await run(reopened, [a, b], "resume");
+    expect(calls).toEqual([0, 9, 9]);
+    expect(result.result_count).toBe(5);
+    expect(
+      (await reopened.database.referenceSnapshot()).map(
+        (row) => row.supports.length,
+      ),
+    ).toEqual([1, 1, 1, 1, 1]);
+    expect(
+      checkpoints(f.home, job)
+        .filter((item) => item.checked)
+        .map((item) => item.source_id),
+    ).toEqual([a, b]);
+  } finally {
+    await reopened?.close();
+    await f.close();
+  }
+});
+
+it("puts the checked marker only in the last segment of a single provider page", async () => {
+  const f = await fixture(source(new Map([[0, [[1], [2], [3]]]]), 64));
+  try {
+    const seed = await add(f.app, 0);
+    const segment = f.app.database.writeMetadataSegment.bind(f.app.database);
+    const cut = vi
+      .spyOn(f.app.database, "writeMetadataSegment")
+      .mockImplementation((write, signal) =>
+        segment(() => write(() => true), signal),
+      );
+    try {
+      const result = await run(f.app, [seed], "split");
+      expect(
+        checkpoints(f.home, result.job_id)
+          .filter((row) => row.source_id === seed)
+          .map((row) => [row.raw_items.length, row.causes.length, row.checked]),
+      ).toEqual([
+        [1, 1, false],
+        [1, 1, false],
+        [1, 1, true],
+      ]);
+    } finally {
+      cut.mockRestore();
+    }
+  } finally {
+    await f.close();
+  }
+});
+
+it("resumes a split provider item with the original observation identities", async () => {
+  const seen: NeutralMetadataItem[] = [];
+  const f = await fixture({
+    provider_name: "fixture",
+    open_reference_query({ keys: [anchor] }) {
+      expect(anchor?.record_id).toBe("0");
+      let pulled = false;
+      return {
+        pull_raw_item() {
+          if (pulled) return null;
+          pulled = true;
+          return { raw_item: {}, source_exhausted_after: true };
+        },
+        convert_raw_item() {
+          const item = groupedCitationItem(anchor!, [1, 2, 3]);
+          seen.push(item);
+          return item;
+        },
+      };
+    },
+  });
+  try {
+    const seed = await add(f.app, 0);
+    const segment = f.app.database.writeMetadataSegment.bind(f.app.database);
+    const cut = vi
+      .spyOn(f.app.database, "writeMetadataSegment")
+      .mockImplementation((write, signal) =>
+        segment(() => write(() => true), signal),
+      );
+    try {
+      const abort = new AbortController();
+      const observe = f.app.identity.observe.bind(f.app.identity);
+      const interruption = vi
+        .spyOn(f.app.identity, "observe")
+        .mockImplementation(async (o, options) => {
+          const decision = await observe(o, options);
+          if (
+            (o as { provenance: { source_record_id: string } }).provenance
+              .source_record_id === "2"
+          )
+            abort.abort();
+          return decision;
+        });
+      try {
+        await expect(
+          run(f.app, [seed], "split-item", abort.signal),
+        ).rejects.toThrow();
+      } finally {
+        interruption.mockRestore();
+      }
+      const job = await processingJobId("split-item");
+      const before = checkpoints(f.home, job).filter(
+        (row) => row.source_id === seed,
+      );
+      expect(before.map((row) => [row.causes.length, row.checked])).toEqual([
+        [1, false],
+      ]);
+      await f.app.processingTasks!.control(job, "resume");
+      const result = await run(f.app, [seed], "split-item");
+      expect(seen).toHaveLength(2);
+      expect(result.result_count).toBe(3);
+      expect(
+        checkpoints(f.home, job)
+          .filter((row) => row.source_id === seed)
+          .map((row) => [row.causes.length, row.checked]),
+      ).toEqual([
+        [1, false],
+        [1, false],
+        [1, true],
+      ]);
+      expect(
+        inspect(f.home, (db) =>
+          db
+            .prepare(
+              "SELECT observation_id FROM provider_relation_observations ORDER BY observation_id",
+            )
+            .all()
+            .map((row) => row.observation_id),
+        ),
+      ).toEqual(seen[0]!.relations.map((o) => o.observation_id).sort());
+    } finally {
+      cut.mockRestore();
+    }
+  } finally {
+    await f.close();
+  }
+});
+
+it("rejects inconsistent saved identities even when the citation item key matches", () => {
+  const event = {
+    kind: "item" as const,
+    failure: null,
+    item: groupedCitationItem({ record_id: "0", identifiers: [] }, [1, 2, 3]),
+  };
+  const saved = pendingCitationItem(event, citationItemKey(event), 1);
+  for (const inconsistent of [
+    { ...saved, observations: saved.observations.slice(1) },
+    { ...saved, relations: saved.relations.slice(1) },
+  ])
+    expect(() => restoreCitationItem(event, inconsistent)).toThrow(
+      "citation checkpoint item lengths do not match its key",
+    );
+});
+
+it.each([null, 1])(
+  "continues when a resumed citation source replaces its partially written response (scan limit %s)",
+  async (scanLimit) => {
+    const calls: number[] = [];
+    const responses = new Map<number, readonly (readonly number[])[]>([
+      [0, [[1, 2, 3]]],
+      [9, [[6]]],
+    ]);
+    const f = await fixture({
+      provider_name: "fixture",
+      open_reference_query({ keys: [anchor] }) {
+        const seed = Number(anchor!.record_id);
+        calls.push(seed);
+        const rows = responses.get(seed)!;
+        let next = 0;
+        return {
+          pull_raw_item() {
+            if (next === rows.length) return null;
+            return {
+              raw_item: rows[next++],
+              source_exhausted_after: next === rows.length,
+            };
+          },
+          convert_raw_item: (raw) =>
+            groupedCitationItem(anchor!, raw as readonly number[]),
+        };
+      },
+    });
+    try {
+      const seed = await add(f.app, 0);
+      const nextSeed = await add(f.app, 9);
+      const segment = f.app.database.writeMetadataSegment.bind(f.app.database);
+      const cut = vi
+        .spyOn(f.app.database, "writeMetadataSegment")
+        .mockImplementation((write, signal) =>
+          segment(() => write(() => true), signal),
+        );
+      const abort = new AbortController();
+      const observe = f.app.identity.observe.bind(f.app.identity);
+      const interruption = vi
+        .spyOn(f.app.identity, "observe")
+        .mockImplementation(async (value, given) => {
+          const decision = await observe(value, given);
+          if (
+            (value as { provenance: { source_record_id: string } }).provenance
+              .source_record_id === "3"
+          )
+            abort.abort();
+          return decision;
+        });
+      try {
+        await expect(
+          run(
+            f.app,
+            [seed, nextSeed],
+            "changed-response",
+            abort.signal,
+            scanLimit,
+          ),
+        ).rejects.toThrow();
+      } finally {
+        interruption.mockRestore();
+        cut.mockRestore();
+      }
+      const job = await processingJobId("changed-response");
+      const before = await f.app.database.referenceSnapshot();
+      expect(before).toHaveLength(2);
+      expect(checkpoints(f.home, job).some((row) => row.checked)).toBe(false);
+
+      responses.set(0, [[2, 4], [5]]);
+      await f.app.processingTasks!.control(job, "resume");
+      const result = await run(
+        f.app,
+        [seed, nextSeed],
+        "changed-response",
+        undefined,
+        scanLimit,
+      );
+      const unrestricted = scanLimit === null;
+      const expectedReferences = [
+        { source_id: seed, doi: doi(1), supports: 1 },
+        { source_id: seed, doi: doi(2), supports: unrestricted ? 2 : 1 },
+      ];
+      if (unrestricted)
+        expectedReferences.push(
+          { source_id: seed, doi: doi(4), supports: 1 },
+          { source_id: seed, doi: doi(5), supports: 1 },
+          { source_id: nextSeed, doi: doi(6), supports: 1 },
+        );
+      expect(result).toMatchObject({
+        status: "COMPLETED",
+        result_count: expectedReferences.length,
+        source_results: [
+          { outcome: unrestricted ? "EXHAUSTED" : "SCAN_LIMIT_REACHED" },
+        ],
+      });
+      expect(calls).toEqual(unrestricted ? [0, 0, 9] : [0, 0]);
+      const references = await f.app.database.referenceSnapshot();
+      expect(references).toHaveLength(expectedReferences.length);
+      expect(references.map(({ reference }) => reference)).toEqual(
+        expect.arrayContaining(before.map(({ reference }) => reference)),
+      );
+      expect(
+        inspect(f.home, (db) =>
+          db
+            .prepare(
+              `
+      SELECT r.source_literature_id AS source_id, i.value AS doi, count(s.observation_id) AS supports
+      FROM literature_references r
+      JOIN literature_metadata_identifiers i ON i.literature_id=r.target_literature_id AND i.namespace='doi'
+      JOIN provider_relation_reference_supports s USING(reference_id)
+      GROUP BY r.reference_id ORDER BY i.value
+    `,
+            )
+            .all(),
+        ),
+      ).toEqual(expectedReferences);
+      const task = await createTaskReader(
+        new ExecutionRepository(f.app.database),
+      ).read(job);
+      expect(task.job.status).toBe("completed");
+      expect(
+        task.events.filter(
+          (event) => event.kind === "citation-response-replaced",
+        ),
+      ).toEqual([
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            literature_id: seed,
+            provider_name: "fixture",
+            committed_relations: 2,
+          }),
+        }),
+      ]);
+      expect(
+        checkpoints(f.home, job)
+          .filter((row) => row.checked)
+          .map((row) => row.source_id),
+      ).toEqual([seed, nextSeed]);
+    } finally {
+      await f.close();
+    }
+  },
+);
+
+it("admits a workbench folder write between active citation segments", async () => {
+  const home = await mkdtemp(join(tmpdir(), "sciretriever-intake-workbench-"));
+  let server: Awaited<ReturnType<typeof startProductionWorkbench>> | undefined;
+  try {
+    await mkdir(join(home, ".sciretriever"), { mode: 0o700 });
+    await writeFile(
+      join(home, ".sciretriever", "config.toml"),
+      `[paths]\ncatalog_path=${JSON.stringify(join(home, "catalog.sqlite"))}\nartifact_root=${JSON.stringify(join(home, "artifacts"))}\n`,
+      { mode: 0o600 },
+    );
+    const rows: Row[] = Array.from({ length: 84 }, (_, n) => [n + 1]);
+    server = await startProductionWorkbench({
+      home,
+      port: 0,
+      access: workbenchTestAccess,
+      assets: new Map([
+        ["/", { contentType: "text/html", body: "<main>Fixture</main>" }],
+      ]),
+      applicationOptions: options(source(new Map([[0, rows]]), 128)),
+    });
+    const { origin, application: app } = server;
+    const seed = await add(app, 0);
+    const auth = await workbenchLogin(origin);
+    const index = await fetch(origin, { headers: { Cookie: auth } });
+    const cookie =
+      auth + "; " + index.headers.get("set-cookie")!.split(";")[0]!;
+    const init = await fetch(origin + "/api/clients", {
+      method: "POST",
+      headers: {
+        Cookie: cookie,
+        Origin: origin,
+        "X-Workbench-Init": "1",
+        "Content-Type": "application/json",
+      },
+      body: "{}",
+    });
+    const grant = (await init.json()) as { client_id: string; csrf: string };
+    let trigger!: () => void;
+    let processed = 0;
+    const foreground = new Promise<void>((resolve) => {
+      trigger = resolve;
+    }).then(async () => {
+      const started = performance.now();
+      const response = await fetch(
+        origin + "/api/v1/maintenance/folders?client_id=" + grant.client_id,
+        {
+          method: "POST",
+          headers: {
+            Cookie: cookie,
+            Origin: origin,
+            "Content-Type": "application/json",
+            "X-Workbench-Csrf": grant.csrf,
+            "X-Sciretriever-Protocol-Version": "1",
+          },
+          body: JSON.stringify({
+            protocol_version: 1,
+            request: {
+              operation: "create",
+              request: { name: "Foreground" },
+            },
+          }),
+        },
+      );
+      return {
+        status: response.status,
+        elapsed: performance.now() - started,
+        processed,
+        body: await response.json(),
+      };
+    });
+    const observe = app.identity.observe.bind(app.identity);
+    const slowed = vi
+      .spyOn(app.identity, "observe")
+      .mockImplementation(async (...args) => {
+        if (++processed === 1) trigger();
+        await delay(4);
+        return observe(...args);
+      });
+    try {
+      const [result, write] = await Promise.all([
+        run(app, [seed], "fairness"),
+        foreground,
+      ]);
+      expect(write.status, JSON.stringify(write.body)).toBe(200);
+      expect(write.processed).toBeLessThan(rows.length);
+      expect(write.elapsed).toBeLessThan(250);
+      expect(result.result_count).toBe(rows.length);
+      console.info(
+        JSON.stringify({
+          folder_write_wait_ms: write.elapsed,
+          processed_when_written: write.processed,
+        }),
+      );
+    } finally {
+      slowed.mockRestore();
+      trigger();
+      await Promise.allSettled([foreground]);
+    }
+  } finally {
+    await server?.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});

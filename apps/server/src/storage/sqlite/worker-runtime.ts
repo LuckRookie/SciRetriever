@@ -350,6 +350,12 @@ function ftsIndexText(value: string): string {
     .join(" ");
 }
 let db: Dynamic;
+let metadataWrite:
+  | {
+      readonly prepare: (sql: string) => Dynamic;
+      readonly nextSequence: Map<string, number>;
+    }
+  | undefined;
 let observedDataVersion: number | null = null;
 let openedCatalogIdentity: string | null = null;
 function catalogIdentity(): string {
@@ -832,7 +838,25 @@ function getLiteratures(ids: Dynamic): Dynamic {
     };
   });
 }
-function findLiteratureByIdentifiers(identifiers: Dynamic): Dynamic {
+function getLiteratureIds(id: string, includeWithdrawn = false): Dynamic {
+  if (!includeWithdrawn && visibilityModule.literatureWithdrawn(db, id))
+    return null;
+  const row = db
+    .prepare(
+      "SELECT l.literature_id,l.meta_literature_id,m.literature_id AS has_metadata FROM literatures l LEFT JOIN literature_metadata m USING(literature_id) WHERE l.literature_id=?",
+    )
+    .get(id);
+  if (!row) return null;
+  if (!row.has_metadata) fail();
+  return {
+    literature_id: row.literature_id,
+    meta_literature_id: row.meta_literature_id,
+  };
+}
+function findLiteratureByIdentifiers(
+  identifiers: Dynamic,
+  idsOnly: boolean,
+): Dynamic {
   if (!Array.isArray(identifiers) || identifiers.length > 128) fail();
   const ids = new Set<Dynamic>();
   const query = db.prepare(
@@ -848,7 +872,11 @@ function findLiteratureByIdentifiers(identifiers: Dynamic): Dynamic {
     for (const row of query.all(identifier.namespace, identifier.value))
       ids.add(row.literature_id);
   }
-  return [...ids].sort().map((id) => getLiterature(id, true));
+  return [...ids]
+    .sort()
+    .map((id) =>
+      idsOnly ? getLiteratureIds(id, true) : getLiterature(id, true),
+    );
 }
 function stateEvidence(id: string): Dynamic {
   return archiveModule.archiveState(
@@ -1834,8 +1862,7 @@ function identityRead(r: Dynamic): Dynamic {
         literature,
         metadata_revision: metadata.metadata_revision,
         metadata_sha256: metadata.metadata_sha256,
-        content_ready:
-          stateEvidence(literature.literature_id).status === "READY",
+        content_ready: literature.status === "READY",
         withdrawn: visibilityModule.literatureWithdrawn(
           db,
           literature.literature_id,
@@ -2315,17 +2342,19 @@ function writeLiteratureAsset(p: Dynamic): Dynamic {
     );
 }
 function transaction(operation: Dynamic): Dynamic {
+  if (metadataWrite) return operation();
   db.exec("BEGIN IMMEDIATE");
   try {
     const value = operation();
     db.exec("COMMIT");
     return value;
   } catch (error) {
-    db.exec("ROLLBACK");
+    if (db.isTransaction) db.exec("ROLLBACK");
     throw error;
   }
 }
 function readTransaction(operation: Dynamic): Dynamic {
+  if (metadataWrite) return operation();
   db.exec("BEGIN");
   try {
     queryCheckpoint();
@@ -3174,16 +3203,21 @@ function appendExecutionEvent(event: Dynamic): Dynamic {
   return transaction(() => insertExecutionEvent(event));
 }
 function insertExecutionEvent(event: Dynamic): Dynamic {
-  if (
-    !db.prepare("SELECT 1 FROM execution_jobs WHERE job_id=?").get(event.job_id)
-  )
-    fail();
-  const last = db
-    .prepare(
-      "SELECT max(sequence) AS sequence FROM execution_events WHERE job_id=?",
+  let expected = metadataWrite?.nextSequence.get(event.job_id);
+  if (expected === undefined) {
+    if (
+      !db
+        .prepare("SELECT 1 FROM execution_jobs WHERE job_id=?")
+        .get(event.job_id)
     )
-    .get(event.job_id);
-  const expected = last.sequence === null ? 0 : Number(last.sequence) + 1;
+      fail();
+    const last = db
+      .prepare(
+        "SELECT max(sequence) AS sequence FROM execution_events WHERE job_id=?",
+      )
+      .get(event.job_id);
+    expected = last.sequence === null ? 0 : Number(last.sequence) + 1;
+  }
   const sequence = event.sequence === -1 ? expected : event.sequence;
   if (sequence !== expected) fail();
   db.prepare(
@@ -3196,6 +3230,7 @@ function insertExecutionEvent(event: Dynamic): Dynamic {
     JSON.stringify(event.payload),
     event.created_at,
   );
+  metadataWrite?.nextSequence.set(event.job_id, expected + 1);
   return { ...event, sequence };
 }
 function listExecutionEvents(
@@ -3219,7 +3254,9 @@ function listExecutionEvents(
     typeof acquisitionOnly !== "boolean"
   )
     fail();
-  const filter = acquisitionOnly ? " AND kind='acquisition-attempt'" : "";
+  const filter = acquisitionOnly
+    ? " AND kind='acquisition-attempt'"
+    : " AND kind<>'citation-write-checkpoint'";
   return db
     .prepare(
       order === "newest"
@@ -4022,8 +4059,7 @@ function commitDocumentVersion(p: Dynamic): Dynamic {
   });
 }
 function putProviderRelation(o: Dynamic): Dynamic {
-  try {
-    db.exec("BEGIN IMMEDIATE");
+  return transaction(() => {
     const p = o.provenance;
     db.prepare(
       "INSERT INTO provenances(provenance_id,source_kind,source_name,source_record_id,observed_at,input_sha256,parameters_sha256) VALUES(?,?,?,?,?,?,?) ON CONFLICT(provenance_id) DO NOTHING",
@@ -4060,16 +4096,8 @@ function putProviderRelation(o: Dynamic): Dynamic {
         );
       }
     }
-    db.exec("COMMIT");
     return true;
-  } catch (e) {
-    try {
-      db.exec("ROLLBACK");
-    } catch {
-      // Preserve the original transaction failure when rollback also fails.
-    }
-    throw e;
-  }
+  });
 }
 function getProviderRelation(id: Dynamic): Dynamic {
   const row = db
@@ -4113,8 +4141,7 @@ function putProviderReferenceSupport(
   observationId: Dynamic,
   reference?: Dynamic,
 ): Dynamic {
-  try {
-    db.exec("BEGIN IMMEDIATE");
+  return transaction(() => {
     if (reference) {
       const existing = db
         .prepare(
@@ -4159,16 +4186,8 @@ function putProviderReferenceSupport(
     db.prepare(
       "INSERT INTO provider_relation_reference_supports(reference_id,observation_id) VALUES(?,?) ON CONFLICT DO NOTHING",
     ).run(referenceId, observationId);
-    db.exec("COMMIT");
     return reference ? edge : true;
-  } catch (e) {
-    try {
-      db.exec("ROLLBACK");
-    } catch {
-      // Preserve the original transaction failure when rollback also fails.
-    }
-    throw e;
-  }
+  });
 }
 function putMetadataReferenceSupport(
   referenceId: Dynamic,
@@ -4701,7 +4720,7 @@ function getDiscovery(id: Dynamic): Dynamic {
     citation_causes,
   };
 }
-function putDiscovery(p: Dynamic): Dynamic {
+function putDiscovery(p: Dynamic, resumeCitation = false): Dynamic {
   return transaction(() => {
     if (
       !p ||
@@ -4722,13 +4741,27 @@ function putDiscovery(p: Dynamic): Dynamic {
         "SELECT kind,status,started_at FROM discovery_runs WHERE discovery_run_id=?",
       )
       .get(r.discovery_run_id);
+    const resuming =
+      resumeCitation &&
+      r.kind === "citation" &&
+      saved?.kind === "citation" &&
+      saved.started_at === r.started_at &&
+      saved.status === "INTERRUPTED";
     if (
       !saved ||
       saved.kind !== r.kind ||
-      saved.status !== r.status ||
+      (saved.status !== r.status && !resuming) ||
       saved.started_at !== r.started_at
     )
       fail();
+    if (resuming) {
+      db.prepare(
+        "UPDATE discovery_runs SET status=? WHERE discovery_run_id=?",
+      ).run(r.status, r.discovery_run_id);
+      db.prepare(
+        "DELETE FROM discovery_source_results WHERE discovery_run_id=?",
+      ).run(r.discovery_run_id);
+    }
     if (r.kind === "topic") {
       db.prepare(
         "INSERT INTO topic_discovery_inputs(discovery_run_id,kind,query,year_from,year_to) VALUES(?,'topic',?,?,?) ON CONFLICT(discovery_run_id) DO NOTHING",
@@ -4903,7 +4936,7 @@ port.on("message", (message: WorkerMessage) => {
       return;
     }
     if (!db) initialize();
-    else if (!db.isTransaction) {
+    else if (!db.isTransaction && !metadataWrite) {
       // FTS5 may retain an obsolete index view on a long-lived SQLite
       // connection after another connection commits. Refresh only between
       // transactions; a multi-command read snapshot must keep its connection.
@@ -4928,8 +4961,56 @@ port.on("message", (message: WorkerMessage) => {
       queryPreflight?.status !== "ready"
     )
       fail();
+    // Some SQLite errors roll back the whole transaction. Until the segment
+    // owner has cleaned up, never run its remaining commands in autocommit.
+    if (
+      metadataWrite &&
+      !db.isTransaction &&
+      message.command.kind !== "metadata_write_rollback"
+    )
+      fail();
     let value;
     switch (message.command.kind) {
+      case "metadata_write_begin": {
+        if (data.read_only || metadataWrite || db.isTransaction) fail();
+        db.exec("BEGIN IMMEDIATE");
+        const prepare = db.prepare;
+        const statements = new Map<string, Dynamic>();
+        db.prepare = (sql: string) => {
+          let statement = statements.get(sql);
+          if (!statement) {
+            statement = prepare.call(db, sql);
+            statements.set(sql, statement);
+          }
+          return statement;
+        };
+        metadataWrite = { prepare, nextSequence: new Map() };
+        value = true;
+        break;
+      }
+      case "metadata_write_commit":
+      case "metadata_write_rollback": {
+        if (!metadataWrite) fail();
+        if (message.command.kind === "metadata_write_commit") {
+          if (message.command.events.length) requireRuntime();
+          for (const event of message.command.events)
+            insertExecutionEvent(event);
+          db.exec("COMMIT");
+        } else if (db.isTransaction) db.exec("ROLLBACK");
+        db.prepare = metadataWrite.prepare;
+        metadataWrite = undefined;
+        value = true;
+        break;
+      }
+      case "citation_checkpoints":
+        requireRuntime();
+        value = db
+          .prepare(
+            "SELECT payload_json FROM execution_events WHERE job_id=? AND kind='citation-write-checkpoint' AND json_extract(payload_json,'$.target_id')=? ORDER BY sequence",
+          )
+          .all(message.command.jobId, message.command.targetId)
+          .map((row: Dynamic) => JSON.parse(row.payload_json));
+        break;
       case "capture_read":
       case "capture_write":
         try {
@@ -5660,7 +5741,10 @@ port.on("message", (message: WorkerMessage) => {
         value = referenceQuerySnapshot(message.command.selection);
         break;
       case "put_discovery":
-        value = putDiscovery(message.command.publication);
+        value = putDiscovery(
+          message.command.publication,
+          message.command.resumeCitation,
+        );
         break;
       case "get_discovery": {
         const { discoveryRunId } = message.command;
@@ -5691,8 +5775,14 @@ port.on("message", (message: WorkerMessage) => {
       case "pending_receipts":
         value = pendingReceipts();
         break;
+      case "get_literature_ids":
+        value = getLiteratureIds(message.command.literatureId);
+        break;
       case "find_literature_by_identifiers":
-        value = findLiteratureByIdentifiers(message.command.identifiers);
+        value = findLiteratureByIdentifiers(
+          message.command.identifiers,
+          message.command.idsOnly === true,
+        );
         break;
       case "schema":
         value = db
