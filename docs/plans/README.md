@@ -7,7 +7,7 @@
 ## 活动索引
 
 - [计划25：加工之前](2026-11-16-before-processing/README.md)。
-- [计划26：二十万篇下的 Web 性能](2026-11-21-web-performance/README.md)（Owner 2026-11-21：Web 是门面，重中之重）。
+- [计划26：千万篇规模的文献库与 Web](2026-11-21-library-scale/README.md)（Owner 2026-11-21：Web 是门面，重中之重；按百万、千万篇立意）。
 
 已完成、取消或被替代的计划从[历史索引](../archive/README.md)查找；验收数字、授权记录与残余事项留在各计划中。知识加工的全部计划内容在[知识加工提案](../proposals/2026-11-16-knowledge-processing/README.md)，暂缓。
 
