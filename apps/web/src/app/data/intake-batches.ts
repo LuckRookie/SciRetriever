@@ -11,6 +11,7 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import type { ApiClient } from "./api.js";
 import { archiveWrite } from "./archive.js";
 import { useApi } from "./query.js";
+import { pacedInterval } from "./polling.js";
 
 const OPEN_STATES = new Set<IntakeBatch["state"]>([
   "collecting",
@@ -97,12 +98,15 @@ export function useIntakeBatches(submitting = false) {
       listIntakeBatches(api, 20, pageParam, signal),
     getNextPageParam: (page) => page.next_cursor,
     refetchInterval: (query) =>
-      submitting ||
-      query.state.data?.pages.some((page) =>
-        page.items.some((batch) => OPEN_STATES.has(batch.state)),
-      )
-        ? 3000
-        : false,
+      pacedInterval(
+        query,
+        submitting ||
+          query.state.data?.pages.some((page) =>
+            page.items.some((batch) => OPEN_STATES.has(batch.state)),
+          )
+          ? 3000
+          : false,
+      ),
   });
 }
 /** One batch by id, for titles and filter chips. */

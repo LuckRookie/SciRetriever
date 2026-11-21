@@ -10,6 +10,8 @@
 
 `api.ts` / `query.tsx` 管理既有 HTTP 适配和共享查询生命周期，`url.ts` 解析及同步可后退的视图状态，`preferences.ts` 访问可恢复的本机偏好，`library.ts` 提供受合同校验的文献读取。`sources.ts` 重新导出框架无关的固定来源解析。`processor-results.ts` 使用有界分页完整读取已发布处理结果，验证范围、连续性、字节数与内容 hash；它不接纳或改写结果，不将 result ID 当作知识 artifact ID。
 
+`polling.ts` 给所有定时刷新同一个节奏：下一次刷新等该查询原来的间隔与上一次读取耗时的两倍中较长者，最多 60 s；原来的间隔为 `false` 时照旧停止。每个 `refetchInterval` 的返回值都经过 `pacedInterval`。上一次读取未返回时，React Query 让到点的刷新并入它而不另发请求，并在每次读取返回时重新计时。
+
 Browser 的轮询读取不会覆盖请求期间已经接纳的推送或操作回执。登录过期、工作台 grant 被另一标签重登录撤销、启动 Cookie 失效时，工作台保留原 URL 进入既有认证恢复；有效登录 Cookie 可自动返回并申请新的 grant。
 
 `wire.ts` 保存通用 JSON 读取边界，`tasks.ts` 保存任务详情投影与状态/范围标签，`candidate-status.ts` 依据真实 publication/operation terminal 形成候选状态文字；这些都不创建 DOM 或改变业务事实。

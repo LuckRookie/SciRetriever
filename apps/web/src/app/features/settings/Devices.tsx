@@ -11,6 +11,7 @@ import {
   LocalTime,
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
+import { pacedInterval } from "../../data/polling.js";
 import { ApiError, type ApiClient } from "../../data/api.js";
 import {
   agentBrief,
@@ -101,13 +102,16 @@ export function useDevices() {
     },
     // A code handed over in the last ten minutes may pair at any moment.
     refetchInterval: (query) =>
-      query.state.data?.some(
-        (device) =>
-          deviceState(device) === "pending" &&
-          Date.now() - new Date(device.created_at).getTime() < 600_000,
-      )
-        ? 3000
-        : false,
+      pacedInterval(
+        query,
+        query.state.data?.some(
+          (device) =>
+            deviceState(device) === "pending" &&
+            Date.now() - new Date(device.created_at).getTime() < 600_000,
+        )
+          ? 3000
+          : false,
+      ),
   });
 }
 

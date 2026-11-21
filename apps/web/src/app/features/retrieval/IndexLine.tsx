@@ -7,6 +7,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { Button } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
+import { pacedInterval } from "../../data/polling.js";
 import { maintain } from "../maintenance/transport.js";
 
 /** Which index the shown results were read from. */
@@ -45,7 +46,10 @@ export function useIndexStatus(answer: AnswerIndex | null) {
       const status = query.state.data;
       // An index that is catching up changes within seconds; a current one
       // only changes when something else publishes.
-      return (status && working(status)) || answer === "stale" ? 2000 : 30000;
+      return pacedInterval(
+        query,
+        (status && working(status)) || answer === "stale" ? 2000 : 30000,
+      );
     },
     refetchOnWindowFocus: true,
   });

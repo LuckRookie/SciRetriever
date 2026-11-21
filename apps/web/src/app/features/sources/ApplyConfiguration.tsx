@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { parseConfigurationApplyState } from "@sciretriever/contracts";
 import { Button } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
+import { pacedInterval } from "../../data/polling.js";
 import { errorMessage } from "../../strings.js";
 import { ProblemLabel } from "./problem.js";
 import { readSourceDirectory, sourceDirectoryKey } from "./SourceDirectory.js";
@@ -27,7 +28,10 @@ export function ApplyConfiguration() {
         (await api.read("/api/configuration/apply", signal)).result,
       ),
     refetchInterval: (query) =>
-      moving.includes(query.state.data?.state ?? "") ? 1000 : false,
+      pacedInterval(
+        query,
+        moving.includes(query.state.data?.state ?? "") ? 1000 : false,
+      ),
   });
   const state = apply.data,
     required = directory.data?.restart_required === true;

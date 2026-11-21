@@ -71,6 +71,7 @@ import {
 import { taskTabs } from "../features/tasks/TaskPage.js";
 import { archiveQuery } from "../data/archive.js";
 import { record } from "../data/wire.js";
+import { pacedInterval } from "../data/polling.js";
 import { createReadingState, closeReadingState } from "../../reading/state.js";
 import { READER_PAINTED, ShellContext } from "./context.js";
 import { topBarLayout } from "../features/reader/geometry.js";
@@ -391,7 +392,7 @@ function Workspace({ api }: { api: ApiClient }) {
     queryFn: ({ signal }) =>
       api.read("/api/tasks?limit=100&status_group=active", signal),
     enabled: api.kind === "workspace",
-    refetchInterval: 5000,
+    refetchInterval: (query) => pacedInterval(query, 5000),
   });
   // “n 进行中” beside 任务; queued tasks are not running.
   const running = runningTaskCount(tasks.data);

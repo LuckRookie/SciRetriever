@@ -27,6 +27,7 @@ import {
   TextField,
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
+import { pacedInterval } from "../../data/polling.js";
 import type { ApiClient } from "../../data/api.js";
 import { errorMessage } from "../../strings.js";
 import { STAGES, sourceName } from "../../data/acquisition-wording.js";
@@ -143,7 +144,7 @@ export function SourceDirectoryPanel() {
           ...d.rows.map((r) => r.test),
           ...d.builtin_tests.map((b) => b.test),
         ].some((t) => t.state === "queued" || t.state === "running");
-      return testing ? 1000 : false;
+      return pacedInterval(query, testing ? 1000 : false);
     },
   });
   const refresh = () =>

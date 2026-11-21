@@ -16,6 +16,7 @@ import {
   TextField,
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
+import { pacedInterval } from "../../data/polling.js";
 import type { ApiClient } from "../../data/api.js";
 import { navigate } from "../../data/url.js";
 import {
@@ -373,7 +374,10 @@ export function BatchPage({ id }: { id: string }) {
     queryKey: batchKey(id),
     queryFn: ({ signal }) => readIntakeBatch(api, id, signal),
     refetchInterval: (query) =>
-      query.state.data && !isActive(query.state.data) ? false : 3000,
+      pacedInterval(
+        query,
+        query.state.data && !isActive(query.state.data) ? false : 3000,
+      ),
   });
   const batch = status.data;
   const imported = batch?.kind === "import";
@@ -390,7 +394,10 @@ export function BatchPage({ id }: { id: string }) {
     enabled: imported && awaiting,
     // The preview carries recognition on; it is read again until it is done.
     refetchInterval: (query) =>
-      query.state.data?.recognition?.state === "running" ? 3000 : false,
+      pacedInterval(
+        query,
+        query.state.data?.recognition?.state === "running" ? 3000 : false,
+      ),
   });
   const ended =
     !!batch &&
@@ -407,7 +414,8 @@ export function BatchPage({ id }: { id: string }) {
       };
     },
     enabled: imported && ended && batch?.state !== "withdrawn",
-    refetchInterval: batch && isActive(batch) ? 3000 : false,
+    refetchInterval: (query) =>
+      pacedInterval(query, batch && isActive(batch) ? 3000 : false),
   });
   const files = useQuery({
     queryKey: [...batchKey(id), "files"],
@@ -431,8 +439,11 @@ export function BatchPage({ id }: { id: string }) {
     queryFn: ({ signal }) => decisionItems(api, id, signal),
     enabled: deciding && (!awaiting || !!preview.data),
     placeholderData: keepPreviousData,
-    refetchInterval:
-      preview.data?.recognition?.state === "running" ? 3000 : false,
+    refetchInterval: (query) =>
+      pacedInterval(
+        query,
+        preview.data?.recognition?.state === "running" ? 3000 : false,
+      ),
   });
   const refresh = () =>
     void queries.invalidateQueries({ queryKey: batchKey(id) });

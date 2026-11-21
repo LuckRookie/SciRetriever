@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { PageHeader, Tabs } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
+import { pacedInterval } from "../../data/polling.js";
 import { navigate } from "../../data/url.js";
 import { runningTaskCount } from "../../data/tasks.js";
 import "./tasks.css";
@@ -14,7 +15,7 @@ export function useActiveTaskCount() {
     queryFn: ({ signal }) =>
       api.read("/api/tasks?limit=100&status_group=active", signal),
     enabled: api.kind === "workspace",
-    refetchInterval: 5000,
+    refetchInterval: (query) => pacedInterval(query, 5000),
   });
   return runningTaskCount(tasks.data);
 }

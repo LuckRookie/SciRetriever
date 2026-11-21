@@ -23,6 +23,7 @@ import {
   TextArea,
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
+import { pacedInterval } from "../../data/polling.js";
 import { TaskPage } from "../tasks/TaskPage.js";
 import { registerNavigationGuard, useUrlState } from "../../data/url.js";
 import {
@@ -216,7 +217,7 @@ export default function Browser() {
     queryKey: ["browser", "view"],
     queryFn: ({ signal }) => api.refreshView(signal),
     initialData: api.view ?? undefined,
-    refetchInterval: 5000,
+    refetchInterval: (query) => pacedInterval(query, 5000),
     enabled: api.kind === "workspace",
   });
   const select = useCallback(
@@ -645,7 +646,7 @@ function Viewer({
     // Production sessions do not expose a page list; only the synthetic
     // workbench serves /api/tabs.
     enabled: active && view.mode !== "production",
-    refetchInterval: 2000,
+    refetchInterval: (query) => pacedInterval(query, 2000),
   });
   // A finished flow keeps its last frame for review; input would be refused.
   const readOnly = ended(view) || current?.phase === "closed";

@@ -24,6 +24,7 @@ import {
 } from "../../components/index.js";
 import { archiveQuery, rows } from "../../data/archive.js";
 import { useApi } from "../../data/query.js";
+import { pacedInterval } from "../../data/polling.js";
 import { ApiError } from "../../data/api.js";
 import { paperTitle, readLiterature } from "../../data/library.js";
 import { navigate, useUrlState } from "../../data/url.js";
@@ -125,7 +126,7 @@ export default function Tasks() {
       };
     },
     getNextPageParam: (page) => page.cursor,
-    refetchInterval: 5000,
+    refetchInterval: (query) => pacedInterval(query, 5000),
     enabled: api.kind === "workspace",
   });
   const items = [
@@ -402,7 +403,7 @@ function TaskSessions({ id }: { id: string }) {
           "sessions",
         ),
       ),
-    refetchInterval: 5000,
+    refetchInterval: (query) => pacedInterval(query, 5000),
   });
   if (!sessions.data?.length) return null;
   return (
@@ -468,13 +469,16 @@ export function TaskDetails({ id }: { id: string }) {
       ),
     refetchInterval: (query) => {
       const task = query.state.data;
-      if (!task) return false;
-      if (!terminal(task.job.status)) return 2000;
-      return isProcessor(task) &&
-        !task.collections.length &&
-        query.state.dataUpdateCount < 5
-        ? 2000
-        : false;
+      if (!task) return pacedInterval(query, false);
+      if (!terminal(task.job.status)) return pacedInterval(query, 2000);
+      return pacedInterval(
+        query,
+        isProcessor(task) &&
+          !task.collections.length &&
+          query.state.dataUpdateCount < 5
+          ? 2000
+          : false,
+      );
     },
   });
   if (detail.isPending) return <Skeleton label="正在读取任务详情" />;

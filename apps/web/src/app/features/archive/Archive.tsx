@@ -14,6 +14,7 @@ import {
 } from "../../components/index.js";
 import { archiveQuery, rows, useArchiveAction } from "../../data/archive.js";
 import { useApi } from "../../data/query.js";
+import { pacedInterval } from "../../data/polling.js";
 import { readLiterature, paperTitleParts } from "../../data/library.js";
 import { record } from "../../data/wire.js";
 import { navigate } from "../../data/url.js";
@@ -63,7 +64,7 @@ export default function Archive() {
         ),
         "archive issues",
       ),
-    refetchInterval: 10000,
+    refetchInterval: (query) => pacedInterval(query, 10000),
   });
   const stats = useQuery({
     queryKey: ["archive", "stats"],
