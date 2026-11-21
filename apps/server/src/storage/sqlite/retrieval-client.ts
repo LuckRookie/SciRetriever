@@ -4,6 +4,10 @@ import type {
   RetrievalHit,
   RetrievalSource,
   RetrievalChangeScan,
+  RetrievalChangeSnapshot,
+  RetrievalCheckpoint,
+  RetrievalChange,
+  RetrievalLiteratureUpdate,
 } from "./retrieval-engine.js";
 import type { SqliteWorker } from "./worker.js";
 
@@ -70,6 +74,19 @@ export class RetrievalStorageClient {
   scanChanges(): Promise<RetrievalChangeScan> {
     return this.worker.retrieval("scanChanges");
   }
+  changesSnapshot(): Promise<RetrievalChangeSnapshot> {
+    return this.worker.retrieval("changesSnapshot");
+  }
+  changePage(
+    after: number,
+    tail: number,
+    limit: number,
+  ): Promise<RetrievalChange[]> {
+    return this.worker.retrieval("changePage", [after, tail, limit]);
+  }
+  pruneChangeBatch(signal?: AbortSignal): Promise<boolean> {
+    return this.worker.retrieval("pruneChangeBatch", [], signal);
+  }
   pruneGenerationBatch(
     target: string | null = null,
     signal?: AbortSignal,
@@ -80,12 +97,16 @@ export class RetrievalStorageClient {
   }> {
     return this.worker.retrieval("pruneGenerationBatch", [target], signal);
   }
-  literatureSources(id: string): Promise<{
+  literatureSources(
+    id: string,
+    generation?: string,
+  ): Promise<{
     fingerprint: string;
     metadata: RetrievalSource | null;
     documents: readonly RetrievalSource[];
+    indexed: boolean;
   }> {
-    return this.worker.retrieval("literatureSources", [id]);
+    return this.worker.retrieval("literatureSources", [id, generation]);
   }
   ensureActive(signal?: AbortSignal): Promise<RetrievalGeneration> {
     return this.worker.retrieval("ensureActive", [], signal);
@@ -103,20 +124,33 @@ export class RetrievalStorageClient {
     staged: string,
     id: string,
     fingerprint: string,
+    checkpoint: RetrievalCheckpoint,
     signal?: AbortSignal,
   ): Promise<boolean> {
     return this.worker.retrieval(
       "commitLiteratureUpdate",
-      [active, staged, id, fingerprint],
+      [active, staged, id, fingerprint, checkpoint],
+      signal,
+    );
+  }
+  commitLiteratureBatch(
+    id: string,
+    updates: readonly RetrievalLiteratureUpdate[],
+    checkpoint: RetrievalCheckpoint,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    return this.worker.retrieval(
+      "commitLiteratureBatch",
+      [id, updates, checkpoint],
       signal,
     );
   }
   finishIncremental(
     id: string,
-    revision: number,
+    checkpoint: RetrievalCheckpoint,
     signal?: AbortSignal,
   ): Promise<RetrievalGeneration> {
-    return this.worker.retrieval("finishIncremental", [id, revision], signal);
+    return this.worker.retrieval("finishIncremental", [id, checkpoint], signal);
   }
   verificationEntries(
     generation: string,
@@ -160,6 +194,7 @@ export class RetrievalStorageClient {
   ): Promise<{
     readonly hits: readonly RetrievalHit[];
     readonly candidateLimit: boolean;
+    readonly relevanceLimited: boolean;
   }> {
     return this.worker.retrieval("search", [
       ftsQuery,

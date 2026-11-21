@@ -162,7 +162,7 @@ LibrarySearchPage
   next_cursor: str | None
 ```
 
-`limit >= 1`；cursor 非空时是调用方不得解释或修改的不透明字符串，并与规范化 query、sort 和稳定位置绑定。cursor 不保存查询或数据库 snapshot；后续翻页重新读取当时的 current facts，数据库在两次请求之间变化时结果和 `total_count` 可以相应变化。`relevance` 只允许在 `query.text` 非空时使用。年份或标题缺失的记录在对应排序中排在具有该值的记录之后；所有排序最后使用 `literature_id` 作为稳定 tie-breaker。`total_count >= 0`，表示忽略本节 cursor/limit 后同一 query 的完整命中数；`items` 不重复且数量不超过 limit，`next_cursor` 只在仍有下一页时存在。
+`limit >= 1`；cursor 非空时是调用方不得解释或修改的不透明字符串，并与规范化 query、sort 和稳定位置绑定。cursor 不保存查询或数据库 snapshot；后续翻页重新读取当时的 current facts，数据库在两次请求之间变化时结果和 `total_count` 可以相应变化。`relevance` 只允许在 `query.text` 非空时使用。年份或标题缺失的记录在对应排序中排在具有该值的记录之后；所有排序最后使用 `literature_id` 作为稳定 tie-breaker。`total_count >= 0`，表示忽略本节 cursor/limit 后同一 query 的完整命中数；按 `relevance` 排序时只能翻到相关度最高的前 1,000 条，命中数超过 1,000 时页面带 `relevance_limit: 1000`，翻到第 1,000 条即止。处理范围的展开（`QuerySelector` 与批量选择）不受这个上限影响。`items` 不重复且数量不超过 limit，`next_cursor` 只在仍有下一页时存在。
 
 每个 `LiteratureSearchItem` 表示一篇具体 `Literature`，不按 `MetaLiterature` 折叠。不同 Provider 的重复记录已经作为同一 Literature 的多个 observations 收敛，不制造多个列表项；同一 MetaLiterature 下的不同明确版本仍分别出现，并通过 `literature.meta_literature_id` 归组。`Literature` 已经包含当前完整 `LiteratureMetadata` 和派生 `LiteratureStatus`，因此 SearchItem 不在顶层重复 metadata/status；revision/hash、第一缺失步骤和人工 PDF 标记是当前读取上下文的补充。
 
@@ -735,7 +735,7 @@ Context 是临时读取结果，不持久化成 KnowledgeArtifact。若用户要
 
 取消停止继续扫描和资源展开；已交付的读取片段无需回滚。读失败与数据库不可用不能当成零结果。重复查询通常不要求 durable 幂等键；响应变化可来自新的显式维护提交，结果应带版本和覆盖以供识别。
 
-目标耗时见 [2.4](#24-规模与目标耗时)。实现需有候选扫描上限、有界片段读取和可解释截断；性能评估区分 FTS 候选时间、源内容验证、资源读取与组装成本，避免每次查询读全库所有 artifact。
+目标耗时见 [2.4](#24-规模与目标耗时)。材料检索的相关度续页同样止于前 1,000 条，实际截断时回执带 `relevance_limit: 1000`，混合 Context 透传材料分支的这个字段。实现需有候选扫描上限、有界片段读取和可解释截断；性能评估区分 FTS 候选时间、源内容验证、资源读取与组装成本，避免每次查询读全库所有 artifact。
 
 ### 4.7 当前入口与目标映射
 
@@ -757,7 +757,7 @@ Context 是临时读取结果，不持久化成 KnowledgeArtifact。若用户要
 
 发生真实 SQLite/FTS 读取损坏或已经由显式维护确认损坏时，返回 index-corrupt，并带可选 `maintenance_hint="rebuild-index"`。查询不为了发现尚未触达的静默损坏而扫描全库；版本/指纹未变化但固定字节损坏的错误仍保留，不能用“索引落后”掩盖真实来源完整性失败。
 
-**逐篇增量刷新**：`refresh()` 先用现有索引比对全部来源的标量指纹，不读正文或 FTS 倒排。指纹为 Literature/Meta 身份、metadata_revision/sha256，以及每个文档的 version、representation、源资产/hash 和 is_default。仅变化、删除或失去来源的 Literature 进入处理；它的元数据与固定文档重新核验并按原规则分块，未变化的文献不读取正文、不重写条目。每篇先借现有 building generation 暂存，每批最多 128 条或 1 MiB，沿用 catalog admission；扫描、文件读取和宿主计算不持有业务写锁。
+**逐篇增量刷新**：影响索引的写入由库里的触发器在同一写事务里把文献 ID 追加进变更表 `retrieval_changes`（位置递增），任何写入者都会被记下，包括直接 SQL、撤回、恢复与删除。`refresh()` 固定变更表的尾位置与源 revision，只读取已处理位置 `retrieval_change_state.processed_position` 之后的变更，逐页合并重复的文献 ID，耗时与变化的篇数成正比；服务启动时不做全库比对。每篇先比对来源的标量指纹，不读正文或 FTS 倒排。指纹为 Literature/Meta 身份、metadata_revision/sha256，以及每个文档的 version、representation、源资产/hash 和 is_default。仅变化、删除或失去来源的 Literature 进入处理；它的元数据与固定文档重新核验并按原规则分块，未变化的文献不读取正文、不重写条目。每篇先借现有 building generation 暂存，每批最多 128 条或 1 MiB，沿用 catalog admission；扫描、文件读取和宿主计算不持有业务写锁。索引内容与变更表的已处理位置在同一事务里推进，中断后从已处理位置继续，不丢不重；已处理的前缀分批删除。已处理位置为空表示迁移后尚未做全量比对，此时刷新返回 `index-reconcile-required`；全库比对只用于这一步、显式重建与 `verify`。
 
 单篇接纳事务重新比较该篇来源指纹；匹配才删除旧的该篇条目并将暂存条目归入 active，按差额更新计数，不切换其它文献。指纹改变只丢弃并重做该篇。后到的新发布导致一次新的轻量比对，已接纳且未再变化的文献保留，不因全局 revision 变化而整批作废。源消失时移除它的旧条目；关闭/取消保留已提交文献，清理未接纳暂存。generation 锁约束刷新、重建与验证，同一 catalog 一个处理者。
 

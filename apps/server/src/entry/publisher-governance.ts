@@ -230,12 +230,16 @@ export class PublisherGovernanceService {
             throw new Error("publisher governance cursor did not advance");
           visited.add(cursor);
         }
-        const page = await this.library.search({
-          query,
-          sort: query.text === null ? "publication-year-desc" : "relevance",
-          limit: Math.min(200, limit - scanned),
-          cursor,
-        });
+        const page = await this.library.search(
+          {
+            query,
+            sort: query.text === null ? "publication-year-desc" : "relevance",
+            limit: Math.min(200, limit - scanned),
+            cursor,
+          },
+          undefined,
+          "selection",
+        );
         for (const item of page.items) {
           cancelled(signal);
           const id = item.literature.literature_id;

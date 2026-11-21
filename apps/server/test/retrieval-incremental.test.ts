@@ -215,19 +215,21 @@ describe("incremental material indexing", () => {
         }),
       );
       const scanned = await env.store.revision();
-      const insert = env.store.insertEntries.bind(env.store);
-      vi.spyOn(env.store, "insertEntries").mockImplementationOnce(
+      const commit = env.store.commitLiteratureBatch.bind(env.store);
+      vi.spyOn(env.store, "commitLiteratureBatch").mockImplementationOnce(
         async (...args) => {
-          await insert(...args);
           entered.resolve();
           await release.promise;
+          const accepted = await commit(...args);
+          expect(accepted).toBe(false);
+          return accepted;
         },
       );
       pending = env.index.refresh().catch((error: unknown) => error);
       await entered.promise;
       await env.app.folders.manage({
         operation: "create",
-        request: { name: "During staging" },
+        request: { name: "Before incremental batch commit" },
       });
       await env.app.database.putLiterature(
         parseLiterature({

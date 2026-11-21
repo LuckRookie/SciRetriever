@@ -442,10 +442,14 @@ export type SqliteCommand =
         | "markCorrupt"
         | "pruneGenerationBatch"
         | "scanChanges"
+        | "changesSnapshot"
+        | "changePage"
+        | "pruneChangeBatch"
         | "literatureSources"
         | "ensureActive"
         | "beginLiteratureUpdate"
         | "commitLiteratureUpdate"
+        | "commitLiteratureBatch"
         | "finishIncremental"
         | "verificationEntries"
         | "verify"
@@ -1567,7 +1571,9 @@ export class SqliteWorker {
       "beginLiteratureUpdate",
       "pruneGenerationBatch",
       "commitLiteratureUpdate",
+      "commitLiteratureBatch",
       "finishIncremental",
+      "pruneChangeBatch",
       "recordVerification",
       "markCorrupt",
     ].includes(operation);
@@ -1588,6 +1594,7 @@ export class SqliteWorker {
         throw new RetrievalStorageError(
           reply.code === "index-stale" ||
           reply.code === "index-storage-full" ||
+          reply.code === "index-reconcile-required" ||
           reply.code === "index-unavailable"
             ? reply.code
             : "index-corrupt",

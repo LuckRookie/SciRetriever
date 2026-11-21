@@ -212,8 +212,12 @@ it("invalidates a cursor as soon as one paper is accepted, before the final sour
     const stale = await q.context!.search(request(1)),
       before = await store.active();
     expect(stale.continuation).not.toBeNull();
-    const commit = store.commitLiteratureUpdate.bind(store);
-    vi.spyOn(store, "commitLiteratureUpdate").mockImplementationOnce(
+    const changePage = store.changePage.bind(store);
+    vi.spyOn(store, "changePage").mockImplementationOnce((after, tail) =>
+      changePage(after, tail, 1),
+    );
+    const commit = store.commitLiteratureBatch.bind(store);
+    vi.spyOn(store, "commitLiteratureBatch").mockImplementationOnce(
       async (...args) => {
         const value = await commit(...args);
         entered.resolve();

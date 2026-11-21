@@ -1,14 +1,26 @@
+import { createReadStream } from "node:fs";
+import { mkdtemp, open, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createInterface } from "node:readline";
 import { DatabaseSync } from "node:sqlite";
-import { acquireCatalogWriteLock } from "../write-admission.js";
+import {
+  acquireCatalogWriteLock,
+  CatalogWriteAdmission,
+} from "../write-admission.js";
 import { verifySchemaObjects } from "./archive-schema-migration.js";
 import { readCatalogIdentity } from "./catalog-identity.js";
 import { CURRENT_CATALOG_CONFIG } from "./catalog-layout.js";
+import { RetrievalStorageEngine } from "./retrieval-engine.js";
 import { schemaTargetFile, schemaTargetPath } from "./schema-path.js";
 import {
   INTAKE_LOOKUP_INDEXES,
+  RETRIEVAL_CHANGE_SCHEMA,
   SCHEMA_FINGERPRINT,
   SCHEMA_FINGERPRINT_V19,
+  SCHEMA_FINGERPRINT_V19_INTAKE_LOOKUPS,
   SCHEMA_MANIFEST_V19,
+  SCHEMA_MANIFEST_V19_INTAKE_LOOKUPS,
   SCHEMA_VERSION,
 } from "./schema.js";
 
@@ -21,7 +33,7 @@ function refuse(cause?: unknown): never {
   );
 }
 
-/** Explicit intake lookup indexes for layout 19. */
+/** Explicit, additive upgrade from either previous layout 19 fingerprint. */
 export async function migrateLiteratureSearchSchema(path: string) {
   await schemaTargetPath(path);
   if (!(await schemaTargetFile(path))) refuse();
@@ -35,16 +47,30 @@ export async function migrateLiteratureSearchSchema(path: string) {
     );
     db.exec("BEGIN IMMEDIATE");
     try {
-      verifySchemaObjects(db, SCHEMA_MANIFEST_V19, refuse);
+      const previous = db
+        .prepare(
+          "SELECT schema_fingerprint FROM schema_identity WHERE singleton=1",
+        )
+        .get()?.schema_fingerprint;
+      const hasIntakeIndexes =
+        previous === SCHEMA_FINGERPRINT_V19_INTAKE_LOOKUPS;
+      if (!hasIntakeIndexes && previous !== SCHEMA_FINGERPRINT_V19) refuse();
+      const manifest = hasIntakeIndexes
+        ? SCHEMA_MANIFEST_V19_INTAKE_LOOKUPS
+        : SCHEMA_MANIFEST_V19;
+      verifySchemaObjects(db, manifest, refuse);
       if (
         !readCatalogIdentity(db, {
           ...CURRENT_CATALOG_CONFIG,
-          schema_manifest: SCHEMA_MANIFEST_V19,
-          schema_fingerprint: SCHEMA_FINGERPRINT_V19,
+          schema_manifest: manifest,
+          schema_fingerprint: previous,
         })
       )
         refuse();
-      for (const sql of INTAKE_LOOKUP_INDEXES) db.exec(sql);
+      if (!hasIntakeIndexes)
+        for (const sql of INTAKE_LOOKUP_INDEXES) db.exec(sql);
+      for (const sql of RETRIEVAL_CHANGE_SCHEMA) db.exec(sql);
+      db.exec("INSERT INTO retrieval_change_state VALUES(1,NULL)");
       db.prepare(
         "UPDATE schema_identity SET schema_fingerprint=? WHERE singleton=1",
       ).run(SCHEMA_FINGERPRINT);
@@ -56,7 +82,7 @@ export async function migrateLiteratureSearchSchema(path: string) {
       return {
         from_version: SCHEMA_VERSION,
         to_version: SCHEMA_VERSION,
-        from_fingerprint: SCHEMA_FINGERPRINT_V19,
+        from_fingerprint: previous,
         schema_fingerprint: SCHEMA_FINGERPRINT,
         elapsed_ms: performance.now() - started,
       };
@@ -70,5 +96,94 @@ export async function migrateLiteratureSearchSchema(path: string) {
     } finally {
       await lock.release();
     }
+  }
+}
+
+/** Explicit post-migration reconciliation. Concurrent writes log themselves. */
+export async function reconcileLiteratureSearchSchema(path: string) {
+  await schemaTargetPath(path);
+  if (!(await schemaTargetFile(path))) refuse();
+  const generations = new CatalogWriteAdmission(`${path}.retrieval-index`);
+  const writes = new CatalogWriteAdmission(path);
+  const started = performance.now();
+  try {
+    return await generations.run(async () => {
+      const root = await mkdtemp(
+        join(tmpdir(), "sciretriever-index-reconcile-"),
+      );
+      try {
+        const pathToChanges = join(root, "literatures.ndjson");
+        const spool = await open(pathToChanges, "wx", 0o600);
+        let differences = 0;
+        const pageSize = 512;
+        let ids: string[] = [];
+        try {
+          const reader = new RetrievalStorageEngine(
+            path,
+            true,
+            CURRENT_CATALOG_CONFIG,
+          );
+          try {
+            for (const id of reader.migrationDifferences()) {
+              ids.push(JSON.stringify(id));
+              differences++;
+              if (ids.length < pageSize) continue;
+              await spool.writeFile(ids.join("\n") + "\n");
+              ids = [];
+            }
+            if (ids.length) await spool.writeFile(ids.join("\n") + "\n");
+          } finally {
+            reader.close();
+          }
+        } finally {
+          await spool.close();
+        }
+        const scan_ms = performance.now() - started;
+        const writer = new RetrievalStorageEngine(
+          path,
+          false,
+          CURRENT_CATALOG_CONFIG,
+        );
+        try {
+          ids = [];
+          const lines = createInterface({
+            input: createReadStream(pathToChanges),
+            crlfDelay: Infinity,
+          });
+          try {
+            const flush = async () => {
+              if (!ids.length) return;
+              await writes.run(async () => writer.recordMigrationChanges(ids));
+              ids = [];
+            };
+            for await (const line of lines) {
+              ids.push(JSON.parse(line) as string);
+              if (ids.length >= pageSize) await flush();
+            }
+            await flush();
+          } finally {
+            lines.close();
+          }
+          // Keep the null position until every difference is durable. After
+          // interruption a rerun may queue an ID again; no IDs can be skipped.
+          const reconciled = await writes.run(async () =>
+            writer.completeMigration(),
+          );
+          return {
+            reconciled,
+            differences,
+            scan_ms,
+            elapsed_ms: performance.now() - started,
+          };
+        } finally {
+          writer.close();
+        }
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  } finally {
+    await writes.close();
+    await generations.close();
   }
 }

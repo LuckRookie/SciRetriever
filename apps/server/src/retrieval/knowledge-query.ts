@@ -153,12 +153,14 @@ export class KnowledgeContextService {
       ? this.material
       : null;
     const initial = await material?.indexSnapshot();
+    const searchMaterial = material?.searchSession();
     if (
       request.continuation &&
       cursor.index_token !== (initial?.state_token ?? null)
     )
       throw new KnowledgeContextError("context-cursor-invalid");
     cursor = { ...cursor, index_token: initial?.state_token ?? null };
+    let relevanceLimit: KnowledgeContextBundle["relevance_limit"];
     const addIndexGap = (coverage: string) => {
       if (coverage.startsWith("index-"))
         addGap({ code: `material-${coverage}`, literature_id: null });
@@ -168,6 +170,9 @@ export class KnowledgeContextService {
       count({
         schema_version: 3,
         score_rule: "sources-then-results-v1",
+        ...(relevanceLimit === undefined
+          ? {}
+          : { relevance_limit: relevanceLimit }),
         items,
         coverage: gaps.some((gap) => gap.code === "material-index-stale")
           ? "index-stale"
@@ -189,7 +194,7 @@ export class KnowledgeContextService {
       const previous = { ...cursor };
       let item: KnowledgeContextItem | undefined;
       if (cursor.phase === "source") {
-        if (!this.material) {
+        if (!searchMaterial) {
           addGap({
             code: "material-index-unavailable",
             literature_id: null,
@@ -198,17 +203,22 @@ export class KnowledgeContextService {
           continue;
         }
         const source = materialContextRequest(request, cursor.source),
-          page = await this.material.search(
+          page = await searchMaterial(
             { ...source, budget: { ...source.budget, max_items: 1 } },
             signal,
           );
         page.gaps.forEach(addGap);
+        relevanceLimit = page.relevance_limit ?? relevanceLimit;
         addIndexGap(page.coverage);
         item = page.items[0];
         cursor = {
           ...cursor,
           source: page.continuation,
-          phase: page.continuation ? "source" : "result",
+          phase: page.continuation
+            ? "source"
+            : request.kinds.includes("knowledge")
+              ? "result"
+              : "done",
         };
       } else {
         if (!request.kinds.includes("knowledge")) {

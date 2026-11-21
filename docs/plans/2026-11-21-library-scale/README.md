@@ -100,7 +100,7 @@ Owner 2026-11-21：
 | [04](04-literature-states.md)       | 文献状态写入时维护                           | 后端                 | B1                                     | Pending        |
 | [05](05-counts-and-facets.md)       | 全库总数；工作集内的计数与分面               | 后端、前端           | B2；04                                 | Pending        |
 | [06](06-paging-and-sorting.md)      | 工作集内的翻页与排序；首页改为工作集入口     | 后端、前端           | B3                                     | Pending        |
-| [07](07-search-index.md)            | 搜索索引只处理变化                           | 后端                 | B4                                     | Pending        |
+| [07](07-search-index.md)            | 搜索索引只处理变化                           | 后端                 | B4                                     | Done（待部署） |
 | [08](08-read-lanes.md)              | 读请求分道与耗时上限；WAL 能收缩             | 后端                 | B5                                     | Pending        |
 | [09](09-pdf-open.md)                | 打开 PDF                                     | 前端；服务端部分后端 | 02.1；B6                               | Pending        |
 | [10](10-intake-throughput.md)       | 入库吞吐                                     | 后端                 | 10.1 无；10.3 起等 B7                  | Done（待部署） |

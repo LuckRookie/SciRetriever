@@ -322,9 +322,6 @@ export function restoreWithdrawnLiterature(
     "DELETE FROM intake_withdrawn_objects WHERE batch_id=? AND object_kind='folder' AND object_id IN (WITH RECURSIVE parents(id) AS (SELECT folder_id FROM folder_members WHERE literature_id=? UNION SELECT f.parent_id FROM folders f JOIN parents p ON f.folder_id=p.id WHERE f.parent_id IS NOT NULL) SELECT id FROM parents)",
   ).run(owner.batch_id!, id);
   restoreFts(db, id);
-  db.exec(
-    "UPDATE retrieval_source_revision SET revision=revision+1 WHERE singleton=1",
-  );
   return true;
 }
 export type IntakeWithdrawalCommand = {
@@ -364,6 +361,13 @@ function remainingObjects(db: DatabaseSync, batchId: string): ObjectRef[] {
       "SELECT object_kind AS kind,object_id AS id FROM intake_withdrawn_objects WHERE batch_id=?",
     )
     .all(batchId) as ObjectRef[];
+}
+function finishWithdrawalRevision(db: DatabaseSync, literatures: number) {
+  // The marker triggers advance the revision for independent SQL writers.
+  // A batch action has always published one revision in its own transaction.
+  db.prepare(
+    "UPDATE retrieval_source_revision SET revision=revision+1-? WHERE singleton=1",
+  ).run(literatures);
 }
 export function runIntakeWithdrawal(
   db: DatabaseSync,
@@ -429,9 +433,7 @@ export function runIntakeWithdrawal(
           db,
           literatureSearchRowIds(db, String(row.object_id)),
         );
-      db.exec(
-        "UPDATE retrieval_source_revision SET revision=revision+1 WHERE singleton=1",
-      );
+      finishWithdrawalRevision(db, preview.remove.literatures);
       db.prepare(
         "INSERT INTO intake_withdrawals VALUES(?,?,?,?,NULL,?,NULL) ON CONFLICT(batch_id) DO UPDATE SET prior_state=excluded.prior_state,withdrawn_at=excluded.withdrawn_at,withdrawn_by=excluded.withdrawn_by,restored_at=NULL,report_json=excluded.report_json,restoration_json=NULL",
       ).run(
@@ -451,16 +453,15 @@ export function runIntakeWithdrawal(
         command.batch_id,
       );
       const objects = remainingObjects(db, command.batch_id);
+      const restore = countObjects(objects);
       db.prepare("DELETE FROM intake_withdrawn_objects WHERE batch_id=?").run(
         command.batch_id,
       );
       for (const object of objects)
         if (object.kind === "literature") restoreFts(db, object.id);
-      db.exec(
-        "UPDATE retrieval_source_revision SET revision=revision+1 WHERE singleton=1",
-      );
+      finishWithdrawalRevision(db, restore.literatures);
       result = parseIntakeWithdrawalReport({
-        restore: countObjects(objects),
+        restore,
         keep: previous.keep,
         kept_items: previous.kept_items,
         registered: previous.registered,

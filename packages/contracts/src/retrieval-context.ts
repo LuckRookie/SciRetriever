@@ -8,6 +8,7 @@ import {
 
 const utf8 = new TextEncoder();
 const hashPattern = /^[0-9a-f]{64}$/;
+export const RELEVANCE_RESULT_LIMIT = 1000;
 function fail(): never {
   throw new ContractValidationError();
 }
@@ -251,6 +252,8 @@ export interface MaterialContextItem {
 }
 export interface MaterialContextBundle {
   readonly maintenance_hint?: "rebuild-index";
+  /** Present when relevance ranking limits the results available to paginate. */
+  readonly relevance_limit?: typeof RELEVANCE_RESULT_LIMIT;
   readonly score_rule: "weighted-term-frequency-v1";
   readonly items: readonly MaterialContextItem[];
   readonly coverage:
@@ -305,6 +308,11 @@ export function parseMaterialContextBundle(
     typeof value === "object" &&
     Object.hasOwn(value, "maintenance_hint")
       ? ["maintenance_hint"]
+      : []),
+    ...(value &&
+    typeof value === "object" &&
+    Object.hasOwn(value, "relevance_limit")
+      ? ["relevance_limit"]
       : []),
   ]);
   if (
@@ -515,7 +523,13 @@ export function parseMaterialContextBundle(
     (items.length !== 0 ||
       gaps.length !== 0 ||
       r.truncated ||
+      Object.hasOwn(r, "relevance_limit") ||
       r.continuation !== null)
+  )
+    fail();
+  if (
+    Object.hasOwn(r, "relevance_limit") &&
+    r.relevance_limit !== RELEVANCE_RESULT_LIMIT
   )
     fail();
   if (r.truncated && r.continuation === null) fail();
@@ -529,6 +543,9 @@ export function parseMaterialContextBundle(
     generation_id,
     source_revision,
     ...indexed,
+    ...(r.relevance_limit === RELEVANCE_RESULT_LIMIT
+      ? { relevance_limit: RELEVANCE_RESULT_LIMIT }
+      : {}),
     gaps: Object.freeze(gaps),
     usage: { bytes, items: items.length, tokens: null, tokenizer: null },
     truncated: r.truncated as boolean,

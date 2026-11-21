@@ -8,6 +8,7 @@ const { visibleLiteratureSql }: typeof import("./intake-visibility.js") =
     ).href
   );
 import { createHash, randomUUID } from "node:crypto";
+import { RELEVANCE_RESULT_LIMIT } from "@sciretriever/contracts";
 import { DatabaseSync } from "node:sqlite";
 import type * as Schema from "./schema.js";
 const { SCHEMA_VERSION }: typeof Schema = await import(
@@ -452,6 +453,28 @@ export interface RetrievalChangeScan {
   readonly generation: RetrievalGeneration | null;
   readonly literature_ids: readonly string[];
 }
+export interface RetrievalChangeSnapshot {
+  readonly generation: RetrievalGeneration | null;
+  readonly revision: number;
+  readonly position: number;
+  readonly tail: number;
+  readonly pending: number;
+}
+export interface RetrievalChange {
+  readonly position: number;
+  readonly literature_id: string;
+}
+export interface RetrievalCheckpoint {
+  readonly previous: number;
+  readonly position: number;
+  readonly revision: number | null;
+}
+export interface RetrievalLiteratureUpdate {
+  readonly literature_id: string;
+  readonly fingerprint: string;
+  /** Null means the same fingerprint is already indexed. */
+  readonly entries: readonly RetrievalEntry[] | null;
+}
 function stamps(rows: readonly SourceStamp[]) {
   return JSON.stringify(rows);
 }
@@ -468,7 +491,11 @@ function* groupStamps(rows: Iterable<SourceStamp>) {
   if (group.length) yield { id: group[0]![0], fingerprint: stamps(group) };
 }
 export class RetrievalStorageError extends Error {
-  readonly code: "index-unavailable" | "index-corrupt" | "index-stale";
+  readonly code:
+    | "index-unavailable"
+    | "index-corrupt"
+    | "index-stale"
+    | "index-reconcile-required";
   constructor(code: RetrievalStorageError["code"]) {
     super(code);
     this.code = code;
@@ -616,63 +643,193 @@ export class RetrievalStorageEngine {
       .iterate(generation, ...(literature === undefined ? [] : [literature]));
     for (const row of rows) yield Object.values(row) as unknown as SourceStamp;
   }
+  private *changedLiteratures(generation: RetrievalGeneration | null) {
+    const current = groupStamps(this.sourceStamps()),
+      indexed = groupStamps(
+        generation ? this.indexedStamps(generation.generation_id) : [],
+      );
+    try {
+      let source = current.next(),
+        projected = indexed.next();
+      while (!source.done && !projected.done) {
+        if (source.value.id === projected.value.id) {
+          if (source.value.fingerprint !== projected.value.fingerprint)
+            yield source.value.id;
+          source = current.next();
+          projected = indexed.next();
+        } else if (
+          Buffer.compare(
+            Buffer.from(source.value.id),
+            Buffer.from(projected.value.id),
+          ) < 0
+        ) {
+          yield source.value.id;
+          source = current.next();
+        } else {
+          yield projected.value.id;
+          projected = indexed.next();
+        }
+      }
+      for (; !source.done; source = current.next()) yield source.value.id;
+      for (; !projected.done; projected = indexed.next())
+        yield projected.value.id;
+    } finally {
+      current.return(undefined);
+      indexed.return(undefined);
+    }
+  }
+  /** Explicit verification only. Normal refresh takes a journal snapshot. */
   scanChanges(): RetrievalChangeScan {
     this.refreshReader();
     this.db.exec("SAVEPOINT retrieval_change_scan");
     try {
-      const generation = this.active(),
-        revision = this.revision();
-      const current = groupStamps(this.sourceStamps()),
-        indexed = groupStamps(
-          generation ? this.indexedStamps(generation.generation_id) : [],
-        );
-      const literature_ids: string[] = [];
-      try {
-        let source = current.next(),
-          projected = indexed.next();
-        while (!source.done && !projected.done) {
-          if (source.value.id === projected.value.id) {
-            if (source.value.fingerprint !== projected.value.fingerprint)
-              literature_ids.push(source.value.id);
-            source = current.next();
-            projected = indexed.next();
-          } else if (
-            Buffer.compare(
-              Buffer.from(source.value.id),
-              Buffer.from(projected.value.id),
-            ) < 0
-          ) {
-            literature_ids.push(source.value.id);
-            source = current.next();
-          } else {
-            literature_ids.push(projected.value.id);
-            projected = indexed.next();
-          }
-        }
-        for (; !source.done; source = current.next())
-          literature_ids.push(source.value.id);
-        for (; !projected.done; projected = indexed.next())
-          literature_ids.push(projected.value.id);
-      } finally {
-        current.return(undefined);
-        indexed.return(undefined);
-      }
-      return { generation, revision, literature_ids: literature_ids.sort() };
+      const generation = this.active();
+      return {
+        generation,
+        revision: this.revision(),
+        literature_ids: [...this.changedLiteratures(generation)].sort(),
+      };
     } finally {
       if (this.db.isTransaction) this.db.exec("RELEASE retrieval_change_scan");
     }
   }
-  literatureSources(literature: string) {
+  private changePosition(): number | null {
+    const position = this.db
+      .prepare(
+        "SELECT processed_position FROM retrieval_change_state WHERE singleton=1",
+      )
+      .get()?.processed_position;
+    if (position === null) return null;
+    if (
+      typeof position !== "number" ||
+      !Number.isSafeInteger(position) ||
+      position < 0
+    )
+      fail();
+    return position;
+  }
+  private changeTail(): number {
+    const tail = this.db
+      .prepare(
+        "SELECT coalesce((SELECT seq FROM sqlite_sequence WHERE name='retrieval_changes'),0) AS tail",
+      )
+      .get()?.tail;
+    if (typeof tail !== "number" || !Number.isSafeInteger(tail) || tail < 0)
+      fail();
+    return tail;
+  }
+  changesSnapshot(): RetrievalChangeSnapshot {
+    this.refreshReader();
+    this.db.exec("SAVEPOINT retrieval_changes_snapshot");
+    try {
+      const position = this.changePosition();
+      if (position === null)
+        throw new RetrievalStorageError("index-reconcile-required");
+      const tail = this.changeTail();
+      if (position > tail) fail();
+      return {
+        generation: this.active(),
+        revision: this.revision(),
+        position,
+        tail,
+        pending: Number(
+          this.db
+            .prepare(
+              "SELECT count(DISTINCT literature_id) AS n FROM retrieval_changes WHERE position>? AND position<=?",
+            )
+            .get(position, tail)!.n,
+        ),
+      };
+    } finally {
+      this.db.exec("RELEASE retrieval_changes_snapshot");
+    }
+  }
+  changePage(after: number, tail: number, limit: number): RetrievalChange[] {
+    this.refreshReader();
+    const rows = this.db
+      .prepare(
+        `WITH page AS MATERIALIZED (
+         SELECT position,literature_id FROM retrieval_changes WHERE position>? AND position<=? ORDER BY position LIMIT ?
+       )
+       SELECT min(position) AS position,literature_id,(SELECT max(position) FROM page) AS tail
+       FROM page GROUP BY literature_id ORDER BY position`,
+      )
+      .all(after, tail, limit) as unknown as (RetrievalChange & {
+      tail: number;
+    })[];
+    // A batch may commit before the end of this page. Until then, only cover
+    // the first position of its last paper, leaving all unprocessed IDs ahead.
+    return rows.map(({ position, literature_id, tail }, index) => ({
+      position: index === rows.length - 1 ? tail : position,
+      literature_id,
+    }));
+  }
+  /** Keep the source and active generation in one snapshot during migration. */
+  *migrationDifferences(): Generator<string> {
+    this.refreshReader();
+    this.db.exec("SAVEPOINT retrieval_migration_scan");
+    try {
+      if (this.changePosition() !== null) return;
+      yield* this.changedLiteratures(this.active());
+    } finally {
+      this.db.exec("RELEASE retrieval_migration_scan");
+    }
+  }
+  recordMigrationChanges(ids: readonly string[]): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      if (this.changePosition() !== null)
+        throw new RetrievalStorageError("index-stale");
+      const record = this.db.prepare(
+        "INSERT INTO retrieval_changes(literature_id) VALUES(?)",
+      );
+      for (const id of ids) record.run(id);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      if (this.db.isTransaction) this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  completeMigration(): boolean {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const pending = this.changePosition() === null;
+      if (pending) {
+        this.db.exec(
+          "UPDATE retrieval_change_state SET processed_position=0 WHERE singleton=1",
+        );
+        // Reconciliation can discover a stale projection at an equal legacy
+        // revision. Make the backlog visible to the regular scalar monitor.
+        if (this.changeTail() > 0)
+          this.db.exec(
+            "UPDATE retrieval_source_revision SET revision=revision+1 WHERE singleton=1",
+          );
+      }
+      this.db.exec("COMMIT");
+      return pending;
+    } catch (error) {
+      if (this.db.isTransaction) this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  literatureSources(literature: string, generation?: string) {
     this.refreshReader();
     this.db.exec("SAVEPOINT retrieval_literature_sources");
     try {
+      const fingerprint = stamps([...this.sourceStamps(literature)]);
+      if (
+        generation !== undefined &&
+        fingerprint === stamps([...this.indexedStamps(generation, literature)])
+      )
+        return { fingerprint, metadata: null, documents: [], indexed: true };
       const metadata = this.metadataSource(literature);
       // SQLite LIMIT -1 includes every version of this literature in the snapshot.
       const documents = this.documentPage(null, -1, literature);
       return {
-        fingerprint: stamps([...this.sourceStamps(literature)]),
+        fingerprint,
         metadata,
         documents,
+        indexed: false,
       };
     } finally {
       if (this.db.isTransaction)
@@ -836,11 +993,13 @@ export class RetrievalStorageEngine {
     staged: string,
     literature: string,
     fingerprint: string,
+    checkpoint: RetrievalCheckpoint,
   ): boolean {
     this.refreshReader();
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      if (this.active()?.generation_id !== active)
+      const generation = this.active();
+      if (generation?.generation_id !== active)
         throw new RetrievalStorageError("index-stale");
       if (stamps([...this.sourceStamps(literature)]) !== fingerprint) {
         this.db.exec("ROLLBACK");
@@ -903,6 +1062,7 @@ export class RetrievalStorageEngine {
       this.db
         .prepare("DELETE FROM retrieval_generations WHERE generation_id=?")
         .run(staged);
+      this.advanceChanges(generation, checkpoint);
       this.db.exec("COMMIT");
       return true;
     } catch (error) {
@@ -910,32 +1070,143 @@ export class RetrievalStorageEngine {
       throw error;
     }
   }
-  finishIncremental(generation: string, revision: number): RetrievalGeneration {
+  /** Small, verified metadata updates fit in a single short catalog write. */
+  commitLiteratureBatch(
+    generation: string,
+    updates: readonly RetrievalLiteratureUpdate[],
+    checkpoint: RetrievalCheckpoint,
+  ): boolean {
     this.refreshReader();
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const active = this.active();
-      if (
-        !active ||
-        active.generation_id !== generation ||
-        !Number.isSafeInteger(revision) ||
-        revision < active.source_revision ||
-        revision > this.revision()
-      )
+      if (active?.generation_id !== generation)
         throw new RetrievalStorageError("index-stale");
-      // Only the completed scan is covered. Publications after its snapshot
-      // may still need indexing in the next round.
-      this.db
-        .prepare(
-          "UPDATE retrieval_generations SET source_revision=? WHERE generation_id=?",
+      for (const update of updates) {
+        if (
+          stamps([...this.sourceStamps(update.literature_id)]) !==
+          update.fingerprint
+        ) {
+          this.db.exec("ROLLBACK");
+          return false;
+        }
+      }
+      const dropFts = this.db.prepare(
+        "DELETE FROM retrieval_fts WHERE rowid IN (SELECT entry_id FROM retrieval_entries WHERE generation_id=? AND kind IN ('metadata','document') AND literature_id=?)",
+      );
+      const drop = this.db.prepare(
+        "DELETE FROM retrieval_entries WHERE generation_id=? AND kind IN ('metadata','document') AND literature_id=?",
+      );
+      const insert = this.entryWriter();
+      let entryDelta = 0,
+        sourceDelta = 0,
+        changed = false;
+      for (const { literature_id, entries } of updates) {
+        if (entries === null) continue;
+        if (
+          entries.some(
+            (entry) =>
+              entry.kind !== "metadata" ||
+              entry.literature_id !== literature_id,
+          )
         )
-        .run(revision, generation);
+          fail();
+        changed = true;
+        sourceDelta +=
+          Number(entries.length > 0) -
+          [...this.indexedStamps(generation, literature_id)].length;
+        dropFts.run(generation, literature_id);
+        entryDelta +=
+          entries.length - Number(drop.run(generation, literature_id).changes);
+        for (const entry of entries) insert(generation, entry);
+      }
+      if (changed)
+        this.db
+          .prepare(
+            "UPDATE retrieval_generations SET entry_count=entry_count+?,fts_count=fts_count+?,source_count=source_count+?,content_sha256=?,posting_sha256=? WHERE generation_id=?",
+          )
+          .run(
+            entryDelta,
+            entryDelta,
+            sourceDelta,
+            RETRIEVAL_UNVERIFIED,
+            createHash("sha256")
+              .update(`retrieval-mutation-v1:${randomUUID()}`)
+              .digest("hex"),
+            generation,
+          );
+      this.advanceChanges(active, checkpoint);
       this.db.exec("COMMIT");
-      return { ...active, source_revision: revision };
+      return true;
     } catch (error) {
       if (this.db.isTransaction) this.db.exec("ROLLBACK");
       throw error;
     }
+  }
+  private advanceChanges(
+    active: RetrievalGeneration,
+    checkpoint: RetrievalCheckpoint,
+  ): RetrievalGeneration {
+    const { previous, position, revision } = checkpoint;
+    if (
+      previous !== this.changePosition() ||
+      !Number.isSafeInteger(position) ||
+      position < previous ||
+      position > this.changeTail()
+    )
+      throw new RetrievalStorageError("index-stale");
+    this.db
+      .prepare(
+        "UPDATE retrieval_change_state SET processed_position=? WHERE singleton=1",
+      )
+      .run(position);
+    if (revision === null) return active;
+    if (
+      !Number.isSafeInteger(revision) ||
+      revision < active.source_revision ||
+      revision > this.revision()
+    )
+      throw new RetrievalStorageError("index-stale");
+    // Only the captured prefix is covered. Later commits remain in the journal.
+    this.db
+      .prepare(
+        "UPDATE retrieval_generations SET source_revision=? WHERE generation_id=?",
+      )
+      .run(revision, active.generation_id);
+    return { ...active, source_revision: revision };
+  }
+  finishIncremental(
+    generation: string,
+    checkpoint: RetrievalCheckpoint,
+  ): RetrievalGeneration {
+    this.refreshReader();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const active = this.active();
+      if (active?.generation_id !== generation)
+        throw new RetrievalStorageError("index-stale");
+      const result = this.advanceChanges(active, checkpoint);
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      if (this.db.isTransaction) this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  pruneChangeBatch(): boolean {
+    this.refreshReader();
+    const limit = 2048;
+    const position = this.changePosition();
+    if (position === null) return true;
+    return (
+      Number(
+        this.db
+          .prepare(
+            "DELETE FROM retrieval_changes WHERE position IN (SELECT position FROM retrieval_changes WHERE position<=? ORDER BY position LIMIT ?)",
+          )
+          .run(position, limit).changes,
+      ) < limit
+    );
   }
   verificationEntries(generation: string, id: string): RetrievalEntry[] {
     this.refreshReader();
@@ -1103,6 +1374,36 @@ export class RetrievalStorageEngine {
     this.repairGeneration = repairing ? id : null;
     return id;
   }
+  private entryWriter() {
+    const insert = this.db.prepare(
+      "INSERT INTO retrieval_entries(generation_id,kind,literature_id,meta_literature_id,metadata_revision,metadata_sha256,document_version_id,representation_sha256,source_asset_id,source_asset_sha256,unit_start_utf8,unit_end_utf8,unit_sha256,section_id,unit_ordinal,is_default) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    );
+    const fts = this.db.prepare(
+      "INSERT INTO retrieval_fts(rowid,title,body) VALUES(?,?,?)",
+    );
+    return (generationId: string, e: RetrievalEntry, target = fts) => {
+      const { lastInsertRowid } = insert.run(
+        generationId,
+        e.kind,
+        e.literature_id,
+        e.meta_literature_id,
+        e.metadata_revision,
+        e.metadata_sha256,
+        e.document_version_id,
+        e.representation_sha256,
+        e.source_asset_id,
+        e.source_asset_sha256,
+        e.unit_start_utf8,
+        e.unit_end_utf8,
+        e.unit_sha256,
+        e.section_id,
+        e.unit_ordinal,
+        e.is_default,
+      );
+      target.run(lastInsertRowid, e.title, e.body);
+      return lastInsertRowid;
+    };
+  }
   insertEntries(
     generationId: string,
     entries: readonly RetrievalEntry[],
@@ -1119,40 +1420,15 @@ export class RetrievalStorageEngine {
         repair.exec("BEGIN");
         repairTransaction = true;
       }
-      const insert = this.db.prepare(
-        "INSERT INTO retrieval_entries(generation_id,kind,literature_id,meta_literature_id,metadata_revision,metadata_sha256,document_version_id,representation_sha256,source_asset_id,source_asset_sha256,unit_start_utf8,unit_end_utf8,unit_sha256,section_id,unit_ordinal,is_default) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-      );
-      const fts = this.db.prepare(
-        "INSERT INTO retrieval_fts(rowid,title,body) VALUES(?,?,?)",
-      );
+      const insert = this.entryWriter();
       const repairText = repair
         ? repair.prepare(
             "INSERT INTO temp.retrieval_repair_text(entry_id,title,body) VALUES(?,?,?)",
           )
         : null;
       for (const e of entries) {
-        const result = insert.run(
-          generationId,
-          e.kind,
-          e.literature_id,
-          e.meta_literature_id,
-          e.metadata_revision,
-          e.metadata_sha256,
-          e.document_version_id,
-          e.representation_sha256,
-          e.source_asset_id,
-          e.source_asset_sha256,
-          e.unit_start_utf8,
-          e.unit_end_utf8,
-          e.unit_sha256,
-          e.section_id,
-          e.unit_ordinal,
-          e.is_default,
-        );
-        if (repairText) {
-          repairText.run(result.lastInsertRowid, e.title, e.body);
-          stagedIds.push(result.lastInsertRowid);
-        } else fts.run(result.lastInsertRowid, e.title, e.body);
+        const id = insert(generationId, e, repairText ?? undefined);
+        if (repairText) stagedIds.push(id);
       }
       this.db
         .prepare(
@@ -1258,6 +1534,13 @@ export class RetrievalStorageEngine {
           "INSERT INTO retrieval_active_generation(singleton,generation_id) VALUES(1,?) ON CONFLICT(singleton) DO UPDATE SET generation_id=excluded.generation_id",
         )
         .run(generationId);
+      // The rebuild's unchanged-source CAS covers all changes in this snapshot,
+      // including a migrated catalog whose journal was not yet reconciled.
+      this.db
+        .prepare(
+          "UPDATE retrieval_change_state SET processed_position=? WHERE singleton=1",
+        )
+        .run(this.changeTail());
       if (repairing) inspectCatalogWithRetrieval(this.db, this.config);
       this.db.exec("COMMIT");
       published = {
@@ -1354,6 +1637,7 @@ export class RetrievalStorageEngine {
   ): {
     readonly hits: readonly RetrievalHit[];
     readonly candidateLimit: boolean;
+    readonly relevanceLimited: boolean;
   } {
     this.refreshReader();
     this.db.exec("SAVEPOINT retrieval_search");
@@ -1363,9 +1647,12 @@ export class RetrievalStorageEngine {
       const scopeJson = JSON.stringify(scope);
       const kindsJson = JSON.stringify(kinds);
       const versionsJson = JSON.stringify(explicitVersions ?? []);
+      // entry_id is exactly FTS rowid. For library-wide searches, stream that
+      // order from MATCH and stop at the existing candidate boundary.
+      const join = scope.length === 0 ? "CROSS JOIN" : "JOIN";
       const rows = this.db
         .prepare(
-          `SELECT e.entry_id,e.generation_id,e.kind,e.literature_id,e.meta_literature_id,e.metadata_revision,e.metadata_sha256,e.document_version_id,e.representation_sha256,e.source_asset_id,e.source_asset_sha256,e.unit_start_utf8,e.unit_end_utf8,e.unit_sha256,e.section_id,e.unit_ordinal,e.is_default,retrieval_fts.title,retrieval_fts.body,(SELECT asset_id FROM literature_assets p WHERE p.literature_id=e.literature_id AND p.role='primary-pdf') AS primary_asset_id FROM retrieval_fts JOIN retrieval_entries e ON e.entry_id=retrieval_fts.rowid WHERE retrieval_fts MATCH ? AND ${visibleLiteratureSql("e.literature_id")} AND e.generation_id=? AND e.kind IN (SELECT value FROM json_each(?)) AND (json_array_length(?)=0 OR e.literature_id IN (SELECT value FROM json_each(?))) AND (e.kind='metadata' OR (?=0 AND e.is_default=1) OR (?=1 AND e.document_version_id IN (SELECT value FROM json_each(?)))) ORDER BY e.entry_id LIMIT 4098`,
+          `SELECT e.entry_id,e.generation_id,e.kind,e.literature_id,e.meta_literature_id,e.metadata_revision,e.metadata_sha256,e.document_version_id,e.representation_sha256,e.source_asset_id,e.source_asset_sha256,e.unit_start_utf8,e.unit_end_utf8,e.unit_sha256,e.section_id,e.unit_ordinal,e.is_default,retrieval_fts.title,retrieval_fts.body,(SELECT asset_id FROM literature_assets p WHERE p.literature_id=e.literature_id AND p.role='primary-pdf') AS primary_asset_id FROM retrieval_fts ${join} retrieval_entries e ON e.entry_id=retrieval_fts.rowid WHERE retrieval_fts MATCH ? AND ${visibleLiteratureSql("e.literature_id")} AND e.generation_id=? AND e.kind IN (SELECT value FROM json_each(?)) AND (json_array_length(?)=0 OR e.literature_id IN (SELECT value FROM json_each(?))) AND (e.kind='metadata' OR (?=0 AND e.is_default=1) OR (?=1 AND e.document_version_id IN (SELECT value FROM json_each(?)))) ORDER BY retrieval_fts.rowid LIMIT 4098`,
         )
         .all(
           ftsQuery,
@@ -1442,8 +1729,12 @@ export class RetrievalStorageEngine {
         return false;
       };
       const result = {
-        hits: ordered.filter(follows).slice(0, limit),
+        hits: ordered
+          .slice(0, RELEVANCE_RESULT_LIMIT)
+          .filter(follows)
+          .slice(0, limit),
         candidateLimit: rows.length > 4097,
+        relevanceLimited: ordered.length > RELEVANCE_RESULT_LIMIT,
       };
       this.db.exec("RELEASE retrieval_search");
       return result;

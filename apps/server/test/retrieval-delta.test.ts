@@ -1,7 +1,12 @@
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
-import { parseLiterature } from "@sciretriever/contracts";
+import {
+  canonicalJsonBytes,
+  EMPTY_METADATA,
+  parseLiterature,
+  sha256,
+} from "@sciretriever/contracts";
 import { RetrievalIndexService } from "../src/retrieval/index.js";
 import { RetrievalStorage } from "../src/retrieval/storage.js";
 import { MaterialContextService } from "../src/retrieval/query.js";
@@ -82,9 +87,10 @@ it("advances to each scanned revision while another connection keeps publishing"
 
     const publications = [40, 50, 60];
     const scannedRevisions: number[] = [];
-    const scanChanges = e.store.scanChanges.bind(e.store);
-    vi.spyOn(e.store, "scanChanges").mockImplementation(async () => {
-      const scan = await scanChanges();
+    const changesSnapshot = e.store.changesSnapshot.bind(e.store);
+    const fullScan = vi.spyOn(e.store, "scanChanges");
+    vi.spyOn(e.store, "changesSnapshot").mockImplementation(async () => {
+      const scan = await changesSnapshot();
       const next = publications[scannedRevisions.length];
       scannedRevisions.push(scan.revision);
       // Write after the snapshot is taken on each of the first three scans.
@@ -114,6 +120,7 @@ it("advances to each scanned revision while another connection keeps publishing"
     }
 
     const final = await e.index.refresh();
+    expect(fullScan).not.toHaveBeenCalled();
     expect(final.source_revision).toBe(await e.store.revision());
     expect(final.source_revision).toBeGreaterThan(indexed);
     const incremental = await context.search(request());
@@ -154,14 +161,22 @@ it("retains accepted papers across later publications, invalidates the old curso
     await e.app.database.putLiterature(paper(30, "Changed synthetic thirty"));
     await e.app.database.putLiterature(paper(40, "Changed synthetic forty"));
     const scanned = await e.store.revision();
+    const changePage = e.store.changePage.bind(e.store);
+    vi.spyOn(e.store, "changePage").mockImplementationOnce((after, tail) =>
+      changePage(after, tail, 1),
+    );
     const accepted: string[] = [],
       read = vi.spyOn(e.app.library, "detail"),
-      commit = e.store.commitLiteratureUpdate.bind(e.store);
-    vi.spyOn(e.store, "commitLiteratureUpdate").mockImplementation(
+      commit = e.store.commitLiteratureBatch.bind(e.store);
+    vi.spyOn(e.store, "commitLiteratureBatch").mockImplementation(
       async (...args) => {
         const result = await commit(...args);
         if (result) {
-          accepted.push(args[2]);
+          accepted.push(
+            ...args[1]
+              .filter((item) => item.entries !== null)
+              .map((item) => item.literature_id),
+          );
           if (accepted.length === 1) {
             entered.resolve();
             await release.promise;
@@ -241,6 +256,111 @@ it("removes a literature whose metadata source disappeared without rereading unc
     await e.close();
   }
 });
+
+it("journals raw SQL creation, metadata edits, withdrawal, restoration and physical deletion", async () => {
+  const e = await fixture();
+  const change = new DatabaseSync(e.catalog);
+  const seed = FIXTURE_LITERATURE.literature_id,
+    added = id(31);
+  try {
+    change.exec("PRAGMA foreign_keys=ON; PRAGMA recursive_triggers=OFF");
+    const original = await e.index.refresh();
+    const title = "Synthetic SQL title";
+    const edited = "Synthetic SQL revision";
+    const titleHash = await sha256(
+      canonicalJsonBytes({ ...EMPTY_METADATA, title }),
+    );
+    const editedHash = await sha256(
+      canonicalJsonBytes({ ...EMPTY_METADATA, title: edited }),
+    );
+    const journalIds = () =>
+      change
+        .prepare(
+          "SELECT DISTINCT literature_id FROM retrieval_changes ORDER BY literature_id",
+        )
+        .all()
+        .map((row) => row.literature_id);
+    const checkRebuild = async () => {
+      const refreshed = await e.index.refresh();
+      expect(refreshed.source_revision).toBe(await e.store.revision());
+      const incremental = rows(e.catalog);
+      expect(journalIds()).toEqual([]);
+      await e.index.build();
+      expect(rows(e.catalog)).toEqual(incremental);
+      return incremental;
+    };
+    change.exec("BEGIN");
+    change
+      .prepare("INSERT INTO literatures VALUES(?,?,'preprint')")
+      .run(added, FIXTURE_LITERATURE.meta_literature_id);
+    change
+      .prepare(
+        "INSERT INTO literature_metadata(literature_id,metadata_revision,metadata_sha256,title) VALUES(?,1,?,?)",
+      )
+      .run(added, titleHash, title);
+    change.exec("COMMIT");
+    expect(journalIds()).toEqual([added]);
+    expect(
+      (await checkRebuild()).some((row) => row.literature_id === added),
+    ).toBe(true);
+    expect((await e.store.changesSnapshot()).position).toBeGreaterThan(0);
+
+    const rewrite = change.prepare(
+      "UPDATE literature_metadata SET title=?,metadata_sha256=?,metadata_revision=metadata_revision+1 WHERE literature_id=?",
+    );
+    const before = await e.store.changesSnapshot();
+    change.exec("BEGIN");
+    rewrite.run(edited, editedHash, added);
+    change.exec("ROLLBACK");
+    expect(await e.store.changesSnapshot()).toEqual(before);
+    rewrite.run(edited, editedHash, added);
+    expect(
+      (await checkRebuild()).find((row) => row.literature_id === added)?.title,
+    ).toBe("synthetic sql revision");
+
+    change
+      .prepare(
+        `INSERT INTO intake_batches(
+      batch_id,kind,default_label,origin,created_at,state,result,initiated_by,request_json
+    ) VALUES('raw-batch','legacy','Synthetic raw batch','migration','2026-11-22','finished','completed','migration','{}')`,
+      )
+      .run();
+    change
+      .prepare(
+        "INSERT INTO intake_withdrawn_objects VALUES('literature',?,'raw-batch','2026-11-22')",
+      )
+      .run(added);
+    expect(journalIds()).toEqual([added]);
+    expect(await e.store.revision()).toBeGreaterThan(original.source_revision);
+    expect(
+      (await checkRebuild()).some((row) => row.literature_id === added),
+    ).toBe(false);
+    change
+      .prepare("DELETE FROM intake_batches WHERE batch_id='raw-batch'")
+      .run();
+    expect(journalIds()).toEqual([added]);
+    expect(
+      (await checkRebuild()).some((row) => row.literature_id === added),
+    ).toBe(true);
+
+    // SQLite REPLACE can displace another paper's link without a DELETE trigger.
+    const moved = change.prepare(`INSERT OR REPLACE INTO literature_assets
+      SELECT literature_asset_id,?,asset_id,role,provenance_id,source_url
+      FROM literature_assets WHERE literature_id=? AND role='primary-pdf'`);
+    expect(Number(moved.run(added, seed).changes)).toBe(1);
+    expect(new Set(journalIds())).toEqual(new Set([seed, added]));
+    await checkRebuild();
+    change.prepare("DELETE FROM literatures WHERE literature_id=?").run(added);
+    expect(journalIds()).toEqual([added]);
+    expect(
+      (await checkRebuild()).some((row) => row.literature_id === added),
+    ).toBe(false);
+  } finally {
+    if (change.isTransaction) change.exec("ROLLBACK");
+    change.close();
+    await e.close();
+  }
+}, 30_000);
 
 it("never runs a global check for cold reads or for a search after another connection writes", async () => {
   const e = await fixture();
@@ -331,9 +451,13 @@ it("keeps committed papers and retries only unfinished work after cancellation",
     await e.index.refresh();
     await e.app.database.putLiterature(paper(30, "Changed synthetic thirty"));
     await e.app.database.putLiterature(paper(40, "Changed synthetic forty"));
-    const commit = e.store.commitLiteratureUpdate.bind(e.store),
+    const changePage = e.store.changePage.bind(e.store);
+    vi.spyOn(e.store, "changePage").mockImplementationOnce((after, tail) =>
+      changePage(after, tail, 1),
+    );
+    const commit = e.store.commitLiteratureBatch.bind(e.store),
       spy = vi
-        .spyOn(e.store, "commitLiteratureUpdate")
+        .spyOn(e.store, "commitLiteratureBatch")
         .mockImplementation(async (...args) => {
           const accepted = await commit(...args);
           if (accepted) stop.abort();
@@ -344,8 +468,35 @@ it("keeps committed papers and retries only unfinished work after cancellation",
     });
     spy.mockRestore();
     expect((await e.store.scanChanges()).literature_ids).toEqual([id(40)]);
-    await e.index.refresh();
+    const firstEntry = rows(e.catalog).find(
+      (row) => row.literature_id === id(30),
+    );
+    expect(firstEntry).toBeDefined();
+    const before = await e.store.changesSnapshot();
+    expect(before.position).toBeLessThan(before.tail);
+    const history = vi.spyOn(e.app.library, "detail");
+    await e.index.close();
+    const reopened = new SqliteWorker(e.catalog, e.app.writes);
+    const resumed = new RetrievalIndexService(
+      new RetrievalStorageClient(reopened),
+      e.app.documentRead,
+      e.app.library,
+      e.app.writes,
+    );
+    try {
+      await resumed.refresh();
+    } finally {
+      await resumed.close();
+      await reopened.close();
+    }
     expect((await e.store.scanChanges()).literature_ids).toEqual([]);
+    expect((await e.store.changesSnapshot()).position).toBe(before.tail);
+    expect(
+      history.mock.calls.filter(([id]) => id === firstEntry?.literature_id),
+    ).toHaveLength(0);
+    expect(rows(e.catalog).find((row) => row.literature_id === id(30))).toEqual(
+      firstEntry,
+    );
   } finally {
     await e.close();
   }

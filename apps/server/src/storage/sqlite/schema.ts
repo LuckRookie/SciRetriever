@@ -666,11 +666,104 @@ export const INTAKE_LOOKUP_INDEXES = [
   "CREATE INDEX citation_discovery_cause_actual_lookup ON citation_discovery_causes(actual_literature_id)",
 ] as const;
 
+export const SCHEMA_MANIFEST_V19_INTAKE_LOOKUPS = [
+  ...SCHEMA_MANIFEST_V19,
+  ...INTAKE_LOOKUP_INDEXES,
+] as const;
+export const SCHEMA_FINGERPRINT_V19_INTAKE_LOOKUPS = createHash("sha256")
+  .update(JSON.stringify(SCHEMA_MANIFEST_V19_INTAKE_LOOKUPS))
+  .digest("hex");
+
+const changeEvents = ["INSERT", "UPDATE", "DELETE"] as const;
+const retrievalChangeTriggers = (
+  table: string,
+  owners: (row: "old" | "new") => string,
+  updateRevision = false,
+) =>
+  changeEvents.map((event) => {
+    // On UPDATE either side can move to a different literature. Keep one
+    // occurrence per owner even when both sides refer to the same paper.
+    const affected =
+      event === "INSERT"
+        ? owners("new")
+        : event === "DELETE"
+          ? owners("old")
+          : `${owners("old")} UNION ${owners("new")}`;
+    // Withdrawal marks have no legacy revision trigger. A direct SQL writer
+    // must make both the recorded change and the lag visible at commit.
+    const revision = updateRevision
+      ? " UPDATE retrieval_source_revision SET revision=revision+1 WHERE singleton=1 AND changes()>0;"
+      : "";
+    return `CREATE TRIGGER retrieval_change_${table}_${event.toLowerCase()} AFTER ${event} ON ${table} BEGIN INSERT INTO retrieval_changes(literature_id) ${affected};${revision} END`;
+  });
+
+// SQLite can replace a conflicting row without firing its DELETE trigger.
+// Record the prior owner for keys that can be reused by another literature.
+const retrievalReplacementOwners = [
+  [
+    "literature_assets",
+    "SELECT literature_id FROM literature_assets WHERE literature_asset_id=new.literature_asset_id AND literature_id<>new.literature_id",
+  ],
+  [
+    "document_versions",
+    "SELECT literature_id FROM document_versions WHERE (document_version_id=new.document_version_id OR (document_id=new.document_id AND representation_sha256=new.representation_sha256)) AND literature_id<>new.literature_id",
+  ],
+  [
+    "document_defaults",
+    "SELECT v.literature_id FROM document_defaults d JOIN document_versions v ON v.document_version_id=d.document_version_id WHERE (d.document_id=new.document_id OR d.document_version_id=new.document_version_id) AND d.document_version_id<>new.document_version_id",
+  ],
+] as const;
+
+export const RETRIEVAL_CHANGE_SCHEMA = [
+  // The position survives deletion of the processed prefix. Deletions must
+  // also leave a change behind, so the journal does not reference literatures.
+  "CREATE TABLE retrieval_changes(position INTEGER PRIMARY KEY AUTOINCREMENT,literature_id TEXT NOT NULL) STRICT",
+  "CREATE TABLE retrieval_change_state(singleton INTEGER NOT NULL PRIMARY KEY CHECK(singleton=1),processed_position INTEGER CHECK(processed_position>=0)) STRICT",
+  ...[
+    "literatures",
+    "literature_metadata",
+    "literature_metadata_authors",
+    "literature_metadata_author_affiliations",
+    "literature_metadata_identifiers",
+    "literature_metadata_keywords",
+    "literature_metadata_subject_terms",
+    "literature_assets",
+    "document_versions",
+  ].flatMap((table) =>
+    retrievalChangeTriggers(table, (row) => `SELECT ${row}.literature_id`),
+  ),
+  // Links have an index on asset_id. Historical document versions carry
+  // their own immutable asset hashes and have their own revision triggers.
+  ...retrievalChangeTriggers(
+    "assets",
+    (row) =>
+      `SELECT DISTINCT literature_id FROM literature_assets WHERE asset_id=${row}.asset_id`,
+  ),
+  ...["document_version_resources", "document_defaults"].flatMap((table) =>
+    retrievalChangeTriggers(
+      table,
+      (row) =>
+        `SELECT literature_id FROM document_versions WHERE document_version_id=${row}.document_version_id`,
+    ),
+  ),
+  ...retrievalChangeTriggers(
+    "intake_withdrawn_objects",
+    (row) => `SELECT ${row}.object_id WHERE ${row}.object_kind='literature'`,
+    true,
+  ),
+  ...retrievalReplacementOwners.flatMap(([table, owners]) =>
+    (["INSERT", "UPDATE"] as const).map(
+      (event) =>
+        `CREATE TRIGGER retrieval_change_${table}_replacement_${event.toLowerCase()} BEFORE ${event} ON ${table} BEGIN INSERT INTO retrieval_changes(literature_id) ${owners}; UPDATE retrieval_source_revision SET revision=revision+1 WHERE singleton=1 AND changes()>0; END`,
+    ),
+  ),
+] as const;
+
 // The existing identity table constrains its version to 19. The fingerprint
 // distinguishes the additive layout without replacing any existing object.
 export const SCHEMA_MANIFEST = [
-  ...SCHEMA_MANIFEST_V19,
-  ...INTAKE_LOOKUP_INDEXES,
+  ...SCHEMA_MANIFEST_V19_INTAKE_LOOKUPS,
+  ...RETRIEVAL_CHANGE_SCHEMA,
 ] as const;
 export const SCHEMA_FINGERPRINT = createHash("sha256")
   .update(JSON.stringify(SCHEMA_MANIFEST))

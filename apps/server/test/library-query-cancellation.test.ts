@@ -125,7 +125,7 @@ it.each(["search", "library-counts"])(
     const method = route === "search" ? "search" : "counts";
     const spy = vi
       .spyOn(app.query, method)
-      .mockImplementation(async (_value: unknown, signal?: AbortSignal) => {
+      .mockImplementation(async (...[, signal]) => {
         expect(signal).toBeDefined();
         started();
         await new Promise<void>((_resolve, reject) =>

@@ -9,6 +9,7 @@ import {
   parseLiteratureBibliographySummary,
   type LiteratureBibliographySummary,
   LITERATURE_STATUSES,
+  RELEVANCE_RESULT_LIMIT,
   type LibraryCounts,
   parseLibraryQuery,
   parseLibrarySearchRequest,
@@ -256,6 +257,7 @@ export interface LibraryPageQuery {
   readonly sort: LibrarySort;
   readonly after: Position | null;
   readonly limit: number;
+  readonly fullRelevance?: true;
 }
 function position(row: SearchSnapshotRow, sort: LibrarySort): Position {
   const l = row.item.literature;
@@ -864,6 +866,7 @@ export class LiteratureQueryService {
   async search(
     value: unknown,
     signal?: AbortSignal,
+    mode: "page" | "selection" = "page",
   ): Promise<LibrarySearchPage> {
     signal?.throwIfAborted();
     const request = parseLibrarySearchRequest(value);
@@ -885,6 +888,7 @@ export class LiteratureQueryService {
         sort: request.sort,
         after,
         limit: request.limit,
+        ...(mode === "selection" ? { fullRelevance: true as const } : {}),
       },
       signal,
     );
@@ -893,6 +897,11 @@ export class LiteratureQueryService {
     return Object.freeze({
       items: Object.freeze(page.map((row) => row.item)),
       total_count: result.total_count,
+      ...(mode === "page" &&
+      request.sort === "relevance" &&
+      result.total_count > RELEVANCE_RESULT_LIMIT
+        ? { relevance_limit: RELEVANCE_RESULT_LIMIT }
+        : {}),
       ...(result.tag_backfill_pending === undefined
         ? {}
         : { tag_backfill_pending: result.tag_backfill_pending }),

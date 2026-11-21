@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   parseMaterialContextBundle,
   parseMaterialContextRequest,
+  RELEVANCE_RESULT_LIMIT,
   type DocumentRef,
   type EvidenceRef,
   type MaterialContextBundle,
@@ -157,6 +158,7 @@ export interface MaterialCandidateSession {
   readonly source_revision: number;
   readonly hits: readonly RetrievalHit[];
   readonly candidate_limit: boolean;
+  readonly relevance_limited: boolean;
   readonly coverage_gaps: MaterialContextBundle["gaps"];
   expand(hit: RetrievalHit): Promise<{
     item: MaterialContextItem | null;
@@ -171,6 +173,10 @@ export interface MaterialIndexSnapshot {
     | "index-unavailable"
     | "index-corrupt"
     | "index-stale";
+}
+interface MaterialSearchWindow {
+  key: string;
+  result?: Awaited<ReturnType<RetrievalStorageClient["search"]>>;
 }
 function check(signal?: AbortSignal): void {
   if (signal?.aborted) throw new MaterialContextError("context-cancelled");
@@ -231,11 +237,24 @@ export class MaterialContextService {
     }));
   }
   search(value: unknown, signal?: AbortSignal): Promise<MaterialContextBundle> {
+    return this.startSearch(value, signal);
+  }
+  /** Reuse rankings while assembling one mixed-context response. */
+  searchSession() {
+    const window: MaterialSearchWindow = { key: "" };
+    return (value: unknown, signal?: AbortSignal) =>
+      this.startSearch(value, signal, window);
+  }
+  private startSearch(
+    value: unknown,
+    signal?: AbortSignal,
+    window?: MaterialSearchWindow,
+  ): Promise<MaterialContextBundle> {
     const request = parseMaterialContextRequest(value);
     if (request.budget.token_limit !== null)
       throw new MaterialContextError("context-tokenizer-unsupported");
     if (this.stopped) throw new MaterialContextError("context-cancelled");
-    const pending = this.execute(request, signal);
+    const pending = this.execute(request, signal, window);
     this.active.add(pending);
     return pending.finally(() => this.active.delete(pending));
   }
@@ -278,6 +297,7 @@ export class MaterialContextService {
     consume: (session: MaterialCandidateSession) => Promise<T>,
     signal?: AbortSignal,
     reserveVerifiedBytes?: (bytes: number) => void,
+    window?: MaterialSearchWindow,
   ): Promise<T> {
     const request = parseMaterialContextRequest(value);
     if (this.stopped) throw new MaterialContextError("context-cancelled");
@@ -321,20 +341,44 @@ export class MaterialContextService {
         coverage = [{ code: "index-stale", literature_id: null }];
       }
       const terms = queryTerms(request.query);
+      const versions =
+        request.versions.kind === "default"
+          ? null
+          : request.versions.documents.map((d) => d.document_version_id);
+      const rank = () =>
+        this.storage!.search(
+          terms.map((term) => `"${term}"`).join(" AND "),
+          terms,
+          generation.generation_id,
+          scope,
+          request.kinds,
+          versions,
+          4097,
+          null,
+        );
+      const load = async () => {
+        if (!window) return rank();
+        const key = JSON.stringify([
+          initial.state_token,
+          initial.source_revision,
+          scope,
+          request.kinds,
+          versions,
+          terms,
+        ]);
+        if (window.key !== key || !window.result) {
+          window.result = await rank();
+          window.key = key;
+        }
+        return window.result;
+      };
       const found = terms.length
-        ? await this.storage!.search(
-            terms.map((term) => `"${term}"`).join(" AND "),
-            terms,
-            generation.generation_id,
-            scope,
-            request.kinds,
-            request.versions.kind === "default"
-              ? null
-              : request.versions.documents.map((d) => d.document_version_id),
-            4097,
-            null,
-          )
-        : { hits: [] as readonly RetrievalHit[], candidateLimit: false };
+        ? await load()
+        : {
+            hits: [] as readonly RetrievalHit[],
+            candidateLimit: false,
+            relevanceLimited: false,
+          };
       const documents = new Map<
         string,
         {
@@ -566,6 +610,7 @@ export class MaterialContextService {
         source_revision: generation.source_revision,
         hits: found.hits,
         candidate_limit: found.candidateLimit,
+        relevance_limited: found.relevanceLimited,
         coverage_gaps: coverage,
         expand,
         assertCurrent,
@@ -591,6 +636,7 @@ export class MaterialContextService {
   private async execute(
     request: MaterialContextRequest,
     signal?: AbortSignal,
+    window?: MaterialSearchWindow,
   ): Promise<MaterialContextBundle> {
     check(signal);
     let generation: Awaited<ReturnType<RetrievalStorageClient["active"]>> =
@@ -667,6 +713,9 @@ export class MaterialContextService {
           gaps.push(gap);
     };
     const items: MaterialContextItem[] = [];
+    let relevanceLimited = false;
+    const relevance = (): Pick<MaterialContextBundle, "relevance_limit"> =>
+      relevanceLimited ? { relevance_limit: RELEVANCE_RESULT_LIMIT } : {};
     let cursor: string | null = request.continuation,
       truncated = false;
     try {
@@ -674,6 +723,7 @@ export class MaterialContextService {
         { ...request, continuation: null },
         { ...generation, state_token: state },
         async (session) => {
+          relevanceLimited = session.relevance_limited;
           addGaps(session.coverage_gaps);
           if (session.candidate_limit)
             addGaps([{ code: "candidate-limit", literature_id: null }]);
@@ -720,6 +770,7 @@ export class MaterialContextService {
             ) =>
               withBytes({
                 ...base("partial"),
+                ...relevance(),
                 items: [...items, item],
                 gaps: extra,
                 truncated: true,
@@ -774,6 +825,8 @@ export class MaterialContextService {
           }
         },
         signal,
+        undefined,
+        window,
       );
     } catch (error) {
       if (
@@ -800,6 +853,7 @@ export class MaterialContextService {
             ? "partial"
             : "complete",
       ),
+      ...relevance(),
       items,
       gaps: boundedGaps(),
       truncated,

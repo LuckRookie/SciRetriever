@@ -9,6 +9,7 @@ import { processorExact, processorHash, processorText } from "./processors.js";
 import {
   parseMaterialContextBundle,
   parseMaterialContextRequest,
+  RELEVANCE_RESULT_LIMIT,
   type MaterialContextBundle,
   type MaterialContextItem,
   type MaterialContextRequest,
@@ -111,6 +112,8 @@ export interface KnowledgeContextBundle {
   readonly schema_version: 3;
   readonly score_rule: "sources-then-results-v1";
   readonly items: readonly KnowledgeContextItem[];
+  /** Relevance window of the material branch, when that branch was capped. */
+  readonly relevance_limit?: typeof RELEVANCE_RESULT_LIMIT;
   readonly coverage: MaterialContextBundle["coverage"];
   readonly gaps: readonly {
     readonly code: string;
@@ -133,9 +136,17 @@ export function parseKnowledgeContextBundle(
     "usage",
     "truncated",
     "continuation",
+    ...(value &&
+    typeof value === "object" &&
+    Object.hasOwn(value, "relevance_limit")
+      ? ["relevance_limit"]
+      : []),
   ]);
   if (
     r.schema_version !== 3 ||
+    (Object.hasOwn(r, "relevance_limit") &&
+      (r.relevance_limit !== RELEVANCE_RESULT_LIMIT ||
+        request.kinds.every((kind) => kind === "knowledge"))) ||
     r.score_rule !== "sources-then-results-v1" ||
     !Array.isArray(r.items) ||
     r.items.length > request.budget.max_items ||
@@ -284,6 +295,9 @@ export function parseKnowledgeContextBundle(
   return {
     schema_version: 3,
     score_rule: "sources-then-results-v1",
+    ...(r.relevance_limit === RELEVANCE_RESULT_LIMIT
+      ? { relevance_limit: RELEVANCE_RESULT_LIMIT }
+      : {}),
     items,
     coverage: r.coverage as KnowledgeContextBundle["coverage"],
     gaps,

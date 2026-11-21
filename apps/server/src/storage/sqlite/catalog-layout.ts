@@ -62,7 +62,7 @@ export function initializeCurrentCatalog(
       EXECUTION_RUNTIME_SCHEMA_FINGERPRINT,
     );
     db.exec(
-      "INSERT INTO retrieval_source_revision VALUES(1,0); INSERT INTO vocabulary_state VALUES(1,0,0)",
+      "INSERT INTO retrieval_source_revision VALUES(1,0); INSERT INTO retrieval_change_state VALUES(1,0); INSERT INTO vocabulary_state VALUES(1,0,0)",
     );
     db.exec("COMMIT");
   } catch (error) {

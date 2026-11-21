@@ -21,6 +21,7 @@ import {
   LITERATURE_STATUSES,
   normalizedTagName,
   draftSortFields,
+  RELEVANCE_RESULT_LIMIT,
 } from "@sciretriever/contracts";
 import type * as DraftFacts from "./draft-facts.js";
 const { PRIMARY_TEXT_LEVEL_SQL, primaryDraftFactSql }: typeof DraftFacts =
@@ -249,6 +250,32 @@ export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
   if (counts.total !== counts.unique_count)
     throw new Error("duplicate library search rows");
   const relevance = ftsQuery === null ? "NULL" : "bm25(literature_search_fts)";
+  if (sort === "relevance" && !request.fullRelevance) {
+    // Apply the cursor after selecting the same top-ranked window on every
+    // page. Keep scoring in the FTS context and evaluate bm25 only once.
+    const rows = db
+      .prepare(
+        `WITH matches AS MATERIALIZED (
+           SELECT l.literature_id,${relevance} AS relevance ${from} ${where}
+           ORDER BY relevance ASC,l.literature_id ASC LIMIT ${RELEVANCE_RESULT_LIMIT}
+         )
+         SELECT literature_id,relevance FROM matches
+         ${after ? "WHERE relevance>? OR (relevance=? AND literature_id>?)" : ""}
+         ORDER BY relevance ASC,literature_id ASC LIMIT ?`,
+      )
+      .all(
+        ...args,
+        ...(after ? [after.value, after.value, after.literature_id] : []),
+        limit + 1,
+      );
+    return {
+      rows,
+      total_count: Number(counts.total),
+      ...(tagIds.length
+        ? { tag_backfill_pending: tagBackfillPending(db, tagIds, q.tags!.mode) }
+        : {}),
+    };
+  }
   const metrics = draftSortFields(sort);
   if (metrics) {
     const pageArgs = [...args],

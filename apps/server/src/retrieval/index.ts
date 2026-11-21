@@ -23,10 +23,15 @@ import {
 } from "./storage.js";
 import { RetrievalStorageError } from "./model.js";
 import { RetrievalStorageClient } from "../storage/sqlite/retrieval-client.js";
+import type {
+  RetrievalCheckpoint,
+  RetrievalLiteratureUpdate,
+} from "../storage/sqlite/retrieval-engine.js";
 
 export const RETRIEVAL_UNIT_RULE = "markdown-context-v1";
 const PAGE = 64;
 const BATCH = 128;
+const CHANGE_PAGE = 384;
 const MAX_SOURCE_FTS_BYTES = 64 * 1024 * 1024;
 const MAX_SPOOL_BATCH_BYTES = 1024 * 1024;
 const FTS_CHUNK_BYTES = 32 * 1024;
@@ -158,6 +163,9 @@ export class RetrievalIndexError extends Error {
 function check(signal?: AbortSignal): void {
   if (signal?.aborted) throw new RetrievalIndexError("index-cancelled");
 }
+type LiteratureSources = Awaited<
+  ReturnType<RetrievalStorageClient["literatureSources"]>
+>;
 
 export class RetrievalIndexService {
   private readonly generationAdmission: CatalogWriteAdmission;
@@ -216,87 +224,195 @@ export class RetrievalIndexService {
     return this.run(signal, progress);
   }
 
-  /** Scan scalar fingerprints once, then publish only changed literatures. */
+  /** Refresh a fixed journal prefix. A later commit is work for the next round. */
   refresh(
     signal?: AbortSignal,
     progress?: (pending: number) => Promise<void>,
   ): Promise<RetrievalGeneration> {
     return this.track(async (active) => {
-      const generation = await this.store.ensureActive(active);
+      const scan = await this.store.changesSnapshot();
+      const generation =
+        scan.generation ?? (await this.store.ensureActive(active));
       await this.pruneRetired(active);
-      check(active);
-      const scan = await this.store.scanChanges();
-      if (scan.generation?.generation_id !== generation.generation_id)
-        throw new RetrievalStorageError("index-stale");
-      await progress?.(scan.literature_ids.length);
-      for (const [ordinal, id] of scan.literature_ids.entries()) {
-        for (;;) {
+      await progress?.(scan.pending);
+      const generationId = generation.generation_id;
+      let position = scan.position;
+      const checkpoint = (last: number): RetrievalCheckpoint => ({
+        previous: position,
+        position: last,
+        revision: last === scan.tail ? scan.revision : null,
+      });
+      if (
+        position === scan.tail &&
+        scan.revision !== generation.source_revision
+      )
+        await this.store.finishIncremental(
+          generationId,
+          checkpoint(position),
+          active,
+        );
+      readChanges: while (position < scan.tail) {
+        check(active);
+        const page = await this.store.changePage(
+          position,
+          scan.tail,
+          CHANGE_PAGE,
+        );
+        if (!page.length) throw new RetrievalStorageError("index-corrupt");
+        const updates = new Map<string, RetrievalLiteratureUpdate>();
+        let last = position,
+          bytes = 0,
+          count = 0;
+        const flush = async () => {
+          if (!updates.size) return true;
           check(active);
-          const source = await this.store.literatureSources(id);
-          let staged: string | null = null;
+          if (
+            !(await this.store.commitLiteratureBatch(
+              generationId,
+              [...updates.values()],
+              checkpoint(last),
+              active,
+            ))
+          )
+            return false;
+          position = last;
+          updates.clear();
+          bytes = count = 0;
+          return true;
+        };
+        for (const change of page) {
+          const id = change.literature_id;
+          check(active);
+          const source = await this.store.literatureSources(id, generationId);
           try {
-            staged = await this.store.beginLiteratureUpdate(active);
-            let batch: RetrievalEntry[] = [],
-              bytes = 0,
-              total = 0;
-            const flush = async () => {
-              if (!batch.length) return;
-              check(active);
-              await this.store.insertEntries(staged!, batch, 0, active);
-              batch = [];
-              bytes = 0;
-              await yieldToEventLoop();
-            };
-            for await (const entry of this.literatureEntries(source, active)) {
-              const size =
-                Buffer.byteLength(entry.title) + Buffer.byteLength(entry.body);
+            const small = await this.smallLiteratureUpdate(source, active);
+            if (!small) {
+              if (!(await flush())) continue readChanges;
               if (
-                total + size > MAX_SOURCE_FTS_BYTES ||
-                size > MAX_SPOOL_BATCH_BYTES
+                !(await this.stageLiterature(
+                  generationId,
+                  id,
+                  source,
+                  checkpoint(change.position),
+                  active,
+                ))
               )
-                throw new RetrievalIndexError("index-limit");
-              if (
-                batch.length &&
-                (batch.length >= BATCH || bytes + size > MAX_SPOOL_BATCH_BYTES)
-              )
-                await flush();
-              batch.push(entry);
-              bytes += size;
-              total += size;
+                continue readChanges;
+              position = last = change.position;
+              continue;
             }
-            await flush();
             if (
-              await this.store.commitLiteratureUpdate(
-                generation.generation_id,
-                staged,
-                id,
-                source.fingerprint,
-                active,
-              )
-            ) {
-              staged = null;
-              break;
-            }
+              updates.size >= BATCH ||
+              count + small.entries.length > BATCH ||
+              bytes + small.bytes > MAX_SPOOL_BATCH_BYTES
+            )
+              if (!(await flush())) continue readChanges;
+            updates.set(id, {
+              literature_id: id,
+              fingerprint: source.fingerprint,
+              entries: source.indexed ? null : small.entries,
+            });
+            count += small.entries.length;
+            bytes += small.bytes;
+            last = change.position;
           } catch (error) {
             check(active);
-            // Only this paper's changed source needs another reading/attempt.
+            // Reads may race a new source before the CAS. Retry the unfinished
+            // prefix only when the source actually changed.
             if (
               (await this.store.literatureSources(id)).fingerprint ===
               source.fingerprint
             )
               throw error;
-          } finally {
-            if (staged) await this.store.discardLiteratureUpdate(staged);
+            continue readChanges;
           }
         }
-        await progress?.(scan.literature_ids.length - ordinal - 1);
+        if (!(await flush())) continue;
+        await yieldToEventLoop();
       }
-      return this.store.finishIncremental(
-        generation.generation_id,
-        scan.revision,
-        active,
-      );
+      check(active);
+      await this.pruneChanges(active);
+      return (await this.store.active())!;
     }, signal);
+  }
+  private async smallLiteratureUpdate(
+    source: LiteratureSources,
+    signal: AbortSignal,
+  ) {
+    if (source.documents.length) return null;
+    const entries: RetrievalEntry[] = [];
+    let bytes = 0;
+    for await (const entry of this.literatureEntries(source, signal)) {
+      bytes += Buffer.byteLength(entry.title) + Buffer.byteLength(entry.body);
+      if (bytes > MAX_SPOOL_BATCH_BYTES || entries.length >= BATCH) return null;
+      entries.push(entry);
+    }
+    return { entries, bytes };
+  }
+  private async stageLiterature(
+    generation: string,
+    id: string,
+    source: LiteratureSources,
+    checkpoint: RetrievalCheckpoint,
+    signal: AbortSignal,
+  ) {
+    let staged: string | null = await this.store.beginLiteratureUpdate(signal);
+    try {
+      let batch: RetrievalEntry[] = [],
+        bytes = 0,
+        total = 0;
+      const flush = async () => {
+        if (!batch.length) return;
+        check(signal);
+        await this.store.insertEntries(staged!, batch, 0, signal);
+        batch = [];
+        bytes = 0;
+        await yieldToEventLoop();
+      };
+      for await (const entry of this.literatureEntries(source, signal)) {
+        const size =
+          Buffer.byteLength(entry.title) + Buffer.byteLength(entry.body);
+        if (total + size > MAX_SOURCE_FTS_BYTES || size > MAX_SPOOL_BATCH_BYTES)
+          throw new RetrievalIndexError("index-limit");
+        if (
+          batch.length &&
+          (batch.length >= BATCH || bytes + size > MAX_SPOOL_BATCH_BYTES)
+        )
+          await flush();
+        batch.push(entry);
+        bytes += size;
+        total += size;
+      }
+      await flush();
+      const accepted = await this.store.commitLiteratureUpdate(
+        generation,
+        staged,
+        id,
+        source.fingerprint,
+        checkpoint,
+        signal,
+      );
+      if (accepted) staged = null;
+      return accepted;
+    } finally {
+      if (staged) await this.store.discardLiteratureUpdate(staged);
+    }
+  }
+  private async pruneChanges(signal: AbortSignal) {
+    while (!signal.aborted) {
+      try {
+        if (await this.store.pruneChangeBatch(signal)) return;
+      } catch (error) {
+        if (
+          signal.aborted &&
+          error instanceof WriteAdmissionError &&
+          error.code === "write-admission-cancelled"
+        )
+          return;
+        throw error;
+      }
+      await yieldToEventLoop();
+    }
   }
   private async pruneRetired(signal: AbortSignal): Promise<void> {
     while (!signal.aborted) {
@@ -333,7 +449,7 @@ export class RetrievalIndexService {
     return pending;
   }
   private async *literatureEntries(
-    source: Awaited<ReturnType<RetrievalStorageClient["literatureSources"]>>,
+    source: LiteratureSources,
     signal?: AbortSignal,
   ): AsyncGenerator<RetrievalEntry> {
     if (source.metadata) {
@@ -706,6 +822,7 @@ export class RetrievalIndexService {
         // The active switch is durable. Cancellation during reclamation keeps
         // that publication and leaves the remaining retired rows for refresh.
         await this.pruneRetired(combined);
+        await this.pruneChanges(combined);
         return published;
       } catch (error) {
         // The spool uses the filesystem's actual space and quota. A size

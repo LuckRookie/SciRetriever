@@ -1587,6 +1587,7 @@ describe("explicit retrieval projection and bounded Context", () => {
           expect(found.hits.length).toBeGreaterThan(0);
           return {
             candidateLimit: false,
+            relevanceLimited: false,
             hits: [
               {
                 ...found.hits[0]!,

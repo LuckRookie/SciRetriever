@@ -1,4 +1,5 @@
 import { parseTextLevel, type TextLevel } from "./draft-document.js";
+import type { RELEVANCE_RESULT_LIMIT } from "./retrieval-context.js";
 import {
   parseDraftFacts,
   parseLiteratureDefaultText,
@@ -343,6 +344,8 @@ export interface LiteratureSearchItem {
 }
 export interface LibrarySearchPage {
   readonly tag_backfill_pending?: number;
+  /** Present when only the highest-ranked results are available to paginate. */
+  readonly relevance_limit?: typeof RELEVANCE_RESULT_LIMIT;
   readonly items: readonly LiteratureSearchItem[];
   readonly total_count: number;
   readonly next_cursor: string | null;

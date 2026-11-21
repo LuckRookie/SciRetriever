@@ -64,12 +64,16 @@ async function searchAll(
   service: Pick<LiteratureQueryService, "search">,
   query: LibraryQuery,
 ): Promise<LibrarySearchPage> {
-  const page = await service.search({
-    query,
-    sort: query.text !== null ? "relevance" : "publication-year-desc",
-    limit: Number.MAX_SAFE_INTEGER,
-    cursor: null,
-  });
+  const page = await service.search(
+    {
+      query,
+      sort: query.text !== null ? "relevance" : "publication-year-desc",
+      limit: Number.MAX_SAFE_INTEGER,
+      cursor: null,
+    },
+    undefined,
+    "selection",
+  );
   if (page.next_cursor !== null || page.items.length !== page.total_count)
     throw new Error("selector snapshot is incomplete");
   return page;
