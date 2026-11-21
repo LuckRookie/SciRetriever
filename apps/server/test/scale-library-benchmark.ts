@@ -1,10 +1,10 @@
 import { execFile, fork } from "node:child_process";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { DatabaseSync } from "node:sqlite";
-import { readFile, writeFile } from "node:fs/promises";
+import { backup, DatabaseSync } from "node:sqlite";
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { loadavg } from "node:os";
 import {
   canonicalJsonBytes,
@@ -30,15 +30,22 @@ const env = {
 };
 const exec = promisify(execFile);
 const deadline = 240_000;
+const minute = 60_000;
 const now = () => Math.round(performance.now());
 
-async function cli(library: ScaleLibrary, args: string[], timeout = deadline) {
+async function cli(
+  library: ScaleLibrary,
+  args: string[],
+  timeout = deadline,
+  onStart?: (pid: number) => Promise<void>,
+) {
   const start = now();
-  const command = await exec(
+  const running = exec(
     process.execPath,
     ["--experimental-strip-types", script, "cli", library.home, ...args],
     { env, timeout, maxBuffer: 4 * 1024 * 1024 },
-  ).catch((error: unknown) => {
+  );
+  const result = running.catch((error: unknown) => {
     if (error instanceof Error && "stdout" in error)
       throw new Error(
         `${args.join(" ")} failed: ${String(error.stdout).slice(0, 2000)}`,
@@ -46,6 +53,10 @@ async function cli(library: ScaleLibrary, args: string[], timeout = deadline) {
       );
     throw error;
   });
+  const [command] = await Promise.all([
+    result,
+    running.child.pid === undefined ? undefined : onStart?.(running.child.pid),
+  ]);
   return {
     elapsed_ms: now() - start,
     response: JSON.parse(command.stdout) as {
@@ -92,6 +103,13 @@ function launch<T extends object>(
   });
   return {
     ready,
+    async rss() {
+      const status = await readFile(`/proc/${child.pid}/status`, "utf8");
+      const rss = /^VmRSS:\s+(\d+)\s+kB$/m.exec(status)?.[1];
+      if (rss === undefined)
+        throw new Error("Scale process RSS is unavailable");
+      return Number(rss) * 1024;
+    },
     async close() {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -254,11 +272,27 @@ function sourceRevisions(library: ScaleLibrary) {
   }
 }
 
+function writerCount(library: ScaleLibrary) {
+  const db = new DatabaseSync(library.catalog, { readOnly: true });
+  try {
+    return Number(
+      db
+        .prepare(
+          "SELECT count(*) AS n FROM literatures WHERE literature_id GLOB 'e05ca1e0-0001-*'",
+        )
+        .get()!.n,
+    );
+  } finally {
+    db.close();
+  }
+}
+
 async function reads(
   library: ScaleLibrary,
   limited: boolean,
   concurrent: boolean,
   save: (name: string, value: unknown) => Promise<void>,
+  memoryOnly = false,
 ) {
   type Read = Awaited<ReturnType<typeof workbench>>;
   const depth = limited ? null : deepPage(library);
@@ -357,6 +391,40 @@ async function reads(
       },
     );
   }
+  const readPair = async (
+    client: Read,
+    operation: (typeof operations)[number],
+  ) => {
+    const pair = [];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const { body, ...measurement } = await operation.read(client);
+      pair.push({ ...measurement, result: operation.check(body) });
+    }
+    return pair;
+  };
+  if (memoryOnly) {
+    const child = launch<{ origin: string }>(library, "serve");
+    try {
+      const { origin } = await child.ready;
+      const startup_rss_bytes = await child.rss();
+      const client = await workbench(origin);
+      const measurements = [];
+      for (const operation of operations)
+        measurements.push({
+          name: operation.name,
+          attempt: await readPair(client, operation),
+        });
+      await save("memory", {
+        startup_rss_bytes,
+        after_reads_rss_bytes: await child.rss(),
+        measurements,
+        load: loadavg(),
+      });
+    } finally {
+      await child.close();
+    }
+    return;
+  }
   const prefix = concurrent ? "concurrent" : "idle";
   for (const operation of operations) {
     const start = now();
@@ -365,15 +433,18 @@ async function reads(
       const { origin } = await child.ready;
       const startup_ms = now() - start;
       const client = await workbench(origin);
-      const pair = [];
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const { body, ...measurement } = await operation.read(client);
-        pair.push({ ...measurement, result: operation.check(body) });
-      }
+      const writesBefore = concurrent ? writerCount(library) : null;
+      const pair = await readPair(client, operation);
       await save(`${prefix}-${operation.name}`, {
         startup_ms,
         origin,
         attempt: pair,
+        ...(writesBefore === null
+          ? {}
+          : {
+              writes_before: writesBefore,
+              writes_after: writerCount(library),
+            }),
         load: loadavg(),
       });
     } finally {
@@ -395,10 +466,75 @@ async function reads(
   }
 }
 
+async function concurrentReads(
+  library: ScaleLibrary,
+  save: (name: string, value: unknown) => Promise<void>,
+) {
+  // Keep the reusable benchmark catalog at exactly the generated revision.
+  const runs = resolve("sandbox/runs");
+  await mkdir(runs, { recursive: true, mode: 0o700 });
+  const directory = await mkdtemp(
+    join(runs, "2026-11-21-scale-library-writes-"),
+  );
+  const home = join(directory, "home");
+  const catalog = join(directory, "catalog.sqlite");
+  const clone = { ...library, home, catalog };
+  const start = now();
+  const source = new DatabaseSync(library.catalog, { readOnly: true });
+  try {
+    await backup(source, catalog, { rate: 8192 });
+  } finally {
+    source.close();
+  }
+  await chmod(catalog, 0o600);
+  const config = join(home, ".sciretriever");
+  await mkdir(config, { recursive: true, mode: 0o700 });
+  await writeFile(
+    join(config, "config.toml"),
+    [
+      "[paths]",
+      `catalog_path=${JSON.stringify(catalog)}`,
+      `artifact_root=${JSON.stringify(library.artifacts)}`,
+      "[sources.acquisition]",
+      'mode="custom"',
+      "providers=[]",
+      "",
+    ].join("\n"),
+    { mode: 0o600, flag: "wx" },
+  );
+  const initial = sourceRevisions(clone);
+  await save("concurrent-copy", {
+    catalog,
+    elapsed_ms: now() - start,
+    ...initial,
+  });
+  const runtime = await acquireExecutionRuntime(catalog);
+  try {
+    const writer = launch<{ ready: true }>(clone, "writer");
+    const started = now();
+    try {
+      await writer.ready;
+      await reads(clone, false, true, save);
+    } finally {
+      await writer.close();
+      const elapsed_ms = now() - started;
+      const written = writerCount(clone);
+      await save("concurrent-writes", {
+        elapsed_ms,
+        written,
+        papers_per_second: (written * 1000) / elapsed_ms,
+        ...sourceRevisions(clone),
+      });
+    }
+  } finally {
+    await runtime.release();
+  }
+}
+
 export async function measureScaleLibrary(
   library: ScaleLibrary,
   reports: string,
-  reuse = false,
+  stage: "all" | "index" | "reads" | "memory",
 ) {
   const write = (name: string, value: unknown) =>
     writeFile(
@@ -410,7 +546,7 @@ export async function measureScaleLibrary(
   // runtime lock a real executor owns, so CLI and Workbench skip recovery.
   const runtime = await acquireExecutionRuntime(library.catalog);
   try {
-    if (reuse) {
+    if (stage === "reads" || stage === "memory") {
       const saved = JSON.parse(
         await readFile(join(reports, "rebuild-index.json"), "utf8"),
       ) as {
@@ -426,21 +562,29 @@ export async function measureScaleLibrary(
       )
         throw new Error("The catalog has changed since the recorded rebuild");
     } else {
-      await write("generation", { ...library, load: loadavg() });
       const before = await scaleLibraryStorage(library);
       await write("storage-before-index", {
         ...before,
         directory_bytes: await directoryBytes(library.artifacts),
       });
-      const verification = await cli(library, [
-        "maintenance",
-        "verify-catalog",
-      ]);
+      const verification = await cli(
+        library,
+        ["maintenance", "verify-catalog"],
+        30 * minute,
+      );
       await write("verify-catalog", verification);
+      const timeout = (library.papers === 1_000_000 ? 9 : 4) * 60 * minute;
       const rebuild = await cli(
         library,
         ["maintenance", "rebuild-index"],
-        4 * 60 * 60 * 1000,
+        timeout,
+        (pid) =>
+          write("rebuild-start", {
+            pid,
+            at: new Date().toISOString(),
+            timeout_ms: timeout,
+            load: loadavg(),
+          }),
       );
       const revisions = sourceRevisions(library);
       await write("rebuild-index", { ...rebuild, ...revisions });
@@ -453,17 +597,27 @@ export async function measureScaleLibrary(
         ...storage,
         directory_bytes: await directoryBytes(library.artifacts),
       });
+      const final = await cli(
+        library,
+        ["maintenance", "verify-catalog"],
+        30 * minute,
+      );
+      await write("verify-catalog-final", final);
+      if ((final.response.value as { hashes?: string }).hashes !== "verified")
+        throw new Error(
+          "The rebuilt scale library index hashes were not verified",
+        );
     }
 
+    if (stage === "index") return;
+    if (stage === "memory") {
+      await reads(library, library.papers === 10_000_000, false, write, true);
+      return;
+    }
     await reads(library, library.papers === 10_000_000, false, write);
     if (library.papers === 1_000_000) {
-      const writer = launch<{ ready: true }>(library, "writer");
-      try {
-        await writer.ready;
-        await reads(library, false, true, write);
-      } finally {
-        await writer.close();
-      }
+      await reads(library, false, false, write, true);
+      await concurrentReads(library, write);
     }
   } finally {
     await runtime.release();

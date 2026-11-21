@@ -6,7 +6,7 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { loadavg, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
@@ -117,7 +117,7 @@ it("generates a valid 2000-paper scale library with product-readable material, t
 const selectedScale = process.env.SCIRETRIEVER_SCALE_LIBRARY;
 it.runIf(selectedScale !== undefined)(
   "runs an explicitly selected scale library",
-  { timeout: 4 * 60 * 60 * 1000 },
+  { timeout: (selectedScale === "1m" ? 12 : 4) * 60 * 60 * 1000 },
   async () => {
     if (
       selectedScale !== "10k" &&
@@ -134,6 +134,17 @@ it.runIf(selectedScale !== undefined)(
     const name = `${selectedScale}-${seed}`;
     const directory = resolve("sandbox/scale-libraries", name);
     const reports = resolve("sandbox/reports/2026-11-21-scale-library", name);
+    const reuse = process.env.SCIRETRIEVER_SCALE_LIBRARY_REUSE === "1";
+    const stage =
+      process.env.SCIRETRIEVER_SCALE_LIBRARY_STAGE ?? (reuse ? "reads" : "all");
+    if (
+      stage !== "all" &&
+      stage !== "generate" &&
+      stage !== "index" &&
+      stage !== "reads" &&
+      stage !== "memory"
+    )
+      throw new Error("Invalid scale library stage");
     await mkdir(reports, { recursive: true, mode: 0o700 });
     try {
       await mkdir(resolve("sandbox/scale-libraries"), {
@@ -141,8 +152,7 @@ it.runIf(selectedScale !== undefined)(
         mode: 0o700,
       });
       let library: ScaleLibrary;
-      const reuse = process.env.SCIRETRIEVER_SCALE_LIBRARY_REUSE === "1";
-      if (reuse) {
+      if (stage !== "all" && stage !== "generate") {
         if ((await realpath(directory)) !== directory)
           throw new Error("Unexpected scale directory path");
         library = JSON.parse(
@@ -172,7 +182,15 @@ it.runIf(selectedScale !== undefined)(
           sourceRecords: 1_000_000,
         });
       }
-      await measureScaleLibrary(library, reports, reuse);
+      if (stage === "all" || stage === "generate") {
+        await writeFile(
+          join(reports, "generation.json"),
+          JSON.stringify({ ...library, load: loadavg() }, null, 2) + "\n",
+          { mode: 0o600 },
+        );
+      }
+      if (stage !== "generate")
+        await measureScaleLibrary(library, reports, stage);
     } catch (error) {
       await writeFile(
         join(reports, "failure.json"),

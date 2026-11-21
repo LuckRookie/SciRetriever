@@ -11,14 +11,20 @@ const [kind, home, ...args] = process.argv.slice(2);
 if (!home) throw new Error("An explicit synthetic home is required");
 
 if (kind === "cli") {
+  const stop = new AbortController();
+  const cancel = () => stop.abort(new Error("Scale CLI interrupted"));
+  process.once("SIGTERM", cancel);
   let diagnostic = "";
   const result = await runCli(args, {
     home,
     json: true,
+    signal: stop.signal,
     stdout: () => {},
     stderr: (text) => {
       diagnostic += text;
     },
+  }).finally(() => {
+    process.removeListener("SIGTERM", cancel);
   });
   if (args[0] === "jobs" && result.code === 0) {
     const detail = result.value as {
