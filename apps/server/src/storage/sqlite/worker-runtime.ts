@@ -369,6 +369,7 @@ let metadataWrite:
   | {
       readonly prepare: (sql: string) => Dynamic;
       readonly nextSequence: Map<string, number>;
+      citationRun?: string;
     }
   | undefined;
 let observedDataVersion: number | null = null;
@@ -1018,77 +1019,62 @@ function readAutomaticPdfExhaustion(command: Dynamic): Dynamic {
 }
 function validateDiscoveryCauses(ids: Dynamic): Dynamic {
   for (const id of new Set<Dynamic>(ids)) {
-    const run = db
-      .prepare("SELECT kind FROM discovery_runs WHERE discovery_run_id=?")
-      .get(id);
-    const results = db
-      .prepare(
-        "SELECT meta_literature_id FROM discovery_results WHERE discovery_run_id=?",
-      )
-      .all(id);
-    const resultIds = new Set<Dynamic>(
-      results.map((row: Dynamic) => row.meta_literature_id),
-    );
-    const counts = new Map<Dynamic, Dynamic>();
-    for (const c of db
-      .prepare("SELECT * FROM topic_discovery_causes WHERE discovery_run_id=?")
-      .all(id)) {
-      if (
-        run?.kind !== "topic" ||
-        !resultIds.has(c.meta_literature_id) ||
-        !db
-          .prepare(
-            "SELECT 1 FROM literature_metadata_observations owner JOIN literatures actual ON actual.literature_id=owner.literature_id WHERE owner.observation_id=? AND actual.literature_id=? AND actual.meta_literature_id=?",
-          )
-          .get(
-            c.metadata_observation_id,
-            c.actual_literature_id,
-            c.meta_literature_id,
-          )
-      )
-        fail();
-      counts.set(
-        c.meta_literature_id,
-        (counts.get(c.meta_literature_id) || 0) + 1,
-      );
-    }
-    for (const c of db
-      .prepare(
-        "SELECT * FROM citation_discovery_causes WHERE discovery_run_id=?",
-      )
-      .all(id)) {
-      if (
-        run?.kind !== "citation" ||
-        !resultIds.has(c.meta_literature_id) ||
-        ![c.source_literature_id, c.target_literature_id].includes(
-          c.actual_literature_id,
-        ) ||
-        !db
-          .prepare("SELECT 1 FROM literatures WHERE literature_id=?")
-          .get(c.source_literature_id) ||
-        !db
-          .prepare("SELECT 1 FROM literatures WHERE literature_id=?")
-          .get(c.target_literature_id) ||
-        !db
-          .prepare(
-            "SELECT 1 FROM literatures WHERE literature_id=? AND meta_literature_id=?",
-          )
-          .get(c.actual_literature_id, c.meta_literature_id)
-      )
-        fail();
-      counts.set(
-        c.meta_literature_id,
-        (counts.get(c.meta_literature_id) || 0) + 1,
-      );
-    }
-    for (const result of results)
-      if (
-        !["topic", "citation"].includes(run?.kind) ||
-        !counts.get(result.meta_literature_id)
-      )
-        fail();
+    const kind =
+      db
+        .prepare("SELECT kind FROM discovery_runs WHERE discovery_run_id=?")
+        .get(id)?.kind ?? null;
+    if (
+      db
+        .prepare(
+          `
+      SELECT 1 FROM topic_discovery_causes c
+      WHERE c.discovery_run_id=? AND (
+        ? IS NOT 'topic'
+        OR NOT EXISTS(SELECT 1 FROM discovery_results r WHERE r.discovery_run_id=c.discovery_run_id AND r.meta_literature_id=c.meta_literature_id)
+        OR NOT EXISTS(
+          SELECT 1 FROM literature_metadata_observations owner
+          JOIN literatures actual ON actual.literature_id=owner.literature_id
+          WHERE owner.observation_id=c.metadata_observation_id AND actual.literature_id=c.actual_literature_id AND actual.meta_literature_id=c.meta_literature_id
+        )
+      ) LIMIT 1`,
+        )
+        .get(id, kind)
+    )
+      fail();
+    if (
+      db
+        .prepare(
+          `
+      SELECT 1 FROM citation_discovery_causes c
+      WHERE c.discovery_run_id=? AND (
+        ? IS NOT 'citation' OR c.actual_literature_id NOT IN (c.source_literature_id,c.target_literature_id)
+        OR NOT EXISTS(SELECT 1 FROM discovery_results r WHERE r.discovery_run_id=c.discovery_run_id AND r.meta_literature_id=c.meta_literature_id)
+        OR NOT EXISTS(SELECT 1 FROM literatures l WHERE l.literature_id=c.source_literature_id)
+        OR NOT EXISTS(SELECT 1 FROM literatures l WHERE l.literature_id=c.target_literature_id)
+        OR NOT EXISTS(SELECT 1 FROM literatures l WHERE l.literature_id=c.actual_literature_id AND l.meta_literature_id=c.meta_literature_id)
+      ) LIMIT 1`,
+        )
+        .get(id, kind)
+    )
+      fail();
+    const causes =
+      kind === "topic" ? "topic_discovery_causes" : "citation_discovery_causes";
+    if (
+      db
+        .prepare(
+          `
+      SELECT 1 FROM discovery_results r WHERE r.discovery_run_id=? AND (
+        (? IS NOT 'topic' AND ? IS NOT 'citation') OR NOT EXISTS(
+          SELECT 1 FROM ${causes} c WHERE c.discovery_run_id=r.discovery_run_id AND c.meta_literature_id=r.meta_literature_id
+        )
+      ) LIMIT 1`,
+        )
+        .get(id, kind, kind)
+    )
+      fail();
   }
 }
+
 function librarySnapshot(
   ftsQuery: Dynamic,
   discoveryRunIds: Dynamic,
@@ -4848,114 +4834,142 @@ function getDiscovery(id: Dynamic): Dynamic {
     citation_causes,
   };
 }
+function putDiscoveryHeader(p: Dynamic, resumeCitation: boolean): string {
+  if (
+    !p?.run ||
+    !Array.isArray(p.providers) ||
+    !Array.isArray(p.source_results)
+  )
+    fail();
+  const r = p.run;
+  db.prepare(
+    "INSERT INTO discovery_runs(discovery_run_id,kind,status,started_at) VALUES(?,?,?,?) ON CONFLICT(discovery_run_id) DO NOTHING",
+  ).run(r.discovery_run_id, r.kind, r.status, r.started_at);
+  const saved = db
+    .prepare(
+      "SELECT kind,status,started_at FROM discovery_runs WHERE discovery_run_id=?",
+    )
+    .get(r.discovery_run_id);
+  const resuming =
+    resumeCitation &&
+    r.kind === "citation" &&
+    saved?.kind === "citation" &&
+    saved.started_at === r.started_at &&
+    saved.status === "INTERRUPTED";
+  if (
+    !saved ||
+    saved.kind !== r.kind ||
+    (saved.status !== r.status && !resuming) ||
+    saved.started_at !== r.started_at
+  )
+    fail();
+  if (resuming) {
+    db.prepare(
+      "UPDATE discovery_runs SET status=? WHERE discovery_run_id=?",
+    ).run(r.status, r.discovery_run_id);
+    db.prepare(
+      "DELETE FROM discovery_source_results WHERE discovery_run_id=?",
+    ).run(r.discovery_run_id);
+  }
+  if (r.kind === "topic") {
+    db.prepare(
+      "INSERT INTO topic_discovery_inputs(discovery_run_id,kind,query,year_from,year_to) VALUES(?,'topic',?,?,?) ON CONFLICT(discovery_run_id) DO NOTHING",
+    ).run(r.discovery_run_id, r.query, r.year_from ?? null, r.year_to ?? null);
+  } else if (r.kind === "citation") {
+    db.prepare(
+      "INSERT INTO citation_discovery_inputs(discovery_run_id,kind,direction,max_depth,result_limit) VALUES(?,'citation',?,?,?) ON CONFLICT(discovery_run_id) DO NOTHING",
+    ).run(r.discovery_run_id, r.direction, r.max_depth, r.result_limit);
+    for (let i = 0; i < (r.seed_literature_ids || []).length; i++)
+      db.prepare(
+        "INSERT INTO citation_discovery_seeds(discovery_run_id,seed_ordinal,literature_id) VALUES(?,?,?) ON CONFLICT(discovery_run_id,seed_ordinal) DO NOTHING",
+      ).run(r.discovery_run_id, i, r.seed_literature_ids[i]);
+  } else fail();
+  for (let i = 0; i < p.providers.length; i++) {
+    const x = p.providers[i];
+    db.prepare(
+      "INSERT INTO discovery_run_providers(discovery_run_id,provider_ordinal,provider_name,scan_limit,kind) VALUES(?,?,?,?,?) ON CONFLICT(discovery_run_id,provider_ordinal) DO NOTHING",
+    ).run(r.discovery_run_id, i, x.provider_name, x.scan_limit, r.kind);
+  }
+  for (const x of p.source_results) {
+    const f = x.failure;
+    db.prepare(
+      "INSERT INTO discovery_source_results(discovery_run_id,provider_name,outcome,failure_code,failure_reason,failure_action,failure_retryable) VALUES(?,?,?,?,?,?,?) ON CONFLICT(discovery_run_id,provider_name) DO NOTHING",
+    ).run(
+      r.discovery_run_id,
+      x.provider_name,
+      x.outcome,
+      f?.code ?? null,
+      f?.reason ?? null,
+      f?.action ?? null,
+      f?.retryable === undefined ? null : Number(f.retryable),
+    );
+  }
+  return r.discovery_run_id;
+}
+function insertDiscoveryResult(runId: string, metaId: string) {
+  db.prepare(
+    "INSERT INTO discovery_results(discovery_run_id,meta_literature_id) VALUES(?,?) ON CONFLICT(discovery_run_id,meta_literature_id) DO NOTHING",
+  ).run(runId, metaId);
+}
+function insertCitationCause(runId: string, cause: Dynamic) {
+  db.prepare(
+    "INSERT INTO citation_discovery_causes(discovery_run_id,meta_literature_id,source_literature_id,target_literature_id,actual_literature_id,depth) VALUES(?,?,?,?,?,?) ON CONFLICT(discovery_run_id,source_literature_id,target_literature_id,depth) DO NOTHING",
+  ).run(
+    runId,
+    cause.meta_literature_id,
+    cause.source_literature_id,
+    cause.target_literature_id,
+    cause.actual_literature_id,
+    cause.depth,
+  );
+}
 function putDiscovery(p: Dynamic, resumeCitation = false): Dynamic {
   return transaction(() => {
     if (
       !p ||
-      !p.run ||
-      !Array.isArray(p.providers) ||
-      !Array.isArray(p.source_results) ||
       !Array.isArray(p.results) ||
       !Array.isArray(p.topic_causes) ||
       !Array.isArray(p.citation_causes)
     )
       fail();
-    const r = p.run;
-    db.prepare(
-      "INSERT INTO discovery_runs(discovery_run_id,kind,status,started_at) VALUES(?,?,?,?) ON CONFLICT(discovery_run_id) DO NOTHING",
-    ).run(r.discovery_run_id, r.kind, r.status, r.started_at);
-    const saved = db
-      .prepare(
-        "SELECT kind,status,started_at FROM discovery_runs WHERE discovery_run_id=?",
-      )
-      .get(r.discovery_run_id);
-    const resuming =
-      resumeCitation &&
-      r.kind === "citation" &&
-      saved?.kind === "citation" &&
-      saved.started_at === r.started_at &&
-      saved.status === "INTERRUPTED";
-    if (
-      !saved ||
-      saved.kind !== r.kind ||
-      (saved.status !== r.status && !resuming) ||
-      saved.started_at !== r.started_at
-    )
-      fail();
-    if (resuming) {
-      db.prepare(
-        "UPDATE discovery_runs SET status=? WHERE discovery_run_id=?",
-      ).run(r.status, r.discovery_run_id);
-      db.prepare(
-        "DELETE FROM discovery_source_results WHERE discovery_run_id=?",
-      ).run(r.discovery_run_id);
-    }
-    if (r.kind === "topic") {
-      db.prepare(
-        "INSERT INTO topic_discovery_inputs(discovery_run_id,kind,query,year_from,year_to) VALUES(?,'topic',?,?,?) ON CONFLICT(discovery_run_id) DO NOTHING",
-      ).run(
-        r.discovery_run_id,
-        r.query,
-        r.year_from ?? null,
-        r.year_to ?? null,
-      );
-    } else if (r.kind === "citation") {
-      db.prepare(
-        "INSERT INTO citation_discovery_inputs(discovery_run_id,kind,direction,max_depth,result_limit) VALUES(?,'citation',?,?,?) ON CONFLICT(discovery_run_id) DO NOTHING",
-      ).run(r.discovery_run_id, r.direction, r.max_depth, r.result_limit);
-      for (let i = 0; i < (r.seed_literature_ids || []).length; i++)
-        db.prepare(
-          "INSERT INTO citation_discovery_seeds(discovery_run_id,seed_ordinal,literature_id) VALUES(?,?,?) ON CONFLICT(discovery_run_id,seed_ordinal) DO NOTHING",
-        ).run(r.discovery_run_id, i, r.seed_literature_ids[i]);
-    } else fail();
-    for (let i = 0; i < p.providers.length; i++) {
-      const x = p.providers[i];
-      db.prepare(
-        "INSERT INTO discovery_run_providers(discovery_run_id,provider_ordinal,provider_name,scan_limit,kind) VALUES(?,?,?,?,?) ON CONFLICT(discovery_run_id,provider_ordinal) DO NOTHING",
-      ).run(r.discovery_run_id, i, x.provider_name, x.scan_limit, r.kind);
-    }
-    for (const x of p.source_results) {
-      const f = x.failure;
-      db.prepare(
-        "INSERT INTO discovery_source_results(discovery_run_id,provider_name,outcome,failure_code,failure_reason,failure_action,failure_retryable) VALUES(?,?,?,?,?,?,?) ON CONFLICT(discovery_run_id,provider_name) DO NOTHING",
-      ).run(
-        r.discovery_run_id,
-        x.provider_name,
-        x.outcome,
-        f?.code ?? null,
-        f?.reason ?? null,
-        f?.action ?? null,
-        f?.retryable === undefined ? null : Number(f.retryable),
-      );
-    }
-    for (const x of p.results)
-      db.prepare(
-        "INSERT INTO discovery_results(discovery_run_id,meta_literature_id) VALUES(?,?) ON CONFLICT(discovery_run_id,meta_literature_id) DO NOTHING",
-      ).run(r.discovery_run_id, x.meta_literature_id);
+    const id = putDiscoveryHeader(p, resumeCitation);
+    for (const x of p.results) insertDiscoveryResult(id, x.meta_literature_id);
     for (const x of p.topic_causes)
       db.prepare(
         "INSERT INTO topic_discovery_causes(discovery_run_id,meta_literature_id,metadata_observation_id,actual_literature_id) VALUES(?,?,?,?) ON CONFLICT(discovery_run_id,meta_literature_id,metadata_observation_id) DO NOTHING",
       ).run(
-        r.discovery_run_id,
+        id,
         x.meta_literature_id,
         x.metadata_observation_id,
         x.actual_literature_id,
       );
-    for (const x of p.citation_causes)
-      db.prepare(
-        "INSERT INTO citation_discovery_causes(discovery_run_id,meta_literature_id,source_literature_id,target_literature_id,actual_literature_id,depth) VALUES(?,?,?,?,?,?) ON CONFLICT(discovery_run_id,meta_literature_id,source_literature_id,target_literature_id,depth) DO NOTHING",
-      ).run(
-        r.discovery_run_id,
-        x.meta_literature_id,
-        x.source_literature_id,
-        x.target_literature_id,
-        x.actual_literature_id,
-        x.depth,
-      );
-    validateDiscoveryCauses([r.discovery_run_id]);
-    return getDiscovery(r.discovery_run_id);
+    for (const x of p.citation_causes) insertCitationCause(id, x);
+    validateDiscoveryCauses([id]);
+    return getDiscovery(id);
   });
 }
+function putCitationPublication(
+  part: Extract<SqliteCommand, { kind: "citation_publication" }>["part"],
+) {
+  if (!metadataWrite) fail();
+  if (part.kind === "header") {
+    if (metadataWrite.citationRun || part.publication.run.kind !== "citation")
+      fail();
+    metadataWrite.citationRun = putDiscoveryHeader(
+      part.publication,
+      part.resume,
+    );
+    return true;
+  }
+  const id = metadataWrite.citationRun;
+  if (!id) fail();
+  for (const cause of part.causes) {
+    insertDiscoveryResult(id, cause.meta_literature_id);
+    insertCitationCause(id, cause);
+  }
+  return true;
+}
+
 function counts(): Dynamic {
   const names = [
     "schema_identity",
@@ -5160,6 +5174,8 @@ port.on("message", (message: WorkerMessage) => {
       case "metadata_write_rollback": {
         if (!metadataWrite) fail();
         if (message.command.kind === "metadata_write_commit") {
+          if (metadataWrite.citationRun)
+            validateDiscoveryCauses([metadataWrite.citationRun]);
           if (message.command.events.length) requireRuntime();
           for (const event of message.command.events)
             insertExecutionEvent(event);
@@ -5170,14 +5186,29 @@ port.on("message", (message: WorkerMessage) => {
         value = true;
         break;
       }
-      case "citation_checkpoints":
+      case "citation_checkpoints": {
         requireRuntime();
-        value = db
-          .prepare(
-            "SELECT payload_json FROM execution_events WHERE job_id=? AND kind='citation-write-checkpoint' AND json_extract(payload_json,'$.target_id')=? ORDER BY sequence",
-          )
-          .all(message.command.jobId, message.command.targetId)
-          .map((row: Dynamic) => JSON.parse(row.payload_json));
+        const { jobId, targetId, range } = message.command;
+        const sql =
+          "SELECT sequence,payload_json FROM execution_events INDEXED BY task_event_target WHERE job_id=? AND kind='citation-write-checkpoint' AND json_extract(payload_json,'$.target_id')=?";
+        const rows = range
+          ? db
+              .prepare(
+                sql +
+                  " AND sequence>? AND sequence<=? ORDER BY sequence LIMIT 32",
+              )
+              .all(jobId, targetId, range.after, range.through)
+          : db
+              .prepare(sql + " ORDER BY sequence DESC LIMIT 1")
+              .all(jobId, targetId);
+        value = rows.map((row: Dynamic) => ({
+          sequence: row.sequence,
+          payload: JSON.parse(row.payload_json),
+        }));
+        break;
+      }
+      case "citation_publication":
+        value = putCitationPublication(message.command.part);
         break;
       case "capture_read":
       case "capture_write":

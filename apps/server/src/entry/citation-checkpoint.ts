@@ -10,6 +10,8 @@ import {
   type StableFailure,
 } from "@sciretriever/contracts";
 import type { MetadataScanEvent } from "../metadata/ports.js";
+import type { MetadataSourceRun } from "../application/jobs/metadata-progress.js";
+import type { CitationProgress } from "../storage/sqlite/citation-progress.js";
 import type { DiscoveryPublication } from "../storage/sqlite/worker.js";
 
 export type CitationCause = DiscoveryPublication["citation_causes"][number];
@@ -148,6 +150,40 @@ export function parseCitationCheckpoint(input: unknown): CitationCheckpoint {
       throw invalid();
   }
   return row;
+}
+
+/** A cause is enqueued at its first committed occurrence in event order. */
+export async function restoreCitationProgress(
+  source: Pick<MetadataSourceRun, "checkpoints">,
+  resume: CitationCheckpoint | undefined,
+  through: number,
+  progress: CitationProgress,
+) {
+  for (let after = -1; after < through; ) {
+    const page = await source.checkpoints(after, through);
+    if (!page.length)
+      throw new Error("citation checkpoint history is incomplete");
+    for (const event of page) {
+      const checkpoint = parseCitationCheckpoint(event.payload);
+      if (!resume || checkpoint.run_id !== resume.run_id) continue;
+      if (
+        checkpoint.batch_id !== resume.batch_id ||
+        checkpoint.started_at !== resume.started_at
+      )
+        throw new Error("citation checkpoint belongs to another run");
+      progress.record(
+        checkpoint.causes,
+        checkpoint.checked ? checkpoint.source_id : null,
+        !resume.checked &&
+          resume.active_query &&
+          checkpoint.source_id === resume.source_id &&
+          checkpoint.raw_provider === resume.next_provider
+          ? checkpoint.raw_items
+          : [],
+      );
+    }
+    after = page.at(-1)!.sequence;
+  }
 }
 
 function stableProvenance(value: MetadataObservation["provenance"]) {

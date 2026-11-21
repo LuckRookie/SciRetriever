@@ -217,6 +217,16 @@ export interface DiscoveryPublication {
   }[];
 }
 
+type CitationPublicationHeader = Omit<
+  DiscoveryPublication,
+  "results" | "topic_causes" | "citation_causes"
+>;
+
+export interface CitationCheckpointEvent {
+  readonly sequence: number;
+  readonly payload: unknown;
+}
+
 export interface IdentityReadRequest {
   readonly target_literature_id?: string;
   readonly observation_id: string;
@@ -323,6 +333,20 @@ export type SqliteCommand =
       readonly kind: "citation_checkpoints";
       readonly jobId: string;
       readonly targetId: string;
+      readonly range?: { readonly after: number; readonly through: number };
+    }
+  | {
+      readonly kind: "citation_publication";
+      readonly part:
+        | {
+            readonly kind: "header";
+            readonly publication: CitationPublicationHeader;
+            readonly resume: boolean;
+          }
+        | {
+            readonly kind: "causes";
+            readonly causes: DiscoveryPublication["citation_causes"];
+          };
     }
   | { readonly kind: "intake_withdrawn"; readonly literature_id: string }
   | {
@@ -1247,6 +1271,7 @@ const METADATA_WRITE_COMMANDS = new Set<string>([
   "publish_provider_reference",
   "intake_write",
   "put_discovery",
+  "citation_publication",
 ]);
 // Leave room for the last indivisible record and the durable commit.
 const METADATA_WRITE_BUDGET_MS = 150;
@@ -1482,8 +1507,14 @@ export class SqliteWorker {
   citationCheckpoints(
     jobId: string,
     targetId: string,
-  ): Promise<readonly unknown[]> {
-    return this.run({ kind: "citation_checkpoints", jobId, targetId });
+    range?: { readonly after: number; readonly through: number },
+  ): Promise<readonly CitationCheckpointEvent[]> {
+    return this.run({
+      kind: "citation_checkpoints",
+      jobId,
+      targetId,
+      ...(range ? { range } : {}),
+    });
   }
   private send<T>(command: SqliteCommand, signal?: AbortSignal): Promise<T> {
     const policy = sqliteReadRequest(command);
@@ -3096,6 +3127,29 @@ export class SqliteWorker {
         resumeCitation,
       }),
     );
+  }
+  async putCitationDiscovery(
+    publication: CitationPublicationHeader,
+    pages: Iterable<DiscoveryPublication["citation_causes"]>,
+    resume: boolean,
+  ): Promise<void> {
+    if (!this.metadataWrites.getStore() || publication.run.kind !== "citation")
+      throw new SqliteWorkerError();
+    parseDiscoveryPublication({
+      ...publication,
+      results: [],
+      topic_causes: [],
+      citation_causes: [],
+    });
+    await this.run({
+      kind: "citation_publication",
+      part: { kind: "header", publication, resume },
+    });
+    for (const causes of pages)
+      await this.run({
+        kind: "citation_publication",
+        part: { kind: "causes", causes },
+      });
   }
   async getDiscovery(
     discoveryRunId: string,

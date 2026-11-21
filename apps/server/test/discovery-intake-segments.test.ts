@@ -126,17 +126,19 @@ function source(
         convert_raw_item(index) {
           const [work, revision] = rows[Number(index)]!;
           const o = observation(work, revision);
+          const related = {
+            record_id: String(work),
+            identifiers: o.metadata.identifiers,
+          };
+          const incoming = context.direction === "cited-by";
           return {
             observations: [o],
             relations: [
               {
                 observation_id: uuid(3, seed * 10000 + Number(index) + 1),
                 provenance: o.provenance,
-                citing: anchor,
-                cited: {
-                  record_id: String(work),
-                  identifiers: o.metadata.identifiers,
-                },
+                citing: incoming ? related : anchor,
+                cited: incoming ? anchor : related,
               },
             ],
           };
@@ -176,6 +178,8 @@ async function run(
   key: string,
   signal?: AbortSignal,
   scanLimit: number | null = null,
+  maxDepth = 1,
+  direction: "references" | "cited-by" = "references",
 ) {
   const result = await withActivity({ actor: "cli:intake-segments" }, () =>
     runMetadataTask(
@@ -183,8 +187,8 @@ async function run(
       {
         kind: "citation",
         seed_literature_ids: seeds,
-        direction: "references",
-        max_depth: 1,
+        direction,
+        max_depth: maxDepth,
         result_limit: null,
         providers: [{ source: "fixture", scan_limit: scanLimit }],
       },
@@ -532,6 +536,307 @@ it("reopens the catalog and repeats only the unfinished source, keeping its comm
     ).toEqual([a, b]);
   } finally {
     await reopened?.close();
+    await f.close();
+  }
+});
+
+const layeredGraph = new Map<number, readonly Row[]>([
+  [0, [[1], [2], [2]]],
+  [9, [[2], [3]]],
+  [1, [[4]]],
+  [2, [[4], [5], [6]]],
+  [3, [[1], [7]]],
+]);
+const layeredOrder = [0, 9, 1, 2, 3];
+
+function interruptAfterCommit(
+  app: Application,
+  sourceId: string,
+  checked: boolean,
+  stop: () => void,
+  saveCheckpoints = true,
+) {
+  let interrupt = false;
+  let stopped = false;
+  const append = app.database.appendMetadataEvent.bind(app.database);
+  const write = app.database.writeMetadataSegment.bind(app.database);
+  const events = vi
+    .spyOn(app.database, "appendMetadataEvent")
+    .mockImplementation(async (event) => {
+      if (event.kind === "citation-write-checkpoint") {
+        const checkpoint = event.payload as {
+          source_id: string | null;
+          checked: boolean;
+          causes: unknown[];
+        };
+        if (
+          !stopped &&
+          checkpoint.source_id === sourceId &&
+          checkpoint.checked === checked &&
+          (checked || checkpoint.causes.length > 0)
+        )
+          interrupt = true;
+        if (!saveCheckpoints) return;
+      }
+      await append(event);
+    });
+  const segments = vi
+    .spyOn(app.database, "writeMetadataSegment")
+    .mockImplementation((segment, signal) =>
+      write(segment, signal).then((result) => {
+        if (interrupt) {
+          interrupt = false;
+          stopped = true;
+          stop();
+        }
+        return result;
+      }),
+    );
+  return () => {
+    events.mockRestore();
+    segments.mockRestore();
+  };
+}
+
+it.each([
+  {
+    point: "midway through a paper",
+    checked: false,
+    anchor: 1,
+    callsBefore: [0, 9],
+    callsAfter: [9, 1, 2, 3],
+  },
+  {
+    point: "after the checked commit",
+    checked: true,
+    anchor: 0,
+    callsBefore: [0],
+    callsAfter: [9, 1, 2, 3],
+  },
+  {
+    point: "at the layer boundary",
+    checked: true,
+    anchor: 1,
+    callsBefore: [0, 9],
+    callsAfter: [1, 2, 3],
+  },
+])(
+  "preserves breadth-first results when interrupted $point",
+  async ({ checked, anchor, callsBefore, callsAfter }) => {
+    const completeCalls: number[] = [];
+    const complete = await fixture(source(layeredGraph, 1, completeCalls));
+    const resumedCalls: number[] = [];
+    const port = source(layeredGraph, 1, resumedCalls);
+    const interrupted = await fixture(port);
+    let reopened: Application | undefined;
+    try {
+      const reference = await run(
+        complete.app,
+        [await add(complete.app, 0), await add(complete.app, 9)],
+        "whole-traversal",
+        undefined,
+        null,
+        2,
+      );
+      expect(completeCalls).toEqual(layeredOrder);
+      const expected = snapshot(
+        complete.home,
+        reference.discovery_run_id,
+        reference.intake_batch_id,
+      );
+      const seeds = [
+        await add(interrupted.app, 0),
+        await add(interrupted.app, 9),
+      ];
+      const stop = new AbortController();
+      const restore = interruptAfterCommit(
+        interrupted.app,
+        seeds[anchor]!,
+        checked,
+        () => {
+          if (checked)
+            throw new Error(
+              "synthetic interruption immediately after the catalog commit",
+            );
+          stop.abort();
+        },
+      );
+      try {
+        await expect(
+          run(interrupted.app, seeds, "resume-layers", stop.signal, null, 2),
+        ).rejects.toThrow();
+      } finally {
+        restore();
+      }
+      expect(resumedCalls).toEqual(callsBefore);
+      const job = await processingJobId("resume-layers");
+      const prior = checkpoints(interrupted.home, job).at(-1);
+      expect(prior).toMatchObject({ source_id: seeds[anchor], checked });
+      await interrupted.app.close();
+      reopened = await createApplication(interrupted.home, options(port));
+      await reopened.processingTasks!.control(
+        job,
+        checked ? "retry" : "resume",
+      );
+      const resumed = await run(
+        reopened,
+        seeds,
+        "resume-layers",
+        undefined,
+        null,
+        2,
+      );
+      expect(resumedCalls).toEqual([...callsBefore, ...callsAfter]);
+      expect(resumed.result_count).toBe(reference.result_count);
+      const actual = snapshot(
+        interrupted.home,
+        resumed.discovery_run_id,
+        resumed.intake_batch_id,
+      );
+      expect(actual.tables).toEqual(expected.tables);
+      const completedSources = checkpoints(interrupted.home, job).filter(
+        (row) => row.checked,
+      );
+      expect(completedSources).toHaveLength(layeredOrder.length);
+      expect(new Set(completedSources.map((row) => row.source_id)).size).toBe(
+        layeredOrder.length,
+      );
+      const unaffectedProgress = (snap: typeof expected) =>
+        snap.events.flatMap((row) => {
+          const event = row as {
+            kind: string;
+            payload_json: { progress?: { unit_id: string; record_id: string } };
+          };
+          const progress = event.payload_json.progress;
+          if (!progress || (!checked && progress.unit_id === `paper:${doi(9)}`))
+            return [];
+          const { record_id, ...facts } = progress;
+          void record_id;
+          return [facts];
+        });
+      expect(unaffectedProgress(actual)).toEqual(unaffectedProgress(expected));
+    } finally {
+      await reopened?.close();
+      await interrupted.close();
+      await complete.close();
+    }
+  },
+  60_000,
+);
+
+it("restarts a pre-checkpoint two-layer task from its seeds without duplicating admitted facts", async () => {
+  const calls: number[] = [];
+  const port = source(layeredGraph, 1, calls);
+  const f = await fixture(port);
+  let reopened: Application | undefined;
+  try {
+    const seeds = [await add(f.app, 0), await add(f.app, 9)];
+    const stop = new AbortController();
+    // The old writer committed facts and visible progress without checkpoint events.
+    const restore = interruptAfterCommit(
+      f.app,
+      seeds[0]!,
+      true,
+      () => stop.abort(),
+      false,
+    );
+    try {
+      await expect(
+        run(f.app, seeds, "old-resume", stop.signal, null, 2, "cited-by"),
+      ).rejects.toThrow();
+    } finally {
+      restore();
+    }
+    const job = await processingJobId("old-resume");
+    expect(calls).toEqual([0]);
+    expect(checkpoints(f.home, job)).toEqual([]);
+    const old = inspect(f.home, (db) =>
+      db.prepare("SELECT discovery_run_id,status FROM discovery_runs").get(),
+    );
+    expect(old?.status).toBe("INTERRUPTED");
+    await f.app.close();
+    reopened = await createApplication(f.home, options(port));
+    await reopened.processingTasks!.control(job, "resume");
+    const resumed = await run(
+      reopened,
+      seeds,
+      "old-resume",
+      undefined,
+      null,
+      2,
+      "cited-by",
+    );
+    expect(calls).toEqual([0, ...layeredOrder]);
+    expect(resumed.discovery_run_id).not.toBe(old?.discovery_run_id);
+    expect(
+      await reopened.database.getDiscovery(String(old?.discovery_run_id)),
+    ).toMatchObject({ run: { status: "INTERRUPTED" } });
+    expect(resumed.result_count).toBe(7);
+    expect((await reopened.database.snapshotCounts()).tables).toMatchObject({
+      literatures: 9,
+      literature_references: 10,
+    });
+    const edges = await reopened.database.referenceSnapshot();
+    expect(edges).toHaveLength(
+      new Set(
+        edges.map(
+          ({ reference }) =>
+            `${reference.source_literature_id}/${reference.target_literature_id}`,
+        ),
+      ).size,
+    );
+    expect(checkpoints(f.home, job).filter((row) => row.checked)).toHaveLength(
+      layeredOrder.length,
+    );
+  } finally {
+    await reopened?.close();
+    await f.close();
+  }
+}, 60_000);
+
+it("validates the streamed publication before commit and retries it without another provider query", async () => {
+  const calls: number[] = [];
+  const f = await fixture(source(new Map([[0, [[1], [2]]]]), 1, calls));
+  try {
+    const seed = await add(f.app, 0);
+    const publish = f.app.database.putCitationDiscovery.bind(f.app.database);
+    const fault = vi
+      .spyOn(f.app.database, "putCitationDiscovery")
+      .mockImplementation((header, pages, resume) => {
+        function* invalidPages() {
+          for (const page of pages)
+            yield page.map((cause) => ({
+              ...cause,
+              meta_literature_id: uuid(9, 10),
+            }));
+        }
+        return publish(header, invalidPages(), resume);
+      });
+    try {
+      await expect(run(f.app, [seed], "publication-fault")).rejects.toThrow();
+    } finally {
+      fault.mockRestore();
+    }
+    expect((await f.app.database.snapshotCounts()).tables).toMatchObject({
+      discovery_runs: 0,
+      literatures: 3,
+      literature_references: 2,
+    });
+    const job = await processingJobId("publication-fault");
+    expect(checkpoints(f.home, job).filter((row) => row.checked)).toHaveLength(
+      1,
+    );
+    await f.app.processingTasks!.control(job, "retry");
+    const result = await run(f.app, [seed], "publication-fault");
+    expect(calls).toEqual([0]);
+    expect(result.result_count).toBe(2);
+    expect(
+      await f.app.database.getDiscovery(result.discovery_run_id),
+    ).toMatchObject({
+      run: { status: "COMPLETED" },
+      citation_causes: [expect.anything(), expect.anything()],
+    });
+  } finally {
     await f.close();
   }
 });

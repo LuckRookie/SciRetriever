@@ -28,6 +28,7 @@ import {
   citationItemKey,
   parseCitationCheckpoint,
   pendingCitationItem,
+  restoreCitationProgress,
   restoreCitationItem,
   type CitationCause,
   type CitationCheckpoint,
@@ -38,6 +39,7 @@ import type { MetadataScanEvent } from "../metadata/ports.js";
 import type { LiteratureIdentityService } from "../literature/identity.js";
 import type { ObservationRepository } from "../storage/sqlite/repositories.js";
 import type { ReferenceRepository } from "../storage/sqlite/repositories.js";
+import { CitationProgress } from "../storage/sqlite/citation-progress.js";
 import {
   type DiscoveryPublication,
   type SqliteWorker,
@@ -474,33 +476,23 @@ export class CitationDiscoveryService {
       });
     }
     const seeds = [...new Set(request.seed_literature_ids)];
-    const frontier = new Map<string, number>(seeds.map((id) => [id, 0]));
-    const visited = new Set(seeds);
-    const seenEdges = new Set<string>();
-    const results = new Map<string, { meta_literature_id: string }>();
-    const causes: CitationCause[] = [];
-    const remember = (cause: CitationCause) => {
-      causes.push(cause);
-      seenEdges.add(
-        cause.source_literature_id + "\u0000" + cause.target_literature_id,
-      );
-      results.set(cause.meta_literature_id, {
-        meta_literature_id: cause.meta_literature_id,
-      });
-      const target = cause.actual_literature_id;
-      if (cause.depth < request.max_depth && !visited.has(target)) {
-        visited.add(target);
-        frontier.set(target, cause.depth);
-      }
-    };
-    const saved = ((await request.source_run?.checkpoints()) ?? []).map(
-      parseCitationCheckpoint,
-    );
-    const latest = saved.at(-1);
+    const traversal = new CitationProgress(seeds, request.max_depth);
+    try {
+      return await this.expand(request, seeds, states, traversal);
+    } finally {
+      traversal.close();
+    }
+  }
+
+  private async expand(
+    request: CitationDiscoveryRequest,
+    seeds: readonly string[],
+    states: Map<string, CitationProviderState>,
+    traversal: CitationProgress,
+  ): Promise<CitationDiscoveryReport> {
+    const tail = await request.source_run?.latestCheckpoint();
+    const latest = tail ? parseCitationCheckpoint(tail.payload) : undefined;
     const resume = latest?.closed === "FAILED" ? undefined : latest;
-    const history = resume
-      ? saved.filter((checkpoint) => checkpoint.run_id === resume.run_id)
-      : [];
     const runId = resume?.run_id ?? randomUUID();
     const startedAt = resume?.started_at ?? new Date().toISOString();
     let batchId: IntakeBatchId;
@@ -517,17 +509,14 @@ export class CitationDiscoveryService {
         );
       for (const state of resume.providers)
         states.set(state.provider_name, { ...state });
-      for (const checkpoint of history) {
-        if (
-          checkpoint.batch_id !== resume.batch_id ||
-          checkpoint.started_at !== startedAt
-        )
-          throw new Error("citation checkpoint belongs to another run");
-        for (const cause of checkpoint.causes) remember(cause);
-        if (checkpoint.checked && checkpoint.source_id)
-          frontier.delete(checkpoint.source_id);
-      }
     }
+    if (request.source_run && tail)
+      await restoreCitationProgress(
+        request.source_run,
+        resume,
+        tail.sequence,
+        traversal,
+      );
     const sourceResults = (): CitationDiscoveryReport["source_results"] =>
       request.providers
         .filter((provider) => states.get(provider.provider_name)!.attempted)
@@ -546,7 +535,7 @@ export class CitationDiscoveryService {
         intake_batch_id: batchId,
         discovery_run_id: runId,
         status,
-        result_count: results.size,
+        result_count: traversal.resultCount,
         source_results: Object.freeze(sourceResults()),
       });
     const save = async (
@@ -611,9 +600,9 @@ export class CitationDiscoveryService {
     const partMetas = new Set<string>();
     const resultLimitReached = () =>
       request.result_limit !== null &&
-      results.size + partMetas.size >= request.result_limit;
+      traversal.resultCount + partMetas.size >= request.result_limit;
     try {
-      for (const [sourceId, depth] of frontier) {
+      for (const [sourceId, depth] of traversal.pending()) {
         if (interrupted || resultLimitReached()) break;
         if (depth >= request.max_depth) continue;
         const sourceResume =
@@ -669,22 +658,10 @@ export class CitationDiscoveryService {
           let complete = false;
           let usableRelations = activeQuery?.usableRelations ?? 0;
           let incomplete = activeQuery?.incomplete ?? false;
-          const replayed = new Map<string, number>();
           const pendingItem = activeQuery?.pending_item ?? null;
           let pendingMatched = pendingItem === null;
-          let replayCount = pendingItem ? 1 : 0;
-          if (activeQuery)
-            for (const checkpoint of history) {
-              if (
-                checkpoint.source_id !== sourceId ||
-                checkpoint.raw_provider !== providerIndex
-              )
-                continue;
-              for (const key of checkpoint.raw_items) {
-                replayed.set(key, (replayed.get(key) ?? 0) + 1);
-                replayCount++;
-              }
-            }
+          const replayCount =
+            (pendingItem ? 1 : 0) + (activeQuery ? traversal.replayCount : 0);
           let stream: AsyncGenerator<MetadataScanEvent>;
           state.attempted = true;
           try {
@@ -1003,7 +980,7 @@ export class CitationDiscoveryService {
               if (!seeds.includes(targetLiterature.literature_id))
                 await progress?.included(targetLiterature.meta_literature_id);
               if (
-                seenEdges.has(edgeKey) ||
+                traversal.hasEdge(edgeSource, edgeTarget) ||
                 partEdges.has(edgeKey) ||
                 seeds.includes(targetLiterature.literature_id)
               )
@@ -1018,7 +995,7 @@ export class CitationDiscoveryService {
                     disposition: "matched",
                   },
                 });
-              if (!results.has(targetLiterature.meta_literature_id))
+              if (!traversal.hasResult(targetLiterature.meta_literature_id))
                 partMetas.add(targetLiterature.meta_literature_id);
               partCauses.push({
                 meta_literature_id: targetLiterature.meta_literature_id,
@@ -1050,9 +1027,11 @@ export class CitationDiscoveryService {
                 nextRelation: number | null;
               }>((event) => {
                 const key = request.source_run ? citationItemKey(event) : null;
-                const remaining = key === null ? 0 : (replayed.get(key) ?? 0);
-                if (key !== null && remaining > 0) {
-                  replayed.set(key, remaining - 1);
+                if (
+                  activeQuery &&
+                  key !== null &&
+                  traversal.consumeRawItem(key)
+                ) {
                   return [];
                 }
                 if (!pendingMatched && pendingItem && key === pendingItem.key) {
@@ -1214,7 +1193,9 @@ export class CitationDiscoveryService {
                   lookups.set(error.key, answer);
                   continue;
                 }
-                for (const cause of partCauses) remember(cause);
+                // The checkpoint above carries enqueue order and checked state
+                // in the same commit as all accepted results in this segment.
+                traversal.record(partCauses, sourceChecked ? sourceId : null);
                 partMetas.clear();
               }
               lookups.clear();
@@ -1229,10 +1210,9 @@ export class CitationDiscoveryService {
           }
           if (sourceChecked) break;
         }
-        if (!interrupted) {
-          if (!sourceChecked)
-            await save({ source_id: sourceId, checked: true });
-          frontier.delete(sourceId);
+        if (!interrupted && !sourceChecked) {
+          await save({ source_id: sourceId, checked: true });
+          traversal.record([], sourceId);
         }
       }
       if (request.signal?.aborted) interrupted = true;
@@ -1240,14 +1220,14 @@ export class CitationDiscoveryService {
       const status: CitationDiscoveryReport["status"] = interrupted
         ? "INTERRUPTED"
         : outcomes.length > 0 &&
-            results.size === 0 &&
+            traversal.resultCount === 0 &&
             outcomes.every((item) => item.outcome === "FAILED")
           ? "FAILED"
           : outcomes.some((item) => item.outcome === "FAILED")
             ? "PARTIAL"
             : "COMPLETED";
       await this.database.writeMetadataSegment(async () => {
-        await this.database.putDiscovery(
+        await this.database.putCitationDiscovery(
           {
             run: {
               discovery_run_id: runId,
@@ -1261,10 +1241,8 @@ export class CitationDiscoveryService {
             },
             providers: request.providers,
             source_results: outcomes,
-            results: [...results.values()],
-            topic_causes: [],
-            citation_causes: causes,
           },
+          traversal.publicationPages(),
           resume !== undefined,
         );
         await finishIntake(

@@ -165,8 +165,18 @@ export class MetadataSourceRun {
     private readonly jobId: string,
     private readonly targetId: string,
   ) {}
-  checkpoints() {
-    return this.repository.citationCheckpoints(this.jobId, this.targetId);
+  async latestCheckpoint() {
+    const rows = await this.repository.citationCheckpoints(
+      this.jobId,
+      this.targetId,
+    );
+    return rows[0] ?? null;
+  }
+  checkpoints(after: number, through: number) {
+    return this.repository.citationCheckpoints(this.jobId, this.targetId, {
+      after,
+      through,
+    });
   }
   checkpoint(fields: Record<string, unknown>) {
     return this.append("citation-write-checkpoint", fields);

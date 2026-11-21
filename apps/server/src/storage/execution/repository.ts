@@ -279,8 +279,12 @@ export class ExecutionRepository {
   appendMetadataEvent(event: ExecutionEvent): Promise<void> {
     return this.database.appendMetadataEvent(event);
   }
-  citationCheckpoints(jobId: string, targetId: string) {
-    return this.database.citationCheckpoints(jobId, targetId);
+  citationCheckpoints(
+    jobId: string,
+    targetId: string,
+    range?: { readonly after: number; readonly through: number },
+  ) {
+    return this.database.citationCheckpoints(jobId, targetId, range);
   }
   sourceRecordPage(request: {
     job_id: string | null;
