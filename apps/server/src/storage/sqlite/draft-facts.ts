@@ -9,6 +9,15 @@ const {
     import.meta.url,
   ).href
 );
+const { DEFAULT_DOCUMENT_LEFT_JOIN }: typeof import("./document-defaults.js") =
+  await import(
+    new URL(
+      import.meta.url.endsWith(".ts")
+        ? "./document-defaults.ts"
+        : "./document-defaults.js",
+      import.meta.url,
+    ).href
+  );
 import type { DatabaseSync } from "node:sqlite";
 import {
   parseDraftFacts,
@@ -57,8 +66,7 @@ export function readDefaultTextFacts(
     CASE WHEN d.schema_version=3 THEN ${draftFactSql("citing_results")} END AS citing_results,
     CASE WHEN d.schema_version=3 THEN ${draftFactSql("unfound_citations")} END AS unfound_citations
     FROM literature_assets la JOIN assets a ON a.asset_id=la.asset_id
-    LEFT JOIN (document_defaults dd JOIN document_versions d ON d.document_version_id=dd.document_version_id)
-      ON d.literature_id=la.literature_id AND d.source_asset_id=a.asset_id AND d.source_sha256=a.sha256
+    ${DEFAULT_DOCUMENT_LEFT_JOIN}
     LEFT JOIN draft_version_facts df ON df.document_version_id=d.document_version_id AND d.schema_version=3
     WHERE ${where.join(" AND ")} ORDER BY la.literature_id,part,a.asset_id`,
     )

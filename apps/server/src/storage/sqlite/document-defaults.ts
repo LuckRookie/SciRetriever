@@ -1,6 +1,16 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { TextLevel } from "@sciretriever/contracts";
 
+/** For reads with the owning literature and PDF available as la and a.
+ *  The material index finds candidate versions first. The unique
+ *  document_defaults.document_version_id makes the EXISTS test equivalent
+ *  to matching the inner join, including NULL when no default matches.
+ */
+export const DEFAULT_DOCUMENT_LEFT_JOIN = `
+    LEFT JOIN document_versions d ON d.literature_id=la.literature_id
+      AND d.source_asset_id=a.asset_id AND d.source_sha256=a.sha256
+      AND EXISTS(SELECT 1 FROM document_defaults dd WHERE dd.document_version_id=d.document_version_id)`;
+
 export interface DocumentDefaultRequest {
   readonly literature_id: string;
   readonly asset_id: string;

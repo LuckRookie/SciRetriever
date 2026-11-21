@@ -22,6 +22,15 @@ import {
 } from "@sciretriever/contracts";
 import type * as State from "../../literature/state.js";
 import type * as DraftFacts from "./draft-facts.js";
+const { DEFAULT_DOCUMENT_LEFT_JOIN }: typeof import("./document-defaults.js") =
+  await import(
+    new URL(
+      import.meta.url.endsWith(".ts")
+        ? "./document-defaults.ts"
+        : "./document-defaults.js",
+      import.meta.url,
+    ).href
+  );
 const { readDefaultTextFacts }: typeof DraftFacts = await import(
   new URL(
     import.meta.url.endsWith(".ts") ? "./draft-facts.ts" : "./draft-facts.js",
@@ -66,6 +75,55 @@ const rows = (db: DatabaseSync, sql: string, ...args: SQLInputValue[]) =>
 function fail(code: string): never {
   throw Object.assign(new Error("archive storage refused"), { code });
 }
+/** Read the same parts as archive_current_parts starting with the requested
+ *  literature's assets. Keep proofread and draft eligibility in the default
+ *  version's ON clause so an ineligible version still leaves the PDF row.
+ */
+export function readArchiveCurrentParts(
+  db: DatabaseSync,
+  id?: string | readonly string[],
+) {
+  const args = id ? [typeof id === "string" ? id : JSON.stringify(id)] : [];
+  const scope = !id
+    ? ""
+    : typeof id === "string"
+      ? "AND la.literature_id=?"
+      : "AND la.literature_id IN (SELECT value FROM json_each(?))";
+  return rows(
+    db,
+    `SELECT la.literature_id,a.asset_id,a.sha256 AS asset_sha256,
+      CASE WHEN la.role='primary-pdf' THEN 'main' ELSE 'supplementary' END AS part,
+      pc.proofread_id,pv.status AS proofread_status,d.document_version_id,
+      ac.annotation_id,COALESCE(an.structure_satisfied,0) AS structure_satisfied,
+      CASE WHEN d.schema_version=3 THEN json_object('text_level','draft','document_version_id',d.document_version_id)
+        WHEN ac.annotation_id IS NOT NULL THEN json_object('document_version_id',d.document_version_id,'structure_annotation_id',ac.annotation_id)
+        ELSE NULL END AS version_json,
+      d.schema_version AS document_schema_version,
+      (SELECT json_group_array(profile) FROM raw_parse_current r
+        WHERE r.source_asset_id=a.asset_id AND r.source_sha256=a.sha256 AND r.raw_parse_id IS NOT NULL) AS profiles_json
+    FROM literature_assets la JOIN assets a ON a.asset_id=la.asset_id
+    LEFT JOIN proofread_current pc ON pc.part_asset_id=a.asset_id AND pc.part_sha256=a.sha256
+      AND pc.manual_revision=COALESCE((SELECT revision FROM proofread_manual_state WHERE part_asset_id=a.asset_id),0)
+      AND NOT EXISTS(
+        SELECT 1 FROM raw_parse_pins rp JOIN raw_parses r ON r.raw_parse_id=rp.raw_parse_id
+        LEFT JOIN raw_parse_current rc ON rc.source_asset_id=r.source_asset_id AND rc.profile=r.profile
+        WHERE rp.proofread_id=pc.proofread_id AND (rc.raw_parse_id IS NULL OR rc.raw_parse_id!=rp.raw_parse_id))
+    LEFT JOIN proofread_versions pv ON pv.proofread_id=pc.proofread_id
+    ${DEFAULT_DOCUMENT_LEFT_JOIN}
+      AND ((d.schema_version=2 AND d.proofread_content_sha256=pv.content_sha256 AND pv.status='complete')
+        OR (d.schema_version=3 AND EXISTS(
+          SELECT 1 FROM draft_current dc
+          JOIN raw_parses r ON r.raw_parse_id=d.raw_parse_id AND r.result_sha256=d.raw_parse_result_sha256
+          JOIN raw_parse_current rc ON rc.source_asset_id=r.source_asset_id AND rc.source_sha256=r.source_sha256
+            AND rc.profile=r.profile AND rc.raw_parse_id=r.raw_parse_id
+          WHERE dc.document_version_id=d.document_version_id AND dc.part_asset_id=a.asset_id AND dc.part_sha256=a.sha256)))
+    LEFT JOIN structure_annotation_current ac ON ac.document_version_id=d.document_version_id AND d.schema_version=2
+    LEFT JOIN structure_annotations an ON an.annotation_id=ac.annotation_id
+    WHERE la.role IN ('primary-pdf','supplementary-pdf') AND a.media_type='application/pdf' ${scope}
+    ORDER BY part<>'main',a.asset_id`,
+    ...args,
+  );
+}
 export function archiveStates(
   db: DatabaseSync,
   id?: string | readonly string[],
@@ -90,11 +148,7 @@ export function archiveStates(
     : typeof id === "string"
       ? " WHERE literature_id=?"
       : " WHERE literature_id IN (SELECT value FROM json_each(?))";
-  const parts = rows(
-    db,
-    `SELECT p.*,(SELECT d.schema_version FROM document_versions d WHERE d.document_version_id=p.document_version_id) AS document_schema_version,(SELECT json_group_array(profile) FROM raw_parse_current r WHERE r.source_asset_id=p.asset_id AND r.source_sha256=p.asset_sha256 AND r.raw_parse_id IS NOT NULL) AS profiles_json FROM archive_current_parts p${filter} ORDER BY p.part<>'main', p.asset_id`,
-    ...args,
-  );
+  const parts = readArchiveCurrentParts(db, id);
   const defaults = includeDraftFacts
     ? new Map(
         readDefaultTextFacts(
@@ -292,9 +346,16 @@ export function archiveLongDocuments(
 ): Map<string, LongDocumentInfo> {
   const markers = new Map<string, LongDocumentInfo>();
   if (!ids.length) return markers;
+  // The view's main part is the primary PDF link. Its left joins cannot
+  // change which arrangement step supplies the marker for that PDF.
   for (const row of rows(
     db,
-    "SELECT p.literature_id,json_extract(s.output_json,'$.long_document') AS marker FROM archive_current_parts p JOIN archive_steps s ON s.literature_id=p.literature_id AND s.asset_id=p.asset_id AND s.step='arrange' WHERE p.part='main' AND p.literature_id IN (SELECT value FROM json_each(?)) AND json_type(s.output_json,'$.long_document')='object'",
+    `SELECT la.literature_id,json_extract(s.output_json,'$.long_document') AS marker
+    FROM literature_assets la JOIN assets a ON a.asset_id=la.asset_id
+    JOIN archive_steps s ON s.literature_id=la.literature_id AND s.asset_id=a.asset_id AND s.step='arrange'
+    WHERE la.role='primary-pdf' AND a.media_type='application/pdf'
+      AND la.literature_id IN (SELECT value FROM json_each(?))
+      AND json_type(s.output_json,'$.long_document')='object'`,
     JSON.stringify(ids),
   ))
     markers.set(

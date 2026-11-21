@@ -36,6 +36,7 @@ const { createLogger }: typeof Logging = await import(
   ).href
 );
 const {
+  DEFAULT_DOCUMENT_LEFT_JOIN,
   recomputeDocumentDefault,
   recomputeAssetDocumentDefaults,
 }: typeof Defaults = await import(
@@ -208,7 +209,12 @@ export function runDraftTextRead(db: DatabaseSync, request: DraftTextRead) {
   // in one snapshot without loading Markdown, structures or any artifact.
   return db
     .prepare(
-      "SELECT l.literature_id,a.asset_id,d.document_version_id AS document_version_id,CASE d.schema_version WHEN 3 THEN 'draft' WHEN 2 THEN 'proofread' ELSE NULL END AS text_level FROM json_each(?) requested JOIN literatures l ON l.literature_id=requested.value LEFT JOIN literature_assets la ON la.literature_id=l.literature_id AND la.role='primary-pdf' LEFT JOIN assets a ON a.asset_id=la.asset_id AND a.media_type='application/pdf' LEFT JOIN (document_defaults dd JOIN document_versions d ON d.document_version_id=dd.document_version_id) ON d.literature_id=l.literature_id AND d.source_asset_id=a.asset_id AND d.source_sha256=a.sha256 ORDER BY l.literature_id",
+      `SELECT l.literature_id,a.asset_id,d.document_version_id AS document_version_id,CASE d.schema_version WHEN 3 THEN 'draft' WHEN 2 THEN 'proofread' ELSE NULL END AS text_level
+      FROM json_each(?) requested JOIN literatures l ON l.literature_id=requested.value
+      LEFT JOIN literature_assets la ON la.literature_id=l.literature_id AND la.role='primary-pdf'
+      LEFT JOIN assets a ON a.asset_id=la.asset_id AND a.media_type='application/pdf'
+      ${DEFAULT_DOCUMENT_LEFT_JOIN}
+      ORDER BY l.literature_id`,
     )
     .all(JSON.stringify([...new Set(request.literature_ids)]));
 }
