@@ -8,6 +8,7 @@ import {
   parseLiterature,
   parseMetadataObservation,
   parseLibraryCounts,
+  parseLibraryExactCount,
 } from "@sciretriever/contracts";
 import {
   createApplication,
@@ -157,6 +158,46 @@ it(
       expect((result.structuredContent as { result: unknown }).result).toEqual(
         expected,
       );
+      const exact = { kind: "counts", ...request };
+      const http = await fetch(
+        web.origin + "/api/v1/query/library-exact-count",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ protocol_version: 1, request: exact }),
+        },
+      );
+      expect(http.status).toBe(200);
+      const explicit = await runCli(
+        ["literature", "exact-count", "--request", "-", "--json"],
+        {
+          home,
+          stdin: (async function* () {
+            yield Buffer.from(JSON.stringify(exact));
+          })(),
+          stdout: () => {},
+          stderr: (s) => errors.push(s),
+        },
+      );
+      expect(explicit.code, errors.join("\n")).toBe(0);
+      const resultExact = await client.callTool({
+        name: "library_exact_count",
+        arguments: exact,
+      });
+      expect(resultExact.isError).not.toBe(true);
+      for (const transport of [
+        await http.json(),
+        explicit.value,
+        resultExact.structuredContent,
+      ]) {
+        expect(
+          parseLibraryExactCount((transport as { result: unknown }).result),
+        ).toMatchObject({
+          kind: "counts",
+          snapshot_at: expect.any(String),
+          counts: expected,
+        });
+      }
     } finally {
       await client.close();
       await mcp.close();

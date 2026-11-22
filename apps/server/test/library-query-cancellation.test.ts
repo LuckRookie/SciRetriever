@@ -103,7 +103,7 @@ it(
   },
 );
 
-it.each(["search", "library-counts"])(
+it.each(["search", "library-counts", "library-exact-count"])(
   "propagates an HTTP disconnect through %s to the query signal",
   { timeout: 0 },
   async (route) => {
@@ -122,7 +122,12 @@ it.each(["search", "library-counts"])(
     const end = new Promise<void>((r) => {
       ended = r;
     });
-    const method = route === "search" ? "search" : "counts";
+    const method =
+      route === "search"
+        ? "search"
+        : route === "library-counts"
+          ? "counts"
+          : "exactCount";
     const spy = vi
       .spyOn(app.query, method)
       .mockImplementation(async (...[, signal]) => {
@@ -145,7 +150,13 @@ it.each(["search", "library-counts"])(
       const pending = fetch(web.origin + "/api/v1/query/" + route, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ protocol_version: 1, request: { query: {} } }),
+        body: JSON.stringify({
+          protocol_version: 1,
+          request:
+            route === "library-exact-count"
+              ? { kind: "counts", query: {} }
+              : { query: {} },
+        }),
         signal: controller.signal,
       }).catch((e) => e);
       await begin;

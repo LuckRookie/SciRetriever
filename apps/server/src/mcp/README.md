@@ -14,7 +14,7 @@
 
 `search_library` 接受完整的 LibraryQuery，包括主 PDF 默认文本的等级和初稿事实筛选、四种事实降序及分页；`read_literature` 返回主 PDF 事实与各 PDF 的 `default_text`，`archive_query` 在各部分返回同一默认版本的事实。读取这些计数只查 catalog，不形成初稿或启动校订。
 
-`library_counts` 的 full_text 按论文统计取得、未取得与其中已试完的数量；statuses、with_primary_pdf 按版本。它忽略 statuses、needs_manual_pdf 的当前选择，保留其它条件；has_primary_pdf 按版本筛选。全部数字来自同一只读快照，不启动获取或任务。
+`library_counts` 的 full_text 按论文统计取得、未取得与其中已试完的数量；statuses、with_primary_pdf 按版本。它忽略 statuses、needs_manual_pdf 的当前选择，保留其它条件；has_primary_pdf 按版本筛选。全部数字来自同一只读快照。筛选计数超过一万个版本时带 `count_truncated`。用 `library_exact_count` 在长请求道计算精确聚合、分面或列表总数，响应带 `snapshot_at`。
 
 HTTP `/mcp` 每次请求重新验证设备连接，协议 session ID 绑定 connection_id。read 与 operate 不互相隐含；配置、凭据、设备管理、Browser/runtime 控制以及书目/PDF 输入不经此传输。入库输入走相邻的 `workbench/import-http.ts`，`intake_batch_status` 和 `intake_batch_report` 两端共用只读批次服务。HTTP 请求上下文在交 SDK 前移除认证与非协议头；操作身份为 `mcp:device:<connection_id>`。
 

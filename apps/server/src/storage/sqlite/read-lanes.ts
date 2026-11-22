@@ -33,6 +33,7 @@ export const SQLITE_READ_LANES = {
       "library_search_page.page",
       "library_search_page.state-filter",
       "library_state_pending",
+      "library_counts.global",
       "library_snapshot.ids",
       "intake_withdrawn",
       "intake_withdrawal_read.read",
@@ -138,6 +139,7 @@ export const SQLITE_READ_LANES = {
       "begin_read_snapshot",
       "snapshot_counts",
       "library_counts",
+      "library_exact_count",
       "library_facets",
       "library_search_page.selection",
       "library_search_page.state-fallback",
@@ -220,6 +222,8 @@ export function sqliteReadRequest(command: SqliteCommand) {
 
 function readOperation(c: SqliteCommand): string {
   switch (c.kind) {
+    case "library_counts":
+      return c.counterRead === "defer" ? "library_counts.global" : c.kind;
     case "import_read":
       return c.action.op === "items-read"
         ? `${c.kind}.items-read.${c.action.query.kind}`

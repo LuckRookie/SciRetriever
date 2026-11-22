@@ -19,6 +19,8 @@ const {
 );
 const { visibleLiteratureSql }: typeof import("./intake-visibility.js") =
   await import(new URL("./intake-visibility" + suffix, import.meta.url).href);
+const { LibraryCountStore }: typeof import("./library-count-store.js") =
+  await import(new URL("./library-count-store" + suffix, import.meta.url).href);
 
 export const LIBRARY_STATE_BATCH_SIZE = 256;
 export interface StateSettings {
@@ -87,6 +89,7 @@ export class StoredLibraryState {
   private readonly db: DatabaseSync;
   private readonly initial: StateSettings;
   private readonly checkpoint: () => void;
+  readonly counts: InstanceType<typeof LibraryCountStore>;
 
   constructor(
     db: DatabaseSync,
@@ -96,6 +99,7 @@ export class StoredLibraryState {
     this.db = db;
     this.initial = initial;
     this.checkpoint = checkpoint;
+    this.counts = new LibraryCountStore(db);
     states.set(db, this);
     db.function(
       "sr_derive_status",
@@ -131,6 +135,7 @@ export class StoredLibraryState {
         generation=generation+1,max_tags=excluded.max_tags,archive_profile=excluded.archive_profile,after_id='',ready=0
       WHERE max_tags<>excluded.max_tags OR archive_profile<>excluded.archive_profile`,
     ).run(settings.max_tags, settings.archive_profile);
+    this.counts.configure();
   }
 
   registerWrites() {
@@ -140,17 +145,37 @@ export class StoredLibraryState {
           "SELECT coalesce(max(position),0) AS position FROM library_state_dirty",
         ).get()!.position,
       );
+      const countPosition = this.counts.position();
       if (!this.progress()) this.configure();
+      else if (!this.counts.configured()) this.counts.configure();
       return () => {
         const progress = this.progress()!;
         for (;;) {
           const ids = this.dirtyIds(position);
-          if (!ids.length) break;
-          this.writeStates(ids, progress);
-          this.clearDirty(ids);
+          if (ids.length) this.writeStates(ids, progress);
+          const counted = this.counts.update(
+            ids,
+            countPosition,
+            LIBRARY_STATE_BATCH_SIZE,
+          );
+          if (ids.length) this.clearDirty(ids);
+          if (
+            ids.length < LIBRARY_STATE_BATCH_SIZE &&
+            counted < LIBRARY_STATE_BATCH_SIZE
+          )
+            break;
         }
       };
     });
+  }
+
+  countsReady(plan = this.readPlan()) {
+    return (
+      plan.indexed &&
+      plan.collectionReady &&
+      !this.counts.backfillPending &&
+      this.counts.position() === 0
+    );
   }
 
   readPlan() {
@@ -268,6 +293,7 @@ export class StoredLibraryState {
   /** One write transaction under catalog admission. Both cursors survive restart. */
   refreshBatch() {
     if (!this.progress()) this.configure();
+    else if (!this.counts.configured()) this.counts.configure();
     const p = this.progress()!;
     const dirty = this.dirtyIds(0);
     if (dirty.length) {
@@ -290,16 +316,23 @@ export class StoredLibraryState {
           LEFT JOIN literature_intake li ON li.literature_id=l.literature_id
           WHERE ${historicalCollectionSql("l.literature_id")} ON CONFLICT(literature_id) DO NOTHING`,
         ).run(JSON.stringify(ids));
+      // During the first backfill the count cursor will visit these papers
+      // after state and historical collection are complete. On a settings
+      // change, repair any previously counted papers in this transaction.
+      if (p.collection_ready)
+        this.counts.update(ids, 0, LIBRARY_STATE_BATCH_SIZE);
       const done = ids.length < LIBRARY_STATE_BATCH_SIZE ? 1 : 0;
       this.statement(
         "UPDATE library_state_progress SET after_id=?,ready=?,collection_ready=max(collection_ready,?) WHERE singleton=1",
       ).run(ids.at(-1) ?? p.after_id, done, done);
     }
+    this.counts.update(dirty, 0, LIBRARY_STATE_BATCH_SIZE);
+    if (p.ready && p.collection_ready)
+      this.counts.backfill(LIBRARY_STATE_BATCH_SIZE);
     return {
       rebuilt,
       repaired: dirty.length,
-      more:
-        this.readPlan().updating || dirty.length === LIBRARY_STATE_BATCH_SIZE,
+      more: !this.countsReady(),
     };
   }
 }

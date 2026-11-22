@@ -12,7 +12,7 @@
 - [worker-runtime.ts](worker-runtime.ts)：SQLite worker 运行实现。
 - [citation-progress.ts](citation-progress.ts) 将引用扩展的待查队列、原因去重、待补查队列和未完成查询的回放键放入临时 SQLite。持久来源为业务事务同写的 `citation-write-checkpoint`，恢复按事件序号每页取 32 条，执行按索引取各队列的最早待查项。原因事实按页送回同一个发布事务，catalog 结构沿用原版。
 - [literature-search-rows.ts](literature-search-rows.ts) 使用内容表的 `c0` 覆盖索引按文献 ID 找到书目 FTS 的 rowid，供改写和撤回使用。FTS5 内部内容表的文件格式规定 `id` 为 rowid，`c0` 为第一个声明列，此处是 `literature_id`。SQLite 随每次 FTS 写入维护该索引。
-- [literature-search-schema-migration.ts](literature-search-schema-migration.ts) 为三个旧结构 19 指纹提供同一加法迁移，按原指纹补齐入库索引、检索变更日志和文献状态存储。需要补齐检索水位时，用迁移入口的 `--reconcile` 显式比对并登记旧索引差异，再由索引刷新消费日志。迁移只安装文献状态结构，应用启动后按批回填。
+- [literature-search-schema-migration.ts](literature-search-schema-migration.ts) 接受四个旧结构 19 指纹，按原指纹补齐入库索引、检索变更日志、文献状态和计数器。需要补齐检索水位时，用迁移入口的 `--reconcile` 显式比对并登记旧索引差异，再由索引刷新消费日志。应用启动后在有界事务中续做状态和计数回填。
 - [library-state.ts](library-state.ts) 保存在写事务中计算的文献状态和缺失步骤、选用记录以及回填游标。SQLite 触发器为其他写入者记录受影响的 Literature ID，后台以短事务核对。读取在同一快照内优先使用当前代的存储值，回填和后台核对期间按篇现算缺少或已改变的值。
 - [draft-text-engine.ts](draft-text-engine.ts)：初稿版本、资源闭包、不可变计数、当前指针及默认关系的同事务登记；按版本读事实、按本页文献批量读主 PDF 默认版本与等级。补形成候选共用文献库筛选和排序，在同一只读快照返回 PDF 部分、当前部署/历史 Markdown raw、指定 raw 的既有初稿 ID 和当前初稿方法；不读取正文或其它文件，业务跳过、limit 与任务冻结由应用层决定。
 - [document-defaults.ts](document-defaults.ts)：原始解析当前切换、初稿登记与校订发布事务内按独立 CAS 重求默认文本，优先有效完整校订稿，再选有效当前初稿，否则删除默认关系。校订发布可提名刚登记的版本，仍复检当前校订内容、人工 revision 和原始解析 pin；相同校订内容的等价方法版本可以复用固定表示。没有提名时保留仍有效的默认表示。资产当前指针切换同时重求其全部文献关系；读取不重求。
@@ -68,6 +68,10 @@
 本地连接需要复用状态时，`library-state-cache.ts` 使用只读事务中的完整状态映射，键包含 catalog 文件身份、SQLite `schema_version`、标签上限和部署解析 profile。事务内触发器维护 `library_state_revision` 与按篇的 `library_state_changes`，少量已定位变更只重新读取并推导对应文献；未知归属、大批量、身份或配置变化退回全量。不同连接独立记录已消费水位，不删除其它连接仍需的提示；删除文献保留失效 tombstone。候选 Map 和水位同时发布，取消或失败不改旧 Map。
 
 状态输入包括：文献与元数据完整性、作者存在性、文献资产角色与 PDF 类型/hash、当前原始解析与 pin、校订版本/当前指针/人工 revision、固定文档与默认指针、结构注释及当前指针、建档 run 与对应 job 状态、步骤、问题处置、标签数量和描述头。完整表集合与 INSERT/UPDATE/DELETE 触发器由 `schema.ts` 的 `LIBRARY_STATE_INPUT_TABLES` 定义。获取失败记录不改变六态，仍在每次计数/筛选的同一快照中读取；阅读历史和文件夹不改变状态缓存版本。结果引用不改变六态，但会改变初稿事实：`library-state-cache.ts` 在同一快照按版本索引比较各篇 PDF 默认初稿的事实摘要，只失效事实变化的文献；不在结果发布事务或冻结结构中另加触发器。内部仅推导就绪状态时不重复聚合事实。
+
+[library-count-store.ts](library-count-store.ts) 按 MetaLiterature 保存全库与收进来范围的贡献，状态提交钩子在同一事务内把差额计入两个汇总行。耗尽、撤回、收进来成员和版本移组或删除通过触发器记录受影响论文。旧写入者的提交由状态维护循环按批核对。计数回填与设置重算期间，读取同一快照中的文献事实并带进度标记。最近打开按时间索引最多取 100 个当前版本。
+
+[library-page.ts](library-page.ts) 的普通筛选计数及分面用第 10,001 个匹配判定截断，列表游标保留第一页总数。显式准确数在长请求道持有一个可取消的读快照并返回 `snapshot_at`。批量选择保持全量。
 
 `literature_intake` 是最早关联元数据观测时间的查询投影，保留 `min(julianday(observed_at))` 的 UTC 毫秒语义；无观测时为 null。观测关系、观测的 provenance 和 provenance 时间发生增删改时，在原事务中重新计算受影响文献；索引按时间降序、文献 ID 升序排列。`library-page.ts` 的入库排序直接使用索引，null 在末尾，其它排序继续保持原游标语义。已有 catalog 必须在停服后的副本上显式追加结构并执行 `LIBRARY_INTAKE_BACKFILL_SQL`，启动和查询不自动迁移。
 

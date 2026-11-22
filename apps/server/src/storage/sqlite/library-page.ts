@@ -21,6 +21,8 @@ import {
   LITERATURE_STATUSES,
   normalizedTagName,
   draftSortFields,
+  globalLibraryCountScope,
+  LIBRARY_COUNT_LIMIT,
   RELEVANCE_RESULT_LIMIT,
 } from "@sciretriever/contracts";
 import type * as DraftFacts from "./draft-facts.js";
@@ -31,10 +33,18 @@ const { PRIMARY_TEXT_LEVEL_SQL, primaryDraftFactSql }: typeof DraftFacts =
       import.meta.url,
     ).href
   );
-import type { LibraryFacets, LibraryQuery } from "@sciretriever/contracts";
+import type {
+  LibraryCounts,
+  LibraryFacets,
+  LibraryQuery,
+  LibrarySearchTotal,
+} from "@sciretriever/contracts";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import type { LibraryPageQuery } from "../../literature/query.js";
-const { fullTextCounts }: typeof import("./full-text-counts.js") = await import(
+const {
+  fullTextCountsFromRow,
+  fullTextCountsProjection,
+}: typeof import("./full-text-counts.js") = await import(
   new URL(
     import.meta.url.endsWith(".ts")
       ? "./full-text-counts.ts"
@@ -54,13 +64,21 @@ const {
   ).href
 );
 
-const HAS_PRIMARY_PDF_SQL = `EXISTS(SELECT 1 FROM literature_assets pdf WHERE pdf.literature_id=l.literature_id AND pdf.role='primary-pdf' AND ${visibleObjectSql("literature-asset", "pdf.literature_asset_id")})`;
-
+const {
+  HAS_PRIMARY_PDF_SQL,
+  HAS_EXHAUSTION_SQL,
+}: typeof import("./library-count-store.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./library-count-store.ts"
+      : "./library-count-store.js",
+    import.meta.url,
+  ).href
+);
 export const OPENED_SQL =
   "(SELECT last_opened_at FROM reading_history h WHERE h.literature_id=l.literature_id)";
-export const RECENT_CUTOFF_SQL =
-  "strftime('%Y-%m-%dT%H:%M:%fZ','now','-30 days')";
-const RECENT_SQL = `${OPENED_SQL} >= ${RECENT_CUTOFF_SQL}`;
+const recentCutoffAt = (at: number) =>
+  new Date(at - 30 * 86_400_000).toISOString();
 /** Earliest known observation, not publication date or the last metadata refresh. */
 export const INTAKE_SQL =
   "(SELECT intake_at FROM literature_intake WHERE literature_id=l.literature_id)";
@@ -77,9 +95,11 @@ function libraryFilter(
   db: DatabaseSync,
   q: LibraryQuery,
   ftsQuery: string | null,
-  intakeOrder = false,
-  metaIds?: readonly string[],
-  countStatuses = false,
+  {
+    intakeOrder = false,
+    countStatuses = false,
+    recentCutoff = recentCutoffAt(Date.now()),
+  } = {},
 ) {
   const state = storedLibraryState(db).readPlan();
   const statusNeeded =
@@ -102,7 +122,7 @@ function libraryFilter(
       "sr_query_continue()",
       visibleLiteratureSql("l.literature_id"),
     ],
-    args: SQLInputValue[] = metaIds ? [JSON.stringify(metaIds)] : [];
+    args: SQLInputValue[] = [];
   const add = (sql: string, ...values: SQLInputValue[]) => {
     terms.push(sql);
     args.push(...values);
@@ -164,11 +184,9 @@ function libraryFilter(
     );
   any(status, q.statuses);
   any(missing, q.missing_steps);
-  const exhaustion =
-    "EXISTS(SELECT 1 FROM automatic_pdf_acquisition_exhaustions ex WHERE ex.literature_id=l.literature_id)";
   if (q.needs_manual_pdf === true)
-    add(`(${exhaustion} AND ${status}='UNREVIEWED')`);
-  if (q.needs_manual_pdf === false) add(`NOT ${exhaustion}`);
+    add(`(${HAS_EXHAUSTION_SQL} AND ${status}='UNREVIEWED')`);
+  if (q.needs_manual_pdf === false) add(`NOT ${HAS_EXHAUSTION_SQL}`);
   if (typeof q.has_primary_pdf === "boolean")
     add(`${HAS_PRIMARY_PDF_SQL} = ?`, Number(q.has_primary_pdf));
   if (q.discovery_run_ids.length) {
@@ -194,7 +212,7 @@ function libraryFilter(
       q.folder.id,
     );
   }
-  if (q.recently_opened) add(RECENT_SQL);
+  if (q.recently_opened) add(`${OPENED_SQL} >= ?`, recentCutoff);
   if (typeof q.needs_metadata === "boolean")
     add(
       `EXISTS(SELECT 1 FROM literature_needs_metadata n WHERE n.literature_id=l.literature_id) = ?`,
@@ -210,10 +228,10 @@ function libraryFilter(
     if (typeof q[key] === "boolean")
       add(`${primaryDraftFactSql(field)} ${q[key] ? ">" : "="} 0`);
   }
-  if (ftsQuery !== null) add("literature_search_fts MATCH ?", ftsQuery);
-  const base = metaIds
-    ? "json_each(?) scope CROSS JOIN literatures l ON l.meta_literature_id=scope.value"
-    : "literatures l";
+  if (ftsQuery === "") {
+    add("0");
+    ftsQuery = null;
+  } else if (ftsQuery !== null) add("literature_search_fts MATCH ?", ftsQuery);
   const metadata =
     "JOIN literature_metadata m ON m.literature_id=l.literature_id";
   const stored =
@@ -230,7 +248,7 @@ function libraryFilter(
   // covering ID indexes instead of forcing a lookup per row in intake order.
   const intakeJoin =
     "JOIN literature_intake li ON l.literature_id=li.literature_id";
-  const from = `FROM ${base} ${metadata} ${stateJoins} ${collectionJoin} ${
+  const from = `FROM literatures l ${metadata} ${stateJoins} ${collectionJoin} ${
     intakeOrder
       ? intakeJoin
       : ftsQuery === null
@@ -269,78 +287,200 @@ function libraryFilter(
     status,
     intakeSource,
     updating: state.updating,
+    collectionReady: state.collectionReady,
   };
 }
+function countsFromTotals(
+  db: DatabaseSync,
+  scope: "all" | "collected",
+  cutoff: string,
+): LibraryCounts {
+  const store = storedLibraryState(db).counts;
+  const row = store.read(scope);
+  const recentlyOpened = db
+    .prepare(
+      `SELECT count(*) AS n FROM (
+      SELECT 1 FROM reading_history h
+      WHERE h.last_opened_at>=? AND sr_query_continue()
+      AND ${visibleLiteratureSql("h.literature_id")}
+      AND EXISTS(SELECT 1 FROM literature_metadata m WHERE m.literature_id=h.literature_id)
+      ${scope === "collected" ? "AND EXISTS(SELECT 1 FROM library_collected c WHERE c.literature_id=h.literature_id)" : ""}
+      ORDER BY h.last_opened_at DESC LIMIT 100
+    )`,
+    )
+    .get(cutoff)!;
+  const total = row.versions;
+  const collected = scope === "all" ? store.read("collected").versions : total;
+  return {
+    total,
+    ...(scope === "all"
+      ? { collection_counts: { collected, discovered_only: total - collected } }
+      : {}),
+    recently_opened: Number(recentlyOpened.n),
+    statuses: Object.fromEntries(
+      LITERATURE_STATUSES.map((s) => [
+        s,
+        row[s.toLowerCase() as Lowercase<typeof s>],
+      ]),
+    ) as LibraryCounts["statuses"],
+    unavailable_pdf: row.unavailable_pdf,
+    with_primary_pdf: row.with_primary_pdf,
+    full_text: fullTextCountsFromRow({
+      total: row.papers,
+      obtained: row.obtained,
+      exhausted: row.exhausted,
+    }),
+  };
+}
+
 export function libraryCounts(
   db: DatabaseSync,
   query: LibraryQuery,
   ftsQuery: string | null,
-  metaIds?: readonly string[],
-  recentCutoff?: string,
-) {
+  exact = false,
+  at = Date.now(),
+): LibraryCounts {
   // Quick-filter counts ignore both quick selections, but retain all other facets.
-  const { from, where, args, status, updating } = libraryFilter(
-    db,
-    { ...query, statuses: [], needs_manual_pdf: null },
-    ftsQuery,
-    false,
-    metaIds,
+  const q = { ...query, statuses: [], needs_manual_pdf: null };
+  const scope = ftsQuery === null ? globalLibraryCountScope(q) : null;
+  const state = storedLibraryState(db);
+  const recentCutoff = recentCutoffAt(at);
+  if (scope && state.countsReady())
+    return countsFromTotals(db, scope, recentCutoff);
+  const bounded = !exact && scope === null;
+  const { from, where, args, status, updating, collectionReady } =
+    libraryFilter(db, q, ftsQuery, { countStatuses: true, recentCutoff });
+  const matching = `SELECT l.literature_id,${status} AS status ${from} ${where}`;
+  const sample = bounded
+    ? `window AS MATERIALIZED (${matching} LIMIT ${LIBRARY_COUNT_LIMIT + 1}),
+       matches AS MATERIALIZED (SELECT * FROM window LIMIT ${LIBRARY_COUNT_LIMIT})`
+    : `matches AS MATERIALIZED (${matching})`;
+  const paper = fullTextCountsProjection(
+    "SELECT literature_id FROM matches",
+    undefined,
     true,
   );
-  const rows = db
+  const collectedSql = `EXISTS(SELECT 1 FROM library_collected c WHERE c.literature_id=l.literature_id)
+    ${collectionReady ? "" : `OR ${historicalCollectionSql("l.literature_id")}`}`;
+  const row = db
     .prepare(
-      `SELECT ${status} AS status,count(*) AS count,
-        sum(${status}='UNREVIEWED' AND EXISTS(SELECT 1 FROM automatic_pdf_acquisition_exhaustions ex WHERE ex.literature_id=l.literature_id)) AS unavailable,
-        sum(${HAS_PRIMARY_PDF_SQL}) AS with_pdf ${from} ${where} GROUP BY ${status}`,
+      `WITH ${sample}, ${paper.cte},
+      version_counts AS (
+        SELECT count(*) AS versions,
+          min(100,coalesce(sum(${OPENED_SQL}>=?),0)) AS recently_opened,
+          coalesce(sum(matches.status='UNREVIEWED' AND ${HAS_EXHAUSTION_SQL}),0) AS unavailable_pdf,
+          coalesce(sum(${HAS_PRIMARY_PDF_SQL}),0) AS with_primary_pdf,
+          ${scope === "all" ? `coalesce(sum(${collectedSql}),0) AS collected,` : ""}
+          ${LITERATURE_STATUSES.map((s) => `coalesce(sum(matches.status='${s}'),0) AS ${s.toLowerCase()}`).join(",")}
+        FROM matches CROSS JOIN literatures l USING(literature_id) WHERE sr_query_continue()
+      ), paper_counts AS (SELECT ${paper.columns})
+     SELECT v.*, p.total AS papers, p.obtained, p.exhausted
+       ${bounded ? `, (SELECT count(*)>${LIBRARY_COUNT_LIMIT} FROM window) AS truncated` : ""}
+     FROM version_counts v CROSS JOIN paper_counts p`,
     )
-    .all(...args);
-  const statuses = Object.fromEntries(LITERATURE_STATUSES.map((s) => [s, 0]));
-  let total = 0,
-    unavailable_pdf = 0,
-    with_primary_pdf = 0;
-  for (const row of rows) {
-    if (!Object.hasOwn(statuses, String(row.status)))
-      throw new Error("invalid library status");
-    statuses[String(row.status)] = Number(row.count);
-    total += Number(row.count);
-    unavailable_pdf += Number(row.unavailable);
-    with_primary_pdf += Number(row.with_pdf);
-  }
-  const recent = db
-    .prepare(
-      `SELECT count(*) AS n ${from} ${where ? where + " AND " : "WHERE "} ${recentCutoff === undefined ? RECENT_SQL : `${OPENED_SQL} >= ?`}`,
-    )
-    .get(...args, ...(recentCutoff === undefined ? [] : [recentCutoff]))!;
+    .get(...args, recentCutoff)!;
+  const total = Number(row.versions);
   return {
-    ...(updating ? { status_updating: true as const } : {}),
+    ...countReadFlags(state, updating),
+    ...(row.truncated ? { count_truncated: true as const } : {}),
+    ...(scope === "all"
+      ? {
+          collection_counts: {
+            collected: Number(row.collected),
+            discovered_only: total - Number(row.collected),
+          },
+        }
+      : {}),
     total,
-    statuses,
-    unavailable_pdf,
-    recently_opened: Math.min(100, Number(recent.n)),
-    with_primary_pdf,
-    full_text: fullTextCounts(db, {
-      sql: `SELECT l.literature_id ${from} ${where}`,
-      parameters: args,
+    recently_opened: Number(row.recently_opened),
+    statuses: Object.fromEntries(
+      LITERATURE_STATUSES.map((s) => [s, Number(row[s.toLowerCase()])]),
+    ) as LibraryCounts["statuses"],
+    unavailable_pdf: Number(row.unavailable_pdf),
+    with_primary_pdf: Number(row.with_primary_pdf),
+    full_text: fullTextCountsFromRow({
+      total: row.papers,
+      obtained: row.obtained,
+      exhausted: row.exhausted,
     }),
   };
 }
-export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
-  const { query: q, sort, after, limit, ftsQuery } = request;
-  const { from, orderedFrom, where, args, tagIds, intakeSource, updating } =
-    libraryFilter(db, q, ftsQuery, sort === "intake-desc" && ftsQuery === null);
+
+function countReadFlags(
+  state: ReturnType<typeof storedLibraryState>,
+  updating: boolean,
+) {
+  return {
+    ...(updating ? { status_updating: true as const } : {}),
+    ...(state.counts.backfillPending
+      ? { counts_backfill_pending: true as const }
+      : {}),
+  };
+}
+
+export function librarySearchTotal(
+  db: DatabaseSync,
+  query: LibraryQuery,
+  ftsQuery: string | null,
+  exact: boolean,
+  filter?: ReturnType<typeof libraryFilter>,
+  at = Date.now(),
+): LibrarySearchTotal {
+  const state = storedLibraryState(db);
+  const scope = ftsQuery === null ? globalLibraryCountScope(query) : null;
+  const matches =
+    filter ??
+    libraryFilter(db, query, ftsQuery, { recentCutoff: recentCutoffAt(at) });
+  const flags = countReadFlags(state, matches.updating);
+  if (scope && state.countsReady())
+    return { total_count: state.counts.read(scope).versions, ...flags };
+  const bounded = !exact && scope === null;
+  const { from, where, args } = matches;
   const counts = db
     .prepare(
-      `SELECT count(*) AS total, count(DISTINCT l.literature_id) AS unique_count ${from} ${where}`,
+      `SELECT count(*) AS total,count(DISTINCT literature_id) AS unique_count
+     FROM (SELECT l.literature_id ${from} ${where} ${bounded ? `LIMIT ${LIBRARY_COUNT_LIMIT + 1}` : ""})`,
     )
     .get(...args)!;
   if (counts.total !== counts.unique_count)
     throw new Error("duplicate library search rows");
+  const total = Number(counts.total);
+  return total > LIBRARY_COUNT_LIMIT && bounded
+    ? { ...flags, total_count: LIBRARY_COUNT_LIMIT, count_truncated: true }
+    : { ...flags, total_count: total };
+}
+
+export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
+  const { query: q, sort, after, limit, ftsQuery } = request;
+  const filter = libraryFilter(db, q, ftsQuery, {
+    intakeOrder: sort === "intake-desc" && ftsQuery === null,
+  });
+  const { from, orderedFrom, where, args, tagIds, intakeSource, updating } =
+    filter;
   const summary = {
-    total_count: Number(counts.total),
-    ...(updating ? { status_updating: true as const } : {}),
+    ...(after?.total && !request.fullRelevance
+      ? { ...after.total, ...countReadFlags(storedLibraryState(db), updating) }
+      : librarySearchTotal(
+          db,
+          q,
+          ftsQuery,
+          request.fullRelevance === true,
+          filter,
+        )),
     ...(tagIds.length
       ? { tag_backfill_pending: tagBackfillPending(db, tagIds, q.tags!.mode) }
       : {}),
+  };
+  const ensureUnique = (
+    rows: Array<Record<string, import("node:sqlite").SQLOutputValue>>,
+  ) => {
+    if (
+      !request.fullRelevance &&
+      ftsQuery !== null &&
+      new Set(rows.map((row) => row.literature_id)).size !== rows.length
+    )
+      throw new Error("duplicate library search rows");
+    return rows;
   };
   const relevance = ftsQuery === null ? "NULL" : "bm25(literature_search_fts)";
   if (sort === "relevance" && !request.fullRelevance) {
@@ -362,7 +502,7 @@ export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
         limit + 1,
       );
     return {
-      rows,
+      rows: ensureUnique(rows),
       ...summary,
     };
   }
@@ -397,7 +537,7 @@ export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
       )
       .all(...pageArgs, limit + 1);
     return {
-      rows,
+      rows: ensureUnique(rows),
       ...summary,
     };
   }
@@ -433,7 +573,7 @@ export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
       )
       .all(...pageArgs, limit + 1);
     return {
-      rows,
+      rows: ensureUnique(rows),
       ...summary,
     };
   }
@@ -457,7 +597,7 @@ export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
     )
     .all(...pageArgs, limit + 1);
   return {
-    rows,
+    rows: ensureUnique(rows),
     ...summary,
   };
 }
@@ -496,74 +636,30 @@ export function libraryFacets(
   query: LibraryQuery,
   ftsQuery: string | null,
   limit: number,
+  exact = false,
+  at = Date.now(),
 ): LibraryFacets {
-  const unfiltered =
-    ftsQuery === null &&
-    !query.folder &&
-    !query.recently_opened &&
-    !query.tags?.ids.length &&
-    Object.entries(query).every(
-      ([key, value]) =>
-        ["folder", "recently_opened", "tags"].includes(key) ||
-        value === null ||
-        value === undefined ||
-        (Array.isArray(value) && value.length === 0),
-    );
-  const wholeCount = () =>
-    Number(
-      db
-        .prepare(
-          `SELECT count(*) AS n FROM literature_metadata WHERE ${visibleLiteratureSql("literature_metadata.literature_id")}`,
-        )
-        .get()!.n,
-    );
-  const aggregateWhole = (total: number) => {
-    const coverage = db
-      .prepare(
-        `SELECT (SELECT count(DISTINCT literature_id) FROM literature_tag_items WHERE ${visibleLiteratureSql("literature_tag_items.literature_id")}) AS tags,(SELECT count(DISTINCT literature_id) FROM literature_metadata_keywords WHERE ${visibleLiteratureSql("literature_metadata_keywords.literature_id")}) AS keywords,(SELECT count(DISTINCT literature_id) FROM literature_metadata_subject_terms WHERE ${visibleLiteratureSql("literature_metadata_subject_terms.literature_id")}) AS subject_terms`,
-      )
-      .get() as { tags: number; keywords: number; subject_terms: number };
-    const tags = db
-      .prepare(
-        `SELECT c.tag_id,${TAG_DISPLAY_NAME} AS value,c.count FROM (SELECT tag_id,count(DISTINCT literature_id) AS count FROM literature_tag_items WHERE ${visibleLiteratureSql("literature_tag_items.literature_id")} GROUP BY tag_id) c JOIN tags t ON t.tag_id=c.tag_id WHERE t.status='active' ORDER BY c.count DESC,value COLLATE BINARY ASC,c.tag_id LIMIT ?`,
-      )
-      .all(limit) as Array<LibraryFacets["tags"][number]>;
-    const keywords = db
-      .prepare(
-        `SELECT min(keyword) AS value,count(DISTINCT literature_id) AS count FROM literature_metadata_keywords WHERE ${visibleLiteratureSql("literature_metadata_keywords.literature_id")} GROUP BY sr_normalize(keyword) ORDER BY count DESC,value COLLATE BINARY ASC LIMIT ?`,
-      )
-      .all(limit) as { value: string; count: number }[];
-    // A normalized subject term is unique within one paper. Its covering
-    // index permits a single ordered aggregate without materializing all IDs.
-    const subject_terms = db
-      .prepare(
-        `SELECT min(term) AS value,count(*) AS count FROM literature_metadata_subject_terms INDEXED BY literature_subject_terms_normalized WHERE ${visibleLiteratureSql("literature_metadata_subject_terms.literature_id")} GROUP BY normalized_term ORDER BY count DESC,value COLLATE BINARY ASC LIMIT ?`,
-      )
-      .all(limit) as { value: string; count: number }[];
-    return {
-      total,
-      coverage,
-      tags,
-      keywords: keywordTags(db, keywords),
-      subject_terms,
-    };
-  };
-  if (unfiltered) return aggregateWhole(wholeCount());
-  const { from, where, args } = libraryFilter(db, query, ftsQuery);
-  const match = `SELECT l.literature_id ${from} ${where}`;
-  const total = Number(
-    db.prepare(`SELECT count(*) AS n FROM (${match})`).get(...args)!.n,
-  );
-  if (total === wholeCount()) return aggregateWhole(total);
+  const state = storedLibraryState(db);
+  const scope = ftsQuery === null ? globalLibraryCountScope(query) : null;
+  const filter = libraryFilter(db, query, ftsQuery, {
+    recentCutoff: recentCutoffAt(at),
+  });
+  const { from, where, args, updating } = filter;
+  const matching = `SELECT l.literature_id ${from} ${where}`;
+  const sample = exact
+    ? `matches AS MATERIALIZED (${matching})`
+    : `window AS MATERIALIZED (${matching} LIMIT ${LIBRARY_COUNT_LIMIT + 1}),
+       matches AS MATERIALIZED (SELECT * FROM window LIMIT ${LIBRARY_COUNT_LIMIT})`;
   // Share the filtered membership and layer rows between coverage and top terms.
   // All fields are read in the caller's one SQLite snapshot, without loading details.
   const result = db
     .prepare(
-      `WITH matches AS MATERIALIZED (${match}),
-      scope_tags AS MATERIALIZED (SELECT i.literature_id,i.tag_id FROM literature_tag_items i JOIN matches m USING(literature_id)),
-      scope_keywords AS MATERIALIZED (SELECT k.literature_id,k.keyword FROM literature_metadata_keywords k JOIN matches m USING(literature_id)),
-      scope_subjects AS MATERIALIZED (SELECT s.literature_id,s.term,s.normalized_term FROM literature_metadata_subject_terms s JOIN matches m USING(literature_id))
+      `WITH ${sample},
+      scope_tags AS MATERIALIZED (SELECT i.literature_id,i.tag_id FROM matches m CROSS JOIN literature_tag_items i USING(literature_id) WHERE sr_query_continue()),
+      scope_keywords AS MATERIALIZED (SELECT k.literature_id,k.keyword FROM matches m CROSS JOIN literature_metadata_keywords k USING(literature_id) WHERE sr_query_continue()),
+      scope_subjects AS MATERIALIZED (SELECT s.literature_id,s.term,s.normalized_term FROM matches m CROSS JOIN literature_metadata_subject_terms s USING(literature_id) WHERE sr_query_continue())
     SELECT
+      (SELECT count(*) FROM ${exact ? "matches" : "window"}) AS window_total,
       (SELECT count(DISTINCT literature_id) FROM scope_tags) AS tags_coverage,
       (SELECT count(DISTINCT literature_id) FROM scope_keywords) AS keywords_coverage,
       (SELECT count(DISTINCT literature_id) FROM scope_subjects) AS subjects_coverage,
@@ -578,7 +674,16 @@ export function libraryFacets(
       )) AS subjects_json`,
     )
     .get(...args, limit, limit, limit)!;
+  const windowTotal = Number(result.window_total);
+  const truncated = !exact && windowTotal > LIBRARY_COUNT_LIMIT;
+  let total = truncated ? LIBRARY_COUNT_LIMIT : windowTotal;
+  if (scope && state.countsReady()) total = state.counts.read(scope).versions;
+  else if (scope && truncated)
+    total = librarySearchTotal(db, query, ftsQuery, true, filter).total_count;
   return {
+    ...countReadFlags(state, updating),
+    ...(truncated ? { facets_truncated: true as const } : {}),
+    ...(truncated && !scope ? { count_truncated: true as const } : {}),
     total,
     coverage: {
       tags: Number(result.tags_coverage),
@@ -657,6 +762,7 @@ function selectionIds(
         after: null,
         limit: Number.MAX_SAFE_INTEGER,
         ftsQuery: request.ftsQuery,
+        fullRelevance: true,
       }).rows.map((row) => String(row.literature_id))
     : [...selector.literature_ids];
 }

@@ -64,6 +64,7 @@ it("resumes a bounded backfill, serves the current snapshot, and repairs writes 
     expect((await query.counts({})).statuses.UNREVIEWED).toBe(270);
     await worker.close();
     worker = new SqliteWorker(path);
+    query = new LiteratureQueryService(worker);
     raw
       .prepare(
         "UPDATE literature_metadata SET title='Edited externally' WHERE literature_id=?",
@@ -72,10 +73,21 @@ it("resumes a bounded backfill, serves the current snapshot, and repairs writes 
     expect(await worker.refreshLibraryState()).toMatchObject({
       rebuilt: 14,
       repaired: 1,
+      more: true,
+    });
+    expect(await query.counts({})).toMatchObject({
+      counts_backfill_pending: true,
+      total: 270,
+    });
+    expect(await worker.refreshLibraryState()).toMatchObject({
+      rebuilt: 0,
+      more: true,
+    });
+    expect(await worker.refreshLibraryState()).toMatchObject({
+      rebuilt: 0,
       more: false,
     });
     expect(await worker.libraryStatePending()).toBe(false);
-    query = new LiteratureQueryService(worker);
     expect(await query.counts({})).not.toHaveProperty("status_updating");
     const stored = raw
       .prepare(

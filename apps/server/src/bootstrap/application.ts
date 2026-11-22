@@ -437,6 +437,7 @@ export interface QueryApplication {
     LiteratureQueryService,
     | "search"
     | "counts"
+    | "exactCount"
     | "detail"
     | "references"
     | "referenceDetail"

@@ -1,4 +1,7 @@
-import { PROCESSOR_METHOD_REVISION } from "@sciretriever/contracts";
+import {
+  LITERATURE_STATUSES,
+  PROCESSOR_METHOD_REVISION,
+} from "@sciretriever/contracts";
 import { createHash } from "node:crypto";
 
 // One current catalog layout. This is not a migration ladder or a list of supported historic layouts.
@@ -925,9 +928,85 @@ export const LIBRARY_STORED_STATE_SCHEMA = [
   END`,
 ] as const;
 
-export const SCHEMA_MANIFEST = [
+export const SCHEMA_MANIFEST_V19_STORED_STATES = [
   ...SCHEMA_MANIFEST_V19_RETRIEVAL_CHANGES,
   ...LIBRARY_STORED_STATE_SCHEMA,
+] as const;
+export const SCHEMA_FINGERPRINT_V19_STORED_STATES = createHash("sha256")
+  .update(JSON.stringify(SCHEMA_MANIFEST_V19_STORED_STATES))
+  .digest("hex");
+
+export const LIBRARY_COUNT_COLUMNS = [
+  "versions",
+  "with_primary_pdf",
+  "unavailable_pdf",
+  ...LITERATURE_STATUSES.map(
+    (status) => status.toLowerCase() as Lowercase<typeof status>,
+  ),
+  "papers",
+  "obtained",
+  "exhausted",
+] as const;
+const countColumns = LIBRARY_COUNT_COLUMNS.map(
+  (name) => `${name} INTEGER NOT NULL CHECK(${name}>=0)`,
+).join(",");
+const countScopes = "scope TEXT NOT NULL CHECK(scope IN ('all','collected'))";
+const queueCountOwners = (owners: string) =>
+  `INSERT INTO library_count_dirty(meta_literature_id) SELECT meta_literature_id FROM (${owners}) WHERE true ON CONFLICT(meta_literature_id) DO UPDATE SET position=excluded.position;`;
+const countOwner = (id: string) =>
+  `SELECT meta_literature_id FROM literatures WHERE literature_id=${id}`;
+const withdrawalCountOwner = (row: "old" | "new") =>
+  `${countOwner(`${row}.object_id`)} AND ${row}.object_kind='literature'
+   UNION SELECT l.meta_literature_id FROM literature_assets a JOIN literatures l USING(literature_id)
+   WHERE a.literature_asset_id=${row}.object_id AND a.role='primary-pdf' AND ${row}.object_kind='literature-asset'`;
+const countDirtyTriggers = (
+  table: string,
+  keys: readonly string[],
+  owners: (row: "old" | "new") => string,
+) =>
+  changeEvents.map((event) => {
+    const affected =
+      event === "INSERT"
+        ? owners("new")
+        : event === "DELETE"
+          ? owners("old")
+          : `${owners("old")} UNION ${owners("new")}`;
+    const action = event === "UPDATE" ? `UPDATE OF ${keys.join(",")}` : event;
+    const changed =
+      event === "UPDATE"
+        ? ` WHEN ${keys.map((key) => `old.${key} IS NOT new.${key}`).join(" OR ")}`
+        : "";
+    return `CREATE TRIGGER library_count_${table}_${event.toLowerCase()} AFTER ${action} ON ${table}${changed} BEGIN ${queueCountOwners(affected)} END`;
+  });
+
+export const LIBRARY_COUNT_SCHEMA = [
+  "CREATE TABLE library_count_progress(singleton INTEGER PRIMARY KEY CHECK(singleton=1),after_id TEXT NOT NULL,ready INTEGER NOT NULL CHECK(ready IN (0,1))) STRICT",
+  // Retain the old contribution until it has been subtracted, even after deletion.
+  `CREATE TABLE library_count_contributions(meta_literature_id TEXT NOT NULL,${countScopes},${countColumns},PRIMARY KEY(meta_literature_id,scope)) STRICT, WITHOUT ROWID`,
+  `CREATE TABLE library_count_totals(${countScopes} PRIMARY KEY,${countColumns}) STRICT, WITHOUT ROWID`,
+  "CREATE TABLE library_count_dirty(position INTEGER PRIMARY KEY,meta_literature_id TEXT NOT NULL UNIQUE) STRICT",
+  ...["automatic_pdf_acquisition_exhaustions", "library_collected"].flatMap(
+    (table) =>
+      countDirtyTriggers(table, ["literature_id"], (row) =>
+        countOwner(`${row}.literature_id`),
+      ),
+  ),
+  ...countDirtyTriggers(
+    "intake_withdrawn_objects",
+    ["object_kind", "object_id"],
+    withdrawalCountOwner,
+  ),
+  // A state invalidation identifies the current owner. Capture the previous
+  // paper too, including replacements that bypass SQLite's DELETE triggers.
+  `CREATE TRIGGER library_count_literatures_delete AFTER DELETE ON literatures BEGIN ${queueCountOwners("SELECT old.meta_literature_id AS meta_literature_id")} END`,
+  `CREATE TRIGGER library_count_literatures_move AFTER UPDATE OF meta_literature_id ON literatures WHEN old.meta_literature_id<>new.meta_literature_id BEGIN ${queueCountOwners("SELECT old.meta_literature_id AS meta_literature_id")} END`,
+  `CREATE TRIGGER library_count_literatures_replace BEFORE INSERT ON literatures BEGIN ${queueCountOwners(`${countOwner("new.literature_id")} AND meta_literature_id<>new.meta_literature_id`)} END`,
+  `CREATE TRIGGER library_count_literatures_replace_key BEFORE UPDATE OF literature_id ON literatures WHEN old.literature_id<>new.literature_id BEGIN ${queueCountOwners(`${countOwner("new.literature_id")} AND meta_literature_id<>new.meta_literature_id`)} END`,
+] as const;
+
+export const SCHEMA_MANIFEST = [
+  ...SCHEMA_MANIFEST_V19_STORED_STATES,
+  ...LIBRARY_COUNT_SCHEMA,
 ] as const;
 export const SCHEMA_FINGERPRINT = createHash("sha256")
   .update(JSON.stringify(SCHEMA_MANIFEST))

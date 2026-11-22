@@ -10,6 +10,17 @@ const {
   ).href
 );
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+const {
+  beginCatalogWrite,
+  commitCatalogWrite,
+}: typeof import("./catalog-write.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./catalog-write.ts"
+      : "./catalog-write.js",
+    import.meta.url,
+  ).href
+);
 import {
   parseFolderOperation,
   parseFolderNode,
@@ -188,7 +199,8 @@ export function runFolderStorage(db: DatabaseSync, value: unknown): unknown {
   };
   if (r.operation === "export") return readExport(db, value);
   const write = !["list", "delete-preview"].includes(r.operation);
-  db.exec(write ? "BEGIN IMMEDIATE" : "BEGIN");
+  if (write) beginCatalogWrite(db);
+  else db.exec("BEGIN");
   try {
     let result: unknown;
     if (r.operation === "opened") {
@@ -334,10 +346,11 @@ export function runFolderStorage(db: DatabaseSync, value: unknown): unknown {
         result = present(db, folder(db, id));
       }
     }
-    db.exec("COMMIT");
+    if (write) commitCatalogWrite(db);
+    else db.exec("COMMIT");
     return result;
   } catch (e) {
-    db.exec("ROLLBACK");
+    if (db.isTransaction) db.exec("ROLLBACK");
     throw e;
   }
 }

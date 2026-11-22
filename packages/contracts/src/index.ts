@@ -1,5 +1,6 @@
 import { parseTextLevel, type TextLevel } from "./draft-document.js";
 import type { RELEVANCE_RESULT_LIMIT } from "./retrieval-context.js";
+import type { LibrarySearchTotal } from "./library-counts.js";
 import {
   parseDraftFacts,
   parseLiteratureDefaultText,
@@ -344,13 +345,11 @@ export interface LiteratureSearchItem {
   readonly missing_step: MissingStep | null;
   readonly needs_manual_pdf: boolean;
 }
-export interface LibrarySearchPage {
-  readonly status_updating?: true;
+export interface LibrarySearchPage extends LibrarySearchTotal {
   readonly tag_backfill_pending?: number;
   /** Present when only the highest-ranked results are available to paginate. */
   readonly relevance_limit?: typeof RELEVANCE_RESULT_LIMIT;
   readonly items: readonly LiteratureSearchItem[];
-  readonly total_count: number;
   readonly next_cursor: string | null;
 }
 export type ReferenceDirection = "references" | "cited-by";

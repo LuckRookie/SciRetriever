@@ -2,6 +2,10 @@ import { expect, it } from "vitest";
 import {
   parseFullTextCounts,
   parseLibraryCounts,
+  parseLibraryExactCount,
+  parseLibraryExactCountRequest,
+  parseLibraryFacets,
+  parseLibrarySearchTotal,
   parseLibrarySearchRequest,
 } from "../src/index.js";
 
@@ -63,6 +67,62 @@ it("checks FullTextCounts relations, exact keys and bounded integers", () => {
     },
   ])
     expect(() => parseFullTextCounts(bad)).toThrow();
+});
+it("validates the truncation boundary, facet coverage, collection totals and exact snapshots", () => {
+  for (const total_count of [9999, 10_000, 10_001]) {
+    expect(parseLibrarySearchTotal({ total_count })).toEqual({ total_count });
+    const truncated = { total_count, count_truncated: true };
+    if (total_count === 10_000)
+      expect(parseLibrarySearchTotal(truncated)).toEqual(truncated);
+    else expect(() => parseLibrarySearchTotal(truncated)).toThrow();
+  }
+  const collection_counts = { collected: 1, discovered_only: 1 };
+  expect(
+    parseLibraryCounts({ ...counts, collection_counts }).collection_counts,
+  ).toEqual(collection_counts);
+  expect(() =>
+    parseLibraryCounts({
+      ...counts,
+      collection_counts: { collected: 2, discovered_only: 1 },
+    }),
+  ).toThrow();
+  const facets = {
+    total: 10_001,
+    coverage: { tags: 0, keywords: 10_000, subject_terms: 0 },
+    tags: [],
+    keywords: [],
+    subject_terms: [],
+  };
+  expect(
+    parseLibraryFacets({ ...facets, facets_truncated: true }).facets_truncated,
+  ).toBe(true);
+  expect(() =>
+    parseLibraryFacets({
+      ...facets,
+      facets_truncated: true,
+      coverage: { ...facets.coverage, keywords: 10_001 },
+    }),
+  ).toThrow();
+  const snapshot_at = "2026-11-22T08:00:00.000Z";
+  expect(
+    parseLibraryExactCount({ snapshot_at, kind: "counts", counts }),
+  ).toEqual({ snapshot_at, kind: "counts", counts });
+  expect(() =>
+    parseLibraryExactCount({
+      snapshot_at,
+      kind: "facets",
+      facets: { ...facets, facets_truncated: true },
+    }),
+  ).toThrow();
+  expect(() =>
+    parseLibraryExactCount({ snapshot_at: "never", kind: "counts", counts }),
+  ).toThrow();
+  expect(() =>
+    parseLibraryExactCountRequest({ kind: "counts", query: {}, limit: 1 }),
+  ).toThrow();
+  expect(() =>
+    parseLibraryExactCountRequest({ kind: "facets", query: {} }),
+  ).toThrow();
 });
 it("accepts true, false and null primary-PDF filters while preserving omitted query bytes", () => {
   const legacy =

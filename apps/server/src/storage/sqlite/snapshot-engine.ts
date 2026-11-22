@@ -9,6 +9,17 @@ const { literatureWithdrawn }: typeof import("./intake-visibility.js") =
   );
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+const {
+  beginCatalogWrite,
+  commitCatalogWrite,
+}: typeof import("./catalog-write.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./catalog-write.ts"
+      : "./catalog-write.js",
+    import.meta.url,
+  ).href
+);
 import {
   canonicalJsonBytes,
   snapshotMemberValue,
@@ -196,7 +207,9 @@ export function runSnapshotStorage(
   archiveProfile: "pipeline" | "vlm-engine" = "vlm-engine",
 ): unknown {
   const r = value as Record<string, unknown>;
-  db.exec(["publish", "rename"].includes(action) ? "BEGIN IMMEDIATE" : "BEGIN");
+  const write = action === "publish" || action === "rename";
+  if (write) beginCatalogWrite(db);
+  else db.exec("BEGIN");
   try {
     let result: unknown;
     if (action === "capture")
@@ -358,7 +371,8 @@ export function runSnapshotStorage(
           list.length > items.length ? items.at(-1)!.snapshot_id : null,
       };
     } else fail("snapshot-operation-invalid");
-    db.exec("COMMIT");
+    if (write) commitCatalogWrite(db);
+    else db.exec("COMMIT");
     return result;
   } catch (e) {
     db.exec("ROLLBACK");

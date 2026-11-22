@@ -300,7 +300,7 @@ it("closes short and long workers while reads are pending", async () => {
   }
 });
 
-it("reduces counts across multiple sections without counting sibling versions as separate full texts", async () => {
+it("counts sibling versions as one paper across both read lanes", async () => {
   const f = await fixture();
   const db = new DatabaseSync(f.path);
   const whole = new SqliteWorker(f.path, undefined, { readOnly: true });

@@ -495,6 +495,7 @@ export function createMcpServer(options: McpOptions = {}) {
       intake_batch_report: "intake-batch-report",
       intake_batches: "intake-batches",
       library_facets: "library-facets",
+      library_exact_count: "library-exact-count",
       acquire_pdf_preview: "acquire-pdf-preview",
       form_drafts_preview: "form-drafts-preview",
       index_status: "index-status",

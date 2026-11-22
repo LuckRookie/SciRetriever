@@ -91,6 +91,7 @@ export const QUERY_OPERATIONS = [
   "form-drafts-preview",
   "library-search",
   "library-counts",
+  "library-exact-count",
   "folders",
   "filters",
   "marks",
@@ -542,6 +543,8 @@ async function readQuery(
       return exportBibliographyRequest(q, value);
     case "library-counts":
       return q.query.counts(operationRecord(value, ["query"]).query, signal);
+    case "library-exact-count":
+      return q.query.exactCount(value, signal);
     case "library-search":
       return q.query.search(parseLibrarySearchRequest(value), signal, "browse");
     case "literature-read":

@@ -14,16 +14,16 @@ import { CURRENT_CATALOG_CONFIG } from "./catalog-layout.js";
 import { RetrievalStorageEngine } from "./retrieval-engine.js";
 import { schemaTargetFile, schemaTargetPath } from "./schema-path.js";
 import {
-  INTAKE_LOOKUP_INDEXES,
-  LIBRARY_STORED_STATE_SCHEMA,
-  RETRIEVAL_CHANGE_SCHEMA,
   SCHEMA_FINGERPRINT,
   SCHEMA_FINGERPRINT_V19,
   SCHEMA_FINGERPRINT_V19_INTAKE_LOOKUPS,
   SCHEMA_FINGERPRINT_V19_RETRIEVAL_CHANGES,
+  SCHEMA_FINGERPRINT_V19_STORED_STATES,
+  SCHEMA_MANIFEST,
   SCHEMA_MANIFEST_V19,
   SCHEMA_MANIFEST_V19_INTAKE_LOOKUPS,
   SCHEMA_MANIFEST_V19_RETRIEVAL_CHANGES,
+  SCHEMA_MANIFEST_V19_STORED_STATES,
   SCHEMA_VERSION,
 } from "./schema.js";
 
@@ -36,7 +36,17 @@ function refuse(cause?: unknown): never {
   );
 }
 
-/** Explicit, additive upgrade from the three earlier layout 19 fingerprints. */
+const previousLayouts = new Map<string, readonly string[]>([
+  [SCHEMA_FINGERPRINT_V19, SCHEMA_MANIFEST_V19],
+  [SCHEMA_FINGERPRINT_V19_INTAKE_LOOKUPS, SCHEMA_MANIFEST_V19_INTAKE_LOOKUPS],
+  [
+    SCHEMA_FINGERPRINT_V19_RETRIEVAL_CHANGES,
+    SCHEMA_MANIFEST_V19_RETRIEVAL_CHANGES,
+  ],
+  [SCHEMA_FINGERPRINT_V19_STORED_STATES, SCHEMA_MANIFEST_V19_STORED_STATES],
+]);
+
+/** Explicit, additive upgrade from the four earlier layout 19 fingerprints. */
 export async function migrateLiteratureSearchSchema(path: string) {
   await schemaTargetPath(path);
   if (!(await schemaTargetFile(path))) refuse();
@@ -55,21 +65,10 @@ export async function migrateLiteratureSearchSchema(path: string) {
           "SELECT schema_fingerprint FROM schema_identity WHERE singleton=1",
         )
         .get()?.schema_fingerprint;
-      const hasIntakeIndexes =
-        previous === SCHEMA_FINGERPRINT_V19_INTAKE_LOOKUPS;
-      const hasRetrievalChanges =
-        previous === SCHEMA_FINGERPRINT_V19_RETRIEVAL_CHANGES;
-      if (
-        !hasRetrievalChanges &&
-        !hasIntakeIndexes &&
-        previous !== SCHEMA_FINGERPRINT_V19
-      )
+      if (typeof previous !== "string") refuse();
+      const manifest = previousLayouts.get(previous);
+      if (!manifest || !manifest.every((sql, i) => SCHEMA_MANIFEST[i] === sql))
         refuse();
-      const manifest = hasRetrievalChanges
-        ? SCHEMA_MANIFEST_V19_RETRIEVAL_CHANGES
-        : hasIntakeIndexes
-          ? SCHEMA_MANIFEST_V19_INTAKE_LOOKUPS
-          : SCHEMA_MANIFEST_V19;
       verifySchemaObjects(db, manifest, refuse);
       if (
         !readCatalogIdentity(db, {
@@ -79,13 +78,9 @@ export async function migrateLiteratureSearchSchema(path: string) {
         })
       )
         refuse();
-      if (!hasIntakeIndexes && !hasRetrievalChanges)
-        for (const sql of INTAKE_LOOKUP_INDEXES) db.exec(sql);
-      if (!hasRetrievalChanges) {
-        for (const sql of RETRIEVAL_CHANGE_SCHEMA) db.exec(sql);
+      for (const sql of SCHEMA_MANIFEST.slice(manifest.length)) db.exec(sql);
+      if (manifest.length < SCHEMA_MANIFEST_V19_RETRIEVAL_CHANGES.length)
         db.exec("INSERT INTO retrieval_change_state VALUES(1,NULL)");
-      }
-      for (const sql of LIBRARY_STORED_STATE_SCHEMA) db.exec(sql);
       db.prepare(
         "UPDATE schema_identity SET schema_fingerprint=? WHERE singleton=1",
       ).run(SCHEMA_FINGERPRINT);

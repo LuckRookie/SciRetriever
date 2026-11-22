@@ -10,6 +10,7 @@ import {
 } from "@sciretriever/contracts";
 import {
   FULL_TEXT_EXPECTED,
+  FULL_TEXT_GLOBAL_EXPECTED,
   fullTextCatalogRows,
   fullTextId as id,
   libraryFullTextFixture,
@@ -30,7 +31,7 @@ it("counts folder, batch, discovery and combined scopes by paper, filters PDFs b
   try {
     const before = fullTextCatalogRows(f.home),
       query = f.reader.query!;
-    expect(await query.counts({})).toEqual(FULL_TEXT_EXPECTED);
+    expect(await query.counts({})).toEqual(FULL_TEXT_GLOBAL_EXPECTED);
     const full = { total: 4, obtained: 1, missing: 3, exhausted: 1 };
     const scopes = [
       { folder: { id: f.root, include_descendants: true } },
@@ -154,7 +155,7 @@ it("counts folder, batch, discovery and combined scopes by paper, filters PDFs b
   }
 });
 
-it("retains legacy cursor bytes when omitted, and binds new cursors to the primary-PDF condition", async () => {
+it("accepts legacy cursors, retains omitted-filter semantics and binds new cursors to the primary-PDF condition", async () => {
   const f = await libraryFullTextFixture();
   try {
     for (const [n, title] of [
@@ -173,19 +174,29 @@ it("retains legacy cursor bytes when omitted, and binds new cursors to the prima
     );
     const legacy =
       "eyJjaGVja3N1bSI6IjBhY2NlZTE5MzE4ZWI2MzEwYzE0ZTQ0ZTI3NjMzODNiMzZjYjg2M2JkMjUyZmM4ZjlhNDdmNDU1ZDdhYjAzMWYiLCJraW5kIjoibGlicmFyeS1zZWFyY2giLCJwYXlsb2FkIjp7InBvc2l0aW9uIjp7ImxpdGVyYXR1cmVfaWQiOiIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwMDEiLCJub3JtYWxpemVkX3RpdGxlIjoibGVnYWN5IGFscGhhIiwidGl0bGVfaXNfbnVsbCI6ZmFsc2V9LCJxdWVyeV9maW5nZXJwcmludCI6IjIzNmMyMWIzMGFlMzllNWUyYjZlYThjY2EwNDUzZGEzMTg1Y2I2MmM4ODVjZmM1YjdiZGJhZjQ2NzRmOTczOWYiLCJzb3J0IjoidGl0bGUtYXNjIn0sInZlcnNpb24iOjF9";
-    expect((await f.reader.query!.search(request)).next_cursor).toBe(legacy);
+    const next = (await f.reader.query!.search(request)).next_cursor;
+    expect(next).not.toBe(legacy);
+    expect(
+      (
+        await f.reader.query!.search({
+          ...request,
+          query: { ...query, has_primary_pdf: null },
+        })
+      ).next_cursor,
+    ).toBe(next);
     expect(
       (await f.reader.query!.search({ ...request, cursor: legacy })).items.map(
         (x) => x.literature.literature_id,
       ),
     ).toEqual([id(2)]);
-    await expect(
-      f.reader.query!.search({
-        ...request,
-        cursor: legacy,
-        query: { ...query, has_primary_pdf: true },
-      }),
-    ).rejects.toMatchObject({ code: "literature-query" });
+    for (const cursor of [legacy, next])
+      await expect(
+        f.reader.query!.search({
+          ...request,
+          cursor,
+          query: { ...query, has_primary_pdf: true },
+        }),
+      ).rejects.toMatchObject({ code: "literature-query" });
     expect(
       queryFingerprint(
         parseLibrarySearchRequest({ query: { has_primary_pdf: false } }).query,
@@ -208,21 +219,30 @@ it("keeps status, version PDF and paper PDF counts in one snapshot during a chec
   try {
     db.exec("BEGIN");
     new StoredLibraryState(db, { max_tags: 6, archive_profile: "vlm-engine" });
-    let changed = false;
+    let commits = 0;
     db.function("sr_query_continue", () => {
-      if (!changed) {
-        changed = true;
+      if (commits === 0) {
         writer
           .prepare(
             "UPDATE literature_assets SET role='supplementary-pdf' WHERE literature_id=?",
           )
           .run(id(2));
+        commits++;
+      } else if (commits === 1) {
+        writer
+          .prepare(
+            "UPDATE literature_metadata SET title='Concurrent edit' WHERE literature_id=?",
+          )
+          .run(id(1));
+        commits++;
       }
       return 1;
     });
     const query = parseLibrarySearchRequest({ query: {} }).query;
-    expect(libraryCounts(db, query, null)).toEqual(FULL_TEXT_EXPECTED);
-    expect(changed).toBe(true);
+    // A filter forces the row-by-row exact calculation even when the counters are ready.
+    const filtered = { ...query, languages: ["en"] };
+    expect(libraryCounts(db, filtered, null, true)).toEqual(FULL_TEXT_EXPECTED);
+    expect(commits).toBe(2);
     db.exec("COMMIT");
     expect((await f.reader.query!.counts({})).full_text).toEqual({
       total: 8,

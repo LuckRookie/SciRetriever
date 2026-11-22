@@ -36,6 +36,10 @@ export const FULL_TEXT_EXPECTED = {
     EXCLUDED: 0,
   },
 };
+export const FULL_TEXT_GLOBAL_EXPECTED = {
+  ...FULL_TEXT_EXPECTED,
+  collection_counts: { collected: 4, discovered_only: 6 },
+};
 
 /** All tables, including FTS shadow rows, so read-only checks cannot hide a write. */
 export function fullTextCatalogRows(home: string) {

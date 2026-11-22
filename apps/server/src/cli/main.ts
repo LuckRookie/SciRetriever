@@ -176,6 +176,7 @@ function usage(options: CliOptions): CliResult {
     "  complete pdf|parser [--literature-id ID] [--transfers ID,...]\n" +
     "  literature search [query options] [--collection-scope collected|all] | show ID | references ID | cited-by ID\n" +
     "  literature counts --request FILE|-  # full_text counts papers (MetaLiterature); statuses and with_primary_pdf count versions; read-only\n" +
+    "  literature exact-count --request FILE|-  # kind=counts|facets|search-total, query, limit for facets; one read snapshot\n" +
     "    --needs-metadata | --no-needs-metadata filters the independent bibliographic recognition mark\n" +
     "  import metadata FORMAT SOURCE | import pdf ID SOURCE\n" +
     "  document parse --literature-id ID --asset-id ID --asset-sha256 SHA256 [--profiles pipeline,vlm-engine] [--force] (default: deployment profile)\n" +
@@ -1055,6 +1056,7 @@ async function execute(
     "literature status": "status",
     "literature search": "library-search",
     "literature counts": "library-counts",
+    "literature exact-count": "library-exact-count",
     "literature read": "literature-read",
     "literature artifact-chunk": "artifact-chunk",
     "literature bibliography": "bibliography-export",

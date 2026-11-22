@@ -369,6 +369,18 @@ function finishWithdrawalRevision(db: DatabaseSync, literatures: number) {
     "UPDATE retrieval_source_revision SET revision=revision+1-? WHERE singleton=1",
   ).run(literatures);
 }
+const {
+  beginCatalogWrite,
+  commitCatalogWrite,
+}: typeof import("./catalog-write.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./catalog-write.ts"
+      : "./catalog-write.js",
+    import.meta.url,
+  ).href
+);
+
 export function runIntakeWithdrawal(
   db: DatabaseSync,
   command: IntakeWithdrawalCommand,
@@ -379,7 +391,8 @@ export function runIntakeWithdrawal(
   | null {
   const read = isIntakeWithdrawalRead(command.operation),
     own = !read || !db.isTransaction;
-  if (own) db.exec(read ? "BEGIN" : "BEGIN IMMEDIATE");
+  if (!read) beginCatalogWrite(db);
+  else if (own) db.exec("BEGIN");
   try {
     if (command.operation === "read") {
       const batch = getBatch(db, command.batch_id);
@@ -476,7 +489,7 @@ export function runIntakeWithdrawal(
         command.batch_id,
       );
     }
-    db.exec("COMMIT");
+    commitCatalogWrite(db);
     return result;
   } catch (error) {
     if (own && db.isTransaction) db.exec("ROLLBACK");

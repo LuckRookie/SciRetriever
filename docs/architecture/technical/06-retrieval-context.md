@@ -164,7 +164,7 @@ LibrarySearchPage
   next_cursor: str | None
 ```
 
-`limit >= 1`；cursor 非空时是调用方不得解释或修改的不透明字符串，并与规范化 query、sort 和稳定位置绑定。cursor 不保存查询或数据库 snapshot；后续翻页重新读取当时的 current facts，数据库在两次请求之间变化时结果和 `total_count` 可以相应变化。`relevance` 只允许在 `query.text` 非空时使用。年份或标题缺失的记录在对应排序中排在具有该值的记录之后；所有排序最后使用 `literature_id` 作为稳定 tie-breaker。`total_count >= 0`，表示忽略本节 cursor/limit 后同一 query 的完整命中数；按 `relevance` 排序时只能翻到相关度最高的前 1,000 条，命中数超过 1,000 时页面带 `relevance_limit: 1000`，翻到第 1,000 条即止。处理范围的展开（`QuerySelector` 与批量选择）不受这个上限影响。`items` 不重复且数量不超过 limit，`next_cursor` 只在仍有下一页时存在。
+`limit >= 1`；cursor 非空时是调用方不得解释或修改的不透明字符串，并与规范化 query、sort 和稳定位置绑定。cursor 不保存查询或数据库 snapshot；后续翻页重新读取当时的 current facts，数据库在两次请求之间变化时结果和 `total_count` 可以相应变化。`relevance` 只允许在 `query.text` 非空时使用。年份或标题缺失的记录在对应排序中排在具有该值的记录之后；所有排序最后使用 `literature_id` 作为稳定 tie-breaker。`total_count >= 0`，表示忽略本节 cursor/limit 后同一 query 的命中数，口径同 2.1.8 的截断：有筛选或搜索且超过 10,000 时只算到 10,000 并带 `count_truncated`；总数在第一页算出，续页沿用游标里的值，不再重算；按 `relevance` 排序时只能翻到相关度最高的前 1,000 条，命中数超过 1,000 时页面带 `relevance_limit: 1000`，翻到第 1,000 条即止。处理范围的展开（`QuerySelector` 与批量选择）不受这个上限影响。`items` 不重复且数量不超过 limit，`next_cursor` 只在仍有下一页时存在。
 
 每个 `LiteratureSearchItem` 表示一篇具体 `Literature`，不按 `MetaLiterature` 折叠。不同 Provider 的重复记录已经作为同一 Literature 的多个 observations 收敛，不制造多个列表项；同一 MetaLiterature 下的不同明确版本仍分别出现，并通过 `literature.meta_literature_id` 归组。`Literature` 已经包含当前完整 `LiteratureMetadata` 和派生 `LiteratureStatus`，因此 SearchItem 不在顶层重复 metadata/status；revision/hash、第一缺失步骤和人工 PDF 标记是当前读取上下文的补充。
 
@@ -463,6 +463,9 @@ LibraryCounts
   with_primary_pdf: int           # 有主 PDF 的版本数，供快速筛选“有 PDF”；“仅元数据”为 total − with_primary_pdf
   full_text: FullTextCounts       # 见下文
   status_updating?: true          # 标签上限或建档方式改变后，状态正在后台重算；重算完后省略
+  count_truncated?: true          # 有筛选或搜索且命中超过 10,000 个版本时出现，各数只算到 10,000（显示“1 万以上”）
+  counts_backfill_pending?: true  # 迁移后的计数器回填尚未完成
+  collection_counts?: {collected: int, discovered_only: int}  # 全库收进来与只被发现的版本数
 
 FullTextCounts
   total: int                      # 范围内的论文数
@@ -483,6 +486,10 @@ FullTextCounts
 - **已试完（`exhausted`）**：`missing` 中，每个版本都有自动 PDF 获取耗尽事实的论文（耗尽事实的成立条件见[文献与材料 4.5](03-literature-materials.md#45-获取流程)）。它是 `missing` 的一部分，不是第三类。
 - **关系**：`total = obtained + missing`，`exhausted ≤ missing`。“还可以再试”是 `missing − exhausted`，入口可以这样显示，合同不另设字段。
 - **与状态计数的关系**：状态计数按版本，`full_text` 按论文，两者不能相加相减。例如一篇论文的预印本是 `UNREVIEWED`、正式版是 `READY`，状态计数里两个版本各计一次，`full_text` 里这篇论文只计一次，算已取得。
+
+**计数器与截断。** 没有筛选，或只按收进来筛选时，各数来自写入时维护的计数器，读取是常数级；计数器与文献状态在同一事务里增减，其他写入者的变更由触发器记下、后台按变化量改正，等待改正期间从同一快照精确计算。有筛选或搜索时，计数与分面取到第 10,001 个命中即停：超过时带 `count_truncated`，分面带 `facets_truncated`，表示分面的覆盖与排名来自前 10,000 个版本；全库与收进来的总数仍准确（[ADR 0065](../decisions/0065-scale-rules.md) 第 6 节第 2 条）。
+
+**准确数。** `LibraryExactCountRequest {kind: "counts" | "search-total", query} | {kind: "facets", query, limit}` 在长请求道上用一个读快照算出准确数，可取消，返回 `snapshot_at` 与对应结果；每次请求重新计算，不缓存。HTTP `/api/v1/query/library-exact-count`、CLI `literature exact-count`、MCP `library_exact_count` 共用这个合同。
 
 **一致性与只读。** 同一次读取的全部数字来自同一个只读快照。计数不联网、不调用模型、不创建任务，不写库（规1）。这些数是查询时的聚合，不另存（[存储 2.3.6](07-versioned-storage.md#236-有意保存与有意推导)）。
 

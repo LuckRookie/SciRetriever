@@ -16,7 +16,7 @@ import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
 import {
   libraryFullTextFixture,
   fullTextCatalogRows,
-  FULL_TEXT_EXPECTED,
+  FULL_TEXT_GLOBAL_EXPECTED,
 } from "./library-fulltext-fixture.js";
 
 const id = (n: number) =>
@@ -44,7 +44,7 @@ it("reads paper full-text counts and version PDF counts through literature count
     );
     expect(result.code, errors.join("\n")).toBe(0);
     expect((result.value as { result: unknown }).result).toEqual(
-      FULL_TEXT_EXPECTED,
+      FULL_TEXT_GLOBAL_EXPECTED,
     );
     expect(f.modelCalls).toBe(0);
     expect(fullTextCatalogRows(f.home)).toEqual(before);

@@ -22,7 +22,7 @@
 
 `literature search --request FILE|-` 接受完整 LibraryQuery 及排序，包括主 PDF 默认初稿的事实筛选和四种降序；查询范围可以直接交给显式任务。`literature read` 的 PDF 资产带默认文本版本与事实，`archive status` 按部分返回同样的事实；读取不启动校订。
 
-`literature counts --request FILE|-` 共用只读文献库计数：full_text 按论文，statuses、with_primary_pdf 按版本。计数忽略 statuses 与 needs_manual_pdf 的选择，保留其它范围条件；has_primary_pdf 按版本筛选。它不启动获取、模型或任务。
+`literature counts --request FILE|-` 共用只读文献库计数：full_text 按论文，statuses、with_primary_pdf 按版本。计数忽略 statuses 与 needs_manual_pdf 的选择，保留其它范围条件；has_primary_pdf 按版本筛选。筛选计数超过一万个版本时带 `count_truncated`。`literature exact-count --request FILE|-` 接受 `kind`、`query`，分面还要求 `limit`。结果来自单个可取消的只读快照，返回 `snapshot_at`。
 
 [上级目录](../README.md)
 

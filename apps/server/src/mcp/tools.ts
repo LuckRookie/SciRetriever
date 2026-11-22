@@ -341,7 +341,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "library_facets",
-    "Count direct active tags, author keywords and subject terms over the entire filtered library. Includes per-layer literature coverage and exact keyword-to-tag alias links.",
+    "Count direct active tags, author keywords and subject terms over at most 10,000 matching versions. facets_truncated marks limited coverage and rankings; count_truncated marks a limited total. Includes exact keyword-to-tag alias links.",
     object({
       query: { type: "object" },
       limit: { type: "integer", minimum: 1, maximum: 30 },
@@ -583,8 +583,26 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "library_counts",
-    "Count library quick filters, ignoring statuses and needs_manual_pdf but preserving all other LibraryQuery facets, including has_primary_pdf. full_text={total,obtained,missing,exhausted} counts papers (MetaLiterature) across all current sibling versions; statuses and with_primary_pdf count versions. All counts share one read-only snapshot. No writes, network, model calls or tasks.",
+    "Count library quick filters, ignoring statuses and needs_manual_pdf but preserving all other LibraryQuery facets, including has_primary_pdf. full_text counts papers (MetaLiterature) using all current sibling versions; statuses and with_primary_pdf count versions. count_truncated marks a scope limited to 10,000 matching versions. All counts share one read-only snapshot.",
     object({ query: { type: "object" } }),
+  ),
+  tool(
+    "library_exact_count",
+    "Calculate exact counts, facets or a search total in one read-only snapshot. Returns snapshot_at. Facets require limit. The request can be cancelled.",
+    {
+      type: "object",
+      oneOf: [
+        object({
+          kind: { enum: ["counts", "search-total"] },
+          query: { type: "object" },
+        }),
+        object({
+          kind: { const: "facets" },
+          query: { type: "object" },
+          limit: { type: "integer", minimum: 1, maximum: 30 },
+        }),
+      ],
+    },
   ),
   tool(
     "search_library",

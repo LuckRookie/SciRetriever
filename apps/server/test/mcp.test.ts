@@ -12,7 +12,7 @@ import { createQueryApplication } from "../src/bootstrap/application.js";
 import {
   libraryFullTextFixture,
   fullTextCatalogRows,
-  FULL_TEXT_EXPECTED,
+  FULL_TEXT_GLOBAL_EXPECTED,
 } from "./library-fulltext-fixture.js";
 
 async function connected(host: ReturnType<typeof createMcpServer>) {
@@ -411,7 +411,7 @@ it("exposes paper full_text and version with_primary_pdf in the read-only librar
     });
     expect(result.isError).not.toBe(true);
     expect((result.structuredContent as { result: unknown }).result).toEqual(
-      FULL_TEXT_EXPECTED,
+      FULL_TEXT_GLOBAL_EXPECTED,
     );
     expect(f.modelCalls).toBe(0);
     expect(fullTextCatalogRows(f.home)).toEqual(before);

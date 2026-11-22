@@ -11,7 +11,14 @@ import {
   type LiteratureId,
 } from "./index.js";
 import { tagInteger } from "./tags.js";
-import { parseFullTextCounts, type FullTextCounts } from "./library-counts.js";
+import {
+  LIBRARY_COUNT_FLAGS,
+  LIBRARY_COUNT_LIMIT,
+  parseFullTextCounts,
+  parseLibraryCountFlags,
+  type FullTextCounts,
+  type LibraryCountFlags,
+} from "./library-counts.js";
 import { parseFormDraftsCounts } from "./form-drafts.js";
 function tagRecord(
   value: unknown,
@@ -127,8 +134,10 @@ export interface IntakeBatchPage {
   readonly items: readonly IntakeBatch[];
   readonly next_cursor: string | null;
 }
-export interface LibraryFacets {
+export interface LibraryFacets extends LibraryCountFlags {
   readonly total: number;
+  /** Coverage and rankings were computed from the first 10,000 matches. */
+  readonly facets_truncated?: true;
   readonly coverage: {
     readonly tags: number;
     readonly keywords: number;
@@ -597,13 +606,11 @@ export function parseIntakeBatchPage(value: unknown): IntakeBatchPage {
   };
 }
 export function parseLibraryFacets(value: unknown): LibraryFacets {
-  const r = tagRecord(value, [
-      "total",
-      "coverage",
-      "tags",
-      "keywords",
-      "subject_terms",
-    ]),
+  const r = tagRecord(
+      value,
+      ["total", "coverage", "tags", "keywords", "subject_terms"],
+      [...LIBRARY_COUNT_FLAGS, "facets_truncated"],
+    ),
     total = tagInteger(r.total),
     c = tagRecord(r.coverage, ["tags", "keywords", "subject_terms"]),
     coverage = {
@@ -611,7 +618,19 @@ export function parseLibraryFacets(value: unknown): LibraryFacets {
       keywords: tagInteger(c.keywords),
       subject_terms: tagInteger(c.subject_terms),
     };
-  if (Object.values(coverage).some((count) => count > total)) fail();
+  const flags = parseLibraryCountFlags(r, total);
+  const limited = Object.hasOwn(r, "facets_truncated");
+  if (
+    (limited && (r.facets_truncated !== true || total < LIBRARY_COUNT_LIMIT)) ||
+    (flags.count_truncated && !limited)
+  )
+    fail();
+  if (
+    Object.values(coverage).some(
+      (count) => count > (limited ? LIBRARY_COUNT_LIMIT : total),
+    )
+  )
+    fail();
   const terms = (
     v: unknown,
     covered: number,
@@ -627,6 +646,8 @@ export function parseLibraryFacets(value: unknown): LibraryFacets {
   };
   return {
     total,
+    ...flags,
+    ...(limited ? { facets_truncated: true as const } : {}),
     coverage,
     tags: terms(r.tags, coverage.tags, ["tag_id"]).map(({ row, ...term }) => ({
       ...term,

@@ -2590,6 +2590,7 @@ const ARCHIVE_HTTP_READS = [
   "filters",
   "marks",
   "library-counts",
+  "library-exact-count",
   "processor-runs",
   "literature-results",
   "usage-estimate",

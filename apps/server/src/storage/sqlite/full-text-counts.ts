@@ -16,22 +16,24 @@ import { parseFullTextCounts } from "@sciretriever/contracts";
 export function fullTextCountsProjection(
   matchingSql: string,
   totalSql = "(SELECT count(*) FROM selected)",
+  cancellable = false,
 ) {
   // Empty fact sets prove zero immediately; otherwise check all sibling versions.
   // The proof and the counts belong to this read snapshot, never to a cache.
+  const checkpoint = cancellable ? "sr_query_continue() AND " : "";
   return {
     cte: `selected AS MATERIALIZED (
       SELECT DISTINCT l.meta_literature_id FROM (${matchingSql}) matching
-      JOIN literatures l USING(literature_id) WHERE ${visibleLiteratureSql("l.literature_id")}
+      JOIN literatures l USING(literature_id) WHERE ${checkpoint}${visibleLiteratureSql("l.literature_id")}
     )`,
     columns: `${totalSql} AS total,
       CASE WHEN EXISTS(SELECT 1 FROM literature_assets WHERE role='primary-pdf') THEN
-        (SELECT count(*) FROM selected s WHERE EXISTS(
+        (SELECT count(*) FROM selected s WHERE ${checkpoint}EXISTS(
           SELECT 1 FROM literatures l JOIN literature_assets a USING(literature_id)
           WHERE ${visibleLiteratureSql("l.literature_id")} AND ${visibleObjectSql("literature-asset", "a.literature_asset_id")} AND l.meta_literature_id=s.meta_literature_id AND a.role='primary-pdf'))
         ELSE 0 END AS obtained,
       CASE WHEN EXISTS(SELECT 1 FROM automatic_pdf_acquisition_exhaustions) THEN
-        (SELECT count(*) FROM selected s WHERE
+        (SELECT count(*) FROM selected s WHERE ${checkpoint}
           NOT EXISTS(SELECT 1 FROM literatures l JOIN literature_assets a USING(literature_id)
             WHERE ${visibleLiteratureSql("l.literature_id")} AND ${visibleObjectSql("literature-asset", "a.literature_asset_id")} AND l.meta_literature_id=s.meta_literature_id AND a.role='primary-pdf')
           AND NOT EXISTS(SELECT 1 FROM literatures l WHERE ${visibleLiteratureSql("l.literature_id")} AND l.meta_literature_id=s.meta_literature_id

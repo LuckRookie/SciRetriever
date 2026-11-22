@@ -9,6 +9,7 @@ const {
     import.meta.url,
   ).href
 );
+import { globalLibraryCountScope } from "@sciretriever/contracts";
 import { existsSync, statSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { parentPort, workerData } from "node:worker_threads";
@@ -1288,80 +1289,59 @@ function librarySnapshot(
       : result;
   });
 }
-type LibraryCountsCommand = Extract<SqliteCommand, { kind: "library_counts" }>;
-const LIBRARY_COUNT_SEGMENT = 512;
-
-function pagedLibraryCounts({ query, ftsQuery }: LibraryCountsCommand) {
-  // FTS ranking and the global recently opened window cannot be applied
-  // independently to ranges of MetaLiterature IDs.
-  if (
-    ftsQuery !== null ||
-    query.recently_opened ||
-    query.discovery_run_ids.length
-  )
-    return null;
-  const version = db.prepare("PRAGMA data_version");
-  const initial = version.get().data_version;
-  const recentCutoff = String(
-    db.prepare(`SELECT ${libraryPageModule.RECENT_CUTOFF_SQL} AS cutoff`).get()
-      .cutoff,
-  );
-  const page = db.prepare(
-    "SELECT meta_literature_id FROM meta_literatures WHERE meta_literature_id>? ORDER BY meta_literature_id LIMIT ?",
-  );
-  let after = "";
-  let counts: ReturnType<typeof libraryPageModule.libraryCounts> | undefined;
-  for (;;) {
-    queryCheckpoint();
-    const part = readTransaction(() => {
-      const ids: string[] = page
-        .all(after, LIBRARY_COUNT_SEGMENT)
-        .map((row: Dynamic) => String(row.meta_literature_id));
+function libraryExactCount(
+  command: Extract<SqliteCommand, { kind: "library_exact_count" }>,
+) {
+  return readTransaction(() => {
+    // A real catalog read pins the WAL snapshot before reporting its time.
+    const snapshot_at = String(
+      db
+        .prepare(
+          "SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now') AS at FROM schema_identity WHERE singleton=1",
+        )
+        .get().at,
+    );
+    const at = Date.parse(snapshot_at);
+    const { request, ftsQuery } = command;
+    const { kind, query } = request;
+    if (kind === "facets")
       return {
-        ids,
-        counts: libraryPageModule.libraryCounts(
+        kind,
+        snapshot_at,
+        facets: libraryPageModule.libraryFacets(
           db,
           query,
-          null,
-          ids,
-          recentCutoff,
+          ftsQuery,
+          request.limit,
+          true,
+          at,
         ),
       };
-    }) as {
-      ids: string[];
-      counts: ReturnType<typeof libraryPageModule.libraryCounts>;
-    };
-    // Mutable query facts have no common domain revision. Discard all parts
-    // if any writer committed and use one exact read snapshot in that case.
-    if (
-      version.get().data_version !== initial ||
-      catalogIdentity() !== openedCatalogIdentity
-    )
-      return null;
-    if (!counts) counts = part.counts;
-    else {
-      const next = part.counts;
-      for (const [status, count] of Object.entries(next.statuses))
-        counts.statuses[status] = (counts.statuses[status] ?? 0) + count;
-      counts.total += next.total;
-      counts.unavailable_pdf += next.unavailable_pdf;
-      counts.recently_opened = Math.min(
-        100,
-        counts.recently_opened + next.recently_opened,
-      );
-      counts.with_primary_pdf += next.with_primary_pdf;
-      counts.full_text = {
-        total: counts.full_text.total + next.full_text.total,
-        obtained: counts.full_text.obtained + next.full_text.obtained,
-        missing: counts.full_text.missing + next.full_text.missing,
-        exhausted: counts.full_text.exhausted + next.full_text.exhausted,
+    validateDiscoveryCauses(query.discovery_run_ids);
+    if (kind === "counts")
+      return {
+        kind,
+        snapshot_at,
+        counts: libraryPageModule.libraryCounts(db, query, ftsQuery, true, at),
       };
-    }
-    if (part.ids.length < LIBRARY_COUNT_SEGMENT) return counts;
-    after = part.ids.at(-1)!;
-  }
+    return {
+      kind,
+      snapshot_at,
+      total_count: libraryPageModule.librarySearchTotal(
+        db,
+        query,
+        ftsQuery,
+        true,
+        undefined,
+        at,
+      ).total_count,
+    };
+  });
 }
-function librarySearchPage(request: Dynamic, defer: boolean): Dynamic {
+function librarySearchPage(
+  request: import("../../literature/query.js").LibraryPageQuery,
+  defer: boolean,
+): Dynamic {
   return readTransaction(() => {
     if (defer) {
       const plan = libraryState.readPlan();
@@ -1371,7 +1351,10 @@ function librarySearchPage(request: Dynamic, defer: boolean): Dynamic {
             request.query.missing_steps.length ||
             request.query.needs_manual_pdf === true)) ||
         (!plan.collectionReady &&
-          request.query.collection_scope === "collected")
+          request.query.collection_scope === "collected") ||
+        (!request.after?.total &&
+          globalLibraryCountScope(request.query) &&
+          !libraryState.countsReady(plan))
       )
         return { defer: true };
     }
@@ -1380,13 +1363,10 @@ function librarySearchPage(request: Dynamic, defer: boolean): Dynamic {
     const textLevels = primaryDocumentTexts(
       page.rows.map((row: Dynamic) => String(row.literature_id)),
     );
+    const { rows, ...summary } = page;
     return {
-      total_count: page.total_count,
-      ...(page.status_updating ? { status_updating: true } : {}),
-      ...(page.tag_backfill_pending === undefined
-        ? {}
-        : { tag_backfill_pending: page.tag_backfill_pending }),
-      rows: page.rows.map((row: Dynamic) => ({
+      ...summary,
+      rows: rows.map((row: Dynamic) => ({
         item: searchItem(row.literature_id, undefined, textLevels),
         relevance: row.relevance,
         has_pdf_exhaustion: !!db
@@ -5380,21 +5360,21 @@ port.on("message", (message: WorkerMessage) => {
           };
         }
         break;
-      case "review":
+      case "review": {
+        const { action, args } = message.command;
+        const review = () => reviewModule.runReviewStorage(db, action, args);
         try {
           value = {
             ok: true,
-            value: reviewModule.runReviewStorage(
-              db,
-              message.command.action,
-              message.command.args,
-            ),
+            // Completing an audited manual tag assignment can collect a version.
+            value: action === "audit-finish" ? transaction(review) : review(),
           };
         } catch (error) {
           throwCatalogCorruption(error);
           value = { ok: false, code: "review-storage-failed" };
         }
         break;
+      }
       case "proofread":
         try {
           value = {
@@ -5808,7 +5788,7 @@ port.on("message", (message: WorkerMessage) => {
         break;
       }
       case "library_state_pending":
-        value = readTransaction(() => !libraryState.readPlan().indexed);
+        value = readTransaction(() => !libraryState.countsReady());
         break;
       case "library_state_refresh":
         value = transaction(() => libraryState.refreshBatch());
@@ -5822,18 +5802,21 @@ port.on("message", (message: WorkerMessage) => {
       }
       case "library_counts": {
         const command = message.command;
-        value =
-          (data.long_read_lane && pagedLibraryCounts(command)) ||
-          readTransaction(() => {
-            validateDiscoveryCauses(command.query.discovery_run_ids);
-            return libraryPageModule.libraryCounts(
-              db,
-              command.query,
-              command.ftsQuery,
-            );
-          });
+        value = readTransaction(() => {
+          if (command.counterRead === "defer" && !libraryState.countsReady())
+            return { defer: true };
+          validateDiscoveryCauses(command.query.discovery_run_ids);
+          return libraryPageModule.libraryCounts(
+            db,
+            command.query,
+            command.ftsQuery,
+          );
+        });
         break;
       }
+      case "library_exact_count":
+        value = libraryExactCount(message.command);
+        break;
       case "intake_read": {
         const c = message.command;
         const read = () => {

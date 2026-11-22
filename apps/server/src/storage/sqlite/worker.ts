@@ -5,7 +5,13 @@ import { IntakeWithdrawalError } from "../../literature/intake-withdrawal.js";
 import { isIntakeWithdrawalRead } from "./intake-withdrawal-engine.js";
 import {
   canonicalJsonBytes,
+  globalLibraryCountScope,
   parseLibraryCounts,
+  parseLibraryExactCount,
+  parseLibrarySearchTotal,
+  type LibraryExactCount,
+  type LibraryExactCountRequest,
+  type LibrarySearchTotal,
   type LibraryCounts,
   decodeCursor,
   encodeCursor,
@@ -742,6 +748,12 @@ export type SqliteCommand =
       readonly kind: "library_counts";
       readonly query: LibraryPageQuery["query"];
       readonly ftsQuery: string | null;
+      readonly counterRead?: "defer";
+    }
+  | {
+      readonly kind: "library_exact_count";
+      readonly request: LibraryExactCountRequest;
+      readonly ftsQuery: string | null;
     }
   | {
       readonly kind: "library_search_page";
@@ -1452,6 +1464,7 @@ export class SqliteWorker {
     if (this.readOnly && !read) return Promise.reject(new SqliteWorkerError());
     const cancellableQuery = [
       "library_counts",
+      "library_exact_count",
       "library_search_page",
       "library_facets",
       "acquire_pdf_selection",
@@ -3293,8 +3306,30 @@ export class SqliteWorker {
     ftsQuery: string | null,
     signal?: AbortSignal,
   ): Promise<LibraryCounts> {
-    return parseLibraryCounts(
-      await this.run({ kind: "library_counts", query, ftsQuery }, signal),
+    const command = { kind: "library_counts" as const, query, ftsQuery };
+    if (
+      this.options.readLane &&
+      ftsQuery === null &&
+      globalLibraryCountScope(query, true)
+    ) {
+      const value = await this.run<LibraryCounts | { defer: true }>(
+        { ...command, counterRead: "defer" },
+        signal,
+      );
+      if (!("defer" in value)) return parseLibraryCounts(value);
+    }
+    return parseLibraryCounts(await this.run(command, signal));
+  }
+  async libraryExactCount(
+    request: LibraryExactCountRequest,
+    ftsQuery: string | null,
+    signal?: AbortSignal,
+  ): Promise<LibraryExactCount> {
+    return parseLibraryExactCount(
+      await this.run(
+        { kind: "library_exact_count", request, ftsQuery },
+        signal,
+      ),
     );
   }
   async configureLibraryState(
@@ -3336,18 +3371,16 @@ export class SqliteWorker {
   async librarySearchPage(
     request: LibraryPageQuery,
     signal?: AbortSignal,
-  ): Promise<{
-    readonly rows: readonly SearchSnapshotRow[];
-    readonly total_count: number;
-    readonly tag_backfill_pending?: number;
-    readonly status_updating?: true;
-  }> {
+  ): Promise<
+    LibrarySearchTotal & {
+      readonly rows: readonly SearchSnapshotRow[];
+      readonly tag_backfill_pending?: number;
+    }
+  > {
     type Page = {
       rows: unknown;
-      total_count: number;
       tag_backfill_pending?: number;
-      status_updating?: unknown;
-    };
+    } & Record<string, unknown>;
     const result = await this.run<Page | { defer: true }>(
       {
         kind: "library_search_page",
@@ -3355,7 +3388,9 @@ export class SqliteWorker {
         ...(this.options.readLane &&
         !this.metadataWrites.getStore() &&
         (needsLibraryState(request.query) ||
-          request.query.collection_scope === "collected") &&
+          request.query.collection_scope === "collected" ||
+          (!request.after?.total &&
+            globalLibraryCountScope(request.query) !== null)) &&
         !request.fullRelevance &&
         request.limit <= 200 &&
         !request.query.discovery_run_ids.length
@@ -3371,26 +3406,29 @@ export class SqliteWorker {
             signal,
           )
         : result;
-    if (!Number.isSafeInteger(page.total_count) || page.total_count < 0)
+    const { rows: rawRows, tag_backfill_pending, ...summary } = page;
+    let total: LibrarySearchTotal;
+    try {
+      total = parseLibrarySearchTotal(summary);
+    } catch {
       throw new SqliteWorkerError();
-    if (page.status_updating !== undefined && page.status_updating !== true)
-      throw new SqliteWorkerError();
-    const rows = this.parseSearchRows(page.rows);
-    if (rows.length > request.limit + 1 || rows.length > page.total_count)
+    }
+    const rows = this.parseSearchRows(rawRows);
+    if (
+      rows.length > request.limit + 1 ||
+      ((!request.after?.total || request.fullRelevance) &&
+        rows.length > total.total_count)
+    )
       throw new SqliteWorkerError();
     if (
-      page.tag_backfill_pending !== undefined &&
-      (!Number.isSafeInteger(page.tag_backfill_pending) ||
-        page.tag_backfill_pending < 0)
+      tag_backfill_pending !== undefined &&
+      (!Number.isSafeInteger(tag_backfill_pending) || tag_backfill_pending < 0)
     )
       throw new SqliteWorkerError();
     return {
       rows,
-      total_count: page.total_count,
-      ...(page.status_updating ? { status_updating: true as const } : {}),
-      ...(page.tag_backfill_pending === undefined
-        ? {}
-        : { tag_backfill_pending: page.tag_backfill_pending }),
+      ...total,
+      ...(tag_backfill_pending === undefined ? {} : { tag_backfill_pending }),
     };
   }
   async librarySnapshot(

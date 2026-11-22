@@ -12,6 +12,7 @@ import {
   libraryFullTextFixture,
   fullTextCatalogRows,
   FULL_TEXT_EXPECTED,
+  FULL_TEXT_GLOBAL_EXPECTED,
 } from "./library-fulltext-fixture.js";
 import { WorkbenchSession } from "../src/workbench/session.js";
 import { parseWorkbenchView } from "@sciretriever/contracts";
@@ -58,7 +59,7 @@ it("returns paper full-text counts and version PDF counts from the shared librar
     expect(response.status).toBe(200);
     expect(JSON.parse(response.text)).toEqual({
       protocol_version: 1,
-      result: FULL_TEXT_EXPECTED,
+      result: FULL_TEXT_GLOBAL_EXPECTED,
     });
     const selected = await request(
       server.origin,
