@@ -27,6 +27,7 @@ import type { ParserBackend } from "./parser-fixture-types.js";
 import { DocumentReadError } from "../src/document/read.js";
 import { readerPanel, readerTool } from "../../web/test/reader-controls.js";
 import { SqliteDocumentStorage } from "../src/document/storage.js";
+import { CatalogWriteAdmission } from "../src/storage/write-admission.js";
 import {
   FIXTURE_LITERATURE,
   workbenchPdf,
@@ -829,6 +830,8 @@ describe("bounded document and material reading", () => {
     "rechecks the catalog after external %s changes (DDL at once, data by verify-catalog)",
     async (kind) => {
       const env = await fixture();
+      const catalog = join(env.home, "catalog.sqlite");
+      const writes = new CatalogWriteAdmission(catalog, { waitMs: 10_000 });
       let raw: DatabaseSync | undefined;
       try {
         await env.reopen();
@@ -840,24 +843,41 @@ describe("bounded document and material reading", () => {
         };
         const first = await env.app.documentRead.describe(request);
         expect(await env.app.documentRead.describe(request)).toEqual(first);
-        raw = new DatabaseSync(join(env.home, "catalog.sqlite"));
+        const external = (raw = new DatabaseSync(catalog));
         await env.app.database.putLiterature(FIXTURE_LITERATURE);
         expect(await env.app.documentRead.describe(request)).toEqual(first);
-        if (kind === "DDL")
-          raw.exec(
-            "CREATE INDEX unexpected_document_index ON literatures(meta_literature_id)",
+        // Publishing schedules an index refresh. The external writer shares
+        // catalog admission with the app's writers.
+        if (kind === "DDL") {
+          await writes.run(async () => {
+            // Extra indexes are allowed. Removing a required index invalidates
+            // the layout and must be detected by the next read.
+            const sql = external
+              .prepare(
+                "SELECT sql FROM sqlite_schema WHERE type='index' AND name='literature_intake_order'",
+              )
+              .get()?.sql;
+            if (typeof sql !== "string")
+              throw new Error("Fixture index missing");
+            external.exec("DROP INDEX literature_intake_order");
+            try {
+              await expect(
+                env.app.documentRead.describe(request),
+              ).rejects.toMatchObject({
+                code: "sqlite-worker",
+              });
+            } finally {
+              external.exec(sql);
+            }
+          });
+        } else {
+          external.exec("PRAGMA foreign_keys=OFF");
+          const replaceAsset = external.prepare(
+            "UPDATE literature_assets SET asset_id=? WHERE asset_id=?",
           );
-        else {
-          raw.exec("PRAGMA foreign_keys=OFF");
-          raw
-            .prepare("UPDATE literature_assets SET asset_id=? WHERE asset_id=?")
-            .run(id(999), env.asset.asset_id);
-        }
-        if (kind === "DDL")
-          await expect(
-            env.app.documentRead.describe(request),
-          ).rejects.toBeInstanceOf(Error);
-        else {
+          await writes.run(async () => {
+            replaceAsset.run(id(999), env.asset.asset_id);
+          });
           // Ordinary commits do not repeat the full check, and since 9571cfb
           // neither does the next start: the explicit verify-catalog does,
           // and refuses the damaged catalog.
@@ -866,17 +886,15 @@ describe("bounded document and material reading", () => {
           await expect(
             env.app.maintenance!.verifyCatalog!(),
           ).rejects.toMatchObject({ code: "catalog-corrupt" });
-        }
-        if (kind === "DDL") raw.exec("DROP INDEX unexpected_document_index");
-        else {
-          raw
-            .prepare("UPDATE literature_assets SET asset_id=? WHERE asset_id=?")
-            .run(env.asset.asset_id, id(999));
+          await writes.run(async () => {
+            replaceAsset.run(env.asset.asset_id, id(999));
+          });
           await env.reopen();
         }
         expect(await env.app.documentRead.describe(request)).toEqual(first);
       } finally {
         raw?.close();
+        await writes.close();
         await env.close();
       }
     },

@@ -49,3 +49,4 @@
 - 并入 14.3：11 的首个增补集 `library-scale-04-07`。同一次迁移把 118 个按位置写入的触发器改成按列名并按原顺序重建，并建增补集登记表；迁移后 `56d843ab` 打不开，是规格 4.4 登记的第一个例外。之后的结构变化用 `storage schema-apply` 在服务运行时应用。
 - 并入 14.3：10.3 的三个索引（FTS 内容表的 `c0`、两张发现原因表的 `actual_literature_id`）与 07 的变更表、触发器是同一次迁移，用 `scripts/migrate-literature-search-indexes.mjs`：先建表与索引（1 百万篇约 1.1–1.5 s），再用 `--reconcile` 做一次全量比对补齐（约 13–16 s）。补齐之前索引刷新返回 `index-reconcile-required`。部署 10.3 之后的任何版本都要先做这两步。
 - 并入 14.2：`apps/server/test/document-read.test.ts` 的“外部 DDL 后重新核对”用例偶发 `database is locked`（bac6b5a3 上 8 次失败 1 次），查明是哪一块引入的并修掉。
+- 2026-11-23：上一条已修（后端实施者，一轮）。锁竞争早于计划 26：测试的裸连接绕过写许可、`busy_timeout` 为 0，碰上文档发布触发的索引线程持锁。另外，f03e0486 起库允许未知索引，这个用例仍期待“多一个索引就拒读”，于是在 HEAD 上每次都失败。只改测试：外部写入走 `CatalogWriteAdmission`，DDL 用例改成删掉必需索引，断言拒读，恢复后读回。修后重复 30 次全部通过；总设计师复跑 3 次通过。报告 `sandbox/reports/2026-11-23-document-read-flaky/REPORT.md`。
