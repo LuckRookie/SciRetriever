@@ -2,7 +2,7 @@
 
 类型：计划（结果块）
 负责：工作集里的翻页与排序很快；超过一万篇的工作集只提供有索引支撑的排序；文献库首页从全库列表改为工作集的入口
-状态：Done（待部署）；保存的筛选与获取 PDF 的范围不接受“最近收进来”，待后端补
+状态：Done（待部署）；前端改用“最近收进来”的完整合同待做
 
 ## 现状
 
@@ -48,6 +48,7 @@ B3、C1 的决定（已定，见 [ADR 0065](../../architecture/decisions/0065-sc
   - 1m 实测：全库搜索第一页 50 项，带来历 893.5 ms，不带 885.9 ms（耗时主要在相关度打分）；一篇被发现 256 次的项，查来历中位数 0.91 ms。
   - 总设计师复跑 15 个定向文件 127 个测试，`pnpm build` 通过。
 - 2026-11-22：前端完成（前端实施者，一轮），报告 `sandbox/reports/2026-11-22-library-frontend/REPORT.md`，截图 `sandbox/reports/design-samples/2026-11-22-2026-11-22-library-2/`、`-library-3/`。总设计师复跑 web 测试 14 个文件 134 项通过（3 项按条件跳过），`pnpm build` 通过。全库带、搜索结果的范围单选、来历链接、“收进来”单篇与批量（就地更新，不重读列表）、受限排序的停用与“改按…”都已实现。规格补一处：全库带的“文件夹”是列出各文件夹的菜单。后端缺口：`LibrarySort`（保存的筛选、获取 PDF 的范围）不接受 `collected-desc`，前端暂存为“最近入库”并在对话框里写明；快照没有总数接口，全库带翻页数出个数。
+- 2026-11-22：合同补齐（后端实施者，一轮）：`LibrarySort` 含 `collected-desc`，保存的筛选与带排序的范围共用一套解析，`LibraryPageSort` 与 `collectedSort` 只作为弃用别名保留到前端改完；`citation_source_cooldowns` 进合同（`CitationSourceCooldown`、`parseTaskCitationSourceCooldowns`）。旧筛选行与旧导出文件逐字节不变。报告 `sandbox/reports/2026-11-22-contract-gaps/REPORT.md`；总设计师复跑 12 个文件全部通过，`pnpm build` 通过。
 
 ## 退出条件
 

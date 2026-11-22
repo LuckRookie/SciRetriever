@@ -7,6 +7,7 @@ import { expect, it } from "vitest";
 import {
   EMPTY_METADATA,
   parseMetadataObservation,
+  parseTaskCitationSourceCooldowns,
   type ProviderLiteratureKey,
 } from "@sciretriever/contracts";
 import {
@@ -279,6 +280,9 @@ it("applies all six default waits, disables the source, and keeps missing anchor
         pending_truncated: false,
       }),
     ]);
+    expect(parseTaskCitationSourceCooldowns(initial)).toEqual({
+      citation_source_cooldowns: initial.citation_source_cooldowns,
+    });
 
     // Exercise the appended and first-read paths after the activity tail
     // has rolled past the cooldown events.
@@ -467,6 +471,9 @@ it.each([
         next_retry_at: new Date(START + 2000).toISOString(),
         pending_count: 2,
       });
+      expect(parseTaskCitationSourceCooldowns(interrupted)).toEqual({
+        citation_source_cooldowns: interrupted.citation_source_cooldowns,
+      });
       expect(calls).toEqual([
         "quota:first",
         "free:first",
@@ -571,6 +578,9 @@ it("defers a supporting lookup and suspends further paging of the same source", 
     expect(detail.citation_source_cooldowns?.[0]).toMatchObject({
       status: "recovered",
       pending_count: 0,
+    });
+    expect(parseTaskCitationSourceCooldowns(detail)).toEqual({
+      citation_source_cooldowns: detail.citation_source_cooldowns,
     });
     expect(
       detail.source_results.metadata?.sources.find(

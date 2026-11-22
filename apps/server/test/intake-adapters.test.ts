@@ -135,7 +135,7 @@ it("shares batch, facets, preview and rename shapes over HTTP, CLI and MCP witho
             query: parseLibrarySearchRequest({
               query: { intake_batch_ids: [batch] },
             }).query,
-            sort: "title-asc",
+            sort: "collected-desc",
             limit: 1,
           },
         },

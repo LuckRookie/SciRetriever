@@ -78,7 +78,7 @@ export function createTaskReader(repository: ExecutionRepository) {
         ? { citation_source_cooldowns: citation_cooldowns.sources }
         : {}),
       ...(citation_cooldowns.truncated
-        ? { citation_source_cooldowns_truncated: true }
+        ? { citation_source_cooldowns_truncated: true as const }
         : {}),
       interventions,
       policy,

@@ -17,6 +17,7 @@ import {
   parseLibraryQuery,
   parseLibrarySearchRequest,
   parseLiteratureMetadata,
+  type LibrarySort,
 } from "../src/index.js";
 const id = "00000000-0000-0000-0000-000000000001";
 it("describes the intake folder response with its items wrapper and tree fields", () => {
@@ -273,6 +274,32 @@ it("decodes historic metadata and queries with empty new fields and preserves ne
     { kind: "literatures", literature_ids: [] },
   ])
     expect(() => parseAcquirePdfSelector(v)).toThrow();
+});
+
+it("shares the collected sort between search and persisted PDF selectors", () => {
+  const sort: LibrarySort = "collected-desc";
+  const query = { collection_scope: "collected" };
+  const search = parseLibrarySearchRequest({ query, sort });
+  expect(search.sort).toBe(sort);
+  expect(
+    parseLibrarySearchRequest({ query, sort }, { collectedSort: true }),
+  ).toEqual(search);
+  const selector = { kind: "query", query: search.query, sort, limit: 4 };
+  expect(parseAcquirePdfSelector(selector)).toEqual(selector);
+  const counts = {
+    matched: 10,
+    process: 4,
+    skipped_has_pdf: 1,
+    skipped_unavailable: 2,
+    over_limit: 3,
+  };
+  expect(parseAcquirePdfScope({ selector, counts })).toEqual({
+    selector,
+    counts,
+  });
+  expect(() =>
+    parseAcquirePdfSelector({ ...selector, cursor: "synthetic" }),
+  ).toThrow();
 });
 
 it("binds the six batch states to nullable results and rejects the retired status field", () => {

@@ -26,7 +26,7 @@ import {
   sha256,
   type LibraryQuery,
   type LibrarySearchPage,
-  type LibraryPageSort,
+  type LibrarySort,
   type LiteratureDetail,
   type LiteratureId,
   type LiteratureReferencePage,
@@ -293,7 +293,7 @@ export interface Position {
 export interface LibraryPageQuery {
   readonly query: LibraryQuery;
   readonly ftsQuery: string | null;
-  readonly sort: LibraryPageSort;
+  readonly sort: LibrarySort;
   readonly after: Position | null;
   readonly limit: number;
   readonly fullRelevance?: true;
@@ -311,7 +311,7 @@ function libraryWorksetUsesIntake(query: LibraryQuery): boolean {
       query.discovery_run_ids.length,
   );
 }
-function position(row: SearchSnapshotRow, sort: LibraryPageSort): Position {
+function position(row: SearchSnapshotRow, sort: LibrarySort): Position {
   const l = row.item.literature;
   const fields = draftSortFields(sort),
     facts = row.item.draft_facts;
@@ -341,7 +341,7 @@ function position(row: SearchSnapshotRow, sort: LibraryPageSort): Position {
                 : row.relevance,
   };
 }
-function compare(a: Position, b: Position, sort: LibraryPageSort): number {
+function compare(a: Position, b: Position, sort: LibrarySort): number {
   if (a.value === null && b.value !== null) return 1;
   if (b.value === null && a.value !== null) return -1;
   let result = 0;
@@ -364,7 +364,7 @@ function compare(a: Position, b: Position, sort: LibraryPageSort): number {
     result = b.secondary! - a.secondary!;
   return result || compareText(a.literature_id, b.literature_id);
 }
-function positionPayload(p: Position, sort: LibraryPageSort): object {
+function positionPayload(p: Position, sort: LibrarySort): object {
   const fields = draftSortFields(sort);
   if (fields)
     return {
@@ -408,7 +408,7 @@ function positionPayload(p: Position, sort: LibraryPageSort): object {
 function encodePosition(
   p: Position,
   query: LibraryQuery,
-  sort: LibraryPageSort,
+  sort: LibrarySort,
   total: NonNullable<Position["total"]>,
   rankingId?: string,
 ): string {
@@ -443,7 +443,7 @@ function object(
 function decodePosition(
   cursor: string,
   query: LibraryQuery,
-  sort: LibraryPageSort,
+  sort: LibrarySort,
 ): Position {
   try {
     if (cursor.length > 65536 || !/^[A-Za-z0-9_-]+$/u.test(cursor)) fail();
@@ -977,7 +977,7 @@ export class LiteratureQueryService {
     mode: "page" | "browse" | "selection" = "page",
   ): Promise<LibrarySearchPage> {
     signal?.throwIfAborted();
-    const request = parseLibrarySearchRequest(value, { collectedSort: true });
+    const request = parseLibrarySearchRequest(value);
     const query =
       mode === "browse" ? browseQuery(request.query) : request.query;
     const defaultSort =

@@ -312,16 +312,18 @@ export interface StableFailure {
 export type LibrarySort =
   | (typeof DRAFT_FACT_SORTS)[number]
   | "intake-desc"
+  | "collected-desc"
   | "opened-desc"
   | "publication-year-desc"
   | "publication-year-asc"
   | "title-asc"
   | "title-desc"
   | "relevance";
-export type LibraryPageSort = LibrarySort | "collected-desc";
+/** @deprecated Use LibrarySort for all library requests. */
+export type LibraryPageSort = LibrarySort;
 export const LIBRARY_SORT_SCOPE_LIMIT = "library-sort-scope-limit";
 
-export interface LibrarySearchRequest<Sort = LibraryPageSort> {
+export interface LibrarySearchRequest<Sort = LibrarySort> {
   readonly query: LibraryQuery;
   readonly sort: Sort;
   readonly limit: number;
@@ -525,16 +527,14 @@ export function parseReferenceDetail(value: unknown): ReferenceDetail {
     supports: Object.freeze(supports),
   });
 }
-export function parseLibrarySearchRequest(
-  value: unknown,
-): LibrarySearchRequest<LibrarySort>;
+export function parseLibrarySearchRequest(value: unknown): LibrarySearchRequest;
+/** @deprecated All library sorts are accepted without the second argument. */
 export function parseLibrarySearchRequest(
   value: unknown,
   options: { readonly collectedSort: true },
 ): LibrarySearchRequest;
 export function parseLibrarySearchRequest(
   value: unknown,
-  options?: { readonly collectedSort: true },
 ): LibrarySearchRequest {
   const r = exact(
     {
@@ -567,13 +567,13 @@ export function parseLibrarySearchRequest(
     discovery_run_ids: [],
     ...object(r.query, []),
   });
-  const sort = enumeration<LibraryPageSort>(
+  const sort = enumeration<LibrarySort>(
     !Object.hasOwn(object(value, []), "sort") && query.recently_opened
       ? "opened-desc"
       : r.sort,
     [
       "intake-desc",
-      ...(options?.collectedSort ? ["collected-desc" as const] : []),
+      "collected-desc",
       "opened-desc",
       "publication-year-desc",
       "publication-year-asc",

@@ -1,10 +1,14 @@
 import { setTimeout as delay } from "node:timers/promises";
-import type { StableFailure } from "@sciretriever/contracts";
+import {
+  MAX_CITATION_RETRIES,
+  type StableFailure,
+} from "@sciretriever/contracts";
 import type { CitationProviderState } from "./citation-checkpoint.js";
 
-const RETRY_DELAYS = [1, 5, 15, 60, 60, 60].map((minutes) => minutes * 60_000);
+const RETRY_MINUTES = [1, 5, 15, 60, 60, 60] as const satisfies {
+  readonly length: typeof MAX_CITATION_RETRIES;
+};
 const RATE_LIMITED = "metadata-provider-rate-limited";
-export const MAX_CITATION_RETRIES = RETRY_DELAYS.length;
 
 export interface CitationClock {
   now(): number;
@@ -40,7 +44,7 @@ export function coolCitationSource(
       : undefined;
   const until = disabled
     ? null
-    : Math.min(8.64e15, now + (declared ?? RETRY_DELAYS[retries]!));
+    : Math.min(8.64e15, now + (declared ?? RETRY_MINUTES[retries]! * 60_000));
   state.cooldown = { retries, until, failure };
   if (disabled) {
     state.terminal = "FAILED";

@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
 import {
+  ContractValidationError,
+  parseCitationSourceCooldown,
+  parseTaskCitationSourceCooldowns,
   parseMetadataTaskRequest,
   parseMetadataSourceProgress,
   parseMetadataSourceRecord,
@@ -51,6 +54,126 @@ const stats = {
     sources: [],
   },
 };
+
+const cooldown = {
+  target_id: "job-1:0",
+  run_id: "00000000-0000-0000-0000-000000000002",
+  source: "openalex",
+  status: "cooling",
+  retries: 0,
+  next_retry_at: at,
+  reason: {
+    code: "metadata-provider-rate-limited",
+    reason: "The source returned a quota error.",
+    action: "Wait for the source to recover.",
+    retryable: true,
+  },
+  pending_count: 2,
+  pending_sample: [
+    { literature_id: literature, purpose: "reference-query" },
+    { literature_id: literature, purpose: "lookup", relation_id: "relation-1" },
+  ],
+  pending_truncated: false,
+};
+
+it("decodes cooldown transitions and bounded task fields without discarding wire fields", () => {
+  const changes = [
+    cooldown,
+    { ...cooldown, next_retry_at: "+275760-09-13T00:00:00.000Z" },
+    { ...cooldown, status: "disabled", retries: 6, next_retry_at: null },
+    { ...cooldown, status: "retry-ended", retries: 1, next_retry_at: null },
+    { ...cooldown, status: "recovered", next_retry_at: null, reason: null },
+    {
+      ...cooldown,
+      pending_count: 21,
+      pending_sample: Array.from({ length: 20 }, (_, n) => ({
+        literature_id: literature,
+        purpose: "lookup",
+        relation_id: `relation-${n}`,
+      })),
+      pending_truncated: true,
+    },
+  ];
+  for (const row of changes)
+    expect(parseCitationSourceCooldown(row)).toEqual(row);
+  expect(parseTaskCitationSourceCooldowns({ job: {} })).toEqual({});
+  const fields = { citation_source_cooldowns: [cooldown] };
+  expect(parseTaskCitationSourceCooldowns({ job: {}, ...fields })).toEqual(
+    fields,
+  );
+  const truncated = {
+    citation_source_cooldowns: Array.from({ length: 32 }, (_, n) => ({
+      ...cooldown,
+      target_id: `job-1:${n}`,
+    })),
+    citation_source_cooldowns_truncated: true,
+  };
+  expect(parseTaskCitationSourceCooldowns(truncated)).toEqual(truncated);
+});
+
+it("rejects invalid cooldown states, timestamps, failure shapes, samples and truncation flags", () => {
+  for (const invalid of [
+    { ...cooldown, status: "running" },
+    { ...cooldown, source: "" },
+    { ...cooldown, target_id: 1 },
+    { ...cooldown, run_id: "" },
+    { ...cooldown, retries: -1 },
+    { ...cooldown, retries: 1.5 },
+    { ...cooldown, retries: 7 },
+    { ...cooldown, retries: 6 },
+    { ...cooldown, next_retry_at: null },
+    { ...cooldown, next_retry_at: "2026-02-30T00:00:00Z" },
+    { ...cooldown, status: "disabled", next_retry_at: null },
+    { ...cooldown, reason: { code: "quota", reason: "exhausted" } },
+    { ...cooldown, reason: { ...cooldown.reason, retryable: "true" } },
+    { ...cooldown, pending_count: 1 },
+    { ...cooldown, pending_truncated: 1 },
+    { ...cooldown, pending_truncated: true },
+    {
+      ...cooldown,
+      pending_count: 21,
+      pending_sample: Array(21).fill(cooldown.pending_sample[0]),
+    },
+    {
+      ...cooldown,
+      pending_sample: [
+        { literature_id: literature, purpose: "lookup" },
+        cooldown.pending_sample[1],
+      ],
+    },
+    {
+      ...cooldown,
+      pending_sample: [
+        { literature_id: literature, purpose: "topic-search" },
+        cooldown.pending_sample[1],
+      ],
+    },
+    {
+      ...cooldown,
+      pending_sample: [
+        { literature_id: "invalid", purpose: "reference-query" },
+        cooldown.pending_sample[1],
+      ],
+    },
+    { ...cooldown, unknown: 1 },
+  ])
+    expect(() => parseCitationSourceCooldown(invalid)).toThrow(
+      ContractValidationError,
+    );
+  for (const invalid of [
+    { citation_source_cooldowns: null },
+    { citation_source_cooldowns: [] },
+    { citation_source_cooldowns: Array(33).fill(cooldown) },
+    { citation_source_cooldowns_truncated: true },
+    {
+      citation_source_cooldowns: [cooldown],
+      citation_source_cooldowns_truncated: false,
+    },
+  ])
+    expect(() => parseTaskCitationSourceCooldowns(invalid)).toThrow(
+      ContractValidationError,
+    );
+});
 
 it("parses frozen topic, citation and lookup selections without accepting arbitrary configuration or credential fields", () => {
   expect(parseMetadataTaskRequest(request)).toEqual(request);

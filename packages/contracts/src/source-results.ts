@@ -1,7 +1,9 @@
 import {
   ContractValidationError,
   parseLiteratureId,
+  parseStableFailure,
   parseUtcTimestamp,
+  type StableFailure,
 } from "./index.js";
 import {
   ACQUISITION_STAGES,
@@ -20,6 +22,35 @@ export const METADATA_SOURCE_PURPOSES = [
   "reference-query",
 ] as const;
 export type MetadataSourcePurpose = (typeof METADATA_SOURCE_PURPOSES)[number];
+export const MAX_CITATION_RETRIES = 6;
+export const CITATION_SOURCE_LIMIT = 32;
+export const CITATION_PENDING_SAMPLE = 20;
+const CITATION_COOLDOWN_STATES = [
+  "cooling",
+  "disabled",
+  "recovered",
+  "retry-ended",
+] as const;
+export type CitationSourcePendingSample = { readonly literature_id: string } & (
+  | { readonly purpose: "reference-query" }
+  | { readonly purpose: "lookup"; readonly relation_id: string }
+);
+export interface CitationSourceCooldown {
+  readonly target_id: string;
+  readonly run_id: string;
+  readonly source: string;
+  readonly status: (typeof CITATION_COOLDOWN_STATES)[number];
+  readonly retries: number;
+  readonly next_retry_at: string | null;
+  readonly reason: StableFailure | null;
+  readonly pending_count: number;
+  readonly pending_sample: readonly CitationSourcePendingSample[];
+  readonly pending_truncated: boolean;
+}
+export interface TaskCitationSourceCooldowns {
+  readonly citation_source_cooldowns?: readonly CitationSourceCooldown[];
+  readonly citation_source_cooldowns_truncated?: true;
+}
 export interface MetadataTaskProvider {
   readonly source: string;
   readonly scan_limit: number;
@@ -250,6 +281,118 @@ function unique<T>(values: readonly T[], key: (v: T) => string): readonly T[] {
   if (new Set(values.map(key)).size !== values.length) fail();
   return values;
 }
+
+function citationRetryAt(value: unknown): string {
+  // A sufficiently long Retry-After can produce Date's expanded-year ISO form.
+  if (typeof value === "string" && value.startsWith("+")) {
+    const date = new Date(value);
+    if (Number.isFinite(date.getTime()) && date.toISOString() === value)
+      return value;
+  }
+  return parseUtcTimestamp(value);
+}
+
+function parseCitationPendingSample(
+  value: unknown,
+): CitationSourcePendingSample {
+  const r = rec(value, ["literature_id", "purpose"], ["relation_id"]);
+  const literature_id = parseLiteratureId(r.literature_id);
+  if (r.purpose === "reference-query" && !Object.hasOwn(r, "relation_id"))
+    return Object.freeze({ literature_id, purpose: r.purpose });
+  if (
+    r.purpose === "lookup" &&
+    typeof r.relation_id === "string" &&
+    r.relation_id
+  )
+    return Object.freeze({
+      literature_id,
+      purpose: r.purpose,
+      relation_id: r.relation_id,
+    });
+  return fail();
+}
+
+export function parseCitationSourceCooldown(
+  value: unknown,
+): CitationSourceCooldown {
+  const r = rec(value, [
+    "target_id",
+    "run_id",
+    "source",
+    "status",
+    "retries",
+    "next_retry_at",
+    "reason",
+    "pending_count",
+    "pending_sample",
+    "pending_truncated",
+  ]);
+  const status = one(r.status, CITATION_COOLDOWN_STATES);
+  const retries = count(r.retries, MAX_CITATION_RETRIES);
+  const next_retry_at = nullable(r.next_retry_at, citationRetryAt);
+  const reason = nullable(r.reason, parseStableFailure);
+  const pending_count = count(r.pending_count);
+  const pending_sample = list(
+    r.pending_sample,
+    parseCitationPendingSample,
+    CITATION_PENDING_SAMPLE,
+  );
+  const pending_truncated = bool(r.pending_truncated);
+  if (
+    (status === "cooling") !== (next_retry_at !== null) ||
+    (status === "recovered") !== (reason === null) ||
+    (status === "cooling" && retries === MAX_CITATION_RETRIES) ||
+    (status === "disabled" && retries !== MAX_CITATION_RETRIES) ||
+    (status === "recovered" && retries !== 0) ||
+    (status === "retry-ended" && retries === 0) ||
+    pending_sample.length !==
+      Math.min(pending_count, CITATION_PENDING_SAMPLE) ||
+    pending_truncated !== pending_count > pending_sample.length
+  )
+    fail();
+  return Object.freeze({
+    target_id: id(r.target_id),
+    run_id: id(r.run_id),
+    source: source(r.source),
+    status,
+    retries,
+    next_retry_at,
+    reason,
+    pending_count,
+    pending_sample,
+    pending_truncated,
+  });
+}
+
+/** Decode only the cooldown fields of a task detail, preserving absent fields. */
+export function parseTaskCitationSourceCooldowns(
+  value: unknown,
+): TaskCitationSourceCooldowns {
+  if (!value || typeof value !== "object" || Array.isArray(value)) fail();
+  const task = value as Record<string, unknown>;
+  const sources = Object.hasOwn(task, "citation_source_cooldowns")
+    ? list(
+        task.citation_source_cooldowns,
+        parseCitationSourceCooldown,
+        CITATION_SOURCE_LIMIT,
+      )
+    : undefined;
+  const truncated = Object.hasOwn(task, "citation_source_cooldowns_truncated");
+  if (
+    sources?.length === 0 ||
+    (truncated &&
+      (task.citation_source_cooldowns_truncated !== true ||
+        sources?.length !== CITATION_SOURCE_LIMIT))
+  )
+    fail();
+  return Object.freeze({
+    ...(sources ? { citation_source_cooldowns: sources } : {}),
+    ...(truncated
+      ? { citation_source_cooldowns_truncated: true as const }
+      : {}),
+  });
+}
+
 export function parseMetadataTaskRequest(value: unknown): MetadataTaskRequest {
   const shape = rec(
     value,

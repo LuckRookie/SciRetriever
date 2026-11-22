@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import {
   EMPTY_METADATA,
+  parseAcquirePdfSelector,
   parseMetadataObservation,
   parseIntakeBatch,
   parseIntakeBatchPage,
@@ -462,6 +463,87 @@ it("previews and freezes ordered PDF scope beyond one thousand rows, with disjoi
     expect(
       (await tasks.list()).tasks.find((t) => t.job_id === job.job_id)?.scope,
     ).toEqual(read.scope);
+  }));
+
+it("uses the first collection time to order and freeze a limited PDF scope", () =>
+  fixture(async (app, home) => {
+    const { DatabaseSync } = await import("node:sqlite");
+    const { createTaskOperations } = await import(
+      "../src/entry/task-operations.js"
+    );
+    const ids: LiteratureId[] = [];
+    for (const [n, record] of [
+      "older-intake",
+      "newer-intake",
+      "discovered",
+    ].entries()) {
+      const observed = intakeObservation(record);
+      const decision = await app.identity.observe({
+        ...observed,
+        provenance: {
+          ...observed.provenance,
+          observed_at: `2026-01-0${n + 1}T00:00:00.000Z`,
+        },
+      });
+      if (decision.disposition !== "accepted")
+        throw new Error("fixture literature was not accepted");
+      ids.push(parseLiteratureId(decision.literature_id));
+    }
+    const older = ids[0]!,
+      newer = ids[1]!,
+      discovered = ids[2]!;
+    await app.database.collectLiteratures([older, newer]);
+    await app.writes.run(async () => {
+      using db = new DatabaseSync(join(home, "catalog.sqlite"));
+      const setTime = db.prepare(
+        "UPDATE library_collection_times SET collected_at=? WHERE literature_id=?",
+      );
+      expect(setTime.run("2026-02-02T00:00:00.000Z", older).changes).toBe(1);
+      expect(setTime.run("2026-02-01T00:00:00.000Z", newer).changes).toBe(1);
+    });
+    const selector = parseAcquirePdfSelector({
+      kind: "query",
+      query: { collection_scope: "all" },
+      sort: "collected-desc",
+      limit: 2,
+    });
+    for (const [sort, expected] of [
+      ["intake-desc", [discovered, newer, older]],
+      ["collected-desc", [older, newer, discovered]],
+    ] as const) {
+      const page = await app.library.search({
+        query: { collection_scope: "all" },
+        sort,
+        limit: 3,
+      });
+      expect(page.items.map((item) => item.literature.literature_id)).toEqual(
+        expected,
+      );
+    }
+    const preview = await app.library.pdfSelection(selector);
+    expect(preview.counts).toEqual({
+      matched: 3,
+      process: 2,
+      skipped_has_pdf: 0,
+      skipped_unavailable: 0,
+      over_limit: 1,
+    });
+    expect(preview.items.map((item) => item.literature_id)).toEqual([
+      older,
+      newer,
+    ]);
+    const tasks = createTaskOperations(app)!;
+    const job = await tasks.create({
+      kind: "acquire-pdf",
+      idempotency_key: "collected-order",
+      selector,
+    });
+    const saved = await tasks.read(job.job_id);
+    expect(saved.scope).toEqual({ selector, counts: preview.counts });
+    expect(saved.targets.map((target) => target.literature_id)).toEqual([
+      older,
+      newer,
+    ]);
   }));
 
 it("keeps explicit PDF and exhausted targets in preview and submission, and retries exhausted targets only on execution", () =>

@@ -97,12 +97,10 @@ it("counts 9,999 and 10,000 exactly, limits a larger sample, and keeps complete 
     }
 
     const full = { text: "sample", publication_year_to: 2022 };
-    await expect(
-      service.search({
-        query: { collection_scope: "all" },
-        sort: "title-desc",
-      }),
-    ).rejects.toMatchObject({ code: "library-sort-scope-limit" });
+    for (const sort of ["title-desc", "collected-desc"])
+      await expect(
+        service.search({ query: { collection_scope: "all" }, sort }),
+      ).rejects.toMatchObject({ code: "library-sort-scope-limit" });
     const badSort = { query: full, sort: "title-desc", limit: 2 };
     const server = await startQueryOnlyWorkbench({ home, assets: new Map() });
     const mcp = createMcpServer({ home });

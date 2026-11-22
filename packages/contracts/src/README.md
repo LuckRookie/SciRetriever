@@ -5,7 +5,7 @@
 ## 内容入口
 
 - [index.ts](index.ts)：包公开导出与基础合同。
-- 文献库页面使用 `LibraryPageSort`。调用 `parseLibrarySearchRequest(value, { collectedSort: true })` 可解析 `collected-desc`。该排序返回可空的 `collected_at`，表示首次选用时间。`intake_at` 仍表示最早书目观测。`library-sort-scope-limit` 表示当前命中范围需要缩小或使用支持的排序。
+- 页面、保存筛选与有序范围共用 `LibrarySort`。`parseLibrarySearchRequest(value)` 接受 `collected-desc`，页面返回的可空 `collected_at` 表示首次选用时间。`intake_at` 表示最早书目观测。`library-sort-scope-limit` 表示当前命中范围需要缩小或使用支持的排序。
 - [device-connections.ts](device-connections.ts)：设备连接、配对请求与精确键解析；可省略的显示类型在创建请求中规范为 null，读取结果始终带 nullable `kind`，用途集合独立校验。
 - [folders.ts](folders.ts) / [filters.ts](filters.ts)：分组与保存筛选的操作、版本 1 导出格式和精确键解析；分组的机器结果按成员分页，下载文件按文件夹嵌套成员。
 - [literature-summary.ts](literature-summary.ts)：文献公开批量读取的最小书目投影，只含稳定 ID、已有标识、题名与年份。
@@ -56,7 +56,7 @@
 
 `source-configuration.ts` 定义来源目录、单源编辑、测试回执与配置应用状态的封闭中性合同；凭据字段只有存在性与替换/清除动作。
 
-`source-results.ts` 定义元数据任务请求、安全来源进度、最终 PDF 渠道、任务来源汇总与来源统计；比例显式带分子分母，历史无记录可区分，所有问题沿用 source-configuration 的安全诊断。
+`source-results.ts` 定义元数据任务请求、安全来源进度、最终 PDF 渠道、任务来源汇总与来源统计；比例显式带分子分母，历史无记录可区分，所有问题沿用 source-configuration 的安全诊断。`parseTaskCitationSourceCooldowns` 解析任务详情的来源冷却状态和有界待补查样本，保留字段的省略语义。
 
 `screencast.ts` 定义人类观看的认证握手、订阅、二进制 JPEG 封套、直接输入及控制/连接状态，包含严格边界解析；它与 Agent 的 WorkbenchObservation 分离。
 \n`document-layout.ts` 定义普通 Markdown 的文章信息、图表分组和逐条页脚注 UTF-8 区间；新文档通过 describe 返回，outline 的无原标题项以 null 表示。\n

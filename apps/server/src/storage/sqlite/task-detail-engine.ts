@@ -7,8 +7,11 @@ import {
 import { rmSync } from "node:fs";
 import { dirname } from "node:path";
 import {
+  CITATION_PENDING_SAMPLE,
+  CITATION_SOURCE_LIMIT,
   ContractValidationError,
-  type StableFailure,
+  type CitationSourceCooldown,
+  type CitationSourcePendingSample,
   type TaskSourceResults,
 } from "@sciretriever/contracts";
 import type { ExecutionEvent } from "./worker.js";
@@ -57,30 +60,15 @@ type ProcessingDetailEvent = SourceEvent & {
 };
 const processingDetailKinds = new Set<string>(PROCESSING_DETAIL_KINDS);
 
-interface CitationSourceTransition {
-  readonly target_id: string;
-  readonly run_id: string;
-  readonly source: string;
-  readonly status: "cooling" | "disabled" | "recovered" | "retry-ended";
-  readonly retries: number;
-  readonly next_retry_at: string | null;
-  readonly reason: StableFailure | null;
-}
-interface CitationPendingSample {
-  readonly literature_id: string;
-  readonly purpose: "reference-query" | "lookup";
-  readonly relation_id?: string;
-}
-interface CitationBacklogChange extends CitationPendingSample {
+type CitationSourceTransition = Omit<
+  CitationSourceCooldown,
+  "pending_count" | "pending_sample" | "pending_truncated"
+>;
+type CitationBacklogChange = CitationSourcePendingSample & {
   readonly source: string;
   readonly work_id: string;
   readonly action: "queued" | "settled";
-}
-export interface CitationSourceDetail extends CitationSourceTransition {
-  readonly pending_count: number;
-  readonly pending_sample: readonly CitationPendingSample[];
-  readonly pending_truncated: boolean;
-}
+};
 
 export interface TaskDetailEvents {
   readonly source_results: TaskSourceResults;
@@ -94,7 +82,7 @@ export interface TaskDetailEvents {
   };
   readonly technical: readonly ExecutionEvent[];
   readonly citation_cooldowns: {
-    readonly sources: readonly CitationSourceDetail[];
+    readonly sources: readonly CitationSourceCooldown[];
     readonly truncated: boolean;
   };
 }
@@ -114,8 +102,6 @@ const PROCESSING_PAGE_SIZE = 1000;
 const PROCESSING_LIMIT = 100_000;
 const ACQUISITION_LIMIT = 10_000;
 const TECHNICAL_LIMIT = 1000;
-const CITATION_SOURCE_LIMIT = 32;
-const CITATION_PENDING_SAMPLE = 20;
 
 function citationScope(...parts: string[]) {
   return Buffer.from(JSON.stringify(parts)).toString("base64url");
@@ -548,7 +534,7 @@ class TaskHistory {
       throw new ProcessingBudgetExceeded();
   }
 
-  private citationSources(): CitationSourceDetail[] {
+  private citationSources(): CitationSourceCooldown[] {
     return this.scratch
       .values<CitationSourceTransition>(
         "citation-source|",
@@ -562,7 +548,7 @@ class TaskHistory {
         );
         const pending_count =
           this.scratch.read<number>("citation-count|" + prefix) ?? 0;
-        const pending_sample = this.scratch.values<CitationPendingSample>(
+        const pending_sample = this.scratch.values<CitationSourcePendingSample>(
           prefix,
           CITATION_PENDING_SAMPLE,
         );

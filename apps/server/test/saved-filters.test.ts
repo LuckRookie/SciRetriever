@@ -8,6 +8,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { expect, it } from "vitest";
 import {
   parseSavedFilter,
+  parseFiltersExportFile,
   parseDeviceConnectionCode,
   parseLibrarySearchRequest,
   parseLiterature,
@@ -62,6 +63,65 @@ const input = (name: string, query: unknown = {}) => ({
   sort: "title-asc",
 });
 const missing = "00000000-0000-0000-0000-000000000001";
+
+it("round-trips collected order through save, update, import and export while preserving legacy bytes", async () => {
+  const f = await fixture();
+  try {
+    const legacy = parseSavedFilter(await f.manage("create", input("legacy")));
+    const exportFile = async () =>
+      parseFiltersExportFile(
+        await f.app.filters.query({ operation: "export", request: {} }),
+      );
+    const legacyExport = await exportFile();
+    const legacyFile = JSON.stringify(legacyExport);
+    using db = new DatabaseSync(join(f.home, "catalog.sqlite"), {
+      readOnly: true,
+    });
+    const legacyRow = db.prepare(
+      "SELECT filter_id,name,query_json,sort,created_at,updated_at FROM saved_filters WHERE filter_id=?",
+    );
+    const savedBytes = JSON.stringify(legacyRow.get(legacy.filter_id));
+
+    const sort = "collected-desc";
+    const query = { collection_scope: "collected" };
+    const created = parseSavedFilter(
+      await f.manage("create", { name: "recent", query, sort }),
+    );
+    expect(created).toMatchObject({ sort, query });
+    await f.manage("update", {
+      filter_id: created.filter_id,
+      query,
+      sort: legacy.sort,
+    });
+    const updated = parseSavedFilter(
+      await f.manage("update", {
+        filter_id: created.filter_id,
+        query: { ...query, title: "test" },
+        sort,
+      }),
+    );
+    expect(updated).toMatchObject({ sort, query: { ...query, title: "test" } });
+    const imported = { name: "imported", query, sort };
+    expect(await f.manage("import", { items: [imported] })).toMatchObject({
+      items: [{ status: "imported", filter: imported }],
+    });
+    const { filters } = await exportFile();
+    expect(filters).toEqual([
+      { ...imported, query: created.query },
+      { name: legacy.name, query: legacy.query, sort: legacy.sort },
+      { name: updated.name, query: updated.query, sort },
+    ]);
+    expect(JSON.stringify(filters[1])).toBe(
+      JSON.stringify(legacyExport.filters[0]),
+    );
+    expect(JSON.stringify(parseFiltersExportFile(JSON.parse(legacyFile)))).toBe(
+      legacyFile,
+    );
+    expect(JSON.stringify(legacyRow.get(legacy.filter_id))).toBe(savedBytes);
+  } finally {
+    await f.close();
+  }
+});
 
 it("owns normalized, codepoint-ordered saved conditions and strict CRUD errors", async () => {
   const f = await fixture();
@@ -436,9 +496,10 @@ it("returns identical saved filters over Web, CLI, actual stdio MCP and device H
           body: JSON.stringify({ protocol_version: 1, request }),
         },
       );
+    const viaWeb = { ...input("via Web"), sort: "collected-desc" };
     const created = await post("maintenance", {
       operation: "create",
-      request: input("via Web"),
+      request: viaWeb,
     });
     expect(created.status).toBe(200);
     await local.connect(stdio);
@@ -463,7 +524,7 @@ it("returns identical saved filters over Web, CLI, actual stdio MCP and device H
         name: "filters_manage",
         arguments: {
           operation: "import",
-          request: { items: [input("via Web")] },
+          request: { items: [viaWeb] },
         },
       });
       expect(write.isError).not.toBe(true);
@@ -473,6 +534,9 @@ it("returns identical saved filters over Web, CLI, actual stdio MCP and device H
     }
     const cli = await runCli(["filters", "list", "--json"], { home: f.home });
     expect(cli.code).toBe(0);
+    expect(cli.value).toMatchObject({
+      items: [{ name: "via Web", sort: "collected-desc" }],
+    });
     const request = { operation: "list", request: {} };
     expect(await (await post("query", request)).json()).toEqual({
       protocol_version: 1,
@@ -484,7 +548,7 @@ it("returns identical saved filters over Web, CLI, actual stdio MCP and device H
           .structuredContent,
       ).toEqual({ protocol_version: 1, result: cli.value });
     async function* stdin() {
-      yield Buffer.from(JSON.stringify({ items: [input("via Web")] }));
+      yield Buffer.from(JSON.stringify({ items: [viaWeb] }));
     }
     const cliWrite = await runCli(
       ["filters", "import", "--request", "-", "--json"],

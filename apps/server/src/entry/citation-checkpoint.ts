@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   canonicalJsonBytes,
+  MAX_CITATION_RETRIES,
   parseIntakeBatchId,
   parseLiteratureId,
   parseMetaLiteratureId,
@@ -17,10 +18,7 @@ import type {
   CitationProgress,
 } from "../storage/sqlite/citation-progress.js";
 import type { DiscoveryPublication } from "../storage/sqlite/worker.js";
-import {
-  isCitationRateLimit,
-  MAX_CITATION_RETRIES,
-} from "./citation-cooldown.js";
+import { isCitationRateLimit } from "./citation-cooldown.js";
 
 export type CitationCause = DiscoveryPublication["citation_causes"][number];
 export type CitationItem = Extract<MetadataScanEvent, { kind: "item" }>;
