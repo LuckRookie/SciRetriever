@@ -7,6 +7,11 @@ import { parseLibrarySearchRequest } from "@sciretriever/contracts";
 import { initializeCurrentCatalog } from "../src/storage/sqlite/catalog-layout.js";
 import { SqliteReadLane, SqliteWorker } from "../src/storage/sqlite/worker.js";
 import { LiteratureQueryService } from "../src/literature/query.js";
+import { startQueryOnlyWorkbench } from "../src/bootstrap/workbench.js";
+import { runCli } from "../src/cli/main.js";
+import { createMcpServer } from "../src/mcp/server.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 
 const id = (n: number) =>
   `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -73,9 +78,84 @@ it("counts 9,999 and 10,000 exactly, limits a larger sample, and keeps complete 
       for (const result of [counts, facets, page])
         expect(result.count_truncated).toBe(n > 10_000 ? true : undefined);
       expect(facets.facets_truncated).toBe(n > 10_000 ? true : undefined);
+      const title = { query, sort: "title-desc", limit: 2 };
+      if (n <= 10_000) {
+        expect(
+          (await service.search(title)).items.map(
+            (row) => row.literature.literature_id,
+          ),
+        ).toEqual([id(1), id(2)]);
+      } else {
+        await expect(service.search(title)).rejects.toMatchObject({
+          code: "library-sort-scope-limit",
+        });
+        expect(await service.search({ query, limit: 2 })).toMatchObject({
+          relevance_limit: 1_000,
+          next_cursor: expect.any(String),
+        });
+      }
     }
 
     const full = { text: "sample", publication_year_to: 2022 };
+    await expect(
+      service.search({
+        query: { collection_scope: "all" },
+        sort: "title-desc",
+      }),
+    ).rejects.toMatchObject({ code: "library-sort-scope-limit" });
+    const badSort = { query: full, sort: "title-desc", limit: 2 };
+    const server = await startQueryOnlyWorkbench({ home, assets: new Map() });
+    const mcp = createMcpServer({ home });
+    const [hostTransport, clientTransport] =
+      InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "sorting-fixture", version: "1" });
+    try {
+      const http = await fetch(`${server.origin}/api/v1/query/search`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Sciretriever-Protocol-Version": "1",
+        },
+        body: JSON.stringify({ protocol_version: 1, request: badSort }),
+      });
+      expect(http.status).toBe(400);
+      expect(await http.json()).toEqual({
+        protocol_version: 1,
+        code: "library-sort-scope-limit",
+      });
+      const stderr: string[] = [];
+      const cli = await runCli(
+        [
+          "literature",
+          "search",
+          "--text",
+          "sample",
+          "--collection-scope",
+          "all",
+          "--sort",
+          "title-desc",
+          "--json",
+        ],
+        {
+          home,
+          stderr: (value) => stderr.push(value),
+        },
+      );
+      expect(cli.code).toBe(3);
+      expect(stderr.join("")).toContain("library-sort-scope-limit");
+      await mcp.connect(hostTransport);
+      await client.connect(clientTransport);
+      const result = await client.callTool({
+        name: "search_library",
+        arguments: badSort,
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain("library-sort-scope-limit");
+    } finally {
+      await client.close();
+      await mcp.close();
+      await server.close();
+    }
     const exact = await service.exactCount({ kind: "counts", query: full });
     expect(exact).toMatchObject({
       kind: "counts",

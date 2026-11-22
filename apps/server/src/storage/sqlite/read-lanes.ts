@@ -143,7 +143,7 @@ export const SQLITE_READ_LANES = {
       "library_facets",
       "library_search_page.selection",
       "library_search_page.state-fallback",
-      "library_search_page.discovery-scope",
+      "library_search_page.relevance",
       "library_snapshot.query",
       "acquire_pdf_selection",
       "parse_document_selection",
@@ -273,8 +273,8 @@ function readOperation(c: SqliteCommand): string {
         return "library_search_page.state-fallback";
       if (c.request.fullRelevance || c.request.limit > 200)
         return "library_search_page.selection";
-      if (c.request.query.discovery_run_ids.length)
-        return "library_search_page.discovery-scope";
+      if (c.request.sort === "relevance" || c.request.relevanceForLargeScope)
+        return "library_search_page.relevance";
       return needsLibraryState(c.request.query)
         ? "library_search_page.state-filter"
         : "library_search_page.page";

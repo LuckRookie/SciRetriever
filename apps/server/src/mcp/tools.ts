@@ -628,6 +628,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
               enum: [
                 "relevance",
                 "intake-desc",
+                "collected-desc",
                 "opened-desc",
                 "publication-year-desc",
                 "publication-year-asc",

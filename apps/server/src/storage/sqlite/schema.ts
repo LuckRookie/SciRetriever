@@ -4,6 +4,16 @@ import {
 } from "@sciretriever/contracts";
 import { createHash } from "node:crypto";
 
+const { libraryPagingSchema }: typeof import("./library-paging-schema.js") =
+  await import(
+    new URL(
+      import.meta.url.endsWith(".ts")
+        ? "./library-paging-schema.ts"
+        : "./library-paging-schema.js",
+      import.meta.url,
+    ).href
+  );
+
 // One current catalog layout. This is not a migration ladder or a list of supported historic layouts.
 export const SCHEMA_VERSION = 19 as const;
 // Inputs read by archiveStates/deriveCurrentState, including view dependencies.
@@ -1004,9 +1014,58 @@ export const LIBRARY_COUNT_SCHEMA = [
   `CREATE TRIGGER library_count_literatures_replace_key BEFORE UPDATE OF literature_id ON literatures WHEN old.literature_id<>new.literature_id BEGIN ${queueCountOwners(`${countOwner("new.literature_id")} AND meta_literature_id<>new.meta_literature_id`)} END`,
 ] as const;
 
-export const SCHEMA_MANIFEST = [
+export const SCHEMA_MANIFEST_V19_COUNTS = [
   ...SCHEMA_MANIFEST_V19_STORED_STATES,
   ...LIBRARY_COUNT_SCHEMA,
+] as const;
+export const SCHEMA_FINGERPRINT_V19_COUNTS = createHash("sha256")
+  .update(JSON.stringify(SCHEMA_MANIFEST_V19_COUNTS))
+  .digest("hex");
+
+export const historicalManualTagSql = (id: string) =>
+  `c.actor='manual' AND (c.before_json IS NULL OR EXISTS(
+    SELECT 1 FROM operation_records o WHERE o.operation='tags' AND o.status='completed'
+    AND json_valid(o.scope_json) AND json_valid(o.result_json)
+    AND json_extract(o.scope_json,'$.operation')='assign'
+    AND json_extract(o.scope_json,'$.request.literature_id')=${id}
+    AND json_extract(o.result_json,'$.revision')=c.revision)) AND ${manualTagChangeAddedSql("c")}`;
+
+/** Match the historical selection proofs and use the oldest available timestamp. */
+export function historicalCollectionTimeSql(id: string) {
+  return `(SELECT strftime('%Y-%m-%dT%H:%M:%fZ',min(julianday(selected_at))) FROM (
+    SELECT coalesce(b.confirmed_at,b.created_at) AS selected_at
+    FROM intake_batch_members m JOIN intake_batches b USING(batch_id)
+    WHERE m.literature_id=${id} AND b.kind='import'
+    UNION ALL SELECT coalesce(i.decided_at,i.created_at)
+    FROM intake_items i JOIN intake_batches b USING(batch_id)
+    WHERE i.literature_id=${id} AND i.origin='page' AND b.kind='import'
+      AND i.disposition IN ('created','enriched','matched','restored')
+    UNION ALL SELECT last_opened_at FROM reading_history WHERE literature_id=${id}
+    UNION ALL SELECT added_at FROM folder_members WHERE literature_id=${id}
+    UNION ALL SELECT s.created_at FROM snapshot_members m JOIN snapshots s USING(snapshot_id)
+      WHERE m.literature_id=${id}
+    UNION ALL SELECT coalesce(b.confirmed_at,b.created_at)
+    FROM intake_batch_objects o JOIN intake_batches b USING(batch_id)
+    WHERE o.object_kind='folder-member'
+      AND CASE WHEN json_valid(o.object_id) THEN json_extract(o.object_id,'$[1]') END=${id}
+    UNION ALL SELECT started_at FROM archive_runs WHERE literature_id=${id}
+    UNION ALL SELECT e.created_at FROM execution_targets t JOIN execution_jobs j USING(job_id)
+    JOIN execution_events e ON e.job_id=t.job_id AND e.kind='task-start-requested'
+    WHERE t.literature_id=${id} AND ${collectionTaskTargetSql("t", "j")}
+    UNION ALL SELECT a.started_at FROM execution_targets t JOIN execution_jobs j USING(job_id)
+    JOIN execution_attempts a USING(target_id)
+    WHERE t.literature_id=${id} AND ${collectionTaskTargetSql("t", "j")}
+    UNION ALL SELECT c.created_at FROM tag_assignment_changes c
+    WHERE c.literature_id=${id} AND ${historicalManualTagSql(id)}
+  ))`;
+}
+
+export const LIBRARY_PAGING_SCHEMA = libraryPagingSchema(
+  historicalCollectionTimeSql("new.literature_id"),
+);
+export const SCHEMA_MANIFEST = [
+  ...SCHEMA_MANIFEST_V19_COUNTS,
+  ...LIBRARY_PAGING_SCHEMA,
 ] as const;
 export const SCHEMA_FINGERPRINT = createHash("sha256")
   .update(JSON.stringify(SCHEMA_MANIFEST))

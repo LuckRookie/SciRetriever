@@ -14,7 +14,6 @@ import {
   parseDocumentDraftDifferencesResult,
   parseDocumentReadResult,
   parseFormDraftsPartResult,
-  parseLibrarySearchRequest,
   parseLiteratureId,
   type DocumentReadOperation,
   type InputManifestItem,
@@ -30,6 +29,7 @@ import { MetadataFieldError } from "../literature/metadata-service.js";
 import {
   LiteratureNotFoundError,
   LiteratureQueryError,
+  LibrarySortScopeLimitError,
 } from "../literature/query.js";
 import { ProofreadError } from "../proofread/service.js";
 import { KnowledgeContextError } from "../retrieval/knowledge-query.js";
@@ -546,7 +546,7 @@ async function readQuery(
     case "library-exact-count":
       return q.query.exactCount(value, signal);
     case "library-search":
-      return q.query.search(parseLibrarySearchRequest(value), signal, "browse");
+      return q.query.search(value, signal, "browse");
     case "literature-read":
       return q.query.detail(
         parseLiteratureId(
@@ -711,7 +711,8 @@ export function isQueryFailure(
     error instanceof ExtractionPreparationError ||
     error instanceof ExtractionSpecError ||
     error instanceof LiteratureNotFoundError ||
-    error instanceof LiteratureQueryError
+    error instanceof LiteratureQueryError ||
+    error instanceof LibrarySortScopeLimitError
   );
 }
 export async function executeQuery(

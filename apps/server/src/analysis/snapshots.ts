@@ -32,12 +32,16 @@ export class SnapshotService {
     let ids: readonly string[];
     if (definition.kind === "literatures") ids = definition.literature_ids;
     else {
-      const selected = await this.library.search({
-        query: definition.query,
-        sort: "title-asc",
-        limit: 10001,
-        cursor: null,
-      });
+      const selected = await this.library.search(
+        {
+          query: definition.query,
+          sort: "title-asc",
+          limit: 10001,
+          cursor: null,
+        },
+        signal,
+        "selection",
+      );
       if (selected.next_cursor !== null || selected.items.length > 10000)
         throw new SnapshotError("snapshot-member-limit");
       ids = selected.items.map((i) => i.literature.literature_id);

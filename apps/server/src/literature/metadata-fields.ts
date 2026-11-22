@@ -1,5 +1,5 @@
 import {
-  canonicalJsonBytes,
+  canonicalJsonText as canonical,
   METADATA_FIELDS,
   parseLiteratureMetadata,
   parseMetadataFieldCandidate,
@@ -19,9 +19,6 @@ const PROOFREAD_FIRST = new Set<MetadataField>([
 ]);
 export function metadataFieldEmpty(value: unknown): boolean {
   return value === null || (Array.isArray(value) && value.length === 0);
-}
-function canonical(value: unknown): string {
-  return Buffer.from(canonicalJsonBytes(value)).toString("utf8");
 }
 export function metadataValuesEqual(
   field: MetadataField,
@@ -74,7 +71,14 @@ export function adjudicateMetadataFields(input: {
   readonly states: readonly MetadataFieldState[];
 } {
   const metadata = { ...parseLiteratureMetadata(input.current) };
-  const candidates = input.candidates.map(parseMetadataFieldCandidate);
+  const candidates = new Map<MetadataField, MetadataFieldCandidate[]>();
+  input.candidates.forEach((value) => {
+    const candidate = parseMetadataFieldCandidate(value);
+    if (metadataFieldEmpty(candidate.value)) return;
+    const values = candidates.get(candidate.field);
+    if (values) values.push(candidate);
+    else candidates.set(candidate.field, [candidate]);
+  });
   const manual = (input.manual ?? []).map(parseMetadataFieldCandidate);
   if (
     manual.some((c) => c.evidence.source !== "manual") ||
@@ -92,9 +96,7 @@ export function adjudicateMetadataFields(input: {
     const edit = manual.find((c) => c.field === field);
     const unlocked = input.unlock?.includes(field) ?? false;
     let locked = edit !== undefined || (previous?.locked === true && !unlocked);
-    const values = candidates.filter(
-      (c) => c.field === field && !metadataFieldEmpty(c.value),
-    );
+    const values = candidates.get(field) ?? [];
     if (
       previous &&
       (previous.evidence.source !== "manual" || locked || values.length === 0)
@@ -114,6 +116,7 @@ export function adjudicateMetadataFields(input: {
     const conflicts: MetadataFieldCandidate[] = [];
     for (const candidate of values) {
       if (
+        candidate === selected ||
         metadataFieldEmpty(candidate.value) ||
         metadataFieldEmpty(selected.value) ||
         metadataValuesEqual(field, selected.value, candidate.value)

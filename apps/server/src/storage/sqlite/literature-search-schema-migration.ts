@@ -16,11 +16,13 @@ import { schemaTargetFile, schemaTargetPath } from "./schema-path.js";
 import {
   SCHEMA_FINGERPRINT,
   SCHEMA_FINGERPRINT_V19,
+  SCHEMA_FINGERPRINT_V19_COUNTS,
   SCHEMA_FINGERPRINT_V19_INTAKE_LOOKUPS,
   SCHEMA_FINGERPRINT_V19_RETRIEVAL_CHANGES,
   SCHEMA_FINGERPRINT_V19_STORED_STATES,
   SCHEMA_MANIFEST,
   SCHEMA_MANIFEST_V19,
+  SCHEMA_MANIFEST_V19_COUNTS,
   SCHEMA_MANIFEST_V19_INTAKE_LOOKUPS,
   SCHEMA_MANIFEST_V19_RETRIEVAL_CHANGES,
   SCHEMA_MANIFEST_V19_STORED_STATES,
@@ -44,9 +46,10 @@ const previousLayouts = new Map<string, readonly string[]>([
     SCHEMA_MANIFEST_V19_RETRIEVAL_CHANGES,
   ],
   [SCHEMA_FINGERPRINT_V19_STORED_STATES, SCHEMA_MANIFEST_V19_STORED_STATES],
+  [SCHEMA_FINGERPRINT_V19_COUNTS, SCHEMA_MANIFEST_V19_COUNTS],
 ]);
 
-/** Explicit, additive upgrade from the four earlier layout 19 fingerprints. */
+/** Explicit, additive upgrade from earlier layout 19 fingerprints. */
 export async function migrateLiteratureSearchSchema(path: string) {
   await schemaTargetPath(path);
   if (!(await schemaTargetFile(path))) refuse();

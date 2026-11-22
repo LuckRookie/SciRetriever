@@ -24,8 +24,10 @@ import {
   fallbackIdentitySha256,
   resolveLiteratureIdentity,
   resolveMetaLiterature,
+  sameFallbackKey,
   stableIdentifierIndex,
   stableIdentifierKeys,
+  type FallbackIdentityKey,
   type VersionEvidence,
 } from "./identity-rules.js";
 import {
@@ -171,27 +173,16 @@ function versionTarget(
   return targetId === undefined ? null : literatureFor(context, targetId);
 }
 
-async function fallbackDigest(literature: Literature): Promise<string | null> {
-  if (stableIdentifierKeys(literature.metadata).length) return null;
-  const key = fallbackIdentityKey(literature.metadata);
-  return key ? fallbackIdentitySha256(key) : null;
+function fallbackDigests() {
+  let last: { key: FallbackIdentityKey; digest: Promise<string> } | undefined;
+  return (key: FallbackIdentityKey | null) => {
+    if (!key) return null;
+    if (!last || !sameFallbackKey(last.key, key))
+      last = { key, digest: fallbackIdentitySha256(key) };
+    return last.digest;
+  };
 }
-
-async function changedLiterature(
-  literature: Literature,
-  metadataRevision: number,
-  metadataSha256?: string,
-  fieldStates: readonly MetadataFieldState[] = [],
-): Promise<IdentityPublicationCommand["literatures"][number]> {
-  return Object.freeze({
-    literature,
-    metadata_revision: metadataRevision,
-    metadata_sha256:
-      metadataSha256 ?? (await sha256(canonicalJsonBytes(literature.metadata))),
-    fallback_identity_sha256: await fallbackDigest(literature),
-    field_states: fieldStates,
-  });
-}
+type FallbackDigest = ReturnType<typeof fallbackDigests>;
 
 function observationReplay(
   existing: MetadataObservation,
@@ -277,11 +268,9 @@ function observationOwner(
 
 async function identityReadRequest(
   observation: MetadataObservation,
+  stable: IdentityReadRequest["stable_identifier_keys"],
+  fallbackDigest: Promise<string> | null,
 ): Promise<IdentityReadRequest> {
-  const stable = stableIdentifierIndex(observation.metadata);
-  const fallback = stable.length
-    ? null
-    : fallbackIdentityKey(observation.metadata);
   return Object.freeze({
     observation_id: observation.observation_id,
     provider_record_key:
@@ -293,9 +282,7 @@ async function identityReadRequest(
           })
         : null,
     stable_identifier_keys: stable,
-    fallback_identity_sha256: fallback
-      ? await fallbackIdentitySha256(fallback)
-      : null,
+    fallback_identity_sha256: fallbackDigest ? await fallbackDigest : null,
     user_observation_semantic_sha256:
       observation.provenance.source_kind === "user"
         ? await userObservationSemanticSha256(observation)
@@ -347,7 +334,9 @@ export class LiteratureIdentityService {
       readonly signal?: AbortSignal;
     } = {},
   ): Promise<LiteratureIdentityDecision> {
-    const observation = parseMetadataObservation(value);
+    const observation = this.database.withMetadataValidation(() =>
+      parseMetadataObservation(value),
+    );
     return this.writes.run(
       () =>
         this.observeAdmitted(
@@ -388,15 +377,33 @@ export class LiteratureIdentityService {
   private async assess(
     observation: MetadataObservation,
     targetLiteratureId?: string,
+    digest = fallbackDigests(),
   ) {
     const target =
       targetLiteratureId === undefined
         ? undefined
         : parseLiteratureId(targetLiteratureId);
+    const { stable, fallback } = this.database.withMetadataValidation(() => {
+      const stable = stableIdentifierIndex(observation.metadata);
+      const fallback = stable.length
+        ? null
+        : fallbackIdentityKey(observation.metadata);
+      return { stable, fallback };
+    });
     const context = await this.database.readIdentity({
-      ...(await identityReadRequest(observation)),
+      ...(await identityReadRequest(observation, stable, digest(fallback))),
       ...(target ? { target_literature_id: target } : {}),
     });
+    return this.database.withMetadataValidation(() =>
+      this.assessContext(observation, context, target),
+    );
+  }
+
+  private assessContext(
+    observation: MetadataObservation,
+    context: IdentityReadContext,
+    target?: string,
+  ) {
     let owner: Literature | null;
     try {
       owner = observationOwner(context, observation);
@@ -462,6 +469,30 @@ export class LiteratureIdentityService {
     return { context, current, currentFact, acceptance };
   }
 
+  private async changedLiterature(
+    literature: Literature,
+    metadataRevision: number,
+    digest: FallbackDigest,
+    metadataSha256?: string,
+    fieldStates: readonly MetadataFieldState[] = [],
+  ): Promise<IdentityPublicationCommand["literatures"][number]> {
+    const { metadata } = literature;
+    const metadataHash =
+      metadataSha256 ?? (await sha256(canonicalJsonBytes(metadata)));
+    const fallback = this.database.withMetadataValidation(() =>
+      stableIdentifierKeys(metadata).length
+        ? null
+        : digest(fallbackIdentityKey(metadata)),
+    );
+    return Object.freeze({
+      literature,
+      metadata_revision: metadataRevision,
+      metadata_sha256: metadataHash,
+      fallback_identity_sha256: fallback ? await fallback : null,
+      field_states: fieldStates,
+    });
+  }
+
   private async observeAdmitted(
     observation: MetadataObservation,
     intakeBatchId?: import("@sciretriever/contracts").IntakeBatchId,
@@ -470,7 +501,12 @@ export class LiteratureIdentityService {
     signal?: AbortSignal,
     intakeResolution?: IntakeMember["resolution"],
   ): Promise<LiteratureIdentityDecision> {
-    const assessment = await this.assess(observation, targetLiteratureId);
+    const digest = fallbackDigests();
+    const assessment = await this.assess(
+      observation,
+      targetLiteratureId,
+      digest,
+    );
     signal?.throwIfAborted();
     if ("disposition" in assessment) return assessment;
     const { context, current, currentFact, acceptance } = assessment;
@@ -482,11 +518,13 @@ export class LiteratureIdentityService {
           acceptance.observation,
           acceptance.projection,
           acceptance.deduplicated,
+          digest,
         )
       : await this.newPublication(
           context,
           acceptance.observation,
           acceptance.projection,
+          digest,
         );
     const intake_member =
       intakeBatchId && !excludeIds.includes(publication.result.literature_id)
@@ -535,6 +573,7 @@ export class LiteratureIdentityService {
     context: IdentityReadContext,
     observation: MetadataObservation,
     projection: AcceptedProjection,
+    digest: FallbackDigest,
   ): Promise<IdentityPublicationCommand & { readonly result: Literature }> {
     const provisional = parseLiterature({
       literature_id: randomUUID(),
@@ -565,9 +604,10 @@ export class LiteratureIdentityService {
     return Object.assign(
       {
         literatures: [
-          await changedLiterature(
+          await this.changedLiterature(
             literature,
             1,
+            digest,
             undefined,
             projection.field_states,
           ),
@@ -599,6 +639,7 @@ export class LiteratureIdentityService {
     observation: MetadataObservation,
     projection: AcceptedProjection,
     deduplicated: boolean,
+    digest: FallbackDigest,
   ): Promise<IdentityPublicationCommand & { readonly result: Literature }> {
     const updated = parseLiterature({
       ...current,
@@ -608,9 +649,10 @@ export class LiteratureIdentityService {
     if (!target || target.meta_literature_id === current.meta_literature_id) {
       const changed = projection.changed
         ? [
-            await changedLiterature(
+            await this.changedLiterature(
               updated,
               projection.metadata_revision,
+              digest,
               undefined,
               projection.field_states,
             ),
@@ -672,11 +714,12 @@ export class LiteratureIdentityService {
     const changedItems = await Promise.all(
       changed.map((item) => {
         const fact = factFor(context, item.literature_id);
-        return changedLiterature(
+        return this.changedLiterature(
           item,
           item.literature_id === current.literature_id
             ? projection.metadata_revision
             : fact.metadata_revision,
+          digest,
           item.literature_id === current.literature_id
             ? undefined
             : fact.metadata_sha256,

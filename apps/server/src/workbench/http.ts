@@ -99,6 +99,7 @@ import { LiteraturePublicationError } from "../literature/primary-pdf.js";
 import {
   LiteratureNotFoundError,
   LiteratureQueryError,
+  LibrarySortScopeLimitError,
   type LiteratureQueryService,
 } from "../literature/query.js";
 import { ParsingFailure } from "../parsing/ports.js";
@@ -304,6 +305,7 @@ const CLIENT_TTL = 180000;
 const UI_SORTS = new Set([
   "opened-desc",
   "intake-desc",
+  "collected-desc",
   "publication-year-desc",
   "publication-year-asc",
   "title-asc",
@@ -1074,6 +1076,13 @@ export async function startWorkbenchHttp(
                           ? "invalid-command"
                           : "command-rejected";
         if (response.destroyed) return;
+        if (
+          error instanceof LibrarySortScopeLimitError &&
+          !response.headersSent
+        ) {
+          json(response, 400, { code: error.code });
+          return;
+        }
         if (response.headersSent) {
           response.destroy();
           return;
@@ -3665,6 +3674,10 @@ function createQueryHttpHandler(
         if (response.destroyed) return;
         if (response.headersSent) {
           response.destroy();
+          return;
+        }
+        if (error instanceof LibrarySortScopeLimitError) {
+          json(response, 400, { protocol_version: 1, code: error.code });
           return;
         }
         const code =

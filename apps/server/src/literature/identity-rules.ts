@@ -216,7 +216,7 @@ export function fallbackIdentitySha256(
   );
 }
 
-function sameFallbackKey(
+export function sameFallbackKey(
   left: FallbackIdentityKey | null,
   right: FallbackIdentityKey | null,
 ): boolean {

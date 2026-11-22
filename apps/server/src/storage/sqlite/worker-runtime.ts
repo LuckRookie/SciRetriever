@@ -9,9 +9,13 @@ const {
     import.meta.url,
   ).href
 );
-import { globalLibraryCountScope } from "@sciretriever/contracts";
+import {
+  ContractTextValidation,
+  globalLibraryCountScope,
+  LIBRARY_SORT_SCOPE_LIMIT,
+} from "@sciretriever/contracts";
 import { existsSync, statSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { parentPort, workerData } from "node:worker_threads";
 import type { SqliteCommand } from "./worker.js";
 import type { RetrievalStorageEngine } from "./retrieval-engine.js";
@@ -23,7 +27,6 @@ interface WorkerRuntimeData {
   readonly long_read_lane: boolean;
   readonly max_tags: number;
   readonly archive_profile: "pipeline" | "vlm-engine";
-  readonly case_fold: Readonly<Record<string, string>>;
   readonly schema_version: number;
   readonly schema_manifest: readonly string[];
   readonly schema_fingerprint: string;
@@ -260,6 +263,19 @@ const libraryPageModule = await import(
     import.meta.url,
   ).href
 );
+const libraryRankings = new libraryPageModule.LibraryRelevanceCache();
+const pagingSuffix = import.meta.url.endsWith(".ts") ? ".ts" : ".js";
+const { libraryPagingReady }: typeof import("./library-paging-state.js") =
+  await import(
+    new URL("./library-paging-state" + pagingSuffix, import.meta.url).href
+  );
+const {
+  invalidTopicCause,
+  invalidCitationCause,
+  invalidDiscoveryResult,
+}: typeof import("./library-paging-schema.js") = await import(
+  new URL("./library-paging-schema" + pagingSuffix, import.meta.url).href
+);
 const intakeModule = await import(
   new URL(
     import.meta.url.endsWith(".ts")
@@ -278,7 +294,6 @@ const queryTextModule = await import(
 );
 const port = parentPort;
 if (!port) throw new Error("sqlite worker parent port is unavailable");
-const CASE_FOLD = data.case_fold;
 const SCHEMA_MANIFEST = data.schema_manifest;
 const SCHEMA_VERSION = data.schema_version;
 const SCHEMA_FINGERPRINT = data.schema_fingerprint;
@@ -348,26 +363,17 @@ function getRetrievalEngine(): RetrievalStorageEngine {
     },
   ));
 }
-function caseFold(value: string): string {
-  return Array.from(
-    value,
-    (character) => CASE_FOLD[character] ?? character,
-  ).join("");
-}
-function ftsIndexText(value: string): string {
-  return (
-    caseFold(value.normalize("NFC")).match(
-      /[\p{L}\p{N}][\p{L}\p{N}\p{M}]*/gu,
-    ) ?? []
-  )
-    .filter((term) => !["and", "near", "not", "or"].includes(term))
-    .join(" ");
-}
 let db: Dynamic;
+const metadataStatements = new Map<string, StatementSync>();
+const METADATA_STATEMENT_LIMIT = 256;
 let metadataWrite:
   | {
       readonly prepare: (sql: string) => Dynamic;
       readonly nextSequence: Map<string, number>;
+      readonly textValidation: ContractTextValidation;
+      readonly textNormalization: InstanceType<
+        typeof queryTextModule.MetadataTextNormalization
+      >;
       citationRun?: string;
     }
   | undefined;
@@ -430,6 +436,7 @@ function initialize(): Dynamic {
 function initializeConnection(): Dynamic {
   // Reconnecting after another connection's commit keeps the proof; the
   // identity below still changes on DDL or a different catalog file.
+  metadataStatements.clear();
   db = data.read_only
     ? new DatabaseSync(data.path, { readOnly: true })
     : new DatabaseSync(data.path);
@@ -660,7 +667,8 @@ function indexMetadata(literatureId: Dynamic, m: Dynamic): Dynamic {
           )
           .get(first)?.content_body || "";
   literatureSearchRows.deleteLiteratureSearchRows(db, rowIds);
-  const index = (value: string): string => ftsIndexText(value || "");
+  const index = (value: string): string =>
+    queryTextModule.ftsIndexText(value || "");
   db.prepare(literatureSearchRows.INSERT_LITERATURE_SEARCH_ROW).run(
     literatureId,
     index(m.title),
@@ -1018,7 +1026,20 @@ function readAutomaticPdfExhaustion(command: Dynamic): Dynamic {
   });
 }
 function validateDiscoveryCauses(ids: Dynamic): Dynamic {
+  if (!ids.length) return;
+  const indexed = libraryPagingReady(db);
   for (const id of new Set<Dynamic>(ids)) {
+    if (indexed) {
+      if (
+        db
+          .prepare(
+            "SELECT 1 FROM library_discovery_invalid WHERE discovery_run_id=? LIMIT 1",
+          )
+          .get(id)
+      )
+        fail();
+      continue;
+    }
     const kind =
       db
         .prepare("SELECT kind FROM discovery_runs WHERE discovery_run_id=?")
@@ -1028,15 +1049,7 @@ function validateDiscoveryCauses(ids: Dynamic): Dynamic {
         .prepare(
           `
       SELECT 1 FROM topic_discovery_causes c
-      WHERE c.discovery_run_id=? AND (
-        ? IS NOT 'topic'
-        OR NOT EXISTS(SELECT 1 FROM discovery_results r WHERE r.discovery_run_id=c.discovery_run_id AND r.meta_literature_id=c.meta_literature_id)
-        OR NOT EXISTS(
-          SELECT 1 FROM literature_metadata_observations owner
-          JOIN literatures actual ON actual.literature_id=owner.literature_id
-          WHERE owner.observation_id=c.metadata_observation_id AND actual.literature_id=c.actual_literature_id AND actual.meta_literature_id=c.meta_literature_id
-        )
-      ) LIMIT 1`,
+      WHERE c.discovery_run_id=? AND ${invalidTopicCause("c", "?")} LIMIT 1`,
         )
         .get(id, kind)
     )
@@ -1046,30 +1059,19 @@ function validateDiscoveryCauses(ids: Dynamic): Dynamic {
         .prepare(
           `
       SELECT 1 FROM citation_discovery_causes c
-      WHERE c.discovery_run_id=? AND (
-        ? IS NOT 'citation' OR c.actual_literature_id NOT IN (c.source_literature_id,c.target_literature_id)
-        OR NOT EXISTS(SELECT 1 FROM discovery_results r WHERE r.discovery_run_id=c.discovery_run_id AND r.meta_literature_id=c.meta_literature_id)
-        OR NOT EXISTS(SELECT 1 FROM literatures l WHERE l.literature_id=c.source_literature_id)
-        OR NOT EXISTS(SELECT 1 FROM literatures l WHERE l.literature_id=c.target_literature_id)
-        OR NOT EXISTS(SELECT 1 FROM literatures l WHERE l.literature_id=c.actual_literature_id AND l.meta_literature_id=c.meta_literature_id)
-      ) LIMIT 1`,
+      WHERE c.discovery_run_id=? AND ${invalidCitationCause("c", "?")} LIMIT 1`,
         )
         .get(id, kind)
     )
       fail();
-    const causes =
-      kind === "topic" ? "topic_discovery_causes" : "citation_discovery_causes";
     if (
       db
         .prepare(
           `
-      SELECT 1 FROM discovery_results r WHERE r.discovery_run_id=? AND (
-        (? IS NOT 'topic' AND ? IS NOT 'citation') OR NOT EXISTS(
-          SELECT 1 FROM ${causes} c WHERE c.discovery_run_id=r.discovery_run_id AND c.meta_literature_id=r.meta_literature_id
+      SELECT 1 FROM discovery_results r WHERE r.discovery_run_id=? AND
+      ${invalidDiscoveryResult("r", "?")} LIMIT 1`,
         )
-      ) LIMIT 1`,
-        )
-        .get(id, kind, kind)
+        .get(id, kind)
     )
       fail();
   }
@@ -1104,6 +1106,7 @@ function librarySnapshot(
             sort: scope.recently_opened ? "opened-desc" : "intake-desc",
             limit: Number.MAX_SAFE_INTEGER,
             after: null,
+            fullRelevance: true,
           })
           .rows.map((r: Dynamic) => String(r.literature_id)),
       );
@@ -1343,6 +1346,7 @@ function librarySearchPage(
   defer: boolean,
 ): Dynamic {
   return readTransaction(() => {
+    const pagingReady = libraryPagingReady(db);
     if (defer) {
       const plan = libraryState.readPlan();
       if (
@@ -1352,6 +1356,11 @@ function librarySearchPage(
             request.query.needs_manual_pdf === true)) ||
         (!plan.collectionReady &&
           request.query.collection_scope === "collected") ||
+        (!pagingReady &&
+          (request.sort === "collected-desc" ||
+            request.query.folder ||
+            request.query.intake_batch_ids.length ||
+            request.query.discovery_run_ids.length)) ||
         (!request.after?.total &&
           globalLibraryCountScope(request.query) &&
           !libraryState.countsReady(plan))
@@ -1359,7 +1368,7 @@ function librarySearchPage(
         return { defer: true };
     }
     validateDiscoveryCauses(request.query.discovery_run_ids);
-    const page = libraryPageModule.libraryPageIds(db, request);
+    const page = libraryPageModule.libraryPageIds(db, request, libraryRankings);
     const textLevels = primaryDocumentTexts(
       page.rows.map((row: Dynamic) => String(row.literature_id)),
     );
@@ -1367,7 +1376,18 @@ function librarySearchPage(
     return {
       ...summary,
       rows: rows.map((row: Dynamic) => ({
-        item: searchItem(row.literature_id, undefined, textLevels),
+        item: {
+          ...searchItem(row.literature_id, undefined, textLevels),
+          ...(request.sort === "collected-desc"
+            ? {
+                collected_at: libraryPageModule.collectedAt(
+                  db,
+                  row.literature_id,
+                  pagingReady,
+                ),
+              }
+            : {}),
+        },
         relevance: row.relevance,
         has_pdf_exhaustion: !!db
           .prepare(
@@ -1436,7 +1456,7 @@ function assetByHash(hash: Dynamic): Dynamic {
 function putObservation(o: Dynamic): Dynamic {
   return transaction(() => storeObservation(o));
 }
-function storeObservation(o: Dynamic): Dynamic {
+function storeObservation(o: Dynamic, literatureId = o.literature_id): Dynamic {
   const old = getObservation(o.observation_id);
   if (old) {
     const normalized = (value: Dynamic) => {
@@ -1470,14 +1490,14 @@ function storeObservation(o: Dynamic): Dynamic {
       JSON.stringify(stable(normalized(old))) !==
         JSON.stringify(stable(normalized(o))) ||
       (old.literature_id !== undefined &&
-        o.literature_id !== undefined &&
-        old.literature_id !== o.literature_id)
+        literatureId !== undefined &&
+        old.literature_id !== literatureId)
     )
       fail();
-    if (o.literature_id !== undefined)
+    if (literatureId !== undefined)
       db.prepare(
         "INSERT INTO literature_metadata_observations(literature_id,observation_id) VALUES(?,?) ON CONFLICT DO NOTHING",
-      ).run(o.literature_id, o.observation_id);
+      ).run(literatureId, o.observation_id);
     return true;
   }
   const p = o.provenance;
@@ -1581,10 +1601,10 @@ function storeObservation(o: Dynamic): Dynamic {
       ).run(o.observation_id, i, j, x.namespace, x.value);
     }
   }
-  if (o.literature_id !== undefined)
+  if (literatureId !== undefined)
     db.prepare(
       "INSERT INTO literature_metadata_observations(literature_id,observation_id) VALUES(?,?) ON CONFLICT DO NOTHING",
-    ).run(o.literature_id, o.observation_id);
+    ).run(literatureId, o.observation_id);
   return true;
 }
 function getObservation(id: Dynamic): Dynamic {
@@ -2116,10 +2136,7 @@ function publishIdentityObservation(p: Dynamic): Dynamic {
           .get(link.literature_id)
       )
         fail();
-      storeObservation({
-        ...link.observation,
-        literature_id: link.literature_id,
-      });
+      storeObservation(link.observation, link.literature_id);
       if (link.user_semantic_sha256 !== null) {
         const existing = db
           .prepare(
@@ -3233,9 +3250,12 @@ function finishExecutionAttempt(
 }
 function appendExecutionEvent(event: Dynamic): Dynamic {
   requireRuntime();
-  return transaction(() => insertExecutionEvent(event));
+  return transaction(() => {
+    const sequence = insertExecutionEvent(event);
+    return { ...event, sequence };
+  });
 }
-function insertExecutionEvent(event: Dynamic): Dynamic {
+function insertExecutionEvent(event: Dynamic): number {
   let expected = metadataWrite?.nextSequence.get(event.job_id);
   if (expected === undefined) {
     if (
@@ -3264,7 +3284,7 @@ function insertExecutionEvent(event: Dynamic): Dynamic {
     event.created_at,
   );
   metadataWrite?.nextSequence.set(event.job_id, expected + 1);
-  return { ...event, sequence };
+  return sequence;
 }
 function listExecutionEvents(
   jobId: Dynamic,
@@ -5049,7 +5069,10 @@ port.on("message", (message: WorkerMessage) => {
       if (current !== observedDataVersion || catalogChanged) {
         // A refresh of the same catalog keeps the task cache. Task reads
         // validate its event prefix against their new SQLite snapshot.
-        if (catalogChanged) taskDetails.clear();
+        if (catalogChanged) {
+          taskDetails.clear();
+          libraryRankings.clear();
+        }
         db.close();
         db = undefined;
         queryPreflight = null;
@@ -5075,17 +5098,27 @@ port.on("message", (message: WorkerMessage) => {
       case "metadata_write_begin": {
         if (data.read_only || metadataWrite || db.isTransaction) fail();
         beginCatalogWrite(db);
-        const prepare = db.prepare;
-        const statements = new Map<string, Dynamic>();
+        const prepare: DatabaseSync["prepare"] = db.prepare;
+        // Segments on this connection use the same statement settings. Keep
+        // the cache bounded for SQL with variable numbers of parameters.
         db.prepare = (sql: string) => {
-          let statement = statements.get(sql);
+          let statement = metadataStatements.get(sql);
           if (!statement) {
             statement = prepare.call(db, sql);
-            statements.set(sql, statement);
+            if (metadataStatements.size === METADATA_STATEMENT_LIMIT) {
+              const oldest = metadataStatements.keys().next().value;
+              if (oldest !== undefined) metadataStatements.delete(oldest);
+            }
+            metadataStatements.set(sql, statement);
           }
           return statement;
         };
-        metadataWrite = { prepare, nextSequence: new Map() };
+        metadataWrite = {
+          prepare,
+          nextSequence: new Map(),
+          textValidation: new ContractTextValidation(),
+          textNormalization: new queryTextModule.MetadataTextNormalization(),
+        };
         value = true;
         break;
       }
@@ -5788,7 +5821,7 @@ port.on("message", (message: WorkerMessage) => {
         break;
       }
       case "library_state_pending":
-        value = readTransaction(() => !libraryState.countsReady());
+        value = readTransaction(() => libraryState.maintenancePending());
         break;
       case "library_state_refresh":
         value = transaction(() => libraryState.refreshBatch());
@@ -6068,9 +6101,18 @@ port.on("message", (message: WorkerMessage) => {
       case "identity_read":
         value = identityRead(message.command.request);
         break;
-      case "publish_identity_observation":
-        value = publishIdentityObservation(message.command.publication);
+      case "publish_identity_observation": {
+        const { publication } = message.command;
+        const scope = metadataWrite;
+        value = scope
+          ? scope.textValidation.run(() =>
+              scope.textNormalization.run(() =>
+                publishIdentityObservation(publication),
+              ),
+            )
+          : publishIdentityObservation(publication);
         break;
+      }
       case "accept_observation":
         value = acceptObservation(message.command);
         break;
@@ -6099,7 +6141,12 @@ port.on("message", (message: WorkerMessage) => {
         ? { code: corruption.code, sqlite_code: corruption.sqlite_code }
         : message.command.kind === "document_commit"
           ? { code: publicationCode }
-          : {}),
+          : message.command.kind === "library_search_page" &&
+              error instanceof Error &&
+              "code" in error &&
+              error.code === LIBRARY_SORT_SCOPE_LIMIT
+            ? { code: LIBRARY_SORT_SCOPE_LIMIT }
+            : {}),
       cancelled: !!cancellation && Atomics.load(cancellation, 0) !== 0,
     });
   } finally {

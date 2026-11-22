@@ -488,12 +488,16 @@ export class UsageEstimator {
   }
   private async select(query: LibraryQuery, signal: AbortSignal) {
     signal.throwIfAborted();
-    const selected = await this.library.search({
-      query,
-      sort: "title-asc",
-      limit: 10001,
-      cursor: null,
-    });
+    const selected = await this.library.search(
+      {
+        query,
+        sort: "title-asc",
+        limit: 10001,
+        cursor: null,
+      },
+      signal,
+      "selection",
+    );
     if (selected.next_cursor || selected.items.length > 10000)
       throw new Error("estimate-scope-limit");
     return selected.items.map((v) => v.literature.literature_id);

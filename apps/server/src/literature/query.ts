@@ -9,6 +9,7 @@ import {
   parseLiteratureBibliographySummary,
   type LiteratureBibliographySummary,
   LITERATURE_STATUSES,
+  LIBRARY_SORT_SCOPE_LIMIT,
   RELEVANCE_RESULT_LIMIT,
   type LibraryCounts,
   type LibraryExactCount,
@@ -25,7 +26,7 @@ import {
   sha256,
   type LibraryQuery,
   type LibrarySearchPage,
-  type LibrarySort,
+  type LibraryPageSort,
   type LiteratureDetail,
   type LiteratureId,
   type LiteratureReferencePage,
@@ -103,6 +104,7 @@ export interface LibraryQueryRepository {
     LibrarySearchTotal & {
       readonly rows: readonly SearchSnapshotRow[];
       readonly tag_backfill_pending?: number;
+      readonly ranking_id?: string;
     }
   >;
   literatureDetailSnapshot(literatureId: string): Promise<{
@@ -144,6 +146,12 @@ export class LiteratureQueryError extends Error {
   readonly code = "literature-query";
   constructor() {
     super("literature query failed");
+  }
+}
+export class LibrarySortScopeLimitError extends Error {
+  readonly code = LIBRARY_SORT_SCOPE_LIMIT;
+  constructor() {
+    super("narrow the library query or choose a supported sort");
   }
 }
 function fail(): never {
@@ -280,16 +288,26 @@ export interface Position {
   readonly value: string | number | null;
   readonly secondary?: number | null;
   readonly total?: Pick<LibrarySearchTotal, "total_count" | "count_truncated">;
+  readonly ranking_id?: string;
 }
 export interface LibraryPageQuery {
   readonly query: LibraryQuery;
   readonly ftsQuery: string | null;
-  readonly sort: LibrarySort;
+  readonly sort: LibraryPageSort;
   readonly after: Position | null;
   readonly limit: number;
   readonly fullRelevance?: true;
+  readonly relevanceForLargeScope?: true;
+  readonly rankingKey?: string;
 }
-function position(row: SearchSnapshotRow, sort: LibrarySort): Position {
+function libraryWorksetUsesIntake(query: LibraryQuery): boolean {
+  return Boolean(
+    query.folder ||
+      query.intake_batch_ids.length ||
+      query.discovery_run_ids.length,
+  );
+}
+function position(row: SearchSnapshotRow, sort: LibraryPageSort): Position {
   const l = row.item.literature;
   const fields = draftSortFields(sort),
     facts = row.item.draft_facts;
@@ -308,16 +326,18 @@ function position(row: SearchSnapshotRow, sort: LibrarySort): Position {
         ? (row.item.last_opened_at ?? null)
         : sort === "intake-desc"
           ? (row.item.intake_at ?? null)
-          : sort.startsWith("publication-year")
-            ? l.metadata.publication_year
-            : sort.startsWith("title")
-              ? l.metadata.title === null
-                ? null
-                : normalizeQueryText(l.metadata.title)
-              : row.relevance,
+          : sort === "collected-desc"
+            ? (row.item.collected_at ?? null)
+            : sort.startsWith("publication-year")
+              ? l.metadata.publication_year
+              : sort.startsWith("title")
+                ? l.metadata.title === null
+                  ? null
+                  : normalizeQueryText(l.metadata.title)
+                : row.relevance,
   };
 }
-function compare(a: Position, b: Position, sort: LibrarySort): number {
+function compare(a: Position, b: Position, sort: LibraryPageSort): number {
   if (a.value === null && b.value !== null) return 1;
   if (b.value === null && a.value !== null) return -1;
   let result = 0;
@@ -340,7 +360,7 @@ function compare(a: Position, b: Position, sort: LibrarySort): number {
     result = b.secondary! - a.secondary!;
   return result || compareText(a.literature_id, b.literature_id);
 }
-function positionPayload(p: Position, sort: LibrarySort): object {
+function positionPayload(p: Position, sort: LibraryPageSort): object {
   const fields = draftSortFields(sort);
   if (fields)
     return {
@@ -361,6 +381,12 @@ function positionPayload(p: Position, sort: LibrarySort): object {
       intake_at: p.value,
       intake_is_null: p.value === null,
     };
+  if (sort === "collected-desc")
+    return {
+      literature_id: p.literature_id,
+      collected_at: p.value,
+      collected_is_null: p.value === null,
+    };
   if (sort.startsWith("publication-year"))
     return {
       literature_id: p.literature_id,
@@ -378,8 +404,9 @@ function positionPayload(p: Position, sort: LibrarySort): object {
 function encodePosition(
   p: Position,
   query: LibraryQuery,
-  sort: LibrarySort,
+  sort: LibraryPageSort,
   total: NonNullable<Position["total"]>,
+  rankingId?: string,
 ): string {
   const core = {
     kind: "library-search",
@@ -388,8 +415,9 @@ function encodePosition(
       query_fingerprint: queryFingerprint(query),
       sort,
       total,
+      ...(rankingId ? { ranking_id: rankingId } : {}),
     },
-    version: 2,
+    version: rankingId ? 3 : 2,
   };
   return Buffer.from(canonical({ checksum: digest(core), ...core })).toString(
     "base64url",
@@ -411,7 +439,7 @@ function object(
 function decodePosition(
   cursor: string,
   query: LibraryQuery,
-  sort: LibrarySort,
+  sort: LibraryPageSort,
 ): Position {
   try {
     if (cursor.length > 65536 || !/^[A-Za-z0-9_-]+$/u.test(cursor)) fail();
@@ -425,7 +453,7 @@ function decodePosition(
     ]);
     if (
       canonical(e) !== raw.toString("utf8") ||
-      (e.version !== 1 && e.version !== 2) ||
+      (e.version !== 1 && e.version !== 2 && e.version !== 3) ||
       e.kind !== "library-search" ||
       digest({ kind: e.kind, payload: e.payload, version: e.version }) !==
         e.checksum
@@ -435,7 +463,8 @@ function decodePosition(
       "position",
       "query_fingerprint",
       "sort",
-      ...(e.version === 2 ? ["total"] : []),
+      ...(e.version !== 1 ? ["total"] : []),
+      ...(e.version === 3 ? ["ranking_id"] : []),
     ]);
     if (
       payload.query_fingerprint !== queryFingerprint(query) ||
@@ -443,7 +472,15 @@ function decodePosition(
     )
       fail();
     const total =
-      e.version === 2 ? parseLibrarySearchTotal(payload.total) : undefined;
+      e.version !== 1 ? parseLibrarySearchTotal(payload.total) : undefined;
+    const rankingId = payload.ranking_id;
+    if (
+      e.version === 3 &&
+      (sort !== "relevance" ||
+        typeof rankingId !== "string" ||
+        !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(rankingId))
+    )
+      fail();
     if (total && (total.status_updating || total.counts_backfill_pending))
       fail();
     const metrics = draftSortFields(sort);
@@ -485,19 +522,23 @@ function decodePosition(
         ? "last_opened_at"
         : sort === "intake-desc"
           ? "intake_at"
-          : sort.startsWith("publication-year")
-            ? "publication_year"
-            : sort.startsWith("title")
-              ? "normalized_title"
-              : "bm25";
+          : sort === "collected-desc"
+            ? "collected_at"
+            : sort.startsWith("publication-year")
+              ? "publication_year"
+              : sort.startsWith("title")
+                ? "normalized_title"
+                : "bm25";
     const flag =
       field === "last_opened_at"
         ? "opened_is_null"
         : field === "intake_at"
           ? "intake_is_null"
-          : field === "publication_year"
-            ? "year_is_null"
-            : "title_is_null";
+          : field === "collected_at"
+            ? "collected_is_null"
+            : field === "publication_year"
+              ? "year_is_null"
+              : "title_is_null";
     const p = object(
       payload.position,
       field === "bm25"
@@ -511,7 +552,7 @@ function decodePosition(
       fail();
     const value = p[field];
     if (
-      ["intake_at", "last_opened_at"].includes(field) &&
+      ["intake_at", "collected_at", "last_opened_at"].includes(field) &&
       value !== null &&
       (typeof value !== "string" ||
         !Number.isFinite(Date.parse(value)) ||
@@ -545,6 +586,7 @@ function decodePosition(
       literature_id: p.literature_id,
       value: value as Position["value"],
       ...(total ? { total } : {}),
+      ...(typeof rankingId === "string" ? { ranking_id: rankingId } : {}),
     };
   } catch {
     return fail();
@@ -931,34 +973,61 @@ export class LiteratureQueryService {
     mode: "page" | "browse" | "selection" = "page",
   ): Promise<LibrarySearchPage> {
     signal?.throwIfAborted();
-    const parsed = parseLibrarySearchRequest(value);
-    const request =
-      mode === "browse"
-        ? { ...parsed, query: browseQuery(parsed.query) }
-        : parsed;
-    const after =
-      request.cursor === null
-        ? null
-        : decodePosition(request.cursor, request.query, request.sort);
-    const terms =
-      request.query.text === null ? null : queryTerms(request.query.text);
+    const request = parseLibrarySearchRequest(value, { collectedSort: true });
+    const query =
+      mode === "browse" ? browseQuery(request.query) : request.query;
+    const defaultSort =
+      !Object.hasOwn(value as object, "sort") && mode !== "selection";
+    const relevanceForLargeScope = defaultSort && query.text !== null;
+    let sort =
+      defaultSort &&
+      !query.recently_opened &&
+      !libraryWorksetUsesIntake(query) &&
+      query.collection_scope === "collected" &&
+      query.text === null
+        ? "collected-desc"
+        : request.sort;
+    let after: Position | null = null;
+    if (request.cursor !== null) {
+      try {
+        after = decodePosition(request.cursor, query, sort);
+      } catch (error) {
+        // An omitted sort can resume an older intake cursor or a ranked
+        // cursor from a large text query with an implicit sort.
+        if (
+          !defaultSort ||
+          (sort !== "collected-desc" && !relevanceForLargeScope)
+        )
+          throw error;
+        sort = sort === "collected-desc" ? "intake-desc" : "relevance";
+        after = decodePosition(request.cursor, query, sort);
+      }
+    }
+    const terms = query.text === null ? null : queryTerms(query.text);
     if (terms?.length === 0)
       return Object.freeze({ items: [], total_count: 0, next_cursor: null });
     const result = await this.repository.librarySearchPage(
       {
-        query: request.query,
+        query,
         ftsQuery:
           terms === null
             ? null
             : terms.map((term) => `"${term}"`).join(" AND "),
-        sort: request.sort,
+        sort,
         after,
         limit: request.limit,
+        ...(relevanceForLargeScope
+          ? { relevanceForLargeScope: true as const }
+          : {}),
+        ...(sort === "relevance" || relevanceForLargeScope
+          ? { rankingKey: queryFingerprint(query) }
+          : {}),
         ...(mode === "selection" ? { fullRelevance: true as const } : {}),
       },
       signal,
     );
     signal?.throwIfAborted();
+    if (result.ranking_id) sort = "relevance";
     const page = result.rows.slice(0, request.limit);
     const total = {
       total_count: result.total_count,
@@ -968,7 +1037,7 @@ export class LiteratureQueryService {
       items: Object.freeze(page.map((row) => row.item)),
       ...total,
       ...(mode !== "selection" &&
-      request.sort === "relevance" &&
+      sort === "relevance" &&
       result.total_count > RELEVANCE_RESULT_LIMIT
         ? { relevance_limit: RELEVANCE_RESULT_LIMIT }
         : {}),
@@ -982,10 +1051,11 @@ export class LiteratureQueryService {
       next_cursor:
         result.rows.length > request.limit && page.length
           ? encodePosition(
-              position(page.at(-1)!, request.sort),
-              request.query,
-              request.sort,
+              position(page.at(-1)!, sort),
+              query,
+              sort,
               total,
+              result.ranking_id,
             )
           : null,
     });

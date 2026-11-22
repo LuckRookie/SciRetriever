@@ -38,7 +38,7 @@ const emptyQuery = {
   discovery_run_ids: [],
 };
 
-it("searches authoritative metadata with Unicode/AND filters and stable v1 cursors", async () => {
+it("searches authoritative metadata with Unicode/AND filters and stable versioned cursors", async () => {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-library-query-"));
   const app = await createApplication(home);
   try {
@@ -153,19 +153,31 @@ it("searches authoritative metadata with Unicode/AND filters and stable v1 curso
           query_fingerprint: string;
           sort: string;
           position: { literature_id: string };
+          total: { total_count: number };
         };
       };
       expect(cursor).toMatchObject({
         kind: "library-search",
-        version: 1,
+        version: sort === "relevance" ? 3 : 2,
         payload: {
           query_fingerprint: queryFingerprint(query),
           sort,
           position: {
             literature_id: page.items[0]!.literature.literature_id,
           },
+          total: { total_count: page.total_count },
+          ...(sort === "relevance"
+            ? {
+                ranking_id: expect.stringMatching(
+                  /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u,
+                ),
+              }
+            : {}),
         },
       });
+      expect(Object.hasOwn(cursor.payload, "ranking_id")).toBe(
+        sort === "relevance",
+      );
       expect(Buffer.from(raw).toString("base64url")).toBe(page.next_cursor);
     }
     expect(normalizeQueryText("  Straße\u0085ΟΣ İ  ")).toBe("strasse οσ i̇");

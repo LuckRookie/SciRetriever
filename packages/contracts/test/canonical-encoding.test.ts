@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   canonicalJsonBytes,
+  canonicalJsonText,
   decodeCursor,
   encodeCursor,
   parseStrictJsonObject,
@@ -26,6 +27,9 @@ describe("canonical bytes and integrity boundaries", () => {
   it("matches the v1 canonical bytes and SHA-256 values", async () => {
     for (const [name, expected] of Object.entries(manifest.sha256_by_record)) {
       const bytes = canonicalJsonBytes(records[name]);
+      expect(canonicalJsonText(records[name])).toBe(
+        new TextDecoder().decode(bytes),
+      );
       expect(await sha256(bytes)).toBe(expected);
     }
     expect(

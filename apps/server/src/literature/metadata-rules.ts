@@ -11,6 +11,7 @@ import {
 } from "@sciretriever/contracts";
 import {
   canonicalJsonBytes,
+  canonicalJsonText,
   parseLiterature,
   parseLiteratureMetadata,
   parseMetadataObservation,
@@ -108,9 +109,7 @@ function rejectedAcceptance(
 }
 
 function equal(left: unknown, right: unknown): boolean {
-  return Buffer.from(canonicalJsonBytes(left)).equals(
-    Buffer.from(canonicalJsonBytes(right)),
-  );
+  return canonicalJsonText(left) === canonicalJsonText(right);
 }
 
 function orderedObservations(
@@ -133,12 +132,9 @@ function orderedObservations(
       Number(b.provenance.source_name === "post-parse-recognition") -
       Number(a.provenance.source_name === "post-parse-recognition"),
   );
-  const providers = observations
-    .filter((item) => item.provenance.source_kind === "metadata-provider")
-    .map((item) => ({
-      ...item,
-      metadata: { ...item.metadata, keywords: item.declared_keywords },
-    }));
+  const providers = observations.filter(
+    (item) => item.provenance.source_kind === "metadata-provider",
+  );
   const listed = new Set(precedence);
   return Object.freeze([
     ...users,
@@ -147,6 +143,12 @@ function orderedObservations(
     ),
     ...providers.filter((item) => !listed.has(item.provenance.source_name)),
   ]);
+}
+
+function observationKeywords(observation: MetadataObservation) {
+  return observation.provenance.source_kind === "metadata-provider"
+    ? observation.declared_keywords
+    : observation.metadata.keywords;
 }
 
 function sameAffiliation(left: Affiliation, right: Affiliation): boolean {
@@ -247,9 +249,10 @@ function buildProjection(observations: readonly MetadataObservation[]): {
         supplementAuthor(author, source[index]!),
       );
   }
-  const keywords =
-    observations.find((o) => o.metadata.keywords.length > 0)?.metadata
-      .keywords ?? [];
+  const keywordSource = observations.find(
+    (observation) => observationKeywords(observation).length > 0,
+  );
+  const keywords = keywordSource ? observationKeywords(keywordSource) : [];
   const subject_terms: string[] = [],
     termsSeen = new Set<string>();
   for (const o of observations.filter(
@@ -310,39 +313,62 @@ export function metadataObservationCandidates(
   observations: readonly MetadataObservation[],
   precedence: readonly string[] = [],
 ): readonly MetadataFieldCandidate[] {
-  const ordered = orderedObservations(observations, precedence);
-  const built = buildProjection(
-    ordered.filter((o) => o.provenance.source_name !== "manual-metadata"),
-  );
+  const ordered = projectionSources(observations, precedence);
+  const built = buildProjection(ordered);
   if (!built.metadata)
     throw new Error(built.failure ?? "metadata-projection-invalid");
+  return projectionCandidates(ordered, built.metadata);
+}
+
+function projectionSources(
+  observations: readonly MetadataObservation[],
+  precedence: readonly string[],
+) {
+  return orderedObservations(observations, precedence).filter(
+    (observation) => observation.provenance.source_name !== "manual-metadata",
+  );
+}
+
+function projectionCandidates(
+  observations: readonly MetadataObservation[],
+  metadata: LiteratureMetadata,
+): readonly MetadataFieldCandidate[] {
+  const evidence: MetadataFieldCandidate["evidence"][] = observations.map(
+    (observation) =>
+      Object.freeze({
+        source:
+          observation.provenance.source_kind === "user"
+            ? "manual"
+            : "authority",
+        observation_id: observation.observation_id,
+        provenance: observation.provenance,
+      }),
+  );
   const candidates: MetadataFieldCandidate[] = [];
   for (const field of METADATA_FIELDS) {
-    const sources = ordered.filter(
-      (o) =>
-        o.provenance.source_name !== "manual-metadata" &&
-        !metadataFieldEmpty(o.metadata[field]) &&
-        (field !== "keywords" ||
-          o.provenance.source_kind !== "metadata-provider" ||
-          o.declared_keywords.length > 0),
-    );
-    for (let index = 0; index < sources.length; index++) {
-      const observation = sources[index]!;
+    let first = true;
+    for (let index = 0; index < observations.length; index++) {
+      const observation = observations[index]!;
+      const value =
+        field === "keywords"
+          ? observationKeywords(observation)
+          : observation.metadata[field];
+      if (
+        metadataFieldEmpty(value) ||
+        (field === "keywords" &&
+          observation.provenance.source_kind === "metadata-provider" &&
+          observation.declared_keywords.length === 0)
+      )
+        continue;
       candidates.push({
         field,
         value:
-          index === 0 && (field === "authors" || field === "identifiers")
-            ? built.metadata[field]
-            : observation.metadata[field],
-        evidence: {
-          source:
-            observation.provenance.source_kind === "user"
-              ? "manual"
-              : "authority",
-          observation_id: observation.observation_id,
-          provenance: observation.provenance,
-        },
+          first && (field === "authors" || field === "identifiers")
+            ? metadata[field]
+            : value,
+        evidence: evidence[index]!,
       });
+      first = false;
     }
   }
   return candidates;
@@ -377,21 +403,16 @@ export function projectMetadata(
   const contentReady = options.content_ready ?? false;
   if (typeof contentReady !== "boolean" || (contentReady && !current))
     throw new TypeError("content-ready projection input is invalid");
-  const ordered = orderedObservations(
+  const ordered = projectionSources(
     observations,
     options.provider_precedence ?? [],
   );
-  const built = buildProjection(
-    ordered.filter((o) => o.provenance.source_name !== "manual-metadata"),
-  );
+  const built = buildProjection(ordered);
   if (!built.metadata)
     return rejectedProjection(metadataRevision, built.failure!);
   if (current && pairConflict(current, built.metadata))
     return rejectedProjection(metadataRevision, "stable-identifier-conflict");
-  const candidates = metadataObservationCandidates(
-    ordered,
-    options.provider_precedence,
-  );
+  const candidates = projectionCandidates(ordered, built.metadata);
   const resolved = adjudicateMetadataFields({
     current: current ?? EMPTY_METADATA,
     states: options.field_states ?? [],
@@ -568,7 +589,14 @@ export function acceptMetadataObservation(
         ? {}
         : { provider_precedence: options.provider_precedence };
     const before = projectMetadata(existing, precedenceOptions);
-    const after = projectMetadata(merged, precedenceOptions);
+    // A projection with no current fields, locks or preservation rules
+    // already represents the observations alone.
+    const after =
+      options.current_metadata == null &&
+      (options.field_states?.length ?? 0) === 0 &&
+      !options.content_ready
+        ? projection
+        : projectMetadata(merged, precedenceOptions);
     if (before.outcome === "rejected")
       return rejectedAcceptance(before.reason, identity);
     if (after.outcome === "rejected")

@@ -13,7 +13,7 @@ const { registerCatalogWriteHook }: typeof import("./catalog-write.js") =
   await import(new URL("./catalog-write" + suffix, import.meta.url).href);
 const {
   collectionTaskTargetSql,
-  manualTagChangeAddedSql,
+  historicalManualTagSql,
 }: typeof import("./schema.js") = await import(
   new URL("./schema" + suffix, import.meta.url).href
 );
@@ -21,6 +21,14 @@ const { visibleLiteratureSql }: typeof import("./intake-visibility.js") =
   await import(new URL("./intake-visibility" + suffix, import.meta.url).href);
 const { LibraryCountStore }: typeof import("./library-count-store.js") =
   await import(new URL("./library-count-store" + suffix, import.meta.url).href);
+const {
+  backfillCollection,
+  backfillLibraryPaging,
+  initializeLibraryPaging,
+  libraryPagingReady,
+}: typeof import("./library-paging-state.js") = await import(
+  new URL("./library-paging-state" + suffix, import.meta.url).href
+);
 
 export const LIBRARY_STATE_BATCH_SIZE = 256;
 export interface StateSettings {
@@ -55,13 +63,7 @@ export function historicalCollectionSql(id: string) {
         OR EXISTS(SELECT 1 FROM execution_attempts a WHERE a.target_id=t.target_id)
       ))
     OR EXISTS(SELECT 1 FROM tag_assignment_changes c
-      WHERE c.literature_id=${id} AND c.actor='manual'
-      AND (c.before_json IS NULL OR EXISTS(SELECT 1 FROM operation_records o
-        WHERE o.operation='tags' AND o.status='completed' AND json_valid(o.scope_json) AND json_valid(o.result_json)
-          AND json_extract(o.scope_json,'$.operation')='assign'
-          AND json_extract(o.scope_json,'$.request.literature_id')=${id}
-          AND json_extract(o.result_json,'$.revision')=c.revision))
-      AND ${manualTagChangeAddedSql("c")})
+      WHERE c.literature_id=${id} AND ${historicalManualTagSql(id)})
   )`;
 }
 
@@ -136,6 +138,7 @@ export class StoredLibraryState {
       WHERE max_tags<>excluded.max_tags OR archive_profile<>excluded.archive_profile`,
     ).run(settings.max_tags, settings.archive_profile);
     this.counts.configure();
+    initializeLibraryPaging(this.db);
   }
 
   registerWrites() {
@@ -176,6 +179,10 @@ export class StoredLibraryState {
       !this.counts.backfillPending &&
       this.counts.position() === 0
     );
+  }
+
+  maintenancePending() {
+    return !this.countsReady() || !libraryPagingReady(this.db);
   }
 
   readPlan() {
@@ -310,12 +317,11 @@ export class StoredLibraryState {
       rebuilt = ids.length;
       this.writeStates(ids, p);
       if (!p.collection_ready)
-        this.statement(
-          `INSERT INTO library_collected(literature_id,intake_at)
-          SELECT l.literature_id,li.intake_at FROM json_each(?) i CROSS JOIN literatures l ON l.literature_id=i.value
-          LEFT JOIN literature_intake li ON li.literature_id=l.literature_id
-          WHERE ${historicalCollectionSql("l.literature_id")} ON CONFLICT(literature_id) DO NOTHING`,
-        ).run(JSON.stringify(ids));
+        backfillCollection(
+          this.db,
+          JSON.stringify(ids),
+          historicalCollectionSql("l.literature_id"),
+        );
       // During the first backfill the count cursor will visit these papers
       // after state and historical collection are complete. On a settings
       // change, repair any previously counted papers in this transaction.
@@ -329,10 +335,12 @@ export class StoredLibraryState {
     this.counts.update(dirty, 0, LIBRARY_STATE_BATCH_SIZE);
     if (p.ready && p.collection_ready)
       this.counts.backfill(LIBRARY_STATE_BATCH_SIZE);
+    if (this.countsReady() && !libraryPagingReady(this.db))
+      backfillLibraryPaging(this.db, LIBRARY_STATE_BATCH_SIZE);
     return {
       rebuilt,
       repaired: dirty.length,
-      more: !this.countsReady(),
+      more: this.maintenancePending(),
     };
   }
 }

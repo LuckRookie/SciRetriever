@@ -24,7 +24,6 @@ import {
   parseMetaLiteratureId,
   parseStrictJsonValue,
   type LibraryQuery,
-  type LibrarySort,
 } from "@sciretriever/contracts";
 import { randomUUID } from "node:crypto";
 import { runMetadataTask } from "../entry/metadata-task.js";
@@ -1653,11 +1652,12 @@ async function execute(
     const positionalText =
       args[2] === undefined || args[2].startsWith("--") ? null : args[2];
     const text = argument(args, "--text") ?? positionalText;
+    const sort = argument(args, "--sort");
     const value = await withQueryApplication(options, (app) =>
       app.query.search(
         {
           query: query(text, args),
-          sort: (argument(args, "--sort") ?? "intake-desc") as LibrarySort,
+          ...(sort === null ? {} : { sort }),
           limit: integerOption(args, "--limit", 50),
           cursor: argument(args, "--cursor"),
         },

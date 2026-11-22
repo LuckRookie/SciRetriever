@@ -1532,12 +1532,56 @@ export const CASE_FOLD: Readonly<Record<string, string>> = Object.freeze({
   "\ud83a\udd21": "\ud83a\udd43",
 });
 export function caseFold(value: string): string {
-  return Array.from(
-    value,
-    (character) => CASE_FOLD[character] ?? character,
-  ).join("");
+  // Printable ASCII uses exactly the A–Z mappings in the full table.
+  if (/^[\x20-\x7e]*$/.test(value)) return value.toLowerCase();
+  let result = "";
+  for (const character of value) result += CASE_FOLD[character] ?? character;
+  return result;
 }
+
+type NormalizedTextCache = {
+  readonly queries: Map<string, string>;
+  readonly fts: Map<string, string>;
+};
+let normalizedTextCache: NormalizedTextCache | undefined;
+
+export class MetadataTextNormalization {
+  private readonly cache: NormalizedTextCache = {
+    queries: new Map(),
+    fts: new Map(),
+  };
+
+  run<T>(normalize: () => T): T {
+    const previous = normalizedTextCache;
+    normalizedTextCache = this.cache;
+    try {
+      return normalize();
+    } finally {
+      normalizedTextCache = previous;
+    }
+  }
+}
+
+function normalizeCached(
+  value: string,
+  cache: Map<string, string> | undefined,
+  normalize: (value: string) => string,
+): string {
+  const existing = cache?.get(value);
+  if (existing !== undefined) return existing;
+  const result = normalize(value);
+  if (cache && cache.size < 512 && value.length <= 4096)
+    cache.set(value, result);
+  return result;
+}
+
+const OTHER_QUERY_SPACES = [
+  0x85, 0xa0, 0x1680, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000,
+];
 export function normalizeQueryText(value: string): string {
+  return normalizeCached(value, normalizedTextCache?.queries, queryText);
+}
+function queryText(value: string): string {
   let normalized = "",
     pendingSpace = false;
   for (const character of value.normalize("NFC")) {
@@ -1546,9 +1590,7 @@ export function normalizeQueryText(value: string): string {
       (code >= 9 && code <= 13) ||
       (code >= 28 && code <= 32) ||
       (code >= 0x2000 && code <= 0x200a) ||
-      [0x85, 0xa0, 0x1680, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000].includes(
-        code,
-      );
+      OTHER_QUERY_SPACES.includes(code);
     if (whitespace) {
       pendingSpace = normalized.length > 0;
       continue;
@@ -1560,6 +1602,9 @@ export function normalizeQueryText(value: string): string {
   return caseFold(normalized);
 }
 export function ftsIndexText(value: string): string {
+  return normalizeCached(value, normalizedTextCache?.fts, ftsText);
+}
+function ftsText(value: string): string {
   return (
     caseFold(value.normalize("NFC")).match(
       /[\p{L}\p{N}][\p{L}\p{N}\p{M}]*/gu,

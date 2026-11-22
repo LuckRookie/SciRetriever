@@ -298,6 +298,33 @@ it("atomically merges two existing MetaLiteratures through one explicit provider
   }
 });
 
+it("validates changed observation fields again within a segment", async () => {
+  const env = await emptyApplication();
+  try {
+    const first = observation(41);
+    const input = { ...first, metadata: { ...first.metadata } };
+    await expect(
+      env.app.database.writeMetadataSegment(async () => {
+        expect(await env.app.identity.observe(input)).toMatchObject({
+          outcome: "created",
+        });
+        input.metadata.title = "changed\u0000title";
+        await env.app.identity.observe(input);
+      }),
+    ).rejects.toThrow("contract validation failed");
+    expect(
+      await env.app.database.getObservation(first.observation_id),
+    ).toBeNull();
+    input.metadata.title = first.metadata.title;
+    const retry = await env.app.database.writeMetadataSegment(() =>
+      env.app.identity.observe(input),
+    );
+    expect(retry).toMatchObject({ outcome: "created" });
+  } finally {
+    await env.close();
+  }
+});
+
 it("rolls back the observation and projection when the identity CAS is stale", async () => {
   const env = await emptyApplication();
   try {

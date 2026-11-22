@@ -279,7 +279,7 @@ function snapshot(home: string, runId: string, batchId: string) {
     };
     const names = db
       .prepare(
-        "SELECT name FROM sqlite_schema WHERE type='table' AND (name='literatures' OR name='meta_literatures' OR name='provenances' OR name GLOB 'literature_metadata*' OR name GLOB 'metadata_observation*' OR name GLOB 'provider_relation*' OR name='literature_references' OR name GLOB 'discovery_*' OR name GLOB 'citation_discovery_*' OR name GLOB 'intake_batch*' OR name='literature_search_fts')",
+        "SELECT name FROM sqlite_schema WHERE type='table' AND (name='literatures' OR name='meta_literatures' OR name='provenances' OR name GLOB 'literature_metadata*' OR name GLOB 'metadata_observation*' OR name GLOB 'provider_relation*' OR name='literature_references' OR name GLOB 'discovery_*' OR name GLOB 'citation_discovery_*' OR name GLOB 'intake_batch*' OR name IN ('literature_search_fts','library_literature_states','library_count_contributions','library_count_totals','library_ordered_members','library_discovery_invalid','library_discovery_replaced'))",
       )
       .all()
       .map((row) => String(row.name));
@@ -304,12 +304,23 @@ it("preserves fields and visible event order for new intake, match, enrichment a
   async function take(pageSize: number) {
     const f = await fixture(source(graph, pageSize));
     try {
+      while ((await f.app.database.refreshLibraryState()).more) {
+        // Finish the small fixture's backfill before comparing stored rows.
+      }
       const seed = await add(f.app, 0);
       await add(f.app, 2);
       await add(f.app, 3);
       const result = await run(f.app, [seed], "parity");
       expect(result.result_count).toBe(3);
-      return snapshot(f.home, result.discovery_run_id, result.intake_batch_id);
+      const stored = snapshot(
+        f.home,
+        result.discovery_run_id,
+        result.intake_batch_id,
+      );
+      expect(stored.tables.library_literature_states).toHaveLength(4);
+      expect(stored.tables.library_count_contributions).not.toHaveLength(0);
+      expect(stored.tables.library_ordered_members).not.toHaveLength(0);
+      return stored;
     } finally {
       await f.close();
     }

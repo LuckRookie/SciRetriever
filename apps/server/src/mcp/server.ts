@@ -430,7 +430,7 @@ export function createMcpServer(options: McpOptions = {}) {
               query: { text: args.text },
               limit: args.limit,
               cursor: args.cursor,
-              sort: args.text ? "relevance" : "intake-desc",
+              ...(args.text ? { sort: "relevance" } : {}),
             },
         signal,
       );

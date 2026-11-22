@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { canonicalJsonBytes, sha256 } from "@sciretriever/contracts";
 import { createApplication } from "../src/bootstrap/application.js";
 import { RetrievalIndexService } from "../src/retrieval/index.js";
@@ -22,15 +22,18 @@ import { RetrievalStorageClient } from "../src/storage/sqlite/retrieval-client.j
 import {
   INTAKE_LOOKUP_INDEXES,
   LIBRARY_COUNT_SCHEMA,
+  LIBRARY_PAGING_SCHEMA,
   LIBRARY_STORED_STATE_SCHEMA,
   RETRIEVAL_CHANGE_SCHEMA,
   SCHEMA_FINGERPRINT,
   SCHEMA_FINGERPRINT_V19,
+  SCHEMA_FINGERPRINT_V19_COUNTS,
   SCHEMA_FINGERPRINT_V19_INTAKE_LOOKUPS,
   SCHEMA_FINGERPRINT_V19_RETRIEVAL_CHANGES,
   SCHEMA_FINGERPRINT_V19_STORED_STATES,
   SCHEMA_MANIFEST,
   SCHEMA_MANIFEST_V19,
+  SCHEMA_MANIFEST_V19_COUNTS,
   SCHEMA_MANIFEST_V19_INTAKE_LOOKUPS,
   SCHEMA_MANIFEST_V19_RETRIEVAL_CHANGES,
   SCHEMA_MANIFEST_V19_STORED_STATES,
@@ -46,19 +49,29 @@ it.each([
       ...INTAKE_LOOKUP_INDEXES,
       ...RETRIEVAL_CHANGE_SCHEMA,
       ...LIBRARY_STORED_STATE_SCHEMA,
+      ...LIBRARY_COUNT_SCHEMA,
     ],
   ],
   [
     SCHEMA_MANIFEST_V19_INTAKE_LOOKUPS,
     SCHEMA_FINGERPRINT_V19_INTAKE_LOOKUPS,
-    [...RETRIEVAL_CHANGE_SCHEMA, ...LIBRARY_STORED_STATE_SCHEMA],
+    [
+      ...RETRIEVAL_CHANGE_SCHEMA,
+      ...LIBRARY_STORED_STATE_SCHEMA,
+      ...LIBRARY_COUNT_SCHEMA,
+    ],
   ],
   [
     SCHEMA_MANIFEST_V19_RETRIEVAL_CHANGES,
     SCHEMA_FINGERPRINT_V19_RETRIEVAL_CHANGES,
-    LIBRARY_STORED_STATE_SCHEMA,
+    [...LIBRARY_STORED_STATE_SCHEMA, ...LIBRARY_COUNT_SCHEMA],
   ],
-  [SCHEMA_MANIFEST_V19_STORED_STATES, SCHEMA_FINGERPRINT_V19_STORED_STATES, []],
+  [
+    SCHEMA_MANIFEST_V19_STORED_STATES,
+    SCHEMA_FINGERPRINT_V19_STORED_STATES,
+    LIBRARY_COUNT_SCHEMA,
+  ],
+  [SCHEMA_MANIFEST_V19_COUNTS, SCHEMA_FINGERPRINT_V19_COUNTS, []],
 ] as const)(
   "adds only the agreed search objects and preserves existing FTS rows and maintenance",
   async (manifest, previous, additions) => {
@@ -100,7 +113,8 @@ it.each([
     `);
       const hasPosition =
         previous === SCHEMA_FINGERPRINT_V19_RETRIEVAL_CHANGES ||
-        previous === SCHEMA_FINGERPRINT_V19_STORED_STATES;
+        previous === SCHEMA_FINGERPRINT_V19_STORED_STATES ||
+        previous === SCHEMA_FINGERPRINT_V19_COUNTS;
       if (hasPosition)
         db.exec("INSERT INTO retrieval_change_state VALUES(1,42)");
       const before = schema(),
@@ -124,7 +138,7 @@ it.each([
       expect(after.filter((row) => oldNames.has(row.name))).toEqual(before);
       const added = after.filter((row) => !oldNames.has(row.name));
       expect(added.map((row) => row.sql).sort()).toEqual(
-        [...additions, ...LIBRARY_COUNT_SCHEMA].sort(),
+        [...additions, ...LIBRARY_PAGING_SCHEMA].sort(),
       );
       expect(db.prepare("SELECT * FROM library_state_progress").all()).toEqual(
         [],
@@ -139,6 +153,9 @@ it.each([
       expect(
         db.prepare("SELECT * FROM library_count_contributions").all(),
       ).toEqual([]);
+      expect(db.prepare("SELECT * FROM library_paging_progress").all()).toEqual(
+        [],
+      );
       expect(
         db
           .prepare("SELECT processed_position FROM retrieval_change_state")
@@ -203,6 +220,7 @@ it("reconciles unlogged legacy writes explicitly and retains post-migration SQL 
         ...RETRIEVAL_CHANGE_SCHEMA,
         ...LIBRARY_STORED_STATE_SCHEMA,
         ...LIBRARY_COUNT_SCHEMA,
+        ...LIBRARY_PAGING_SCHEMA,
       ].reverse()) {
         const [, object, name] =
           /^CREATE (TABLE|TRIGGER|INDEX) ([a-z_]+)/u.exec(sql)!;
@@ -253,6 +271,12 @@ it("reconciles unlogged legacy writes explicitly and retains post-migration SQL 
     } finally {
       sqlWriter.close();
     }
+    // Let unrelated background catalog maintenance release admission before
+    // invoking the explicit migration step, which uses nonblocking admission.
+    await vi.waitFor(
+      async () => expect(await app!.database.libraryStatePending()).toBe(false),
+      { timeout: 20_000 },
+    );
     await expect(reconcileLiteratureSearchSchema(path)).resolves.toMatchObject({
       reconciled: true,
       differences: 1,

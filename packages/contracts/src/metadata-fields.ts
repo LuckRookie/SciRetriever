@@ -11,6 +11,7 @@ import {
 import {
   ContractValidationError,
   parseLiteratureMetadata,
+  parseLiteratureMetadataField,
   parseProvenance,
   type LiteratureMetadata,
   type Provenance,
@@ -125,10 +126,7 @@ export function parseMetadataFieldCandidate(
 ): MetadataFieldCandidate {
   const row = exact(value, ["field", "value", "evidence"]);
   const field = parseMetadataField(row.field);
-  const normalized = parseLiteratureMetadata({
-    ...EMPTY_METADATA,
-    [field]: row.value,
-  })[field];
+  const normalized = parseLiteratureMetadataField(field, row.value);
   const raw = object(row.evidence);
   let evidence: MetadataFieldEvidence;
   if (raw.source === "proofread") {

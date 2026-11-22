@@ -5,6 +5,7 @@
 ## 内容入口
 
 - [index.ts](index.ts)：包公开导出与基础合同。
+- 文献库页面使用 `LibraryPageSort`。调用 `parseLibrarySearchRequest(value, { collectedSort: true })` 可解析 `collected-desc`。该排序返回可空的 `collected_at`，表示首次选用时间。`intake_at` 仍表示最早书目观测。`library-sort-scope-limit` 表示当前命中范围需要缩小或使用支持的排序。
 - [device-connections.ts](device-connections.ts)：设备连接、配对请求与精确键解析；可省略的显示类型在创建请求中规范为 null，读取结果始终带 nullable `kind`，用途集合独立校验。
 - [folders.ts](folders.ts) / [filters.ts](filters.ts)：分组与保存筛选的操作、版本 1 导出格式和精确键解析；分组的机器结果按成员分页，下载文件按文件夹嵌套成员。
 - [literature-summary.ts](literature-summary.ts)：文献公开批量读取的最小书目投影，只含稳定 ID、已有标识、题名与年份。

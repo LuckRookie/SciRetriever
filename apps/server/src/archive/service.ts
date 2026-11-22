@@ -146,12 +146,16 @@ export class ArchiveService extends ArchiveReader {
         ? await this.library.targetedSnapshot({
             literature_ids: selector.literature_ids,
           })
-        : await this.library.search({
-            query: selector.query,
-            sort: "title-asc",
-            limit: 10001,
-            cursor: null,
-          });
+        : await this.library.search(
+            {
+              query: selector.query,
+              sort: "title-asc",
+              limit: 10001,
+              cursor: null,
+            },
+            undefined,
+            "selection",
+          );
     if (selected.items.length > 10000 || selected.next_cursor !== null)
       throw new ArchiveError("archive-batch-limit");
     if (

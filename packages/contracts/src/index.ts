@@ -317,9 +317,12 @@ export type LibrarySort =
   | "title-asc"
   | "title-desc"
   | "relevance";
-export interface LibrarySearchRequest {
+export type LibraryPageSort = LibrarySort | "collected-desc";
+export const LIBRARY_SORT_SCOPE_LIMIT = "library-sort-scope-limit";
+
+export interface LibrarySearchRequest<Sort = LibraryPageSort> {
   readonly query: LibraryQuery;
-  readonly sort: LibrarySort;
+  readonly sort: Sort;
   readonly limit: number;
   readonly cursor: string | null;
 }
@@ -333,6 +336,8 @@ export interface LiteratureSearchItem {
   readonly last_opened_at?: string | null;
   /** Earliest attached metadata observation, UTC; null when unavailable. */
   readonly intake_at?: string | null;
+  /** First selection time, UTC; null when historical evidence has no date. */
+  readonly collected_at?: string | null;
   readonly tags?: readonly {
     readonly tag_id: string;
     readonly name: string;
@@ -504,6 +509,14 @@ export function parseReferenceDetail(value: unknown): ReferenceDetail {
 }
 export function parseLibrarySearchRequest(
   value: unknown,
+): LibrarySearchRequest<LibrarySort>;
+export function parseLibrarySearchRequest(
+  value: unknown,
+  options: { readonly collectedSort: true },
+): LibrarySearchRequest;
+export function parseLibrarySearchRequest(
+  value: unknown,
+  options?: { readonly collectedSort: true },
 ): LibrarySearchRequest {
   const r = exact(
     {
@@ -536,12 +549,13 @@ export function parseLibrarySearchRequest(
     discovery_run_ids: [],
     ...object(r.query, []),
   });
-  const sort = enumeration<LibrarySort>(
+  const sort = enumeration<LibraryPageSort>(
     !Object.hasOwn(object(value, []), "sort") && query.recently_opened
       ? "opened-desc"
       : r.sort,
     [
       "intake-desc",
+      ...(options?.collectedSort ? ["collected-desc" as const] : []),
       "opened-desc",
       "publication-year-desc",
       "publication-year-asc",
@@ -580,6 +594,9 @@ export function parseLiteratureSearchItem(
         : []),
       "tags",
       ...(Object.hasOwn(object(value, []), "collected") ? ["collected"] : []),
+      ...(Object.hasOwn(object(value, []), "collected_at")
+        ? ["collected_at"]
+        : []),
       ...(value &&
       typeof value === "object" &&
       Object.hasOwn(value, "draft_facts")
@@ -637,6 +654,12 @@ export function parseLiteratureSearchItem(
     long_document:
       r.long_document === null ? null : parseLongDocumentInfo(r.long_document),
     intake_at: r.intake_at as string | null,
+    ...(Object.hasOwn(r, "collected_at")
+      ? {
+          collected_at:
+            r.collected_at === null ? null : parseUtcTimestamp(r.collected_at),
+        }
+      : {}),
     last_opened_at:
       r.last_opened_at === null ? null : parseUtcTimestamp(r.last_opened_at),
     folder_ids: list(r.folder_ids, [], (v) => parseAssetId(v)),
@@ -800,36 +823,54 @@ function exact(
     fail(path);
   return result;
 }
+// The Unicode flag treats pairs as one code point. Keep the existing C0/DEL
+// checks and the existing acceptance of a terminal high surrogate.
+const INVALID_CONTRACT_TEXT =
+  /[^\x20-\x7e\x80-\u{10ffff}]|[\udc00-\udfff]|[\ud800-\udbff](?=[\s\S])/u;
+let textValidationCache: Map<string, string> | undefined;
+
+/** Reuse successful checks of immutable strings in synchronous batch work. */
+export class ContractTextValidation {
+  private readonly strings = new Map<string, string>();
+
+  run<T>(validate: () => T): T {
+    const previous = textValidationCache;
+    textValidationCache = this.strings;
+    try {
+      return validate();
+    } finally {
+      textValidationCache = previous;
+    }
+  }
+}
+
 function text(
   value: unknown,
   path: readonly string[],
   nonblank = false,
 ): string {
   if (typeof value !== "string") fail(path);
+  const cached = textValidationCache?.get(value);
+  if (cached !== undefined) {
+    if (nonblank && cached.length === 0) fail(path);
+    return cached;
+  }
   const normalized = value.normalize("NFC").trim();
   if (nonblank && normalized.length === 0) fail(path);
-  if (hasLoneSurrogate(normalized)) fail(path);
+  if (INVALID_CONTRACT_TEXT.test(normalized)) fail(path);
   if (
-    [...normalized].some((character) => {
-      const code = character.codePointAt(0) ?? 0;
-      return code < 0x20 || code === 0x7f;
-    })
+    textValidationCache &&
+    textValidationCache.size < 512 &&
+    value.length <= 4096
   )
-    fail(path);
+    textValidationCache.set(value, normalized);
   return normalized;
 }
 function rawText(value: unknown, path: readonly string[]): string {
   if (
     typeof value !== "string" ||
     value.length === 0 ||
-    hasLoneSurrogate(value)
-  )
-    fail(path);
-  if (
-    [...value].some((character) => {
-      const code = character.codePointAt(0) ?? 0;
-      return code < 0x20 || code === 0x7f;
-    })
+    INVALID_CONTRACT_TEXT.test(value)
   )
     fail(path);
   return value;
@@ -1045,54 +1086,63 @@ export function parseAuthor(
     ),
   });
 }
+type MetadataParsers = {
+  [Field in keyof LiteratureMetadata]: (
+    value: unknown,
+  ) => LiteratureMetadata[Field];
+};
+const metadataParsers: MetadataParsers = {
+  title: (value) => nullableText(value, ["title"]),
+  authors: (value) => list(value, ["authors"], parseAuthor),
+  abstract: (value) => nullableText(value, ["abstract"]),
+  publication_date: (value) => nullableText(value, ["publication_date"]),
+  publication_year: (value) => optionalInteger(value, ["publication_year"]),
+  publication_form: parsePublicationForm,
+  article_kind: parseArticleKind,
+  language: (value) => nullableText(value, ["language"]),
+  venue: (value) => nullableText(value, ["venue"]),
+  publisher: (value) => nullableText(value, ["publisher"]),
+  volume: (value) => nullableText(value, ["volume"]),
+  issue: (value) => nullableText(value, ["issue"]),
+  pages: (value) => nullableText(value, ["pages"]),
+  identifiers: (value) => list(value, ["identifiers"], parseIdentifier),
+  subject_terms: (value) =>
+    list(value, ["subject_terms"], (item, path) => text(item, path, true)),
+  keywords: (value) =>
+    list(value, ["keywords"], (item, path) => text(item, path, true)),
+};
+const metadataKeys = Object.keys(metadataParsers);
+
+export function parseLiteratureMetadataField<
+  Field extends keyof LiteratureMetadata,
+>(field: Field, value: unknown): LiteratureMetadata[Field] {
+  if (!Object.hasOwn(metadataParsers, field)) fail();
+  return metadataParsers[field](value);
+}
+
 export function parseLiteratureMetadata(value: unknown): LiteratureMetadata {
   const record = exact(
     { subject_terms: [], ...object(value, []) },
-    [
-      "title",
-      "authors",
-      "abstract",
-      "publication_date",
-      "publication_year",
-      "publication_form",
-      "article_kind",
-      "language",
-      "venue",
-      "publisher",
-      "volume",
-      "issue",
-      "pages",
-      "identifiers",
-      "keywords",
-      "subject_terms",
-    ],
+    metadataKeys,
     [],
   );
   return Object.freeze({
-    title: nullableText(record.title, ["title"]),
-    authors: list(record.authors, ["authors"], parseAuthor),
-    abstract: nullableText(record.abstract, ["abstract"]),
-    publication_date: nullableText(record.publication_date, [
-      "publication_date",
-    ]),
-    publication_year: optionalInteger(record.publication_year, [
-      "publication_year",
-    ]),
-    publication_form: parsePublicationForm(record.publication_form),
-    article_kind: parseArticleKind(record.article_kind),
-    language: nullableText(record.language, ["language"]),
-    venue: nullableText(record.venue, ["venue"]),
-    publisher: nullableText(record.publisher, ["publisher"]),
-    volume: nullableText(record.volume, ["volume"]),
-    issue: nullableText(record.issue, ["issue"]),
-    pages: nullableText(record.pages, ["pages"]),
-    identifiers: list(record.identifiers, ["identifiers"], parseIdentifier),
-    subject_terms: list(record.subject_terms, ["subject_terms"], (item, path) =>
-      text(item, path, true),
-    ),
-    keywords: list(record.keywords, ["keywords"], (item, path) =>
-      text(item, path, true),
-    ),
+    title: metadataParsers.title(record.title),
+    authors: metadataParsers.authors(record.authors),
+    abstract: metadataParsers.abstract(record.abstract),
+    publication_date: metadataParsers.publication_date(record.publication_date),
+    publication_year: metadataParsers.publication_year(record.publication_year),
+    publication_form: metadataParsers.publication_form(record.publication_form),
+    article_kind: metadataParsers.article_kind(record.article_kind),
+    language: metadataParsers.language(record.language),
+    venue: metadataParsers.venue(record.venue),
+    publisher: metadataParsers.publisher(record.publisher),
+    volume: metadataParsers.volume(record.volume),
+    issue: metadataParsers.issue(record.issue),
+    pages: metadataParsers.pages(record.pages),
+    identifiers: metadataParsers.identifiers(record.identifiers),
+    subject_terms: metadataParsers.subject_terms(record.subject_terms),
+    keywords: metadataParsers.keywords(record.keywords),
   });
 }
 export function parseMetaLiterature(value: unknown): MetaLiterature {
@@ -1680,10 +1730,13 @@ function canonicalValue(value: unknown): unknown {
   }
   fail();
 }
-export function canonicalJsonBytes(value: unknown): Uint8Array {
+export function canonicalJsonText(value: unknown): string {
   const encoded = JSON.stringify(canonicalValue(value));
   if (encoded === undefined) fail();
-  return new TextEncoder().encode(encoded);
+  return encoded;
+}
+export function canonicalJsonBytes(value: unknown): Uint8Array {
+  return new TextEncoder().encode(canonicalJsonText(value));
 }
 export async function sha256(value: Uint8Array): Promise<Sha256> {
   // HTTP IP workbenches lack SubtleCrypto. Preserve the exact hash contract there.

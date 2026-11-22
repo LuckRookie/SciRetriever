@@ -236,3 +236,76 @@ it("ends both relevance windows at 1,000 while counts and query selections retai
     await rm(home, { recursive: true, force: true });
   }
 }, 40_000);
+
+it("continues the first ranking after writes, skips withdrawn rows, and recomputes after a restart", async () => {
+  const home = await mkdtemp(join(tmpdir(), "sciretriever-relevance-reopen-"));
+  const app = await createApplication(home, {
+    indexRefreshIntervalMs: null,
+    metadata: {},
+  });
+  let reader: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
+  const db = new DatabaseSync(join(home, "catalog.sqlite"));
+  const request = {
+    query: { text: "rankwindow" },
+    sort: "relevance",
+    limit: 2,
+  };
+  const ids = (page: Awaited<ReturnType<typeof app.library.search>>) =>
+    page.items.map((row) => row.literature.literature_id);
+  try {
+    db.exec("PRAGMA foreign_keys=ON; BEGIN");
+    for (let n = 1; n <= 5; n++) {
+      db.prepare("INSERT INTO meta_literatures VALUES(?,?)").run(id(n), id(n));
+      db.prepare("INSERT INTO literatures VALUES(?,?,'published')").run(
+        id(n),
+        id(n),
+      );
+      db.prepare(
+        "INSERT INTO literature_metadata(literature_id,metadata_revision,metadata_sha256,title) VALUES(?,1,?,'rankwindow')",
+      ).run(id(n), "a".repeat(64));
+      db.prepare(
+        "INSERT INTO literature_search_fts(literature_id,title) VALUES(?,'rankwindow')",
+      ).run(id(n));
+    }
+    db.exec("COMMIT");
+    const first = await app.library.search(request);
+    expect(ids(first)).toEqual([id(1), id(2)]);
+    expect(first.next_cursor).not.toBeNull();
+    db.exec("BEGIN");
+    db.prepare(
+      "INSERT INTO intake_batches(batch_id,kind,default_label,origin,created_at,state,result,initiated_by,request_json) VALUES(?,'citation','Fixture','cli','2026-10-01T00:00:00.000Z','finished','completed','local:cli','{}')",
+    ).run(id(100));
+    db.prepare(
+      "INSERT INTO intake_withdrawn_objects VALUES('literature',?,?,'2026-10-01T00:00:00.000Z')",
+    ).run(id(3), id(100));
+    db.prepare(
+      "UPDATE literature_metadata SET title='Current title' WHERE literature_id=?",
+    ).run(id(4));
+    db.prepare(
+      "DELETE FROM literature_search_fts WHERE rowid IN (SELECT id FROM literature_search_fts_content WHERE c0=?)",
+    ).run(id(4));
+    db.exec("COMMIT");
+    const next = await app.library.search({
+      ...request,
+      cursor: first.next_cursor,
+    });
+    expect(ids(next)).toEqual([id(4), id(5)]);
+    expect(next.items[0]?.literature.metadata.title).toBe("Current title");
+    expect(next.total_count).toBe(5);
+    expect(next.next_cursor).toBeNull();
+
+    reader = await createQueryApplication(home);
+    const uncached = await reader.query!.search({
+      ...request,
+      cursor: first.next_cursor,
+    });
+    expect(ids(uncached)).toEqual([id(5)]);
+    expect(uncached.next_cursor).toBeNull();
+  } finally {
+    if (db.isTransaction) db.exec("ROLLBACK");
+    db.close();
+    await reader?.close();
+    await app.close();
+    await rm(home, { recursive: true, force: true });
+  }
+}, 30_000);

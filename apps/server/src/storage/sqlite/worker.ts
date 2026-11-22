@@ -5,7 +5,9 @@ import { IntakeWithdrawalError } from "../../literature/intake-withdrawal.js";
 import { isIntakeWithdrawalRead } from "./intake-withdrawal-engine.js";
 import {
   canonicalJsonBytes,
+  ContractTextValidation,
   globalLibraryCountScope,
+  LIBRARY_SORT_SCOPE_LIMIT,
   parseLibraryCounts,
   parseLibraryExactCount,
   parseLibrarySearchTotal,
@@ -86,7 +88,8 @@ import type {
   LibraryPageQuery,
   SearchSnapshotRow,
 } from "../../literature/query.js";
-import { CASE_FOLD } from "../../literature/unicode-casefold.js";
+import { LibrarySortScopeLimitError } from "../../literature/query.js";
+import { MetadataTextNormalization } from "../../literature/unicode-casefold.js";
 import { RetrievalStorageError } from "../../retrieval/model.js";
 import { TagError } from "../../tags/rules.js";
 import {
@@ -1317,6 +1320,8 @@ type MetadataWriteScope = {
   readonly done: Promise<void>;
   readonly events: ExecutionEvent[];
   readonly commands: ReadonlySet<string>;
+  readonly textValidation?: ContractTextValidation;
+  readonly textNormalization?: MetadataTextNormalization;
 };
 
 function validateExecutionEvent(event: ExecutionEvent): void {
@@ -1399,7 +1404,6 @@ export class SqliteWorker {
         long_read_lane: options.longReadWorker === true,
         max_tags: options.maxTags ?? 6,
         archive_profile: options.archiveProfile ?? "vlm-engine",
-        case_fold: CASE_FOLD,
         schema_version: SCHEMA_VERSION,
         schema_manifest: SCHEMA_MANIFEST,
         schema_fingerprint: SCHEMA_FINGERPRINT,
@@ -1423,11 +1427,13 @@ export class SqliteWorker {
             ? new DOMException("Library query cancelled", "AbortError")
             : reply.code === "catalog-corrupt"
               ? new CatalogCorruptionError(reply.sqlite_code ?? null)
-              : new SqliteWorkerError(
-                  isDocumentCommitFailureCode(reply.code)
-                    ? reply.code
-                    : "sqlite-worker",
-                ),
+              : reply.code === LIBRARY_SORT_SCOPE_LIMIT
+                ? new LibrarySortScopeLimitError()
+                : new SqliteWorkerError(
+                    isDocumentCommitFailureCode(reply.code)
+                      ? reply.code
+                      : "sqlite-worker",
+                  ),
         );
     });
     this.worker.on("error", () => {
@@ -1525,7 +1531,17 @@ export class SqliteWorker {
       const done = new Promise<void>((resolve) => {
         release = resolve;
       });
-      const scope: MetadataWriteScope = { done, events: [], commands };
+      const scope: MetadataWriteScope = {
+        done,
+        events: [],
+        commands,
+        ...(commands === METADATA_WRITE_COMMANDS
+          ? {
+              textValidation: new ContractTextValidation(),
+              textNormalization: new MetadataTextNormalization(),
+            }
+          : {}),
+      };
       this.metadataWrite = scope;
       try {
         return await this.metadataWrites.run(scope, async () => {
@@ -1556,6 +1572,13 @@ export class SqliteWorker {
         release();
       }
     }, signal);
+  }
+  withMetadataValidation<T>(validate: () => T): T {
+    const { textValidation, textNormalization } =
+      this.metadataWrites.getStore() ?? {};
+    return textValidation && textNormalization
+      ? textValidation.run(() => textNormalization.run(validate))
+      : validate();
   }
   citationCheckpoints(
     jobId: string,
@@ -3375,11 +3398,13 @@ export class SqliteWorker {
     LibrarySearchTotal & {
       readonly rows: readonly SearchSnapshotRow[];
       readonly tag_backfill_pending?: number;
+      readonly ranking_id?: string;
     }
   > {
     type Page = {
       rows: unknown;
       tag_backfill_pending?: number;
+      ranking_id?: string;
     } & Record<string, unknown>;
     const result = await this.run<Page | { defer: true }>(
       {
@@ -3388,12 +3413,17 @@ export class SqliteWorker {
         ...(this.options.readLane &&
         !this.metadataWrites.getStore() &&
         (needsLibraryState(request.query) ||
+          request.sort === "collected-desc" ||
+          request.query.folder ||
+          request.query.intake_batch_ids.length ||
+          request.query.discovery_run_ids.length ||
           request.query.collection_scope === "collected" ||
           (!request.after?.total &&
             globalLibraryCountScope(request.query) !== null)) &&
         !request.fullRelevance &&
         request.limit <= 200 &&
-        !request.query.discovery_run_ids.length
+        request.sort !== "relevance" &&
+        !request.relevanceForLargeScope
           ? { stateRead: "defer" as const }
           : {}),
       },
@@ -3406,7 +3436,12 @@ export class SqliteWorker {
             signal,
           )
         : result;
-    const { rows: rawRows, tag_backfill_pending, ...summary } = page;
+    const {
+      rows: rawRows,
+      tag_backfill_pending,
+      ranking_id,
+      ...summary
+    } = page;
     let total: LibrarySearchTotal;
     try {
       total = parseLibrarySearchTotal(summary);
@@ -3416,7 +3451,8 @@ export class SqliteWorker {
     const rows = this.parseSearchRows(rawRows);
     if (
       rows.length > request.limit + 1 ||
-      ((!request.after?.total || request.fullRelevance) &&
+      (!total.count_truncated &&
+        (!request.after?.total || request.fullRelevance) &&
         rows.length > total.total_count)
     )
       throw new SqliteWorkerError();
@@ -3425,10 +3461,17 @@ export class SqliteWorker {
       (!Number.isSafeInteger(tag_backfill_pending) || tag_backfill_pending < 0)
     )
       throw new SqliteWorkerError();
+    if (
+      ranking_id !== undefined &&
+      ((request.sort !== "relevance" && !request.relevanceForLargeScope) ||
+        !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(ranking_id))
+    )
+      throw new SqliteWorkerError();
     return {
       rows,
       ...total,
       ...(tag_backfill_pending === undefined ? {} : { tag_backfill_pending }),
+      ...(ranking_id === undefined ? {} : { ranking_id }),
     };
   }
   async librarySnapshot(
@@ -3685,57 +3728,60 @@ export class SqliteWorker {
     const value = await this.run<unknown>({ kind: "identity_read", request });
     if (!value || typeof value !== "object" || Array.isArray(value))
       throw new SqliteWorkerError();
-    const context = value as Partial<IdentityReadContext>;
+    const { literatures, meta_literatures, observations, facts } =
+      value as Partial<IdentityReadContext>;
     if (
-      !Array.isArray(context.literatures) ||
-      !Array.isArray(context.meta_literatures) ||
-      !Array.isArray(context.observations) ||
-      !Array.isArray(context.facts)
+      !Array.isArray(literatures) ||
+      !Array.isArray(meta_literatures) ||
+      !Array.isArray(observations) ||
+      !Array.isArray(facts)
     )
       throw new SqliteWorkerError();
-    return Object.freeze({
-      literatures: Object.freeze(context.literatures.map(parseLiterature)),
-      meta_literatures: Object.freeze(
-        context.meta_literatures.map(parseMetaLiterature),
-      ),
-      observations: Object.freeze(
-        context.observations.map((link) => {
-          if (
-            !link ||
-            typeof link !== "object" ||
-            typeof link.literature_id !== "string"
-          )
-            throw new SqliteWorkerError();
-          return Object.freeze({
-            literature_id: link.literature_id,
-            observation: parseMetadataObservation(link.observation),
-          });
-        }),
-      ),
-      facts: Object.freeze(
-        context.facts.map((fact) => {
-          if (
-            !fact ||
-            typeof fact !== "object" ||
-            !Number.isSafeInteger(fact.metadata_revision) ||
-            (fact.metadata_revision as number) < 1 ||
-            typeof fact.metadata_sha256 !== "string" ||
-            typeof fact.content_ready !== "boolean"
-          )
-            throw new SqliteWorkerError();
-          return Object.freeze({
-            literature: parseLiterature(fact.literature),
-            metadata_revision: fact.metadata_revision as number,
-            metadata_sha256: fact.metadata_sha256,
-            content_ready: fact.content_ready,
-            withdrawn: fact.withdrawn === true,
-            field_states: Object.freeze(
-              fact.field_states.map(parseMetadataFieldState),
-            ),
-          });
-        }),
-      ),
-    });
+    return this.withMetadataValidation(() =>
+      Object.freeze({
+        literatures: Object.freeze(literatures.map(parseLiterature)),
+        meta_literatures: Object.freeze(
+          meta_literatures.map(parseMetaLiterature),
+        ),
+        observations: Object.freeze(
+          observations.map((link) => {
+            if (
+              !link ||
+              typeof link !== "object" ||
+              typeof link.literature_id !== "string"
+            )
+              throw new SqliteWorkerError();
+            return Object.freeze({
+              literature_id: link.literature_id,
+              observation: parseMetadataObservation(link.observation),
+            });
+          }),
+        ),
+        facts: Object.freeze(
+          facts.map((fact) => {
+            if (
+              !fact ||
+              typeof fact !== "object" ||
+              !Number.isSafeInteger(fact.metadata_revision) ||
+              (fact.metadata_revision as number) < 1 ||
+              typeof fact.metadata_sha256 !== "string" ||
+              typeof fact.content_ready !== "boolean"
+            )
+              throw new SqliteWorkerError();
+            return Object.freeze({
+              literature: parseLiterature(fact.literature),
+              metadata_revision: fact.metadata_revision as number,
+              metadata_sha256: fact.metadata_sha256,
+              content_ready: fact.content_ready,
+              withdrawn: fact.withdrawn === true,
+              field_states: Object.freeze(
+                fact.field_states.map(parseMetadataFieldState),
+              ),
+            });
+          }),
+        ),
+      }),
+    );
   }
   publishIdentityObservation(
     publication: IdentityPublicationCommand,
