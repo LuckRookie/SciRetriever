@@ -16,6 +16,29 @@
 
 相关说明：[测试目录与本机试验场](../../../tests/README.md)；[测试与验收规则](../../../HARNESS.md)。
 
+## 规模性能验收
+
+从仓库根目录显式运行 `scale-acceptance.mjs`。它使用 14.1 的固定种子 20261121 合成库，各有 1 万／100 万篇书目和 1 千／10 万篇已取得全文的论文。准备脚本创建独立副本、迁移、补齐检索并完成回填。测量使用 Node 22.19.0、SQLite WAL 和回环地址上的生产工作台，同期由独立进程提交合成书目。验收按实测至少 100 篇／秒的提交速率判断负载是否有效。共用机器串行运行两个规模，各轮都设总时限。
+
+每项最多取 20 次，从发出 HTTP 请求计到读完并解析响应。首页包含并行读取收进来列表的前 50 项和计数。工作集包含固定的万项文件夹、状态筛选、第一页、计数、分面及续页。搜索测相关度前 1,000 条排名的首批 50 项。任务详情含服务启动后对同一个有 2,000,001 条事件和 100 万条来源记录的任务的首次访问。数据准备、启动与登录不计时。
+
+1m 的五项 P95 上限分别是 1,000、200、1,000、1,500、500 ms，来自[查询技术篇 2.4](../../../docs/architecture/technical/06-retrieval-context.md#24-规模与目标耗时)。同一查询和响应批量下，`P95(1m) / P95(10k)` 的上限取 3，给索引层级和共享机器的 I/O 抖动留余量。索引延迟从提交到活动索引修订覆盖该提交，按 250 ms 轮询算上界，最长 120 s。任务详情仍在执行时另测翻页、单篇、状态、PDF Range。任一短读超过 5 s 或产生日志 `sqlite-short-read-slow` 即失败。超过单项指标十倍时结束该轮采样，保留已测数据并返回非零。任务的紧接读取仅用于诊断缓存影响。
+
+```sh
+export COREPACK_ENABLE_NETWORK=0 npm_config_offline=true
+pnpm build
+report_dir=sandbox/reports/2026-11-23-scale-acceptance
+mkdir -p "$report_dir" sandbox/runs
+copy_10k=$(mktemp -d sandbox/runs/scale-acceptance-10k-XXXXXX)
+copy_1m=$(mktemp -d sandbox/runs/scale-acceptance-1m-XXXXXX)
+timeout --kill-after=20s 5m node apps/server/test/scale-acceptance-fixture.mjs 10k "$copy_10k"
+timeout --kill-after=45s 5m node apps/server/test/scale-acceptance.mjs 10k "$copy_10k" "$report_dir/acceptance-10k.json"
+timeout --kill-after=20s 15m node apps/server/test/scale-acceptance-fixture.mjs 1m "$copy_1m"
+timeout --kill-after=45s 10m node apps/server/test/scale-acceptance.mjs 1m "$copy_1m" "$report_dir/acceptance-1m.json" "$report_dir/acceptance-10k.json"
+```
+
+两档测试须各自运行，即使 10k 已返回失败也保留它的 JSON 给 1m 对比。退出后仅删除这两个刚创建的副本目录。结果与日志留在本机报告目录。脚本不进入默认 Vitest。
+
 [上级目录](../README.md) · [项目 README](../../../README.md)
 
 `workbench-auth-fixture.ts` 只服务隔离回归：使用合成密码、绑定 loopback，并经真实 `/auth/login` 为 HTTP/浏览器旅程取得会话，不绕过统一认证。默认对外监听和自动密钥由 `web-remote-access.test.ts` 验证。

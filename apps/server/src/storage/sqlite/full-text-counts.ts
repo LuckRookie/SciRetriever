@@ -22,9 +22,11 @@ export function fullTextCountsProjection(
   // The proof and the counts belong to this read snapshot, never to a cache.
   const checkpoint = cancellable ? "sr_query_continue() AND " : "";
   return {
+    // Keep the selected IDs on the outer loop so a bounded workset does not
+    // become a scan of the catalog's covering index for this DISTINCT.
     cte: `selected AS MATERIALIZED (
       SELECT DISTINCT l.meta_literature_id FROM (${matchingSql}) matching
-      JOIN literatures l USING(literature_id) WHERE ${checkpoint}${visibleLiteratureSql("l.literature_id")}
+      CROSS JOIN literatures l USING(literature_id) WHERE ${checkpoint}${visibleLiteratureSql("l.literature_id")}
     )`,
     columns: `${totalSql} AS total,
       CASE WHEN EXISTS(SELECT 1 FROM literature_assets WHERE role='primary-pdf') THEN
