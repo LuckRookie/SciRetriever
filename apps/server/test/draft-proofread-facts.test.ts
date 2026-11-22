@@ -21,7 +21,7 @@ import { primaryDraftFactSql } from "../src/storage/sqlite/draft-facts.js";
 const id = (n: number) =>
   `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
 
-it("preserves old normalized requests, query selectors, cursor and saved task bytes when new fields are omitted", async () => {
+it("preserves normalized request, selector and task bytes and resumes legacy cursors", async () => {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-draft-facts-wire-")),
     app = await createApplication(home);
   try {
@@ -70,8 +70,9 @@ it("preserves old normalized requests, query selectors, cursor and saved task by
         "014ef57b181f6d02e77a3afde2eb889a0842e7aca30fbf249b398503169c9a1b",
       selector:
         "46a190bb00418b2145514ca0eb7bd7eec457f55c93cdc93e8e3fbd2cce0b4393",
+      // Plan 26 §5.4 and retrieval §2.1.2 carry the first page's total in v2 cursors.
       cursor:
-        "dcfc8ccf46bb79e46343394d011924b1265d0523f6101d256f48d56387a2ff54",
+        "1e3ab85d1755ad420a51b6ddfd8df5a86887f159908dbe3156029c55b6a03400",
       saved: "86883fa1b282a6683b719ecb13b0dd084b7b8f7280d29d72991775a5e640e8e5",
     });
     expect(
@@ -84,6 +85,36 @@ it("preserves old normalized requests, query selectors, cursor and saved task by
         })
       ).items.map((row) => row.literature.literature_id),
     ).toEqual([id(2)]);
+
+    // Captured from ea7daace with the same query and first item.
+    const legacyCursor = Buffer.from(
+      canonicalJsonBytes({
+        checksum:
+          "f6cdca309c4dfec2fc8cfd666612e62d1c52cadb56dca0982260868af7ef5484",
+        kind: "library-search",
+        payload: {
+          position: {
+            literature_id: id(1),
+            normalized_title: "synthetic 1",
+            title_is_null: false,
+          },
+          query_fingerprint:
+            "18b040b882a21a6f1a4fe180e21bfe96c73544db06429f762a57ea4ab4d0caeb",
+          sort: "title-asc",
+        },
+        version: 1,
+      }),
+    ).toString("base64url");
+    expect(await sha256(Buffer.from(legacyCursor))).toBe(
+      "dcfc8ccf46bb79e46343394d011924b1265d0523f6101d256f48d56387a2ff54",
+    );
+    expect(
+      await app.library.search({ ...request, cursor: legacyCursor }),
+    ).toMatchObject({
+      items: [{ literature: { literature_id: id(2) } }],
+      total_count: 2,
+      next_cursor: null,
+    });
   } finally {
     await app.close();
     await rm(home, { recursive: true, force: true });
