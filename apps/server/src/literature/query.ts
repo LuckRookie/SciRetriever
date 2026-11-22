@@ -300,6 +300,10 @@ export interface LibraryPageQuery {
   readonly relevanceForLargeScope?: true;
   readonly rankingKey?: string;
 }
+export interface LibraryCollectRequest {
+  readonly selector: import("@sciretriever/contracts").CollectLiteraturesRequest["selector"];
+  readonly ftsQuery: string | null;
+}
 function libraryWorksetUsesIntake(query: LibraryQuery): boolean {
   return Boolean(
     query.folder ||

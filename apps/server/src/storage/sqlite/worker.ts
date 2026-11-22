@@ -47,6 +47,7 @@ import {
   type Asset,
   type CandidatePublicationIntent,
   type CandidatePublicationReceipt,
+  type CollectLiteraturesResult,
   type MetadataObservation as ContractMetadataObservation,
   type DocumentMaterialRef,
   type DocumentRef,
@@ -87,6 +88,7 @@ import {
   stableIdentifierKeys,
 } from "../../literature/identity-rules.js";
 import type {
+  LibraryCollectRequest,
   LibraryPageQuery,
   SearchSnapshotRow,
 } from "../../literature/query.js";
@@ -755,6 +757,11 @@ export type SqliteCommand =
       };
     }
   | { readonly kind: "library_collect"; readonly ids: readonly string[] }
+  | {
+      readonly kind: "library_collect";
+      readonly request: LibraryCollectRequest;
+      readonly cancellation: SharedArrayBuffer;
+    }
   | {
       readonly kind: "library_counts";
       readonly query: LibraryPageQuery["query"];
@@ -3414,12 +3421,41 @@ export class SqliteWorker {
       });
     });
   }
-  async collectLiteratures(ids: readonly string[], signal?: AbortSignal) {
-    if (ids.length)
+  collectLiteratures(
+    ids: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<void>;
+  collectLiteratures(
+    request: LibraryCollectRequest,
+    signal?: AbortSignal,
+  ): Promise<CollectLiteraturesResult | null>;
+  async collectLiteratures(
+    input: readonly string[] | LibraryCollectRequest,
+    signal?: AbortSignal,
+  ): Promise<void | CollectLiteraturesResult | null> {
+    if ("selector" in input) {
+      // Keep read/write admission until the actor acknowledges either rollback or commit.
+      const cancellation = new Int32Array(new SharedArrayBuffer(4));
+      const abort = () => Atomics.store(cancellation, 0, 1);
+      signal?.addEventListener("abort", abort, { once: true });
+      try {
+        return await this.run<CollectLiteraturesResult | null>(
+          {
+            kind: "library_collect",
+            request: input,
+            cancellation: cancellation.buffer,
+          },
+          signal,
+        );
+      } finally {
+        signal?.removeEventListener("abort", abort);
+      }
+    }
+    if (input.length)
       await this.run(
         {
           kind: "library_collect",
-          ids: ids.map(parseLiteratureId),
+          ids: input.map(parseLiteratureId),
         },
         signal,
       );

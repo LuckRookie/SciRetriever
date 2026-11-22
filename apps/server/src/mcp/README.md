@@ -30,4 +30,6 @@ HTTP `/mcp` 每次请求重新验证设备连接，协议 session ID 绑定 conn
 
 `filters_query` 只读列出或导出保存的筛选，`filters_manage` 管理与导入筛选；HTTP MCP 分别要求 `read`、`operate`，不登记直接 HTTP 设备查询或维护路由。`folders_query` 的 `export` 按 `{cursor, limit}` 读取树与成员，第一页带完整树，成员按文件夹和文献 ID 排序，每页最多 1,000 项；同样要求 `read`。
 
+`collect_literatures` 在 maintenance 模式接受 `{selector}`，返回 `target_count` 和 `newly_collected`，HTTP MCP 要求 `operate`。`search_library` 在只被发现的项上返回 `discovery_origin`。
+
 `marks_manage` 的 `place` 记录同部分材料上的位置（`target`、`similarity`、`method`），HTTP MCP 要求 `operate`；`marks_query` 的列表和 JSON 导出包含当前方法的 `places`。原锚点和 Markdown 导出保持。

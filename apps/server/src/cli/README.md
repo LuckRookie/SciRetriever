@@ -26,6 +26,8 @@
 
 `literature search --sort collected-desc` 按首次选用时间列文献，`--sort intake-desc` 按入库时间列文献。超过一万篇时，收进来范围用 `collected-desc`，文件夹与批次等范围用 `intake-desc`，文本搜索用 `relevance`。超出范围的排序返回 `library-sort-scope-limit`。
 
+`literature collect --request FILE|-` 接受 `{selector}`，按文献 ID 或完整查询范围收进来。`result` 含 `target_count` 和 `newly_collected`。重新收进来保留第一次选用时间。搜索页中只被发现的项带 `discovery_origin`，没有发现记录时值为 `null`。
+
 `literature counts --request FILE|-` 共用只读文献库计数：full_text 按论文，statuses、with_primary_pdf 按版本。计数忽略 statuses 与 needs_manual_pdf 的选择，保留其它范围条件；has_primary_pdf 按版本筛选。筛选计数超过一万个版本时带 `count_truncated`。`literature exact-count --request FILE|-` 接受 `kind`、`query`，分面还要求 `limit`。结果来自单个可取消的只读快照，返回 `snapshot_at`。
 
 [上级目录](../README.md)

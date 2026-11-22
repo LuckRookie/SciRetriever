@@ -24,6 +24,7 @@ import {
   globalLibraryCountScope,
   LIBRARY_COUNT_LIMIT,
   LIBRARY_SORT_SCOPE_LIMIT,
+  parseIntakeBatchId,
   RELEVANCE_RESULT_LIMIT,
 } from "@sciretriever/contracts";
 import type * as DraftFacts from "./draft-facts.js";
@@ -35,6 +36,7 @@ const { PRIMARY_TEXT_LEVEL_SQL, primaryDraftFactSql }: typeof DraftFacts =
     ).href
   );
 import type {
+  DiscoveryOrigin,
   LibraryCounts,
   LibraryFacets,
   LibraryQuery,
@@ -42,7 +44,12 @@ import type {
 } from "@sciretriever/contracts";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync, SQLInputValue, SQLOutputValue } from "node:sqlite";
-import type { LibraryPageQuery, Position } from "../../literature/query.js";
+import type {
+  LibraryCollectRequest,
+  LibraryPageQuery,
+  Position,
+} from "../../literature/query.js";
+import type { LibraryCollectionTargets } from "./library-state.js";
 import type { WorksetKind } from "./library-paging-schema.js";
 const suffix = import.meta.url.endsWith(".ts") ? ".ts" : ".js";
 const { libraryPagingReady }: typeof import("./library-paging-state.js") =
@@ -107,6 +114,44 @@ export function collectedAt(db: DatabaseSync, id: string, ready: boolean) {
       )
       .get(id)?.collected_at ?? null
   );
+}
+export function libraryDiscoveryOrigins(
+  db: DatabaseSync,
+  ids: readonly string[],
+): ReadonlyMap<string, DiscoveryOrigin> {
+  const origins = new Map<string, DiscoveryOrigin>();
+  if (!ids.length) return origins;
+  const candidates = (kind: "topic" | "citation") => `
+    SELECT p.literature_id,b.kind,b.batch_id,b.created_at
+    FROM page p CROSS JOIN ${kind}_discovery_causes c INDEXED BY ${kind}_discovery_cause_actual_lookup
+      ON c.actual_literature_id=p.literature_id
+    CROSS JOIN discovery_results r
+      ON r.discovery_run_id=c.discovery_run_id AND r.meta_literature_id=c.meta_literature_id
+    CROSS JOIN intake_batches b ON b.discovery_run_id=c.discovery_run_id AND b.kind='${kind}'
+    CROSS JOIN intake_batch_members m ON m.batch_id=b.batch_id AND m.literature_id=p.literature_id
+    WHERE sr_query_continue() ${kind === "citation" ? `AND ${visibleCitationSql("c")}` : ""}
+  `;
+  const rows = db
+    .prepare(
+      `WITH page(literature_id) AS MATERIALIZED (SELECT value FROM json_each(?)),
+      candidates AS (${candidates("topic")} UNION ALL ${candidates("citation")}),
+      ranked AS (
+        SELECT literature_id,kind,batch_id,
+          row_number() OVER (PARTITION BY literature_id ORDER BY created_at DESC,batch_id DESC) AS position
+        FROM candidates
+      )
+      SELECT literature_id,kind,batch_id FROM ranked WHERE position=1`,
+    )
+    .all(JSON.stringify(ids));
+  for (const row of rows) {
+    if (row.kind !== "topic" && row.kind !== "citation")
+      throw new Error("invalid discovery origin");
+    origins.set(String(row.literature_id), {
+      kind: row.kind,
+      intake_batch_id: parseIntakeBatchId(row.batch_id),
+    });
+  }
+  return origins;
 }
 export function intakeAt(db: DatabaseSync, id: string): string | null {
   return (db
@@ -380,6 +425,23 @@ function libraryFilter(
     pagingReady,
   };
 }
+/** Full QuerySelector scope with the same predicates as paging. */
+export function libraryCollectionTargets(
+  db: DatabaseSync,
+  { selector, ftsQuery }: LibraryCollectRequest,
+): LibraryCollectionTargets {
+  if (selector.kind === "literatures")
+    return {
+      sql: `SELECT l.literature_id FROM json_each(?) i
+        CROSS JOIN literatures l ON l.literature_id=i.value
+        CROSS JOIN literature_metadata m ON m.literature_id=l.literature_id
+        WHERE sr_query_continue() AND ${visibleLiteratureSql("l.literature_id")}`,
+      parameters: [JSON.stringify(selector.literature_ids)],
+    };
+  const { from, where, args } = libraryFilter(db, selector.query, ftsQuery);
+  return { sql: `SELECT l.literature_id ${from} ${where}`, parameters: args };
+}
+
 function countsFromTotals(
   db: DatabaseSync,
   scope: "all" | "collected",

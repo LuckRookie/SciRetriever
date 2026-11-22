@@ -2572,6 +2572,7 @@ const ARCHIVE_HTTP_WRITES = [
   "filters",
   "marks",
   "reading-open",
+  "library-collect",
   "snapshot-rename",
   "archive",
   "tags",
@@ -3632,7 +3633,9 @@ function createQueryHttpHandler(
           const code =
             isMaintenanceFailure(error) || isQueryFailure(error)
               ? error.code
-              : error instanceof ContractValidationError
+              : error instanceof ContractValidationError ||
+                  (route === "/api/v1/maintenance/library-collect" &&
+                    error instanceof WorkbenchInputError)
                 ? "invalid-request"
                 : "operation-unavailable";
           if (response.headersSent || response.destroyed) response.destroy();

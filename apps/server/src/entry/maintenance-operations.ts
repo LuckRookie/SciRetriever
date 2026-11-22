@@ -12,6 +12,7 @@ import { activityContext } from "../logging/activity.js";
 import { presentActors } from "../logging/actor-label.js";
 import {
   ContractValidationError,
+  parseCollectLiteraturesRequest,
   parseExtractionAcceptedResult,
   parseExtractionOperationResult,
   parseExtractionReceiptResult,
@@ -37,6 +38,8 @@ import { createMetadataOperations } from "./metadata-operations.js";
 import { operationRecord, ProductOperationError } from "./query-operations.js";
 import { manageTags } from "./tag-operations.js";
 import { createTaskOperations } from "./task-operations.js";
+import { LiteratureNotFoundError, queryTerms } from "../literature/query.js";
+import { WriteAdmissionError } from "../storage/write-admission.js";
 
 export const EXTRACTION_OPERATIONS = [
   "operation",
@@ -106,6 +109,7 @@ export const MAINTENANCE_OPERATIONS = [
   "filters",
   "marks",
   "reading-open",
+  "library-collect",
   "archive",
   "archive-arrangement-edit",
   "tags",
@@ -197,6 +201,39 @@ async function performMaintenance(
   if (operation === "filters") return app.filters.manage(input, signal);
   if (operation === "marks") return app.marks.manage(input, signal);
   if (operation === "reading-open") return app.folders.opened(input, signal);
+  if (operation === "library-collect") {
+    let selection: ReturnType<typeof parseCollectLiteraturesRequest>;
+    try {
+      selection = parseCollectLiteraturesRequest(input);
+    } catch (cause) {
+      if (cause instanceof ContractValidationError)
+        throw new ProductOperationError("invalid-request", { cause });
+      throw cause;
+    }
+    const { selector } = selection;
+    const ftsQuery =
+      selector.kind === "query" && selector.query.text !== null
+        ? queryTerms(selector.query.text)
+            .map((term) => `"${term}"`)
+            .join(" AND ")
+        : null;
+    try {
+      const result = await app.database.collectLiteratures(
+        { selector, ftsQuery },
+        signal,
+      );
+      if (result === null) throw new LiteratureNotFoundError();
+      return result;
+    } catch (cause) {
+      if (
+        (cause instanceof Error && cause.name === "AbortError") ||
+        (cause instanceof WriteAdmissionError &&
+          cause.code === "write-admission-cancelled")
+      )
+        throw new ProductOperationError("operation-cancelled", { cause });
+      throw cause;
+    }
+  }
   if (operation === "snapshot-rename")
     return app.snapshots.rename(input, signal);
   if (operation === "snapshots") return app.snapshots.create(input, signal);

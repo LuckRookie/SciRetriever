@@ -1,5 +1,5 @@
 import type { MissingStep, LiteratureStatus } from "@sciretriever/contracts";
-import type { DatabaseSync, StatementSync } from "node:sqlite";
+import type { DatabaseSync, SQLInputValue, StatementSync } from "node:sqlite";
 
 const suffix = import.meta.url.endsWith(".ts") ? ".ts" : ".js";
 const {
@@ -77,14 +77,37 @@ export function historicalCollectionSql(id: string) {
 
 export function recordCollectedLiteratures(
   db: DatabaseSync,
-  ids: readonly string[],
+  targets: readonly string[] | LibraryCollectionTargets,
 ) {
-  db.prepare(
-    `INSERT INTO library_collected(literature_id,intake_at)
-     SELECT l.literature_id, li.intake_at FROM json_each(?) i CROSS JOIN literatures l ON l.literature_id=i.value
+  const explicit = "sql" in targets;
+  const scope = explicit
+    ? targets
+    : {
+        sql: "SELECT value AS literature_id FROM json_each(?)",
+        parameters: [JSON.stringify(targets)],
+      };
+  const historical =
+    explicit && !storedLibraryState(db).readPlan().collectionReady
+      ? `AND NOT ${historicalCollectionSql("l.literature_id")}`
+      : "";
+  return Number(
+    db
+      .prepare(
+        `INSERT INTO library_collected(literature_id,intake_at)
+     SELECT l.literature_id, li.intake_at FROM (${scope.sql}) i CROSS JOIN literatures l ON l.literature_id=i.literature_id
      LEFT JOIN literature_intake li ON li.literature_id=l.literature_id
-     WHERE ${visibleLiteratureSql("l.literature_id")} ON CONFLICT(literature_id) DO NOTHING`,
-  ).run(JSON.stringify(ids));
+     WHERE ${visibleLiteratureSql("l.literature_id")}
+       ${explicit ? "AND sr_query_continue()" : ""}
+       ${historical}
+     ON CONFLICT(literature_id) DO NOTHING`,
+      )
+      .run(...scope.parameters).changes,
+  );
+}
+
+export interface LibraryCollectionTargets {
+  readonly sql: string;
+  readonly parameters: readonly SQLInputValue[];
 }
 
 const states = new WeakMap<DatabaseSync, StoredLibraryState>();

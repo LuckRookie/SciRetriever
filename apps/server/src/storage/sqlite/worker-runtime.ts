@@ -1378,37 +1378,77 @@ function librarySearchPage(
     const textLevels = primaryDocumentTexts(
       page.rows.map((row: Dynamic) => String(row.literature_id)),
     );
-    const { rows, ...summary } = page;
-    return {
-      ...summary,
-      rows: rows.map((row: Dynamic) => ({
-        item: {
-          ...searchItem(row.literature_id, undefined, textLevels),
-          ...(request.sort === "collected-desc"
-            ? {
-                collected_at: libraryPageModule.collectedAt(
-                  db,
-                  row.literature_id,
-                  pagingReady,
-                ),
-              }
-            : {}),
-        },
-        relevance: row.relevance,
-        has_pdf_exhaustion: !!db
-          .prepare(
-            "SELECT 1 FROM automatic_pdf_acquisition_exhaustions WHERE literature_id=?",
-          )
-          .get(row.literature_id),
-        discovery_run_ids: db
-          .prepare(
-            `SELECT discovery_run_id FROM topic_discovery_causes WHERE actual_literature_id=? UNION SELECT discovery_run_id FROM citation_discovery_causes WHERE ${visibilityModule.visibleCitationSql()} AND actual_literature_id=?`,
-          )
-          .all(row.literature_id, row.literature_id)
-          .map((r: Dynamic) => r.discovery_run_id),
-      })),
-    };
+    const { rows: pageRows, ...summary } = page;
+    const rows = pageRows.map((row: Dynamic) => ({
+      item: {
+        ...searchItem(row.literature_id, undefined, textLevels),
+        ...(request.sort === "collected-desc"
+          ? {
+              collected_at: libraryPageModule.collectedAt(
+                db,
+                row.literature_id,
+                pagingReady,
+              ),
+            }
+          : {}),
+      },
+      relevance: row.relevance,
+      has_pdf_exhaustion: !!db
+        .prepare(
+          "SELECT 1 FROM automatic_pdf_acquisition_exhaustions WHERE literature_id=?",
+        )
+        .get(row.literature_id),
+      discovery_run_ids: db
+        .prepare(
+          `SELECT discovery_run_id FROM topic_discovery_causes WHERE actual_literature_id=? UNION SELECT discovery_run_id FROM citation_discovery_causes WHERE ${visibilityModule.visibleCitationSql()} AND actual_literature_id=?`,
+        )
+        .all(row.literature_id, row.literature_id)
+        .map((r: Dynamic) => r.discovery_run_id),
+    }));
+    if (!request.fullRelevance) {
+      const uncollected = rows
+        .slice(0, request.limit)
+        .filter((row: Dynamic) => row.item.collected === false);
+      const origins = libraryPageModule.libraryDiscoveryOrigins(
+        db,
+        uncollected.map((row: Dynamic) =>
+          String(row.item.literature.literature_id),
+        ),
+      );
+      for (const { item } of uncollected)
+        item.discovery_origin =
+          origins.get(item.literature.literature_id) ?? null;
+    }
+    return { ...summary, rows };
   });
+}
+function collectLibrarySelection(
+  request: import("../../literature/query.js").LibraryCollectRequest,
+): import("@sciretriever/contracts").CollectLiteraturesResult | null {
+  queryCheckpoint();
+  const { selector } = request;
+  if (selector.kind === "query")
+    validateDiscoveryCauses(selector.query.discovery_run_ids);
+  const targets = libraryPageModule.libraryCollectionTargets(db, request);
+  const count = db
+    .prepare(
+      `SELECT count(*) AS total,count(DISTINCT literature_id) AS unique_count FROM (${targets.sql})`,
+    )
+    .get(...targets.parameters)!;
+  if (count.total !== count.unique_count)
+    throw new Error("duplicate library search rows");
+  queryCheckpoint();
+  const target_count = Number(count.total);
+  if (
+    selector.kind === "literatures" &&
+    target_count !== selector.literature_ids.length
+  )
+    return null;
+  const newly_collected = target_count
+    ? libraryStateModule.recordCollectedLiteratures(db, targets)
+    : 0;
+  queryCheckpoint();
+  return { target_count, newly_collected };
 }
 function listLiterature(afterId: Dynamic, limit: Dynamic): Dynamic {
   const rows = db
@@ -5893,10 +5933,17 @@ port.on("message", (message: WorkerMessage) => {
         value = refreshLibraryState(message.command.budget);
         break;
       case "library_collect": {
-        const { ids } = message.command;
-        value = transaction(() =>
-          libraryStateModule.recordCollectedLiteratures(db, ids),
-        );
+        const command = message.command;
+        if ("ids" in command)
+          value = transaction(() => {
+            libraryStateModule.recordCollectedLiteratures(db, command.ids);
+          });
+        else {
+          cancellation = new Int32Array(command.cancellation);
+          value = transaction(() => collectLibrarySelection(command.request));
+          // A cancellation after the commit point must not report a rollback.
+          cancellation = undefined;
+        }
         break;
       }
       case "library_counts": {

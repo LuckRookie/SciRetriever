@@ -24,6 +24,8 @@
 
 `POST /api/v1/query/folders-export` 接受协议版本 1 和空 request，在单个只读快照中流式输出 `sciretriever-folders` JSON 附件，成员嵌在各自文件夹下；按 HTTP 背压逐批读取书目，连接中断后释放快照。`POST /api/v1/query/filters` 的 `export` 一次返回 `sciretriever-filters`。两者走现有 Web 登录、client/Origin/CSRF 校验；设备通过 HTTP MCP 的对应查询工具读取。
 
+`POST /api/v1/maintenance/library-collect` 走现有维护授权。协议版本 1 的 `request` 为 `{selector}`，`result` 为 `{target_count, newly_collected}`。`POST /api/v1/query/search` 给只被发现的结果项附上 `discovery_origin`。
+
 | 路径                                            | 当前用途                                                                                                                                                                                                                                                                                                                                                |
 | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET /api/workspace`                            | 实际启动绑定、schema、配置 revision 与已组装能力；配置保存后不自动切换正在使用的库。                                                                                                                                                                                                                                                                    |

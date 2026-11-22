@@ -271,6 +271,7 @@ export function createMcpServer(options: McpOptions = {}) {
       filters_manage: "filters",
       marks_manage: "marks",
       reading_open: "reading-open",
+      collect_literatures: "library-collect",
       archive_manage: "archive",
       archive_arrangement_edit: "archive-arrangement-edit",
       tags_manage: "tags",

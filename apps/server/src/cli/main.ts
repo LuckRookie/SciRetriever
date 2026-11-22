@@ -84,6 +84,7 @@ import {
   executeQuery,
   isQueryFailure,
   operationRecord,
+  ProductOperationError,
   type QueryOperation,
 } from "../entry/query-operations.js";
 import { type LiteratureSelector } from "../entry/selectors.js";
@@ -191,6 +192,7 @@ function usage(options: CliOptions): CliResult {
     "    corrections is corrected-only; devices read via HTTP MCP /mcp with purpose read, not query HTTP routes\n" +
     "  context search|knowledge --request FILE|-; analysis prepare --request FILE|-; extraction prepare --request FILE|-\n" +
     "  literature status; literature search|read|references|reference|identity|artifact-chunk|bibliography --request FILE|-\n" +
+    "  literature collect --request FILE|-\n" +
     "  jobs list|inspect|create-request|resolve --request FILE|- (create-request only saves)\n" +
     "  library batches|facets|batch-rename --request FILE|-; acquire-pdf preview --request FILE|-\n" +
     "  form-drafts preview|start --request FILE|-  # existing raw parses only; no model, network or parser; start waits for its durable task\n" +
@@ -1148,6 +1150,7 @@ async function execute(
   const maintenanceRoutes: Readonly<Record<string, MaintenanceOperation>> = {
     "form-drafts start": "form-drafts",
     "library batch-rename": "intake-batch-rename",
+    "literature collect": "library-collect",
     "literature resolve-references": "archive-references",
     "literature metadata-edit": "metadata-edit",
     "archive arrangement-edit": "archive-arrangement-edit",
@@ -1166,19 +1169,34 @@ async function execute(
     "extraction cleanup": "extraction-cleanup",
   };
   if (Object.hasOwn(maintenanceRoutes, queryKey)) {
+    const operation = maintenanceRoutes[queryKey]!;
     const source = argument(args, "--request");
     if (!source || args.length !== 4 || args[2] !== "--request") invalidInput();
-    const bytes = await inputBytes(source, options, 1024 * 1024 + 4096);
-    if (bytes.byteLength > 1024 * 1024 + 4096) invalidInput();
-    const request = parseStrictJsonValue(bytes);
+    let request: unknown;
+    try {
+      const bytes = await inputBytes(source, options, 1024 * 1024 + 4096);
+      if (bytes.byteLength > 1024 * 1024 + 4096) invalidInput();
+      request = parseStrictJsonValue(bytes);
+    } catch (cause) {
+      if (operation === "library-collect") {
+        if (options.signal?.aborted)
+          throw new ProductOperationError("operation-cancelled", { cause });
+        if (
+          cause instanceof ContractValidationError ||
+          cause instanceof CliInputError
+        )
+          throw new ProductOperationError("invalid-request", { cause });
+      }
+      throw cause;
+    }
     const result = await withApplication(options, async (app) => {
       const accepted = await executeMaintenance(
         app,
-        maintenanceRoutes[queryKey]!,
+        operation,
         request,
         options.signal,
       );
-      if (maintenanceRoutes[queryKey] === "form-drafts") {
+      if (operation === "form-drafts") {
         const job = accepted as { job_id: string };
         await app.processingTasks!.run(job.job_id, options.signal);
       }

@@ -941,6 +941,22 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
     false,
   ),
   tool(
+    "collect_literatures",
+    "Collect selected literature versions. Pass literature IDs or a library query selecting all matches. Reports target_count and newly_collected.",
+    object({
+      selector: {
+        oneOf: [
+          object({
+            kind: { const: "literatures" },
+            literature_ids: { type: "array", minItems: 1, items: id },
+          }),
+          object({ kind: { const: "query" }, query: { type: "object" } }),
+        ],
+      },
+    }),
+    false,
+  ),
+  tool(
     "snapshot_rename",
     "Set a snapshot display name independently of its immutable content. Empty or null name restores the generated label.",
     object({ snapshot_id: id, name: nullable(text) }),

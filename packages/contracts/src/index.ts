@@ -47,6 +47,7 @@ export * from "./article-identity.js";
 export * from "./operations.js";
 export * from "./form-drafts.js";
 export * from "./intake.js";
+import { parseIntakeBatchId, type IntakeBatchId } from "./intake.js";
 export * from "./capture.js";
 export * from "./long-document.js";
 import {
@@ -326,8 +327,25 @@ export interface LibrarySearchRequest<Sort = LibraryPageSort> {
   readonly limit: number;
   readonly cursor: string | null;
 }
+export interface DiscoveryOrigin {
+  readonly kind: "topic" | "citation";
+  readonly intake_batch_id: IntakeBatchId;
+}
+export interface CollectLiteraturesRequest {
+  readonly selector:
+    | {
+        readonly kind: "literatures";
+        readonly literature_ids: readonly LiteratureId[];
+      }
+    | { readonly kind: "query"; readonly query: LibraryQuery };
+}
+export interface CollectLiteraturesResult {
+  readonly target_count: number;
+  readonly newly_collected: number;
+}
 export interface LiteratureSearchItem {
   readonly collected?: boolean;
+  readonly discovery_origin?: DiscoveryOrigin | null;
   readonly needs_metadata?: boolean;
   readonly draft_facts?: DraftFacts | null;
   readonly text_level?: TextLevel | null;
@@ -576,6 +594,49 @@ export function parseLibrarySearchRequest(
     cursor: r.cursor as string | null,
   });
 }
+export function parseCollectLiteraturesRequest(
+  value: unknown,
+): CollectLiteraturesRequest {
+  const request = exact(value, ["selector"], []);
+  const selector = object(request.selector, ["selector"]);
+  if (selector.kind === "query") {
+    exact(selector, ["kind", "query"], ["selector"]);
+    return {
+      selector: {
+        kind: "query",
+        query: parseLibrarySearchRequest({ query: selector.query }).query,
+      },
+    };
+  }
+  if (selector.kind !== "literatures") fail(["selector", "kind"]);
+  exact(selector, ["kind", "literature_ids"], ["selector"]);
+  const ids = list(
+    selector.literature_ids,
+    ["selector", "literature_ids"],
+    (v, path) => id<"LiteratureId">(v, path),
+  );
+  if (!ids.length) fail(["selector", "literature_ids"]);
+  return {
+    selector: {
+      kind: "literatures",
+      literature_ids: Object.freeze([...new Set(ids)]),
+    },
+  };
+}
+
+function parseDiscoveryOrigin(value: unknown): DiscoveryOrigin {
+  const path = ["discovery_origin"];
+  const record = exact(value, ["kind", "intake_batch_id"], path);
+  return Object.freeze({
+    kind: enumeration<DiscoveryOrigin["kind"]>(
+      record.kind,
+      ["topic", "citation"],
+      [...path, "kind"],
+    ),
+    intake_batch_id: parseIntakeBatchId(record.intake_batch_id),
+  });
+}
+
 export function parseLiteratureSearchItem(
   value: unknown,
 ): LiteratureSearchItem {
@@ -594,6 +655,9 @@ export function parseLiteratureSearchItem(
         : []),
       "tags",
       ...(Object.hasOwn(object(value, []), "collected") ? ["collected"] : []),
+      ...(Object.hasOwn(object(value, []), "discovery_origin")
+        ? ["discovery_origin"]
+        : []),
       ...(Object.hasOwn(object(value, []), "collected_at")
         ? ["collected_at"]
         : []),
@@ -632,9 +696,19 @@ export function parseLiteratureSearchItem(
     (r.text_level === "draft") !== (r.draft_facts !== null)
   )
     fail(["draft_facts"]);
+  if (Object.hasOwn(r, "discovery_origin") && r.collected !== false)
+    fail(["discovery_origin"]);
   return Object.freeze({
     ...(Object.hasOwn(r, "collected")
       ? { collected: wireBoolean(r.collected) }
+      : {}),
+    ...(Object.hasOwn(r, "discovery_origin")
+      ? {
+          discovery_origin:
+            r.discovery_origin === null
+              ? null
+              : parseDiscoveryOrigin(r.discovery_origin),
+        }
       : {}),
     ...(Object.hasOwn(r, "needs_metadata")
       ? { needs_metadata: wireBoolean(r.needs_metadata) }
