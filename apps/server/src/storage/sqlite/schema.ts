@@ -761,9 +761,173 @@ export const RETRIEVAL_CHANGE_SCHEMA = [
 
 // The existing identity table constrains its version to 19. The fingerprint
 // distinguishes the additive layout without replacing any existing object.
-export const SCHEMA_MANIFEST = [
+export const SCHEMA_MANIFEST_V19_RETRIEVAL_CHANGES = [
   ...SCHEMA_MANIFEST_V19_INTAKE_LOOKUPS,
   ...RETRIEVAL_CHANGE_SCHEMA,
+] as const;
+export const SCHEMA_FINGERPRINT_V19_RETRIEVAL_CHANGES = createHash("sha256")
+  .update(JSON.stringify(SCHEMA_MANIFEST_V19_RETRIEVAL_CHANGES))
+  .digest("hex");
+
+const byAsset = (asset: string) =>
+  `SELECT literature_id FROM literature_assets WHERE asset_id=${asset}`;
+const byRawParse = (parse: string) =>
+  `SELECT literature_id FROM document_versions WHERE raw_parse_id=${parse}
+   UNION SELECT la.literature_id FROM raw_parse_pins pin JOIN proofread_versions p USING(proofread_id)
+   JOIN literature_assets la ON la.asset_id=p.part_asset_id WHERE pin.raw_parse_id=${parse}`;
+const queueStateOwners = (owners: string) =>
+  `INSERT INTO library_state_dirty(literature_id) SELECT literature_id FROM (${owners}) WHERE literature_id IS NOT NULL ON CONFLICT(literature_id) DO UPDATE SET position=excluded.position;`;
+const stateDirtyTriggers = (
+  table: string,
+  owners: (row: "new" | "old") => string,
+  events: readonly (typeof changeEvents)[number][] = changeEvents,
+) =>
+  events.map((event) => {
+    const affected =
+      event === "INSERT"
+        ? owners("new")
+        : event === "DELETE"
+          ? owners("old")
+          : `${owners("old")} UNION ${owners("new")}`;
+    return `CREATE TRIGGER stored_state_${table}_${event.toLowerCase()} AFTER ${event} ON ${table} BEGIN ${queueStateOwners(affected)} END`;
+  });
+const collect = (ids: string) =>
+  `INSERT INTO library_collected(literature_id,intake_at) SELECT owner.literature_id,
+    (SELECT intake_at FROM literature_intake WHERE literature_id=owner.literature_id)
+    FROM (${ids}) owner WHERE owner.literature_id IS NOT NULL ON CONFLICT(literature_id) DO NOTHING;`;
+
+export const collectionTaskTargetSql = (target: string, job: string) =>
+  `${target}.literature_id IS NOT NULL AND ${job}.target_kind<>'discovery' AND (
+    json_extract(${job}.selector_json,'$.goal') IN ('pdf','parser','draft') OR EXISTS(
+      SELECT 1 FROM json_each(${job}.selector_json,'$.request.operations') op
+      WHERE op.key=${target}.ordinal AND op.type='object' AND json_extract(op.value,'$.operation') IN (
+        'build-archive','run-processor','parse-documents','assess-article-identity'
+      )
+    ) OR EXISTS(SELECT 1 FROM processor_run_requests r WHERE r.job_id=${job}.job_id)
+  )`;
+const taskSelection = (jobId: string) =>
+  `SELECT t.literature_id FROM execution_targets t JOIN execution_jobs j USING(job_id)
+    WHERE t.job_id=${jobId} AND ${collectionTaskTargetSql("t", "j")}
+   UNION SELECT l.literature_id FROM execution_jobs j
+    JOIN json_each(j.selector_json,'$.request.operations') op
+    JOIN json_each(CASE WHEN op.type='object' THEN op.value ELSE '{}' END,'$.request.inputs') input
+    JOIN literatures l ON l.literature_id=json_extract(CASE WHEN input.type='object' THEN input.value ELSE '{}' END,'$.literature_id')
+    WHERE j.job_id=${jobId} AND op.type='object' AND input.type='object'
+      AND json_extract(op.value,'$.operation')='run-processor'
+   UNION SELECT l.literature_id FROM execution_jobs j
+    JOIN json_each(j.selector_json,'$.frozen_targets') t
+    JOIN json_each(CASE WHEN t.type='object' THEN t.value ELSE '{}' END,'$.candidates') candidate
+    JOIN literatures l ON l.literature_id=candidate.value
+    WHERE j.job_id=${jobId} AND json_extract(j.selector_json,'$.goal') IN ('pdf','parser')`;
+export const manualTagChangeAddedSql = (change: string) =>
+  `EXISTS(SELECT 1 FROM json_each(${change}.after_json,'$.items') item
+    WHERE json_extract(item.value,'$.origin')='manual' AND NOT EXISTS(
+      SELECT 1 FROM json_each(${change}.before_json,'$.items') prior WHERE
+        json_extract(prior.value,'$.tag_id')=json_extract(item.value,'$.tag_id')
+        AND json_extract(prior.value,'$.origin')='manual'))`;
+
+export const LIBRARY_STORED_STATE_SCHEMA = [
+  "CREATE TABLE library_state_progress(singleton INTEGER PRIMARY KEY CHECK(singleton=1),generation INTEGER NOT NULL CHECK(generation>0),max_tags INTEGER NOT NULL,archive_profile TEXT NOT NULL CHECK(archive_profile IN ('pipeline','vlm-engine')),after_id TEXT NOT NULL,ready INTEGER NOT NULL CHECK(ready IN (0,1)),collection_ready INTEGER NOT NULL CHECK(collection_ready IN (0,1))) STRICT",
+  "CREATE TABLE library_literature_states(literature_id TEXT PRIMARY KEY,status TEXT NOT NULL CHECK(status IN ('UNREVIEWED','ASSET_READY','ARCHIVING','ARCHIVE_FAILED','EXCLUDED','READY')),missing_step TEXT,generation INTEGER NOT NULL CHECK(generation>0),intake_at TEXT,FOREIGN KEY(literature_id) REFERENCES literatures(literature_id) ON DELETE CASCADE ON UPDATE CASCADE) STRICT",
+  "CREATE INDEX library_literature_states_status ON library_literature_states(status,intake_at DESC,literature_id)",
+  "CREATE INDEX library_literature_states_missing ON library_literature_states(missing_step,intake_at DESC,literature_id)",
+  "CREATE TABLE library_collected(literature_id TEXT PRIMARY KEY,intake_at TEXT,FOREIGN KEY(literature_id) REFERENCES literatures(literature_id) ON DELETE CASCADE ON UPDATE CASCADE) STRICT",
+  "CREATE INDEX library_collected_order ON library_collected(intake_at DESC,literature_id)",
+  "CREATE TABLE library_state_dirty(position INTEGER PRIMARY KEY,literature_id TEXT NOT NULL UNIQUE) STRICT",
+  "CREATE INDEX snapshot_members_literature ON snapshot_members(literature_id)",
+  "CREATE INDEX intake_folder_member_literature ON intake_batch_objects(CASE WHEN json_valid(object_id) THEN json_extract(object_id,'$[1]') END) WHERE object_kind='folder-member'",
+  "CREATE INDEX execution_targets_literature ON execution_targets(literature_id,job_id) WHERE literature_id IS NOT NULL",
+  "CREATE INDEX execution_start_requests ON execution_events(job_id) WHERE kind='task-start-requested'",
+  "CREATE INDEX execution_attempts_target ON execution_attempts(target_id)",
+  "CREATE INDEX operation_manual_tags ON operation_records(json_extract(scope_json,'$.request.literature_id'),json_extract(result_json,'$.revision')) WHERE operation='tags' AND status='completed' AND json_valid(scope_json) AND json_valid(result_json) AND json_extract(scope_json,'$.operation')='assign'",
+  // Ordinary changes already carry owners. Keep the legacy journal intact for
+  // open older writers, and mirror its keyed invalidations into the work queue.
+  ...stateDirtyTriggers(
+    "library_state_changes",
+    (r) => `SELECT ${r}.literature_id AS literature_id`,
+    ["INSERT", "UPDATE"],
+  ),
+  ...stateDirtyTriggers(
+    "literatures",
+    (r) => `SELECT ${r}.literature_id AS literature_id`,
+    ["UPDATE"],
+  ),
+  ...stateDirtyTriggers(
+    "literature_intake",
+    (r) => `SELECT ${r}.literature_id AS literature_id`,
+  ),
+  ...changeEvents.map(
+    (event) =>
+      `CREATE TRIGGER library_collect_intake_order_${event.toLowerCase()} AFTER ${event} ON literature_intake BEGIN
+      ${event === "INSERT" ? "" : `UPDATE library_collected SET intake_at=NULL WHERE literature_id=old.literature_id AND intake_at IS NOT NULL${event === "UPDATE" ? " AND old.literature_id<>new.literature_id" : ""};`}
+      ${event === "DELETE" ? "" : "UPDATE library_collected SET intake_at=new.intake_at WHERE literature_id=new.literature_id AND intake_at IS NOT new.intake_at;"}
+    END`,
+  ),
+  ...stateDirtyTriggers(
+    "raw_parse_current",
+    (r) =>
+      `${byAsset(`${r}.source_asset_id`)} UNION ${byRawParse(`${r}.raw_parse_id`)}`,
+  ),
+  ...stateDirtyTriggers(
+    "raw_parses",
+    (r) =>
+      `${byAsset(`${r}.source_asset_id`)} UNION ${byRawParse(`${r}.raw_parse_id`)}`,
+  ),
+  // The old hints cap shared owner discovery at 32. These tables can fan
+  // out through a content-addressed asset or one execution job, so keep all
+  // owners for them and let the consumer use bounded batches.
+  ...[
+    "assets",
+    "execution_jobs",
+    "proofread_current",
+    "proofread_versions",
+    "proofread_manual_state",
+    "raw_parse_pins",
+    "draft_current",
+  ].flatMap((table) =>
+    stateDirtyTriggers(table, (r) =>
+      stateOwners(
+        table === "draft_current" ? "proofread_current" : table,
+        r,
+      )!.replace(" ORDER BY literature_id LIMIT 33", ""),
+    ),
+  ),
+  ...retrievalReplacementOwners.flatMap(([table, owners]) =>
+    (["INSERT", "UPDATE"] as const).map(
+      (event) =>
+        `CREATE TRIGGER stored_state_${table}_replacement_${event.toLowerCase()} BEFORE ${event} ON ${table} BEGIN ${queueStateOwners(owners)} END`,
+    ),
+  ),
+  ...["INSERT", "UPDATE"].flatMap((event) => [
+    `CREATE TRIGGER library_collect_intake_${event.toLowerCase()} AFTER ${event} ON intake_batch_members WHEN EXISTS(SELECT 1 FROM intake_batches WHERE batch_id=new.batch_id AND kind='import') BEGIN ${collect("SELECT new.literature_id AS literature_id")} END`,
+    ...["folder_members", "snapshot_members", "reading_history"].map(
+      (table) =>
+        `CREATE TRIGGER library_collect_${table}_${event.toLowerCase()} AFTER ${event} ON ${table} BEGIN ${collect("SELECT new.literature_id AS literature_id")} END`,
+    ),
+  ]),
+  `CREATE TRIGGER library_collect_folder_history BEFORE DELETE ON folder_members WHEN EXISTS(SELECT 1 FROM literatures WHERE literature_id=old.literature_id) BEGIN ${collect("SELECT old.literature_id AS literature_id")} END`,
+  `CREATE TRIGGER library_collect_audited_tag AFTER UPDATE OF status ON operation_records
+    WHEN new.operation='tags' AND new.status='completed' AND json_valid(new.scope_json)
+      AND json_valid(new.result_json) AND json_extract(new.scope_json,'$.operation')='assign' BEGIN
+    ${collect(`SELECT c.literature_id FROM tag_assignment_changes c
+      WHERE c.literature_id=json_extract(new.scope_json,'$.request.literature_id')
+        AND c.revision=json_extract(new.result_json,'$.revision')
+        AND c.actor='manual' AND ${manualTagChangeAddedSql("c")}`)}
+  END`,
+  `CREATE TRIGGER library_collect_archive_begin AFTER INSERT ON archive_runs BEGIN ${collect("SELECT new.literature_id AS literature_id")} END`,
+  `CREATE TRIGGER library_collect_archive_restart AFTER UPDATE OF run_id ON archive_runs BEGIN ${collect("SELECT new.literature_id AS literature_id")} END`,
+  `CREATE TRIGGER library_collect_task_start AFTER INSERT ON execution_events WHEN new.kind='task-start-requested' BEGIN
+    ${collect(taskSelection("new.job_id"))}
+  END`,
+  `CREATE TRIGGER library_collect_task_run AFTER UPDATE OF status ON execution_jobs
+    WHEN new.status='running' AND old.status<>'running' AND new.target_kind<>'discovery' BEGIN
+    ${collect(taskSelection("new.job_id"))}
+  END`,
+] as const;
+
+export const SCHEMA_MANIFEST = [
+  ...SCHEMA_MANIFEST_V19_RETRIEVAL_CHANGES,
+  ...LIBRARY_STORED_STATE_SCHEMA,
 ] as const;
 export const SCHEMA_FINGERPRINT = createHash("sha256")
   .update(JSON.stringify(SCHEMA_MANIFEST))

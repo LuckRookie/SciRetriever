@@ -15,7 +15,7 @@ import {
   proofreadFactsFixture,
   factId,
 } from "./draft-proofread-facts-fixture.js";
-import { LibraryStateCache } from "../src/storage/sqlite/library-state-cache.js";
+import { LibraryStateCache } from "./legacy-library-state-cache.js";
 import { primaryDraftFactSql } from "../src/storage/sqlite/draft-facts.js";
 
 const id = (n: number) =>

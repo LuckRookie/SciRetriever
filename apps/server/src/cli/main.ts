@@ -18,6 +18,7 @@ import { withActivity, machineActor } from "../logging/activity.js";
 import {
   ContractValidationError,
   parseDiscoveryRunId,
+  parseDocumentRequest,
   parseLibraryQuery,
   parseLiteratureId,
   parseMetaLiteratureId,
@@ -173,7 +174,7 @@ function usage(options: CliOptions): CliResult {
     "  discover topic QUERY | discover citations --seed-literature-id ID\n" +
     "  metadata lookup ID[,ID] | sources statistics --request FILE|-\n" +
     "  complete pdf|parser [--literature-id ID] [--transfers ID,...]\n" +
-    "  literature search [query options] | show ID | references ID | cited-by ID\n" +
+    "  literature search [query options] [--collection-scope collected|all] | show ID | references ID | cited-by ID\n" +
     "  literature counts --request FILE|-  # full_text counts papers (MetaLiterature); statuses and with_primary_pdf count versions; read-only\n" +
     "    --needs-metadata | --no-needs-metadata filters the independent bibliographic recognition mark\n" +
     "  import metadata FORMAT SOURCE | import pdf ID SOURCE\n" +
@@ -481,6 +482,10 @@ function query(
     keywords: argumentsOf(args, "--keyword"),
     subject_terms: argumentsOf(args, "--subject-term"),
     intake_batch_ids: argumentsOf(args, "--intake-batch-id"),
+    ...(args.includes("--collection-scope") ||
+    argument(args, "--collection-scope") !== null
+      ? { collection_scope: argument(args, "--collection-scope") }
+      : {}),
     version_roles: argumentsOf(args, "--version-role"),
     statuses: argumentsOf(args, "--status"),
     missing_steps: argumentsOf(args, "--missing-step"),
@@ -1312,18 +1317,20 @@ async function execute(
     )
       invalidInput();
     return output(
-      await withApplication(options, (app) =>
-        app.documentProcessing.parseDocuments(
-          {
-            literature_id: literatureId,
-            asset_id: assetId,
-            asset_sha256: assetSha,
-            ...(profiles ? { profiles } : {}),
-            force: args.includes("--force"),
-          },
+      await withApplication(options, async (app) => {
+        const request = parseDocumentRequest({
+          literature_id: literatureId,
+          asset_id: assetId,
+          asset_sha256: assetSha,
+          ...(profiles ? { profiles } : {}),
+          force: args.includes("--force"),
+        });
+        await app.database.collectLiteratures(
+          [request.literature_id],
           options.signal,
-        ),
-      ),
+        );
+        return app.documentProcessing.parseDocuments(request, options.signal);
+      }),
       options,
     );
   }
@@ -1645,12 +1652,16 @@ async function execute(
       args[2] === undefined || args[2].startsWith("--") ? null : args[2];
     const text = argument(args, "--text") ?? positionalText;
     const value = await withQueryApplication(options, (app) =>
-      app.query.search({
-        query: query(text, args),
-        sort: (argument(args, "--sort") ?? "intake-desc") as LibrarySort,
-        limit: integerOption(args, "--limit", 50),
-        cursor: argument(args, "--cursor"),
-      }),
+      app.query.search(
+        {
+          query: query(text, args),
+          sort: (argument(args, "--sort") ?? "intake-desc") as LibrarySort,
+          limit: integerOption(args, "--limit", 50),
+          cursor: argument(args, "--cursor"),
+        },
+        options.signal,
+        "browse",
+      ),
     );
     return output(value, options);
   }

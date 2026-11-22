@@ -18,7 +18,7 @@ import { migrateLibraryStateSchema } from "../src/storage/sqlite/library-state-s
 import { migrateReadingMarksSchema } from "../src/storage/sqlite/reading-marks-schema-migration.js";
 import { inspectCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
 import { CURRENT_CATALOG_CONFIG } from "../src/storage/sqlite/catalog-layout.js";
-import { LibraryStateCache } from "../src/storage/sqlite/library-state-cache.js";
+import { LibraryStateCache } from "./legacy-library-state-cache.js";
 
 function previous(path: string) {
   const db = new DatabaseSync(path);

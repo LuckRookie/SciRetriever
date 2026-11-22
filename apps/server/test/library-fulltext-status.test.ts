@@ -18,7 +18,7 @@ import { createQueryApplication } from "../src/bootstrap/application.js";
 import { queryFingerprint } from "../src/literature/query.js";
 import { processorFixture } from "./processor-fixture.js";
 import { libraryCounts } from "../src/storage/sqlite/library-page.js";
-import { LibraryStateCache } from "../src/storage/sqlite/library-state-cache.js";
+import { StoredLibraryState } from "../src/storage/sqlite/library-state.js";
 import { DatabaseCompletionService } from "../src/entry/database-completion.js";
 import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
 
@@ -207,16 +207,9 @@ it("keeps status, version PDF and paper PDF counts in one snapshot during a chec
     writer = new DatabaseSync(path);
   try {
     db.exec("BEGIN");
-    const states = new LibraryStateCache().read(
-      db,
-      "fulltext-snapshot",
-      6,
-      "vlm-engine",
-      () => {},
-    );
+    new StoredLibraryState(db, { max_tags: 6, archive_profile: "vlm-engine" });
     let changed = false;
-    db.function("sr_query_continue", () => 1);
-    db.function("sr_status", (key) => {
+    db.function("sr_query_continue", () => {
       if (!changed) {
         changed = true;
         writer
@@ -225,7 +218,7 @@ it("keeps status, version PDF and paper PDF counts in one snapshot during a chec
           )
           .run(id(2));
       }
-      return states.get(String(key))!.status;
+      return 1;
     });
     const query = parseLibrarySearchRequest({ query: {} }).query;
     expect(libraryCounts(db, query, null)).toEqual(FULL_TEXT_EXPECTED);

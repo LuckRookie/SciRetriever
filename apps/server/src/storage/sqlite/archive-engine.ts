@@ -1,3 +1,14 @@
+const {
+  beginCatalogWrite,
+  commitCatalogWrite,
+}: typeof import("./catalog-write.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./catalog-write.ts"
+      : "./catalog-write.js",
+    import.meta.url,
+  ).href
+);
 const { literatureWithdrawn }: typeof import("./intake-visibility.js") =
   await import(
     new URL(
@@ -350,18 +361,17 @@ export function archiveLongDocuments(
   // change which arrangement step supplies the marker for that PDF.
   for (const row of rows(
     db,
-    `SELECT la.literature_id,json_extract(s.output_json,'$.long_document') AS marker
+    `SELECT la.literature_id,s.output_json
     FROM literature_assets la JOIN assets a ON a.asset_id=la.asset_id
     JOIN archive_steps s ON s.literature_id=la.literature_id AND s.asset_id=a.asset_id AND s.step='arrange'
     WHERE la.role='primary-pdf' AND a.media_type='application/pdf'
-      AND la.literature_id IN (SELECT value FROM json_each(?))
-      AND json_type(s.output_json,'$.long_document')='object'`,
+      AND la.literature_id IN (SELECT value FROM json_each(?))`,
     JSON.stringify(ids),
-  ))
-    markers.set(
-      String(row.literature_id),
-      parseLongDocumentInfo(JSON.parse(String(row.marker))),
-    );
+  )) {
+    const marker = JSON.parse(String(row.output_json)).long_document;
+    if (marker)
+      markers.set(String(row.literature_id), parseLongDocumentInfo(marker));
+  }
   return markers;
 }
 export function archiveState(
@@ -376,10 +386,12 @@ export function archiveState(
   return { ...state, ...deriveCurrentState(state, maxTags, archiveProfile) };
 }
 function transaction<T>(db: DatabaseSync, write: boolean, fn: () => T): T {
-  db.exec(write ? "BEGIN IMMEDIATE" : "BEGIN");
+  if (write) beginCatalogWrite(db);
+  else db.exec("BEGIN");
   try {
     const result = fn();
-    db.exec("COMMIT");
+    if (write) commitCatalogWrite(db);
+    else db.exec("COMMIT");
     return result;
   } catch (e) {
     db.exec("ROLLBACK");

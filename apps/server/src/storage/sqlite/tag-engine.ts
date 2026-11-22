@@ -1,3 +1,14 @@
+const {
+  beginCatalogWrite,
+  commitCatalogWrite,
+}: typeof import("./catalog-write.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./catalog-write.ts"
+      : "./catalog-write.js",
+    import.meta.url,
+  ).href
+);
 import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -74,10 +85,12 @@ function bounded(value: unknown, fallback: number, max: number) {
   return n;
 }
 function tx<T>(db: DatabaseSync, write: boolean, work: () => T): T {
-  db.exec(write ? "BEGIN IMMEDIATE" : "BEGIN");
+  if (write) beginCatalogWrite(db);
+  else db.exec("BEGIN");
   try {
     const v = work();
-    db.exec("COMMIT");
+    if (write) commitCatalogWrite(db);
+    else db.exec("COMMIT");
     return v;
   } catch (e) {
     db.exec("ROLLBACK");
@@ -536,7 +549,7 @@ export function runTagStorage(
         max,
         r.actor as "auto" | "manual" | "backfill",
       );
-      return store.saveAssignment(
+      const assignment = store.saveAssignment(
         {
           literature_id: id,
           items: ordered,
@@ -548,6 +561,23 @@ export function runTagStorage(
         String(r.actor),
         tagText(r.reason),
       );
+      if (
+        r.actor === "manual" &&
+        assignment.items.some(
+          (item) =>
+            item.origin === "manual" &&
+            !before?.items.some(
+              (previous) =>
+                previous.tag_id === item.tag_id && previous.origin === "manual",
+            ),
+        )
+      )
+        db.prepare(
+          `INSERT INTO library_collected(literature_id,intake_at) VALUES(
+            ?, (SELECT intake_at FROM literature_intake WHERE literature_id=?)
+          ) ON CONFLICT(literature_id) DO NOTHING`,
+        ).run(id, id);
+      return assignment;
     }
     if (action === "backfill-candidates") {
       const ids = resolveTags(store, r.tag_ids, false),

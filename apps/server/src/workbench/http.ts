@@ -2057,6 +2057,7 @@ export async function startWorkbenchHttp(
               const page = await library.queries.search(
                 value,
                 AbortSignal.any([stop.signal, stopUploads.signal]),
+                "browse",
               );
               if (!response.destroyed) json(response, 200, { page });
             } finally {

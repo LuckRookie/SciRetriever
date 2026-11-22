@@ -1,8 +1,18 @@
+const {
+  beginCatalogWrite,
+  commitCatalogWrite,
+}: typeof import("./catalog-write.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./catalog-write.ts"
+      : "./catalog-write.js",
+    import.meta.url,
+  ).href
+);
 import { existsSync, statSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { parentPort, workerData } from "node:worker_threads";
 import type { SqliteCommand } from "./worker.js";
-import type * as StateCache from "./library-state-cache.js";
 import type { RetrievalStorageEngine } from "./retrieval-engine.js";
 /** Dynamic values are confined to SQLite rows and JSON columns at this adapter boundary. */
 type Dynamic = ReturnType<typeof JSON.parse>;
@@ -29,27 +39,15 @@ interface WorkerMessage {
   readonly cancellation?: SharedArrayBuffer;
 }
 const data = workerData as WorkerRuntimeData;
-const {
-  LibraryStateCache,
-  readLiteratureStatus,
-  scopedLiteratureStates,
-  materializeLiteratureStates,
-}: typeof StateCache = await import(
+const libraryStateModule: typeof import("./library-state.js") = await import(
   new URL(
     import.meta.url.endsWith(".ts")
-      ? "./library-state-cache.ts"
-      : "./library-state-cache.js",
+      ? "./library-state.ts"
+      : "./library-state.js",
     import.meta.url,
   ).href
 );
-const libraryStateCache = new LibraryStateCache();
-let closeLibraryProjection: (() => void) | undefined;
-const { needsLibraryState }: typeof import("./read-lanes.js") = await import(
-  new URL(
-    import.meta.url.endsWith(".ts") ? "./read-lanes.ts" : "./read-lanes.js",
-    import.meta.url,
-  ).href
-);
+let libraryState: import("./library-state.js").StoredLibraryState;
 const draftFactsModule = await import(
   new URL(
     import.meta.url.endsWith(".ts") ? "./draft-facts.ts" : "./draft-facts.js",
@@ -444,6 +442,11 @@ function initializeConnection(): Dynamic {
   });
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA busy_timeout = 5000");
+  libraryState = new libraryStateModule.StoredLibraryState(
+    db,
+    data,
+    queryCheckpoint,
+  );
   if (data.read_only) {
     db.exec("PRAGMA query_only = ON");
     queryPreflight = inspectQueryCatalog();
@@ -482,6 +485,7 @@ function initializeConnection(): Dynamic {
     !validDocumentSchema(existing.schema_version)
   )
     fail();
+  libraryState.registerWrites();
   observedDataVersion = Number(
     db.prepare("PRAGMA data_version").get().data_version,
   );
@@ -514,7 +518,7 @@ function putLiterature(
   fallbackIdentitySha256: Dynamic,
 ): Dynamic {
   try {
-    db.exec("BEGIN IMMEDIATE");
+    beginCatalogWrite(db);
     db.prepare(
       "INSERT INTO meta_literatures(meta_literature_id,representative_literature_id) VALUES(?,?) ON CONFLICT(meta_literature_id) DO NOTHING",
     ).run(l.meta_literature_id, l.literature_id);
@@ -523,7 +527,7 @@ function putLiterature(
     ).run(l.literature_id, l.meta_literature_id, l.version_role);
     writeMetadata(l.literature_id, l.metadata, metadataSha256);
     replaceFallbackIndex(l.literature_id, fallbackIdentitySha256);
-    db.exec("COMMIT");
+    commitCatalogWrite(db);
   } catch (e) {
     try {
       db.exec("ROLLBACK");
@@ -730,7 +734,8 @@ function getLiterature(id: Dynamic, includeWithdrawn = false): Dynamic {
     )
     .all(id)
     .map((x: Dynamic) => x.keyword);
-  const status = stateEvidence(id).status;
+  const status = libraryState.get(id)?.status;
+  if (!status) fail();
   return {
     literature_id: l.literature_id,
     meta_literature_id: l.meta_literature_id,
@@ -838,7 +843,8 @@ function getLiteratures(ids: Dynamic): Dynamic {
         affiliations: author.affiliations,
       }),
     );
-    const state = stateEvidence(literature_id);
+    const state = libraryState.get(literature_id);
+    if (!state) fail();
     return {
       literature_id,
       meta_literature_id,
@@ -895,15 +901,6 @@ function findLiteratureByIdentifiers(
       idsOnly ? getLiteratureIds(id, true) : getLiterature(id, true),
     );
 }
-function stateEvidence(id: string): Dynamic {
-  return archiveModule.archiveState(
-    db,
-    id,
-    data.max_tags,
-    data.archive_profile,
-    false,
-  );
-}
 function libraryTagBadges(ids: readonly string[]): Map<string, Dynamic[]> {
   const result = new Map<string, Dynamic[]>();
   for (const row of db
@@ -939,7 +936,8 @@ function searchItem(
       "SELECT metadata_revision,metadata_sha256 FROM literature_metadata WHERE literature_id=?",
     )
     .get(id);
-  const state = stateEvidence(id);
+  const state = libraryState.get(id);
+  if (!state) fail();
   const defaultTexts = levels ?? primaryDocumentTexts([String(id)]);
   const exhausted = !!db
     .prepare(
@@ -954,7 +952,8 @@ function searchItem(
     ...folderModule.libraryMembership(db, id),
     text_level: defaultTexts.get(String(id))?.text_level ?? null,
     draft_facts: defaultTexts.get(String(id))?.draft_facts ?? null,
-    long_document: state.long_document ?? null,
+    collected: libraryState.collected(id),
+    long_document: archiveModule.archiveLongDocuments(db, [id]).get(id) ?? null,
     missing_step: state.missing_step,
     needs_manual_pdf: state.status === "UNREVIEWED" && exhausted,
     needs_metadata: !!db
@@ -1084,8 +1083,7 @@ function librarySnapshot(
   tags: Dynamic = undefined,
   scope: Dynamic = undefined,
 ): Dynamic {
-  db.exec("BEGIN");
-  try {
+  return readTransaction(() => {
     if (
       !Array.isArray(literatureIds) ||
       !Array.isArray(metaLiteratureIds) ||
@@ -1097,7 +1095,6 @@ function librarySnapshot(
     validateDiscoveryCauses(discoveryRunIds);
     let scopeMatches: Set<string> | null = null;
     if (scope) {
-      if (needsLibraryState(scope)) registerLibraryStates();
       scopeMatches = new Set(
         libraryPageModule
           .libraryPageIds(db, {
@@ -1243,6 +1240,7 @@ function librarySnapshot(
             tags: tagBadges.get(String(row.literature_id)) ?? [],
             intake_at: libraryPageModule.intakeAt(db, row.literature_id),
             ...folderModule.libraryMembership(db, row.literature_id),
+            collected: libraryState.collected(row.literature_id),
             long_document: longDocuments.get(String(row.literature_id)) ?? null,
             text_level:
               textLevels.get(String(row.literature_id))?.text_level ?? null,
@@ -1277,7 +1275,6 @@ function librarySnapshot(
           .all(row.literature_id, row.literature_id)
           .map((x: Dynamic) => x.discovery_run_id),
       }));
-    db.exec("COMMIT");
     if (scopeMatches)
       result = result.map((r: Dynamic) => ({
         ...r,
@@ -1289,61 +1286,7 @@ function librarySnapshot(
           tag_match: tagMatches.has(r.item.literature.literature_id),
         }))
       : result;
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-}
-function registerLibraryStateLookup(states: {
-  get(id: string): { status?: unknown; missing_step?: unknown } | undefined;
-}) {
-  db.function("sr_status", { deterministic: true }, (id: Dynamic) => {
-    queryCheckpoint();
-    return states.get(id)?.status ?? null;
   });
-  db.function("sr_missing", { deterministic: true }, (id: Dynamic) => {
-    queryCheckpoint();
-    return states.get(id)?.missing_step ?? null;
-  });
-}
-function registerLibraryStates() {
-  if (data.long_read_lane) {
-    const projection = materializeLiteratureStates(
-      db,
-      data.max_tags,
-      data.archive_profile,
-      queryCheckpoint,
-    );
-    closeLibraryProjection = projection.close;
-    registerLibraryStateLookup(projection);
-    return;
-  }
-  const identity = JSON.stringify([
-    db.prepare("PRAGMA schema_version").get().schema_version,
-    catalogIdentity(),
-  ]);
-  registerLibraryStateLookup(
-    libraryStateCache.read(
-      db,
-      identity,
-      data.max_tags,
-      data.archive_profile,
-      queryCheckpoint,
-    ),
-  );
-}
-function registerIntakeStatus() {
-  // readIntakeBatch calls this function only for exhausted members without
-  // a primary PDF. A status request should not prepare every literature.
-  db.function("sr_status", { deterministic: true }, (id: string) =>
-    readLiteratureStatus(
-      db,
-      id,
-      data.max_tags,
-      data.archive_profile,
-      queryCheckpoint,
-    ),
-  );
 }
 type LibraryCountsCommand = Extract<SqliteCommand, { kind: "library_counts" }>;
 const LIBRARY_COUNT_SEGMENT = 512;
@@ -1366,9 +1309,6 @@ function pagedLibraryCounts({ query, ftsQuery }: LibraryCountsCommand) {
   const page = db.prepare(
     "SELECT meta_literature_id FROM meta_literatures WHERE meta_literature_id>? ORDER BY meta_literature_id LIMIT ?",
   );
-  const members = db.prepare(
-    "SELECT l.literature_id FROM json_each(?) scope CROSS JOIN literatures l ON l.meta_literature_id=scope.value",
-  );
   let after = "";
   let counts: ReturnType<typeof libraryPageModule.libraryCounts> | undefined;
   for (;;) {
@@ -1377,18 +1317,6 @@ function pagedLibraryCounts({ query, ftsQuery }: LibraryCountsCommand) {
       const ids: string[] = page
         .all(after, LIBRARY_COUNT_SEGMENT)
         .map((row: Dynamic) => String(row.meta_literature_id));
-      const literatureIds: string[] = members
-        .all(JSON.stringify(ids))
-        .map((row: Dynamic) => String(row.literature_id));
-      registerLibraryStateLookup(
-        scopedLiteratureStates(
-          db,
-          literatureIds,
-          data.max_tags,
-          data.archive_profile,
-          queryCheckpoint,
-        ),
-      );
       return {
         ids,
         counts: libraryPageModule.libraryCounts(
@@ -1433,17 +1361,28 @@ function pagedLibraryCounts({ query, ftsQuery }: LibraryCountsCommand) {
     after = part.ids.at(-1)!;
   }
 }
-function librarySearchPage(request: Dynamic): Dynamic {
+function librarySearchPage(request: Dynamic, defer: boolean): Dynamic {
   return readTransaction(() => {
+    if (defer) {
+      const plan = libraryState.readPlan();
+      if (
+        (!plan.indexed &&
+          (request.query.statuses.length ||
+            request.query.missing_steps.length ||
+            request.query.needs_manual_pdf === true)) ||
+        (!plan.collectionReady &&
+          request.query.collection_scope === "collected")
+      )
+        return { defer: true };
+    }
     validateDiscoveryCauses(request.query.discovery_run_ids);
-    const q = request.query;
-    if (needsLibraryState(q)) registerLibraryStates();
     const page = libraryPageModule.libraryPageIds(db, request);
     const textLevels = primaryDocumentTexts(
       page.rows.map((row: Dynamic) => String(row.literature_id)),
     );
     return {
       total_count: page.total_count,
+      ...(page.status_updating ? { status_updating: true } : {}),
       ...(page.tag_backfill_pending === undefined
         ? {}
         : { tag_backfill_pending: page.tag_backfill_pending }),
@@ -2283,7 +2222,7 @@ function publishIdentityObservation(p: Dynamic): Dynamic {
 }
 function acceptObservation(c: Dynamic): Dynamic {
   try {
-    db.exec("BEGIN IMMEDIATE");
+    beginCatalogWrite(db);
     const current = db
       .prepare(
         "SELECT metadata_revision,metadata_sha256 FROM literature_metadata WHERE literature_id=?",
@@ -2364,7 +2303,7 @@ function acceptObservation(c: Dynamic): Dynamic {
     db.prepare(
       "DELETE FROM automatic_pdf_acquisition_exhaustions WHERE literature_id=?",
     ).run(c.literatureId);
-    db.exec("COMMIT");
+    commitCatalogWrite(db);
     return true;
   } catch (e) {
     try {
@@ -2457,10 +2396,10 @@ function writeLiteratureAsset(p: Dynamic): Dynamic {
 }
 function transaction(operation: Dynamic): Dynamic {
   if (metadataWrite) return operation();
-  db.exec("BEGIN IMMEDIATE");
+  beginCatalogWrite(db);
   try {
     const value = operation();
-    db.exec("COMMIT");
+    commitCatalogWrite(db);
     return value;
   } catch (error) {
     if (db.isTransaction) db.exec("ROLLBACK");
@@ -4309,7 +4248,7 @@ function putMetadataReferenceSupport(
   index: Dynamic,
 ): Dynamic {
   try {
-    db.exec("BEGIN IMMEDIATE");
+    beginCatalogWrite(db);
     const valid = db
       .prepare(
         "SELECT 1 FROM literature_references r JOIN literature_metadata_observations owner ON owner.literature_id=r.source_literature_id JOIN metadata_observation_reference_texts text ON text.observation_id=owner.observation_id AND text.reference_index=? WHERE r.reference_id=? AND owner.observation_id=?",
@@ -4319,7 +4258,7 @@ function putMetadataReferenceSupport(
     db.prepare(
       "INSERT INTO metadata_reference_text_supports(reference_id,metadata_observation_id,reference_index) VALUES(?,?,?) ON CONFLICT DO NOTHING",
     ).run(referenceId, observationId, index);
-    db.exec("COMMIT");
+    commitCatalogWrite(db);
     return true;
   } catch (e) {
     try {
@@ -4673,7 +4612,7 @@ function artifactReclamationSnapshot(reference: Dynamic): Dynamic {
   });
 }
 function putAsset(a: Dynamic): Dynamic {
-  db.exec("BEGIN IMMEDIATE");
+  beginCatalogWrite(db);
   try {
     db.prepare(
       "INSERT INTO artifact_objects(artifact_id,sha256,byte_size,media_type,relative_path) VALUES(?,?,?,?,?) ON CONFLICT(artifact_id) DO NOTHING",
@@ -4694,7 +4633,7 @@ function putAsset(a: Dynamic): Dynamic {
       stored.relative_path !== a.path
     )
       fail();
-    db.exec("COMMIT");
+    commitCatalogWrite(db);
     return true;
   } catch (e) {
     try {
@@ -5155,7 +5094,7 @@ port.on("message", (message: WorkerMessage) => {
     switch (message.command.kind) {
       case "metadata_write_begin": {
         if (data.read_only || metadataWrite || db.isTransaction) fail();
-        db.exec("BEGIN IMMEDIATE");
+        beginCatalogWrite(db);
         const prepare = db.prepare;
         const statements = new Map<string, Dynamic>();
         db.prepare = (sql: string) => {
@@ -5179,7 +5118,7 @@ port.on("message", (message: WorkerMessage) => {
           if (message.command.events.length) requireRuntime();
           for (const event of message.command.events)
             insertExecutionEvent(event);
-          db.exec("COMMIT");
+          commitCatalogWrite(db);
         } else if (db.isTransaction) db.exec("ROLLBACK");
         db.prepare = metadataWrite.prepare;
         metadataWrite = undefined;
@@ -5242,19 +5181,13 @@ port.on("message", (message: WorkerMessage) => {
             ok: true,
             value:
               command.kind === "import_read"
-                ? readTransaction(() => {
-                    if (
-                      command.action.op === "batch" ||
-                      command.action.op === "report-snapshot" ||
-                      command.action.op === "sessions"
-                    )
-                      registerIntakeStatus();
-                    return importModule.readImportStorage(
+                ? readTransaction(() =>
+                    importModule.readImportStorage(
                       db,
                       command.action,
                       data.archive_profile,
-                    );
-                  })
+                    ),
+                  )
                 : importModule.writeImportStorage(
                     db,
                     command.action,
@@ -5365,8 +5298,8 @@ port.on("message", (message: WorkerMessage) => {
               db,
               message.command.action,
               message.command.args,
-              data.max_tags,
-              data.archive_profile,
+              libraryState.settings().max_tags,
+              libraryState.settings().archive_profile,
             ),
           };
         } catch (error) {
@@ -5388,8 +5321,8 @@ port.on("message", (message: WorkerMessage) => {
               db,
               message.command.action,
               message.command.args,
-              data.max_tags,
-              data.archive_profile,
+              libraryState.settings().max_tags,
+              libraryState.settings().archive_profile,
             ),
           };
         } catch (error) {
@@ -5869,13 +5802,30 @@ port.on("message", (message: WorkerMessage) => {
       case "get_receipt_result":
         value = getReceiptResult(message.command.receiptId);
         break;
+      case "library_state_configure": {
+        const settings = message.command.settings;
+        value = transaction(() => libraryState.configure(settings));
+        break;
+      }
+      case "library_state_pending":
+        value = readTransaction(() => !libraryState.readPlan().indexed);
+        break;
+      case "library_state_refresh":
+        value = transaction(() => libraryState.refreshBatch());
+        break;
+      case "library_collect": {
+        const { ids } = message.command;
+        value = transaction(() =>
+          libraryStateModule.recordCollectedLiteratures(db, ids),
+        );
+        break;
+      }
       case "library_counts": {
         const command = message.command;
         value =
           (data.long_read_lane && pagedLibraryCounts(command)) ||
           readTransaction(() => {
             validateDiscoveryCauses(command.query.discovery_run_ids);
-            registerLibraryStates();
             return libraryPageModule.libraryCounts(
               db,
               command.query,
@@ -5887,7 +5837,6 @@ port.on("message", (message: WorkerMessage) => {
       case "intake_read": {
         const c = message.command;
         const read = () => {
-          registerIntakeStatus();
           return intakeModule.queryIntakeBatches(
             db,
             c.value,
@@ -5905,7 +5854,6 @@ port.on("message", (message: WorkerMessage) => {
       case "library_facets": {
         const c = message.command;
         value = readTransaction(() => {
-          if (needsLibraryState(c.request)) registerLibraryStates();
           return libraryPageModule.libraryFacets(
             db,
             c.request,
@@ -5918,10 +5866,6 @@ port.on("message", (message: WorkerMessage) => {
       case "acquire_pdf_selection": {
         const c = message.command;
         value = readTransaction(() => {
-          const selector = c.request.selector;
-          if (selector.kind === "query" && needsLibraryState(selector.query))
-            registerLibraryStates();
-          else registerIntakeStatus();
           return libraryPageModule.acquirePdfSelection(db, c.request);
         });
         break;
@@ -5929,9 +5873,6 @@ port.on("message", (message: WorkerMessage) => {
       case "parse_document_selection": {
         const c = message.command;
         value = readTransaction(() => {
-          const selector = c.request.selector;
-          if (selector.kind === "query" && needsLibraryState(selector.query))
-            registerLibraryStates();
           return libraryPageModule.parseDocumentSelection(
             db,
             c.request,
@@ -5941,7 +5882,10 @@ port.on("message", (message: WorkerMessage) => {
         break;
       }
       case "library_search_page":
-        value = librarySearchPage(message.command.request);
+        value = librarySearchPage(
+          message.command.request,
+          message.command.stateRead === "defer",
+        );
         break;
       case "library_snapshot":
         value = librarySnapshot(
@@ -6177,7 +6121,5 @@ port.on("message", (message: WorkerMessage) => {
     });
   } finally {
     cancellation = undefined;
-    closeLibraryProjection?.();
-    closeLibraryProjection = undefined;
   }
 });

@@ -1,4 +1,6 @@
 import { expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { processorFixture } from "./processor-fixture.js";
@@ -27,6 +29,14 @@ it(
     let q: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
     try {
       await e.build(e.parseRequest);
+      const catalog = new DatabaseSync(join(e.home, "catalog.sqlite"));
+      try {
+        catalog
+          .prepare("DELETE FROM library_collected WHERE literature_id=?")
+          .run(e.parseRequest.literature_id);
+      } finally {
+        catalog.close();
+      }
       const created = await withActivity({ actor: "cli:fixture" }, () =>
         e.app.snapshots.create({
           kind: "literatures",
@@ -34,6 +44,9 @@ it(
           name: "研究范围",
         }),
       );
+      expect(
+        (await e.app.library.detail(e.parseRequest.literature_id)).collected,
+      ).toBe(true);
       const before = await e.app.snapshots.all(created.snapshot_id);
       expect(before.name).toBe("研究范围");
       expect(before.name_source).toBe("manual");

@@ -31,6 +31,8 @@ export const SQLITE_READ_LANES = {
       "get_provider_relation",
       "reference_query_snapshot.id",
       "library_search_page.page",
+      "library_search_page.state-filter",
+      "library_state_pending",
       "library_snapshot.ids",
       "intake_withdrawn",
       "intake_withdrawal_read.read",
@@ -138,7 +140,7 @@ export const SQLITE_READ_LANES = {
       "library_counts",
       "library_facets",
       "library_search_page.selection",
-      "library_search_page.state-filter",
+      "library_search_page.state-fallback",
       "library_search_page.discovery-scope",
       "library_snapshot.query",
       "acquire_pdf_selection",
@@ -263,6 +265,8 @@ function readOperation(c: SqliteCommand): string {
     case "reference_query_snapshot":
       return `${c.kind}.${"reference_id" in c.selection ? "id" : "literature"}`;
     case "library_search_page":
+      if (c.stateRead === "fallback")
+        return "library_search_page.state-fallback";
       if (c.request.fullRelevance || c.request.limit > 200)
         return "library_search_page.selection";
       if (c.request.query.discovery_run_ids.length)

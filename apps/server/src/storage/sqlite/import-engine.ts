@@ -1,3 +1,14 @@
+const {
+  beginCatalogWrite,
+  commitCatalogWrite,
+}: typeof import("./catalog-write.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./catalog-write.ts"
+      : "./catalog-write.js",
+    import.meta.url,
+  ).href
+);
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import { IMPORT_LIMITS } from "@sciretriever/contracts";
 import type {
@@ -611,7 +622,7 @@ export function writeImportStorage(
   r: ImportWrite,
   intakeWrite: (db: DatabaseSync, r: IntakeWrite) => unknown,
 ): unknown {
-  db.exec("BEGIN IMMEDIATE");
+  beginCatalogWrite(db);
   try {
     let value: unknown = true;
     if (r.op === "items-write") value = writeIntakeItem(db, r.action);
@@ -1001,7 +1012,7 @@ export function writeImportStorage(
         ).run(p.artifact_id, p.artifact_id);
       value = retired;
     }
-    db.exec("COMMIT");
+    commitCatalogWrite(db);
     return value;
   } catch (error) {
     db.exec("ROLLBACK");

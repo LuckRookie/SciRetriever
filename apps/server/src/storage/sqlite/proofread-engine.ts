@@ -1,3 +1,14 @@
+const {
+  beginCatalogWrite,
+  commitCatalogWrite,
+}: typeof import("./catalog-write.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./catalog-write.ts"
+      : "./catalog-write.js",
+    import.meta.url,
+  ).href
+);
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import type {
@@ -76,10 +87,12 @@ function fail(code: string): never {
   throw Object.assign(new Error("proofread storage refused"), { code });
 }
 function transaction<T>(db: DatabaseSync, write: boolean, fn: () => T): T {
-  db.exec(write ? "BEGIN IMMEDIATE" : "BEGIN");
+  if (write) beginCatalogWrite(db);
+  else db.exec("BEGIN");
   try {
     const result = fn();
-    db.exec("COMMIT");
+    if (write) commitCatalogWrite(db);
+    else db.exec("COMMIT");
     return result;
   } catch (error) {
     db.exec("ROLLBACK");

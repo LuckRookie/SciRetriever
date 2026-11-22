@@ -21,27 +21,39 @@ import {
 import { RetrievalStorageClient } from "../src/storage/sqlite/retrieval-client.js";
 import {
   INTAKE_LOOKUP_INDEXES,
+  LIBRARY_STORED_STATE_SCHEMA,
   RETRIEVAL_CHANGE_SCHEMA,
   SCHEMA_FINGERPRINT,
   SCHEMA_FINGERPRINT_V19,
   SCHEMA_FINGERPRINT_V19_INTAKE_LOOKUPS,
+  SCHEMA_FINGERPRINT_V19_RETRIEVAL_CHANGES,
   SCHEMA_MANIFEST,
   SCHEMA_MANIFEST_V19,
   SCHEMA_MANIFEST_V19_INTAKE_LOOKUPS,
+  SCHEMA_MANIFEST_V19_RETRIEVAL_CHANGES,
 } from "../src/storage/sqlite/schema.js";
 import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
 import { coreProcessingFixture } from "./core-processing-fixture.js";
 
 it.each([
-  [SCHEMA_MANIFEST_V19, SCHEMA_FINGERPRINT_V19, INTAKE_LOOKUP_INDEXES],
+  [
+    SCHEMA_MANIFEST_V19,
+    SCHEMA_FINGERPRINT_V19,
+    [...INTAKE_LOOKUP_INDEXES, ...RETRIEVAL_CHANGE_SCHEMA],
+  ],
   [
     SCHEMA_MANIFEST_V19_INTAKE_LOOKUPS,
     SCHEMA_FINGERPRINT_V19_INTAKE_LOOKUPS,
+    RETRIEVAL_CHANGE_SCHEMA,
+  ],
+  [
+    SCHEMA_MANIFEST_V19_RETRIEVAL_CHANGES,
+    SCHEMA_FINGERPRINT_V19_RETRIEVAL_CHANGES,
     [],
   ],
 ] as const)(
   "adds only the agreed search objects and preserves existing FTS rows and maintenance",
-  async (manifest, previous, indexes) => {
+  async (manifest, previous, additions) => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-fts-migration-"));
     const path = join(home, "catalog.sqlite");
     const db = new DatabaseSync(path);
@@ -78,6 +90,8 @@ it.each([
       INSERT INTO literature_search_fts(literature_id,title) VALUES
         ('a','same word'),('b','same word with same again'),('c','other phrase');
     `);
+      if (previous === SCHEMA_FINGERPRINT_V19_RETRIEVAL_CHANGES)
+        db.exec("INSERT INTO retrieval_change_state VALUES(1,42)");
       const before = schema(),
         found = match(),
         rows = db
@@ -99,14 +113,23 @@ it.each([
       expect(after.filter((row) => oldNames.has(row.name))).toEqual(before);
       const added = after.filter((row) => !oldNames.has(row.name));
       expect(added.map((row) => row.sql).sort()).toEqual(
-        [...indexes, ...RETRIEVAL_CHANGE_SCHEMA].sort(),
+        [...additions, ...LIBRARY_STORED_STATE_SCHEMA].sort(),
       );
+      expect(db.prepare("SELECT * FROM library_state_progress").all()).toEqual(
+        [],
+      );
+      expect(
+        db.prepare("SELECT * FROM library_literature_states").all(),
+      ).toEqual([]);
       expect(db.prepare("SELECT * FROM retrieval_changes").all()).toEqual([]);
       expect(
         db
           .prepare("SELECT processed_position FROM retrieval_change_state")
           .get(),
-      ).toEqual({ processed_position: null });
+      ).toEqual({
+        processed_position:
+          previous === SCHEMA_FINGERPRINT_V19_RETRIEVAL_CHANGES ? 42 : null,
+      });
       expect(
         db
           .prepare("SELECT rowid,* FROM literature_search_fts ORDER BY rowid")
@@ -160,10 +183,12 @@ it("reconciles unlogged legacy writes explicitly and retains post-migration SQL 
     await f.app.close();
     const raw = new DatabaseSync(path);
     try {
-      for (const sql of [...RETRIEVAL_CHANGE_SCHEMA].reverse()) {
-        const [, object, name] = /^CREATE (TABLE|TRIGGER) ([a-z_]+)/u.exec(
-          sql,
-        )!;
+      for (const sql of [
+        ...RETRIEVAL_CHANGE_SCHEMA,
+        ...LIBRARY_STORED_STATE_SCHEMA,
+      ].reverse()) {
+        const [, object, name] =
+          /^CREATE (TABLE|TRIGGER|INDEX) ([a-z_]+)/u.exec(sql)!;
         raw.exec(`DROP ${object} ${name}`);
       }
       raw

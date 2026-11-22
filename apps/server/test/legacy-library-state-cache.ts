@@ -1,103 +1,8 @@
-import { DatabaseSync } from "node:sqlite";
-import type * as Archive from "./archive-engine.js";
-import type * as State from "../../literature/state.js";
-import type * as DraftFacts from "./draft-facts.js";
-const { readResultFactStamps }: typeof DraftFacts = await import(
-  new URL(
-    import.meta.url.endsWith(".ts") ? "./draft-facts.ts" : "./draft-facts.js",
-    import.meta.url,
-  ).href
-);
-const { archiveStates }: typeof Archive = await import(
-  new URL(
-    import.meta.url.endsWith(".ts")
-      ? "./archive-engine.ts"
-      : "./archive-engine.js",
-    import.meta.url,
-  ).href
-);
-const { deriveCurrentState }: typeof State = await import(
-  new URL(
-    import.meta.url.endsWith(".ts")
-      ? "../../literature/state.ts"
-      : "../../literature/state.js",
-    import.meta.url,
-  ).href
-);
-
-export function readLiteratureStatus(
-  db: DatabaseSync,
-  id: string,
-  maxTags: number,
-  profile: "pipeline" | "vlm-engine",
-  checkpoint: () => void,
-) {
-  const fact = archiveStates(db, id, checkpoint, false).get(id);
-  return fact ? deriveCurrentState(fact, maxTags, profile).status : null;
-}
-
-export function scopedLiteratureStates(
-  db: DatabaseSync,
-  ids: readonly string[],
-  maxTags: number,
-  profile: "pipeline" | "vlm-engine",
-  checkpoint: () => void,
-) {
-  const states = new Map<string, ReturnType<typeof deriveCurrentState>>();
-  for (const [id, facts] of archiveStates(db, ids, checkpoint, false))
-    states.set(id, deriveCurrentState(facts, maxTags, profile));
-  return states;
-}
-
-/** Disk-backed projection for operations that require one mutable-fact snapshot. */
-export function materializeLiteratureStates(
-  db: DatabaseSync,
-  maxTags: number,
-  profile: "pipeline" | "vlm-engine",
-  checkpoint: () => void,
-) {
-  const scratch = new DatabaseSync("");
-  try {
-    scratch.exec(`
-      PRAGMA cache_size=-1024;
-      PRAGMA journal_mode=OFF;
-      CREATE TABLE states(id TEXT PRIMARY KEY,status TEXT NOT NULL,missing_step TEXT) WITHOUT ROWID;
-      BEGIN;
-    `);
-    const page = db.prepare(
-      "SELECT literature_id FROM literature_metadata WHERE literature_id>? ORDER BY literature_id LIMIT 1000",
-    );
-    const put = scratch.prepare("INSERT INTO states VALUES(?,?,?)");
-    let after = "";
-    for (;;) {
-      checkpoint();
-      const ids = page
-        .all(after)
-        .map(({ literature_id }) => String(literature_id));
-      if (!ids.length) break;
-      for (const [id, state] of scopedLiteratureStates(
-        db,
-        ids,
-        maxTags,
-        profile,
-        checkpoint,
-      ))
-        put.run(id, state.status, state.missing_step);
-      after = ids.at(-1)!;
-    }
-    scratch.exec("COMMIT");
-    const get = scratch.prepare(
-      "SELECT status,missing_step FROM states WHERE id=?",
-    );
-    return {
-      get: (id: string) => get.get(id),
-      close: () => scratch.close(),
-    };
-  } catch (error) {
-    scratch.close();
-    throw error;
-  }
-}
+// Legacy projection used as a migration and trigger regression oracle.
+import type { DatabaseSync } from "node:sqlite";
+import { archiveStates } from "../src/storage/sqlite/archive-engine.js";
+import { draftFactSql } from "../src/storage/sqlite/draft-facts.js";
+import { deriveCurrentState } from "../src/literature/state.js";
 
 /** One complete projection per committed input revision; used inside the caller's read transaction. */
 export class LibraryStateCache {
@@ -185,4 +90,33 @@ export class LibraryStateCache {
     this.factStamps = factStamps;
     return next;
   }
+}
+
+function readResultFactStamps(db: DatabaseSync): Map<string, string> {
+  const grouped = new Map<string, unknown[]>();
+  for (const row of db
+    .prepare(
+      `SELECT la.literature_id,a.asset_id,d.document_version_id AS document_version_id,
+    ${draftFactSql("citing_results", "d.document_version_id")} AS citing_results,
+    ${draftFactSql("unfound_citations", "d.document_version_id")} AS unfound_citations
+    FROM literature_assets la JOIN assets a ON a.asset_id=la.asset_id
+    JOIN document_versions d ON d.literature_id=la.literature_id AND d.source_asset_id=a.asset_id AND d.source_sha256=a.sha256
+    JOIN document_defaults dd ON dd.document_version_id=d.document_version_id
+    WHERE d.schema_version=3 AND a.media_type='application/pdf' AND la.role IN ('primary-pdf','supplementary-pdf')
+    ORDER BY la.literature_id,a.asset_id`,
+    )
+    .all()) {
+    const id = String(row.literature_id),
+      values = grouped.get(id) ?? [];
+    values.push([
+      row.asset_id,
+      row.document_version_id,
+      row.citing_results,
+      row.unfound_citations,
+    ]);
+    grouped.set(id, values);
+  }
+  return new Map(
+    [...grouped].map(([id, values]) => [id, JSON.stringify(values)]),
+  );
 }

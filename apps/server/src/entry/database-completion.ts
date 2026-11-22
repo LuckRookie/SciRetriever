@@ -117,6 +117,10 @@ export interface DatabaseCompletionTargetPorts {
 }
 
 export interface DatabaseCompletionPorts extends DatabaseCompletionTargetPorts {
+  readonly selectionWrites?: Pick<
+    SqliteWorker,
+    "writeLibrarySelection" | "collectLiteratures"
+  >;
   readonly library: Pick<
     LiteratureQueryService,
     "search" | "selectionSnapshot" | "detail"
@@ -962,9 +966,16 @@ export class DatabaseCompletionService {
     const transferIds = this.normalizeTransfers(request.transfer_ids ?? []);
     // Freeze once under admission; network/model/file preparation must not hold
     // the catalog lock. Each publication owns its short admission and CAS.
-    const targets = await this.ports.writes.run(() =>
-      this.freeze(request.selector, goal),
-    );
+    const selection = this.ports.selectionWrites;
+    const targets = await (selection
+      ? selection.writeLibrarySelection(
+          () =>
+            this.freeze(request.selector, goal, (ids) =>
+              selection.collectLiteratures(ids),
+            ),
+          options.signal,
+        )
+      : this.ports.writes.run(() => this.freeze(request.selector, goal)));
     return this.runAdmitted(targets, goal, transferIds, options);
   }
 
@@ -1149,11 +1160,13 @@ export class DatabaseCompletionService {
   private async freeze(
     selector: LiteratureSelector,
     goal: BatchGoal,
+    collect?: (ids: readonly LiteratureId[]) => Promise<void>,
   ): Promise<readonly FrozenTarget[]> {
     const page = await selectCompletionLiteratures(
       this.ports.library,
       selector,
     );
+    await collect?.(page.items.map((item) => item.literature.literature_id));
     if (selector.kind === "literatures") {
       const explicit = new Set(explicitRetryLiteratureIds(selector));
       return Object.freeze(

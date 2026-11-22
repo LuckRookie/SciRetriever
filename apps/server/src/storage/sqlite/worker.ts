@@ -58,7 +58,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLogger, type Logger } from "../../logging/index.js";
-import { sqliteReadRequest, SLOW_SHORT_READ } from "./read-lanes.js";
+import {
+  needsLibraryState,
+  sqliteReadRequest,
+  SLOW_SHORT_READ,
+} from "./read-lanes.js";
 import type {
   TaskDetailRead,
   TaskDetailProbe,
@@ -728,11 +732,22 @@ export type SqliteCommand =
   | { readonly kind: "schema" }
   | { readonly kind: "query_preflight" }
   | {
+      readonly kind: "library_state_configure";
+      readonly settings: import("./library-state.js").StateSettings;
+    }
+  | { readonly kind: "library_state_pending" }
+  | { readonly kind: "library_state_refresh" }
+  | { readonly kind: "library_collect"; readonly ids: readonly string[] }
+  | {
       readonly kind: "library_counts";
       readonly query: LibraryPageQuery["query"];
       readonly ftsQuery: string | null;
     }
-  | { readonly kind: "library_search_page"; readonly request: LibraryPageQuery }
+  | {
+      readonly kind: "library_search_page";
+      readonly request: LibraryPageQuery;
+      readonly stateRead?: "defer" | "fallback";
+    }
   | {
       readonly kind: "library_snapshot";
       readonly ftsQuery: string | null;
@@ -1273,11 +1288,23 @@ const METADATA_WRITE_COMMANDS = new Set<string>([
   "put_discovery",
   "citation_publication",
 ]);
+const LIBRARY_SELECTION_COMMANDS = new Set<string>([
+  "metadata_write_begin",
+  "metadata_write_commit",
+  "metadata_write_rollback",
+  "library_snapshot",
+  "library_search_page",
+  "literature_detail_snapshot",
+  "get_literature",
+  "raw_parse",
+  "library_collect",
+]);
 // Leave room for the last indivisible record and the durable commit.
 const METADATA_WRITE_BUDGET_MS = 150;
 type MetadataWriteScope = {
   readonly done: Promise<void>;
   readonly events: ExecutionEvent[];
+  readonly commands: ReadonlySet<string>;
 };
 
 function validateExecutionEvent(event: ExecutionEvent): void {
@@ -1463,6 +1490,19 @@ export class SqliteWorker {
     write: (expired: () => boolean) => Promise<T>,
     signal?: AbortSignal,
   ): Promise<T> {
+    return this.writeSegment(write, METADATA_WRITE_COMMANDS, signal);
+  }
+  writeLibrarySelection<T>(
+    write: () => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    return this.writeSegment(write, LIBRARY_SELECTION_COMMANDS, signal);
+  }
+  private async writeSegment<T>(
+    write: (expired: () => boolean) => Promise<T>,
+    commands: ReadonlySet<string>,
+    signal?: AbortSignal,
+  ): Promise<T> {
     const admission = this.admission;
     if (this.readOnly || !admission || this.metadataWrites.getStore())
       throw new SqliteWorkerError();
@@ -1472,7 +1512,7 @@ export class SqliteWorker {
       const done = new Promise<void>((resolve) => {
         release = resolve;
       });
-      const scope: MetadataWriteScope = { done, events: [] };
+      const scope: MetadataWriteScope = { done, events: [], commands };
       this.metadataWrite = scope;
       try {
         return await this.metadataWrites.run(scope, async () => {
@@ -1587,10 +1627,7 @@ export class SqliteWorker {
       return Promise.reject(new SqliteWorkerError());
     const scope = this.metadataWrites.getStore();
     if (scope) {
-      if (
-        scope !== this.metadataWrite ||
-        !METADATA_WRITE_COMMANDS.has(command.kind)
-      )
+      if (scope !== this.metadataWrite || !scope.commands.has(command.kind))
         return Promise.reject(new SqliteWorkerError());
     } else if (this.metadataWrite) {
       return this.metadataWrite.done.then(() =>
@@ -3260,6 +3297,42 @@ export class SqliteWorker {
       await this.run({ kind: "library_counts", query, ftsQuery }, signal),
     );
   }
+  async configureLibraryState(
+    maxTags: number,
+    profile: "pipeline" | "vlm-engine",
+  ) {
+    if (
+      !Number.isSafeInteger(maxTags) ||
+      maxTags < 1 ||
+      maxTags > 64 ||
+      !["pipeline", "vlm-engine"].includes(profile)
+    )
+      throw new SqliteWorkerError();
+    await this.run({
+      kind: "library_state_configure",
+      settings: { max_tags: maxTags, archive_profile: profile },
+    });
+  }
+  libraryStatePending(): Promise<boolean> {
+    return this.run({ kind: "library_state_pending" });
+  }
+  refreshLibraryState(): Promise<{
+    rebuilt: number;
+    repaired: number;
+    more: boolean;
+  }> {
+    return this.run({ kind: "library_state_refresh" });
+  }
+  async collectLiteratures(ids: readonly string[], signal?: AbortSignal) {
+    if (ids.length)
+      await this.run(
+        {
+          kind: "library_collect",
+          ids: ids.map(parseLiteratureId),
+        },
+        signal,
+      );
+  }
   async librarySearchPage(
     request: LibraryPageQuery,
     signal?: AbortSignal,
@@ -3267,19 +3340,40 @@ export class SqliteWorker {
     readonly rows: readonly SearchSnapshotRow[];
     readonly total_count: number;
     readonly tag_backfill_pending?: number;
+    readonly status_updating?: true;
   }> {
-    const page = await this.run<{
+    type Page = {
       rows: unknown;
       total_count: number;
       tag_backfill_pending?: number;
-    }>(
+      status_updating?: unknown;
+    };
+    const result = await this.run<Page | { defer: true }>(
       {
         kind: "library_search_page",
         request,
+        ...(this.options.readLane &&
+        !this.metadataWrites.getStore() &&
+        (needsLibraryState(request.query) ||
+          request.query.collection_scope === "collected") &&
+        !request.fullRelevance &&
+        request.limit <= 200 &&
+        !request.query.discovery_run_ids.length
+          ? { stateRead: "defer" as const }
+          : {}),
       },
       signal,
     );
+    const page =
+      "defer" in result
+        ? await this.run<Page>(
+            { kind: "library_search_page", request, stateRead: "fallback" },
+            signal,
+          )
+        : result;
     if (!Number.isSafeInteger(page.total_count) || page.total_count < 0)
+      throw new SqliteWorkerError();
+    if (page.status_updating !== undefined && page.status_updating !== true)
       throw new SqliteWorkerError();
     const rows = this.parseSearchRows(page.rows);
     if (rows.length > request.limit + 1 || rows.length > page.total_count)
@@ -3293,6 +3387,7 @@ export class SqliteWorker {
     return {
       rows,
       total_count: page.total_count,
+      ...(page.status_updating ? { status_updating: true as const } : {}),
       ...(page.tag_backfill_pending === undefined
         ? {}
         : { tag_backfill_pending: page.tag_backfill_pending }),

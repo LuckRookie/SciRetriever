@@ -1,3 +1,14 @@
+const {
+  beginCatalogWrite,
+  commitCatalogWrite,
+}: typeof import("./catalog-write.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./catalog-write.ts"
+      : "./catalog-write.js",
+    import.meta.url,
+  ).href
+);
 const { visibleLiteratureSql }: typeof import("./intake-visibility.js") =
   await import(
     new URL(
@@ -451,13 +462,13 @@ function commit(
 }
 export function runDraftTextWrite(db: DatabaseSync, request: DraftTextWrite) {
   requireSchema(db);
-  db.exec("BEGIN IMMEDIATE");
+  beginCatalogWrite(db);
   try {
     const result =
       request.kind === "commit"
         ? commit(db, request.publication)
         : recomputeDocumentDefault(db, request.request);
-    db.exec("COMMIT");
+    commitCatalogWrite(db);
     return result;
   } catch (error) {
     if (db.isTransaction) {

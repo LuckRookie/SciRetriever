@@ -12,7 +12,8 @@
 - [worker-runtime.ts](worker-runtime.ts)：SQLite worker 运行实现。
 - [citation-progress.ts](citation-progress.ts) 将引用扩展的待查队列、原因去重、待补查队列和未完成查询的回放键放入临时 SQLite。持久来源为业务事务同写的 `citation-write-checkpoint`，恢复按事件序号每页取 32 条，执行按索引取各队列的最早待查项。原因事实按页送回同一个发布事务，catalog 结构沿用原版。
 - [literature-search-rows.ts](literature-search-rows.ts) 使用内容表的 `c0` 覆盖索引按文献 ID 找到书目 FTS 的 rowid，供改写和撤回使用。FTS5 内部内容表的文件格式规定 `id` 为 rowid，`c0` 为第一个声明列，此处是 `literature_id`。SQLite 随每次 FTS 写入维护该索引。
-- [literature-search-schema-migration.ts](literature-search-schema-migration.ts) 为两个旧结构 19 指纹提供同一加法迁移，补齐三个入库索引并安装检索变更日志。执行 `migrate-literature-search-indexes.mjs` 后，用同一脚本的 `--reconcile` 显式比对并登记旧索引差异，再执行 `maintenance refresh-index` 消费日志。应用启动只读水位，未补齐时增量刷新报告 `index-reconcile-required`。
+- [literature-search-schema-migration.ts](literature-search-schema-migration.ts) 为三个旧结构 19 指纹提供同一加法迁移，按原指纹补齐入库索引、检索变更日志和文献状态存储。需要补齐检索水位时，用迁移入口的 `--reconcile` 显式比对并登记旧索引差异，再由索引刷新消费日志。迁移只安装文献状态结构，应用启动后按批回填。
+- [library-state.ts](library-state.ts) 保存在写事务中计算的文献状态和缺失步骤、选用记录以及回填游标。SQLite 触发器为其他写入者记录受影响的 Literature ID，后台以短事务核对。读取在同一快照内优先使用当前代的存储值，回填和后台核对期间按篇现算缺少或已改变的值。
 - [draft-text-engine.ts](draft-text-engine.ts)：初稿版本、资源闭包、不可变计数、当前指针及默认关系的同事务登记；按版本读事实、按本页文献批量读主 PDF 默认版本与等级。补形成候选共用文献库筛选和排序，在同一只读快照返回 PDF 部分、当前部署/历史 Markdown raw、指定 raw 的既有初稿 ID 和当前初稿方法；不读取正文或其它文件，业务跳过、limit 与任务冻结由应用层决定。
 - [document-defaults.ts](document-defaults.ts)：原始解析当前切换、初稿登记与校订发布事务内按独立 CAS 重求默认文本，优先有效完整校订稿，再选有效当前初稿，否则删除默认关系。校订发布可提名刚登记的版本，仍复检当前校订内容、人工 revision 和原始解析 pin；相同校订内容的等价方法版本可以复用固定表示。没有提名时保留仍有效的默认表示。资产当前指针切换同时重求其全部文献关系；读取不重求。
 - [draft-text-schema-migration.ts](draft-text-schema-migration.ts)：独立离线 16→17；精确匹配冻结 16，原地重建文档父表、子表不改名或重建，核对全部旧表行数及校订行、内容版本、事件和结果过时状态；不形成初稿，不访问 artifact。
@@ -60,7 +61,7 @@
 
 ## 文献库查询投影与取消
 
-纯 SQL 文献库计数按 512 个 MetaLiterature 分段，因此各版本的全文计数仍按同一篇合并。各段释放 catalog 读事务。发现并发提交时改用单一快照，FTS 筛选和最近打开窗口也使用单一快照。长线程需要的完整状态投影保存在临时 SQLite 文件，状态计算每批装入最多 1,000 个文献 ID，返回结果后关闭文件。导入批次状态按受影响文献推算。
+纯 SQL 文献库计数按 512 个 MetaLiterature 分段，因此各版本的全文计数仍按同一篇合并。各段释放 catalog 读事务。发现并发提交时改用单一快照，FTS 筛选和最近打开窗口也使用单一快照。稳定期的状态筛选页走短请求道，查询直接使用状态索引。回填或核对期间，涉及状态或历史选用的筛选页走长请求道，在读取快照里按篇补算。
 
 任务详情首次扫描固定事件尾部，按序号分段读，每段最多 1,000 条。扫描结束复核任务身份、尾锚及前缀条数。短线程读缓存位置之后的新增事件，使用最多 32 个任务的聚合缓存。工作台每 10 秒检查 WAL。空闲 15 秒后尝试 PASSIVE，只有全部帧已写回且 WAL 未继续变化才以零等待尝试 TRUNCATE。
 

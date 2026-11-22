@@ -543,7 +543,7 @@ async function readQuery(
     case "library-counts":
       return q.query.counts(operationRecord(value, ["query"]).query, signal);
     case "library-search":
-      return q.query.search(parseLibrarySearchRequest(value), signal);
+      return q.query.search(parseLibrarySearchRequest(value), signal, "browse");
     case "literature-read":
       return q.query.detail(
         parseLiteratureId(

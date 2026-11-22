@@ -1,4 +1,6 @@
 import { expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { join } from "node:path";
 import {
   parseLibrarySearchRequest,
   parseTag,
@@ -58,7 +60,18 @@ it("uses two model steps, requires candidate rejection and corrected evidence, a
   };
   const e = await tagFixture(model);
   try {
+    // The fixture supplied a PDF. Start the tag test with an uncollected
+    // paper to model an automatic acquisition from discovery.
+    const catalog = new DatabaseSync(join(e.home, "catalog.sqlite"));
+    try {
+      catalog
+        .prepare("DELETE FROM library_collected WHERE literature_id=?")
+        .run(e.id);
+    } finally {
+      catalog.close();
+    }
     const first = await e.tags.build(e.request);
+    expect((await e.app.library.detail(e.id)).collected).toBe(false);
     expect(first.input_coverage).toEqual({
       document_version_id: e.doc.document_version_id,
       annotation_id: e.annotation.annotation_id,
@@ -99,6 +112,15 @@ it("uses two model steps, requires candidate rejection and corrected evidence, a
         model: null,
       }),
     ).rejects.toMatchObject({ code: "tag-evidence-invalid" });
+    expect((await e.app.library.detail(e.id)).collected).toBe(false);
+    await e.assign([first.assignment.items[0]!.tag_id], true);
+    expect((await e.app.library.detail(e.id)).collected).toBe(true);
+    const replacement = await e.create("Replacement topic");
+    await e.assign([replacement]);
+    expect(
+      (await e.tags.assignment(e.id))?.items.map((item) => item.tag_id),
+    ).toEqual([replacement]);
+    expect((await e.app.library.detail(e.id)).collected).toBe(true);
   } finally {
     await e.close();
   }

@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { initializeCurrentCatalog } from "../src/storage/sqlite/catalog-layout.js";
-import { LibraryStateCache } from "../src/storage/sqlite/library-state-cache.js";
+import { LibraryStateCache } from "./legacy-library-state-cache.js";
 import { archiveStates } from "../src/storage/sqlite/archive-engine.js";
 import { deriveCurrentState } from "../src/literature/state.js";
 

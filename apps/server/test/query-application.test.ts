@@ -267,7 +267,8 @@ it("serves a real query-only Web request without changing the catalog", async ()
       body: JSON.stringify({
         protocol_version: 1,
         request: {
-          query: parseLibraryQuery(emptyQuery),
+          // A fixture written directly is not collected; list the whole library.
+          query: parseLibraryQuery({ ...emptyQuery, collection_scope: "all" }),
           sort: "title-asc",
           limit: 10,
           cursor: null,

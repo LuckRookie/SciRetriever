@@ -42,6 +42,17 @@ const { fullTextCounts }: typeof import("./full-text-counts.js") = await import(
     import.meta.url,
   ).href
 );
+const {
+  historicalCollectionSql,
+  storedLibraryState,
+}: typeof import("./library-state.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./library-state.ts"
+      : "./library-state.js",
+    import.meta.url,
+  ).href
+);
 
 const HAS_PRIMARY_PDF_SQL = `EXISTS(SELECT 1 FROM literature_assets pdf WHERE pdf.literature_id=l.literature_id AND pdf.role='primary-pdf' AND ${visibleObjectSql("literature-asset", "pdf.literature_asset_id")})`;
 
@@ -68,7 +79,25 @@ function libraryFilter(
   ftsQuery: string | null,
   intakeOrder = false,
   metaIds?: readonly string[],
+  countStatuses = false,
 ) {
+  const state = storedLibraryState(db).readPlan();
+  const statusNeeded =
+    countStatuses ||
+    !!q.statuses.length ||
+    !!q.missing_steps.length ||
+    q.needs_manual_pdf === true;
+  const fallback = (column: "status" | "missing_step", fn: string) =>
+    `CASE WHEN ls.generation=${state.generation} AND sd.literature_id IS NULL THEN ls.${column}
+      ELSE ${fn}(l.literature_id) END`;
+  const status = state.indexed
+    ? "ls.status"
+    : fallback("status", "sr_derive_status");
+  const missing = state.indexed
+    ? "ls.missing_step"
+    : fallback("missing_step", "sr_derive_missing");
+  const collecting = q.collection_scope === "collected";
+  const collectedJoin = collecting && state.collectionReady;
   const terms: string[] = [
       "sr_query_continue()",
       visibleLiteratureSql("l.literature_id"),
@@ -79,7 +108,8 @@ function libraryFilter(
     args.push(...values);
   };
   const any = (field: string, values: readonly string[]) => {
-    if (values.length)
+    if (values.length === 1) add(`${field} = ?`, values[0]!);
+    else if (values.length)
       add(
         `${field} IN (SELECT value FROM json_each(?))`,
         JSON.stringify(values),
@@ -128,12 +158,16 @@ function libraryFilter(
       "EXISTS(SELECT 1 FROM intake_batch_members b WHERE b.literature_id=l.literature_id AND b.batch_id IN (SELECT value FROM json_each(?)))",
       JSON.stringify(q.intake_batch_ids),
     );
-  any("sr_status(l.literature_id)", q.statuses);
-  any("sr_missing(l.literature_id)", q.missing_steps);
+  if (collecting && !collectedJoin)
+    add(
+      `(EXISTS(SELECT 1 FROM library_collected WHERE literature_id=l.literature_id) OR ${historicalCollectionSql("l.literature_id")})`,
+    );
+  any(status, q.statuses);
+  any(missing, q.missing_steps);
   const exhaustion =
     "EXISTS(SELECT 1 FROM automatic_pdf_acquisition_exhaustions ex WHERE ex.literature_id=l.literature_id)";
   if (q.needs_manual_pdf === true)
-    add(`(${exhaustion} AND sr_status(l.literature_id)='UNREVIEWED')`);
+    add(`(${exhaustion} AND ${status}='UNREVIEWED')`);
   if (q.needs_manual_pdf === false) add(`NOT ${exhaustion}`);
   if (typeof q.has_primary_pdf === "boolean")
     add(`${HAS_PRIMARY_PDF_SQL} = ?`, Number(q.has_primary_pdf));
@@ -182,17 +216,41 @@ function libraryFilter(
     : "literatures l";
   const metadata =
     "JOIN literature_metadata m ON m.literature_id=l.literature_id";
+  const stored =
+    "JOIN library_literature_states ls ON ls.literature_id=l.literature_id";
+  const stateJoins = !statusNeeded
+    ? ""
+    : state.indexed
+      ? stored
+      : `LEFT ${stored} LEFT JOIN library_state_dirty sd ON sd.literature_id=l.literature_id`;
+  const collectionJoin = collectedJoin
+    ? "JOIN library_collected lc ON lc.literature_id=l.literature_id"
+    : "";
   // Counting uses the same joins and duplicate check. Let SQLite walk the
   // covering ID indexes instead of forcing a lookup per row in intake order.
-  const from = `FROM ${base} ${metadata}${
+  const intakeJoin =
+    "JOIN literature_intake li ON l.literature_id=li.literature_id";
+  const from = `FROM ${base} ${metadata} ${stateJoins} ${collectionJoin} ${
     intakeOrder
-      ? " JOIN literature_intake li ON l.literature_id=li.literature_id"
+      ? intakeJoin
       : ftsQuery === null
         ? ""
         : " JOIN literature_search_fts ON literature_search_fts.literature_id=l.literature_id"
   }`;
+  const stateOrder =
+    state.indexed &&
+    (q.statuses.length === 1
+      ? "library_literature_states_status"
+      : q.missing_steps.length === 1
+        ? "library_literature_states_missing"
+        : null);
+  const intakeSource = collectedJoin ? "lc" : stateOrder ? "ls" : "li";
   const orderedFrom = intakeOrder
-    ? `FROM literature_intake li INDEXED BY literature_intake_order CROSS JOIN literatures l ON l.literature_id=li.literature_id ${metadata}`
+    ? intakeSource === "lc"
+      ? `FROM library_collected lc INDEXED BY library_collected_order CROSS JOIN literatures l ON l.literature_id=lc.literature_id ${metadata} ${intakeJoin} ${stateJoins}`
+      : intakeSource === "ls"
+        ? `FROM library_literature_states ls INDEXED BY ${stateOrder} CROSS JOIN literatures l ON l.literature_id=ls.literature_id ${metadata} ${intakeJoin}`
+        : `FROM literature_intake li INDEXED BY literature_intake_order CROSS JOIN literatures l ON l.literature_id=li.literature_id ${metadata} ${stateJoins}`
     : from;
   let where = terms.length ? `WHERE ${terms.join(" AND ")}` : "";
   if (q.recently_opened)
@@ -202,7 +260,16 @@ function libraryFilter(
     where += " AND literature_search_fts MATCH ?";
     args.push(ftsQuery);
   }
-  return { from, orderedFrom, where, args, tagIds };
+  return {
+    from,
+    orderedFrom,
+    where,
+    args,
+    tagIds,
+    status,
+    intakeSource,
+    updating: state.updating,
+  };
 }
 export function libraryCounts(
   db: DatabaseSync,
@@ -212,17 +279,19 @@ export function libraryCounts(
   recentCutoff?: string,
 ) {
   // Quick-filter counts ignore both quick selections, but retain all other facets.
-  const { from, where, args } = libraryFilter(
+  const { from, where, args, status, updating } = libraryFilter(
     db,
     { ...query, statuses: [], needs_manual_pdf: null },
     ftsQuery,
     false,
     metaIds,
+    true,
   );
-  // Status is a per-row function; materialize it so each row computes it once.
   const rows = db
     .prepare(
-      `WITH s AS MATERIALIZED (SELECT sr_status(l.literature_id) AS status, EXISTS(SELECT 1 FROM automatic_pdf_acquisition_exhaustions ex WHERE ex.literature_id=l.literature_id) AS exhausted, ${HAS_PRIMARY_PDF_SQL} AS has_pdf ${from} ${where}) SELECT status, count(*) AS count, sum(status='UNREVIEWED' AND exhausted) AS unavailable, sum(has_pdf) AS with_pdf FROM s GROUP BY status`,
+      `SELECT ${status} AS status,count(*) AS count,
+        sum(${status}='UNREVIEWED' AND EXISTS(SELECT 1 FROM automatic_pdf_acquisition_exhaustions ex WHERE ex.literature_id=l.literature_id)) AS unavailable,
+        sum(${HAS_PRIMARY_PDF_SQL}) AS with_pdf ${from} ${where} GROUP BY ${status}`,
     )
     .all(...args);
   const statuses = Object.fromEntries(LITERATURE_STATUSES.map((s) => [s, 0]));
@@ -243,6 +312,7 @@ export function libraryCounts(
     )
     .get(...args, ...(recentCutoff === undefined ? [] : [recentCutoff]))!;
   return {
+    ...(updating ? { status_updating: true as const } : {}),
     total,
     statuses,
     unavailable_pdf,
@@ -256,12 +326,8 @@ export function libraryCounts(
 }
 export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
   const { query: q, sort, after, limit, ftsQuery } = request;
-  const { from, orderedFrom, where, args, tagIds } = libraryFilter(
-    db,
-    q,
-    ftsQuery,
-    sort === "intake-desc" && ftsQuery === null,
-  );
+  const { from, orderedFrom, where, args, tagIds, intakeSource, updating } =
+    libraryFilter(db, q, ftsQuery, sort === "intake-desc" && ftsQuery === null);
   const counts = db
     .prepare(
       `SELECT count(*) AS total, count(DISTINCT l.literature_id) AS unique_count ${from} ${where}`,
@@ -269,6 +335,13 @@ export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
     .get(...args)!;
   if (counts.total !== counts.unique_count)
     throw new Error("duplicate library search rows");
+  const summary = {
+    total_count: Number(counts.total),
+    ...(updating ? { status_updating: true as const } : {}),
+    ...(tagIds.length
+      ? { tag_backfill_pending: tagBackfillPending(db, tagIds, q.tags!.mode) }
+      : {}),
+  };
   const relevance = ftsQuery === null ? "NULL" : "bm25(literature_search_fts)";
   if (sort === "relevance" && !request.fullRelevance) {
     // Apply the cursor after selecting the same top-ranked window on every
@@ -290,10 +363,7 @@ export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
       );
     return {
       rows,
-      total_count: Number(counts.total),
-      ...(tagIds.length
-        ? { tag_backfill_pending: tagBackfillPending(db, tagIds, q.tags!.mode) }
-        : {}),
+      ...summary,
     };
   }
   const metrics = draftSortFields(sort);
@@ -328,10 +398,7 @@ export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
       .all(...pageArgs, limit + 1);
     return {
       rows,
-      total_count: Number(counts.total),
-      ...(tagIds.length
-        ? { tag_backfill_pending: tagBackfillPending(db, tagIds, q.tags!.mode) }
-        : {}),
+      ...summary,
     };
   }
   const value =
@@ -346,12 +413,14 @@ export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
             : relevance;
   if (sort === "intake-desc" && ftsQuery === null) {
     const pageArgs = [...args];
+    const at = `${intakeSource}.intake_at`;
+    const id = `${intakeSource}.literature_id`;
     let cursor = "";
     if (after) {
       cursor =
         after.value === null
-          ? " AND li.intake_at IS NULL AND l.literature_id > ?"
-          : " AND (li.intake_at IS NULL OR li.intake_at < ? OR (li.intake_at = ? AND l.literature_id > ?))";
+          ? ` AND ${at} IS NULL AND ${id} > ?`
+          : ` AND (${at} IS NULL OR ${at} < ? OR (${at} = ? AND ${id} > ?))`;
       pageArgs.push(
         ...(after.value === null
           ? [after.literature_id]
@@ -360,15 +429,12 @@ export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
     }
     const rows = db
       .prepare(
-        `SELECT l.literature_id,${relevance} AS relevance ${orderedFrom} ${where} ${cursor} ORDER BY li.intake_at DESC,li.literature_id ASC LIMIT ?`,
+        `SELECT l.literature_id,${relevance} AS relevance ${orderedFrom} ${where} ${cursor} ORDER BY ${at} DESC,${id} ASC LIMIT ?`,
       )
       .all(...pageArgs, limit + 1);
     return {
       rows,
-      total_count: Number(counts.total),
-      ...(tagIds.length
-        ? { tag_backfill_pending: tagBackfillPending(db, tagIds, q.tags!.mode) }
-        : {}),
+      ...summary,
     };
   }
   const pageArgs = [...args];
@@ -392,10 +458,7 @@ export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
     .all(...pageArgs, limit + 1);
   return {
     rows,
-    total_count: Number(counts.total),
-    ...(tagIds.length
-      ? { tag_backfill_pending: tagBackfillPending(db, tagIds, q.tags!.mode) }
-      : {}),
+    ...summary,
   };
 }
 

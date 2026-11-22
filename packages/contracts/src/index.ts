@@ -262,6 +262,7 @@ export const MISSING_STEPS = [
 ] as const;
 export type MissingStep = (typeof MISSING_STEPS)[number];
 export interface LibraryQuery {
+  readonly collection_scope?: "collected" | "all";
   readonly has_primary_pdf?: boolean | null;
   readonly needs_metadata?: boolean;
   readonly text_levels?: readonly TextLevel[];
@@ -322,6 +323,7 @@ export interface LibrarySearchRequest {
   readonly cursor: string | null;
 }
 export interface LiteratureSearchItem {
+  readonly collected?: boolean;
   readonly needs_metadata?: boolean;
   readonly draft_facts?: DraftFacts | null;
   readonly text_level?: TextLevel | null;
@@ -343,6 +345,7 @@ export interface LiteratureSearchItem {
   readonly needs_manual_pdf: boolean;
 }
 export interface LibrarySearchPage {
+  readonly status_updating?: true;
   readonly tag_backfill_pending?: number;
   /** Present when only the highest-ranked results are available to paginate. */
   readonly relevance_limit?: typeof RELEVANCE_RESULT_LIMIT;
@@ -577,6 +580,7 @@ export function parseLiteratureSearchItem(
         ? ["needs_metadata"]
         : []),
       "tags",
+      ...(Object.hasOwn(object(value, []), "collected") ? ["collected"] : []),
       ...(value &&
       typeof value === "object" &&
       Object.hasOwn(value, "draft_facts")
@@ -613,6 +617,9 @@ export function parseLiteratureSearchItem(
   )
     fail(["draft_facts"]);
   return Object.freeze({
+    ...(Object.hasOwn(r, "collected")
+      ? { collected: wireBoolean(r.collected) }
+      : {}),
     ...(Object.hasOwn(r, "needs_metadata")
       ? { needs_metadata: wireBoolean(r.needs_metadata) }
       : {}),
@@ -1212,6 +1219,7 @@ export function parseLibraryQuery(value: unknown): LibraryQuery {
       "folder",
       "recently_opened",
       ...[
+        "collection_scope",
         "has_primary_pdf",
         "needs_metadata",
         "text_levels",
@@ -1233,6 +1241,15 @@ export function parseLibraryQuery(value: unknown): LibraryQuery {
   if ([from, to].some((year) => year !== null && (year < 1 || year > 9999)))
     fail([]);
   return Object.freeze({
+    ...(Object.hasOwn(record, "collection_scope")
+      ? {
+          collection_scope: enumeration(
+            record.collection_scope,
+            ["collected", "all"] as const,
+            ["collection_scope"],
+          ),
+        }
+      : {}),
     ...(Object.hasOwn(record, "needs_metadata")
       ? { needs_metadata: wireBoolean(record.needs_metadata) }
       : {}),
@@ -3752,6 +3769,7 @@ export async function parseLiteratureDetail(
         ? ["needs_metadata"]
         : []),
       "intake_batches",
+      ...(Object.hasOwn(object(value, []), "collected") ? ["collected"] : []),
       ...(value &&
       typeof value === "object" &&
       Object.hasOwn(value, "draft_facts")
@@ -3783,6 +3801,7 @@ export async function parseLiteratureDetail(
     [],
   );
   const item = parseLiteratureSearchItem({
+    ...(Object.hasOwn(r, "collected") ? { collected: r.collected } : {}),
     ...(Object.hasOwn(r, "needs_metadata")
       ? { needs_metadata: r.needs_metadata }
       : {}),

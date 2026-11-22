@@ -29,7 +29,7 @@ export class ArchiveReferenceService {
     private readonly database: SqliteWorker,
     private readonly annotations: SqliteAnnotationStorage,
   ) {}
-  async build(value: unknown, signal?: AbortSignal) {
+  async build(value: unknown, signal?: AbortSignal, explicit = false) {
     const r = annotationRecord(value, [
       "literature_id",
       "document_version_id",
@@ -42,6 +42,7 @@ export class ArchiveReferenceService {
       !/^[a-f0-9]{64}$/u.test(r.annotation_id)
     )
       throw new ArchiveReferenceError("archive-reference-invalid");
+    if (explicit) await this.database.collectLiteratures([source], signal);
     const snapshot = await this.database.documentVersion(document);
     if (
       !snapshot ||

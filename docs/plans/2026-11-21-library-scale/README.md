@@ -97,7 +97,7 @@ Owner 2026-11-21：
 | [01](01-scale-target-and-rules.md)  | 规模目标与原则写进需求与 ADR                 | 总设计师、Owner      | A1–A3                                  | Pending        |
 | [02](02-measurement-and-targets.md) | 实测、无写入基线、空间分布、性能目标         | 总设计师、Owner      | G-browser、G-quiet、G-lib；02.4 等 B11 | Pending        |
 | [03](03-task-detail.md)             | 运行中任务的详情不再每次整读来源记录（缺陷） | 后端；03.3 前端      | G-dispatch                             | Pending        |
-| [04](04-literature-states.md)       | 文献状态写入时维护                           | 后端                 | B1                                     | Pending        |
+| [04](04-literature-states.md)       | 文献状态写入时维护                           | 后端                 | B1                                     | 后端 Done（待部署） |
 | [05](05-counts-and-facets.md)       | 全库总数；工作集内的计数与分面               | 后端、前端           | B2；04                                 | Pending        |
 | [06](06-paging-and-sorting.md)      | 工作集内的翻页与排序；首页改为工作集入口     | 后端、前端           | B3                                     | Pending        |
 | [07](07-search-index.md)            | 搜索索引只处理变化                           | 后端                 | B4                                     | Done（待部署） |

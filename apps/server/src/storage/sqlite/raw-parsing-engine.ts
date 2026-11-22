@@ -1,3 +1,14 @@
+const {
+  beginCatalogWrite,
+  commitCatalogWrite,
+}: typeof import("./catalog-write.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./catalog-write.ts"
+      : "./catalog-write.js",
+    import.meta.url,
+  ).href
+);
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import type { RawParse, ArtifactRef } from "@sciretriever/contracts";
@@ -37,10 +48,10 @@ function one(db: DatabaseSync, sql: string, ...args: SQLInputValue[]) {
   return db.prepare(sql).get(...args) ?? null;
 }
 function transaction<T>(db: DatabaseSync, fn: () => T): T {
-  db.exec("BEGIN IMMEDIATE");
+  beginCatalogWrite(db);
   try {
     const result = fn();
-    db.exec("COMMIT");
+    commitCatalogWrite(db);
     return result;
   } catch (e) {
     db.exec("ROLLBACK");

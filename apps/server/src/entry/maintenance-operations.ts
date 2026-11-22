@@ -213,7 +213,7 @@ async function performMaintenance(
   }
   if (operation === "tags") return manageTags(app.tags, input, signal);
   if (operation === "archive-references")
-    return app.archiveReferences.build(input, signal);
+    return app.archiveReferences.build(input, signal, true);
   if (operation === "metadata-edit") {
     const result = await app.metadataFields.edit(input, signal);
     return {

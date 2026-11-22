@@ -342,6 +342,7 @@ it("saves page provenance, uses the existing metadata task, merges concurrent re
       job_id: expect.any(String),
     });
     const detail = await f.app.library.detail(a.literature_id);
+    expect(detail.collected).toBe(true);
     expect(detail.literature.metadata).toMatchObject({
       title: "Captured page title",
       abstract: "Provider abstract",

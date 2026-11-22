@@ -843,6 +843,8 @@ async function createApplicationOwned(
   let indexRefresh: IndexRefreshService | null = null;
   let walTimer: ReturnType<typeof setInterval> | undefined;
   let walCheck: Promise<void> | undefined;
+  let stateTimer: ReturnType<typeof setTimeout> | undefined;
+  let stateCheck: Promise<void> | undefined;
   const catalogPath =
     configuration.paths.catalog_path ?? join(home, "catalog.sqlite");
   const networkBudget = options.networkBudget ?? new NetworkBudgetCoordinator();
@@ -899,6 +901,10 @@ async function createApplicationOwned(
         async () => {
           clearInterval(walTimer);
           await walCheck;
+        },
+        async () => {
+          clearTimeout(stateTimer);
+          await stateCheck;
         },
         () => indexRefresh?.close(),
         () => retrievalIndex?.close(),
@@ -1654,6 +1660,34 @@ async function createApplicationOwned(
       maxTags: configuration.tags.max_per_literature,
       archiveProfile: configuration.parsing.archive_profile,
     });
+    await database.configureLibraryState(
+      configuration.tags.max_per_literature,
+      configuration.parsing.archive_profile,
+    );
+    const stateDatabase = database;
+    const scheduleState = (delay: number) => {
+      if (closing) return;
+      stateTimer = setTimeout(() => {
+        let delay = 5_000;
+        stateCheck = (async () => {
+          if (await stateDatabase.libraryStatePending()) {
+            const result = await stateDatabase.refreshLibraryState();
+            if (result.more) delay = 25;
+          }
+        })()
+          .catch(() =>
+            logger.warn("Library state refresh failed", {
+              code: "library-state-refresh-failed",
+            }),
+          )
+          .finally(() => {
+            stateCheck = undefined;
+            scheduleState(delay);
+          });
+      }, delay);
+      stateTimer.unref();
+    };
+    scheduleState(25);
     if (options.maintainWal) {
       const checkWal = indexDatabase.idleWalCheckpoint.bind(indexDatabase);
       walTimer = setInterval(() => {
@@ -1736,6 +1770,7 @@ async function createApplicationOwned(
         library,
         database,
         writes,
+        selectionWrites: database,
         max_concurrency: configuration.execution.max_concurrency,
         automatic_pdf_for_parsing: true,
         completion: completion ?? null,

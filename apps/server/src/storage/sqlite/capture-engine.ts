@@ -1,3 +1,14 @@
+const {
+  beginCatalogWrite,
+  commitCatalogWrite,
+}: typeof import("./catalog-write.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./catalog-write.ts"
+      : "./catalog-write.js",
+    import.meta.url,
+  ).href
+);
 import type { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import {
@@ -162,7 +173,7 @@ export function writeCapture(
   r: CaptureWrite,
   intake: typeof Intake,
 ) {
-  db.exec("BEGIN IMMEDIATE");
+  beginCatalogWrite(db);
   try {
     if (r.op === "ensure") {
       const old = db
@@ -359,7 +370,7 @@ export function writeCapture(
       }
     }
     const value = readCapture(db, r);
-    db.exec("COMMIT");
+    commitCatalogWrite(db);
     return value;
   } catch (error) {
     if (db.isTransaction) db.exec("ROLLBACK");

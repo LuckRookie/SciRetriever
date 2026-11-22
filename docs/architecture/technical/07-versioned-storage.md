@@ -203,11 +203,11 @@ Catalog 只为会改变未来自动目标选择的稳定缺失保存一张最小
 
 `LiteratureSearchItem`、`LibrarySearchPage`、`LiteratureAssetView`、`LiteratureDetail`、`LiteratureReferencePage` 和 `ReferenceDetail` 都在查询时由上述权威行、唯一关系、聚合值和稳定 artifact 引用临时组装。Catalog 不建立 search item、page、detail、asset view、missing step、引用数量、关系读取 DTO 或其它完整读取 DTO 投影表；这些对象没有独立 ID、provenance、revision 或写入操作。`LiteratureDetail` 必须在同一个 read-only SQLite snapshot 中读取 Literature/MetaLiterature、metadata binding、observations、资产关系、当前原始解析/校订稿/建档状态、其它版本与 Reference 数量，再使用已经提交的不可变 artifact 引用读取需要的结构化内容，不能把不同时间点的 current facts 拼成一个结果。
 
-文献库性能路径：`literature_intake` 仅物化最早关联观测时间这一可重建的排序键，事务触发器维护，UTC 规范化与未物化时的 `min(julianday(observed_at))` 一致，无观测为 null；不产生独立业务身份或人工编辑入口。状态缓存的 `library_state_revision` 与 `library_state_changes` 只保存失效提示，六态、missing_step 及其它状态字段仍由同一个 archiveStates/deriveCurrentState 推导，不保存第二份就绪事实。
+文献库性能路径：`literature_intake` 仅物化最早关联观测时间这一可重建的排序键，事务触发器维护，UTC 规范化与未物化时的 `min(julianday(observed_at))` 一致，无观测为 null；不产生独立业务身份或人工编辑入口。六态、missing_step 与“是否收进来”存在 `library_literature_states` 与 `library_collected`，有按状态、缺失步骤与收进来顺序的索引；取值仍由同一个 archiveStates/deriveCurrentState 推导。本代码的写入在事实事务提交前重算当次触及的文献；其他写入者（旧版本进程、直接 SQL）留下的 `library_state_changes` 与补充触发器记下的文献进入 `library_state_dirty`，由后台每批最多 256 篇改正。读取遇到尚未回填、已过期或待改正的文献，在同一快照里按篇推算，结果与存储一致。标签上限或建档方式改变时开启新一代后台重算，期间计数与列表带 `status_updating`。进程内不再保存整库状态。
 
-状态输入触发器在原事务中推进 revision，并按文献 ID 更新变化表的最近 revision；删除保留无外键 tombstone，供不同只读连接各自按水位消费，不在读取时删掉提示。资产和任务的反向关联有专用索引，单个触发器最多定位 32 篇；找不到归属或超过此数则只推进 full_revision。原始解析版本/当前指针可能经 pin 影响其它校订稿，保守全量失效；身份行更新也全量失效。完整表集合及映射由 schema.ts 维护，写入不扫描全库。
+状态输入触发器在原事务中推进 revision，并按文献 ID 更新变化表的最近 revision；删除保留无外键 tombstone，供不同只读连接各自按水位消费，不在读取时删掉提示。资产和任务的反向关联有专用索引，单个触发器最多定位 32 篇；找不到归属或超过此数时推进 full_revision，补充触发器仍把受影响的文献逐篇记入 `library_state_dirty`。原始解析版本/当前指针可能经 pin 影响其它校订稿，保守全量失效；身份行更新也全量失效。完整表集合及映射由 schema.ts 维护，写入不扫描全库。
 
-读取在同一快照中比较 catalog/schema 身份、标签上限、解析 profile 与版本水位。通常只读最近改变的至多 64 篇，再替换其派生值；更多篇、全量标记领先、未追踪的 revision 更新、身份或配置改变都退回全量。未追踪的计数器写入由 tracked_revision 守护提升全量标记。缓存先复制旧 Map，在候选 Map 中计算、移除已删除文献，最后一次 checkpoint 通过后才同时发布完整 Map 与水位；失败或取消保留原缓存。Map 的复制仍随缓存篇数增长，但不重读或重新推导未变化文献。冷连接仍需一次全量构建。已有 catalog 的转换必须显式离线执行，不在启动时自动迁移。
+已有 catalog 的转换必须显式执行，不在启动时自动迁移。
 
 `LiteratureReferencePage` 在同一 snapshot 中读取指定端点的权威 Reference、相关 Literature current facts 和每条边的 support count；`ReferenceDetail` 在同一 snapshot 中读取 Reference 两端和全部当前 support。正向和反向列表都查询 `literature_references`，不能物化 cited-by 副本。关系页面的固定排序、total 和 cursor 位置必须来自同一读取视图；后续页面可以看到后续提交的 current facts，但单页内部不能混合提交前后状态。
 

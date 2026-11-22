@@ -97,34 +97,6 @@ export function readDefaultTextFacts(
 /** Only result facts lack existing readiness triggers; immutable draft counts
  * and default changes already have revision hints. Keep this projection separate
  * from public fact validation so internal readiness does not require the counts. */
-export function readResultFactStamps(db: DatabaseSync): Map<string, string> {
-  const grouped = new Map<string, unknown[]>();
-  for (const row of db
-    .prepare(
-      `SELECT la.literature_id,a.asset_id,d.document_version_id AS document_version_id,
-    ${draftFactSql("citing_results", "d.document_version_id")} AS citing_results,
-    ${draftFactSql("unfound_citations", "d.document_version_id")} AS unfound_citations
-    FROM literature_assets la JOIN assets a ON a.asset_id=la.asset_id
-    JOIN document_versions d ON d.literature_id=la.literature_id AND d.source_asset_id=a.asset_id AND d.source_sha256=a.sha256
-    JOIN document_defaults dd ON dd.document_version_id=d.document_version_id
-    WHERE d.schema_version=3 AND a.media_type='application/pdf' AND la.role IN ('primary-pdf','supplementary-pdf')
-    ORDER BY la.literature_id,a.asset_id`,
-    )
-    .all()) {
-    const id = String(row.literature_id),
-      values = grouped.get(id) ?? [];
-    values.push([
-      row.asset_id,
-      row.document_version_id,
-      row.citing_results,
-      row.unfound_citations,
-    ]);
-    grouped.set(id, values);
-  }
-  return new Map(
-    [...grouped].map(([id, values]) => [id, JSON.stringify(values)]),
-  );
-}
 export function primaryDefaultTexts(rows: readonly DefaultTextFactsRow[]) {
   return new Map(
     rows

@@ -1,3 +1,14 @@
+const {
+  beginCatalogWrite,
+  commitCatalogWrite,
+}: typeof import("./catalog-write.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./catalog-write.ts"
+      : "./catalog-write.js",
+    import.meta.url,
+  ).href
+);
 import type * as StructureRules from "../../document/structure-extract.js";
 const { structureSatisfied }: typeof StructureRules = await import(
   new URL(
@@ -49,10 +60,12 @@ function fail(code: string): never {
   });
 }
 function tx<T>(db: DatabaseSync, write: boolean, fn: () => T): T {
-  db.exec(write ? "BEGIN IMMEDIATE" : "BEGIN");
+  if (write) beginCatalogWrite(db);
+  else db.exec("BEGIN");
   try {
     const r = fn();
-    db.exec("COMMIT");
+    if (write) commitCatalogWrite(db);
+    else db.exec("COMMIT");
     return r;
   } catch (e) {
     db.exec("ROLLBACK");

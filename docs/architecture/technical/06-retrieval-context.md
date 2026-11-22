@@ -129,6 +129,8 @@ CONTENT_READY
 
 **被撤回的文献**：任何 `LibraryQuery` 的结果、`total_count`、计数（2.1.8）、词频、引用关系的两端、发现原因与 `QuerySelector` 的展开都排除被撤回的文献，详情按不存在处理；字段不变，调用方不能选择包含它们。撤回的规则见[文献与材料 6.4.11](03-literature-materials.md#6411-撤回)。
 
+`collection_scope` 只接受 `collected | all`，区分收进来的文献与只被发现的文献（[ADR 0065](../decisions/0065-scale-rules.md) 第 2 节）。省略时：浏览列表（查询里没有 text、title、author、venue、publisher、identifiers、author_orcids、discovery_run_ids、intake_batch_ids）按 `collected` 处理，其余查询（搜索、按发现或入库批次查看）覆盖全部；`QuerySelector` 只按显式给出的值展开。每个 `LiteratureSearchItem` 带 `collected`。一篇被导入（`kind='import'` 的批次）、浏览时收藏、手动加标签、放进文件夹或快照、登记过打开阅读（工作台、CLI、MCP 的 `reading-open`）、请求全文或发起加工时，在同一事务里标为收进来，之后不撤销；独立查询页只读，它的打开阅读不算。
+
 `needs_metadata` 为 true 时，只匹配带“书目待补”标记的版本；为 false 时只匹配不带的；null 或省略时不筛选。省略时不进入规范化的查询，已有请求与 cursor 的字节不变。标记的含义见[文献与材料 8.4](03-literature-materials.md#84-书目待补)。
 
 #### 2.1.2 搜索请求与页面
@@ -460,6 +462,7 @@ LibraryCounts
   recently_opened: int            # 范围内最近 30 天打开过的版本数，最多计到 100
   with_primary_pdf: int           # 有主 PDF 的版本数，供快速筛选“有 PDF”；“仅元数据”为 total − with_primary_pdf
   full_text: FullTextCounts       # 见下文
+  status_updating?: true          # 标签上限或建档方式改变后，状态正在后台重算；重算完后省略
 
 FullTextCounts
   total: int                      # 范围内的论文数

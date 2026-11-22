@@ -4,7 +4,7 @@ import { expect, it } from "vitest";
 import { LITERATURE_STATUSES } from "@sciretriever/contracts";
 import { archiveFixture } from "./archive-fixture.js";
 import { archiveStates } from "../src/storage/sqlite/archive-engine.js";
-import { LibraryStateCache } from "../src/storage/sqlite/library-state-cache.js";
+import { LibraryStateCache } from "./legacy-library-state-cache.js";
 import { deriveCurrentState } from "../src/literature/state.js";
 import { LiteratureQueryService } from "../src/literature/query.js";
 import { SqliteWorker } from "../src/storage/sqlite/worker.js";
@@ -290,6 +290,39 @@ it(
       ).run(e.id, new Date().toISOString(), 1);
       expect(read()).toBe(stable);
       await check("reading-only");
+      const revised = deriveCurrentState(
+        archiveStates(db).get(e.id)!,
+        1,
+        "pipeline",
+      );
+      await e.app.writes.run(async () => {
+        await e.app.database.configureLibraryState(1, "pipeline");
+        expect((await query.counts({})).status_updating).toBe(true);
+        expect(
+          (await query.search({ query: { statuses: [revised.status] } })).items,
+        ).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              literature: expect.objectContaining({
+                literature_id: e.id,
+                status: revised.status,
+              }),
+              missing_step: revised.missing_step,
+            }),
+          ]),
+        );
+      });
+      while ((await e.app.database.refreshLibraryState()).more) {
+        // Each call commits one bounded portion of the new generation.
+      }
+      expect((await query.counts({})).status_updating).toBeUndefined();
+      expect(
+        db
+          .prepare(
+            "SELECT status,missing_step FROM library_literature_states WHERE literature_id=?",
+          )
+          .get(e.id),
+      ).toEqual(revised);
       // Exhaustion counts are intentionally queried live, outside the state cache.
       db.exec(
         "UPDATE literature_assets SET role='supplementary-pdf' WHERE role='primary-pdf'",

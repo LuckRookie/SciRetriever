@@ -173,6 +173,21 @@ function configurationHttpAdapter(
       : {}),
   });
   lifecycle?.bind(application, sources);
+  const updateLibraryState = async (
+    snapshot: Awaited<ReturnType<TypeScriptConfigurationOwner["read"]>>,
+  ) => {
+    const { configuration } = snapshot;
+    const defaultCatalog = join(owner.home, "catalog.sqlite");
+    if (
+      resolve(configuration.paths.catalog_path ?? defaultCatalog) ===
+      resolve(application.configuration.paths.catalog_path ?? defaultCatalog)
+    )
+      await application.database.configureLibraryState(
+        configuration.tags.max_per_literature,
+        configuration.parsing.archive_profile,
+      );
+    return snapshot;
+  };
   return {
     lifecycleFlushed: () => lifecycle?.flushed(),
     sourceOperation: (operation, value, signal) =>
@@ -188,9 +203,13 @@ function configurationHttpAdapter(
       application.configurationAcquisitionRoutes(snapshot, signal),
     diff: (payload, baseline, signal) => owner.diff(payload, baseline, signal),
     publish: (payload, baseline, sections, signal) =>
-      owner.publish(payload, baseline, sections, signal),
+      owner
+        .publish(payload, baseline, sections, signal)
+        .then(updateLibraryState),
     publishConfiguration: (configuration, baseline, sections, signal) =>
-      owner.publishConfiguration(configuration, baseline, sections, signal),
+      owner
+        .publishConfiguration(configuration, baseline, sections, signal)
+        .then(updateLibraryState),
     probe: async (request, signal) => {
       const probe = await ConfigurationProbeSession.create(owner, probeSeams);
       try {

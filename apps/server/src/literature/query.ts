@@ -93,6 +93,7 @@ export interface LibraryQueryRepository {
     readonly rows: readonly SearchSnapshotRow[];
     readonly total_count: number;
     readonly tag_backfill_pending?: number;
+    readonly status_updating?: true;
   }>;
   literatureDetailSnapshot(literatureId: string): Promise<{
     readonly detail: unknown;
@@ -200,6 +201,9 @@ export function queryFingerprint(query: LibraryQuery): string {
     author: contains(query.author),
     author_orcids: unique(query.author_orcids),
     discovery_run_ids: unique(query.discovery_run_ids),
+    ...(query.collection_scope === "collected"
+      ? { collection_scope: "collected" }
+      : {}),
     ...(query.intake_batch_ids?.length
       ? { intake_batch_ids: unique(query.intake_batch_ids) }
       : {}),
@@ -866,10 +870,25 @@ export class LiteratureQueryService {
   async search(
     value: unknown,
     signal?: AbortSignal,
-    mode: "page" | "selection" = "page",
+    mode: "page" | "browse" | "selection" = "page",
   ): Promise<LibrarySearchPage> {
     signal?.throwIfAborted();
-    const request = parseLibrarySearchRequest(value);
+    const parsed = parseLibrarySearchRequest(value);
+    const q = parsed.query;
+    const listing =
+      q.text === null &&
+      q.title === null &&
+      q.author === null &&
+      q.venue === null &&
+      q.publisher === null &&
+      !q.identifiers.length &&
+      !q.author_orcids.length &&
+      !q.discovery_run_ids.length &&
+      !q.intake_batch_ids.length;
+    const request =
+      mode === "browse" && listing && q.collection_scope === undefined
+        ? { ...parsed, query: { ...q, collection_scope: "collected" as const } }
+        : parsed;
     const after =
       request.cursor === null
         ? null
@@ -897,7 +916,7 @@ export class LiteratureQueryService {
     return Object.freeze({
       items: Object.freeze(page.map((row) => row.item)),
       total_count: result.total_count,
-      ...(mode === "page" &&
+      ...(mode !== "selection" &&
       request.sort === "relevance" &&
       result.total_count > RELEVANCE_RESULT_LIMIT
         ? { relevance_limit: RELEVANCE_RESULT_LIMIT }
@@ -905,6 +924,7 @@ export class LiteratureQueryService {
       ...(result.tag_backfill_pending === undefined
         ? {}
         : { tag_backfill_pending: result.tag_backfill_pending }),
+      ...(result.status_updating ? { status_updating: true as const } : {}),
       next_cursor:
         result.rows.length > request.limit && page.length
           ? encodePosition(
@@ -935,6 +955,7 @@ export class LiteratureQueryService {
       [],
       query.tags,
       query.folder ||
+        query.collection_scope === "collected" ||
         query.recently_opened ||
         query.intake_batch_ids?.length ||
         typeof query.has_primary_pdf === "boolean"

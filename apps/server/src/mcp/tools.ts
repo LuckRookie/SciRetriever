@@ -588,7 +588,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "search_library",
-    "Search existing literature with full LibraryQuery filters, sorting and pagination. A miss never starts discovery or PDF acquisition. The legacy text/limit/cursor form remains supported.",
+    "Search existing literature with full LibraryQuery filters, sorting and pagination. Listing defaults to collected papers. Use query.collection_scope='all' to list the entire library. Text search defaults to the entire library. A miss never starts discovery or PDF acquisition. The legacy text/limit/cursor form remains supported.",
     {
       type: "object",
       oneOf: [
