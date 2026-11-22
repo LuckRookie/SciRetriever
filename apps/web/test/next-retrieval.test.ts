@@ -606,10 +606,11 @@ it("opens the fixed hit after a new default is published and restores the query 
       .poll(() => w.page.locator("main").textContent(), { timeout: 20_000 })
       .toContain("不匹配");
     expect(await w.page.locator(".reading-article").count()).toBe(0);
-    const materialReads: unknown[] = [];
+    const materialReads: string[] = [];
     w.page.on("request", (request) => {
-      if (new URL(request.url()).pathname.endsWith("/query/material-bytes"))
-        materialReads.push(request.postDataJSON());
+      const path = new URL(request.url()).pathname;
+      if (path.startsWith("/api/v1/query/material-bytes"))
+        materialReads.push(path);
     });
     const pdfUrl = new URL(fixedUrl);
     pdfUrl.searchParams.set("reader", "pdf");
@@ -626,16 +627,13 @@ it("opens the fixed hit after a new default is published and restores the query 
       .locator('.reading-pdf-page[data-rendered="true"]')
       .first()
       .waitFor();
-    expect(materialReads).toEqual([
-      {
-        protocol_version: 1,
-        request: {
-          literature_id: w.env.parseRequest.literature_id,
-          asset_id: w.env.asset.asset_id,
-          asset_sha256: w.env.asset.sha256,
-        },
-      },
-    ]);
+    // Only the fixed material, by its content address (ranges of one GET route).
+    expect(materialReads.length).toBeGreaterThan(0);
+    expect(new Set(materialReads)).toEqual(
+      new Set([
+        `/api/v1/query/material-bytes/${w.env.parseRequest.literature_id}/${w.env.asset.asset_id}/${w.env.asset.sha256}`,
+      ]),
+    );
     expect(w.env.parseCalls).toBe(parseCallsAfterSetup);
   } finally {
     await w.close();

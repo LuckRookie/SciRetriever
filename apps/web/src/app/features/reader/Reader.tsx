@@ -1456,6 +1456,11 @@ export default function Reader() {
               id: "pdf",
               label: "下载 PDF",
               disabled: !pdfUrl,
+              // The checked file only (ADR 0065 section 6 rule 6): while the
+              // whole check runs in the background, the item says so.
+              ...(shown?.id === id && shown.kind === "pdf" && !pdfUrl && !issue
+                ? { description: "正在核对文件与记录，完成后可下载" }
+                : {}),
               onAction: () => {
                 const a = document.createElement("a");
                 a.href = pdfUrl;

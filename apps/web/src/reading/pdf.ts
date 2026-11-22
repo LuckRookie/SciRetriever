@@ -1,5 +1,6 @@
 import {
   getDocument,
+  PDFDataRangeTransport,
   PDFWorker,
   TextLayer,
   type PDFDocumentProxy,
@@ -20,6 +21,7 @@ import {
   readingLine,
 } from "./anchor.js";
 import { canon, indexText, locate, PLACE, rangeOf } from "./mark-locate.js";
+import { PDF_BLOCK, pdfProblem, type PdfSource } from "./pdf-bytes.js";
 import type { ReadingAnchor } from "./contract.js";
 
 type RenderedPage = {
@@ -34,6 +36,33 @@ type RenderedPage = {
   drawn?: boolean;
 };
 type Bitmap = { img: HTMLImageElement; url: string; bytes: number };
+/**
+ * PDF.js asks this for the ranges it needs; they come from the shared source,
+ * which downloads each block once. Nothing is handed over after `abort`.
+ */
+class SourceTransport extends PDFDataRangeTransport {
+  private closed = false;
+  constructor(
+    private readonly source: PdfSource,
+    private readonly arrived: () => void,
+  ) {
+    super(source.size, null);
+  }
+  override requestDataRange(begin: number, end: number) {
+    // A failed read stops the view through `source.checked`.
+    void this.source.read(begin, end).then(
+      (chunk) => {
+        if (this.closed) return;
+        this.arrived();
+        this.onDataRange(begin, chunk);
+      },
+      () => undefined,
+    );
+  }
+  override abort() {
+    this.closed = true;
+  }
+}
 /** Spec 5.3: a page that leaves the drawn range keeps a picture at most this scale. */
 const BITMAP_SCALE = 0.5,
   BITMAP_PAGES = 40,
@@ -49,7 +78,7 @@ export async function renderPdf(
   ctx: ReadingContext,
   frame: ReaderFrame,
   state: ReadingPosition,
-  bytes: Uint8Array<ArrayBuffer>,
+  source: PdfSource,
 ): Promise<void> {
   if (frame.pdfLocation) {
     state.page = frame.pdfLocation.page;
@@ -75,8 +104,24 @@ export async function renderPdf(
   const workerPort = new Worker("/reader/pdf.worker.mjs", { type: "module" });
   if (READER_PROBE) probeCount("workersStarted");
   const worker = PDFWorker.create({ port: workerPort });
+  // Checked earlier in this session: the whole file at once. Otherwise by
+  // ranges, the first page first; the rest and the check follow (spec 6.3).
+  const verified = source.verifiedCopy();
+  let firstData = !!verified;
   const loading = getDocument({
-    data: bytes.slice(),
+    ...(verified
+      ? { data: verified }
+      : {
+          range: new SourceTransport(source, () => {
+            if (firstData) return;
+            firstData = true;
+            frame.onLoadStep?.("parse");
+          }),
+          rangeChunkSize: PDF_BLOCK,
+          // The source fills in the rest itself, shared by every reader.
+          disableAutoFetch: true,
+          disableStream: true,
+        }),
     worker,
     enableXfa: false,
     cMapUrl: "/reader/cmaps/",
@@ -346,7 +391,28 @@ export async function renderPdf(
     });
   };
   ctx.signal.addEventListener("abort", dispose, { once: true });
+  // The whole check failed, a response did not match or a read broke: the
+  // PDF stops showing and its pages are released (ADR 0065 section 6 rule 6).
+  // It overrides what an earlier problem said (a password, a broken file).
+  let stopped = false;
+  source.checked.catch((error: unknown) => {
+    if (stopped || ctx.signal.aborted) return;
+    stopped = true;
+    const problem = pdfProblem(error),
+      retry = () => ctx.refresh();
+    if (frame.onIssue)
+      frame.onIssue(problem.message, retry, {
+        retained: problem.retained,
+        detail: problem.detail,
+      });
+    else readerProblem(frame, `${problem.message}${problem.retained}`, retry);
+    dispose();
+    // Its bytes are of no use now.
+    source.release();
+  });
   loading.onPassword = () => {
+    // The download it offers is the checked file: the check goes on.
+    source.complete();
     readerProblem(
       frame,
       "此 PDF 需要密码，当前未提供解密输入。可下载同一份已核验文件。",
@@ -358,6 +424,7 @@ export async function renderPdf(
     (event) => {
       event.preventDefault();
       if (closed || ctx.signal.aborted) return;
+      source.complete();
       readerProblem(
         frame,
         "PDF 阅读组件未能加载。可以重试，或下载同一份已核验文件。",
@@ -542,6 +609,8 @@ export async function renderPdf(
         height: base.height,
       });
       ctx.root.dataset.readingReady = "true";
+      // A page is on screen: the rest of the file and its check follow.
+      source.complete();
       if (firstPaint && n === state.page) {
         firstPaint = false;
         performance.measure("sciretriever-pdf-first-paint", {
@@ -1044,11 +1113,21 @@ export async function renderPdf(
       }
     };
   } catch {
-    if (!ctx.signal.aborted)
-      readerProblem(
-        frame,
-        "PDF 无法打开，文件读取、校验或渲染未完成。可下载同一份已核验文件。",
+    // A file PDF.js cannot open may be one that does not match its record:
+    // the whole check says which, and only a file that passed it is offered.
+    if (!ctx.signal.aborted && !stopped) {
+      source.complete();
+      void source.checked.then(
+        () => {
+          if (!ctx.signal.aborted && !stopped)
+            readerProblem(
+              frame,
+              "PDF 无法打开，文件读取或渲染未完成。可下载同一份已核验文件。",
+            );
+        },
+        () => undefined,
       );
+    }
     dispose();
   }
 }

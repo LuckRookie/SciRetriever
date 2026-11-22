@@ -370,7 +370,7 @@ it("shows the loading skeleton with its steps in order past 300 ms, and none whe
     let release!: () => void;
     const held = new Promise<void>((resolve) => (release = resolve));
     await w.page.route(
-      (url) => url.pathname === "/api/v1/query/material-bytes",
+      (url) => url.pathname.startsWith("/api/v1/query/material-bytes/"),
       async (route) => {
         await held;
         await route.continue().catch(() => undefined);
@@ -382,20 +382,20 @@ it("shows the loading skeleton with its steps in order past 300 ms, and none whe
       .locator('.reader-preparing-step[data-state="current"]')
       .getByText("下载 PDF")
       .waitFor();
-    // In the content area, with the title from the bibliography, the four steps and the bar.
+    // In the content area, with the title from the bibliography, the steps and the bar.
     expect(await skeleton.locator(".reader-preparing-title").innerText()).toBe(
       "Unparsed source",
     );
     expect(
       await skeleton.locator(".reader-preparing-step").allInnerTexts(),
-    ).toEqual(["下载 PDF", "校验", "解析", "排版"]);
+    ).toEqual(["下载 PDF", "解析", "排版"]);
     // The page header on the skeleton's sheet says what is being prepared (spec 6.3).
     expect(await skeleton.locator(".reader-page-header-view").innerText()).toBe(
       "PDF · 正在准备",
     );
     // Released slowly enough for each step to show.
-    await w.page.unroute(
-      (url) => url.pathname === "/api/v1/query/material-bytes",
+    await w.page.unroute((url) =>
+      url.pathname.startsWith("/api/v1/query/material-bytes/"),
     );
     release();
     await w.page
@@ -407,7 +407,7 @@ it("shows the loading skeleton with its steps in order past 300 ms, and none whe
       () => (window as unknown as { preparing: { seen: string[] } }).preparing,
     );
     // Each step shown in the order the loading went; at least the first and last.
-    const order = ["下载 PDF", "校验", "解析", "排版"];
+    const order = ["下载 PDF", "解析", "排版"];
     const seen = record.seen.map((s) =>
       order.findIndex((o) => s.startsWith(o)),
     );
@@ -748,7 +748,7 @@ it("does not let a late PDF response overwrite a newer full-text view", async ()
   let intercepted = false;
   try {
     await w.page.route(
-      (url) => url.pathname === "/api/v1/query/material-bytes",
+      (url) => url.pathname.startsWith("/api/v1/query/material-bytes/"),
       async (route) => {
         intercepted = true;
         await barrier;

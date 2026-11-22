@@ -126,7 +126,8 @@ function sampleSessions(literature: string) {
 /** Leaves one API response pending until the page closes: a loading state that stays put. */
 async function holdResponse(p: Page, path: string) {
   await p.route(
-    (url) => url.pathname === path,
+    // The PDF bytes are read by GET under the route's path (`/:literature/:asset/:sha256`).
+    (url) => url.pathname === path || url.pathname.startsWith(`${path}/`),
     async (request) => {
       await new Promise((resolve) => p.once("close", resolve));
       await request.abort().catch(() => undefined);

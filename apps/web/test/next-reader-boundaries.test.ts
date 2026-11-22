@@ -402,7 +402,7 @@ it("explains scan-only PDFs and refuses bytes whose immutable hash changed", asy
       .poll(() => w.page.locator(".reader-find").innerText())
       .toContain("没有自带的文字可以检索");
     await w.page.route(
-      (url) => url.pathname === "/api/v1/query/material-bytes",
+      (url) => url.pathname.startsWith("/api/v1/query/material-bytes/"),
       async (route) => {
         const response = await route.fetch();
         const bytes = await response.body();
@@ -416,7 +416,7 @@ it("explains scan-only PDFs and refuses bytes whose immutable hash changed", asy
         () => w.page.locator(".reader-surface .ui-error-notice").innerText(),
         { timeout: 20_000 },
       )
-      .toContain("PDF 完整性校验失败");
+      .toContain("文件与记录不一致");
     expect(await w.page.locator("canvas").count()).toBe(0);
     expect(w.errors).toEqual([]);
   } finally {

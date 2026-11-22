@@ -7,7 +7,8 @@ import {
 import { parsePageRegion, type PageRegion } from "@sciretriever/contracts";
 import { Button } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
-import { readDocument, readPdfBytes } from "../../../reading/transport.js";
+import { readPdfBytes } from "../../../reading/pdf-bytes.js";
+import { readDocument } from "../../../reading/transport.js";
 import { errorMessage } from "../../strings.js";
 /** Disposable PDF.js crop from the verified original PDF; never server screenshots or model calls. */
 export function RegionPreview({

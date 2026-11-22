@@ -409,7 +409,7 @@ it("reads, searches, follows references and downloads through the query-only pag
         .count(),
     ).toBe(0);
     await page.keyboard.press("Escape");
-    await page.route("**/api/v1/query/material-bytes", async (route) => {
+    await page.route("**/api/v1/query/material-bytes/**", async (route) => {
       const corrupted = Buffer.from(expectedPdf);
       corrupted[corrupted.length - 1] = corrupted[corrupted.length - 1]! ^ 1;
       await route.fulfill({
@@ -428,7 +428,7 @@ it("reads, searches, follows references and downloads through the query-only pag
       .poll(() => page.getByRole("alert").allTextContents(), {
         timeout: 20_000,
       })
-      .toContainEqual(expect.stringContaining("完整性校验失败"));
+      .toContainEqual(expect.stringContaining("文件与记录不一致"));
     expect(await page.locator(".reading-pdf-page").count()).toBe(0);
     await page.getByRole("button", { name: "更多", exact: true }).click();
     expect(
@@ -437,7 +437,7 @@ it("reads, searches, follows references and downloads through the query-only pag
         .getAttribute("aria-disabled"),
     ).toBe("true");
     await page.keyboard.press("Escape");
-    await page.unroute("**/api/v1/query/material-bytes");
+    await page.unroute("**/api/v1/query/material-bytes/**");
     // The references are in the side panel's “关联” tab (spec 1.4, 3.7).
     await readerPanel(page, "关联");
     await page.getByRole("button", { name: "引用", exact: true }).click();
@@ -527,9 +527,14 @@ it("reads, searches, follows references and downloads through the query-only pag
         "/api/v1/query/read",
         "/api/v1/query/references",
         "/api/v1/query/reference",
-        "/api/v1/query/material-bytes",
       ]),
     );
+    // The PDF is read by its content address (`/:literature/:asset/:sha256`).
+    expect(
+      apiRequests.some((request) =>
+        request.pathname.startsWith("/api/v1/query/material-bytes/"),
+      ),
+    ).toBe(true);
     expect(failures).toEqual([]);
   } finally {
     await browser?.close();

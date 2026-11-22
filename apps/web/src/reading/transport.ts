@@ -16,7 +16,8 @@ import {
 } from "@sciretriever/contracts";
 import type { ReadingContext } from "./contract.js";
 import type { FixedSource } from "./source.js";
-import { READER_PROBE, probeCountKey } from "./probe.js";
+import { prefetchPdf as prefetchPdfStart } from "./pdf-bytes.js";
+import { remember } from "./session-cache.js";
 
 const operations: Record<DocumentReadOperation, string> = {
   default: "document-default",
@@ -31,8 +32,8 @@ const operations: Record<DocumentReadOperation, string> = {
 };
 /**
  * Session memory (spec 5.1), cleared when the page closes. A document version
- * never changes, so its reads are kept by version; verified PDF bytes are kept
- * by asset SHA-256. Both evict the least recently used entry first.
+ * never changes, so its reads are kept by version, least recently used out
+ * first; verified PDF bytes are kept by `pdf-bytes.ts`.
  */
 const versionReads = new Map<string, { value: unknown; size: number }>();
 let versionReadSize = 0;
@@ -44,29 +45,6 @@ const versionBound = new Set<DocumentReadOperation>([
   "resources",
   "slice",
 ]);
-function remember<V>(
-  cache: Map<string, { value: V; size: number }>,
-  key: string,
-  value: V,
-  size: number,
-  limit: number,
-  used: number,
-): number {
-  if (size > limit) return used;
-  const previous = cache.get(key);
-  if (previous) {
-    cache.delete(key);
-    used -= previous.size;
-  }
-  cache.set(key, { value, size });
-  used += size;
-  for (const [old, entry] of cache) {
-    if (used <= limit) break;
-    cache.delete(old);
-    used -= entry.size;
-  }
-  return used;
-}
 export async function readDocument<K extends DocumentReadOperation>(
   ctx: ReadingContext,
   kind: K,
@@ -108,16 +86,10 @@ export function forgetDocumentRead<K extends DocumentReadOperation>(
   versionReads.delete(key);
   versionReadSize -= entry.size;
 }
-const pdfBytes = new Map<
-  string,
-  { value: Uint8Array<ArrayBuffer>; size: number }
->();
-let pdfBytesSize = 0;
-const PDF_BYTES_LIMIT = 256 * 1024 * 1024;
 /**
- * `prefetchPdf`: the PDF view is wanted, so its bytes start downloading as
- * soon as the material is known, alongside the text version's reads (cold
- * open); the engine's own read joins that download.
+ * `prefetchPdf`: the PDF view is wanted, so the parts of it PDF.js reads
+ * first start downloading as soon as the material is known, alongside the
+ * text version's reads (cold open); the engine's own reads join them.
  */
 export async function resolveReadingSources(
   ctx: ReadingContext,
@@ -166,7 +138,7 @@ export async function resolveReadingSources(
       if (!expectedHash || material.asset_sha256 !== expectedHash)
         throw new Error("固定 PDF 与来源 hash 不匹配");
       if (prefetchPdf && material.literature_id === id)
-        void readPdfBytes(ctx, material).catch(() => undefined);
+        prefetchPdfStart(ctx, material);
     }
   }
   if (material && material.literature_id !== id)
@@ -197,131 +169,6 @@ export async function resolveReadingSources(
   }
   return { material, document };
 }
-type PdfProgress = (
-  step: "download" | "verify",
-  done: number,
-  total: number,
-) => void;
-/** Downloads under way, by SHA-256: a second reader joins the first. */
-const pdfInFlight = new Map<
-  string,
-  { bytes: Promise<Uint8Array<ArrayBuffer>>; listeners: Set<PdfProgress> }
->();
-/** `progress` hears the bytes as they arrive, then the start of the hash check (spec 6.3). */
-export async function readPdfBytes(
-  ctx: ReadingContext,
-  material: DocumentMaterialRef,
-  progress?: PdfProgress,
-): Promise<Uint8Array<ArrayBuffer>> {
-  if (
-    material.media_type !== "application/pdf" ||
-    material.byte_size < 1 ||
-    material.byte_size > 256 * 1024 * 1024
-  )
-    throw new Error("PDF 超过受控读取上限或材料类型不符");
-  // Callers may hand their copy to PDF.js, which detaches it; the cache keeps its own.
-  const cached = pdfBytes.get(material.asset_sha256);
-  if (cached && cached.value.byteLength === material.byte_size) {
-    pdfBytes.delete(material.asset_sha256);
-    pdfBytes.set(material.asset_sha256, cached);
-    return cached.value.slice();
-  }
-  const pending = pdfInFlight.get(material.asset_sha256);
-  if (pending) {
-    if (progress) pending.listeners.add(progress);
-    try {
-      const bytes = await pending.bytes;
-      ctx.signal.throwIfAborted();
-      return bytes.slice();
-    } catch (error) {
-      // The other reader gave up (it was cancelled): read it ourselves.
-      if (ctx.signal.aborted) throw error;
-    } finally {
-      if (progress) pending.listeners.delete(progress);
-    }
-  }
-  const listeners = new Set<PdfProgress>(progress ? [progress] : []);
-  const bytes = downloadPdf(ctx, material, (step, done, total) => {
-    for (const listener of listeners) listener(step, done, total);
-  });
-  const entry = { bytes, listeners };
-  pdfInFlight.set(material.asset_sha256, entry);
-  try {
-    return (await bytes).slice();
-  } finally {
-    if (pdfInFlight.get(material.asset_sha256) === entry)
-      pdfInFlight.delete(material.asset_sha256);
-  }
-}
-/** One request for the PDF, checked against its size and SHA-256, then cached. */
-async function downloadPdf(
-  ctx: ReadingContext,
-  material: DocumentMaterialRef,
-  progress: PdfProgress,
-): Promise<Uint8Array<ArrayBuffer>> {
-  if (READER_PROBE) probeCountKey("pdfRequests", material.asset_sha256);
-  const response = await ctx.api.fetch("/api/v1/query/material-bytes", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      protocol_version: 1,
-      request: {
-        literature_id: material.literature_id,
-        asset_id: material.asset_id,
-        asset_sha256: material.asset_sha256,
-      },
-    }),
-    signal: ctx.signal,
-  });
-  if (
-    !response.ok ||
-    response.headers.get("Content-Type")?.split(";")[0] !== "application/pdf" ||
-    response.headers.get("x-sciretriever-asset-id") !== material.asset_id ||
-    response.headers.get("x-sciretriever-asset-sha256") !==
-      material.asset_sha256 ||
-    response.headers.get("x-sciretriever-byte-size") !==
-      String(material.byte_size)
-  )
-    throw new Error("PDF 响应与固定材料不一致");
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error("PDF 响应无字节");
-  const bytes = new Uint8Array(material.byte_size);
-  let offset = 0;
-  try {
-    for (;;) {
-      ctx.signal.throwIfAborted();
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      if (offset + chunk.value.byteLength > bytes.length)
-        throw new Error("PDF 响应超过声明大小");
-      bytes.set(chunk.value, offset);
-      offset += chunk.value.byteLength;
-      progress("download", offset, bytes.length);
-    }
-  } finally {
-    await reader.cancel();
-    reader.releaseLock();
-  }
-  if (READER_PROBE && offset === bytes.length)
-    probeCountKey("pdfHashes", material.asset_sha256);
-  progress("verify", 0, 1);
-  if (
-    offset !== bytes.length ||
-    (await sha256(bytes)) !== material.asset_sha256
-  )
-    throw new Error("PDF 完整性校验失败");
-  ctx.signal.throwIfAborted();
-  pdfBytesSize = remember(
-    pdfBytes,
-    material.asset_sha256,
-    bytes,
-    bytes.byteLength,
-    PDF_BYTES_LIMIT,
-    pdfBytesSize,
-  );
-  return bytes;
-}
-
 /** One whole picture of a fixed document version, checked against its header and hash. */
 export async function readResourceBytes(
   ctx: ReadingContext,

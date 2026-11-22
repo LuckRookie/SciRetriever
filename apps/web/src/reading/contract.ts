@@ -83,7 +83,7 @@ export interface ReaderResourceEntry {
 }
 /** One step of preparing a view (spec 6.3), as the loading actually goes. */
 export interface LoadStep {
-  readonly id: "download" | "verify" | "parse" | "read" | "layout";
+  readonly id: "download" | "parse" | "read" | "layout";
   readonly label: string;
   readonly state: "done" | "current" | "waiting";
   /** Counted progress within the step, e.g. bytes or pages. */

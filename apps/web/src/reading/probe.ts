@@ -11,9 +11,14 @@ export const READER_PROBE =
 export interface ReaderProbeCounts {
   /** Engine mounts, by reader mode. */
   engines: Record<string, number>;
-  /** PDF byte requests and SHA-256 checks, by asset SHA-256. */
+  /**
+   * PDF downloads (one per asset however many ranges it takes) and SHA-256
+   * checks, by asset SHA-256; with the range requests and bytes they took.
+   */
   pdfRequests: Record<string, number>;
   pdfHashes: Record<string, number>;
+  pdfRanges: Record<string, number>;
+  pdfBytes: Record<string, number>;
   workersStarted: number;
   workersTerminated: number;
   workersPeak: number;
@@ -39,7 +44,7 @@ type Counter =
   | "canvasesReleased"
   | "objectUrlsCreated"
   | "objectUrlsRevoked";
-type Keyed = "engines" | "pdfRequests" | "pdfHashes";
+type Keyed = "engines" | "pdfRequests" | "pdfHashes" | "pdfRanges" | "pdfBytes";
 
 function counts(): ReaderProbeCounts {
   const scope = globalThis as { __sciretrieverReaderProbe?: ReaderProbeCounts };
@@ -47,6 +52,8 @@ function counts(): ReaderProbeCounts {
     engines: {},
     pdfRequests: {},
     pdfHashes: {},
+    pdfRanges: {},
+    pdfBytes: {},
     workersStarted: 0,
     workersTerminated: 0,
     workersPeak: 0,
@@ -80,9 +87,12 @@ export function probeCount(name: Counter) {
   );
 }
 export function probeCountKey(name: Keyed, key: string) {
+  probeAddKey(name, key, 1);
+}
+export function probeAddKey(name: Keyed, key: string, amount: number) {
   if (!READER_PROBE) return;
   const map = counts()[name];
-  map[key] = (map[key] ?? 0) + 1;
+  map[key] = (map[key] ?? 0) + amount;
 }
 /** One bitmap kept (`bytes` > 0) or released (`bytes` < 0); `paper` is the owner's totals after it. */
 export function probeBitmap(

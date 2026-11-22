@@ -29,7 +29,7 @@ import {
   rememberReading,
   type ReadingState,
 } from "../../../reading/state.js";
-import { readPdfBytes } from "../../../reading/transport.js";
+import { openPdfSource } from "../../../reading/pdf-bytes.js";
 import { archiveJsonStream, archiveQuery, rows } from "../../data/archive.js";
 import type { ApiClient } from "../../data/api.js";
 import { record } from "../../data/wire.js";
@@ -78,10 +78,13 @@ export interface ViewUi {
   /** The sheet's page header the reader page fills (spec 1.2). */
   header: HTMLElement | null;
 }
+/**
+ * The PDF's whole-file check runs in the background once its first screen
+ * shows (ADR 0065 section 6 rule 6), so it is not a step here.
+ */
 const STEPS: Record<ViewKind, readonly Pick<LoadStep, "id" | "label">[]> = {
   pdf: [
     { id: "download", label: "下载 PDF" },
-    { id: "verify", label: "校验" },
     { id: "parse", label: "解析" },
     { id: "layout", label: "排版" },
   ],
@@ -772,41 +775,32 @@ function build(
           update(view, { empty: "pdf" });
           return;
         }
-        // The engine's code loads while the bytes download.
+        // The engine's code loads while the first bytes download.
         const engineCode = import("../../../reading/pdf.js");
         engineCode.catch(() => undefined);
-        let shownBytes = 0;
         const started = performance.now(),
-          bytes = await readPdfBytes(
-            ctx,
-            material.material,
-            (at, done, total) => {
-              // A step a frame is enough: report at most every 2% of the file.
-              if (
-                at === "download" &&
-                done < total &&
-                done - shownBytes < total / 50
-              )
-                return;
-              shownBytes = done;
-              step(at, at === "download" ? { done, total } : undefined);
-            },
-          );
-        performance.measure("sciretriever-pdf-read-verify", {
-          start: started,
-          end: performance.now(),
-        });
-        controller.signal.throwIfAborted();
-        const url = URL.createObjectURL(
-          new Blob([bytes], { type: "application/pdf" }),
+          source = openPdfSource(ctx, material.material);
+        // “下载 PDF” is offered once the whole file passed its check.
+        void source.checked.then(
+          () => {
+            const file = source.file();
+            if (controller.signal.aborted || !file) return;
+            performance.measure("sciretriever-pdf-verified", {
+              start: started,
+              end: performance.now(),
+            });
+            const url = URL.createObjectURL(file);
+            urls.add(url);
+            if (READER_PROBE) probeCount("objectUrlsCreated");
+            update(view, { pdfUrl: url });
+          },
+          () => undefined,
         );
-        urls.add(url);
-        if (READER_PROBE) probeCount("objectUrlsCreated");
-        update(view, { pdfUrl: url });
-        step("parse");
+        // Checked earlier in this session: nothing to download.
+        if (source.verified) step("parse");
         const pdfEngine = await engineCode;
         controller.signal.throwIfAborted();
-        await pdfEngine.renderPdf(ctx, frame, position, bytes);
+        await pdfEngine.renderPdf(ctx, frame, position, source);
       } else {
         if (!material.document) {
           update(view, { empty: "text" });
