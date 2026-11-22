@@ -311,6 +311,7 @@ Agent 与人使用同一套合同和同一份数据，没有专供 Agent 的副�
 | 读文件夹               | 侧栏目录树、阅读页信息栏                               | `folders list`、`folders delete-preview --request FILE`                                 | `folders_query`                   | `POST /api/v1/query/folders`                                     |
 | 写文件夹               | 新建、改名、拖动、删除（先预览）、加入与移出、撤销加入 | `folders create\|rename\|move\|delete\|add\|remove --request FILE`                      | `folders_manage`                  | `POST /api/v1/maintenance/folders`                               |
 | 记录打开               | 打开阅读页时                                           | `literature open ID`                                                                    | `reading_open`                    | `POST /api/v1/maintenance/reading-open`                          |
+| 收进来                 | 搜索结果里只被发现的行的“收进来”，选择栏“更多”的“收进来 n” | `literature collect --request FILE`                                                     | `collect_literatures`             | `POST /api/v1/maintenance/library-collect`                       |
 | 按文件夹或最近阅读筛选 | 文献库                                                 | `literature search` 的 `LibraryQuery`                                                   | 文献库查询工具的 `LibraryQuery`   | 文献库查询                                                       |
 | 读批注                 | 阅读器与批注栏                                         | `marks list\|export --request FILE`                                                     | `marks_query`                     | `POST /api/v1/query/marks`                                       |
 | 写批注                 | 阅读器中高亮、框选、改色、写笔记、删除与撤销           | `marks create\|update\|delete\|restore --request FILE`                                  | `marks_manage`                    | `POST /api/v1/maintenance/marks`                                 |
@@ -318,6 +319,7 @@ Agent 与人使用同一套合同和同一份数据，没有专供 Agent 的副�
 | 导出分组               | 侧栏“文件夹”一组的菜单                                 | `folders export --request FILE`                                                         | `folders_query` 的 `export`       | `POST /api/v1/query/folders-export`                              |
 
 - CLI 与 HTTP 的 request 就是 `FolderOperation` / `MarkOperation` 的 `request`；MCP 工具参数为 `{operation, request}`。HTTP 封套与认证见[产品接口 2.4](01-product-interface.md#24-当前只读-api)。
+- “收进来”的 request 是 `{selector}`：`selector` 为 `literatures`（一篇或多篇 ID）或 `QuerySelector`（展开全部命中）。它登记一次选用，规则与 [查询 2.1.1](06-retrieval-context.md#211-libraryquery) 的选用相同：同一事务写入收进来与第一次选用时间，已经收进来的不改时间，之后不撤销，也不提供取消。结果为 `{target_count, newly_collected}`，`target_count` 含已经收进来的篇数。错误码为 `invalid-request`、`literature-not-found`、`operation-cancelled`。
 - `marks export` 不带 `--json` 时直接打印导出的文档，可以重定向成文件。
 - CLI 的读操作使用只读的 QueryApplication，写操作使用完整 Application。
 - Web 的操作步骤见 [Web 指南](../../guides/web-workbench.md#批注)；Agent 的调用示例见 [Agent 接口指南](../../guides/agent-interface.md#库组织与阅读记录)。CLI 的 `--help` 当前没有列出 `folders` 与 `literature open`。

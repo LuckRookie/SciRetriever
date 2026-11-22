@@ -129,7 +129,9 @@ CONTENT_READY
 
 **被撤回的文献**：任何 `LibraryQuery` 的结果、`total_count`、计数（2.1.8）、词频、引用关系的两端、发现原因与 `QuerySelector` 的展开都排除被撤回的文献，详情按不存在处理；字段不变，调用方不能选择包含它们。撤回的规则见[文献与材料 6.4.11](03-literature-materials.md#6411-撤回)。
 
-`collection_scope` 只接受 `collected | all`，区分收进来的文献与只被发现的文献（[ADR 0065](../decisions/0065-scale-rules.md) 第 2 节）。省略时：浏览列表（查询里没有 text、title、author、venue、publisher、identifiers、author_orcids、discovery_run_ids、intake_batch_ids）按 `collected` 处理，其余查询（搜索、按发现或入库批次查看）覆盖全部；`QuerySelector` 只按显式给出的值展开。每个 `LiteratureSearchItem` 带 `collected`。一篇被导入（`kind='import'` 的批次）、浏览时收藏、手动加标签、放进文件夹或快照、登记过打开阅读（工作台、CLI、MCP 的 `reading-open`）、请求全文或发起加工时，在同一事务里标为收进来，之后不撤销；独立查询页只读，它的打开阅读不算。
+`collection_scope` 只接受 `collected | all`，区分收进来的文献与只被发现的文献（[ADR 0065](../decisions/0065-scale-rules.md) 第 2 节）。省略时：浏览列表（查询里没有 text、title、author、venue、publisher、identifiers、author_orcids、discovery_run_ids、intake_batch_ids）按 `collected` 处理，其余查询（搜索、按发现或入库批次查看）覆盖全部；`QuerySelector` 只按显式给出的值展开。每个 `LiteratureSearchItem` 带 `collected`。一篇被导入（`kind='import'` 的批次）、浏览时收藏、手动加标签、放进文件夹或快照、登记过打开阅读（工作台、CLI、MCP 的 `reading-open`）、请求全文或发起加工时，在同一事务里标为收进来，之后不撤销；独立查询页只读，它的打开阅读不算。“收进来”操作见[用户组织 7](09-user-organization.md#7-三个入口)。
+
+只被发现的项（`collected=false`）带 `discovery_origin`：发现过它的主题搜索或引用扩展的入库批次里，`created_at` 最晚的一个（相同时按批次 ID），`kind` 是该批次的发现类型，界面用 `intake_batch_id` 打开那次的发现批次。没有任何发现批次的（例如“早期入库”里缺选用证据的历史文献）为 `null`，不推测来历。收进来的项不带这个字段。取值在同一读快照里按页批量查，耗时与本页项数和每篇被发现的次数有关，与总篇数无关；不另建投影。
 
 `needs_metadata` 为 true 时，只匹配带“书目待补”标记的版本；为 false 时只匹配不带的；null 或省略时不筛选。省略时不进入规范化的查询，已有请求与 cursor 的字节不变。标记的含义见[文献与材料 8.4](03-literature-materials.md#84-书目待补)。
 
@@ -158,6 +160,12 @@ LiteratureSearchItem
   metadata_sha256: Sha256
   missing_step: LiteratureMissingStep | None
   needs_manual_pdf: bool
+  collected: bool
+  discovery_origin?: DiscoveryOrigin | None   # 只在 collected=false 时出现
+
+DiscoveryOrigin
+  kind: "topic" | "citation"
+  intake_batch_id: IntakeBatchId
 
 LibrarySearchPage
   items: tuple[LiteratureSearchItem, ...]
