@@ -374,6 +374,7 @@ let metadataWrite:
   | undefined;
 let observedDataVersion: number | null = null;
 let openedCatalogIdentity: string | null = null;
+const CATALOG_BUSY_TIMEOUT_SQL = "PRAGMA busy_timeout=5000";
 function catalogIdentity(): string {
   if (data.path === ":memory:") return "memory";
   const stat = statSync(data.path);
@@ -452,7 +453,7 @@ function initializeConnection(): Dynamic {
     return 1;
   });
   db.exec("PRAGMA foreign_keys = ON");
-  db.exec("PRAGMA busy_timeout = 5000");
+  db.exec(CATALOG_BUSY_TIMEOUT_SQL);
   libraryState = new libraryStateModule.StoredLibraryState(
     db,
     data,
@@ -2408,6 +2409,33 @@ function transaction(operation: Dynamic): Dynamic {
   } catch (error) {
     if (db.isTransaction) db.exec("ROLLBACK");
     throw error;
+  }
+}
+function refreshLibraryState(
+  budget: Extract<SqliteCommand, { kind: "library_state_refresh" }>["budget"],
+) {
+  if (!budget) return transaction(() => libraryState.refreshBatch());
+  const retry = { rebuilt: 0, repaired: 0, more: true };
+  const foregroundWaiting = new Int32Array(budget.foregroundWaiting);
+  const shouldYield = () =>
+    Atomics.load(foregroundWaiting, 0) !== 0 ||
+    performance.now() >= budget.deadline;
+  if (shouldYield()) return retry;
+  // A writer outside the admission protocol may own SQLite's lock.
+  db.exec("PRAGMA busy_timeout=0");
+  try {
+    return transaction(() => libraryState.refreshBatch(shouldYield));
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "errcode" in error &&
+      typeof error.errcode === "number" &&
+      (error.errcode & 0xff) === 5 // SQLITE_BUSY
+    )
+      return retry;
+    throw error;
+  } finally {
+    db.exec(CATALOG_BUSY_TIMEOUT_SQL);
   }
 }
 function readTransaction(operation: Dynamic): Dynamic {
@@ -5862,7 +5890,7 @@ port.on("message", (message: WorkerMessage) => {
         value = readTransaction(() => libraryState.maintenancePending());
         break;
       case "library_state_refresh":
-        value = transaction(() => libraryState.refreshBatch());
+        value = refreshLibraryState(message.command.budget);
         break;
       case "library_collect": {
         const { ids } = message.command;

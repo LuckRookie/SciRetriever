@@ -479,6 +479,107 @@ function oldFacts(db: DatabaseSync) {
   ).run(id(1010), id(1), id(10), id(10));
 }
 
+it("commits only a completed slice at the deadline and resumes all projections", async () => {
+  await catalogFixture(async (home, interrupted) => {
+    const uninterrupted = join(home, "uninterrupted.sqlite");
+    for (const path of [interrupted, uninterrupted]) {
+      const db = new DatabaseSync(path);
+      try {
+        initializeCurrentCatalog(db, at);
+        db.exec("BEGIN IMMEDIATE; PRAGMA defer_foreign_keys=ON");
+        db.prepare(
+          "UPDATE catalog_schema_additions SET backfill_step=0 WHERE name=?",
+        ).run(LIBRARY_SCALE_ADDITION.name);
+        oldFacts(db);
+        db.prepare(
+          "INSERT OR IGNORE INTO folder_members(folder_id,literature_id,added_at,actor) SELECT 'f',literature_id,?,'local:cli' FROM literatures LIMIT 90",
+        ).run(at);
+        db.exec("DELETE FROM library_ordered_members; COMMIT");
+      } finally {
+        db.close();
+      }
+    }
+
+    const openState = (path: string) => {
+      const db = new DatabaseSync(path);
+      const state = new StoredLibraryState(db, settings);
+      state.registerWrites();
+      const batch = (deadline?: number) => {
+        beginCatalogWrite(db);
+        const result = state.refreshBatch(
+          deadline === undefined
+            ? undefined
+            : () => performance.now() >= deadline,
+        );
+        commitCatalogWrite(db);
+        return result;
+      };
+      return { db, batch };
+    };
+    const first = openState(interrupted);
+    try {
+      // The elapsed deadline admits one indivisible slice, then forces a commit.
+      expect(first.batch(performance.now())).toMatchObject({
+        rebuilt: 32,
+        more: true,
+      });
+      expect(
+        first.db.prepare("SELECT after_id FROM library_state_progress").get(),
+      ).toEqual({ after_id: id(32) });
+      const registry = first.db
+        .prepare(
+          "SELECT backfill_step,backfill_cursor_json FROM catalog_schema_additions",
+        )
+        .get()!;
+      expect(registry.backfill_step).toBe(0);
+      expect(
+        JSON.parse(String(registry.backfill_cursor_json)).state.after_id,
+      ).toBe(id(32));
+    } finally {
+      first.db.close();
+    }
+    const resumed = openState(interrupted);
+    const expected = openState(uninterrupted);
+    try {
+      while (resumed.batch(performance.now()).more) {
+        // Each phase yields at the first completed slice.
+      }
+      while (expected.batch().more) {
+        // Complete the same input with the original row budget.
+      }
+      for (const table of [
+        "library_literature_states",
+        "library_collected",
+        "library_collection_times",
+        "library_count_totals",
+        "library_count_contributions",
+        "library_ordered_members",
+        "library_discovery_invalid",
+        "library_discovery_replaced",
+        "catalog_schema_additions",
+      ]) {
+        const rows = (db: DatabaseSync) =>
+          db
+            .prepare(`SELECT * FROM ${table}`)
+            .all()
+            .map((row) => JSON.stringify(row))
+            .sort();
+        expect(rows(resumed.db), table).toEqual(rows(expected.db));
+      }
+      expect(
+        resumed.db
+          .prepare(
+            "SELECT count(*) AS n FROM library_ordered_members WHERE kind='folder'",
+          )
+          .get()?.n,
+      ).toBe(90);
+    } finally {
+      resumed.db.close();
+      expected.db.close();
+    }
+  });
+});
+
 it("repairs named writes from a connection that has no application functions or knowledge of the projections", async () => {
   await catalogFixture(async (home, oldPath) => {
     const currentPath = join(home, "current.sqlite");

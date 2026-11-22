@@ -213,6 +213,7 @@ async function acquireProtocolLock(
 export function acquireCatalogWriteLock(path: string) {
   return acquireProtocolLock(path, "exclusive");
 }
+type CatalogWriteLock = Awaited<ReturnType<typeof acquireCatalogWriteLock>>;
 /** Dedicated process handoff locks; never substitutes for the catalog business lock. */
 export function acquireRestartLock(
   identity: string,
@@ -233,6 +234,9 @@ export class CatalogWriteAdmission {
   private readonly context = new AsyncLocalStorage<Scope>();
   private tail: Promise<unknown> = Promise.resolve();
   private waiting = 0;
+  private backgroundPending = false;
+  private backgroundYield: Int32Array<SharedArrayBuffer> | undefined;
+  private lockForNextWriter: CatalogWriteLock | undefined;
   private closed = false;
   constructor(
     readonly catalogPath: string,
@@ -261,6 +265,69 @@ export class CatalogWriteAdmission {
       check();
     }
   }
+  private async admitted<T>(
+    lock: CatalogWriteLock,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const scope = { active: true };
+    try {
+      return await this.context.run(scope, operation);
+    } finally {
+      scope.active = false;
+      await lock.release();
+    }
+  }
+
+  /** Try at the next release without asking the active writer to yield its segment. */
+  runWhenIdle<T>(
+    operation: (foregroundWaiting: SharedArrayBuffer) => Promise<T>,
+  ): Promise<T | undefined> {
+    if (this.closed)
+      return Promise.reject(new WriteAdmissionError("write-admission-closed"));
+    if (this.context.getStore() || this.waiting || this.backgroundPending)
+      return Promise.resolve(undefined);
+    this.backgroundPending = true;
+    const busy = () => this.closed || this.waiting > 0;
+    const pending = this.tail
+      .then(async () => {
+        if (busy()) return undefined;
+        let lock;
+        try {
+          lock = await acquireCatalogWriteLock(this.catalogPath);
+        } catch (error) {
+          if (
+            error instanceof WriteAdmissionError &&
+            error.code === "write-admission-conflict"
+          )
+            return undefined;
+          throw error;
+        }
+        if (this.closed) {
+          await lock.release();
+          return undefined;
+        }
+        if (this.waiting) {
+          // The first queued writer can use the verified lock directly.
+          this.lockForNextWriter = lock;
+          return undefined;
+        }
+        const foregroundWaiting = new Int32Array(new SharedArrayBuffer(4));
+        this.backgroundYield = foregroundWaiting;
+        try {
+          return await this.admitted(lock, () =>
+            operation(foregroundWaiting.buffer),
+          );
+        } finally {
+          this.backgroundYield = undefined;
+        }
+      })
+      .finally(() => {
+        this.backgroundPending = false;
+      });
+    this.tail = pending.catch(() => undefined);
+    return pending;
+  }
+
   run<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     const check = () => {
       if (this.closed) throw new WriteAdmissionError("write-admission-closed");
@@ -282,18 +349,17 @@ export class CatalogWriteAdmission {
       }
     }
     this.waiting++;
+    if (this.backgroundYield) Atomics.store(this.backgroundYield, 0, 1);
     const pending = this.tail.then(async () => {
       this.waiting--;
-      check();
-      const lock = await this.lock(check, signal);
-      const scope = { active: true };
-      try {
+      const reserved = this.lockForNextWriter;
+      this.lockForNextWriter = undefined;
+      if (!reserved) check();
+      const lock = reserved ?? (await this.lock(check, signal));
+      return this.admitted(lock, async () => {
         check();
-        return await this.context.run(scope, operation);
-      } finally {
-        scope.active = false;
-        await lock.release();
-      }
+        return operation();
+      });
     });
     this.tail = pending.catch(() => undefined);
     return pending;

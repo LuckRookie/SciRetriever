@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, StatementSync } from "node:sqlite";
 
 const suffix = import.meta.url.endsWith(".ts") ? ".ts" : ".js";
 const { nameCatalogInsertColumns }: typeof import("./catalog-ddl.js") =
@@ -81,18 +81,18 @@ export function initializeLibraryPaging(db: DatabaseSync) {
 
 /** Used by 04 before inserting its historical selections into library_collected. */
 export function backfillCollection(
-  db: DatabaseSync,
+  prepare: (sql: string) => StatementSync,
   ids: string,
   historicalSelection: string,
 ) {
-  db.prepare(
+  prepare(
     `INSERT INTO library_collection_times(literature_id,collected_at)
      SELECT l.literature_id,${historicalCollectionTimeSql("l.literature_id")}
      FROM json_each(?) j CROSS JOIN literatures l ON l.literature_id=j.value
      WHERE NOT EXISTS(SELECT 1 FROM library_collection_times c WHERE c.literature_id=l.literature_id)
        AND ${historicalSelection} ON CONFLICT DO NOTHING`,
   ).run(ids);
-  db.prepare(
+  prepare(
     `INSERT INTO library_collected(literature_id,intake_at)
      SELECT l.literature_id,i.intake_at FROM json_each(?) j
      CROSS JOIN literatures l ON l.literature_id=j.value
@@ -103,8 +103,11 @@ export function backfillCollection(
 }
 
 /** Run under catalog admission. Readers keep using facts until all stages commit. */
-export function backfillLibraryPaging(db: DatabaseSync, limit: number) {
-  const progress = db.prepare(
+export function backfillLibraryPaging(
+  prepare: (sql: string) => StatementSync,
+  limit: number,
+) {
+  const progress = prepare(
     "SELECT stage,after_rowid FROM library_paging_progress WHERE singleton=1",
   );
   progress.setReadBigInts(true);
@@ -114,7 +117,7 @@ export function backfillLibraryPaging(db: DatabaseSync, limit: number) {
   let remaining = limit;
   while (stage < stages.length && remaining > 0) {
     const input = stages[stage]!;
-    const select = db.prepare(
+    const select = prepare(
       `SELECT rowid AS position FROM ${input.table} ${previous === null ? "" : "WHERE rowid>?"} ORDER BY rowid LIMIT ?`,
     );
     select.setReadBigInts(true);
@@ -126,14 +129,14 @@ export function backfillLibraryPaging(db: DatabaseSync, limit: number) {
     const last = page.at(-1)?.position;
     if (first !== undefined && last !== undefined)
       for (const sql of input.writes)
-        db.prepare(nameCatalogInsertColumns(sql)).run(first, last);
+        prepare(nameCatalogInsertColumns(sql)).run(first, last);
     if (page.length < remaining) {
       stage++;
       previous = null;
     } else previous = last!;
     remaining -= page.length;
   }
-  db.prepare(
+  prepare(
     "INSERT INTO library_paging_progress(singleton,stage,after_rowid) VALUES(1,?,?) ON CONFLICT(singleton) DO UPDATE SET stage=excluded.stage,after_rowid=excluded.after_rowid",
   ).run(stage, previous);
   return stage < stages.length;

@@ -1667,14 +1667,16 @@ async function createApplicationOwned(
       configuration.parsing.archive_profile,
     );
     const stateDatabase = database;
-    const scheduleState = (delay: number) => {
+    const scheduleState = (delay: number, pending = false) => {
       if (closing) return;
       stateTimer = setTimeout(() => {
         let delay = 5_000;
         stateCheck = (async () => {
-          if (await stateDatabase.libraryStatePending()) {
-            const result = await stateDatabase.refreshLibraryState();
-            if (result.more) delay = 25;
+          pending ||= await stateDatabase.libraryStatePending();
+          if (pending) {
+            const result = await stateDatabase.refreshLibraryStateWhenIdle();
+            pending = result?.more !== false;
+            if (pending) delay = 25;
           }
         })()
           .catch(() =>
@@ -1684,7 +1686,7 @@ async function createApplicationOwned(
           )
           .finally(() => {
             stateCheck = undefined;
-            scheduleState(delay);
+            scheduleState(delay, pending);
           });
       }, delay);
       stateTimer.unref();

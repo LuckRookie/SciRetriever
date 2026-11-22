@@ -3,6 +3,7 @@ import { FolderError } from "../../literature/folders.js";
 import { MarkError } from "../../literature/marks.js";
 import { IntakeWithdrawalError } from "../../literature/intake-withdrawal.js";
 import { CatalogSchemaError } from "./schema-path.js";
+import { CATALOG_BACKFILL_WRITE_MS } from "./catalog-backfill.js";
 import { isIntakeWithdrawalRead } from "./intake-withdrawal-engine.js";
 import {
   canonicalJsonBytes,
@@ -746,7 +747,13 @@ export type SqliteCommand =
       readonly settings: import("./library-state.js").StateSettings;
     }
   | { readonly kind: "library_state_pending" }
-  | { readonly kind: "library_state_refresh" }
+  | {
+      readonly kind: "library_state_refresh";
+      readonly budget?: {
+        readonly deadline: number;
+        readonly foregroundWaiting: SharedArrayBuffer;
+      };
+    }
   | { readonly kind: "library_collect"; readonly ids: readonly string[] }
   | {
       readonly kind: "library_counts";
@@ -1318,6 +1325,11 @@ const LIBRARY_SELECTION_COMMANDS = new Set<string>([
 ]);
 // Leave room for the last indivisible record and the durable commit.
 const METADATA_WRITE_BUDGET_MS = 150;
+interface LibraryStateRefreshResult {
+  readonly rebuilt: number;
+  readonly repaired: number;
+  readonly more: boolean;
+}
 type MetadataWriteScope = {
   readonly done: Promise<void>;
   readonly events: ExecutionEvent[];
@@ -1346,6 +1358,7 @@ function validateExecutionEvent(event: ExecutionEvent): void {
 export class SqliteWorker {
   private readonly worker: Worker;
   private nextId = 1;
+  private inFlight = 0;
   private readonly pending = new Map<
     number,
     {
@@ -1419,6 +1432,7 @@ export class SqliteWorker {
       },
     });
     this.worker.on("message", (reply: Reply) => {
+      this.inFlight--;
       const pending = this.pending.get(reply.id);
       if (!pending) return;
       this.pending.delete(reply.id);
@@ -1719,6 +1733,7 @@ export class SqliteWorker {
         command,
         ...(cancellation ? { cancellation: cancellation.buffer } : {}),
       });
+      this.inFlight++;
     });
   }
 
@@ -3378,12 +3393,26 @@ export class SqliteWorker {
   libraryStatePending(): Promise<boolean> {
     return this.run({ kind: "library_state_pending" });
   }
-  refreshLibraryState(): Promise<{
-    rebuilt: number;
-    repaired: number;
-    more: boolean;
-  }> {
+  refreshLibraryState(): Promise<LibraryStateRefreshResult> {
     return this.run({ kind: "library_state_refresh" });
+  }
+  refreshLibraryStateWhenIdle(): Promise<
+    LibraryStateRefreshResult | undefined
+  > {
+    if (!this.admission || this.readOnly || this.closed || this.failed)
+      return Promise.reject(new SqliteWorkerError());
+    return this.admission.runWhenIdle(async (foregroundWaiting) => {
+      // A local read, including a cancelled read that is still unwinding, can
+      // occupy the worker without owning write admission.
+      if (this.inFlight) return undefined;
+      return this.send<LibraryStateRefreshResult>({
+        kind: "library_state_refresh",
+        budget: {
+          deadline: performance.now() + CATALOG_BACKFILL_WRITE_MS,
+          foregroundWaiting,
+        },
+      });
+    });
   }
   async collectLiteratures(ids: readonly string[], signal?: AbortSignal) {
     if (ids.length)
@@ -3838,6 +3867,7 @@ export class SqliteWorker {
         reject: () => resolve(),
       });
       this.worker.postMessage({ id, command: { kind: "close" } });
+      this.inFlight++;
     });
     await this.worker.terminate();
   }

@@ -5,6 +5,7 @@ const suffix = import.meta.url.endsWith(".ts") ? ".ts" : ".js";
 const {
   catalogBackfillPending,
   runCatalogBackfillBatch,
+  visitCatalogBackfillSlices,
 }: typeof import("./catalog-backfill.js") = await import(
   new URL("./catalog-backfill" + suffix, import.meta.url).href
 );
@@ -121,14 +122,14 @@ export class StoredLibraryState {
     db.function("sr_status", (id) => this.get(String(id))?.status ?? null);
   }
 
-  private statement(sql: string) {
+  private readonly statement = (sql: string) => {
     let result = this.statements.get(sql);
     if (!result) {
       result = this.db.prepare(sql);
       this.statements.set(sql, result);
     }
     return result;
-  }
+  };
 
   private progress() {
     return this.statement(
@@ -256,11 +257,11 @@ export class StoredLibraryState {
     return this.progress() ?? this.initial;
   }
 
-  private dirtyIds(after: number) {
+  private dirtyIds(after: number, limit = LIBRARY_STATE_BATCH_SIZE) {
     return this.statement(
       "SELECT literature_id FROM library_state_dirty WHERE position>? ORDER BY position LIMIT ?",
     )
-      .all(after, LIBRARY_STATE_BATCH_SIZE)
+      .all(after, limit)
       .map((row) => String(row.literature_id));
   }
 
@@ -309,11 +310,11 @@ export class StoredLibraryState {
   }
 
   /** One write transaction under catalog admission. Both cursors survive restart. */
-  refreshBatch() {
+  refreshBatch(shouldYield?: () => boolean) {
     return (
       runCatalogBackfillBatch(this.db, LIBRARY_SCALE_ADDITION, {
         "library-projections": () => {
-          const value = this.refreshProjectionsBatch();
+          const value = this.refreshProjectionsBatch(shouldYield);
           const state = this.progress()!;
           const counts =
             this.statement(
@@ -333,15 +334,30 @@ export class StoredLibraryState {
             cursor: { state, counts, paging },
           };
         },
-      }) ?? this.refreshProjectionsBatch()
+      }) ?? this.refreshProjectionsBatch(shouldYield)
     );
   }
 
-  private refreshProjectionsBatch() {
-    if (!this.progress()) this.configure();
+  private refreshProjectionsBatch(shouldYield?: () => boolean) {
+    if (!shouldYield)
+      return this.refreshProjectionsSlice(LIBRARY_STATE_BATCH_SIZE);
+    const result = { rebuilt: 0, repaired: 0, more: true };
+    visitCatalogBackfillSlices(shouldYield, (keys) => {
+      const slice = this.refreshProjectionsSlice(keys);
+      result.rebuilt += slice.rebuilt;
+      result.repaired += slice.repaired;
+      result.more = slice.more;
+      return slice.more;
+    });
+    return result;
+  }
+
+  private refreshProjectionsSlice(keys: number) {
+    const progress = this.progress();
+    if (!progress) this.configure();
     else if (!this.counts.configured()) this.counts.configure();
-    const p = this.progress()!;
-    const dirty = this.dirtyIds(0);
+    const p = progress ?? this.progress()!;
+    const dirty = this.dirtyIds(0, keys);
     if (dirty.length) {
       this.writeStates(dirty, p);
       this.clearDirty(dirty);
@@ -351,31 +367,29 @@ export class StoredLibraryState {
       const ids = this.statement(
         "SELECT literature_id FROM literature_metadata WHERE literature_id>? ORDER BY literature_id LIMIT ?",
       )
-        .all(p.after_id, LIBRARY_STATE_BATCH_SIZE)
+        .all(p.after_id, keys)
         .map((row) => String(row.literature_id));
       rebuilt = ids.length;
       this.writeStates(ids, p);
       if (!p.collection_ready)
         backfillCollection(
-          this.db,
+          this.statement,
           JSON.stringify(ids),
           historicalCollectionSql("l.literature_id"),
         );
       // During the first backfill the count cursor will visit these papers
       // after state and historical collection are complete. On a settings
       // change, repair any previously counted papers in this transaction.
-      if (p.collection_ready)
-        this.counts.update(ids, 0, LIBRARY_STATE_BATCH_SIZE);
-      const done = ids.length < LIBRARY_STATE_BATCH_SIZE ? 1 : 0;
+      if (p.collection_ready) this.counts.update(ids, 0, keys);
+      const done = ids.length < keys ? 1 : 0;
       this.statement(
         "UPDATE library_state_progress SET after_id=?,ready=?,collection_ready=max(collection_ready,?) WHERE singleton=1",
       ).run(ids.at(-1) ?? p.after_id, done, done);
     }
-    this.counts.update(dirty, 0, LIBRARY_STATE_BATCH_SIZE);
-    if (p.ready && p.collection_ready)
-      this.counts.backfill(LIBRARY_STATE_BATCH_SIZE);
+    this.counts.update(dirty, 0, keys);
+    if (p.ready && p.collection_ready) this.counts.backfill(keys);
     if (this.countsReady() && !libraryPagingReady(this.db))
-      backfillLibraryPaging(this.db, LIBRARY_STATE_BATCH_SIZE);
+      backfillLibraryPaging(this.statement, keys);
     return {
       rebuilt,
       repaired: dirty.length,
