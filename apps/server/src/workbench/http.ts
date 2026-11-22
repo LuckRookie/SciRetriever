@@ -1278,8 +1278,11 @@ export async function startWorkbenchHttp(
         json(response, 404, { code: "endpoint-not-found" });
         return;
       }
+      const materialGet =
+        request.method === "GET" && materialBytesPath(url.pathname) !== null;
       const queryKeys = [...url.searchParams.keys()];
       if (
+        (materialGet && url.search) ||
         queryKeys.some(
           (key) =>
             ![
@@ -1303,7 +1306,11 @@ export async function startWorkbenchHttp(
         json(response, 400, { code: "invalid-query" });
         return;
       }
-      const clientId = url.searchParams.get("client_id") ?? "";
+      let clientId: string;
+      if (materialGet) {
+        const ids = request.headersDistinct["x-sciretriever-client-id"];
+        clientId = ids?.length === 1 ? ids[0]! : "";
+      } else clientId = url.searchParams.get("client_id") ?? "";
       const grant = clients.get(clientId);
       if (!grant || grant.authSessionId !== authSessionId) {
         json(response, 401, { code: "client-required" });
@@ -3097,11 +3104,10 @@ function createQueryHttpHandler(
     const material =
       request.method === "GET" ? materialBytesPath(url.pathname) : null;
     if (material) {
-      if (
-        [...url.searchParams.keys()].some((key) => key !== "client_id") ||
-        url.searchParams.getAll("client_id").length > 1
-      )
-        invalidInput();
+      if (url.search) {
+        json(response, 400, { protocol_version: 1, code: "invalid-query" });
+        return;
+      }
       if (
         !application.query ||
         !application.documentRead ||

@@ -71,6 +71,7 @@ function paddedPdf(
 
 interface Request {
   url: string;
+  clientId: string | null;
   range: string | null;
   cacheControl: string | null;
   status: number;
@@ -90,6 +91,10 @@ async function watchNetwork(page: Page) {
     const headers = event.request.headers as Record<string, string>;
     const request: Request = {
       url: event.request.url,
+      clientId:
+        headers["X-Sciretriever-Client-Id"] ??
+        headers["x-sciretriever-client-id"] ??
+        null,
       range: headers.Range ?? headers.range ?? null,
       cacheControl: null,
       status: 0,
@@ -304,6 +309,49 @@ async function addMedium(
     bytes: medium,
   });
 }
+
+it("reuses the PDF URL and browser cache across a reload with a fresh Workbench grant", async () => {
+  const w = await nextWorkspace({ ready: "body", readerProbe: true });
+  try {
+    await markFirstPage(w.page);
+    const network = await watchNetwork(w.page);
+    const paper = w.env.parseRequest.literature_id;
+    const asset = w.env.asset;
+    const expectedUrl = `${w.origin}/api/v1/query/material-bytes/${paper}/${asset.asset_id}/${asset.sha256}`;
+    const read = async () => {
+      await firstPage(w.page);
+      await w.page.waitForFunction(
+        () =>
+          performance.getEntriesByName("sciretriever-pdf-verified").length > 0,
+      );
+      await settled(network);
+      const requests = network.take();
+      expect(new Set(requests.map((request) => request.url))).toEqual(
+        new Set([expectedUrl]),
+      );
+      expect(requests.every((request) => Boolean(request.clientId))).toBe(true);
+      return requests;
+    };
+    await network.cdp.send("Network.clearBrowserCache");
+    await w.page.goto(readerUrl(w, paper));
+    const cold = await read();
+    expect(
+      cold.some(
+        (request) =>
+          !request.cached && request.range !== null && request.status === 206,
+      ),
+    ).toBe(true);
+    await w.page.reload();
+    const warm = await read();
+    expect(
+      warm.every((request) => request.clientId !== cold[0]!.clientId),
+    ).toBe(true);
+    expect(warm.some((request) => request.cached)).toBe(true);
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 120_000);
 
 it("measures the first page, a second open and the bytes of large and small PDFs (spec 8.2)", async () => {
   const w = await nextWorkspace({

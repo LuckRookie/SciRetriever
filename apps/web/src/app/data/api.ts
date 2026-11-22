@@ -178,10 +178,10 @@ export class ApiClient {
   private connection(connected: boolean) {
     for (const listener of this.connectionListeners) listener(connected);
   }
-  url(path: string): string {
+  url(path: string, clientInQuery = true): string {
     const url = new URL(path, location.origin);
     if (url.origin !== location.origin) throw new Error("跨来源请求被拒绝");
-    if (this.kind === "workspace" && this.clientId)
+    if (clientInQuery && this.kind === "workspace" && this.clientId)
       url.searchParams.set("client_id", this.clientId);
     return url.toString();
   }
@@ -191,18 +191,24 @@ export class ApiClient {
   ): Promise<Response> => {
     if (this.released && !init.keepalive)
       throw new ApiError("工作台连接已关闭。", "client-closed", "business");
-    if (
-      this.kind === "query" &&
-      new URL(path, location.origin).pathname.startsWith("/api/v1/maintenance/")
-    )
+    const pathname = new URL(path, location.origin).pathname;
+    if (this.kind === "query" && pathname.startsWith("/api/v1/maintenance/"))
       throw new ApiError("此入口只提供查询与阅读。", "read-only", "business");
     const headers = new Headers(init.headers);
+    const materialGet =
+      (init.method ?? "GET").toUpperCase() === "GET" &&
+      /^\/api\/v1\/query\/material-bytes\/[^/]+\/[^/]+\/[^/]+$/u.test(pathname);
+    if (materialGet && this.kind === "workspace" && this.clientId)
+      headers.set("X-Sciretriever-Client-Id", this.clientId);
     if (this.csrf)
       headers.set(
         this.kind === "workspace" ? "X-Workbench-Csrf" : "X-Sciretriever-Csrf",
         this.csrf,
       );
-    const response = await fetch(this.url(path), { ...init, headers });
+    const response = await fetch(this.url(path, !materialGet), {
+      ...init,
+      headers,
+    });
     if (response.status === 401 && this.kind === "workspace") {
       const failure: unknown = await response
         .clone()

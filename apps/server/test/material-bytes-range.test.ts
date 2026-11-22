@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { request as httpRequest, type IncomingMessage } from "node:http";
 import {
   link,
   mkdtemp,
@@ -41,6 +42,7 @@ import {
 
 const base = "/api/v1/query/material-bytes";
 const literature = FIXTURE_LITERATURE.literature_id;
+const clientHeader = "X-Sciretriever-Client-Id";
 const cacheControl = "private, max-age=31536000, immutable";
 const chunkSize = 1024 * 1024;
 
@@ -174,6 +176,14 @@ it("serves the selected primary or supplementary original and preserves the POST
       expect(response.headers.has("content-range")).toBe(false);
       expect(await bytes(response)).toEqual(value.bytes);
     }
+    const legacy = await fetch(
+      http.origin + f.primary.url + "?client_id=stale",
+    );
+    expect(legacy.status).toBe(400);
+    expect(await legacy.json()).toEqual({
+      protocol_version: 1,
+      code: "invalid-query",
+    });
     const post = await fetch(http.origin + base, {
       method: "POST",
       headers: { "Content-Type": "application/json", Range: "bytes=0-1" },
@@ -377,22 +387,17 @@ it("applies Workbench session, tab, same-origin and device gates before conditio
   });
   try {
     const target = http.origin + f.primary.url;
-    const conditional = { "If-None-Match": "*" };
+    const conditional = { "If-None-Match": `"${f.primary.asset.sha256}"` };
     const anon = await fetch(target, { headers: conditional });
     expect(anon.status).toBe(401);
     expect(anon.headers.get("cache-control")).toBe("no-store");
     const auth = await workbenchLogin(http.origin);
     const landing = await fetch(http.origin, { headers: { Cookie: auth } });
     expect(landing.status).toBe(200);
-    const cookie = [
-      auth,
-      ...landing.headers.getSetCookie().map((value) => value.split(";")[0]!),
-    ].join("; ");
-    const noClient = await fetch(target, {
-      headers: { ...conditional, Cookie: cookie },
-    });
-    expect(noClient.status).toBe(401);
-    expect(await noClient.json()).toMatchObject({ code: "client-required" });
+    const workbenchCookies = landing.headers
+      .getSetCookie()
+      .map((value) => value.split(";")[0]!);
+    const cookie = [auth, ...workbenchCookies].join("; ");
     const attached = await fetch(http.origin + "/api/clients", {
       method: "POST",
       headers: {
@@ -405,25 +410,90 @@ it("applies Workbench session, tab, same-origin and device gates before conditio
     });
     expect(attached.status).toBe(201);
     const { client_id } = (await attached.json()) as { client_id: string };
-    const clientTarget = target + "?client_id=" + encodeURIComponent(client_id);
-    const fullAccess = await fetch(clientTarget, {
-      headers: { Cookie: cookie, Range: "bytes=0-3" },
+    const grantHeaders = { Cookie: cookie, [clientHeader]: client_id };
+    const fullAccess = await fetch(target, {
+      headers: { ...grantHeaders, Range: "bytes=0-3" },
     });
     expect(fullAccess.status).toBe(206);
     headers(fullAccess, f.primary);
     expect(await bytes(fullAccess)).toEqual(f.primary.bytes.subarray(0, 4));
-    const sameOrigin = await fetch(clientTarget, {
-      headers: { ...conditional, Cookie: cookie, Origin: http.origin },
+    const sameOrigin = await fetch(target, {
+      headers: { ...conditional, ...grantHeaders, Origin: http.origin },
     });
     expect(sameOrigin.status).toBe(304);
+    headers(sameOrigin, f.primary);
+    expect(await sameOrigin.text()).toBe("");
+    const legacyTarget = target + "?client_id=" + encodeURIComponent(client_id);
+    for (const queried of [
+      legacyTarget,
+      target + "?limit=1",
+      target + "?other=",
+    ]) {
+      const reply = await fetch(queried, {
+        headers: { ...conditional, ...grantHeaders },
+      });
+      expect(reply.status).toBe(400);
+      expect(await reply.json()).toEqual({ code: "invalid-query" });
+    }
+    const urlOnly = await fetch(legacyTarget, { headers: { Cookie: cookie } });
+    expect(urlOnly.status).toBe(400);
+    expect(await urlOnly.json()).toEqual({ code: "invalid-query" });
+
+    const anotherAuth = await workbenchLogin(http.origin);
+    const anotherSession = [anotherAuth, ...workbenchCookies].join("; ");
+    for (const invalidGrant of [
+      { Cookie: cookie },
+      { Cookie: cookie, [clientHeader]: "" },
+      { Cookie: anotherSession, [clientHeader]: client_id },
+    ]) {
+      const denied = await fetch(target, {
+        headers: { ...conditional, ...invalidGrant },
+      });
+      expect(denied.status).toBe(401);
+      expect(denied.headers.get("cache-control")).toBe("no-store");
+      expect(await denied.json()).toEqual({ code: "client-required" });
+    }
+    const duplicate = await new Promise<IncomingMessage>((resolve, reject) => {
+      const request = httpRequest(
+        target,
+        {
+          headers: {
+            ...conditional,
+            Cookie: cookie,
+            [clientHeader]: [client_id, client_id],
+          },
+        },
+        resolve,
+      );
+      request.on("error", reject);
+      request.end();
+    });
+    let duplicateBody = "";
+    for await (const chunk of duplicate) duplicateBody += String(chunk);
+    expect(duplicate.statusCode).toBe(401);
+    expect(duplicate.headers["cache-control"]).toBe("no-store");
+    expect(JSON.parse(duplicateBody)).toEqual({ code: "client-required" });
+    const noWorkbenchCookie = await fetch(target, {
+      headers: { ...conditional, ...grantHeaders, Cookie: auth },
+    });
+    expect(noWorkbenchCookie.status).toBe(401);
+    expect(await noWorkbenchCookie.json()).toEqual({
+      code: "authentication-required",
+    });
+    const viewWithoutQuery = await fetch(http.origin + "/api/view", {
+      headers: grantHeaders,
+    });
+    expect(viewWithoutQuery.status).toBe(401);
+    expect(await viewWithoutQuery.json()).toEqual({ code: "client-required" });
+
     for (const [header, value] of [
       ["Origin", "https://foreign.example"],
       ["Sec-Fetch-Site", "cross-site"],
     ] as const) {
-      const denied = await fetch(clientTarget, {
+      const denied = await fetch(target, {
         headers: {
           ...conditional,
-          Cookie: cookie,
+          ...grantHeaders,
           [header]: value,
         },
       });
@@ -443,7 +513,7 @@ it("applies Workbench session, tab, same-origin and device gates before conditio
     const device = await fetch(target, {
       headers: {
         ...conditional,
-        Cookie: cookie,
+        ...grantHeaders,
         Authorization: `Bearer ${token}`,
       },
     });
@@ -451,7 +521,7 @@ it("applies Workbench session, tab, same-origin and device gates before conditio
     expect(await device.json()).toMatchObject({
       code: "device-purpose-forbidden",
     });
-    const invalidDevice = await fetch(clientTarget, {
+    const invalidDevice = await fetch(legacyTarget, {
       headers: {
         ...conditional,
         Cookie: cookie,
