@@ -1150,6 +1150,139 @@
     font-size: var(--text-caption);
     white-space: nowrap;
   }
+  /* The band over the collected papers: a quiet sunken block that scrolls
+     away with the content (page specs “全库带”). */
+  .library-band {
+    display: grid;
+    gap: var(--space-2);
+    margin-bottom: var(--space-5);
+    padding: var(--space-4);
+    border-radius: var(--radius-md);
+    background: var(--surface-sunken);
+    --field-fill: var(--surface);
+  }
+  .library-band .ui-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .library-band-totals {
+    margin: 0;
+    color: var(--fg2);
+    font-size: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+  .library-band-sets {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1) var(--space-2);
+    margin-inline-start: calc(-1 * var(--space-2));
+  }
+  .library-band-sets .ui-button {
+    color: var(--fg2);
+    font-variant-numeric: tabular-nums;
+  }
+  /* A search's scope, and the relevance cap at the far end. */
+  .library-search-scope {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-4);
+    padding-bottom: var(--space-2);
+  }
+  .library-search-scope > .ui-field {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .library-search-scope .ui-label {
+    margin: 0;
+    color: var(--fg2);
+    font-size: var(--text-control);
+  }
+  .library-search-scope .ui-label::after {
+    content: "：";
+  }
+  .ui-page-count > .ui-button,
+  .ui-page-count > .library-count-running,
+  .ui-page-count > .library-count-error {
+    margin-inline-start: var(--space-2);
+  }
+  .library-relevance-limit,
+  .library-status-updating,
+  .library-count-at,
+  .library-count-running {
+    color: var(--fg3);
+    font-size: var(--text-secondary);
+  }
+  .library-status-updating {
+    margin-inline-start: var(--space-2);
+  }
+  .library-count-error {
+    color: var(--status-problem);
+    font-size: var(--text-secondary);
+  }
+  /* The one sort left, offered where the list would be. */
+  .library-sort-limit {
+    display: grid;
+    justify-items: center;
+    gap: var(--space-3);
+    padding-block: var(--space-7);
+    color: var(--fg2);
+    text-align: center;
+  }
+  .library-sort-limit > p,
+  .library-relevance-end {
+    margin: 0;
+  }
+  .library-relevance-end {
+    padding: var(--space-4) var(--space-2);
+    color: var(--fg3);
+    font-size: var(--text-secondary);
+    text-align: center;
+  }
+  /* A row whose origin is a button of its own keeps the opening button
+     to its title; the citation follows it in the same column. */
+  .paper-main {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    min-width: 0;
+  }
+  .paper-discovered {
+    color: var(--fg3);
+  }
+  .paper-origin {
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: var(--line2);
+    text-underline-offset: 2px;
+  }
+  .paper-origin:hover {
+    color: var(--fg2);
+    text-decoration-color: currentColor;
+  }
+  .paper-origin:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
+    border-radius: var(--radius-xs);
+  }
+  .library-table-sort:disabled {
+    color: inherit;
+    cursor: default;
+  }
 }
 
 @layer pages {

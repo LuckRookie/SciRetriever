@@ -1,5 +1,8 @@
 import { readerPanel } from "./reader-controls.js";
-import { showAllLibraryStatuses } from "./next-workspace-fixture.js";
+import {
+  showAllLibraryStatuses,
+  searchLibrary,
+} from "./next-workspace-fixture.js";
 import { processorFixture } from "../../server/test/processor-fixture.js";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -367,9 +370,7 @@ it("reads, searches, follows references and downloads through the query-only pag
       .fill(originalInputs);
     await page.goto(`${workbench.origin}/`);
     await showAllLibraryStatuses(page);
-    await page
-      .getByRole("searchbox", { name: "搜索文献", exact: true })
-      .fill("Synthetic literature workbench");
+    await searchLibrary(page, "Synthetic literature workbench");
     const sourceResult = page.getByRole("article", {
       name: "Synthetic literature workbench",
       exact: true,
@@ -462,9 +463,7 @@ it("reads, searches, follows references and downloads through the query-only pag
       .toBe(related.literature_id);
     await page.goto(`${workbench.origin}/`);
     await showAllLibraryStatuses(page);
-    await page
-      .getByRole("searchbox", { name: "搜索文献", exact: true })
-      .fill("Query reader without a PDF");
+    await searchLibrary(page, "Query reader without a PDF");
     await page
       .getByRole("article", { name: "Query reader without a PDF", exact: true })
       .locator(".paper-open")

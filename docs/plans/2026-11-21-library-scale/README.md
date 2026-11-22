@@ -2,7 +2,7 @@
 
 类型：计划
 负责：让文献库在百万到千万篇、并有持续大批量写入时仍然好用：规模目标与原则；状态、计数、翻页、搜索、读请求、打开 PDF、入库吞吐、迁移方式；长时间引用扩展的断点续跑与来源冷却
-状态：In progress（2026-11-21 计划编写完成；立意 A1–A3 与设计问题 B1–B11 已定；ADR 0065 待 Owner 审定；实施等 G-dispatch；实施未开始）
+状态：In progress（03–10、12、13 Done，待部署；11 的饱和回填份额待 Owner 定；01.2 ADR 0065 待 Owner 审定；02 待测量窗口；14.2 起进行中）
 
 ## 目标
 
@@ -97,16 +97,16 @@ Owner 2026-11-21：
 | [01](01-scale-target-and-rules.md)  | 规模目标与原则写进需求与 ADR                 | 总设计师、Owner      | A1–A3                                  | Pending        |
 | [02](02-measurement-and-targets.md) | 实测、无写入基线、空间分布、性能目标         | 总设计师、Owner      | G-browser、G-quiet、G-lib；02.4 等 B11 | Pending        |
 | [03](03-task-detail.md)             | 运行中任务的详情不再每次整读来源记录（缺陷） | 后端；03.3 前端      | G-dispatch                             | Done（待部署） |
-| [04](04-literature-states.md)       | 文献状态写入时维护                           | 后端                 | B1                                     | 后端 Done（待部署） |
-| [05](05-counts-and-facets.md)       | 全库总数；工作集内的计数与分面               | 后端、前端           | B2；04                                 | 后端 Done（待部署） |
-| [06](06-paging-and-sorting.md)      | 工作集内的翻页与排序；首页改为工作集入口     | 后端、前端           | B3                                     | 后端 Done（待部署） |
+| [04](04-literature-states.md)       | 文献状态写入时维护                           | 后端                 | B1                                     | Done（待部署） |
+| [05](05-counts-and-facets.md)       | 全库总数；工作集内的计数与分面               | 后端、前端           | B2；04                                 | Done（待部署） |
+| [06](06-paging-and-sorting.md)      | 工作集内的翻页与排序；首页改为工作集入口     | 后端、前端           | B3                                     | Done（待部署） |
 | [07](07-search-index.md)            | 搜索索引只处理变化                           | 后端                 | B4                                     | Done（待部署） |
 | [08](08-read-lanes.md)              | 读请求分道与耗时上限；WAL 能收缩             | 后端                 | B5                                     | Done（待部署） |
 | [09](09-pdf-open.md)                | 打开 PDF                                     | 前端；服务端部分后端 | 02.1；B6                               | Done（待部署） |
 | [10](10-intake-throughput.md)       | 入库吞吐                                     | 后端                 | 10.1 无；10.3 起等 B7                  | Done（待部署） |
 | [11](11-online-migration.md)        | 不停服的迁移方式                             | 后端                 | B8                                     | In progress |
 | [12](12-discovery-resume.md)        | 引用扩展从断点续跑                           | 后端                 | B9                                     | Done（待部署） |
-| [13](13-source-cooldown.md)         | 来源限流后冷却重试                           | 后端                 | B10                                    | 后端 Done（待部署） |
+| [13](13-source-cooldown.md)         | 来源限流后冷却重试                           | 后端                 | B10                                    | Done（待部署） |
 | [14](14-closing.md)                 | 规模检查、复测、迁移上线、规格同步           | 总设计师、后端       | 01–13                                  | Pending        |
 
 ## 先后顺序

@@ -1,0 +1,611 @@
+import { expect, it } from "vitest";
+import type { Page, Route } from "playwright";
+import { parseFolderNode, parseLiterature } from "@sciretriever/contracts";
+import { nextWorkspace } from "./next-workspace-fixture.js";
+import { missingId } from "./processor-workspace-fixture.js";
+import { FIXTURE_LITERATURE } from "../../server/src/workbench/synthetic-fixture.js";
+
+// Page specs “文献库”: the collected papers, the band over them, search
+// results with only-discovered papers, counts beyond 10,000 and the sorts
+// left there; “获取任务详情”: a citation expansion's rate-limited sources.
+
+const encode = (value: object) => encodeURIComponent(JSON.stringify(value));
+const query = (page: Page) =>
+  JSON.parse(new URL(page.url()).searchParams.get("query") ?? "{}");
+const sort = (page: Page) => new URL(page.url()).searchParams.get("sort");
+const DISCOVERED = [
+  ["00000000-0000-0000-0000-000000006201", "Discovered sulfide interphase"],
+  ["00000000-0000-0000-0000-000000006202", "Discovered sulfide cathodes"],
+] as const;
+const BATCH = "00000000-0000-0000-0000-000000006401";
+
+/** Two papers only discovered: in the catalog, never chosen by anyone. */
+type Env = Parameters<
+  NonNullable<NonNullable<Parameters<typeof nextWorkspace>[0]>["setup"]>
+>[0];
+async function withDiscovered(env: Env) {
+  for (const [n, [id, title]] of DISCOVERED.entries())
+    await env.app.database.putLiterature(
+      parseLiterature({
+        ...FIXTURE_LITERATURE,
+        literature_id: id,
+        meta_literature_id: `00000000-0000-0000-0000-00000000630${n + 1}`,
+        metadata: { ...FIXTURE_LITERATURE.metadata, title, identifiers: [] },
+      }),
+    );
+  const folder = parseFolderNode(
+    await env.app.folders.manage({
+      operation: "create",
+      request: { name: "样例文件夹", parent_id: null, position: null },
+    }),
+  );
+  await env.app.folders.manage({
+    operation: "add",
+    request: {
+      folder_id: folder.folder_id,
+      literature_ids: [FIXTURE_LITERATURE.literature_id],
+    },
+  });
+}
+/** The sidebar's “文献库” and its number. */
+const sidebarCount = (page: Page) =>
+  page
+    .locator(".application-shell")
+    .getByRole("button", { name: /^文献库/u })
+    .first()
+    .locator(".navigation-count");
+/** Rewrites one query route's answer. */
+async function rewrite(
+  page: Page,
+  name: string,
+  change: (result: Record<string, unknown>, request: unknown) => unknown,
+) {
+  await page.route(
+    (url) => url.pathname === `/api/v1/query/${name}`,
+    async (route: Route) => {
+      const response = await route.fetch();
+      const value = (await response.json()) as Record<string, unknown>;
+      const request = (
+        route.request().postDataJSON() as { request: unknown } | null
+      )?.request;
+      const changed = change(value, request);
+      await route.fulfill({ response, json: changed ?? value });
+    },
+  );
+}
+
+it("shows the band only over the collected papers, counts the collected in the sidebar and searches the whole library from it", async () => {
+  const w = await nextWorkspace({ setup: withDiscovered });
+  try {
+    const page = w.page;
+    await page
+      .getByRole("heading", { level: 1, name: "收进来的文献" })
+      .waitFor();
+    const band = page.getByRole("region", { name: "整个文献库" });
+    const totals = band.locator(".library-band-totals");
+    await totals.waitFor();
+    const [, all, collected, discovered] =
+      /^全库 (\d+) 篇：收进来的 (\d+) 篇，只被发现的 (\d+) 篇（来自引用扩展与主题搜索）$/u.exec(
+        (await totals.textContent()) ?? "",
+      )!;
+    expect(Number(collected) + Number(discovered)).toBe(Number(all));
+    expect(Number(discovered)).toBeGreaterThanOrEqual(2);
+    // The sidebar counts the collected papers, not the whole library.
+    await expect.poll(() => sidebarCount(page).textContent()).toBe(collected);
+    // The page's own total is the collected one, once.
+    expect(
+      await page.locator(".ui-page-header .ui-page-count").textContent(),
+    ).toBe(`共 ${collected} 篇`);
+    // The working sets with something in them; the folder is one.
+    expect(
+      await band
+        .getByRole("button", { name: "文件夹 · 1", exact: true })
+        .count(),
+    ).toBe(1);
+    // The collected papers are searched from the band only.
+    expect(
+      await page.locator(".library-toolbar").getByRole("searchbox").count(),
+    ).toBe(0);
+    expect(
+      await page
+        .locator(".library-band")
+        .getByRole("searchbox", { name: "搜索整个文献库" })
+        .count(),
+    ).toBe(1);
+
+    // Enter searches the whole library: no band, the scope and relevance.
+    const box = band.getByRole("searchbox", { name: "搜索整个文献库" });
+    await box.fill("Discovered sulfide");
+    await box.press("Enter");
+    await page
+      .getByRole("heading", { level: 1, name: "搜索“Discovered sulfide”" })
+      .waitFor();
+    expect(await page.getByRole("region", { name: "整个文献库" }).count()).toBe(
+      0,
+    );
+    expect(sort(page)).toBeNull();
+    expect(
+      await page
+        .getByRole("button", { name: /排序/u })
+        .and(page.locator('[aria-haspopup="listbox"]'))
+        .textContent(),
+    ).toBe("排序：相关度");
+    const scope = page.getByRole("radiogroup", { name: "范围" });
+    expect(
+      await scope.getByRole("radio", { name: "整个文献库" }).isChecked(),
+    ).toBe(true);
+    await expect
+      .poll(() => page.locator(".ui-page-header .ui-page-count").textContent())
+      .toBe("2 篇符合");
+    // “只看收进来的 · n”: none of the two is collected.
+    const only = scope.getByRole("radio", { name: "只看收进来的 · 0" });
+    await only.waitFor();
+    await only.click({ force: true });
+    await expect.poll(() => query(page).collection_scope).toBe("collected");
+    expect(query(page).text).toBe("Discovered sulfide");
+    await page.getByText("没有符合条件的文献", { exact: true }).waitFor();
+
+    // A working set searches in itself, and can widen to the whole library.
+    await page
+      .locator(".application-shell")
+      .getByRole("button", { name: /^样例文件夹/u })
+      .first()
+      .click();
+    await page.getByRole("heading", { level: 1, name: "样例文件夹" }).waitFor();
+    expect(await page.getByRole("region", { name: "整个文献库" }).count()).toBe(
+      0,
+    );
+    const inFolder = page.getByRole("searchbox", {
+      name: "在「样例文件夹」里搜索",
+    });
+    await inFolder.fill("Discovered");
+    const folderScope = page.getByRole("radiogroup", { name: "范围" });
+    await folderScope.waitFor();
+    expect(
+      await folderScope
+        .getByRole("radio", { name: "「样例文件夹」里" })
+        .isChecked(),
+    ).toBe(true);
+    await folderScope
+      .getByRole("radio", { name: "整个文献库" })
+      .click({ force: true });
+    await expect.poll(() => query(page).folder ?? null).toBeNull();
+    expect(query(page).text).toBe("Discovered");
+    // The way back stays offered while the search lasts.
+    await folderScope
+      .getByRole("radio", { name: "「样例文件夹」里" })
+      .click({ force: true });
+    await expect.poll(() => query(page).folder?.id ?? null).not.toBeNull();
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);
+
+it("marks only-discovered rows with where they came from and collects one in place and several from the selection", async () => {
+  const w = await nextWorkspace({ setup: withDiscovered });
+  try {
+    const page = w.page;
+    // The first discovered paper came from a citation expansion; the other
+    // has no discovery batch (technical 06 2.1.1).
+    await rewrite(page, "search", (value) => {
+      const pageValue = value.page as {
+        items: Record<string, unknown>[];
+      };
+      for (const item of pageValue.items) {
+        const id = (item.literature as { literature_id: string }).literature_id;
+        if (id === DISCOVERED[0][0] && item.collected === false)
+          item.discovery_origin = { kind: "citation", intake_batch_id: BATCH };
+      }
+      return value;
+    });
+    const collected = Number(await sidebarCount(page).textContent());
+    await page.goto(
+      new URL(`/?view=lib&query=${encode({ text: "Discovered" })}`, page.url())
+        .href,
+    );
+    const row = (id: string) =>
+      page.locator(`.paper-row[data-literature-id="${id}"]`);
+    await row(DISCOVERED[0][0]).waitFor();
+    expect(
+      await row(DISCOVERED[0][0]).locator(".paper-citation").textContent(),
+    ).toMatch(/ · 只被发现：来自引用扩展$/u);
+    expect(
+      await row(DISCOVERED[1][0]).locator(".paper-citation").textContent(),
+    ).toMatch(/ · 只被发现$/u);
+    // Only a known origin is a link; the other is plain words.
+    expect(
+      await row(DISCOVERED[1][0])
+        .getByRole("button", { name: /^只被发现/u })
+        .count(),
+    ).toBe(0);
+
+    // One paper: the row changes where it is, and so does the sidebar.
+    const requests: string[] = [];
+    page.on("request", (request) => {
+      const path = new URL(request.url()).pathname;
+      if (path === "/api/v1/query/search") requests.push(path);
+    });
+    await row(DISCOVERED[1][0])
+      .getByRole("button", { name: "收进来", exact: true })
+      .click();
+    await row(DISCOVERED[1][0])
+      .getByText("已收进来", { exact: true })
+      .waitFor();
+    expect(
+      await row(DISCOVERED[1][0]).locator(".paper-citation").textContent(),
+    ).not.toContain("只被发现");
+    await expect
+      .poll(() => sidebarCount(page).textContent())
+      .toBe(String(collected + 1));
+    // The list is not read again.
+    expect(requests).toEqual([]);
+
+    // Several: “收进来 n” counts only the discovered among the selected.
+    for (const id of [DISCOVERED[0][0], DISCOVERED[1][0]]) {
+      await row(id).focus();
+      await page.keyboard.press("Space");
+    }
+    const bar = page.getByRole("region", { name: "文献选择" });
+    await bar.getByRole("button", { name: "更多", exact: true }).click();
+    await page.getByRole("menuitem", { name: "收进来 1", exact: true }).click();
+    await row(DISCOVERED[0][0])
+      .getByText("已收进来", { exact: true })
+      .waitFor();
+    await expect
+      .poll(() => sidebarCount(page).textContent())
+      .toBe(String(collected + 2));
+    await bar.getByRole("button", { name: "更多", exact: true }).click();
+    expect(await page.getByRole("menuitem", { name: /^收进来/u }).count()).toBe(
+      0,
+    );
+    await page.keyboard.press("Escape");
+
+    // The origin opens that task's discovery batch in the library.
+    await page.goto(
+      new URL(`/?view=lib&query=${encode({ text: "Discovered" })}`, page.url())
+        .href,
+    );
+    await page.unroute((url) => url.pathname === "/api/v1/query/search");
+    await rewrite(page, "search", (value) => {
+      const items = (value.page as { items: Record<string, unknown>[] }).items;
+      for (const item of items)
+        if (
+          (item.literature as { literature_id: string }).literature_id ===
+          DISCOVERED[0][0]
+        ) {
+          item.collected = false;
+          item.discovery_origin = { kind: "topic", intake_batch_id: BATCH };
+        }
+      return value;
+    });
+    await page.reload();
+    await row(DISCOVERED[0][0])
+      .getByRole("button", { name: "只被发现：来自主题搜索", exact: true })
+      .click();
+    await expect.poll(() => query(page).intake_batch_ids).toEqual([BATCH]);
+    expect(query(page).text ?? null).toBeNull();
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);
+
+it("says “1 万篇以上” beyond 10,000, works the exact number out on request and writes “1 万+” for counts from a sample", async () => {
+  const w = await nextWorkspace({ setup: withDiscovered });
+  try {
+    const page = w.page;
+    // The service's own flags, for a scope this fixture cannot reach.
+    await rewrite(page, "search", (value) => {
+      const p = value.page as Record<string, unknown>;
+      p.total_count = 10000;
+      p.count_truncated = true;
+      p.status_updating = true;
+      return value;
+    });
+    await rewrite(page, "library-counts", (value, request) => {
+      const r = value.result as Record<string, unknown>;
+      const q = (request as { query: Record<string, unknown> }).query;
+      // Filtered counts stop at 10,000; the unfiltered ones are counters.
+      if (q.author) {
+        const statuses = r.statuses as Record<string, number>;
+        for (const key of Object.keys(statuses)) statuses[key] = 0;
+        statuses.UNREVIEWED = 10000;
+        r.total = 10000;
+        r.unavailable_pdf = 0;
+        r.with_primary_pdf = 0;
+        r.recently_opened = 0;
+        r.full_text = { total: 0, obtained: 0, missing: 0, exhausted: 0 };
+        r.count_truncated = true;
+      }
+      return value;
+    });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const exact: unknown[] = [];
+    await page.route(
+      (url) => url.pathname === "/api/v1/query/library-exact-count",
+      async (route) => {
+        exact.push(
+          (route.request().postDataJSON() as { request: unknown }).request,
+        );
+        await held;
+        await route.fulfill({
+          status: 200,
+          json: {
+            protocol_version: 1,
+            result: {
+              kind: "search-total",
+              snapshot_at: "2026-11-22T06:32:00.000Z",
+              total_count: 12345,
+            },
+          },
+        });
+      },
+    );
+    await page.goto(
+      new URL(`/?view=lib&query=${encode({ author: "Imaginary" })}`, page.url())
+        .href,
+    );
+    const count = page.locator(".ui-page-header .ui-page-count");
+    await expect
+      .poll(() => count.textContent())
+      .toMatch(/^符合 1 万篇以上 \/ 共 \d+ 篇算出准确数$/u);
+    // The quick filters were counted from the first 10,000 matches.
+    const quick = page.locator(".library-status-filters");
+    await expect
+      .poll(() =>
+        quick
+          .getByRole("button", { name: /^全部/u })
+          .locator(".filter-count")
+          .textContent(),
+      )
+      .toBe("1 万+");
+    expect(await quick.textContent()).toContain("状态正在更新，数字可能不准");
+    await count
+      .getByRole("button", { name: "算出准确数", exact: true })
+      .click();
+    await count.getByText("正在计算…", { exact: true }).waitFor();
+    expect(
+      await count.getByRole("button", { name: "算出准确数" }).count(),
+    ).toBe(0);
+    release();
+    await expect
+      .poll(() => count.textContent())
+      .toMatch(/^符合 12,345 篇（截至 \d\d:\d\d） \/ 共 \d+ 篇$/u);
+    // Asked for exactly this query, the collected papers by an author.
+    expect(exact).toEqual([
+      expect.objectContaining({
+        kind: "search-total",
+        query: expect.objectContaining({
+          author: "Imaginary",
+          collection_scope: "collected",
+        }),
+      }),
+    ]);
+    // Another condition and the worked-out number is gone.
+    await page
+      .locator(".library-status-filters")
+      .getByRole("button", { name: /^只有书目/u })
+      .click();
+    await expect
+      .poll(() => count.textContent())
+      .toMatch(/^符合 1 万篇以上 \/ 共 \d+ 篇算出准确数$/u);
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);
+
+it("beyond 10,000 keeps only the view's own sort, and offers it in words when the address asks for another", async () => {
+  const w = await nextWorkspace({ setup: withDiscovered });
+  try {
+    const page = w.page;
+    await page.route(
+      (url) => url.pathname === "/api/v1/query/search",
+      async (route) => {
+        const request = (
+          route.request().postDataJSON() as {
+            request: { sort: string; query: { text: string | null } };
+          }
+        ).request;
+        if (request.sort !== "collected-desc" && !request.query.text)
+          return route.fulfill({
+            status: 400,
+            json: { protocol_version: 1, code: "library-sort-scope-limit" },
+          });
+        const response = await route.fetch();
+        const value = (await response.json()) as {
+          page: Record<string, unknown>;
+        };
+        value.page.total_count = 10000;
+        value.page.count_truncated = true;
+        return route.fulfill({ response, json: value });
+      },
+    );
+    // An old address with another order: not changed silently.
+    await page.goto(new URL("/?view=lib&sort=title-asc", page.url()).href);
+    const notice = page.locator(".library-sort-limit");
+    await notice.waitFor();
+    expect(await notice.locator("p").textContent()).toBe(
+      "超过 1 万篇时只能按这几种排序；先加条件，或缩小范围",
+    );
+    expect(sort(page)).toBe("title-asc");
+    await notice
+      .getByRole("button", { name: "改按最近收进来", exact: true })
+      .click();
+    await expect.poll(() => sort(page)).toBe("collected-desc");
+    await page.locator(".paper-row").first().waitFor();
+    // The menu keeps the other sorts, disabled, saying why.
+    await page
+      .getByRole("button", { name: /排序/u })
+      .and(page.locator('[aria-haspopup="listbox"]'))
+      .click();
+    const options = page.getByRole("option");
+    await options.first().waitFor();
+    const states = await options.evaluateAll((items) =>
+      items.map((item) => [
+        item.querySelector('[slot="label"]')?.textContent ?? "",
+        item.getAttribute("aria-disabled") === "true",
+      ]),
+    );
+    expect(states.find(([label]) => label === "最近收进来")?.[1]).toBe(false);
+    expect(
+      states
+        .filter(([label]) => label !== "最近收进来")
+        .every(([, disabled]) => disabled),
+    ).toBe(true);
+    expect(await page.getByRole("listbox").textContent()).toContain(
+      "超过 1 万篇时只能按这几种排序；先加条件，或缩小范围",
+    );
+    await page.keyboard.press("Escape");
+    // The table's heads do not sort either.
+    await page.getByRole("tab", { name: "表格", exact: true }).click();
+    const heads = page.locator(".library-table-sort");
+    await heads.first().waitFor();
+    expect(
+      await heads.evaluateAll((items) =>
+        items.every((item) => (item as HTMLButtonElement).disabled),
+      ),
+    ).toBe(true);
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);
+
+it("lists a citation expansion's rate-limited sources under the summary, with their state and the queries they owe", async () => {
+  let task = "";
+  const w = await nextWorkspace({
+    setup: async (env) => {
+      await withDiscovered(env);
+      task = (
+        await env.app.jobService!.create({
+          target_kind: "selector",
+          goal: "pdf",
+          selector: {
+            kind: "literatures",
+            literature_ids: [env.parseRequest.literature_id],
+          },
+          policy_version: "cooldown-fixture",
+          policy: { mode: "never", max_retries: 0 },
+          idempotency_key: "cooldown-fixture-task",
+        })
+      ).job_id;
+    },
+  });
+  try {
+    const page = w.page;
+    const soon = new Date(Date.now() + 60 * 60_000).toISOString(),
+      past = new Date(Date.now() - 60_000).toISOString();
+    const reason = (code: string) => ({
+      code,
+      reason: "Synthetic provider failure.",
+      action: "Retry later.",
+      retryable: true,
+    });
+    await page.route(
+      (url) => /^\/api\/tasks\/[^/]+$/u.test(url.pathname),
+      async (route) => {
+        const response = await route.fetch();
+        const value = (await response.json()) as {
+          task: Record<string, unknown>;
+        };
+        value.task.citation_source_cooldowns = [
+          {
+            source: "openalex",
+            status: "cooling",
+            retries: 1,
+            next_retry_at: soon,
+            reason: reason("metadata-provider-rate-limited"),
+            pending_count: 37,
+            pending_sample: [
+              { literature_id: missingId, purpose: "reference-query" },
+              { literature_id: DISCOVERED[0][0], purpose: "lookup" },
+            ],
+            pending_truncated: true,
+          },
+          {
+            source: "semantic-scholar",
+            status: "cooling",
+            retries: 0,
+            next_retry_at: past,
+            reason: reason("metadata-provider-rate-limited"),
+            pending_count: 0,
+            pending_sample: [],
+            pending_truncated: false,
+          },
+          {
+            source: "core",
+            status: "disabled",
+            retries: 6,
+            next_retry_at: null,
+            reason: reason("metadata-provider-rate-limited"),
+            pending_count: 0,
+            pending_sample: [],
+            pending_truncated: false,
+          },
+          {
+            source: "crossref",
+            status: "recovered",
+            retries: 0,
+            next_retry_at: null,
+            reason: null,
+            pending_count: 0,
+            pending_sample: [],
+            pending_truncated: false,
+          },
+          {
+            source: "opencitations",
+            status: "retry-ended",
+            retries: 1,
+            next_retry_at: null,
+            reason: reason("metadata-provider-unavailable"),
+            pending_count: 0,
+            pending_sample: [],
+            pending_truncated: false,
+          },
+        ];
+        await route.fulfill({ response, json: value });
+      },
+    );
+    await page.goto(new URL(`/?view=task&task=${task}`, page.url()).href);
+    const sources = page.getByRole("region", { name: "来源", exact: true });
+    await sources.waitFor();
+    const lines = await sources
+      .locator(".citation-source-state")
+      .allTextContents();
+    const retryAt = new Date(soon).toLocaleTimeString("zh-CN", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    expect(lines).toEqual([
+      `OpenAlex · 冷却中，${retryAt} 重试（第 2 次） · 待补查 37 项`,
+      "Semantic Scholar · 冷却中，等待重试",
+      "CORE · 本任务内已停用：连续限流 6 次",
+      "Crossref · 已恢复",
+      "OpenCitations · 冷却结束，重试出错：错误",
+    ]);
+    expect(
+      await sources.locator('.citation-source[data-status="disabled"]').count(),
+    ).toBe(1);
+    await sources
+      .getByRole("button", { name: "待补查 37 项", exact: true })
+      .click();
+    const sample = sources.locator(".citation-source-sample");
+    await expect
+      .poll(() => sample.locator(".citation-source-title").allTextContents())
+      .toEqual(["Unparsed source", DISCOVERED[0][1]]);
+    expect(
+      await sample.locator(".citation-source-purpose").allTextContents(),
+    ).toEqual(["查参考文献", "查书目"]);
+    expect(await sample.locator(".citation-source-more").textContent()).toBe(
+      "只列出前 2 项",
+    );
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);

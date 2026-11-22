@@ -30,7 +30,9 @@ it("has no bar above the page and no “活动” panel; on a narrow screen the 
   const w = await nextWorkspace();
   try {
     const page = w.page;
-    await page.getByRole("heading", { level: 1, name: "文献库" }).waitFor();
+    await page
+      .getByRole("heading", { level: 1, name: "收进来的文献" })
+      .waitFor();
     expect(await page.locator(".workspace-header").count()).toBe(0);
     expect(
       await page.getByRole("navigation", { name: "工作区与阅读标签" }).count(),
@@ -76,13 +78,13 @@ it("keeps the toolbar on one line and leaves the search words out of the filter 
     const toolbar = page.locator(".library-toolbar");
     const filter = toolbar.getByRole("button", { name: /^筛选/u });
     expect(await filter.textContent()).toBe("筛选");
-    // “排序：最近入库”, “显示：列表 / 表格”, 批量操作.
+    // “排序：最近收进来”, “显示：列表 / 表格”, 批量操作.
     expect(
       await toolbar
         .getByRole("button", { name: /排序/u })
         .and(page.locator('[aria-haspopup="listbox"]'))
         .textContent(),
-    ).toBe("排序：最近入库");
+    ).toBe("排序：最近收进来");
     const display = toolbar.locator(".library-display");
     expect(await display.innerText()).toMatch(/^显示\s*列表\s*表格$/u);
     const batch = toolbar.getByRole("button", {
@@ -104,10 +106,18 @@ it("keeps the toolbar on one line and leaves the search words out of the filter 
       );
     expect(new Set(tops).size).toBe(1);
     // Searching: the words stay in the box, no chip, no count on 筛选.
+    // The collected papers are searched from the band (page specs “全库带”).
     const count = page.locator(".ui-page-header .ui-page-count");
-    await expect.poll(() => count.textContent()).toBe("2 篇");
-    await page.getByRole("searchbox", { name: "搜索文献" }).fill("Unparsed");
-    await expect.poll(() => count.textContent()).toBe("符合 1 篇 / 共 2 篇");
+    await expect.poll(() => count.textContent()).toBe("共 2 篇");
+    const band = page.getByRole("searchbox", { name: "搜索整个文献库" });
+    await band.fill("Unparsed");
+    await band.press("Enter");
+    await expect.poll(() => count.textContent()).toBe("1 篇符合");
+    expect(
+      await page
+        .getByRole("searchbox", { name: "搜索整个文献库" })
+        .inputValue(),
+    ).toBe("Unparsed");
     expect(query(page)).toMatchObject({ text: "Unparsed" });
     expect(await page.locator(".library-applied").count()).toBe(0);
     expect(await filter.textContent()).toBe("筛选");

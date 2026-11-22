@@ -1,6 +1,7 @@
 import {
   openMoreConditions,
   openSavedViews,
+  searchLibrary,
   showAllLibraryStatuses,
 } from "./next-workspace-fixture.js";
 import { expect, it } from "vitest";
@@ -87,6 +88,10 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
             m.pages,
           );
         }
+        // All of them are in hand: the library lists the collected papers.
+        db.exec(
+          "INSERT INTO library_collected(literature_id,intake_at) SELECT literature_id,NULL FROM literatures WHERE literature_id LIKE '00000000-0000-0000-0030-%'",
+        );
         expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
         db.exec("COMMIT");
       } finally {
@@ -99,7 +104,7 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
     await showAllLibraryStatuses(p);
     // The total is written once, beside the title (page specs “文献库”).
     const count = p.locator(".ui-page-header .ui-page-count");
-    await expect.poll(() => count.textContent()).toBe("30,002 篇");
+    await expect.poll(() => count.textContent()).toBe("共 30,002 篇");
     expect(await p.locator(".library-list-heading").textContent()).not.toMatch(
       /已显示|共/u,
     );
@@ -154,14 +159,15 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
         .getByRole("checkbox", { name: "全选已加载", exact: true })
         .evaluate((el) => (el as HTMLInputElement).indeterminate),
     ).toBe(true);
-    const before = await list.evaluate((el) => el.scrollTop);
+    // The row stays where it was on screen. The band above the list may
+    // gain an entry meanwhile (“最近读过 · 1”), so the offset is not compared.
+    const at = () => row.evaluate((el) => el.getBoundingClientRect().top);
+    const before = await at();
     await row.locator(".paper-open").click();
     await p.locator(".reader-workspace").waitFor();
     await p.goBack();
     await list.waitFor();
-    await expect
-      .poll(() => list.evaluate((el) => el.scrollTop))
-      .toBeCloseTo(before, -1);
+    await expect.poll(at).toBeCloseTo(before, -1);
     expect(
       await p
         .getByRole("checkbox", { name: `选择 ${title}`, exact: true })
@@ -279,17 +285,15 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
       .getByRole("menuitem", { name: "My library", exact: true })
       .waitFor();
     await p.keyboard.press("Escape");
-    await p.getByRole("searchbox", { name: "搜索文献" }).fill("Paper 00001");
-    await expect
-      .poll(() => count.textContent())
-      .toBe("符合 1 篇 / 共 30,002 篇");
+    await searchLibrary(p, "Paper 00001");
+    await expect.poll(() => count.textContent()).toBe("1 篇符合");
     // The search words are no filter condition: no chip, no count on 筛选.
     expect(await p.locator(".library-applied").count()).toBe(0);
     expect(
       await p.getByRole("button", { name: /^筛选/ }).first().textContent(),
     ).toBe("筛选");
-    await p.getByRole("searchbox", { name: "搜索文献" }).fill("");
-    await expect.poll(() => count.textContent()).toBe("30,002 篇");
+    await p.getByRole("searchbox", { name: "搜索整个文献库" }).fill("");
+    await expect.poll(() => count.textContent()).toBe("共 30,002 篇");
 
     // The table pages and bounds the DOM the same way (page specs “文献库”).
     await p.getByRole("tab", { name: "表格", exact: true }).click();
@@ -531,6 +535,8 @@ async function seedFullText(w: Awaited<ReturnType<typeof nextWorkspace>>) {
       },
     });
   await finishIntake(app.database, batch, "completed");
+  // Every one of them is in hand: the library lists the collected papers.
+  await app.database.collectLiteratures([1, 2, 3, 4].map(id));
   return { folder, batch };
 }
 
@@ -554,7 +560,7 @@ it("writes the scope's total once beside the title, “符合 n 篇 / 共 m 篇�
     });
     await page.reload();
     const count = page.locator(".ui-page-header .ui-page-count");
-    await expect.poll(() => count.textContent()).toBe("6 篇");
+    await expect.poll(() => count.textContent()).toBe("共 6 篇");
     // The “全文已取得 … / 总数 …” line is gone; the total is said once.
     expect(await page.getByLabel("全文取得情况").count()).toBe(0);
     expect(await page.getByText(/全文已取得/u).count()).toBe(0);
@@ -593,13 +599,13 @@ it("writes the scope's total once beside the title, “符合 n 篇 / 共 m 篇�
     const query = () =>
       JSON.parse(new URL(page.url()).searchParams.get("query") ?? "{}");
     await chip("全部").click();
-    await expect.poll(() => count.textContent()).toBe("6 篇");
+    await expect.poll(() => count.textContent()).toBe("共 6 篇");
     // An intake batch is a condition of the library.
     await page
       .getByRole("group", { name: "最近入库" })
       .getByRole("button", { name: /^全文批次/u })
       .click();
-    await expect.poll(() => count.textContent()).toBe("符合 2 篇 / 共 6 篇");
+    await expect.poll(() => count.textContent()).toBe("共 2 篇");
     expect(query().intake_batch_ids).toEqual([batch]);
     // A folder is the page's scope: its own total, narrowed by a search.
     await page
@@ -607,11 +613,11 @@ it("writes the scope's total once beside the title, “符合 n 篇 / 共 m 篇�
       .getByRole("button", { name: /^全文范围/u })
       .click();
     await page.getByRole("heading", { name: "全文范围" }).waitFor();
-    await expect.poll(() => count.textContent()).toBe("2 篇");
+    await expect.poll(() => count.textContent()).toBe("共 2 篇");
     await page
-      .getByRole("searchbox", { name: "搜索文献" })
+      .getByRole("searchbox", { name: "在「全文范围」里搜索" })
       .fill("Full text two versions");
-    await expect.poll(() => count.textContent()).toBe("符合 1 篇 / 共 2 篇");
+    await expect.poll(() => count.textContent()).toBe("1 篇符合");
     expect(query()).toMatchObject({ folder: { id: folder } });
     await expect
       .poll(() =>
@@ -624,7 +630,7 @@ it("writes the scope's total once beside the title, “符合 n 篇 / 共 m 篇�
       .toEqual([id(2)]);
     // Nothing found: one sentence in the list, and the way back.
     await page
-      .getByRole("searchbox", { name: "搜索文献" })
+      .getByRole("searchbox", { name: "在「全文范围」里搜索" })
       .fill("nothing-at-all");
     const empty = page.locator(".library-empty");
     await empty.getByText("没有符合条件的文献", { exact: true }).waitFor();
@@ -639,9 +645,11 @@ it("writes the scope's total once beside the title, “符合 n 篇 / 共 m 篇�
     expect(query().text ?? null).toBeNull();
     expect(query()).toMatchObject({ folder: { id: folder } });
     expect(
-      await page.getByRole("searchbox", { name: "搜索文献" }).inputValue(),
+      await page
+        .getByRole("searchbox", { name: "在「全文范围」里搜索" })
+        .inputValue(),
     ).toBe("");
-    await expect.poll(() => count.textContent()).toBe("2 篇");
+    await expect.poll(() => count.textContent()).toBe("共 2 篇");
     expect(started).toEqual([]);
     expect(w.errors).toEqual([]);
   } finally {
@@ -663,13 +671,13 @@ it("shows the title's count for the whole library, an intake batch and a folder 
     const count = page.locator(".ui-page-header .ui-page-count");
     const shot = (name: string) =>
       page.screenshot({ path: join(output, `${name}.png`) });
-    await expect.poll(() => count.textContent()).toBe("6 篇");
+    await expect.poll(() => count.textContent()).toBe("共 6 篇");
     await shot("count-library");
     await page
       .getByRole("group", { name: "最近入库" })
       .getByRole("button", { name: /^全文批次/u })
       .click();
-    await expect.poll(() => count.textContent()).toContain("符合 2 篇");
+    await expect.poll(() => count.textContent()).toBe("共 2 篇");
     await page.locator(".paper-row").first().waitFor();
     await shot("count-batch");
     await page
@@ -677,7 +685,7 @@ it("shows the title's count for the whole library, an intake batch and a folder 
       .getByRole("button", { name: /^全文范围/u })
       .click();
     await page.getByRole("heading", { name: "全文范围" }).waitFor();
-    await expect.poll(() => count.textContent()).toBe("2 篇");
+    await expect.poll(() => count.textContent()).toBe("共 2 篇");
     await shot("count-folder");
     expect(w.errors).toEqual([]);
   } finally {

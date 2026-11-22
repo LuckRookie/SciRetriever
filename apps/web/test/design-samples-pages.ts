@@ -312,6 +312,112 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     ready: ".ui-empty",
   },
   {
+    id: "library-search-discovered",
+    name: "文献库 · 搜索结果（含只被发现的行）",
+    route: route("lib", `&query=${query({ text: "Synthetic" })}`),
+    interaction:
+      "搜索整个文献库；第一页的只被发现的行排到前面，分别标为来自引用扩展、来自主题搜索与没有来历（来历与排列为模拟）",
+    // The sample's discovered papers have no discovery batch; the origins
+    // are given in the service's shape for this page.
+    prepare: async (p) => {
+      await p.route(
+        (url) => url.pathname === "/api/v1/query/search",
+        async (request) => {
+          const response = await request.fetch();
+          const value = await response.json();
+          let n = 0;
+          // Bring the first page's discovered rows into view, after two
+          // collected ones.
+          const items = value.page?.items ?? [];
+          if (items.length)
+            value.page.items = [
+              ...items
+                .filter((i: { collected?: boolean }) => i.collected !== false)
+                .slice(0, 2),
+              ...items.filter(
+                (i: { collected?: boolean }) => i.collected === false,
+              ),
+              ...items
+                .filter((i: { collected?: boolean }) => i.collected !== false)
+                .slice(2),
+            ];
+          for (const item of value.page?.items ?? [])
+            if (item.collected === false && n++ % 3 !== 2)
+              item.discovery_origin = {
+                kind: n % 3 === 1 ? "citation" : "topic",
+                intake_batch_id: "00000000-0000-0000-0000-000000079001",
+              };
+          await request.fulfill({ response, json: value });
+        },
+      );
+      await p.reload();
+    },
+    ready: ".paper-row .paper-collect",
+  },
+  {
+    id: "library-over-limit",
+    name: "文献库 · 超过一万篇",
+    route: route("lib", `&query=${query({ author: "Imaginary" })}`),
+    interaction:
+      "按作者筛选收进来的文献；列表、快速筛选与范围内的词按超过一万篇的截断标记模拟，状态正在更新",
+    prepare: async (p) => {
+      await p.route(
+        (url) => url.pathname === "/api/v1/query/search",
+        async (request) => {
+          const response = await request.fetch();
+          const value = await response.json();
+          value.page.total_count = 10000;
+          value.page.count_truncated = true;
+          value.page.status_updating = true;
+          await request.fulfill({ response, json: value });
+        },
+      );
+      await p.route(
+        (url) => url.pathname === "/api/v1/query/library-counts",
+        async (request) => {
+          const response = await request.fetch();
+          const value = await response.json();
+          const asked = request.request().postDataJSON()?.request?.query ?? {};
+          const r = value.result;
+          // The filtered counts stop at 10,000; the scope's are counters.
+          if (asked.author) {
+            const statuses = r.statuses as Record<string, number>;
+            for (const key of Object.keys(statuses)) statuses[key] = 0;
+            Object.assign(statuses, {
+              READY: 3200,
+              ASSET_READY: 1800,
+              UNREVIEWED: 5000,
+            });
+            Object.assign(r, {
+              total: 10000,
+              unavailable_pdf: 0,
+              with_primary_pdf: 5000,
+              recently_opened: 0,
+              full_text: { total: 0, obtained: 0, missing: 0, exhausted: 0 },
+              count_truncated: true,
+            });
+          }
+          await request.fulfill({ response, json: value });
+        },
+      );
+      await p.route(
+        (url) => url.pathname === "/api/v1/query/library-facets",
+        async (request) => {
+          const response = await request.fetch();
+          const value = await response.json();
+          Object.assign(value.result, {
+            total: 10000,
+            count_truncated: true,
+            facets_truncated: true,
+          });
+          await request.fulfill({ response, json: value });
+        },
+      );
+      await p.reload();
+    },
+    ready: '.ui-page-count .ui-button:has-text("算出准确数")',
+  },
+  {
     id: "reader-pdf",
     name: "阅读 · PDF",
     route: reader("pdf"),
@@ -800,6 +906,78 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     name: "任务 · 主题发现进行中",
     route: (ids) => `/?view=task&task=${ids.metadataRunningTask}`,
     ready: ".source-running",
+  },
+  {
+    id: "task-detail-citation-sources",
+    name: "任务 · 引用扩展的来源冷却",
+    route: (ids) => `/?view=task&task=${ids.metadataTask}`,
+    interaction:
+      "任务详情的“来源”一组：冷却中、等待重试、已停用、已恢复、冷却结束重试出错，并展开待补查（来源状态按合同样式模拟）",
+    prepare: async (p, ids) => {
+      const soon = new Date(Date.now() + 42 * 60_000).toISOString();
+      const failure = (code: string) => ({
+        code,
+        reason: "Synthetic source failure.",
+        action: "Retry later.",
+        retryable: true,
+      });
+      const source = (
+        name: string,
+        status: string,
+        retries: number,
+        extra: object = {},
+      ) => ({
+        source: name,
+        status,
+        retries,
+        next_retry_at: null,
+        reason: failure("metadata-provider-rate-limited"),
+        pending_count: 0,
+        pending_sample: [],
+        pending_truncated: false,
+        ...extra,
+      });
+      await p.route(
+        (url) => url.pathname === `/api/tasks/${ids.metadataTask}`,
+        async (request) => {
+          const response = await request.fetch();
+          const value = await response.json();
+          value.task.citation_source_cooldowns = [
+            source("openalex", "cooling", 1, {
+              next_retry_at: soon,
+              pending_count: 37,
+              pending_sample: [
+                { literature_id: ids.literature, purpose: "reference-query" },
+                { literature_id: ids.draft, purpose: "lookup" },
+                { literature_id: ids.metadataOnly, purpose: "reference-query" },
+              ],
+              pending_truncated: true,
+            }),
+            source("semantic-scholar", "cooling", 0, {
+              next_retry_at: new Date(Date.now() - 60_000).toISOString(),
+            }),
+            source("core", "disabled", 6),
+            source("crossref", "recovered", 0, { reason: null }),
+            source("opencitations", "retry-ended", 1, {
+              reason: failure("metadata-provider-unavailable"),
+            }),
+          ];
+          await request.fulfill({ response, json: value });
+        },
+      );
+      await p.reload();
+      await p
+        .getByRole("button", { name: "待补查 37 项", exact: true })
+        .click();
+      // The sample's titles are read one by one.
+      await p.waitForFunction(
+        () =>
+          !document
+            .querySelector(".citation-source-sample")
+            ?.textContent?.includes("正在读取标题…"),
+      );
+    },
+    ready: ".citation-source-sample",
   },
   {
     id: "source-statistics",

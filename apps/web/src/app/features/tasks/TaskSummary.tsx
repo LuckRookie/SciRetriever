@@ -21,6 +21,7 @@ import { useShell } from "../../shell/context.js";
 import { localTime, shortTime } from "../../strings.js";
 import { problemText } from "../sources/problem.js";
 import { CitationScope, TaskScope } from "./TaskScope.js";
+import { CitationSources } from "./CitationSources.js";
 
 const count = new Intl.NumberFormat("zh-CN");
 const TERMINAL = ["completed", "cancelled", "failed", "interrupted"];
@@ -182,6 +183,11 @@ export function TaskSummary({ task }: { task: TaskDetail }) {
           </span>
         ) : null}
       </div>
+      <CitationSources
+        sources={task.citation_source_cooldowns}
+        truncated={task.citation_source_cooldowns_truncated}
+        now={now}
+      />
       {papers.length ? (
         <section className="task-papers" aria-label="逐篇结果">
           <h3>

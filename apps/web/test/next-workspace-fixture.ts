@@ -187,3 +187,17 @@ export async function openMoreConditions(page: Page) {
   const more = page.getByRole("button", { name: "更多条件", exact: true });
   if ((await more.getAttribute("aria-expanded")) !== "true") await more.click();
 }
+/**
+ * Searches as a person does (page specs “文献库”): from the band over the
+ * collected papers, or in the search page's own box; Enter opens the results.
+ */
+export async function searchLibrary(
+  page: Pick<Page, "getByRole">,
+  words: string,
+) {
+  const box = page
+    .getByRole("searchbox", { name: "搜索整个文献库", exact: true })
+    .first();
+  await box.fill(words);
+  await box.press("Enter");
+}

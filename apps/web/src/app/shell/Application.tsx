@@ -57,6 +57,7 @@ import {
 import {
   emptyQuery,
   readLibraryCounts,
+  viewSort,
   readLiterature,
   paperTitle,
   type LiteratureChoice,
@@ -69,8 +70,7 @@ import {
   withoutScope,
 } from "../features/library/Folders.js";
 import { taskTabs } from "../features/tasks/TaskPage.js";
-import { archiveQuery } from "../data/archive.js";
-import { record } from "../data/wire.js";
+import { useIssueCount } from "../data/archive.js";
 import { pacedInterval } from "../data/polling.js";
 import { createReadingState, closeReadingState } from "../../reading/state.js";
 import { READER_PAINTED, ShellContext } from "./context.js";
@@ -396,25 +396,8 @@ function Workspace({ api }: { api: ApiClient }) {
   });
   // “n 进行中” beside 任务; queued tasks are not running.
   const running = runningTaskCount(tasks.data);
-  // “m 需处理” beside 任务: the archive issues' total, under the archive query
-  // prefix so resolving an issue refreshes it.
-  const issues = useQuery({
-    queryKey: ["archive", "issues", "count"],
-    queryFn: async ({ signal }) =>
-      Number(
-        record(
-          await archiveQuery(
-            api,
-            "archive",
-            { operation: "issues", request: { offset: 0, limit: 1 } },
-            signal,
-          ),
-          "archive issues",
-        ).total_count ?? 0,
-      ),
-    enabled: api.kind === "workspace" && api.workspace.readiness === "ready",
-    staleTime: 30000,
-  });
+  // “m 需处理” beside 任务: the archive issues' total.
+  const issues = useIssueCount();
   const lastTasks = useRef<string | null>(null);
   const taskQueries = useQueryClient();
   useEffect(() => {
@@ -481,9 +464,19 @@ function Workspace({ api }: { api: ApiClient }) {
       {
         view: "lib",
         literature: null,
-        query: JSON.stringify(withoutScope(route.query)),
-        ...(route.query.recently_opened && route.sort === "opened-desc"
-          ? { sort: "intake-desc" }
+        // The collected papers: no working set and no search words; the
+        // view's own sort unless another was chosen (page specs “文献库”).
+        query: JSON.stringify({
+          ...withoutScope(route.query),
+          text: null,
+          intake_batch_ids: [],
+          discovery_run_ids: [],
+          collection_scope: undefined,
+        }),
+        ...(route.sort === viewSort(route.query) ||
+        route.sort === "collected-desc" ||
+        route.sort === "intake-desc"
+          ? { sort: null }
           : {}),
       },
       { clearSource: true },
@@ -536,7 +529,11 @@ function Workspace({ api }: { api: ApiClient }) {
       {sectionLabels[section]}
       {section === "lib" && (
         <span className="navigation-count">
-          {count.isPending ? "…" : (count.data?.total.toLocaleString() ?? "")}
+          {/* The collected papers, not the whole library (page specs
+              “整体信息架构”); the whole library's count is in the band. */}
+          {count.isPending
+            ? "…"
+            : (count.data?.collection_counts?.collected.toLocaleString() ?? "")}
         </span>
       )}
       {section === "task" && taskCount ? (

@@ -415,6 +415,41 @@
     color: var(--fg3);
     overflow-wrap: anywhere;
   }
+  /* A citation expansion's rate-limited sources, one line each. */
+  .citation-source {
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--line);
+    font-size: var(--text-secondary);
+    color: var(--fg2);
+  }
+  .citation-source[data-status="disabled"] .citation-source-state {
+    color: var(--t-red);
+  }
+  .citation-source[data-status="recovered"] .citation-source-state {
+    color: var(--fg3);
+  }
+  .citation-source-sample {
+    display: grid;
+    gap: 2px;
+    margin: var(--space-2) 0 0;
+    padding: 0 0 0 var(--space-4);
+    list-style: none;
+  }
+  .citation-source-sample > li {
+    display: flex;
+    gap: var(--space-3);
+    justify-content: space-between;
+    font-size: var(--text-caption);
+  }
+  .citation-source-title {
+    min-width: 0;
+    color: var(--fg);
+  }
+  .citation-source-purpose,
+  .citation-source-more {
+    flex-shrink: 0;
+    color: var(--fg3);
+  }
   .task-run {
     display: grid;
     grid-template-columns: minmax(0, 1fr);

@@ -62,6 +62,9 @@ export async function workspace(
         },
       }),
     );
+    // Both papers are in hand: the library lists the collected papers
+    // (ADR 0065 §2), and this one was never parsed or opened.
+    await env.app.database.collectLiteratures([missingId]);
     env.setText(
       "# Measurements\nThe measured energy was 4.2 eV.\n\n## Context\nA separate discussion.\n",
     );

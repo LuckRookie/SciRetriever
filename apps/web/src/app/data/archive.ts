@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApi, invalidateMaterials } from "./query.js";
 import type { ApiClient } from "./api.js";
 import { record } from "./wire.js";
@@ -85,4 +85,28 @@ export async function archiveJsonStream(
     if (next === null) return { header, value: JSON.parse(text) };
   }
   throw new Error("整理数据过大，请通过 CLI 分页读取");
+}
+/**
+ * How many problems wait in 需处理: beside 任务 in the sidebar and in the
+ * library's band; under the archive query prefix so resolving one refreshes it.
+ */
+export function useIssueCount() {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["archive", "issues", "count"],
+    queryFn: async ({ signal }) =>
+      Number(
+        record(
+          await archiveQuery(
+            api,
+            "archive",
+            { operation: "issues", request: { offset: 0, limit: 1 } },
+            signal,
+          ),
+          "archive issues",
+        ).total_count ?? 0,
+      ),
+    enabled: api.kind === "workspace" && api.workspace.readiness === "ready",
+    staleTime: 30000,
+  });
 }

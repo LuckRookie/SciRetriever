@@ -93,19 +93,21 @@ export function withoutScope(query: LibraryQuery): LibraryQuery {
   delete rest.recently_opened;
   return rest;
 }
-function openScope(
-  scope: Pick<LibraryQuery, "folder" | "recently_opened">,
-  sort?: string,
-) {
+function openScope(scope: Pick<LibraryQuery, "folder" | "recently_opened">) {
+  // Each working set opens in its own default order (page specs “文献库”).
   navigate(
     {
       view: "lib",
       literature: null,
       query: JSON.stringify(scopeQuery(scope)),
-      ...(sort ? { sort } : {}),
+      sort: null,
     },
     { clearSource: true },
   );
+}
+/** The papers read in the last 30 days, the last opened first. */
+export function openRecent() {
+  openScope({ recently_opened: true });
 }
 /** The library limited to one intake batch, newest intake first. */
 export function openBatch(id: string) {
@@ -114,7 +116,7 @@ export function openBatch(id: string) {
       view: "lib",
       literature: null,
       query: JSON.stringify({ ...emptyQuery(), intake_batch_ids: [id] }),
-      sort: "intake-desc",
+      sort: null,
     },
     { clearSource: true },
   );
@@ -518,7 +520,7 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
         aria-current={recent ? "page" : false}
         icon={<Icon name="clock" />}
         onPress={() => {
-          openScope({ recently_opened: true }, "opened-desc");
+          openRecent();
           onNavigate();
         }}
       >

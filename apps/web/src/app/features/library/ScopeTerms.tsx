@@ -4,6 +4,7 @@ import type { LibraryFacets, LibraryQuery } from "@sciretriever/contracts";
 import { Button, Icon } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
 import { readLibraryFacets } from "../../data/intake-batches.js";
+import { libraryCount } from "../../data/library.js";
 
 type TermField = "keywords" | "subject_terms";
 type Layer = "tags" | TermField;
@@ -84,6 +85,7 @@ export function ScopeTerms({
               layer="tags"
               value={tag.value}
               count={tag.count}
+              truncated={!!data.facets_truncated}
               pressed={tagIds.includes(tag.tag_id)}
               onPress={() =>
                 onChange(
@@ -107,6 +109,7 @@ export function ScopeTerms({
               layer="keywords"
               value={term.value}
               count={term.count}
+              truncated={!!data.facets_truncated}
               tag={term.tag?.name ?? null}
               pressed={has(query.keywords, term.value)}
               onPress={() =>
@@ -137,6 +140,7 @@ export function ScopeTerms({
                 layer="subject_terms"
                 value={term.value}
                 count={term.count}
+                truncated={!!data.facets_truncated}
                 pressed={has(query.subject_terms, term.value)}
                 onPress={() =>
                   onChange({
@@ -194,16 +198,19 @@ function Row({
   data: LibraryFacets;
   children: ReactNode;
 }) {
+  // Counted from the first 10,000 matches, every number is “1 万+”
+  // (page specs “超过一万篇”).
+  const number = (value: number) =>
+    libraryCount(value, !!data.facets_truncated);
   return (
     <div className="scope-terms-row" data-layer={layer}>
       <span className="scope-terms-label">
         {LABELS[layer]}
         <span
           className="scope-terms-coverage"
-          title={`当前结果 ${data.total.toLocaleString()} 篇中，${data.coverage[layer].toLocaleString()} 篇有${LABELS[layer]}`}
+          title={`当前结果 ${number(data.total)} 篇中，${number(data.coverage[layer])} 篇有${LABELS[layer]}`}
         >
-          {data.coverage[layer].toLocaleString()} /{" "}
-          {data.total.toLocaleString()} 篇
+          {number(data.coverage[layer])} / {number(data.total)} 篇
         </span>
       </span>
       <span className="scope-terms-values">{children}</span>
@@ -215,6 +222,7 @@ function Term({
   layer,
   value,
   count,
+  truncated,
   tag = null,
   pressed,
   onPress,
@@ -222,6 +230,7 @@ function Term({
   layer: Layer;
   value: string;
   count: number;
+  truncated: boolean;
   tag?: string | null;
   pressed: boolean;
   onPress: () => void;
@@ -232,12 +241,12 @@ function Term({
       size="compact"
       className="scope-term"
       aria-pressed={pressed}
-      aria-label={`${LABELS[layer]} ${value}，${count} 篇${tag ? `，对应标签 ${tag}` : ""}`}
+      aria-label={`${LABELS[layer]} ${value}，${libraryCount(count, truncated, "篇")}${tag ? `，对应标签 ${tag}` : ""}`}
       onPress={onPress}
     >
       {value}
       {tag ? <Icon name="tag" className="scope-term-tag" /> : null}
-      <span className="scope-term-count">{count.toLocaleString()}</span>
+      <span className="scope-term-count">{libraryCount(count, truncated)}</span>
     </Button>
   );
 }

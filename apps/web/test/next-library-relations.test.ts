@@ -1,7 +1,7 @@
 import { readerPanel } from "./reader-controls.js";
 import { expect, it } from "vitest";
 import { parseLiterature, parseReference } from "@sciretriever/contracts";
-import { nextWorkspace } from "./next-workspace-fixture.js";
+import { nextWorkspace, searchLibrary } from "./next-workspace-fixture.js";
 import { FIXTURE_LITERATURE } from "../../server/src/workbench/synthetic-fixture.js";
 const uuid = (group: number, index: number) =>
   `00000000-0000-0000-${String(group).padStart(4, "0")}-${String(index).padStart(12, "0")}`;
@@ -129,9 +129,7 @@ it("restores search and detail history and reads more than 25 references with th
         },
       });
     });
-    await page
-      .getByRole("searchbox", { name: "搜索文献", exact: true })
-      .fill(title);
+    await searchLibrary(page, title);
     await expect.poll(() => page.locator(".paper-row").count()).toBe(1);
     await page
       .getByRole("article", { name: title, exact: true })
@@ -197,7 +195,7 @@ it("restores search and detail history and reads more than 25 references with th
       .toBe(false);
     expect(
       await page
-        .getByRole("searchbox", { name: "搜索文献", exact: true })
+        .getByRole("searchbox", { name: "搜索整个文献库", exact: true })
         .inputValue(),
     ).toBe(title);
     await page.goForward();

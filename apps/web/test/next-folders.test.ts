@@ -226,7 +226,14 @@ it("organizes papers into nested folders by dialog and drag, scopes the library,
     await p.getByRole("heading", { name: "最近阅读", exact: true }).waitFor();
     await expect.poll(() => rows.count()).toBe(1);
     expect(await rows.first().getAttribute("aria-label")).toBe(second);
-    expect(new URL(p.url()).searchParams.get("sort")).toBe("opened-desc");
+    // Its own order, the last opened first, without one in the address.
+    expect(new URL(p.url()).searchParams.get("sort")).toBeNull();
+    expect(
+      await p
+        .getByRole("button", { name: /排序/u })
+        .and(p.locator('[aria-haspopup="listbox"]'))
+        .textContent(),
+    ).toBe("排序：最近阅读");
 
     // Deleting a folder previews the impact and only removes memberships.
     await folderRow(p, "表面界面")
@@ -246,7 +253,9 @@ it("organizes papers into nested folders by dialog and drag, scopes the library,
       .getByLabel("主导航", { exact: true })
       .getByRole("button", { name: /^文献库/ })
       .click();
-    await p.getByRole("heading", { name: "文献库", exact: true }).waitFor();
+    await p
+      .getByRole("heading", { name: "收进来的文献", exact: true })
+      .waitFor();
     await expect.poll(() => rows.count()).toBeGreaterThan(1);
   } finally {
     await w.close();

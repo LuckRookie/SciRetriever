@@ -21,10 +21,12 @@ import {
 import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import {
   ARTICLE_KIND_LABELS,
+  LIBRARY_SORT_SCOPE_LIMIT,
   PUBLICATION_FORM_LABELS,
   parseLibrarySearchRequest,
+  type LibraryCounts,
+  type LibraryPageSort,
   type LibraryQuery,
-  type LibrarySort,
   type TextLevel,
   type LiteratureSearchItem,
 } from "@sciretriever/contracts";
@@ -41,6 +43,8 @@ import {
   IconButton,
   Menu,
   PageHeader,
+  Radio,
+  RadioGroup,
   SearchField,
   SegmentedControl,
   Select,
@@ -51,12 +55,21 @@ import {
 } from "../../components/index.js";
 import type { MenuOption } from "../../components/index.js";
 import { AnimatedPanel, Presence, LayoutGroup } from "../../motion/index.js";
-import type { ApiClient } from "../../data/api.js";
+import { ApiError, type ApiClient } from "../../data/api.js";
 import { useApi } from "../../data/query.js";
 import { useUrlState, navigate } from "../../data/url.js";
 import { preferences } from "../../data/preferences.js";
 import {
   CITATION_SEED_LIMIT,
+  collectLiteratures,
+  emptyQuery,
+  exactSearchTotal,
+  libraryCount,
+  libraryView,
+  overCountLimit,
+  pageQuery,
+  storedSort,
+  viewSort,
   literatureChoice,
   metadataTitleParts,
   paperAuthors,
@@ -74,6 +87,7 @@ import {
 import { useIntakeBatch } from "../../data/intake-batches.js";
 import { AcquireDialog, type AcquireScope } from "./AcquireDialog.js";
 import { ScopeTerms } from "./ScopeTerms.js";
+import { LibraryBand } from "./LibraryBand.js";
 import { useShell } from "../../shell/context.js";
 import { archiveQuery, useArchiveAction, rows } from "../../data/archive.js";
 import { record } from "../../data/wire.js";
@@ -108,6 +122,7 @@ import {
   AddToFolderDialog,
   LITERATURE_DRAG,
   folderPaths,
+  openBatch,
   scopeQuery,
   useFolders,
 } from "./Folders.js";
@@ -132,7 +147,15 @@ type LibraryDisplay = "list" | "table";
 const DISPLAY_KEY = "sciretriever:library:display:v1";
 const readDisplay = (): LibraryDisplay =>
   preferences.read(DISPLAY_KEY) === "table" ? "table" : "list";
-const scrollPositions = new WeakMap<ApiClient, Map<string, number>>();
+/**
+ * Where the page was scrolled, with the list's offset at the time: content
+ * above the list (the band's entries) may change height meanwhile.
+ */
+interface ScrollPosition {
+  readonly top: number;
+  readonly margin: number;
+}
+const scrollPositions = new WeakMap<ApiClient, Map<string, ScrollPosition>>();
 const rowMeasurements = new WeakMap<ApiClient, Map<string, VirtualItem[]>>();
 /** The draft-difference filter in words (page specs “界面用词”). */
 const DIFFERS_LABEL = "全文和 PDF 自带的文字不一样";
@@ -145,7 +168,7 @@ export const TEXT_LEVEL_LABELS = {
  * The draft mark on a row; sorted by a draft fact, followed by its count
  * (page specs “文献库”): “未校对 · 差异 12 段”, “未校对 · 扫描 3 页”.
  */
-function draftNote(item: LiteratureSearchItem, sort: LibrarySort) {
+function draftNote(item: LiteratureSearchItem, sort: LibraryPageSort) {
   const facts = item.draft_facts;
   if (facts && sort === "draft-differences-desc")
     return `未校对 · 差异 ${facts.differs_segments} 段`;
@@ -160,6 +183,14 @@ export default function Library() {
   const archiveAction = useArchiveAction();
   const queries = useQueryClient();
   const queryString = JSON.stringify(route.query);
+  const view = libraryView(route.query);
+  // What the page reads: the collected papers unless a search or a working
+  // set says otherwise (page specs “文献库”).
+  const effective = useMemo(
+    () => pageQuery(route.query),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [queryString],
+  );
   // The list and the table keep their own scroll and row measurements.
   const [display, setDisplay] = useState<LibraryDisplay>(readDisplay);
   const chooseDisplay = (value: LibraryDisplay) => {
@@ -276,19 +307,26 @@ export default function Library() {
       ? new Set(["statuses", "needs_manual_pdf"])
       : new Set();
   const chips = conditions.filter((chip) => !quickFields.has(chip.key));
-  /** A search or a filter narrows the page's scope (page specs “文献库”). */
+  /**
+   * A filter narrows the page's scope (page specs “文献库”); the batch a
+   * batch view shows is its scope, and search words make a search page.
+   */
   const narrowed =
-    !!route.query.text || chips.length > 0 || quickFields.size > 0;
+    chips.some((chip) => chip.key !== "intake_batch_ids") ||
+    quickFields.size > 0;
   /** The current filter in words, for dialogs that act on all of it. */
   const scopeLabel = () =>
     [
       folderLabel ? `文件夹：${folderLabel}` : "",
       route.query.recently_opened ? "最近阅读" : "",
       route.query.text ? `搜索：${route.query.text}` : "",
+      route.query.text && route.query.collection_scope === "collected"
+        ? "只看收进来的"
+        : "",
       ...conditions.map((chip) => chip.label),
     ]
       .filter(Boolean)
-      .join("；") || "全部文献";
+      .join("；") || "收进来的文献";
   const [text, setText] = useState(route.query.text ?? "");
   const [filters, setFilters] = useState(false);
   const [mobileTools, setMobileTools] = useState(false);
@@ -372,10 +410,14 @@ export default function Library() {
     label: string;
   } | null>(null);
   const [rowMenu, setRowMenu] = useState<ContextMenuRequest | null>(null);
+  // A search started in a working set can widen to the whole library and
+  // come back (page specs “搜索结果”); the set is remembered here, not in
+  // the address.
+  const [origin, setOrigin] = useState<SearchOrigin | null>(null);
   const next = useInfiniteQuery({
-    queryKey: ["library", route.query, route.sort],
+    queryKey: ["library", effective, route.sort],
     queryFn: ({ pageParam, signal }) =>
-      searchLibrary(api, route.query, route.sort, pageParam, signal),
+      searchLibrary(api, effective, route.sort, pageParam, signal),
     initialPageParam: null as string | null,
     getNextPageParam: (page) => page.cursor,
     placeholderData: keepPreviousData,
@@ -391,7 +433,18 @@ export default function Library() {
     ],
     [next.data],
   );
-  const total = next.data?.pages[0]?.total ?? 0;
+  const firstPage = next.data?.pages[0];
+  const total = firstPage?.total ?? 0,
+    truncated = firstPage?.truncated ?? false;
+  // The service refused the sort for a scope over 10,000 papers; it never
+  // picks another one itself (page specs “超过一万篇”).
+  const sortRefused =
+    next.error instanceof ApiError &&
+    next.error.code === LIBRARY_SORT_SCOPE_LIMIT;
+  const allowedSort = viewSort(route.query);
+  const sortLimited = firstPage
+    ? overCountLimit(total, truncated)
+    : sortRefused;
   // Statuses seen in this session, so a selection made across scrolls and
   // filters can still be split into what each batch action applies to.
   const known = useRef(new Map<string, LiteratureSearchItem>()).current;
@@ -401,16 +454,35 @@ export default function Library() {
     selected: shell.selected,
     setSelected: shell.setSelected,
   });
-  const countScope = materialCountScope(route.query);
+  const countScope = materialCountScope(effective);
   const counts = useQuery({
     queryKey: ["library", "counts", countScope],
     queryFn: ({ signal }) => readLibraryCounts(api, countScope, signal),
     placeholderData: keepPreviousData,
     enabled: api.workspace.readiness === "ready",
   });
-  // The page's whole scope, before any search or filter: the library, a
-  // folder or the recently read. The plain library shares the sidebar's query.
-  const baseScope = scopeQuery(route.query);
+  // The page's whole scope, before any filter: the collected papers, a
+  // folder, the recently read or a batch.
+  const baseScope = useMemo(
+    () =>
+      pageQuery({
+        ...scopeQuery(route.query),
+        ...(view === "batch"
+          ? {
+              intake_batch_ids: route.query.intake_batch_ids,
+              discovery_run_ids: route.query.discovery_run_ids,
+            }
+          : {}),
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [queryString],
+  );
+  // The whole library's totals, shared with the sidebar and the band.
+  const libraryTotals = useQuery({
+    queryKey: ["library", "counts", emptyQuery()],
+    queryFn: ({ signal }) => readLibraryCounts(api, emptyQuery(), signal),
+    enabled: api.workspace.readiness === "ready",
+  });
   const scopeCounts = useQuery({
     queryKey: ["library", "counts", baseScope],
     queryFn: ({ signal }) => readLibraryCounts(api, baseScope, signal),
@@ -425,6 +497,9 @@ export default function Library() {
         ? counts.data.total
         : materialCount(counts.data, filter)
       : null;
+  /** Counted from the first 10,000 matches: “1 万+” (page specs “超过一万篇”). */
+  const quickCount = (filter: MaterialState | "") =>
+    libraryCount(countFor(filter)!, counts.data?.count_truncated === true);
   const folders = useFolders();
   const folder = route.query.folder ?? null;
   const folderLabel = folder
@@ -433,8 +508,19 @@ export default function Library() {
       )?.label ?? "文件夹")
     : null;
   const [adding, setAdding] = useState<string[] | null>(null);
-  const updateQuery = (query: LibraryQuery, sort = route.sort) =>
-    navigate({ query: JSON.stringify(query), sort }, { replace: true });
+  /**
+   * A new query keeps the chosen sort; a view's own sort follows the view,
+   * and relevance goes with the search words.
+   */
+  const updateQuery = (query: LibraryQuery, sort?: LibraryPageSort) => {
+    const chosen =
+      sort ??
+      (route.sort === viewSort(route.query) ||
+      (route.sort === "relevance" && !query.text)
+        ? null
+        : route.sort);
+    navigate({ query: JSON.stringify(query), sort: chosen }, { replace: true });
+  };
   // An old address's “主 PDF” selects no quick filter, not even 全部.
   const statusFilter =
     typeof route.query.has_primary_pdf === "boolean"
@@ -466,28 +552,45 @@ export default function Library() {
     if (all) setText("");
     updateQuery({
       ...scopeQuery(route.query),
-      ...(all ? {} : { text: route.query.text }),
+      ...(all
+        ? {}
+        : {
+            text: route.query.text,
+            ...(route.query.collection_scope
+              ? { collection_scope: route.query.collection_scope }
+              : {}),
+          }),
     });
   };
   useEffect(() => {
     setText(route.query.text ?? "");
   }, [route.query.text]);
+  const folderName = folderLabel,
+    batchName = batch.data?.label ?? null;
+  useEffect(() => {
+    if (view !== "search") {
+      setOrigin(null);
+      return;
+    }
+    const q = route.query;
+    if (q.folder)
+      setOrigin({ scope: { folder: q.folder }, name: folderName ?? "文件夹" });
+    else if (q.recently_opened)
+      setOrigin({ scope: { recently_opened: true }, name: "最近阅读" });
+    else if (q.intake_batch_ids.length)
+      setOrigin({
+        scope: { intake_batch_ids: q.intake_batch_ids },
+        name: batchName ?? "入库批次",
+      });
+  }, [view, route.query, folderName, batchName]);
   useEffect(() => {
     if (text.trim() === (route.query.text ?? "")) return;
     const timer = setTimeout(
-      () =>
-        navigate(
-          {
-            query: JSON.stringify({
-              ...route.query,
-              text: text.trim() || null,
-            }),
-          },
-          { replace: true },
-        ),
+      () => updateQuery({ ...route.query, text: text.trim() || null }),
       300,
     );
     return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text, route.query]);
   const toggle = useCallback(
     (id: string) => {
@@ -507,7 +610,7 @@ export default function Library() {
     try {
       const ids = selected
         ? [...shell.selected]
-        : await scopeIds(api, route.query, route.sort);
+        : await scopeIds(api, effective, route.sort);
       setOperation({ ids, kind });
     } catch (error) {
       shell.notify(errorMessage(error));
@@ -520,7 +623,7 @@ export default function Library() {
     if (choosing) return;
     setChoosing(true);
     try {
-      setAdding(await scopeIds(api, route.query, route.sort));
+      setAdding(await scopeIds(api, effective, route.sort));
     } catch (error) {
       shell.notify(errorMessage(error));
     } finally {
@@ -532,7 +635,7 @@ export default function Library() {
     if (choosing) return;
     setChoosing(true);
     try {
-      const all = await scopeItems(api, route.query, route.sort);
+      const all = await scopeItems(api, effective, route.sort);
       setWholeScope({ key: scopeKey, size: all.length });
       const selected = new Set(shell.selected);
       for (const item of all) {
@@ -582,6 +685,73 @@ export default function Library() {
     (id: string, file: File) =>
       setOperation({ ids: [id], kind: "upload", file }),
     [],
+  );
+  // Papers collected on this page: their rows say “已收进来” in place of
+  // the button (page specs “搜索结果”).
+  const [collectedNow, setCollectedNow] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const collect = useCallback(
+    async (ids: readonly string[]) => {
+      const result = await collectLiteratures(api, ids);
+      const done = new Set(ids);
+      const update = (item: LiteratureSearchItem) => {
+        if (!done.has(item.literature.literature_id) || item.collected)
+          return item;
+        const { discovery_origin: _origin, ...rest } = item;
+        void _origin;
+        return { ...rest, collected: true };
+      };
+      for (const id of ids) {
+        const item = known.get(id);
+        if (item) known.set(id, update(item));
+      }
+      setCollectedNow((current) => new Set([...current, ...ids]));
+      // The rows and every number change where they are; the list is not
+      // read again.
+      queries.setQueriesData<{
+        pages: { items: LiteratureSearchItem[] }[];
+      }>(
+        {
+          queryKey: ["library"],
+          predicate: (query) =>
+            typeof query.queryKey[1] === "object" && query.queryKey[1] !== null,
+        },
+        (data) =>
+          data?.pages
+            ? {
+                ...data,
+                pages: data.pages.map((page) => ({
+                  ...page,
+                  items: page.items.map(update),
+                })),
+              }
+            : data,
+      );
+      const n = result.newly_collected;
+      queries.setQueryData<LibraryCounts>(
+        ["library", "counts", emptyQuery()],
+        (counts) =>
+          counts?.collection_counts
+            ? {
+                ...counts,
+                collection_counts: {
+                  collected: counts.collection_counts.collected + n,
+                  discovered_only: Math.max(
+                    0,
+                    counts.collection_counts.discovered_only - n,
+                  ),
+                },
+              }
+            : counts,
+      );
+      void queries.invalidateQueries({
+        queryKey: ["library", "counts"],
+        predicate: (query) =>
+          JSON.stringify(query.queryKey[2]) !== JSON.stringify(emptyQuery()),
+      });
+    },
+    [api, known, queries],
   );
   const { expandCitations } = shell;
   /** Seeds for citation expansion, as the library has them (page specs “入库”). */
@@ -667,6 +837,10 @@ export default function Library() {
     [],
   );
   const groups = groupSelection(shell.selected, known);
+  // The selected papers that are only discovered (page specs “搜索结果”).
+  const discovered = [...shell.selected].filter(
+    (id) => known.get(id)?.collected === false && !collectedNow.has(id),
+  );
   /** Each batch button counts only the papers it would actually act on. */
   const batchReason = (group: SelectionGroup, none: string) =>
     groups[group].length === 0
@@ -684,10 +858,10 @@ export default function Library() {
   // The whole catalog is always over the limit, so the reason lives with the
   // disabled actions instead of occupying the toolbar.
   const overLimit =
-    total > 1000
+    total > 1000 || truncated
       ? {
           disabled: true,
-          description: `当前 ${total.toLocaleString()} 篇，超过 1,000 篇上限；请先筛选或选择。`,
+          description: `当前 ${libraryCount(total, truncated, "篇")}，超过 1,000 篇上限；请先筛选或选择。`,
         }
       : {};
   // What the current results hold, for the batch menu: an action none of them
@@ -717,8 +891,8 @@ export default function Library() {
               setMobileTools(false);
               setAcquire({
                 kind: "query",
-                query: route.query,
-                sort: route.sort,
+                query: effective,
+                sort: storedSort(route.sort),
                 label: scopeLabel(),
               });
             },
@@ -773,14 +947,14 @@ export default function Library() {
         setMobileTools(false);
         setRunner({
           scope: { kind: "query" },
-          label: `文献库当前筛选（${total.toLocaleString()} 篇）`,
+          label: `文献库当前筛选（${libraryCount(total, truncated, "篇")}）`,
         });
       },
     },
     {
       id: "snapshot",
       label: "生成快照",
-      onAction: () => snapshot({ kind: "query", query: route.query }),
+      onAction: () => snapshot({ kind: "query", query: effective }),
     },
   ];
   const savedFilterMenu = (
@@ -828,7 +1002,7 @@ export default function Library() {
                 onAction: () => {
                   void updateFilter(api, activeView, {
                     query: route.query,
-                    sort: route.sort,
+                    sort: storedSort(route.sort),
                   })
                     .then(refreshFilters)
                     .catch((error: unknown) =>
@@ -908,12 +1082,27 @@ export default function Library() {
         onChange={(sort) =>
           updateQuery(
             route.query,
-            parseLibrarySearchRequest({ query: route.query, sort }).sort,
+            parseLibrarySearchRequest(
+              { query: route.query, sort },
+              { collectedSort: true },
+            ).sort,
           )
         }
-        options={LIBRARY_MENU_SORTS.map((value) => ({
+        options={LIBRARY_MENU_SORTS.filter(
+          (value) =>
+            value === route.sort ||
+            (value === "relevance"
+              ? view === "search"
+              : value !== "collected-desc" || view !== "search"),
+        ).map((value) => ({
           value,
           label: SORT_LABELS[value],
+          // Beyond 10,000 papers only the view's own sort has an index
+          // (page specs “超过一万篇”).
+          // The chosen one stays as it is: the list says why it fails.
+          ...(sortLimited && value !== allowedSort && value !== route.sort
+            ? { disabled: true, description: SORT_LIMIT_REASON }
+            : {}),
         }))}
       />
       <span className="library-display">
@@ -965,6 +1154,61 @@ export default function Library() {
       </section>
     );
   const scopeTotal = scopeCounts.data?.total;
+  const pageName =
+    folderLabel ??
+    (view === "recent"
+      ? "最近阅读"
+      : view === "batch"
+        ? (batch.data?.label ?? "入库批次")
+        : "收进来的文献");
+  const inView =
+    !!route.query.folder ||
+    !!route.query.recently_opened ||
+    route.query.intake_batch_ids.length > 0;
+  const searchLabel =
+    view !== "search" || inView
+      ? `在「${pageName}」里搜索`
+      : route.query.collection_scope === "collected"
+        ? "在收进来的文献里搜索"
+        : "搜索整个文献库";
+  /** Totals at the title, once (page specs “文献库”, “超过一万篇”). */
+  const headerCount = (() => {
+    if (view === "search")
+      return next.data ? (
+        <CountFigure
+          key={JSON.stringify(effective)}
+          query={effective}
+          value={total}
+          truncated={truncated}
+          suffix="符合"
+        />
+      ) : undefined;
+    if (scopeTotal === undefined || (narrowed && !next.data)) return undefined;
+    const prefix = view === "recent" ? "最近 30 天 · " : "";
+    const scopeText = libraryCount(
+      scopeTotal,
+      scopeCounts.data?.count_truncated === true,
+      "篇",
+    );
+    return narrowed ? (
+      <CountFigure
+        key={JSON.stringify(effective)}
+        query={effective}
+        value={total}
+        truncated={truncated}
+        prefix={`${prefix}符合 `}
+        suffix={` / 共 ${scopeText}`}
+      />
+    ) : (
+      <CountFigure
+        key={JSON.stringify(baseScope)}
+        query={baseScope}
+        value={scopeTotal}
+        truncated={scopeCounts.data?.count_truncated === true}
+        prefix={`${prefix}共 `}
+      />
+    );
+  })();
   const allLoaded =
     items.length > 0 &&
     items.every((item) => shell.selected.has(item.literature.literature_id));
@@ -995,13 +1239,13 @@ export default function Library() {
         size="compact"
         isPending={choosing}
         disabledReason={
-          total > 1000
-            ? `共 ${total.toLocaleString()} 篇，超过 1,000 篇上限。获取 PDF 可用“批量操作 → 获取 PDF”整体提交。`
+          total > 1000 || truncated
+            ? `共 ${libraryCount(total, truncated, "篇")}，超过 1,000 篇上限。获取 PDF 可用“批量操作 → 获取 PDF”整体提交。`
             : undefined
         }
         onPress={selectScope}
       >
-        选择全部 {total.toLocaleString()} 篇符合条件的文献
+        选择全部 {libraryCount(total, truncated, "篇")}符合条件的文献
       </Button>
     ) : null;
   return (
@@ -1010,37 +1254,59 @@ export default function Library() {
       data-preview={peek !== null || undefined}
       data-display={display}
     >
+      {/* Only over the collected papers (page specs “全库带”). */}
+      {view === "collected" ? (
+        <LibraryBand counts={libraryTotals.data} />
+      ) : null}
       <PageHeader
-        title={
-          folderLabel ??
-          (route.query.recently_opened
-            ? "最近阅读"
-            : batchId && batch.data
-              ? batch.data.label
-              : "文献库")
-        }
-        count={
-          scopeTotal === undefined || (narrowed && !next.data)
-            ? undefined
-            : `${route.query.recently_opened ? "最近 30 天 · " : ""}${
-                // The total only once, here (page specs “文献库”).
-                narrowed
-                  ? `符合 ${total.toLocaleString()} 篇 / 共 ${scopeTotal.toLocaleString()} 篇`
-                  : `${scopeTotal.toLocaleString()} 篇`
-              }`
-        }
+        title={view === "search" ? `搜索“${route.query.text}”` : pageName}
+        count={headerCount}
       />
       <div className="library-controls" ref={controls}>
-        <div className="library-toolbar">
-          <SearchField
-            label="搜索文献"
-            value={text}
-            onChange={setText}
-            onSubmit={(value) =>
-              updateQuery({ ...route.query, text: value.trim() || null })
+        {view === "search" ? (
+          <SearchScope
+            query={route.query}
+            origin={
+              origin ??
+              (inView
+                ? {
+                    scope: {
+                      ...(route.query.folder
+                        ? { folder: route.query.folder }
+                        : {}),
+                      ...(route.query.recently_opened
+                        ? { recently_opened: true }
+                        : {}),
+                      ...(route.query.intake_batch_ids.length
+                        ? { intake_batch_ids: route.query.intake_batch_ids }
+                        : {}),
+                    },
+                    name: pageName,
+                  }
+                : null)
             }
-            placeholder="按标题、作者、期刊搜索"
+            relevanceLimit={
+              route.sort === "relevance"
+                ? (firstPage?.relevanceLimit ?? null)
+                : null
+            }
+            onChange={updateQuery}
           />
+        ) : null}
+        <div className="library-toolbar">
+          {/* The collected papers are searched from the band; the other
+              views search in themselves (page specs “工具条”). */}
+          {view !== "collected" ? (
+            <SearchField
+              label={searchLabel}
+              value={text}
+              onChange={setText}
+              onSubmit={(value) =>
+                updateQuery({ ...route.query, text: value.trim() || null })
+              }
+              placeholder={searchLabel}
+            />
+          ) : null}
           <div className="library-toolbar-actions">{toolbarActions}</div>
           <Button className="library-more" onPress={() => setMobileTools(true)}>
             更多操作
@@ -1092,7 +1358,7 @@ export default function Library() {
                   {countFor(filter.id) !== null ? " " : null}
                   {countFor(filter.id) !== null ? (
                     <span className="filter-count">
-                      {countFor(filter.id)!.toLocaleString()}
+                      {quickCount(filter.id)}
                     </span>
                   ) : null}
                 </FilterChip>
@@ -1113,10 +1379,17 @@ export default function Library() {
                   label:
                     countFor(filter.id) === null
                       ? filter.label
-                      : `${filter.label} ${countFor(filter.id)!.toLocaleString()}`,
+                      : `${filter.label} ${quickCount(filter.id)}`,
                   onAction: () => setStatusFilter(filter.id),
                 }))}
               />
+            ) : null}
+            {/* Statuses recomputed in the background after a settings
+                change (page specs “超过一万篇”). */}
+            {counts.data?.status_updating || firstPage?.statusUpdating ? (
+              <span className="library-status-updating" role="status">
+                状态正在更新，数字可能不准
+              </span>
             ) : null}
           </div>
           {folder ? (
@@ -1159,7 +1432,12 @@ export default function Library() {
           </div>
         )}
         {chips.length > 0 ? (
-          <ScopeTerms query={route.query} onChange={updateQuery} />
+          <ScopeTerms
+            query={effective}
+            onChange={(query) =>
+              updateQuery(withoutScopeFlag(query, route.query))
+            }
+          />
         ) : null}
         <Presence>
           {filters && (
@@ -1189,7 +1467,7 @@ export default function Library() {
         ) : null}
       </div>
       <LayoutGroup className="library-results-region">
-        {next.isError && (
+        {next.isError && !sortRefused && (
           <ErrorNotice
             message={errorMessage(next.error)}
             onRetry={() => void next.refetch()}
@@ -1202,23 +1480,71 @@ export default function Library() {
           total={total}
           sort={route.sort}
           onSort={(sort) => updateQuery(route.query, sort)}
+          sortDisabled={sortLimited ? SORT_LIMIT_REASON : undefined}
           selectAll={selectAll(false)}
           empty={
-            <EmptyState
-              title="没有符合条件的文献"
-              action={
-                narrowed ? (
-                  <Button
-                    variant="text"
-                    size="compact"
-                    onPress={() => clearConditions(true)}
-                  >
-                    清除条件
-                  </Button>
-                ) : undefined
-              }
-            />
+            sortRefused ? (
+              // The same words as the menu, and the one sort that works.
+              <div className="library-sort-limit" role="status">
+                <p>{SORT_LIMIT_REASON}</p>
+                <Button onPress={() => updateQuery(route.query, allowedSort)}>
+                  改按{SORT_LABELS[allowedSort]}
+                </Button>
+              </div>
+            ) : view === "collected" && !narrowed ? (
+              <EmptyState
+                title="还没有收进来的文献"
+                {...((libraryTotals.data?.collection_counts?.discovered_only ??
+                  0) > 0
+                  ? { description: "可以在上方搜索整个文献库" }
+                  : {})}
+                action={
+                  mutable ? (
+                    <Button
+                      variant="text"
+                      size="compact"
+                      onPress={() =>
+                        navigate(
+                          { view: "disc", literature: null },
+                          { clearSource: true },
+                        )
+                      }
+                    >
+                      去入库
+                    </Button>
+                  ) : undefined
+                }
+              />
+            ) : (
+              <EmptyState
+                title="没有符合条件的文献"
+                action={
+                  narrowed || view === "search" ? (
+                    <Button
+                      variant="text"
+                      size="compact"
+                      onPress={() => clearConditions(true)}
+                    >
+                      清除条件
+                    </Button>
+                  ) : undefined
+                }
+              />
+            )
           }
+          footer={
+            firstPage?.relevanceLimit &&
+            route.sort === "relevance" &&
+            !next.hasNextPage &&
+            items.length >= firstPage.relevanceLimit ? (
+              <p className="library-relevance-end" role="status">
+                相关度排序只显示前 {firstPage.relevanceLimit.toLocaleString()}{" "}
+                条；加条件或换个检索词可以看到其余的
+              </p>
+            ) : null
+          }
+          collectedNow={collectedNow}
+          onCollect={mutable ? collect : undefined}
           selected={shell.selected}
           mutable={mutable}
           scrollKey={scrollKey}
@@ -1286,8 +1612,8 @@ export default function Library() {
                           wholeScope.size === shell.selected.size
                           ? {
                               kind: "query",
-                              query: route.query,
-                              sort: route.sort,
+                              query: effective,
+                              sort: storedSort(route.sort),
                               label: scopeLabel(),
                             }
                           : {
@@ -1327,6 +1653,19 @@ export default function Library() {
                     label="更多"
                     indicator
                     items={[
+                      ...(discovered.length
+                        ? [
+                            {
+                              id: "collect",
+                              label: `收进来 ${discovered.length.toLocaleString()}`,
+                              onAction: () =>
+                                void collect(discovered).catch(
+                                  (error: unknown) =>
+                                    shell.notify(errorMessage(error)),
+                                ),
+                            },
+                          ]
+                        : []),
                       ...(folder
                         ? [
                             {
@@ -1411,7 +1750,7 @@ export default function Library() {
               void createFilter(api, {
                 name: viewName.trim(),
                 query: route.query,
-                sort: route.sort,
+                sort: storedSort(route.sort),
               })
                 .then((saved) => {
                   setActiveView(saved.filter_id);
@@ -1679,7 +2018,7 @@ const KEEPS_KEYS =
  * by it with the service's own orders; the other columns have none.
  */
 const TABLE_SORTS: Readonly<
-  Record<"title" | "year", { first: LibrarySort; second: LibrarySort }>
+  Record<"title" | "year", { first: LibraryPageSort; second: LibraryPageSort }>
 > = {
   title: { first: "title-asc", second: "title-desc" },
   year: { first: "publication-year-desc", second: "publication-year-asc" },
@@ -1687,10 +2026,13 @@ const TABLE_SORTS: Readonly<
 function TableHead({
   sort,
   onSort,
+  sortDisabled,
   selectAll,
 }: {
-  sort: LibrarySort;
-  onSort: (sort: LibrarySort) => void;
+  sort: LibraryPageSort;
+  onSort: (sort: LibraryPageSort) => void;
+  /** Why the heads do not sort, beyond 10,000 papers. */
+  sortDisabled: string | undefined;
   selectAll: ReactNode;
 }) {
   const head = (column: keyof typeof TABLE_SORTS, label: string) => {
@@ -1707,6 +2049,8 @@ function TableHead({
         <button
           type="button"
           className="library-table-sort"
+          disabled={!!sortDisabled}
+          {...(sortDisabled ? { title: sortDisabled } : {})}
           onClick={() => onSort(on === "first" ? second : first)}
         >
           {label}
@@ -1746,8 +2090,12 @@ const LibraryList = memo(function LibraryList({
   total,
   sort,
   onSort,
+  sortDisabled,
   selectAll,
   empty,
+  footer,
+  collectedNow,
+  onCollect,
   selected,
   mutable,
   scrollKey,
@@ -1777,14 +2125,19 @@ const LibraryList = memo(function LibraryList({
   display: LibraryDisplay;
   items: readonly LiteratureSearchItem[];
   total: number;
-  sort: LibrarySort;
-  onSort: (sort: LibrarySort) => void;
+  sort: LibraryPageSort;
+  onSort: (sort: LibraryPageSort) => void;
+  sortDisabled: string | undefined;
   selectAll: ReactNode;
   empty: ReactNode;
+  /** After the last row: the end of a relevance ranking. */
+  footer: ReactNode;
+  collectedNow: ReadonlySet<string>;
+  onCollect: ((ids: readonly string[]) => Promise<unknown>) | undefined;
   selected: ReadonlySet<string>;
   mutable: boolean;
   scrollKey: string;
-  positions: Map<string, number>;
+  positions: Map<string, ScrollPosition>;
   measurements: Map<string, VirtualItem[]>;
   pending: boolean;
   fetching: boolean;
@@ -1814,33 +2167,38 @@ const LibraryList = memo(function LibraryList({
   const scroll = useRef<HTMLElement | null>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
   const getScrollElement = useCallback(() => scroll.current, []);
+  /** The rows' offset inside the scrolling page. */
+  const listOffset = useCallback(() => {
+    const container = scroll.current,
+      element = rowsBox.current ?? list.current;
+    return container && element
+      ? Math.round(
+          element.getBoundingClientRect().top -
+            container.getBoundingClientRect().top +
+            container.scrollTop,
+        )
+      : 0;
+  }, []);
   useLayoutEffect(() => {
     const element = list.current;
     scroll.current =
       element?.closest<HTMLElement>(".workspace-content") ?? null;
     const container = scroll.current;
     if (!element || !container) return;
-    const measure = () =>
-      setScrollMargin(
-        Math.round(
-          (rowsBox.current ?? element).getBoundingClientRect().top -
-            container.getBoundingClientRect().top +
-            container.scrollTop,
-        ),
-      );
+    const measure = () => setScrollMargin(listOffset());
     measure();
     const observer = new ResizeObserver(measure);
     for (const sibling of element.parentElement?.parentElement?.children ?? [])
       if (!sibling.contains(element)) observer.observe(sibling);
     return () => observer.disconnect();
-  }, []);
+  }, [listOffset]);
   const getItemKey = useCallback(
     (index: number) => items[index]!.literature.literature_id,
     [items],
   );
   const initial = useMemo(
     () => ({
-      offset: positions.get(scrollKey) ?? 0,
+      offset: positions.get(scrollKey)?.top ?? 0,
       measurements: measurements.get(scrollKey) ?? [],
     }),
     [positions, measurements, scrollKey],
@@ -1883,22 +2241,32 @@ const LibraryList = memo(function LibraryList({
     // Runs after the shell resets the shared scroll container for this route.
     restored.current = false;
     const frame = requestAnimationFrame(() => {
-      scroll.current?.scrollTo({ top: positions.get(scrollKey) ?? 0 });
+      const saved = positions.get(scrollKey);
+      // Within the list, the same rows; above it, the same place.
+      const top = !saved
+        ? 0
+        : saved.top > saved.margin
+          ? saved.top - saved.margin + listOffset()
+          : saved.top;
+      scroll.current?.scrollTo({ top });
       restored.current = true;
     });
     return () => cancelAnimationFrame(frame);
-  }, [scrollKey, positions]);
+  }, [scrollKey, positions, listOffset]);
   useEffect(() => {
     const container = scroll.current;
     if (!container) return;
     const remember = () => {
       if (!restored.current) return;
-      positions.set(scrollKey, container.scrollTop);
+      positions.set(scrollKey, {
+        top: container.scrollTop,
+        margin: listOffset(),
+      });
       measurements.set(scrollKey, virtual.measurementsCache.slice());
     };
     container.addEventListener("scroll", remember, { passive: true });
     return () => container.removeEventListener("scroll", remember);
-  }, [scrollKey, positions, measurements, virtual]);
+  }, [scrollKey, positions, measurements, virtual, listOffset]);
   // While a preview is open, moving through the rows moves the preview too.
   const previewing = useRef(peek !== null);
   previewing.current = peek !== null;
@@ -1978,7 +2346,12 @@ const LibraryList = memo(function LibraryList({
         <div className="library-empty">{empty}</div>
       ) : null}
       {table && shown ? (
-        <TableHead sort={sort} onSort={onSort} selectAll={selectAll} />
+        <TableHead
+          sort={sort}
+          onSort={onSort}
+          sortDisabled={sortDisabled}
+          selectAll={selectAll}
+        />
       ) : null}
       <div
         className="virtual-list"
@@ -1993,6 +2366,10 @@ const LibraryList = memo(function LibraryList({
             offset={scrollMargin}
             item={items[row.index]!}
             sort={sort}
+            collectedNow={collectedNow.has(
+              items[row.index]!.literature.literature_id,
+            )}
+            onCollect={onCollect}
             selected={selected.has(items[row.index]!.literature.literature_id)}
             previewed={peek === items[row.index]!.literature.literature_id}
             mutable={mutable}
@@ -2013,6 +2390,7 @@ const LibraryList = memo(function LibraryList({
         ))}
       </div>
       {fetchingNextPage && <p role="status">正在读取下一批…</p>}
+      {shown && !hasNextPage ? footer : null}
       {nextPageFailed && (
         <Button onPress={() => void loadNextPage()}>重试读取下一批</Button>
       )}
@@ -2052,6 +2430,8 @@ const LibraryRow = memo(function LibraryRow({
   offset,
   item,
   sort,
+  collectedNow,
+  onCollect,
   selected,
   previewed,
   mutable,
@@ -2073,7 +2453,10 @@ const LibraryRow = memo(function LibraryRow({
   row: VirtualItem;
   offset: number;
   item: LiteratureSearchItem;
-  sort: LibrarySort;
+  sort: LibraryPageSort;
+  /** Collected on this page: “已收进来” in place of the button. */
+  collectedNow: boolean;
+  onCollect: ((ids: readonly string[]) => Promise<unknown>) | undefined;
   selected: boolean;
   previewed: boolean;
   mutable: boolean;
@@ -2094,6 +2477,25 @@ const LibraryRow = memo(function LibraryRow({
   const id = item.literature.literature_id,
     title = paperTitle(item),
     table = display === "table";
+  // Only discovered: said at the end of the citation, the batch that found
+  // it one press away, and “收进来” on the right (page specs “搜索结果”).
+  const discovered = item.collected === false;
+  const origin = discovered ? (item.discovery_origin ?? null) : null;
+  const collectControl =
+    discovered && onCollect ? (
+      <Button
+        variant="secondary"
+        size="compact"
+        className="paper-collect"
+        onPress={async () => {
+          await onCollect([id]);
+        }}
+      >
+        收进来
+      </Button>
+    ) : collectedNow && !discovered ? (
+      <small className="paper-status-note paper-collected">已收进来</small>
+    ) : null;
   const check = (
     <span
       className="paper-check"
@@ -2220,57 +2622,94 @@ const LibraryRow = memo(function LibraryRow({
         </span>
         <span role="cell" className="library-table-cell">
           {quietState(item) ? null : <MaterialBadge item={item} />}
+          {collectControl}
         </span>
         {tools}
       </div>
     );
   }
+  const paperTitleText = (
+    <span className="paper-title">
+      <RichTitle parts={paperTitleParts(item)} />
+    </span>
+  );
+  const citation = (
+    <span className="paper-citation">
+      {rowAuthors(item)} · <Venue name={item.literature.metadata.venue} /> ·{" "}
+      {item.literature.metadata.publication_year ?? "年份未提供"}
+      {/* Literature materials 8.4: its bibliography still lacks parts. */}
+      {item.needs_metadata ? (
+        <span className="paper-needs-metadata"> · 书目不全</span>
+      ) : null}
+      {origin ? (
+        <span className="paper-discovered">
+          {" · "}
+          <button
+            type="button"
+            className="paper-origin"
+            onClick={() => openBatch(origin.intake_batch_id)}
+          >
+            只被发现：{ORIGIN_LABELS[origin.kind]}
+          </button>
+        </span>
+      ) : discovered ? (
+        // Without a discovery batch the history is not guessed.
+        <span className="paper-discovered"> · 只被发现</span>
+      ) : null}
+    </span>
+  );
+  const rowTermsLine = item.tags?.length ? (
+    <span className="paper-tags">
+      {item.tags.slice(0, ROW_TAGS).map((t) => (
+        <span
+          key={t.tag_id}
+          className={t.rank === 1 ? "paper-tag primary" : "paper-tag"}
+        >
+          {t.name}
+        </span>
+      ))}
+      {item.tags.length > ROW_TAGS ? (
+        <span
+          className="paper-tag-more"
+          title={item.tags
+            .slice(ROW_TAGS)
+            .map((t) => t.name)
+            .join("、")}
+        >
+          +{item.tags.length - ROW_TAGS}
+        </span>
+      ) : null}
+    </span>
+  ) : rowTerms(item).length ? (
+    // Without tags, the paper's own keywords (or the source's subjects) say what it is about.
+    <span className="paper-terms">{rowTerms(item).join(" · ")}</span>
+  ) : null;
   return (
     <article {...shared}>
       {check}
-      {open(
-        <>
-          <span className="paper-title">
-            <RichTitle parts={paperTitleParts(item)} />
-          </span>
-          <span className="paper-citation">
-            {rowAuthors(item)} · <Venue name={item.literature.metadata.venue} />{" "}
-            · {item.literature.metadata.publication_year ?? "年份未提供"}
-            {/* Literature materials 8.4: its bibliography still lacks parts. */}
-            {item.needs_metadata ? (
-              <span className="paper-needs-metadata"> · 书目不全</span>
-            ) : null}
-          </span>
-          {item.tags?.length ? (
-            <span className="paper-tags">
-              {item.tags.slice(0, ROW_TAGS).map((t) => (
-                <span
-                  key={t.tag_id}
-                  className={t.rank === 1 ? "paper-tag primary" : "paper-tag"}
-                >
-                  {t.name}
-                </span>
-              ))}
-              {item.tags.length > ROW_TAGS ? (
-                <span
-                  className="paper-tag-more"
-                  title={item.tags
-                    .slice(ROW_TAGS)
-                    .map((t) => t.name)
-                    .join("、")}
-                >
-                  +{item.tags.length - ROW_TAGS}
-                </span>
-              ) : null}
-            </span>
-          ) : rowTerms(item).length ? (
-            // Without tags, the paper's own keywords (or the source's subjects) say what it is about.
-            <span className="paper-terms">{rowTerms(item).join(" · ")}</span>
-          ) : null}
-        </>,
+      {origin ? (
+        // The origin is a button of its own, so it stays outside the
+        // button that opens the paper.
+        <div className="paper-main">
+          {open(paperTitleText)}
+          {citation}
+          {rowTermsLine}
+        </div>
+      ) : (
+        open(
+          <>
+            {paperTitleText}
+            {citation}
+            {rowTermsLine}
+          </>,
+        )
       )}
       {quietState(item) ? (
-        <span />
+        collectControl ? (
+          <span className="paper-status-cell">{collectControl}</span>
+        ) : (
+          <span />
+        )
       ) : (
         <span className="paper-status-cell">
           <MaterialBadge item={item}>
@@ -2316,6 +2755,7 @@ const LibraryRow = memo(function LibraryRow({
               {draftNote(item, sort)}
             </small>
           ) : null}
+          {collectControl}
         </span>
       )}
       {tools}
@@ -2636,6 +3076,217 @@ function ImportReport({
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/** The same words in the sort menu, the table heads and the list (page specs “超过一万篇”). */
+const SORT_LIMIT_REASON = "超过 1 万篇时只能按这几种排序；先加条件，或缩小范围";
+/** Where an only-discovered paper came from (page specs “搜索结果”). */
+const ORIGIN_LABELS = {
+  citation: "来自引用扩展",
+  topic: "来自主题搜索",
+} as const;
+/** The working set a search began in. */
+interface SearchOrigin {
+  readonly scope: Partial<
+    Pick<LibraryQuery, "folder" | "recently_opened" | "intake_batch_ids">
+  >;
+  readonly name: string;
+}
+/** The page adds the collected scope itself; the address keeps without it. */
+function withoutScopeFlag(
+  query: LibraryQuery,
+  original: LibraryQuery,
+): LibraryQuery {
+  if (original.collection_scope !== undefined) return query;
+  const { collection_scope: _scope, ...rest } = query;
+  void _scope;
+  return rest;
+}
+/** The search's words and conditions in another scope. */
+function inScope(
+  query: LibraryQuery,
+  scope: "all" | "collected" | SearchOrigin["scope"],
+): LibraryQuery {
+  const {
+    collection_scope: _scope,
+    folder: _folder,
+    recently_opened: _recent,
+    ...rest
+  } = query;
+  void _scope;
+  void _folder;
+  void _recent;
+  const widened = { ...rest, intake_batch_ids: [] };
+  if (scope === "all") return widened;
+  if (scope === "collected")
+    return { ...widened, collection_scope: "collected" };
+  return { ...widened, ...scope };
+}
+
+/**
+ * A count at the title (page specs “超过一万篇”): a count stopped at 10,000
+ * reads “1 万篇以上” and offers “算出准确数”, worked out in the background
+ * for exactly this query; another query starts over (the caller keys it).
+ */
+function CountFigure({
+  query,
+  value,
+  truncated,
+  prefix = "",
+  suffix = "",
+}: {
+  query: LibraryQuery;
+  value: number;
+  truncated: boolean;
+  prefix?: string;
+  suffix?: string;
+}) {
+  const api = useApi();
+  const [state, setState] = useState<
+    | { kind: "idle" | "running" }
+    | { kind: "done"; total: number; at: string }
+    | { kind: "failed"; reason: string }
+  >({ kind: "idle" });
+  const abort = useRef<AbortController | null>(null);
+  useEffect(() => () => abort.current?.abort(), []);
+  if (state.kind === "done")
+    return (
+      <>
+        {prefix}
+        {libraryCount(state.total, false, "篇")}
+        <span className="library-count-at">
+          （截至{" "}
+          {new Date(state.at).toLocaleTimeString("zh-CN", {
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+          ）
+        </span>
+        {suffix}
+      </>
+    );
+  const compute = async () => {
+    const controller = new AbortController();
+    abort.current = controller;
+    setState({ kind: "running" });
+    try {
+      const exact = await exactSearchTotal(api, query, controller.signal);
+      setState({ kind: "done", total: exact.total, at: exact.at });
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      setState({ kind: "failed", reason: errorMessage(error) });
+    }
+  };
+  return (
+    <>
+      {prefix}
+      {libraryCount(value, truncated, "篇")}
+      {suffix}
+      {truncated ? (
+        state.kind === "running" ? (
+          <span className="library-count-running" role="status">
+            正在计算…
+          </span>
+        ) : (
+          <>
+            <Button size="compact" onPress={() => void compute()}>
+              算出准确数
+            </Button>
+            {state.kind === "failed" ? (
+              <span className="library-count-error" role="alert">
+                {state.reason}
+              </span>
+            ) : null}
+          </>
+        )
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * Where a search looks (page specs “搜索结果”): from the band the whole
+ * library or only the collected papers; from a working set that set or the
+ * whole library. Switching keeps the words and the conditions.
+ */
+function SearchScope({
+  query,
+  origin,
+  relevanceLimit,
+  onChange,
+}: {
+  query: LibraryQuery;
+  origin: SearchOrigin | null;
+  relevanceLimit: number | null;
+  onChange: (query: LibraryQuery) => void;
+}) {
+  const api = useApi();
+  const inView =
+    !!query.folder ||
+    !!query.recently_opened ||
+    query.intake_batch_ids.length > 0;
+  const value = inView
+    ? "view"
+    : query.collection_scope === "collected"
+      ? "collected"
+      : "all";
+  const collected = useMemo(() => inScope(query, "collected"), [query]);
+  // “只看收进来的 · n”: the collected matches under the same quick filter.
+  const counts = useQuery({
+    queryKey: ["library", "counts", materialCountScope(collected)],
+    queryFn: ({ signal }) =>
+      readLibraryCounts(api, materialCountScope(collected), signal),
+    placeholderData: keepPreviousData,
+    enabled: !origin,
+  });
+  const state = queryMaterialState(query);
+  const collectedCount = counts.data
+    ? libraryCount(
+        state === "" ? counts.data.total : materialCount(counts.data, state),
+        counts.data.count_truncated === true,
+      )
+    : null;
+  return (
+    <div className="library-search-scope">
+      <RadioGroup
+        label="范围"
+        segmented
+        value={value}
+        onChange={(next) =>
+          onChange(
+            inScope(
+              query,
+              next === "view" && origin
+                ? origin.scope
+                : next === "collected"
+                  ? "collected"
+                  : "all",
+            ),
+          )
+        }
+      >
+        {origin ? (
+          <>
+            <Radio value="view">「{origin.name}」里</Radio>
+            <Radio value="all">整个文献库</Radio>
+          </>
+        ) : (
+          <>
+            <Radio value="all">整个文献库</Radio>
+            <Radio value="collected">
+              只看收进来的
+              {collectedCount === null ? "" : ` · ${collectedCount}`}
+            </Radio>
+          </>
+        )}
+      </RadioGroup>
+      {relevanceLimit ? (
+        <span className="library-relevance-limit">
+          按相关度显示前 {relevanceLimit.toLocaleString()} 条
+        </span>
+      ) : null}
     </div>
   );
 }

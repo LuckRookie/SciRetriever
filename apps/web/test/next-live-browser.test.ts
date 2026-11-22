@@ -10,7 +10,11 @@ import {
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { nextAssets, motionOptions } from "./next-workspace-fixture.js";
+import {
+  nextAssets,
+  motionOptions,
+  searchLibrary,
+} from "./next-workspace-fixture.js";
 import { readerToLibrary } from "./reader-controls.js";
 import { readingAssets } from "./reading-assets-fixture.js";
 import { chromium, type Page } from "playwright";
@@ -375,15 +379,13 @@ describe("live workbench on the installed Cloak runtime", () => {
           .getByLabel("主导航", { exact: true })
           .getByRole("button", { name: /文献库/ })
           .click();
-        await desktop
-          .getByRole("searchbox", { name: "搜索文献", exact: true })
-          .fill("QueryBank");
+        await searchLibrary(desktop, "QueryBank");
         // The count is said once, beside the title (page specs “文献库”).
         await expect
           .poll(() => desktop.locator(".ui-page-count").innerText(), {
             timeout: 20_000,
           })
-          .toMatch(/^符合 53 篇 \/ 共 [\d,]+ 篇$/u);
+          .toBe("53 篇符合");
         const loaded = () =>
           desktop.locator(".library-scroll").getAttribute("data-loaded");
         await expect.poll(loaded, { timeout: 20_000 }).toBe("50");
@@ -400,9 +402,7 @@ describe("live workbench on the installed Cloak runtime", () => {
         await desktop.locator(".workspace-content").evaluate((el) => {
           el.scrollTop = 0;
         });
-        await desktop
-          .getByRole("searchbox", { name: "搜索文献", exact: true })
-          .fill("QueryBank <img");
+        await searchLibrary(desktop, "QueryBank <img");
         await desktop
           .getByRole("article", {
             name: "QueryBank <img src=x onerror=alert(1)>",
@@ -422,9 +422,7 @@ describe("live workbench on the installed Cloak runtime", () => {
         ).toBe(0);
         // The reader page has no site sidebar: the library is in its navigation drawer.
         await readerToLibrary(desktop);
-        await desktop
-          .getByRole("searchbox", { name: "搜索文献", exact: true })
-          .fill("Synthetic literature");
+        await searchLibrary(desktop, "Synthetic literature");
         // The previous search also had one row; wait for the new result itself.
         await desktop
           .getByRole("article", { name: FIXTURE_TITLE, exact: true })
@@ -464,9 +462,7 @@ describe("live workbench on the installed Cloak runtime", () => {
         await mobile
           .getByRole("dialog", { name: "导航", exact: true })
           .waitFor({ state: "hidden" });
-        await mobile
-          .getByRole("searchbox", { name: "搜索文献", exact: true })
-          .fill("Synthetic literature");
+        await searchLibrary(mobile, "Synthetic literature");
         await expect.poll(() => mobile.locator(".paper-row").count()).toBe(1);
         await mobile.locator(".paper-open").click();
         await mobile.getByRole("tab", { name: "PDF", exact: true }).click();

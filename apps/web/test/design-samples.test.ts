@@ -114,7 +114,8 @@ it("renders publisher inline markup in titles, raw or entity-escaped, as real ta
   const page = await context.newPage();
   try {
     await loginWorkbenchPage(page, samples.origin, password);
-    await page.goto(`${samples.origin}/?view=lib`);
+    // By title, so the two samples are among the first rows.
+    await page.goto(`${samples.origin}/?view=lib&sort=title-asc`);
     const raw = page.locator(".paper-title", { hasText: "[Sample 01]" });
     await raw.waitFor();
     expect(await raw.locator("sub").allTextContents()).toEqual(["6", "5"]);

@@ -441,6 +441,9 @@ export async function seedDesignSamples(options: { homeParent?: string } = {}) {
     });
     for (const literature_id of papers.slice(0, 5))
       await app.folders.opened({ literature_id });
+    // Some bibliography-only papers were chosen too; the last fifteen stay
+    // only discovered, for the search results (page specs “文献库”).
+    await app.database.collectLiteratures(papers.slice(29, 45));
     const snapshots = [];
     for (const [n, name] of [
       "样例 · 初次阅读",

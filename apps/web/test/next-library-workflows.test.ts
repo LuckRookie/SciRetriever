@@ -7,6 +7,7 @@ import {
   openProcessingEntry,
   openSavedViews,
   showAllLibraryStatuses,
+  searchLibrary,
 } from "./next-workspace-fixture.js";
 import {
   parseFiltersExportFile,
@@ -180,7 +181,7 @@ it("keeps saved filters in the catalog: the menu applies, saves and deletes thro
       .toBe("title-desc");
     expect(JSON.stringify(await list())).toBe(before);
     // “用当前条件更新这项筛选”: the current condition replaces the saved one; the name stays.
-    await page.getByRole("searchbox", { name: "搜索文献" }).fill("Synthetic");
+    await searchLibrary(page, "Synthetic");
     await expect
       .poll(() => new URL(page.url()).searchParams.get("query") ?? "")
       .toContain("Synthetic");
@@ -411,9 +412,7 @@ it("aborts a library search when navigating to another page and ignores its late
       await gate;
       await route.fulfill({ response }).catch(() => {});
     });
-    await page
-      .getByRole("searchbox", { name: "搜索文献", exact: true })
-      .fill("Unparsed");
+    await searchLibrary(page, "Unparsed");
     await began;
     await openProcessingEntry(page.getByLabel("主导航"), "洞察");
     await page.locator(".insight-figures").waitFor();
