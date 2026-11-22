@@ -177,6 +177,20 @@ describe("closed provider-neutral contracts", () => {
     expect(Object.isFrozen(parsed.authors)).toBe(true);
   });
 
+  it("rejects unpaired surrogates anywhere in text, including at the end", () => {
+    for (const title of ["a\ud800", "\ud800a", "a\udc00", "a\ud800\ud800b"]) {
+      expect(() => parseLiteratureMetadata({ ...metadata, title })).toThrow(
+        ContractValidationError,
+      );
+      expect(() => canonicalJsonBytes({ title })).toThrow(
+        ContractValidationError,
+      );
+    }
+    expect(
+      parseLiteratureMetadata({ ...metadata, title: "a\ud83d\ude00" }).title,
+    ).toBe("a\ud83d\ude00");
+  });
+
   it("does not expose rejected input in the stable failure shape", () => {
     const error = (() => {
       try {

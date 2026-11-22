@@ -823,10 +823,9 @@ function exact(
     fail(path);
   return result;
 }
-// The Unicode flag treats pairs as one code point. Keep the existing C0/DEL
-// checks and the existing acceptance of a terminal high surrogate.
-const INVALID_CONTRACT_TEXT =
-  /[^\x20-\x7e\x80-\u{10ffff}]|[\udc00-\udfff]|[\ud800-\udbff](?=[\s\S])/u;
+// The Unicode flag treats a surrogate pair as one code point, so any
+// surrogate left in the range is unpaired. C0 controls and DEL stay invalid.
+const INVALID_CONTRACT_TEXT = /[^\x20-\x7e\x80-\ud7ff\ue000-\u{10ffff}]/u;
 let textValidationCache: Map<string, string> | undefined;
 
 /** Reuse successful checks of immutable strings in synchronous batch work. */
@@ -880,7 +879,8 @@ function hasLoneSurrogate(value: string): boolean {
     const code = value.charCodeAt(index);
     if (code >= 0xd800 && code <= 0xdbff) {
       const next = value.charCodeAt(index + 1);
-      if (next < 0xdc00 || next > 0xdfff) return true;
+      // charCodeAt past the end is NaN, which fails both comparisons.
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
       index += 1;
     } else if (code >= 0xdc00 && code <= 0xdfff) return true;
   }
