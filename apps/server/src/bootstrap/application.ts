@@ -193,6 +193,7 @@ import { createBrowserNetworkAdmission } from "../network/browser-admission.js";
 import type { BrowserNetworkProxy } from "../network/browser-proxy.js";
 import { NetworkBudgetCoordinator } from "../network/budget.js";
 import { throwCatalogCorruption } from "../storage/sqlite/errors.js";
+import { CatalogSchemaError } from "../storage/sqlite/schema-path.js";
 import type { ConnectionDependencies } from "../network/connection.js";
 import { createAgentTransport, NetworkHttpError } from "../network/http.js";
 import type { Resolver } from "../network/policy.js";
@@ -2437,6 +2438,11 @@ export async function createQueryApplication(
   } catch (error) {
     await closeAfterStartupFailure(error);
     throwCatalogCorruption(error);
+    if (
+      error instanceof CatalogSchemaError &&
+      error.code === "catalog-addition-required"
+    )
+      throw error;
     return unavailable();
   }
   if (preflight.status === "not-initialized") {

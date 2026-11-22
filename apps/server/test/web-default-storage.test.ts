@@ -16,9 +16,14 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { startProductionWorkbench } from "../src/bootstrap/workbench.js";
 import { runCli } from "../src/cli/main.js";
+import { startWebSupervisor } from "../src/cli/web-supervisor.js";
 import { TypeScriptConfigurationOwner } from "../src/configuration/owner.js";
 import { createMcpServer } from "../src/mcp/server.js";
-import { inspectCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
+import {
+  initializeCatalogSchema,
+  inspectCatalogSchema,
+} from "../src/storage/sqlite/catalog-schema.js";
+import { LIBRARY_SCALE_ADDITION } from "../src/storage/sqlite/schema.js";
 import { DatabaseSync } from "node:sqlite";
 import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
 
@@ -35,6 +40,34 @@ const open = (home: string) =>
   });
 
 describe("Web default storage", () => {
+  it("reports a missing addition through the supervised Web startup", async () => {
+    const home = await mkdtemp(
+      join(tmpdir(), "sciretriever-web-missing-addition-"),
+    );
+    try {
+      const directory = join(home, ".sciretriever");
+      const path = join(directory, "catalog.sqlite");
+      await mkdir(directory, { mode: 0o700 });
+      await initializeCatalogSchema(path);
+      const db = new DatabaseSync(path);
+      try {
+        db.prepare("DELETE FROM catalog_schema_additions WHERE name=?").run(
+          LIBRARY_SCALE_ADDITION.name,
+        );
+      } finally {
+        db.close();
+      }
+      await expect(
+        startWebSupervisor({ home, port: 0, access: workbenchTestAccess }),
+      ).rejects.toMatchObject({
+        code: "catalog-addition-required",
+        addition: LIBRARY_SCALE_ADDITION.name,
+      });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   // Reached 2.7 s under Full (36/12) load, too close to the 5 s default.
   it("shares the persisted library with CLI and MCP and reopens existing facts", async () => {
     const home = await mkdtemp(

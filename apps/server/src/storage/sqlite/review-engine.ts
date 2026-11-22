@@ -67,7 +67,7 @@ function taskSteps(
 ): Record<string, unknown>[] {
   const rows = db
     .prepare(
-      "SELECT * FROM task_steps WHERE job_id=? AND literature_id=? ORDER BY updated_at",
+      "SELECT job_id,literature_id,asset_id,step,status,reason,calls,input_tokens,output_tokens,elapsed_ms,updated_at FROM task_steps WHERE job_id=? AND literature_id=? ORDER BY updated_at",
     )
     .all(jobId, literatureId);
   if (!rows.some((row) => row.step === "parse")) return rows;
@@ -120,7 +120,7 @@ export function runReviewStorage(
       "('acquisition-attempt','metadata-source','pdf-source-result')";
     const rows = db
       .prepare(
-        `SELECT e.* ,e.rowid AS source_cursor FROM execution_events e JOIN execution_jobs j USING(job_id) WHERE e.rowid>? AND e.rowid<=? AND e.kind IN ${kinds} AND julianday(e.created_at)<=julianday(?) AND julianday(j.created_at)<=julianday(?) AND (? IS NULL OR julianday(j.created_at)>=julianday(?)) AND (? IS NULL OR e.job_id=?) ORDER BY e.rowid LIMIT ?`,
+        `SELECT e.event_id,e.job_id,e.sequence,e.kind,e.payload_json,e.created_at ,e.rowid AS source_cursor FROM execution_events e JOIN execution_jobs j USING(job_id) WHERE e.rowid>? AND e.rowid<=? AND e.kind IN ${kinds} AND julianday(e.created_at)<=julianday(?) AND julianday(j.created_at)<=julianday(?) AND (? IS NULL OR julianday(j.created_at)>=julianday(?)) AND (? IS NULL OR e.job_id=?) ORDER BY e.rowid LIMIT ?`,
       )
       .all(after, snapshot, through, through, from, from, job, job, limit + 1);
     const page = rows.slice(0, limit);
@@ -246,7 +246,7 @@ export function runReviewStorage(
       );
       if (session?.status === "running" && session.job_id)
         db.prepare(
-          "INSERT INTO task_model_usage VALUES(?,?,?,?,?,?) ON CONFLICT(job_id,literature_id,role) DO UPDATE SET calls=calls+excluded.calls,input_tokens=input_tokens+excluded.input_tokens,output_tokens=output_tokens+excluded.output_tokens",
+          "INSERT INTO task_model_usage(job_id,literature_id,role,calls,input_tokens,output_tokens) VALUES(?,?,?,?,?,?) ON CONFLICT(job_id,literature_id,role) DO UPDATE SET calls=calls+excluded.calls,input_tokens=input_tokens+excluded.input_tokens,output_tokens=output_tokens+excluded.output_tokens",
         ).run(
           session.job_id,
           session.literature_id ?? "",
@@ -310,7 +310,7 @@ export function runReviewStorage(
     const id = text(r.session_id),
       session = db
         .prepare(
-          "SELECT s.*,m.title FROM agent_sessions s LEFT JOIN literature_metadata m USING(literature_id) WHERE session_id=?",
+          "SELECT s.session_id,s.role,s.provider,s.model,s.actor,s.job_id,s.literature_id,s.subject_json,s.status,s.started_at,s.finished_at,s.calls,s.input_tokens,s.output_tokens,s.event_bytes,s.truncated,m.title FROM agent_sessions s LEFT JOIN literature_metadata m USING(literature_id) WHERE session_id=?",
         )
         .get(id);
     if (!session) return null;
@@ -318,7 +318,7 @@ export function runReviewStorage(
       after = integer(r.after, 0, Number.MAX_SAFE_INTEGER);
     const events = db
       .prepare(
-        "SELECT * FROM agent_session_events WHERE session_id=? AND sequence>? ORDER BY sequence LIMIT ?",
+        "SELECT sequence,session_id,kind,payload_json,created_at,truncated FROM agent_session_events WHERE session_id=? AND sequence>? ORDER BY sequence LIMIT ?",
       )
       .all(id, after, limit + 1);
     const latest = db
@@ -345,7 +345,7 @@ export function runReviewStorage(
       limit = integer(r.limit, 30, 200);
     const found = db
       .prepare(
-        "SELECT p.*,f.state AS freshness,s.outcomes_json,s.method_revision,(SELECT count(*) FROM processor_result_literatures l WHERE l.result_id=p.result_id) AS literature_count FROM processor_result_literatures l JOIN processor_results p USING(result_id) LEFT JOIN processor_result_currentness f USING(result_id) LEFT JOIN processor_result_summaries s USING(result_id) WHERE l.literature_id=? ORDER BY p.created_at DESC,p.result_id LIMIT ? OFFSET ?",
+        "SELECT p.result_id,p.comparison_sha256,p.processor_id,p.processor_version,p.complete,p.producer,p.content_reference,p.content_sha256,p.content_size,p.content_media_type,p.created_at,f.state AS freshness,s.outcomes_json,s.method_revision,(SELECT count(*) FROM processor_result_literatures l WHERE l.result_id=p.result_id) AS literature_count FROM processor_result_literatures l JOIN processor_results p USING(result_id) LEFT JOIN processor_result_currentness f USING(result_id) LEFT JOIN processor_result_summaries s USING(result_id) WHERE l.literature_id=? ORDER BY p.created_at DESC,p.result_id LIMIT ? OFFSET ?",
       )
       .all(id, limit + 1, offset);
     return {
@@ -387,10 +387,9 @@ export function runReviewStorage(
     if (old && old.request_json !== request)
       throw new Error("processor-run-conflict");
     if (!old)
-      db.prepare("INSERT INTO processor_run_requests VALUES(?,?)").run(
-        job,
-        request,
-      );
+      db.prepare(
+        "INSERT INTO processor_run_requests(job_id,request_json) VALUES(?,?)",
+      ).run(job, request);
     return null;
   }
   if (action === "usage-history") {
@@ -428,7 +427,9 @@ export function runReviewStorage(
   if (action === "job-origin-get")
     return (
       db
-        .prepare("SELECT * FROM job_origins WHERE job_id=?")
+        .prepare(
+          "SELECT job_id,actor,operation,created_at FROM job_origins WHERE job_id=?",
+        )
         .get(text(r.job_id)) ?? null
     );
   if (action === "audit-start") {
@@ -471,7 +472,7 @@ export function runReviewStorage(
     }
     const rows = db
       .prepare(
-        `SELECT * FROM operation_records WHERE ${conditions.join(" AND ")} ORDER BY sequence LIMIT ?`,
+        `SELECT sequence,operation_id,actor,operation,scope_json,result_json,status,created_at,finished_at FROM operation_records WHERE ${conditions.join(" AND ")} ORDER BY sequence LIMIT ?`,
       )
       .all(...args, limit + 1);
     return {
@@ -495,7 +496,7 @@ function taskRun(db: DatabaseSync, r: Record<string, unknown>) {
     limit = integer(r.limit, 50, 200);
   const job = db
     .prepare(
-      "SELECT j.*,o.actor FROM execution_jobs j LEFT JOIN job_origins o USING(job_id) WHERE j.job_id=?",
+      "SELECT j.job_id,j.target_kind,j.selector_json,j.policy_version,j.status,j.idempotency_key,j.created_at,j.finished_at,o.actor FROM execution_jobs j LEFT JOIN job_origins o USING(job_id) WHERE j.job_id=?",
     )
     .get(id);
   if (!job) return null;
@@ -508,12 +509,12 @@ function taskRun(db: DatabaseSync, r: Record<string, unknown>) {
   const targetRows = targetId
     ? db
         .prepare(
-          `SELECT * FROM execution_targets WHERE job_id=? AND target_id=? AND (literature_id IS NULL OR ${visibleLiteratureSql("literature_id")})`,
+          `SELECT target_id,job_id,ordinal,literature_id,version_role,stage,disposition,next_eligible_at FROM execution_targets WHERE job_id=? AND target_id=? AND (literature_id IS NULL OR ${visibleLiteratureSql("literature_id")})`,
         )
         .all(id, targetId)
     : db
         .prepare(
-          `SELECT * FROM execution_targets WHERE job_id=? AND (literature_id IS NULL OR ${visibleLiteratureSql("literature_id")}) ORDER BY ordinal LIMIT ? OFFSET ?`,
+          `SELECT target_id,job_id,ordinal,literature_id,version_role,stage,disposition,next_eligible_at FROM execution_targets WHERE job_id=? AND (literature_id IS NULL OR ${visibleLiteratureSql("literature_id")}) ORDER BY ordinal LIMIT ? OFFSET ?`,
         )
         .all(id, limit, offset);
   const count = Number(
@@ -819,7 +820,7 @@ function processorRuns(db: DatabaseSync, r: Record<string, unknown>) {
   }
   const found = db
     .prepare(
-      `SELECT c.*,o.actor,q.request_json FROM processor_collections c LEFT JOIN job_origins o ON o.job_id=c.run_id LEFT JOIN processor_run_requests q ON q.job_id=c.run_id ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY c.created_at DESC,c.collection_id LIMIT ? OFFSET ?`,
+      `SELECT c.collection_id,c.run_id,c.name,c.processor_id,c.spec_json,c.content_reference,c.content_sha256,c.content_size,c.content_media_type,c.created_at,o.actor,q.request_json FROM processor_collections c LEFT JOIN job_origins o ON o.job_id=c.run_id LEFT JOIN processor_run_requests q ON q.job_id=c.run_id ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY c.created_at DESC,c.collection_id LIMIT ? OFFSET ?`,
     )
     .all(...args, limit + 1, offset);
   return {

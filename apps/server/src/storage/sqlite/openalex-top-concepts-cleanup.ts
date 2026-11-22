@@ -57,7 +57,11 @@ export async function cleanupOpenAlexTopConcepts(path: string) {
     );
     db.exec("BEGIN IMMEDIATE");
     try {
-      const identity = db.prepare("SELECT * FROM schema_identity").get();
+      const identity = db
+        .prepare(
+          "SELECT singleton,product,schema_version,schema_fingerprint,created_at FROM schema_identity",
+        )
+        .get();
       if (
         identity?.product !== "sciretriever" ||
         identity.schema_version !== 19 ||
@@ -111,7 +115,7 @@ export async function cleanupOpenAlexTopConcepts(path: string) {
           "DELETE FROM metadata_observation_subject_terms WHERE observation_id IN (SELECT value FROM json_each(?))",
         ).run(observationIds);
         const insert = db.prepare(
-          "INSERT INTO metadata_observation_subject_terms VALUES(?,?,?)",
+          "INSERT INTO metadata_observation_subject_terms(observation_id,ordinal,term) VALUES(?,?,?)",
         );
         let previous: string | null = null,
           ordinal = 0;

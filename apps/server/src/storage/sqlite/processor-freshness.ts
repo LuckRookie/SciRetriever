@@ -20,9 +20,9 @@ export function bindProcessorFreshness(
   reads: ProcessorReads | undefined,
   usesDescription = false,
 ) {
-  db.prepare("INSERT INTO processor_result_freshness VALUES(?,'current')").run(
-    id,
-  );
+  db.prepare(
+    "INSERT INTO processor_result_freshness(result_id,state) VALUES(?,'current')",
+  ).run(id);
   const bind = (
     literature: string,
     parts: readonly {
@@ -36,11 +36,11 @@ export function bindProcessorFreshness(
     uses: boolean,
   ) => {
     db.prepare(
-      "INSERT OR IGNORE INTO processor_result_archive_scopes VALUES(?,?,?,?,?)",
+      "INSERT OR IGNORE INTO processor_result_archive_scopes(result_id,literature_id,parts,uses_description,description_version) VALUES(?,?,?,?,?)",
     ).run(id, literature, selected, Number(uses), description);
     for (const p of parts)
       db.prepare(
-        "INSERT OR IGNORE INTO processor_result_archive_parts VALUES(?,?,?,?,?)",
+        "INSERT OR IGNORE INTO processor_result_archive_parts(result_id,literature_id,asset_id,part,source_json) VALUES(?,?,?,?,?)",
       ).run(
         id,
         literature,
@@ -67,10 +67,10 @@ export function bindProcessorFreshness(
       // Watch exactly the scopes of map results, including an absent supplementary part.
       for (const mapped of input.mapped_results) {
         db.prepare(
-          "INSERT OR IGNORE INTO processor_result_archive_scopes SELECT ?,literature_id,parts,?,description_version FROM processor_result_archive_scopes WHERE result_id=?",
+          "INSERT OR IGNORE INTO processor_result_archive_scopes(result_id,literature_id,parts,uses_description,description_version) SELECT ?,literature_id,parts,?,description_version FROM processor_result_archive_scopes WHERE result_id=?",
         ).run(id, Number(usesDescription), mapped.result_id);
         db.prepare(
-          "INSERT OR IGNORE INTO processor_result_archive_parts SELECT ?,literature_id,asset_id,part,source_json FROM processor_result_archive_parts WHERE result_id=?",
+          "INSERT OR IGNORE INTO processor_result_archive_parts(result_id,literature_id,asset_id,part,source_json) SELECT ?,literature_id,asset_id,part,source_json FROM processor_result_archive_parts WHERE result_id=?",
         ).run(id, mapped.result_id);
       }
       if (usesDescription && input.mapped_results.length)
@@ -96,7 +96,9 @@ export function bindProcessorFreshness(
   }
   // A fixed snapshot may already be older than the current catalog when its result is published.
   for (const s of db
-    .prepare("SELECT * FROM processor_result_archive_scopes WHERE result_id=?")
+    .prepare(
+      "SELECT result_id,literature_id,parts,uses_description,description_version FROM processor_result_archive_scopes WHERE result_id=?",
+    )
     .all(id)) {
     const literature = String(s.literature_id);
     const expected = db
@@ -117,7 +119,7 @@ export function bindProcessorFreshness(
       if (a && b && a.part === b.part && a.source_json === b.source_json)
         continue;
       db.prepare(
-        "INSERT OR IGNORE INTO processor_result_freshness_reasons VALUES(?,?,NULL,?,?,'content-version-changed',?,?,NULL)",
+        "INSERT OR IGNORE INTO processor_result_freshness_reasons(result_id,reason_key,event_sequence,literature_id,asset_id,kind,old_json,new_json,expected_version) VALUES(?,?,NULL,?,?,'content-version-changed',?,?,NULL)",
       ).run(
         id,
         `published:${asset}`,
@@ -135,7 +137,7 @@ export function bindProcessorFreshness(
         .get(literature);
       if (digest(d?.source_json) !== s.description_version)
         db.prepare(
-          "INSERT OR IGNORE INTO processor_result_freshness_reasons VALUES(?,?,NULL,?,NULL,'description-version-changed',NULL,?,?)",
+          "INSERT OR IGNORE INTO processor_result_freshness_reasons(result_id,reason_key,event_sequence,literature_id,asset_id,kind,old_json,new_json,expected_version) VALUES(?,?,NULL,?,NULL,'description-version-changed',NULL,?,?)",
         ).run(
           id,
           `published-description:${literature}`,
@@ -161,7 +163,7 @@ export function readProcessorFreshness(db: DatabaseSync, id: string) {
     });
   const reasons = db
     .prepare(
-      "SELECT * FROM processor_result_freshness_reasons WHERE result_id=? ORDER BY reason_key LIMIT 101",
+      "SELECT result_id,reason_key,event_sequence,literature_id,asset_id,kind,old_json,new_json,expected_version FROM processor_result_freshness_reasons WHERE result_id=? ORDER BY reason_key LIMIT 101",
     )
     .all(id);
   return {

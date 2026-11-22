@@ -1,14 +1,25 @@
 import { lstat, type Stats } from "node:fs";
 import { promisify } from "node:util";
 import { dirname, resolve } from "node:path";
+import { CATALOG_ADDITION_REQUIRED } from "./catalog-ddl.js";
 
 export class CatalogSchemaError extends Error {
-  readonly code = "catalog-schema-refused";
+  readonly code: "catalog-schema-refused" | typeof CATALOG_ADDITION_REQUIRED;
   constructor(
     readonly reason: string,
     options?: ErrorOptions,
+    readonly addition?: string,
   ) {
-    super("catalog schema operation refused", options);
+    super(
+      reason === CATALOG_ADDITION_REQUIRED
+        ? `required catalog addition is missing: ${addition}`
+        : "catalog schema operation refused",
+      options,
+    );
+    this.code =
+      reason === CATALOG_ADDITION_REQUIRED
+        ? CATALOG_ADDITION_REQUIRED
+        : "catalog-schema-refused";
   }
 }
 const stat = promisify(lstat);

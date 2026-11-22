@@ -10,7 +10,10 @@ import {
   initializeCurrentCatalog,
   CURRENT_CATALOG_CONFIG,
 } from "../src/storage/sqlite/catalog-layout.js";
-import { readCatalogIdentity } from "../src/storage/sqlite/catalog-identity.js";
+import {
+  readCatalogIdentity,
+  readCatalogLayout,
+} from "../src/storage/sqlite/catalog-identity.js";
 import {
   catalogNeedsInitialization,
   inspectCatalogSchema,
@@ -59,12 +62,14 @@ it("reads a single schema inventory and singleton identities without checking ca
       expect(readCatalogIdentity(db, CURRENT_CATALOG_CONFIG)).toMatchObject({
         product: "sciretriever",
       });
-      expect(sql.filter((s) => s.includes("sqlite_master"))).toHaveLength(1);
-      expect(sql).toHaveLength(4);
+      expect(
+        sql.filter((s) => /sqlite_(?:master|schema)/u.test(s)),
+      ).toHaveLength(1);
+      expect(sql).toHaveLength(5);
       db.exec("CREATE TABLE sqlitex_payload(value TEXT)");
-      expect(() => readCatalogIdentity(db, CURRENT_CATALOG_CONFIG)).toThrow(
-        "catalog-layout-not-current",
-      );
+      expect(
+        readCatalogLayout(db, CURRENT_CATALOG_CONFIG)?.extra_objects,
+      ).toEqual([{ type: "table", name: "sqlitex_payload" }]);
       db.exec("DROP TABLE sqlitex_payload");
       db.exec("DROP INDEX literature_reference_target_lookup");
       expect(() => readCatalogIdentity(db, CURRENT_CATALOG_CONFIG)).toThrow(

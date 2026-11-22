@@ -12,6 +12,7 @@ import {
 import { ManagedConfigurationLifecycle } from "../configuration/apply.js";
 import { issueRestartBootstrapPermit } from "../application/restart-admission.js";
 import { acquireExecutionRuntime } from "../storage/execution/runtime-owner.js";
+import { CatalogSchemaError } from "../storage/sqlite/schema-path.js";
 import { WriteAdmissionError } from "../storage/write-admission.js";
 import { parseConfigurationApplyState } from "@sciretriever/contracts";
 import type { WebWorkerStart } from "./web-supervisor.js";
@@ -174,8 +175,16 @@ export function runWebWorker(
           return;
         }
         start = m as unknown as WebWorkerStart;
-        starting = boot(start).catch(() => {
-          send(packet({ event: "startup-failed" }));
+        starting = boot(start).catch((error: unknown) => {
+          send(
+            packet({
+              event: "startup-failed",
+              ...(error instanceof CatalogSchemaError &&
+              error.code === "catalog-addition-required"
+                ? { code: error.code, addition: error.addition }
+                : {}),
+            }),
+          );
           process.exitCode = 1;
           if (process.connected) process.disconnect?.();
         });

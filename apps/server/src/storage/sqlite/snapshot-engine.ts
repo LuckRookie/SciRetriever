@@ -230,7 +230,9 @@ export function runSnapshotStorage(
           members: manifest,
         });
       if (r.content_sha256 !== digest) fail("snapshot-integrity");
-      db.prepare("INSERT INTO snapshots VALUES(?,?,?,?,?,?)").run(
+      db.prepare(
+        "INSERT INTO snapshots(snapshot_id,created_at,definition_json,content_sha256,member_count,excluded_count) VALUES(?,?,?,?,?,?)",
+      ).run(
         String(r.snapshot_id),
         String(r.created_at),
         json(snapshotDefinitionValue(definition)),
@@ -242,7 +244,9 @@ export function runSnapshotStorage(
         if (Buffer.byteLength(json(member)) > 1024 * 1024)
           fail("snapshot-member-budget");
       for (const [ordinal, member] of members.entries())
-        db.prepare("INSERT INTO snapshot_members VALUES(?,?,?,?,?)").run(
+        db.prepare(
+          "INSERT INTO snapshot_members(snapshot_id,literature_id,ordinal,member_sha256,member_json) VALUES(?,?,?,?,?)",
+        ).run(
           String(r.snapshot_id),
           member.literature_id,
           ordinal,
@@ -250,7 +254,9 @@ export function runSnapshotStorage(
           json(snapshotMemberValue(member)),
         );
       if (r.name !== null && r.name !== undefined)
-        db.prepare("INSERT INTO snapshot_labels VALUES(?,?,?,?)").run(
+        db.prepare(
+          "INSERT INTO snapshot_labels(snapshot_id,name,updated_at,actor) VALUES(?,?,?,?)",
+        ).run(
           String(r.snapshot_id),
           String(r.name),
           String(r.created_at),
@@ -259,23 +265,31 @@ export function runSnapshotStorage(
       result = header(
         db,
         db
-          .prepare("SELECT * FROM snapshots WHERE snapshot_id=?")
+          .prepare(
+            "SELECT snapshot_id,created_at,definition_json,content_sha256,member_count,excluded_count FROM snapshots WHERE snapshot_id=?",
+          )
           .get(String(r.snapshot_id))!,
       );
     } else if (action === "rename") {
       const id = String(r.snapshot_id),
-        row = db.prepare("SELECT * FROM snapshots WHERE snapshot_id=?").get(id);
+        row = db
+          .prepare(
+            "SELECT snapshot_id,created_at,definition_json,content_sha256,member_count,excluded_count FROM snapshots WHERE snapshot_id=?",
+          )
+          .get(id);
       if (!row) fail("snapshot-not-found");
       if (r.name === null)
         db.prepare("DELETE FROM snapshot_labels WHERE snapshot_id=?").run(id);
       else
         db.prepare(
-          "INSERT INTO snapshot_labels VALUES(?,?,?,?) ON CONFLICT(snapshot_id) DO UPDATE SET name=excluded.name,updated_at=excluded.updated_at,actor=excluded.actor",
+          "INSERT INTO snapshot_labels(snapshot_id,name,updated_at,actor) VALUES(?,?,?,?) ON CONFLICT(snapshot_id) DO UPDATE SET name=excluded.name,updated_at=excluded.updated_at,actor=excluded.actor",
         ).run(id, String(r.name), String(r.updated_at), String(r.actor));
       result = header(db, row);
     } else if (action === "member") {
       const row = db
-        .prepare("SELECT * FROM snapshots WHERE snapshot_id=?")
+        .prepare(
+          "SELECT snapshot_id,created_at,definition_json,content_sha256,member_count,excluded_count FROM snapshots WHERE snapshot_id=?",
+        )
         .get(String(r.snapshot_id));
       if (!row) fail("snapshot-not-found");
       const manifest = db
@@ -309,7 +323,9 @@ export function runSnapshotStorage(
       result = { ...header(db, row), member };
     } else if (action === "read") {
       const row = db
-        .prepare("SELECT * FROM snapshots WHERE snapshot_id=?")
+        .prepare(
+          "SELECT snapshot_id,created_at,definition_json,content_sha256,member_count,excluded_count FROM snapshots WHERE snapshot_id=?",
+        )
         .get(String(r.snapshot_id));
       if (!row) fail("snapshot-not-found");
       const offset = Number(r.offset ?? 0),
@@ -317,7 +333,7 @@ export function runSnapshotStorage(
         budget = Number(r.max_bytes ?? 262144);
       const saved = db
         .prepare(
-          "SELECT * FROM snapshot_members WHERE snapshot_id=? AND ordinal>=? ORDER BY ordinal LIMIT ?",
+          "SELECT snapshot_id,literature_id,ordinal,member_sha256,member_json FROM snapshot_members WHERE snapshot_id=? AND ordinal>=? ORDER BY ordinal LIMIT ?",
         )
         .all(String(r.snapshot_id), offset, limit);
       const members: SnapshotMember[] = [];
@@ -352,7 +368,7 @@ export function runSnapshotStorage(
         limit = Math.min(200, Number(r.limit ?? 50)),
         list = db
           .prepare(
-            "SELECT * FROM snapshots WHERE snapshot_id>? ORDER BY snapshot_id LIMIT ?",
+            "SELECT snapshot_id,created_at,definition_json,content_sha256,member_count,excluded_count FROM snapshots WHERE snapshot_id>? ORDER BY snapshot_id LIMIT ?",
           )
           .all(after, limit + 1);
       const items: SnapshotHeader[] = [];

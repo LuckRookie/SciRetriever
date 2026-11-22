@@ -207,6 +207,7 @@ function usage(options: CliOptions): CliResult {
     "  literature open ID  # record a paper's latest opening time\n" +
     "  marks list|export|create|update|delete|restore|place --request FILE  # reading highlights, regions and notes of one paper\n" +
     "  storage schema-inspect|schema-init --catalog PATH\n" +
+    "  storage schema-apply --catalog PATH --addition NAME\n" +
     "  maintenance rebuild-index\n" +
     "  maintenance refresh-index\n" +
     "  maintenance verify-index\n" +
@@ -1255,6 +1256,18 @@ async function execute(
     );
     return output(await inspectCatalogRetrieval(path), options);
   }
+  if (group === "storage" && command === "schema-apply") {
+    const path = argument(args, "--catalog");
+    const name = argument(args, "--addition");
+    if (!path?.startsWith("/") || !name || args.length !== 6) invalidInput();
+    const { applyDeclaredCatalogAddition } = await import(
+      "../storage/sqlite/catalog-schema.js"
+    );
+    return output(
+      await applyDeclaredCatalogAddition(path, name, options.signal),
+      options,
+    );
+  }
   if (
     group === "storage" &&
     (command === "schema-inspect" || command === "schema-init")
@@ -2235,7 +2248,7 @@ export async function runCli(
                           : configuration
                             ? "configuration-failed"
                             : catalog
-                              ? "catalog-schema-refused"
+                              ? error.code
                               : business
                                 ? "business-failed"
                                 : "internal-failed";
@@ -2274,7 +2287,10 @@ export async function runCli(
           ? { fields: error.fields }
           : {}),
         ...(error instanceof CatalogSchemaError
-          ? { reason: error.reason }
+          ? {
+              reason: error.reason,
+              ...(error.addition ? { addition: error.addition } : {}),
+            }
           : {}),
       })}\n`,
     );

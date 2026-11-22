@@ -150,7 +150,7 @@ export function archiveStates(
         : " WHERE m.literature_id IN (SELECT value FROM json_each(?))";
   const all = rows(
     db,
-    `SELECT m.*, EXISTS(SELECT 1 FROM literature_metadata_authors a WHERE a.literature_id=m.literature_id) AS has_authors, r.mode, r.asset_id AS run_asset, r.state AS run_state, r.job_id, j.status AS job_status, (SELECT count(*) FROM literature_tag_items i WHERE i.literature_id=m.literature_id) AS tag_count, dh.source_json AS description_json FROM literature_metadata m LEFT JOIN archive_runs r ON r.literature_id=m.literature_id LEFT JOIN execution_jobs j ON j.job_id=r.job_id LEFT JOIN archive_description_heads dh ON dh.literature_id=m.literature_id ${where}`,
+    `SELECT m.literature_id,m.metadata_revision,m.metadata_sha256,m.title,m.abstract,m.publication_date,m.publication_year,m.publication_form,m.article_kind,m.language,m.venue,m.publisher,m.volume,m.issue,m.pages, EXISTS(SELECT 1 FROM literature_metadata_authors a WHERE a.literature_id=m.literature_id) AS has_authors, r.mode, r.asset_id AS run_asset, r.state AS run_state, r.job_id, j.status AS job_status, (SELECT count(*) FROM literature_tag_items i WHERE i.literature_id=m.literature_id) AS tag_count, dh.source_json AS description_json FROM literature_metadata m LEFT JOIN archive_runs r ON r.literature_id=m.literature_id LEFT JOIN execution_jobs j ON j.job_id=r.job_id LEFT JOIN archive_description_heads dh ON dh.literature_id=m.literature_id ${where}`,
     ...args,
   );
   checkpoint();
@@ -172,9 +172,17 @@ export function archiveStates(
       )
     : null;
   checkpoint();
-  const steps = rows(db, `SELECT * FROM archive_steps${filter}`, ...args);
+  const steps = rows(
+    db,
+    `SELECT literature_id,asset_id,step,status,input_sha256,output_json,reason,elapsed_ms,calls,input_tokens,output_tokens,updated_at FROM archive_steps${filter}`,
+    ...args,
+  );
   checkpoint();
-  const issues = rows(db, `SELECT * FROM archive_issues${filter}`, ...args);
+  const issues = rows(
+    db,
+    `SELECT issue_id,literature_id,asset_id,step,reason,detail_json,resolution,updated_at FROM archive_issues${filter}`,
+    ...args,
+  );
   const byLit = <T extends { literature_id: unknown }>(list: T[]) => {
     const map = new Map<string, T[]>();
     for (const item of list) {
@@ -417,7 +425,7 @@ export function runArchiveStorage(
     if (action === "events")
       return rows(
         db,
-        "SELECT * FROM archive_version_events WHERE sequence>? ORDER BY sequence LIMIT ?",
+        "SELECT sequence,kind,literature_id,asset_id,old_part,new_part,old_json,new_json,created_at FROM archive_version_events WHERE sequence>? ORDER BY sequence LIMIT ?",
         Number(r.after ?? 0),
         Math.min(1000, Number(r.limit ?? 100)),
       ).map(
@@ -566,7 +574,7 @@ export function runArchiveStorage(
       const status = String(r.status),
         elapsed = Math.max(0, Math.round(Number(r.elapsed_ms) || 0));
       db.prepare(
-        "INSERT INTO task_steps VALUES(?,?,?,'parse',?,?,0,0,0,?,?) ON CONFLICT(job_id,literature_id,asset_id,step) DO UPDATE SET status=excluded.status,reason=excluded.reason,elapsed_ms=task_steps.elapsed_ms+excluded.elapsed_ms,updated_at=excluded.updated_at",
+        "INSERT INTO task_steps(job_id,literature_id,asset_id,step,status,reason,calls,input_tokens,output_tokens,elapsed_ms,updated_at) VALUES(?,?,?,'parse',?,?,0,0,0,?,?) ON CONFLICT(job_id,literature_id,asset_id,step) DO UPDATE SET status=excluded.status,reason=excluded.reason,elapsed_ms=task_steps.elapsed_ms+excluded.elapsed_ms,updated_at=excluded.updated_at",
       ).run(
         job,
         String(r.literature_id),
@@ -583,7 +591,9 @@ export function runArchiveStorage(
           )
           .get(job)!.n,
       );
-      db.prepare("INSERT INTO execution_events VALUES(?,?,?,?,?,?)").run(
+      db.prepare(
+        "INSERT INTO execution_events(event_id,job_id,sequence,kind,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+      ).run(
         `${String(r.run_id)}:${String(r.asset_id)}:parse:${sequence}`,
         job,
         sequence,
@@ -634,7 +644,7 @@ export function runArchiveStorage(
       )
         fail("archive-run-stale");
       db.prepare(
-        "INSERT INTO archive_steps VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(literature_id,asset_id,step) DO UPDATE SET status=excluded.status,input_sha256=excluded.input_sha256,output_json=excluded.output_json,reason=excluded.reason,elapsed_ms=excluded.elapsed_ms,calls=excluded.calls,input_tokens=excluded.input_tokens,output_tokens=excluded.output_tokens,updated_at=excluded.updated_at",
+        "INSERT INTO archive_steps(literature_id,asset_id,step,status,input_sha256,output_json,reason,elapsed_ms,calls,input_tokens,output_tokens,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(literature_id,asset_id,step) DO UPDATE SET status=excluded.status,input_sha256=excluded.input_sha256,output_json=excluded.output_json,reason=excluded.reason,elapsed_ms=excluded.elapsed_ms,calls=excluded.calls,input_tokens=excluded.input_tokens,output_tokens=excluded.output_tokens,updated_at=excluded.updated_at",
       ).run(
         s.literature_id,
         s.asset_id,
@@ -656,7 +666,7 @@ export function runArchiveStorage(
         .get(s.literature_id, String(r.run_id))?.job_id;
       if (job)
         db.prepare(
-          "INSERT INTO task_steps VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(job_id,literature_id,asset_id,step) DO UPDATE SET status=excluded.status,reason=excluded.reason,calls=task_steps.calls+excluded.calls,input_tokens=task_steps.input_tokens+excluded.input_tokens,output_tokens=task_steps.output_tokens+excluded.output_tokens,elapsed_ms=task_steps.elapsed_ms+excluded.elapsed_ms,updated_at=excluded.updated_at",
+          "INSERT INTO task_steps(job_id,literature_id,asset_id,step,status,reason,calls,input_tokens,output_tokens,elapsed_ms,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(job_id,literature_id,asset_id,step) DO UPDATE SET status=excluded.status,reason=excluded.reason,calls=task_steps.calls+excluded.calls,input_tokens=task_steps.input_tokens+excluded.input_tokens,output_tokens=task_steps.output_tokens+excluded.output_tokens,elapsed_ms=task_steps.elapsed_ms+excluded.elapsed_ms,updated_at=excluded.updated_at",
         ).run(
           job,
           s.literature_id,
@@ -743,7 +753,9 @@ export function runArchiveStorage(
               }
             : null,
         };
-        db.prepare("INSERT INTO execution_events VALUES(?,?,?,?,?,?)").run(
+        db.prepare(
+          "INSERT INTO execution_events(event_id,job_id,sequence,kind,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+        ).run(
           `${r.run_id}:${s.asset_id}:${s.step}:${sequence}`,
           job,
           sequence,
@@ -758,7 +770,7 @@ export function runArchiveStorage(
         const issue = item as { code?: unknown; page_index?: unknown };
         if (issue.code !== "page-content-missing") continue;
         db.prepare(
-          "INSERT INTO archive_issues VALUES(?,?,?,?,?,?,NULL,?) ON CONFLICT(issue_id) DO UPDATE SET detail_json=excluded.detail_json,updated_at=excluded.updated_at",
+          "INSERT INTO archive_issues(issue_id,literature_id,asset_id,step,reason,detail_json,resolution,updated_at) VALUES(?,?,?,?,?,?,NULL,?) ON CONFLICT(issue_id) DO UPDATE SET detail_json=excluded.detail_json,updated_at=excluded.updated_at",
         ).run(
           hash([s.literature_id, s.asset_id, issue.code, issue.page_index]),
           s.literature_id,
@@ -772,7 +784,7 @@ export function runArchiveStorage(
       const issue = hash([s.literature_id, s.asset_id, s.step]);
       if (s.status === "failed" || s.status === "unavailable")
         db.prepare(
-          "INSERT INTO archive_issues VALUES(?,?,?,?,?,?,NULL,?) ON CONFLICT(issue_id) DO UPDATE SET reason=excluded.reason,detail_json=excluded.detail_json,resolution=NULL,updated_at=excluded.updated_at",
+          "INSERT INTO archive_issues(issue_id,literature_id,asset_id,step,reason,detail_json,resolution,updated_at) VALUES(?,?,?,?,?,?,NULL,?) ON CONFLICT(issue_id) DO UPDATE SET reason=excluded.reason,detail_json=excluded.detail_json,resolution=NULL,updated_at=excluded.updated_at",
         ).run(
           issue,
           s.literature_id,
@@ -813,7 +825,7 @@ export function runArchiveStorage(
           claimed:
             db
               .prepare(
-                "INSERT INTO archive_batch_hooks VALUES(?,'running','{}') ON CONFLICT DO NOTHING",
+                "INSERT INTO archive_batch_hooks(job_id,state,result_json) VALUES(?,'running','{}') ON CONFLICT DO NOTHING",
               )
               .run(String(r.job_id)).changes === 1,
         };

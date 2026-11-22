@@ -16,7 +16,9 @@ function fail(code: string): never {
 }
 function row(db: DatabaseSync, id: string) {
   const value = db
-    .prepare("SELECT * FROM saved_filters WHERE filter_id=?")
+    .prepare(
+      "SELECT filter_id,name,query_json,sort,created_at,updated_at FROM saved_filters WHERE filter_id=?",
+    )
     .get(id);
   if (!value) fail("filter-not-found");
   return value;
@@ -49,14 +51,9 @@ function ensureRoom(db: DatabaseSync) {
 }
 function insert(db: DatabaseSync, input: FilterInput, id: string, now: string) {
   ensureRoom(db);
-  db.prepare("INSERT INTO saved_filters VALUES(?,?,?,?,?,?)").run(
-    id,
-    input.name,
-    JSON.stringify(input.query),
-    input.sort,
-    now,
-    now,
-  );
+  db.prepare(
+    "INSERT INTO saved_filters(filter_id,name,query_json,sort,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+  ).run(id, input.name, JSON.stringify(input.query), input.sort, now, now);
   return present(db, row(db, id));
 }
 export function runFilterStorage(db: DatabaseSync, value: unknown): unknown {
@@ -81,7 +78,9 @@ export function runFilterStorage(db: DatabaseSync, value: unknown): unknown {
     if (op.operation === "list" || op.operation === "export") {
       result = {
         items: db
-          .prepare("SELECT * FROM saved_filters ORDER BY name COLLATE BINARY")
+          .prepare(
+            "SELECT filter_id,name,query_json,sort,created_at,updated_at FROM saved_filters ORDER BY name COLLATE BINARY",
+          )
           .all()
           .map((v) => present(db, v)),
       };
@@ -110,7 +109,9 @@ export function runFilterStorage(db: DatabaseSync, value: unknown): unknown {
             suffix = 1;
           for (;;) {
             const existing = db
-              .prepare("SELECT * FROM saved_filters WHERE name=?")
+              .prepare(
+                "SELECT filter_id,name,query_json,sort,created_at,updated_at FROM saved_filters WHERE name=?",
+              )
               .get(name);
             if (!existing) {
               items.push({

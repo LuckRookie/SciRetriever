@@ -19,6 +19,8 @@ import { initializeCurrentCatalog } from "../src/storage/sqlite/catalog-layout.j
 import {
   SCHEMA_VERSION,
   LIBRARY_STATE_INPUT_TABLES,
+  CATALOG_BASE_SCHEMA,
+  LIBRARY_SCALE_ADDITION,
   SCHEMA_FINGERPRINT,
   SCHEMA_MANIFEST,
   SCHEMA_MANIFEST_V16,
@@ -27,7 +29,9 @@ import {
   SCHEMA_MANIFEST_V19,
   SCHEMA_FINGERPRINT_V19,
   SCHEMA_FINGERPRINT_V19_COUNTS,
+  SCHEMA_FINGERPRINT_V19_COMBINED,
   SCHEMA_MANIFEST_V19_COUNTS,
+  SCHEMA_MANIFEST_V19_COMBINED,
   RETRIEVAL_CHANGE_SCHEMA,
   SCHEMA_FINGERPRINT_V19_INTAKE_LOOKUPS,
   SCHEMA_FINGERPRINT_V19_RETRIEVAL_CHANGES,
@@ -64,8 +68,11 @@ it("pins the frozen 16–19 manifests, current additive layout and version-speci
   expect(SCHEMA_FINGERPRINT_V19_COUNTS).toBe(
     "dda502a9c79b0f09255da30725a4294c1a1b793edfdd2c5edbe2eb8bb96a060c",
   );
-  expect(SCHEMA_FINGERPRINT).toBe(
+  expect(SCHEMA_FINGERPRINT_V19_COMBINED).toBe(
     "14c693f06f287f426f3fde730f7b5743c9ec64d2304919272d1b1d2e51202952",
+  );
+  expect(SCHEMA_FINGERPRINT).toBe(
+    "6b3eca115bc5e171b8eb4c8accca53d5780b234bac1b5326f8841658a4c89fb0",
   );
   expect(SCHEMA_FINGERPRINT_V18).toBe(
     "a95b796f5f8dd69839748571476a8bcc0f3d38ed1547d8f8aab25c38b1e2d8cf",
@@ -88,9 +95,9 @@ it("pins the frozen 16–19 manifests, current additive layout and version-speci
     ...SCHEMA_MANIFEST_V19_STORED_STATES,
     ...LIBRARY_COUNT_SCHEMA,
   ]);
-  expect(SCHEMA_MANIFEST.slice(0, SCHEMA_MANIFEST_V19_COUNTS.length)).toEqual(
-    SCHEMA_MANIFEST_V19_COUNTS,
-  );
+  expect(
+    SCHEMA_MANIFEST_V19_COMBINED.slice(0, SCHEMA_MANIFEST_V19_COUNTS.length),
+  ).toEqual(SCHEMA_MANIFEST_V19_COUNTS);
   expect(SCHEMA_FINGERPRINT_V17).toBe(
     "b8c82c83c57f6f4826e9ed8fdb4080942b1acc863b10581a45221abc3441de91",
   );
@@ -105,8 +112,15 @@ it("pins the frozen 16–19 manifests, current additive layout and version-speci
     "8545637a22c2341066427f71195eec5465e4c906f3dabd2c2cbad2a4c512f0f8",
   );
   expect(
-    createHash("sha256").update(JSON.stringify(SCHEMA_MANIFEST)).digest("hex"),
+    createHash("sha256")
+      .update(JSON.stringify(CATALOG_BASE_SCHEMA))
+      .digest("hex"),
   ).toBe(SCHEMA_FINGERPRINT);
+  expect(
+    createHash("sha256")
+      .update(JSON.stringify(LIBRARY_SCALE_ADDITION.statements))
+      .digest("hex"),
+  ).toBe(LIBRARY_SCALE_ADDITION.ddl_fingerprint);
   for (const name of ["saved_filters", "reading_mark_places"]) {
     expect(LIBRARY_STATE_INPUT_TABLES as readonly string[]).not.toContain(name);
     expect(
@@ -436,7 +450,9 @@ it("refuses foreign, older and drifted layouts without repairing or writing them
     const current = join(root, "current.sqlite");
     await initializeCatalogSchema(current);
     const changed = new DatabaseSync(current);
-    changed.exec("CREATE TABLE unknown_payload(value TEXT)");
+    changed.exec(
+      "DROP INDEX literature_intake_order; CREATE INDEX literature_intake_order ON literature_intake(intake_at ASC,literature_id ASC)",
+    );
     changed.close();
     await expect(inspectCatalogSchema(current)).rejects.toMatchObject({
       reason: "catalog-integrity-refused",

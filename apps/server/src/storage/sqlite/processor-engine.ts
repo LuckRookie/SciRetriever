@@ -122,7 +122,7 @@ function publish(db: DatabaseSync, p: ProcessorPublication): Row {
   return tx(db, () => {
     const existing = one(
       db,
-      "SELECT * FROM processor_results WHERE result_id=?",
+      "SELECT result_id,comparison_sha256,processor_id,processor_version,complete,producer,content_reference,content_sha256,content_size,content_media_type,created_at FROM processor_results WHERE result_id=?",
       p.result_id,
     );
     if (existing) {
@@ -133,7 +133,7 @@ function publish(db: DatabaseSync, p: ProcessorPublication): Row {
     if (p.complete && p.producer === "internal") {
       const previous = one(
         db,
-        "SELECT * FROM processor_results WHERE comparison_sha256=? AND complete=1 AND producer='internal'",
+        "SELECT result_id,comparison_sha256,processor_id,processor_version,complete,producer,content_reference,content_sha256,content_size,content_media_type,created_at FROM processor_results WHERE comparison_sha256=? AND complete=1 AND producer='internal'",
         p.comparison_sha256,
       );
       if (previous) return previous;
@@ -155,7 +155,9 @@ function publish(db: DatabaseSync, p: ProcessorPublication): Row {
       p.created_at,
     );
     if (p.outcomes)
-      db.prepare("INSERT INTO processor_result_summaries VALUES(?,?,?,?)").run(
+      db.prepare(
+        "INSERT INTO processor_result_summaries(result_id,usage_json,outcomes_json,method_revision) VALUES(?,?,?,?)",
+      ).run(
         p.result_id,
         p.usage ? JSON.stringify(p.usage) : null,
         JSON.stringify(p.outcomes),
@@ -164,18 +166,18 @@ function publish(db: DatabaseSync, p: ProcessorPublication): Row {
     for (const input of p.inputs) {
       if (input.kind === "snapshot")
         db.prepare(
-          "INSERT OR IGNORE INTO processor_result_literatures SELECT ?,literature_id FROM snapshot_members WHERE snapshot_id=?",
+          "INSERT OR IGNORE INTO processor_result_literatures(result_id,literature_id) SELECT ?,literature_id FROM snapshot_members WHERE snapshot_id=?",
         ).run(p.result_id, input.snapshot_id);
       else
         db.prepare(
-          "INSERT OR IGNORE INTO processor_result_literatures VALUES(?,?)",
+          "INSERT OR IGNORE INTO processor_result_literatures(result_id,literature_id) VALUES(?,?)",
         ).run(p.result_id, input.literature_id);
       if (input.kind === "archive-document") {
         for (const part of input.parts)
           if (part.available) {
             const d = one(
               db,
-              "SELECT d.* FROM document_versions d JOIN structure_annotations a ON a.document_version_id=d.document_version_id WHERE d.document_version_id=? AND d.literature_id=? AND d.source_asset_id=? AND d.source_sha256=? AND d.schema_version=2 AND a.annotation_id=?",
+              "SELECT d.document_version_id,d.document_id,d.schema_version,d.literature_id,d.source_asset_id,d.source_sha256,d.source_byte_size,d.source_media_type,d.source_artifact_path,d.builder_version,d.locator_scheme,d.representation_sha256,d.markdown_artifact_path,d.markdown_sha256,d.markdown_byte_size,d.markdown_media_type,d.structure_artifact_path,d.structure_sha256,d.structure_byte_size,d.structure_media_type,d.proofread_id,d.proofread_content_sha256,d.created_at,d.raw_parse_id,d.raw_parse_result_sha256,d.page_layer_sha256,d.draft_method_sha256,d.draft_content_artifact_path,d.draft_content_sha256,d.draft_content_byte_size,d.draft_content_media_type FROM document_versions d JOIN structure_annotations a ON a.document_version_id=d.document_version_id WHERE d.document_version_id=? AND d.literature_id=? AND d.source_asset_id=? AND d.source_sha256=? AND d.schema_version=2 AND a.annotation_id=?",
               part.document_version_id!,
               input.literature_id,
               part.asset_id,
@@ -184,7 +186,7 @@ function publish(db: DatabaseSync, p: ProcessorPublication): Row {
             );
             if (!d) fail("processor-input-changed");
             db.prepare(
-              "INSERT OR IGNORE INTO processor_result_documents VALUES(?,?,?,?,?,?)",
+              "INSERT OR IGNORE INTO processor_result_documents(result_id,literature_id,asset_id,asset_sha256,document_version_id,representation_sha256) VALUES(?,?,?,?,?,?)",
             ).run(
               p.result_id,
               input.literature_id,
@@ -220,7 +222,7 @@ function publish(db: DatabaseSync, p: ProcessorPublication): Row {
           );
           if (!found) fail("processor-input-changed");
           db.prepare(
-            "INSERT OR IGNORE INTO processor_result_documents VALUES(?,?,?,?,?,?)",
+            "INSERT OR IGNORE INTO processor_result_documents(result_id,literature_id,asset_id,asset_sha256,document_version_id,representation_sha256) VALUES(?,?,?,?,?,?)",
           ).run(
             p.result_id,
             input.literature_id,
@@ -231,7 +233,7 @@ function publish(db: DatabaseSync, p: ProcessorPublication): Row {
           );
         } else if (m)
           db.prepare(
-            "INSERT OR IGNORE INTO processor_result_materials VALUES(?,?,?,?)",
+            "INSERT OR IGNORE INTO processor_result_materials(result_id,literature_id,asset_id,asset_sha256) VALUES(?,?,?,?)",
           ).run(p.result_id, input.literature_id, m.asset_id, m.asset_sha256);
       }
     }
@@ -244,7 +246,7 @@ function publish(db: DatabaseSync, p: ProcessorPublication): Row {
     );
     return one(
       db,
-      "SELECT * FROM processor_results WHERE result_id=?",
+      "SELECT result_id,comparison_sha256,processor_id,processor_version,complete,producer,content_reference,content_sha256,content_size,content_media_type,created_at FROM processor_results WHERE result_id=?",
       p.result_id,
     )!;
   });
@@ -414,13 +416,13 @@ export function runProcessorStorage(
     case "get":
       return one(
         db,
-        "SELECT * FROM processor_results WHERE result_id=?",
+        "SELECT result_id,comparison_sha256,processor_id,processor_version,complete,producer,content_reference,content_sha256,content_size,content_media_type,created_at FROM processor_results WHERE result_id=?",
         String(args),
       );
     case "comparison":
       return one(
         db,
-        "SELECT * FROM processor_results WHERE comparison_sha256=? AND complete=1 AND producer='internal'",
+        "SELECT result_id,comparison_sha256,processor_id,processor_version,complete,producer,content_reference,content_sha256,content_size,content_media_type,created_at FROM processor_results WHERE comparison_sha256=? AND complete=1 AND producer='internal'",
         String(args),
       );
     case "publish":
@@ -430,7 +432,7 @@ export function runProcessorStorage(
     case "projection":
       return one(
         db,
-        "SELECT s.*, (SELECT count(*) FROM processor_record_projection r WHERE r.result_id=s.result_id) AS actual_count, (SELECT count(*) FROM processor_result_fts f WHERE f.result_id=s.result_id) AS fts_count FROM processor_projection_state s WHERE s.result_id=?",
+        "SELECT s.result_id,s.content_sha256,s.record_count, (SELECT count(*) FROM processor_record_projection r WHERE r.result_id=s.result_id) AS actual_count, (SELECT count(*) FROM processor_result_fts f WHERE f.result_id=s.result_id) AS fts_count FROM processor_projection_state s WHERE s.result_id=?",
         String(args),
       );
     case "query":
@@ -439,17 +441,17 @@ export function runProcessorStorage(
       return {
         materials: db
           .prepare(
-            "SELECT * FROM processor_result_materials WHERE result_id=? ORDER BY asset_id",
+            "SELECT result_id,literature_id,asset_id,asset_sha256 FROM processor_result_materials WHERE result_id=? ORDER BY asset_id",
           )
           .all(String(args)),
         documents: db
           .prepare(
-            "SELECT * FROM processor_result_documents WHERE result_id=? ORDER BY document_version_id",
+            "SELECT result_id,literature_id,asset_id,asset_sha256,document_version_id,representation_sha256 FROM processor_result_documents WHERE result_id=? ORDER BY document_version_id",
           )
           .all(String(args)),
         results: db
           .prepare(
-            "SELECT * FROM processor_result_inputs WHERE result_id=? ORDER BY source_result_id",
+            "SELECT result_id,source_result_id,source_sha256 FROM processor_result_inputs WHERE result_id=? ORDER BY source_result_id",
           )
           .all(String(args)),
       };
@@ -467,7 +469,7 @@ export function runProcessorStorage(
         WITH related(result_id) AS (
           SELECT result_id FROM processor_result_literatures WHERE literature_id=?
         )
-        SELECT p.*,f.state AS freshness FROM processor_results p JOIN related r ON r.result_id=p.result_id JOIN processor_result_currentness f ON f.result_id=p.result_id
+        SELECT p.result_id,p.comparison_sha256,p.processor_id,p.processor_version,p.complete,p.producer,p.content_reference,p.content_sha256,p.content_size,p.content_media_type,p.created_at,f.state AS freshness FROM processor_results p JOIN related r ON r.result_id=p.result_id JOIN processor_result_currentness f ON f.result_id=p.result_id
         WHERE p.result_id>? AND (? IS NULL OR f.state=?) ORDER BY p.result_id LIMIT ?
       `,
           )
@@ -484,7 +486,7 @@ export function runProcessorStorage(
           );
       return db
         .prepare(
-          "SELECT p.*,f.state AS freshness FROM processor_results p JOIN processor_result_currentness f ON f.result_id=p.result_id WHERE p.result_id>? AND (? IS NULL OR f.state=?) ORDER BY p.result_id LIMIT ?",
+          "SELECT p.result_id,p.comparison_sha256,p.processor_id,p.processor_version,p.complete,p.producer,p.content_reference,p.content_sha256,p.content_size,p.content_media_type,p.created_at,f.state AS freshness FROM processor_results p JOIN processor_result_currentness f ON f.result_id=p.result_id WHERE p.result_id>? AND (? IS NULL OR f.state=?) ORDER BY p.result_id LIMIT ?",
         )
         .all(
           q.after,
@@ -538,7 +540,7 @@ export function runProcessorStorage(
       return tx(db, () => {
         const old = one(
           db,
-          "SELECT * FROM processor_collections WHERE collection_id=?",
+          "SELECT collection_id,run_id,name,processor_id,spec_json,content_reference,content_sha256,content_size,content_media_type,created_at FROM processor_collections WHERE collection_id=?",
           p.collection_id,
         );
         if (old) {
@@ -577,7 +579,7 @@ export function runProcessorStorage(
     case "collection-get":
       return one(
         db,
-        "SELECT * FROM processor_collections WHERE collection_id=?",
+        "SELECT collection_id,run_id,name,processor_id,spec_json,content_reference,content_sha256,content_size,content_media_type,created_at FROM processor_collections WHERE collection_id=?",
         String(args),
       );
     case "collections": {

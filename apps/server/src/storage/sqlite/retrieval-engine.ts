@@ -10,6 +10,8 @@ const { visibleLiteratureSql }: typeof import("./intake-visibility.js") =
 import { createHash, randomUUID } from "node:crypto";
 import { RELEVANCE_RESULT_LIMIT } from "@sciretriever/contracts";
 import { DatabaseSync } from "node:sqlite";
+import { statSync } from "node:fs";
+import type { CatalogAdditionRequirement } from "./catalog-ddl.js";
 import type * as Schema from "./schema.js";
 const { SCHEMA_VERSION }: typeof Schema = await import(
   new URL(
@@ -24,11 +26,24 @@ const { CatalogCorruptionError, catalogCorruption, sqliteStorageFull } =
       import.meta.url,
     ).href
   );
+const {
+  readCatalogLayout,
+  checkCatalogIdentityRows,
+  CatalogLayoutError,
+}: typeof import("./catalog-identity.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./catalog-identity.ts"
+      : "./catalog-identity.js",
+    import.meta.url,
+  ).href
+);
 
 export interface RetrievalSchemaConfig {
   readonly schema_version: typeof SCHEMA_VERSION;
   readonly schema_fingerprint: string;
   readonly schema_manifest: readonly string[];
+  readonly schema_additions?: readonly CatalogAdditionRequirement[];
   readonly execution_schema_version: number;
   readonly execution_schema_fingerprint: string;
   readonly execution_runtime_schema_version: number;
@@ -51,6 +66,19 @@ export function inspectRetrievalIdentity(
   db: DatabaseSync,
   config: RetrievalSchemaConfig,
 ): void {
+  if (config.schema_additions) {
+    try {
+      if (!readCatalogLayout(db, config)) fail();
+    } catch (error) {
+      if (
+        !(error instanceof CatalogLayoutError) ||
+        error.reason === "catalog-addition-required"
+      )
+        throw error;
+      fail();
+    }
+    return;
+  }
   const row = db
     .prepare(
       "SELECT product,schema_version,schema_fingerprint FROM schema_identity WHERE singleton=1",
@@ -151,6 +179,10 @@ function inspectCatalogSnapshot(
     hashes: ReturnType<typeof retrievalHashes>,
   ) => void,
 ): RetrievalCatalogInspection {
+  const layout = config.schema_additions
+    ? readCatalogLayout(db, config)
+    : undefined;
+  if (layout === null) fail();
   const identity = db
     .prepare(
       "SELECT product,schema_version,schema_fingerprint FROM schema_identity WHERE singleton=1",
@@ -176,6 +208,7 @@ function inspectCatalogSnapshot(
       )?.[1];
     if (!name) fail();
     names.add(name);
+    if (layout) continue;
     const actual = db
       .prepare("SELECT sql FROM sqlite_master WHERE name=?")
       .get(name) as { sql?: unknown } | undefined;
@@ -203,13 +236,19 @@ function inspectCatalogSnapshot(
   const actual = db
     .prepare("SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")
     .all() as { name: string }[];
-  if (actual.some((row) => !names.has(row.name))) fail();
+  if (!layout && actual.some((row) => !names.has(row.name))) fail();
   if (sourceOnly || config.schema_version === SCHEMA_VERSION) {
     // The global integrity pragma invokes FTS5's integrity hook. Repair must
     // still be able to read sound source facts when only that index is damaged.
     const tables = config.schema_manifest.map(
       (sql) => /^CREATE (?:VIRTUAL )?TABLE ([a-z_][a-z0-9_]*)/.exec(sql)?.[1],
     );
+    if (layout && !sourceOnly)
+      tables.push(
+        ...layout.extra_objects
+          .filter((object) => object.type === "table")
+          .map((object) => object.name),
+      );
     // A table-specific check of the FTS virtual table invokes the FTS5 hook.
     // Check the shadow table as well to cover its ordinary SQLite index.
     if (names.has("literature_search_fts_content_owner"))
@@ -228,13 +267,18 @@ function inspectCatalogSnapshot(
         continue;
       if (
         (
-          db.prepare(`PRAGMA integrity_check(${table})`).get() as
-            | { integrity_check?: unknown }
-            | undefined
+          db
+            .prepare("SELECT integrity_check FROM pragma_integrity_check(?)")
+            .get(table) as { integrity_check?: unknown } | undefined
         )?.integrity_check !== "ok"
       )
         fail();
-      if (db.prepare(`PRAGMA foreign_key_check(${table})`).get()) fail();
+      if (
+        db
+          .prepare("SELECT 1 FROM pragma_foreign_key_check(?) LIMIT 1")
+          .get(table)
+      )
+        fail();
     }
   } else {
     if (
@@ -517,15 +561,18 @@ export class RetrievalStorageEngine {
   } | null = null;
   readonly readOnly: boolean;
   private readonly config: RetrievalSchemaConfig;
+  private layoutProof: string | undefined;
+  private fileIdentity: string;
   constructor(path: string, readOnly: boolean, config: RetrievalSchemaConfig) {
     this.path = path;
     this.readOnly = readOnly;
     this.config = config;
     this.db = this.connect();
+    this.fileIdentity = this.catalogFileIdentity();
     this.observedDataVersion = this.dataVersion();
     if (!readOnly) {
       try {
-        inspectRetrievalIdentity(this.db, this.config);
+        this.checkLayout();
       } catch (error) {
         this.db.close();
         throw error;
@@ -533,6 +580,32 @@ export class RetrievalStorageEngine {
     }
   }
   private readonly path: string;
+  private catalogFileIdentity(): string {
+    if (this.path === ":memory:") return "memory";
+    const file = statSync(this.path);
+    return `${file.dev}:${file.ino}`;
+  }
+  private checkLayout(reconnected = false) {
+    const proof = `${this.fileIdentity}:${this.db.prepare("PRAGMA schema_version").get()!.schema_version}`;
+    if (proof === this.layoutProof) {
+      if (reconnected) {
+        try {
+          checkCatalogIdentityRows(this.db, this.config);
+        } catch (error) {
+          this.layoutProof = undefined;
+          if (
+            !(error instanceof CatalogLayoutError) ||
+            error.reason === "catalog-addition-required"
+          )
+            throw error;
+          fail();
+        }
+      }
+      return;
+    }
+    inspectRetrievalIdentity(this.db, this.config);
+    this.layoutProof = proof;
+  }
   private connect(): DatabaseSync {
     const db = new DatabaseSync(this.path, { readOnly: this.readOnly });
     db.exec("PRAGMA foreign_keys=ON");
@@ -554,23 +627,17 @@ export class RetrievalStorageEngine {
     // would discard both the snapshot and the caller's transaction boundary.
     if (this.db.isTransaction) return;
     const current = this.dataVersion();
-    if (!this.readOnly) {
-      if (current !== this.observedDataVersion) {
-        this.verification = null;
-        this.db.close();
-        this.db = this.connect();
-        inspectRetrievalIdentity(this.db, this.config);
-        this.observedDataVersion = this.dataVersion();
-      }
-      return;
-    }
-    if (current !== this.observedDataVersion) {
+    const file = this.catalogFileIdentity();
+    const reconnected =
+      current !== this.observedDataVersion || file !== this.fileIdentity;
+    if (reconnected) {
       this.verification = null;
       this.db.close();
       this.db = this.connect();
+      this.fileIdentity = file;
       this.observedDataVersion = this.dataVersion();
     }
-    inspectRetrievalIdentity(this.db, this.config);
+    this.checkLayout(reconnected);
   }
   private validate(sourceOnly: boolean): void {
     try {
@@ -855,7 +922,9 @@ export class RetrievalStorageEngine {
           new Date().toISOString(),
         );
       this.db
-        .prepare("INSERT INTO retrieval_active_generation VALUES(1,?)")
+        .prepare(
+          "INSERT INTO retrieval_active_generation(singleton,generation_id) VALUES(1,?)",
+        )
         .run(id);
       this.db.exec("COMMIT");
       return this.active()!;

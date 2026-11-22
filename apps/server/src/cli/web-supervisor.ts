@@ -11,6 +11,7 @@ import type {
 } from "@sciretriever/contracts";
 import { parseConfigurationApplyState } from "@sciretriever/contracts";
 import { unmanagedApply, sourceDetails } from "../configuration/sources.js";
+import { CatalogSchemaError } from "../storage/sqlite/schema-path.js";
 import {
   validateWorkbenchAccess,
   type WorkbenchAccessOptions,
@@ -488,8 +489,18 @@ export async function startWebSupervisor(
         });
       } else if (message.event === "startup-failed") {
         startupFailed = true;
-        diagnostic("web-startup-failed");
-        rejectFirst(new WebSupervisorError("web-startup-failed"));
+        if (
+          message.code === "catalog-addition-required" &&
+          typeof message.addition === "string"
+        ) {
+          diagnostic(message.code);
+          rejectFirst(
+            new CatalogSchemaError(message.code, undefined, message.addition),
+          );
+        } else {
+          diagnostic("web-startup-failed");
+          rejectFirst(new WebSupervisorError("web-startup-failed"));
+        }
       } else if (message.event === "operator-stop") {
         operatorStopped = true;
         stopping = true;

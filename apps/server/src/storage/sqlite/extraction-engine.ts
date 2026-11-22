@@ -84,7 +84,7 @@ function v5(db: DatabaseSync): void {
 function operation(db: DatabaseSync, id: string): Operation | null {
   const row = one(
     db,
-    "SELECT o.*,s.spec_json FROM extraction_operations o JOIN extraction_specs s ON s.caller_id=o.caller_id AND s.spec_id=o.spec_id AND s.spec_version=o.spec_version AND s.spec_sha256=o.spec_sha256 WHERE o.operation_id=?",
+    "SELECT o.operation_id,o.caller_id,o.spec_id,o.spec_version,o.spec_sha256,o.manifest_sha256,o.manifest_json,o.status,o.created_at,o.accept_until,o.closed_at,s.spec_json FROM extraction_operations o JOIN extraction_specs s ON s.caller_id=o.caller_id AND s.spec_id=o.spec_id AND s.spec_version=o.spec_version AND s.spec_sha256=o.spec_sha256 WHERE o.operation_id=?",
     id,
   );
   return row as Operation | null;
@@ -125,7 +125,7 @@ function receiptByKey(
     db,
     one(
       db,
-      "SELECT * FROM extraction_receipts WHERE operation_id=? AND submission_key=?",
+      "SELECT receipt_id,operation_id,submission_key,batch_id,submission_sha256,accepted_at,receipt_expires_at,protection_expires_at,checks_json FROM extraction_receipts WHERE operation_id=? AND submission_key=?",
       operationId,
       key,
     ),
@@ -222,7 +222,7 @@ export function runExtractionStorage(
         db,
         one(
           db,
-          "SELECT * FROM extraction_receipts WHERE receipt_id=?",
+          "SELECT receipt_id,operation_id,submission_key,batch_id,submission_sha256,accepted_at,receipt_expires_at,protection_expires_at,checks_json FROM extraction_receipts WHERE receipt_id=?",
           String(args),
         ),
         now(),
@@ -383,7 +383,7 @@ export function runExtractionStorage(
         db,
         one(
           db,
-          "SELECT * FROM extraction_receipts WHERE receipt_id=?",
+          "SELECT receipt_id,operation_id,submission_key,batch_id,submission_sha256,accepted_at,receipt_expires_at,protection_expires_at,checks_json FROM extraction_receipts WHERE receipt_id=?",
           receiptId,
         )!,
       );

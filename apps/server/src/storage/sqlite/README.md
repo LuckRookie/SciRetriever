@@ -4,7 +4,8 @@
 
 ## 内容入口
 
-- [catalog-schema.ts](catalog-schema.ts)：Catalog 版本与准入。
+- [catalog-schema.ts](catalog-schema.ts) 提供显式检查、空库初始化和按名称应用增补集。普通打开核对基础 DDL、执行层身份与所有必需增补集。显式检查列出额外的表、索引、触发器、视图，以及已知表末尾可空或带默认值的列。
+- [catalog-additions.ts](catalog-additions.ts) 在业务写许可内以同一事务应用已声明的 DDL 和增补集登记。新增触发器在未注册应用函数的连接上编译。[catalog-backfill.ts](catalog-backfill.ts) 将每个回填批次与其步骤和游标在同一短事务内提交。
 - [repositories.ts](repositories.ts)：文献等事实仓库。
 - [worker.ts](worker.ts)：Worker 调用边界；`withReadSnapshot` 为多次关联读取创建独立只读连接，消费结束或失败时关闭，不占用普通查询连接的事务。
 - [read-lanes.ts](read-lanes.ts) 列出读取的分道与耗时上限。工作台的查询与应用对象共用一个只读长请求线程。许可内的读取继续随原写入处理。短读排队及执行合计超过 5 秒时记录 `sqlite-short-read-slow`。
@@ -12,7 +13,7 @@
 - [worker-runtime.ts](worker-runtime.ts)：SQLite worker 运行实现。
 - [citation-progress.ts](citation-progress.ts) 将引用扩展的待查队列、原因去重、待补查队列和未完成查询的回放键放入临时 SQLite。持久来源为业务事务同写的 `citation-write-checkpoint`，恢复按事件序号每页取 32 条，执行按索引取各队列的最早待查项。原因事实按页送回同一个发布事务，catalog 结构沿用原版。
 - [literature-search-rows.ts](literature-search-rows.ts) 使用内容表的 `c0` 覆盖索引按文献 ID 找到书目 FTS 的 rowid，供改写和撤回使用。FTS5 内部内容表的文件格式规定 `id` 为 rowid，`c0` 为第一个声明列，此处是 `literature_id`。SQLite 随每次 FTS 写入维护该索引。
-- [literature-search-schema-migration.ts](literature-search-schema-migration.ts) 接受五个旧结构 19 指纹，按原指纹补齐入库索引、检索变更日志、文献状态、计数器和分页投影。需要补齐检索水位时，用迁移入口的 `--reconcile` 显式比对并登记旧索引差异，再由索引刷新消费日志。应用启动后在有界事务中续做状态、计数和分页投影回填。
+- [literature-search-schema-migration.ts](literature-search-schema-migration.ts) 接受五个旧结构 19 指纹与已经合并 04–07 的旧指纹，登记首个增补集 `library-scale-04-07`。首次切换将存量触发器改为按列名写入并保留原执行顺序。已完成的状态、计数和分页投影沿用原水位。需要补齐检索水位时，用迁移入口的 `--reconcile` 显式比对并登记差异。
 - [library-state.ts](library-state.ts) 保存在写事务中计算的文献状态和缺失步骤、选用记录以及回填游标。SQLite 触发器为其他写入者记录受影响的 Literature ID，后台以短事务核对。读取在同一快照内优先使用当前代的存储值，回填和后台核对期间按篇现算缺少或已改变的值。
 - [library-page.ts](library-page.ts) 依据首页总数选择允许的排序。收进来范围用 `collected_at`，其他范围用 `intake_at`。相关度查询在长请求道保留最多 16 个前 1,000 项的排名，续页沿用入选 ID 与评分并读取仍可见条目的当前事实。缓存淘汰或服务重启时重算。
 - [library-paging-schema.ts](library-paging-schema.ts) 的触发器登记首次选用时间，同时维护文件夹、入库批次和发现批次的有序成员与发现原因校验结果。[library-paging-state.ts](library-paging-state.ts) 按原表批量回填，完成前分页使用原始事实。
@@ -47,7 +48,7 @@
 
 - `metadata-rows.ts` / `metadata-field-storage.ts`：中性元数据读取及字段状态的原子保存；来源证据必须属于同一篇文献，建档提议提交时重新检查默认文档与结构注释。
 
-当前数据库结构只由 `schema.ts` 定义；`catalog-layout.ts` 统一初始化空库，`catalog-schema.ts` 提供检查和显式创建。历史布局仅保留为专用离线工具的精确输入证明，不是运行时支持的另一套 schema。版本或指纹不匹配时拒绝按当前结构读取，不隐式转换已有库。
+基础布局和当前增补集由 `schema.ts` 声明。`catalog-layout.ts` 统一初始化空库。历史布局只供专用离线工具精确核对，普通打开要求当前基础指纹和必需的增补集登记。
 
 `raw-parsing-engine.ts`、`proofread-engine.ts`、`structure-annotation-engine.ts`、`metadata-field-storage.ts` 和 `archive-reference-engine.ts` 在同一当前结构中分别保存对应 owner 提交的事实。模块拆分不产生独立数据库版本。
 

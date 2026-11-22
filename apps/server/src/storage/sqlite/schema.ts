@@ -4,6 +4,18 @@ import {
 } from "@sciretriever/contracts";
 import { createHash } from "node:crypto";
 
+const {
+  CATALOG_ADDITIONS_DDL,
+  defineCatalogAddition,
+  manifestWithAdditions,
+  nameCatalogInsertColumns,
+}: typeof import("./catalog-ddl.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts") ? "./catalog-ddl.ts" : "./catalog-ddl.js",
+    import.meta.url,
+  ).href
+);
+
 const { libraryPagingSchema }: typeof import("./library-paging-schema.js") =
   await import(
     new URL(
@@ -1063,10 +1075,54 @@ export function historicalCollectionTimeSql(id: string) {
 export const LIBRARY_PAGING_SCHEMA = libraryPagingSchema(
   historicalCollectionTimeSql("new.literature_id"),
 );
-export const SCHEMA_MANIFEST = [
+export const SCHEMA_MANIFEST_V19_COMBINED = [
   ...SCHEMA_MANIFEST_V19_COUNTS,
   ...LIBRARY_PAGING_SCHEMA,
 ] as const;
-export const SCHEMA_FINGERPRINT = createHash("sha256")
-  .update(JSON.stringify(SCHEMA_MANIFEST))
+export const SCHEMA_FINGERPRINT_V19_COMBINED = createHash("sha256")
+  .update(JSON.stringify(SCHEMA_MANIFEST_V19_COMBINED))
   .digest("hex");
+
+export const CATALOG_BASE_SCHEMA = [
+  ...SCHEMA_MANIFEST_V19.map((sql) =>
+    sql.startsWith("CREATE TRIGGER ") ? nameCatalogInsertColumns(sql) : sql,
+  ),
+  CATALOG_ADDITIONS_DDL,
+] as const;
+export const SCHEMA_FINGERPRINT = createHash("sha256")
+  .update(JSON.stringify(CATALOG_BASE_SCHEMA))
+  .digest("hex");
+
+export const LIBRARY_SCALE_ADDITION = defineCatalogAddition(
+  "library-scale-04-07",
+  [
+    ...SCHEMA_MANIFEST_V19_COMBINED.slice(SCHEMA_MANIFEST_V19.length).map(
+      (sql) =>
+        sql.startsWith("CREATE TRIGGER ") ? nameCatalogInsertColumns(sql) : sql,
+    ),
+    `CREATE TRIGGER library_collect_first_manual_tag AFTER INSERT ON tag_assignment_changes
+    WHEN new.actor='manual' AND new.before_json IS NULL AND json_valid(new.after_json) BEGIN
+      ${collect(`SELECT c.literature_id FROM tag_assignment_changes c
+      WHERE c.change_id=new.change_id AND ${manualTagChangeAddedSql("c")}`)}
+    END`,
+    `CREATE TRIGGER library_collect_audited_tag_insert AFTER INSERT ON operation_records
+    WHEN new.operation='tags' AND new.status='completed' AND json_valid(new.scope_json)
+      AND json_valid(new.result_json) AND json_extract(new.scope_json,'$.operation')='assign' BEGIN
+      ${collect(`SELECT c.literature_id FROM tag_assignment_changes c
+      WHERE c.literature_id=json_extract(new.scope_json,'$.request.literature_id')
+        AND c.revision=json_extract(new.result_json,'$.revision')
+        AND c.actor='manual' AND ${manualTagChangeAddedSql("c")}`)}
+    END`,
+    `CREATE TRIGGER library_collect_task_attempt AFTER INSERT ON execution_attempts BEGIN
+      ${collect(`SELECT t.literature_id FROM execution_targets t JOIN execution_jobs j USING(job_id)
+      WHERE t.target_id=new.target_id AND ${collectionTaskTargetSql("t", "j")}`)}
+    END`,
+  ],
+  ["library-projections"],
+);
+
+export const CATALOG_ADDITIONS = [LIBRARY_SCALE_ADDITION] as const;
+export const SCHEMA_MANIFEST = manifestWithAdditions(
+  CATALOG_BASE_SCHEMA,
+  CATALOG_ADDITIONS,
+);

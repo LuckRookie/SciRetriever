@@ -73,7 +73,7 @@ function present(db: DatabaseSync, row: Record<string, unknown>): ReadingMark {
     deleted_at: row.deleted_at,
     places: db
       .prepare(
-        "SELECT * FROM reading_mark_places WHERE mark_id=? AND method=? ORDER BY target_kind,target_id",
+        "SELECT mark_id,target_kind,target_id,pdf_page,pdf_rects_json,document_start_utf8,document_end_utf8,similarity,method,located_at FROM reading_mark_places WHERE mark_id=? AND method=? ORDER BY target_kind,target_id",
       )
       .all(String(row.mark_id), MARK_LOCATE_METHOD)
       .map((place) => ({
@@ -100,7 +100,11 @@ function present(db: DatabaseSync, row: Record<string, unknown>): ReadingMark {
   });
 }
 function mark(db: DatabaseSync, id: string) {
-  const row = db.prepare("SELECT * FROM reading_marks WHERE mark_id=?").get(id);
+  const row = db
+    .prepare(
+      "SELECT mark_id,literature_id,kind,color,note,quote,quote_prefix,quote_suffix,pdf_sha256,pdf_page,pdf_rects_json,document_version_id,document_start_utf8,document_end_utf8,created_at,updated_at,deleted_at,actor FROM reading_marks WHERE mark_id=?",
+    )
+    .get(id);
   if (
     !row ||
     literatureWithdrawn(db, String(row.literature_id)) ||
@@ -199,7 +203,7 @@ function placeTarget(
     fail("mark-anchor-invalid");
   const asset = db
     .prepare(
-      "SELECT a.* FROM assets a JOIN literature_assets la USING(asset_id) WHERE la.literature_id=? AND a.sha256=? AND a.media_type='application/pdf' ORDER BY CASE WHEN la.role='primary-pdf' THEN 0 ELSE 1 END LIMIT 1",
+      "SELECT a.asset_id,a.sha256,a.size_bytes,a.media_type,a.relative_path FROM assets a JOIN literature_assets la USING(asset_id) WHERE la.literature_id=? AND a.sha256=? AND a.media_type='application/pdf' ORDER BY CASE WHEN la.role='primary-pdf' THEN 0 ELSE 1 END LIMIT 1",
     )
     .get(literature, target.pdf.sha256)!;
   if (part(db, literature, String(asset.asset_id)) !== sourcePart)
@@ -245,7 +249,7 @@ export function runMarkStorage(db: DatabaseSync, value: unknown): unknown {
         items: sortMarks(
           db
             .prepare(
-              `SELECT * FROM reading_marks WHERE literature_id=? AND deleted_at IS NULL AND ${visibleObjectSql("mark", "mark_id")} ORDER BY created_at,mark_id`,
+              `SELECT mark_id,literature_id,kind,color,note,quote,quote_prefix,quote_suffix,pdf_sha256,pdf_page,pdf_rects_json,document_version_id,document_start_utf8,document_end_utf8,created_at,updated_at,deleted_at,actor FROM reading_marks WHERE literature_id=? AND deleted_at IS NULL AND ${visibleObjectSql("mark", "mark_id")} ORDER BY created_at,mark_id`,
             )
             .all(op.request.literature_id)
             .map((row) => present(db, row)),
@@ -272,7 +276,7 @@ export function runMarkStorage(db: DatabaseSync, value: unknown): unknown {
         if (q.pdf) checkPdf(db, q.literature_id, q.pdf);
         if (q.document) checkDocument(db, q.literature_id, q.document);
         db.prepare(
-          "INSERT INTO reading_marks VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?)",
+          "INSERT INTO reading_marks(mark_id,literature_id,kind,color,note,quote,quote_prefix,quote_suffix,pdf_sha256,pdf_page,pdf_rects_json,document_version_id,document_start_utf8,document_end_utf8,created_at,updated_at,deleted_at,actor) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?)",
         ).run(
           id,
           q.literature_id,
@@ -308,7 +312,7 @@ export function runMarkStorage(db: DatabaseSync, value: unknown): unknown {
           )
             fail("mark-anchor-invalid");
           db.prepare(
-            "INSERT INTO reading_mark_places VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(mark_id,target_kind,target_id) DO UPDATE SET pdf_page=excluded.pdf_page,pdf_rects_json=excluded.pdf_rects_json,document_start_utf8=excluded.document_start_utf8,document_end_utf8=excluded.document_end_utf8,similarity=excluded.similarity,method=excluded.method,located_at=excluded.located_at",
+            "INSERT INTO reading_mark_places(mark_id,target_kind,target_id,pdf_page,pdf_rects_json,document_start_utf8,document_end_utf8,similarity,method,located_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(mark_id,target_kind,target_id) DO UPDATE SET pdf_page=excluded.pdf_page,pdf_rects_json=excluded.pdf_rects_json,document_start_utf8=excluded.document_start_utf8,document_end_utf8=excluded.document_end_utf8,similarity=excluded.similarity,method=excluded.method,located_at=excluded.located_at",
           ).run(
             q.mark_id,
             pdf ? "pdf" : "document",

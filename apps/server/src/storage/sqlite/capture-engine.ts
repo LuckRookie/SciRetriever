@@ -113,7 +113,7 @@ function fail(code: string): never {
 export function readCapture(db: DatabaseSync, r: CaptureRead): StoredCapture {
   const row = db
     .prepare(
-      "SELECT p.*,i.literature_id,i.disposition,i.created_at FROM intake_page_requests p JOIN intake_items i USING(item_id) WHERE p.item_id=? AND p.connection_id=?",
+      "SELECT p.connection_id,p.request_id,p.request_sha256,p.item_id,p.batch_id,p.result_json,i.literature_id,i.disposition,i.created_at FROM intake_page_requests p JOIN intake_items i USING(item_id) WHERE p.item_id=? AND p.connection_id=?",
     )
     .get(r.item_id, r.connection_id);
   if (!row) fail("intake-item-missing");
@@ -213,11 +213,9 @@ export function writeCapture(
             },
             intake.writeIntakeBatch,
           );
-          db.prepare("INSERT INTO intake_open_batches VALUES(?,?,?)").run(
-            `device:${r.connection_id}`,
-            r.day,
-            r.batch.batch_id,
-          );
+          db.prepare(
+            "INSERT INTO intake_open_batches(opener,day,batch_id) VALUES(?,?,?)",
+          ).run(`device:${r.connection_id}`, r.day, r.batch.batch_id);
           opened = { batch_id: r.batch.batch_id };
         }
         const batchId = String(opened.batch_id);

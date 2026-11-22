@@ -5,9 +5,15 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { canonicalJsonBytes, sha256 } from "@sciretriever/contracts";
 import { createApplication } from "../src/bootstrap/application.js";
+import { runCli } from "../src/cli/main.js";
 import { RetrievalIndexService } from "../src/retrieval/index.js";
 import { verifyOfflineLayout } from "../src/storage/sqlite/archive-schema-migration.js";
 import { inspectCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
+import {
+  manifestObject,
+  nameCatalogInsertColumns,
+  objectKey,
+} from "../src/storage/sqlite/catalog-ddl.js";
 import {
   EXECUTION_RUNTIME_SCHEMA_FINGERPRINT,
   EXECUTION_RUNTIME_SCHEMA_VERSION,
@@ -20,20 +26,18 @@ import {
 } from "../src/storage/sqlite/literature-search-schema-migration.js";
 import { RetrievalStorageClient } from "../src/storage/sqlite/retrieval-client.js";
 import {
-  INTAKE_LOOKUP_INDEXES,
-  LIBRARY_COUNT_SCHEMA,
-  LIBRARY_PAGING_SCHEMA,
-  LIBRARY_STORED_STATE_SCHEMA,
-  RETRIEVAL_CHANGE_SCHEMA,
+  LIBRARY_SCALE_ADDITION,
   SCHEMA_FINGERPRINT,
   SCHEMA_FINGERPRINT_V19,
   SCHEMA_FINGERPRINT_V19_COUNTS,
+  SCHEMA_FINGERPRINT_V19_COMBINED,
   SCHEMA_FINGERPRINT_V19_INTAKE_LOOKUPS,
   SCHEMA_FINGERPRINT_V19_RETRIEVAL_CHANGES,
   SCHEMA_FINGERPRINT_V19_STORED_STATES,
   SCHEMA_MANIFEST,
   SCHEMA_MANIFEST_V19,
   SCHEMA_MANIFEST_V19_COUNTS,
+  SCHEMA_MANIFEST_V19_COMBINED,
   SCHEMA_MANIFEST_V19_INTAKE_LOOKUPS,
   SCHEMA_MANIFEST_V19_RETRIEVAL_CHANGES,
   SCHEMA_MANIFEST_V19_STORED_STATES,
@@ -41,40 +45,38 @@ import {
 import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
 import { coreProcessingFixture } from "./core-processing-fixture.js";
 
+function restoreLegacyLayout(
+  db: DatabaseSync,
+  manifest: readonly string[],
+  fingerprint: string,
+) {
+  const legacy = new Map(
+    manifest.map((sql) => [objectKey(manifestObject(sql)), sql]),
+  );
+  for (const sql of [...SCHEMA_MANIFEST].reverse()) {
+    const object = manifestObject(sql);
+    const expected = legacy.get(objectKey(object));
+    if (expected === sql) continue;
+    db.exec(`DROP ${object.type} ${object.name}`);
+    if (expected) db.exec(expected);
+  }
+  db.prepare("UPDATE schema_identity SET schema_fingerprint=?").run(
+    fingerprint,
+  );
+}
+
 it.each([
-  [
-    SCHEMA_MANIFEST_V19,
-    SCHEMA_FINGERPRINT_V19,
-    [
-      ...INTAKE_LOOKUP_INDEXES,
-      ...RETRIEVAL_CHANGE_SCHEMA,
-      ...LIBRARY_STORED_STATE_SCHEMA,
-      ...LIBRARY_COUNT_SCHEMA,
-    ],
-  ],
-  [
-    SCHEMA_MANIFEST_V19_INTAKE_LOOKUPS,
-    SCHEMA_FINGERPRINT_V19_INTAKE_LOOKUPS,
-    [
-      ...RETRIEVAL_CHANGE_SCHEMA,
-      ...LIBRARY_STORED_STATE_SCHEMA,
-      ...LIBRARY_COUNT_SCHEMA,
-    ],
-  ],
+  [SCHEMA_MANIFEST_V19, SCHEMA_FINGERPRINT_V19],
+  [SCHEMA_MANIFEST_V19_INTAKE_LOOKUPS, SCHEMA_FINGERPRINT_V19_INTAKE_LOOKUPS],
   [
     SCHEMA_MANIFEST_V19_RETRIEVAL_CHANGES,
     SCHEMA_FINGERPRINT_V19_RETRIEVAL_CHANGES,
-    [...LIBRARY_STORED_STATE_SCHEMA, ...LIBRARY_COUNT_SCHEMA],
   ],
-  [
-    SCHEMA_MANIFEST_V19_STORED_STATES,
-    SCHEMA_FINGERPRINT_V19_STORED_STATES,
-    LIBRARY_COUNT_SCHEMA,
-  ],
-  [SCHEMA_MANIFEST_V19_COUNTS, SCHEMA_FINGERPRINT_V19_COUNTS, []],
+  [SCHEMA_MANIFEST_V19_STORED_STATES, SCHEMA_FINGERPRINT_V19_STORED_STATES],
+  [SCHEMA_MANIFEST_V19_COUNTS, SCHEMA_FINGERPRINT_V19_COUNTS],
 ] as const)(
   "adds only the agreed search objects and preserves existing FTS rows and maintenance",
-  async (manifest, previous, additions) => {
+  async (manifest, previous) => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-fts-migration-"));
     const path = join(home, "catalog.sqlite");
     const db = new DatabaseSync(path);
@@ -135,10 +137,18 @@ it.each([
       });
       const oldNames = new Set(before.map((row) => row.name));
       const after = schema();
-      expect(after.filter((row) => oldNames.has(row.name))).toEqual(before);
+      expect(after.filter((row) => oldNames.has(row.name))).toEqual(
+        before.map((row) =>
+          row.type === "trigger"
+            ? { ...row, sql: nameCatalogInsertColumns(String(row.sql)) }
+            : row,
+        ),
+      );
       const added = after.filter((row) => !oldNames.has(row.name));
       expect(added.map((row) => row.sql).sort()).toEqual(
-        [...additions, ...LIBRARY_PAGING_SCHEMA].sort(),
+        SCHEMA_MANIFEST.filter(
+          (sql) => !oldNames.has(manifestObject(sql).name),
+        ).sort(),
       );
       expect(db.prepare("SELECT * FROM library_state_progress").all()).toEqual(
         [],
@@ -193,6 +203,14 @@ it.each([
       await expect(inspectCatalogSchema(path)).resolves.toMatchObject({
         status: "ready",
         schema_fingerprint: SCHEMA_FINGERPRINT,
+        additions: [
+          {
+            name: LIBRARY_SCALE_ADDITION.name,
+            ddl_fingerprint: LIBRARY_SCALE_ADDITION.ddl_fingerprint,
+            backfill_step: 0,
+            backfill_cursor: null,
+          },
+        ],
       });
       await expect(migrateLiteratureSearchSchema(path)).rejects.toMatchObject({
         code: "literature-search-schema-migration-refused",
@@ -205,6 +223,83 @@ it.each([
   },
 );
 
+it("registers a completed legacy combined catalog through schema-apply without replaying its backfill", async () => {
+  const f = await coreProcessingFixture({ offline: true });
+  try {
+    const id = FIXTURE_LITERATURE.literature_id;
+    await f.app.folders.opened({ literature_id: id });
+    while ((await f.app.database.refreshLibraryState()).more) {
+      /* finish all projections */
+    }
+    await f.app.close();
+    const path = join(f.home, "catalog.sqlite");
+    const db = new DatabaseSync(path);
+    try {
+      restoreLegacyLayout(
+        db,
+        SCHEMA_MANIFEST_V19_COMBINED,
+        SCHEMA_FINGERPRINT_V19_COMBINED,
+      );
+      const snapshot = () =>
+        Object.fromEntries(
+          [
+            "literature_metadata",
+            "library_collected",
+            "library_collection_times",
+            "library_literature_states",
+            "library_count_totals",
+            "library_ordered_members",
+            "library_state_progress",
+            "library_count_progress",
+            "library_paging_progress",
+            "retrieval_change_state",
+            "retrieval_changes",
+          ].map((table) => [table, db.prepare(`SELECT * FROM ${table}`).all()]),
+        );
+      const before = snapshot();
+      expect(before.library_collected).toEqual([
+        { literature_id: id, intake_at: null },
+      ]);
+      const migrated = await runCli(
+        [
+          "storage",
+          "schema-apply",
+          "--catalog",
+          path,
+          "--addition",
+          LIBRARY_SCALE_ADDITION.name,
+        ],
+        {
+          home: f.home,
+          stdout: () => {},
+          stderr: () => {},
+        },
+      );
+      expect(migrated).toMatchObject({
+        code: 0,
+        value: {
+          from_fingerprint: SCHEMA_FINGERPRINT_V19_COMBINED,
+          schema_fingerprint: SCHEMA_FINGERPRINT,
+        },
+      });
+      expect(snapshot()).toEqual(before);
+      await expect(inspectCatalogSchema(path)).resolves.toMatchObject({
+        additions: [
+          {
+            name: LIBRARY_SCALE_ADDITION.name,
+            backfill_step: LIBRARY_SCALE_ADDITION.backfill_steps.length,
+            backfill_cursor: null,
+          },
+        ],
+      });
+    } finally {
+      db.close();
+    }
+  } finally {
+    await f.close();
+  }
+});
+
 it("reconciles unlogged legacy writes explicitly and retains post-migration SQL writes", async () => {
   const f = await coreProcessingFixture();
   let app: Awaited<ReturnType<typeof createApplication>> | undefined;
@@ -216,19 +311,11 @@ it("reconciles unlogged legacy writes explicitly and retains post-migration SQL 
     await f.app.close();
     const raw = new DatabaseSync(path);
     try {
-      for (const sql of [
-        ...RETRIEVAL_CHANGE_SCHEMA,
-        ...LIBRARY_STORED_STATE_SCHEMA,
-        ...LIBRARY_COUNT_SCHEMA,
-        ...LIBRARY_PAGING_SCHEMA,
-      ].reverse()) {
-        const [, object, name] =
-          /^CREATE (TABLE|TRIGGER|INDEX) ([a-z_]+)/u.exec(sql)!;
-        raw.exec(`DROP ${object} ${name}`);
-      }
-      raw
-        .prepare("UPDATE schema_identity SET schema_fingerprint=?")
-        .run(SCHEMA_FINGERPRINT_V19_INTAKE_LOOKUPS);
+      restoreLegacyLayout(
+        raw,
+        SCHEMA_MANIFEST_V19_INTAKE_LOOKUPS,
+        SCHEMA_FINGERPRINT_V19_INTAKE_LOOKUPS,
+      );
       const oldEdit = {
         ...FIXTURE_LITERATURE.metadata,
         title: "Legacy offline edit",

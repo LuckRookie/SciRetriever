@@ -63,11 +63,11 @@ export class LibraryCountStore {
 
   configure() {
     this.statement(
-      "INSERT INTO library_count_progress SELECT 1,'',NOT EXISTS(SELECT 1 FROM literature_metadata) ON CONFLICT(singleton) DO NOTHING",
+      "INSERT INTO library_count_progress(singleton,after_id,ready) SELECT 1,'',NOT EXISTS(SELECT 1 FROM literature_metadata) ON CONFLICT(singleton) DO NOTHING",
     ).run();
     for (const scope of scopes)
       this.statement(
-        `INSERT INTO library_count_totals VALUES(?,${columns.map(() => "0")}) ON CONFLICT(scope) DO NOTHING`,
+        `INSERT INTO library_count_totals(scope,versions,with_primary_pdf,unavailable_pdf,unreviewed,asset_ready,archiving,archive_failed,ready,excluded,papers,obtained,exhausted) VALUES(?,${columns.map(() => "0")}) ON CONFLICT(scope) DO NOTHING`,
       ).run(scope);
   }
 
@@ -95,7 +95,7 @@ export class LibraryCountStore {
 
   read(scope: LibraryCountScope) {
     const row = this.statement(
-      "SELECT * FROM library_count_totals WHERE scope=?",
+      "SELECT scope,versions,with_primary_pdf,unavailable_pdf,unreviewed,asset_ready,archiving,archive_failed,ready,excluded,papers,obtained,exhausted FROM library_count_totals WHERE scope=?",
     ).get(scope);
     if (!row) throw new Error("missing library count totals");
     return row as unknown as CountColumns;
@@ -141,13 +141,13 @@ export class LibraryCountStore {
   private replace(ids: readonly string[]) {
     const input = JSON.stringify(ids);
     const previous = this.statement(
-      "SELECT c.* FROM json_each(?) ids CROSS JOIN library_count_contributions c ON c.meta_literature_id=ids.value",
+      "SELECT c.meta_literature_id,c.scope,c.versions,c.with_primary_pdf,c.unavailable_pdf,c.unreviewed,c.asset_ready,c.archiving,c.archive_failed,c.ready,c.excluded,c.papers,c.obtained,c.exhausted FROM json_each(?) ids CROSS JOIN library_count_contributions c ON c.meta_literature_id=ids.value",
     ).all(input) as unknown as Contribution[];
     const updated = this.statement(contributionsSql).all(
       input,
     ) as unknown as Contribution[];
     const upsert = this.statement(
-      `INSERT INTO library_count_contributions VALUES(?,?,${columns.map(() => "?")})
+      `INSERT INTO library_count_contributions(meta_literature_id,scope,versions,with_primary_pdf,unavailable_pdf,unreviewed,asset_ready,archiving,archive_failed,ready,excluded,papers,obtained,exhausted) VALUES(?,?,${columns.map(() => "?")})
       ON CONFLICT(meta_literature_id,scope) DO UPDATE SET ${columns.map((c) => `${c}=excluded.${c}`)}`,
     );
     const remove = this.statement(

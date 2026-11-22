@@ -239,7 +239,7 @@ function nullable(v: SQLOutputValue | undefined): string | null {
 function row(db: DatabaseSync, id: string): Row {
   const r = db
     .prepare(
-      "SELECT s.*,b.state,b.result,b.confirmation,b.confirmed_at,b.finished_at,b.initiated_by,b.origin,b.owner_pid,coalesce(json_extract(b.request_json,'$.metadata_only'),0) AS metadata_only FROM import_sessions s JOIN intake_batches b USING(batch_id) WHERE batch_id=?",
+      "SELECT s.batch_id,s.library_key,s.library_json,s.format,s.scope,s.file_name,s.import_user_tags,s.active,s.phase,s.storage_failures,s.created_at,s.updated_at,s.last_file_at,s.metadata_complete,s.record_count,s.summary_json,b.state,b.result,b.confirmation,b.confirmed_at,b.finished_at,b.initiated_by,b.origin,b.owner_pid,coalesce(json_extract(b.request_json,'$.metadata_only'),0) AS metadata_only FROM import_sessions s JOIN intake_batches b USING(batch_id) WHERE batch_id=?",
     )
     .get(id);
   if (!r) fail("intake-batch-state");
@@ -297,7 +297,7 @@ function session(db: DatabaseSync, r: Row): StoredImportSession {
 function parts(db: DatabaseSync, id: string): ImportPart[] {
   return db
     .prepare(
-      "SELECT p.*,a.relative_path,a.sha256,a.byte_size,a.media_type FROM import_parts p JOIN artifact_objects a USING(artifact_id) WHERE batch_id=? ORDER BY sequence",
+      "SELECT p.batch_id,p.sequence,p.artifact_id,p.record_count,a.relative_path,a.sha256,a.byte_size,a.media_type FROM import_parts p JOIN artifact_objects a USING(artifact_id) WHERE batch_id=? ORDER BY sequence",
     )
     .all(id)
     .map((r) => ({
@@ -399,7 +399,7 @@ export function readImportStorage(
   if (r.op === "active")
     return db
       .prepare(
-        "SELECT s.*,b.state,b.result,b.confirmation,b.confirmed_at,b.finished_at,b.initiated_by,b.origin,b.owner_pid,coalesce(json_extract(b.request_json,'$.metadata_only'),0) AS metadata_only FROM import_sessions s JOIN intake_batches b USING(batch_id) WHERE s.active=1 ORDER BY s.created_at,s.batch_id",
+        "SELECT s.batch_id,s.library_key,s.library_json,s.format,s.scope,s.file_name,s.import_user_tags,s.active,s.phase,s.storage_failures,s.created_at,s.updated_at,s.last_file_at,s.metadata_complete,s.record_count,s.summary_json,b.state,b.result,b.confirmation,b.confirmed_at,b.finished_at,b.initiated_by,b.origin,b.owner_pid,coalesce(json_extract(b.request_json,'$.metadata_only'),0) AS metadata_only FROM import_sessions s JOIN intake_batches b USING(batch_id) WHERE s.active=1 ORDER BY s.created_at,s.batch_id",
       )
       .all()
       .map((r) => session(db, r));
@@ -455,7 +455,7 @@ export function readImportStorage(
     return (
       db
         .prepare(
-          "SELECT * FROM external_object_mappings WHERE library_key=? AND object_kind=? AND external_id=?",
+          "SELECT library_key,object_kind,external_id,internal_id,content_sha256,observation_id,state FROM external_object_mappings WHERE library_key=? AND object_kind=? AND external_id=?",
         )
         .get(r.library_key, r.object_kind, r.external_id) ?? null
     );
@@ -506,7 +506,7 @@ export function readImportStorage(
   if (r.op === "result") {
     const v = db
       .prepare(
-        "SELECT * FROM import_record_results WHERE batch_id=? AND sequence=? AND record_index=?",
+        "SELECT batch_id,sequence,record_index,item_id,external_id,disposition,literature_id,meta_literature_id,reason FROM import_record_results WHERE batch_id=? AND sequence=? AND record_index=?",
       )
       .get(r.batch_id, r.sequence, r.record_index);
     return v ? result(v) : null;
@@ -514,7 +514,7 @@ export function readImportStorage(
   if (r.op === "file") {
     const v = db
       .prepare(
-        "SELECT f.*,CASE WHEN f.status='pending' AND EXISTS(SELECT 1 FROM literature_assets a WHERE a.literature_id=f.literature_id AND a.role='primary-pdf') THEN 'hash' ELSE f.action END AS action FROM import_files f WHERE batch_id=? AND file_id=?",
+        "SELECT f.file_id,f.batch_id,f.item_id,f.external_id,f.record_external_id,f.literature_id,f.file_name,f.size_bytes,f.expected_sha256,f.action,f.status,f.sha256,f.reason,f.source_url,CASE WHEN f.status='pending' AND EXISTS(SELECT 1 FROM literature_assets a WHERE a.literature_id=f.literature_id AND a.role='primary-pdf') THEN 'hash' ELSE f.action END AS action FROM import_files f WHERE batch_id=? AND file_id=?",
       )
       .get(r.batch_id, r.file_id);
     if (!v) fail("intake-file-missing");
@@ -523,7 +523,7 @@ export function readImportStorage(
   if (r.op === "files") {
     const rows = db
       .prepare(
-        `SELECT f.*,CASE WHEN f.status='pending' AND EXISTS(SELECT 1 FROM literature_assets a WHERE a.literature_id=f.literature_id AND a.role='primary-pdf') THEN 'hash' ELSE f.action END AS action FROM import_files f WHERE batch_id=? AND file_id>? ${r.pending ? "AND status='pending'" : ""} ORDER BY file_id LIMIT ?`,
+        `SELECT f.file_id,f.batch_id,f.item_id,f.external_id,f.record_external_id,f.literature_id,f.file_name,f.size_bytes,f.expected_sha256,f.action,f.status,f.sha256,f.reason,f.source_url,CASE WHEN f.status='pending' AND EXISTS(SELECT 1 FROM literature_assets a WHERE a.literature_id=f.literature_id AND a.role='primary-pdf') THEN 'hash' ELSE f.action END AS action FROM import_files f WHERE batch_id=? AND file_id>? ${r.pending ? "AND status='pending'" : ""} ORDER BY file_id LIMIT ?`,
       )
       .all(r.batch_id, r.cursor ?? "", r.limit + 1);
     return {
@@ -535,7 +535,7 @@ export function readImportStorage(
   const after = r.cursor === null ? [-1, -1] : r.cursor.split(":").map(Number);
   const rows = db
     .prepare(
-      "SELECT * FROM import_record_results WHERE batch_id=? AND (sequence,record_index)>(?,?) ORDER BY sequence,record_index LIMIT ?",
+      "SELECT batch_id,sequence,record_index,item_id,external_id,disposition,literature_id,meta_literature_id,reason FROM import_record_results WHERE batch_id=? AND (sequence,record_index)>(?,?) ORDER BY sequence,record_index LIMIT ?",
     )
     .all(r.batch_id, after[0]!, after[1]!, r.limit + 1);
   const last = rows[r.limit - 1];
@@ -562,7 +562,7 @@ export function insertImportBatch(
   const l = r.source,
     b = r.batch;
   db.prepare(
-    "INSERT INTO import_libraries VALUES(?,?,?,?,?,?) ON CONFLICT(library_key) DO NOTHING",
+    "INSERT INTO import_libraries(library_key,system,external_library_id,identity_scope,name,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(library_key) DO NOTHING",
   ).run(
     r.library_key,
     l.system,
@@ -636,7 +636,7 @@ export function writeImportStorage(
         "DELETE FROM import_parts WHERE batch_id=? AND sequence=?",
       ).run(r.batch_id, r.sequence);
       db.prepare(
-        "INSERT INTO artifact_objects VALUES(?,?,?,?,?) ON CONFLICT(artifact_id) DO NOTHING",
+        "INSERT INTO artifact_objects(artifact_id,sha256,byte_size,media_type,relative_path) VALUES(?,?,?,?,?) ON CONFLICT(artifact_id) DO NOTHING",
       ).run(
         r.artifact_id,
         r.part.artifact.sha256,
@@ -644,13 +644,12 @@ export function writeImportStorage(
         r.part.artifact.media_type,
         r.part.reference,
       );
-      db.prepare("INSERT INTO import_parts VALUES(?,?,?,?)").run(
-        r.batch_id,
-        r.sequence,
-        r.artifact_id,
-        r.records,
+      db.prepare(
+        "INSERT INTO import_parts(batch_id,sequence,artifact_id,record_count) VALUES(?,?,?,?)",
+      ).run(r.batch_id, r.sequence, r.artifact_id, r.records);
+      const put = db.prepare(
+        "INSERT INTO import_staged_keys(batch_id,object_kind,external_id,sequence) VALUES(?,?,?,?)",
       );
-      const put = db.prepare("INSERT INTO import_staged_keys VALUES(?,?,?,?)");
       for (const key of r.keys) {
         if (
           db
@@ -737,11 +736,9 @@ export function writeImportStorage(
           },
           intakeWrite,
         );
-        db.prepare("INSERT INTO intake_open_batches VALUES(?,?,?)").run(
-          opener,
-          r.day,
-          batchId,
-        );
+        db.prepare(
+          "INSERT INTO intake_open_batches(opener,day,batch_id) VALUES(?,?,?)",
+        ).run(opener, r.day, batchId);
       }
       live(db, batchId, ["running"]);
       const position = Number(
@@ -835,7 +832,7 @@ export function writeImportStorage(
       if (r.op === "resolve-result") {
         const old = db
           .prepare(
-            "SELECT * FROM intake_items WHERE batch_id=? AND item_id=? AND disposition='pending-decision' AND retain_until>? AND recognition_json IS NOT NULL",
+            "SELECT item_id,batch_id,origin,sequence,record_index,external_id,title,file_name,candidate_transfer_id,recognition_json,possible_duplicates_json,unpaired,needs_decision,decision_json,decided_by,decided_at,disposition,literature_id,retain_until,created_at FROM intake_items WHERE batch_id=? AND item_id=? AND disposition='pending-decision' AND retain_until>? AND recognition_json IS NOT NULL",
           )
           .get(r.batch_id, r.item_id, r.now);
         if (!old || old.decision_json === null) fail("intake-decision-invalid");
@@ -941,7 +938,9 @@ export function writeImportStorage(
     } else if (r.op === "file-result") {
       const s = live(db, r.batch_id, ["running"]);
       const old = db
-        .prepare("SELECT * FROM import_files WHERE batch_id=? AND file_id=?")
+        .prepare(
+          "SELECT file_id,batch_id,item_id,external_id,record_external_id,literature_id,file_name,size_bytes,expected_sha256,action,status,sha256,reason,source_url FROM import_files WHERE batch_id=? AND file_id=?",
+        )
         .get(r.batch_id, r.file_id);
       if (!old) fail("intake-file-missing");
       if (old.status === "pending") {

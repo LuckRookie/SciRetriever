@@ -46,7 +46,7 @@ function fail(code: string): never {
 function folder(db: DatabaseSync, id: string) {
   const row = db
     .prepare(
-      `SELECT * FROM folders WHERE folder_id=? AND ${visibleObjectSql("folder", "folder_id")}`,
+      `SELECT folder_id,parent_id,name,position,created_at,updated_at FROM folders WHERE folder_id=? AND ${visibleObjectSql("folder", "folder_id")}`,
     )
     .get(id);
   if (!row) fail("folder-not-found");
@@ -214,10 +214,12 @@ export function runFolderStorage(db: DatabaseSync, value: unknown): unknown {
       )
         fail("literature-not-found");
       db.prepare(
-        "INSERT INTO reading_history VALUES(?,?,1) ON CONFLICT(literature_id) DO UPDATE SET last_opened_at=MAX(last_opened_at,excluded.last_opened_at),open_count=open_count+1",
+        "INSERT INTO reading_history(literature_id,last_opened_at,open_count) VALUES(?,?,1) ON CONFLICT(literature_id) DO UPDATE SET last_opened_at=MAX(last_opened_at,excluded.last_opened_at),open_count=open_count+1",
       ).run(literature_id, r.now!);
       result = db
-        .prepare("SELECT * FROM reading_history WHERE literature_id=?")
+        .prepare(
+          "SELECT literature_id,last_opened_at,open_count FROM reading_history WHERE literature_id=?",
+        )
         .get(literature_id);
     } else {
       const op = parseFolderOperation({
@@ -230,7 +232,7 @@ export function runFolderStorage(db: DatabaseSync, value: unknown): unknown {
         result = {
           items: db
             .prepare(
-              `SELECT * FROM folders WHERE ${visibleObjectSql("folder", "folder_id")} ORDER BY parent_id,position,folder_id`,
+              `SELECT folder_id,parent_id,name,position,created_at,updated_at FROM folders WHERE ${visibleObjectSql("folder", "folder_id")} ORDER BY parent_id,position,folder_id`,
             )
             .all()
             .map((row) => present(db, row)),
@@ -263,7 +265,7 @@ export function runFolderStorage(db: DatabaseSync, value: unknown): unknown {
               op.operation === "add"
                 ? db
                     .prepare(
-                      "INSERT INTO folder_members VALUES(?,?,?,?) ON CONFLICT DO NOTHING",
+                      "INSERT INTO folder_members(folder_id,literature_id,added_at,actor) VALUES(?,?,?,?) ON CONFLICT DO NOTHING",
                     )
                     .run(op.request.folder_id, id, r.now!, r.actor!).changes
                 : db
@@ -324,14 +326,9 @@ export function runFolderStorage(db: DatabaseSync, value: unknown): unknown {
                     .get(parent)!.n,
                 );
         if (op.operation === "create")
-          db.prepare("INSERT INTO folders VALUES(?,?,?,?,?,?)").run(
-            id,
-            parent,
-            name,
-            position,
-            r.now!,
-            r.now!,
-          );
+          db.prepare(
+            "INSERT INTO folders(folder_id,parent_id,name,position,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+          ).run(id, parent, name, position, r.now!, r.now!);
         else
           db.prepare(
             "UPDATE folders SET parent_id=?,name=?,position=?,updated_at=? WHERE folder_id=?",

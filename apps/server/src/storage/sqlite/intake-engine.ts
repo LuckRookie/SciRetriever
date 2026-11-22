@@ -114,7 +114,7 @@ function insertIntakeMember(db: DatabaseSync, member: IntakeMember): void {
   if (restoreWithdrawnLiterature(db, member.literature_id))
     member = { ...member, disposition: "restored" };
   db.prepare(
-    `INSERT INTO intake_batch_members VALUES(?,?,?) ON CONFLICT(batch_id,literature_id) DO UPDATE SET disposition=${member.authoritative ? "excluded.disposition" : "CASE WHEN disposition='restored' OR excluded.disposition='restored' THEN 'restored' WHEN disposition='created' OR excluded.disposition='created' THEN 'created' WHEN disposition='enriched' OR excluded.disposition='enriched' THEN 'enriched' ELSE 'matched' END"}`,
+    `INSERT INTO intake_batch_members(batch_id,literature_id,disposition) VALUES(?,?,?) ON CONFLICT(batch_id,literature_id) DO UPDATE SET disposition=${member.authoritative ? "excluded.disposition" : "CASE WHEN disposition='restored' OR excluded.disposition='restored' THEN 'restored' WHEN disposition='created' OR excluded.disposition='created' THEN 'created' WHEN disposition='enriched' OR excluded.disposition='enriched' THEN 'enriched' ELSE 'matched' END"}`,
   ).run(member.batch_id, member.literature_id, member.disposition);
   if (member.disposition === "created")
     recordIntakeObject(db, member.batch_id, "literature", member.literature_id);
@@ -132,7 +132,9 @@ export function readIntakeBatch(
   profile = "vlm-engine",
 ): IntakeBatch {
   const row = db
-    .prepare("SELECT * FROM intake_batches WHERE batch_id=?")
+    .prepare(
+      "SELECT batch_id,kind,default_label,label,origin,created_at,finished_at,state,result,confirmation,confirmed_at,initiated_by,request_json,discovery_run_id,rejected,source_failures,owner_pid FROM intake_batches WHERE batch_id=?",
+    )
     .get(id);
   if (!row)
     throw Object.assign(new Error("intake batch not found"), {
@@ -155,7 +157,11 @@ export function readIntakeBatch(
     counts;
   const imported =
     row.kind === "import"
-      ? db.prepare("SELECT * FROM import_sessions WHERE batch_id=?").get(id)
+      ? db
+          .prepare(
+            "SELECT batch_id,library_key,library_json,format,scope,file_name,import_user_tags,active,phase,storage_failures,created_at,updated_at,last_file_at,metadata_complete,record_count,summary_json FROM import_sessions WHERE batch_id=?",
+          )
+          .get(id)
       : undefined;
   let state = row.state,
     result = row.result;

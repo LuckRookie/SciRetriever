@@ -20,7 +20,7 @@ export interface ArchiveReferencePublication {
 }
 /** Historical supports remain pinned until a subsequent explicit reference publication cleans them. */
 export const ACTIVE_ARCHIVE_REFERENCE_SUPPORT =
-  "SELECT s.* FROM archive_reference_text_supports s JOIN literature_references r ON r.reference_id=s.reference_id JOIN document_versions d ON d.document_version_id=s.document_version_id AND d.literature_id=r.source_literature_id JOIN document_defaults f ON f.document_version_id=d.document_version_id JOIN structure_annotation_current c ON c.document_version_id=d.document_version_id AND c.annotation_id=s.annotation_id JOIN literature_assets l ON l.literature_id=d.literature_id AND l.asset_id=d.source_asset_id AND l.role='primary-pdf'";
+  "SELECT s.reference_id,s.document_version_id,s.annotation_id,s.reference_index,s.segment_ids_json,s.matching_basis,s.target_metadata_revision,s.target_metadata_sha256 FROM archive_reference_text_supports s JOIN literature_references r ON r.reference_id=s.reference_id JOIN document_versions d ON d.document_version_id=s.document_version_id AND d.literature_id=r.source_literature_id JOIN document_defaults f ON f.document_version_id=d.document_version_id JOIN structure_annotation_current c ON c.document_version_id=d.document_version_id AND c.annotation_id=s.annotation_id JOIN literature_assets l ON l.literature_id=d.literature_id AND l.asset_id=d.source_asset_id AND l.role='primary-pdf'";
 export function archiveReferenceSupports(db: DatabaseSync, id: string) {
   return db
     .prepare(

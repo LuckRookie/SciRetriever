@@ -71,7 +71,9 @@ function countObjects(objects: readonly ObjectRef[]): IntakeWithdrawalCounts {
 }
 function getBatch(db: DatabaseSync, id: string) {
   const batch = db
-    .prepare("SELECT * FROM intake_batches WHERE batch_id=?")
+    .prepare(
+      "SELECT batch_id,kind,default_label,label,origin,created_at,finished_at,state,result,confirmation,confirmed_at,initiated_by,request_json,discovery_run_id,rejected,source_failures,owner_pid FROM intake_batches WHERE batch_id=?",
+    )
     .get(id);
   if (!batch) fail("intake-batch-missing");
   return batch;
@@ -115,10 +117,10 @@ function plan(
       : "1";
   // The original Meta ID may survive a merge. Also inspect subsequent explicit
   // cross-version links; a source's self-link on re-import is not a merge.
-  const sql = `WITH batch AS (SELECT * FROM intake_batches WHERE batch_id=?),
-    members AS (SELECT m.*,l.meta_literature_id FROM intake_batch_members m
+  const sql = `WITH batch AS (SELECT batch_id,kind,default_label,label,origin,created_at,finished_at,state,result,confirmation,confirmed_at,initiated_by,request_json,discovery_run_id,rejected,source_failures,owner_pid FROM intake_batches WHERE batch_id=?),
+    members AS (SELECT m.batch_id,m.literature_id,m.disposition,l.meta_literature_id FROM intake_batch_members m
       JOIN literatures l USING(literature_id) JOIN batch b ON b.batch_id=m.batch_id),
-    owner AS (SELECT o.* FROM intake_batch_objects o JOIN batch b USING(batch_id))
+    owner AS (SELECT o.object_kind,o.object_id,o.batch_id FROM intake_batch_objects o JOIN batch b USING(batch_id))
     SELECT literature_id,'pre-existing' reason FROM members WHERE disposition<>'created'
     UNION SELECT m.literature_id,'hit-by-later-batch' FROM members m
       JOIN intake_batch_members n USING(literature_id) JOIN intake_batches b ON b.batch_id=n.batch_id
@@ -213,7 +215,7 @@ function plan(
       const folder = String(row.object_id);
       const descendants = db
         .prepare(
-          "WITH RECURSIVE sub AS (SELECT * FROM folders WHERE folder_id=? UNION ALL SELECT f.* FROM folders f JOIN sub s ON f.parent_id=s.folder_id) SELECT * FROM sub",
+          "WITH RECURSIVE sub AS (SELECT folder_id,parent_id,name,position,created_at,updated_at FROM folders WHERE folder_id=? UNION ALL SELECT f.folder_id,f.parent_id,f.name,f.position,f.created_at,f.updated_at FROM folders f JOIN sub s ON f.parent_id=s.folder_id) SELECT * FROM sub",
         )
         .all(folder);
       if (
@@ -345,7 +347,9 @@ export function isIntakeWithdrawalRead(
 }
 function savedWithdrawal(db: DatabaseSync, batchId: string) {
   const row = db
-    .prepare("SELECT * FROM intake_withdrawals WHERE batch_id=?")
+    .prepare(
+      "SELECT batch_id,prior_state,withdrawn_at,withdrawn_by,restored_at,report_json,restoration_json FROM intake_withdrawals WHERE batch_id=?",
+    )
     .get(batchId);
   if (!row) fail("intake-batch-state");
   const report = parseIntakeWithdrawalReport(
@@ -431,12 +435,9 @@ export function runIntakeWithdrawal(
         by: "web",
       });
       for (const object of objects)
-        db.prepare("INSERT INTO intake_withdrawn_objects VALUES(?,?,?,?)").run(
-          object.kind,
-          object.id,
-          command.batch_id,
-          command.at,
-        );
+        db.prepare(
+          "INSERT INTO intake_withdrawn_objects(object_kind,object_id,batch_id,withdrawn_at) VALUES(?,?,?,?)",
+        ).run(object.kind, object.id, command.batch_id, command.at);
       for (const row of db
         .prepare(
           "SELECT object_id FROM intake_withdrawn_objects WHERE batch_id=? AND object_kind='literature'",
@@ -448,7 +449,7 @@ export function runIntakeWithdrawal(
         );
       finishWithdrawalRevision(db, preview.remove.literatures);
       db.prepare(
-        "INSERT INTO intake_withdrawals VALUES(?,?,?,?,NULL,?,NULL) ON CONFLICT(batch_id) DO UPDATE SET prior_state=excluded.prior_state,withdrawn_at=excluded.withdrawn_at,withdrawn_by=excluded.withdrawn_by,restored_at=NULL,report_json=excluded.report_json,restoration_json=NULL",
+        "INSERT INTO intake_withdrawals(batch_id,prior_state,withdrawn_at,withdrawn_by,restored_at,report_json,restoration_json) VALUES(?,?,?,?,NULL,?,NULL) ON CONFLICT(batch_id) DO UPDATE SET prior_state=excluded.prior_state,withdrawn_at=excluded.withdrawn_at,withdrawn_by=excluded.withdrawn_by,restored_at=NULL,report_json=excluded.report_json,restoration_json=NULL",
       ).run(
         command.batch_id,
         batch.state!,

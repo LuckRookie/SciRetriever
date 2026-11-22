@@ -1,6 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 
 const suffix = import.meta.url.endsWith(".ts") ? ".ts" : ".js";
+const { nameCatalogInsertColumns }: typeof import("./catalog-ddl.js") =
+  await import(new URL("./catalog-ddl" + suffix, import.meta.url).href);
 const {
   refreshDiscoveryIntegrity,
   refreshDiscoveryMembers,
@@ -17,7 +19,7 @@ const stages = [
   {
     table: "library_collected",
     writes: [
-      `INSERT INTO library_collection_times
+      `INSERT INTO library_collection_times(literature_id,collected_at)
        SELECT c.literature_id,${historicalCollectionTimeSql("c.literature_id")}
        FROM library_collected c ${range} AND NOT EXISTS(
          SELECT 1 FROM library_collection_times t WHERE t.literature_id=c.literature_id
@@ -68,7 +70,7 @@ export function libraryPagingReady(db: DatabaseSync): boolean {
 export function initializeLibraryPaging(db: DatabaseSync) {
   // An empty catalog has no historical members. New facts already have triggers.
   db.prepare(
-    `INSERT INTO library_paging_progress
+    `INSERT INTO library_paging_progress(singleton,stage,after_rowid)
      SELECT 1,?,NULL WHERE NOT EXISTS(SELECT 1 FROM literatures)
        AND NOT EXISTS(SELECT 1 FROM discovery_results)
        AND NOT EXISTS(SELECT 1 FROM topic_discovery_causes)
@@ -84,7 +86,7 @@ export function backfillCollection(
   historicalSelection: string,
 ) {
   db.prepare(
-    `INSERT INTO library_collection_times
+    `INSERT INTO library_collection_times(literature_id,collected_at)
      SELECT l.literature_id,${historicalCollectionTimeSql("l.literature_id")}
      FROM json_each(?) j CROSS JOIN literatures l ON l.literature_id=j.value
      WHERE NOT EXISTS(SELECT 1 FROM library_collection_times c WHERE c.literature_id=l.literature_id)
@@ -123,7 +125,8 @@ export function backfillLibraryPaging(db: DatabaseSync, limit: number) {
     const first = page[0]?.position;
     const last = page.at(-1)?.position;
     if (first !== undefined && last !== undefined)
-      for (const sql of input.writes) db.prepare(sql).run(first, last);
+      for (const sql of input.writes)
+        db.prepare(nameCatalogInsertColumns(sql)).run(first, last);
     if (page.length < remaining) {
       stage++;
       previous = null;
@@ -131,7 +134,7 @@ export function backfillLibraryPaging(db: DatabaseSync, limit: number) {
     remaining -= page.length;
   }
   db.prepare(
-    "INSERT INTO library_paging_progress VALUES(1,?,?) ON CONFLICT(singleton) DO UPDATE SET stage=excluded.stage,after_rowid=excluded.after_rowid",
+    "INSERT INTO library_paging_progress(singleton,stage,after_rowid) VALUES(1,?,?) ON CONFLICT(singleton) DO UPDATE SET stage=excluded.stage,after_rowid=excluded.after_rowid",
   ).run(stage, previous);
   return stage < stages.length;
 }

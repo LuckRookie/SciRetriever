@@ -2,6 +2,12 @@ import type { MissingStep, LiteratureStatus } from "@sciretriever/contracts";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 
 const suffix = import.meta.url.endsWith(".ts") ? ".ts" : ".js";
+const {
+  catalogBackfillPending,
+  runCatalogBackfillBatch,
+}: typeof import("./catalog-backfill.js") = await import(
+  new URL("./catalog-backfill" + suffix, import.meta.url).href
+);
 const { archiveStates }: typeof import("./archive-engine.js") = await import(
   new URL("./archive-engine" + suffix, import.meta.url).href
 );
@@ -14,6 +20,7 @@ const { registerCatalogWriteHook }: typeof import("./catalog-write.js") =
 const {
   collectionTaskTargetSql,
   historicalManualTagSql,
+  LIBRARY_SCALE_ADDITION,
 }: typeof import("./schema.js") = await import(
   new URL("./schema" + suffix, import.meta.url).href
 );
@@ -125,13 +132,13 @@ export class StoredLibraryState {
 
   private progress() {
     return this.statement(
-      "SELECT * FROM library_state_progress WHERE singleton=1",
+      "SELECT generation,max_tags,archive_profile,after_id,ready,collection_ready FROM library_state_progress WHERE singleton=1",
     ).get() as (StateProgress & Record<string, unknown>) | undefined;
   }
 
   configure(settings: StateSettings = this.initial) {
     this.statement(
-      `INSERT INTO library_state_progress
+      `INSERT INTO library_state_progress(singleton,generation,max_tags,archive_profile,after_id,ready,collection_ready)
       SELECT 1,1,?,?,'',NOT EXISTS(SELECT 1 FROM literature_metadata),NOT EXISTS(SELECT 1 FROM literature_metadata)
       WHERE true ON CONFLICT(singleton) DO UPDATE SET
         generation=generation+1,max_tags=excluded.max_tags,archive_profile=excluded.archive_profile,after_id='',ready=0
@@ -182,7 +189,11 @@ export class StoredLibraryState {
   }
 
   maintenancePending() {
-    return !this.countsReady() || !libraryPagingReady(this.db);
+    return (
+      !this.countsReady() ||
+      !libraryPagingReady(this.db) ||
+      catalogBackfillPending(this.db, LIBRARY_SCALE_ADDITION)
+    );
   }
 
   readPlan() {
@@ -274,7 +285,7 @@ export class StoredLibraryState {
       .map((r) => String(r.literature_id));
     const facts = withPdf.length ? archiveStates(this.db, withPdf) : new Map();
     const upsert = this
-      .statement(`INSERT INTO library_literature_states VALUES(?,?,?,?,?)
+      .statement(`INSERT INTO library_literature_states(literature_id,status,missing_step,generation,intake_at) VALUES(?,?,?,?,?)
       ON CONFLICT(literature_id) DO UPDATE SET status=excluded.status,missing_step=excluded.missing_step,generation=excluded.generation,intake_at=excluded.intake_at
       WHERE status<>excluded.status OR missing_step IS NOT excluded.missing_step OR generation<>excluded.generation OR intake_at IS NOT excluded.intake_at`);
     for (const row of candidates) {
@@ -299,6 +310,34 @@ export class StoredLibraryState {
 
   /** One write transaction under catalog admission. Both cursors survive restart. */
   refreshBatch() {
+    return (
+      runCatalogBackfillBatch(this.db, LIBRARY_SCALE_ADDITION, {
+        "library-projections": () => {
+          const value = this.refreshProjectionsBatch();
+          const state = this.progress()!;
+          const counts =
+            this.statement(
+              "SELECT after_id,ready FROM library_count_progress WHERE singleton=1",
+            ).get() ?? null;
+          const paging =
+            this.statement(
+              "SELECT stage,CAST(after_rowid AS TEXT) AS after_rowid FROM library_paging_progress WHERE singleton=1",
+            ).get() ?? null;
+          return {
+            value,
+            done:
+              state.ready === 1 &&
+              state.collection_ready === 1 &&
+              counts?.ready === 1 &&
+              libraryPagingReady(this.db),
+            cursor: { state, counts, paging },
+          };
+        },
+      }) ?? this.refreshProjectionsBatch()
+    );
+  }
+
+  private refreshProjectionsBatch() {
     if (!this.progress()) this.configure();
     else if (!this.counts.configured()) this.counts.configure();
     const p = this.progress()!;
@@ -340,7 +379,7 @@ export class StoredLibraryState {
     return {
       rebuilt,
       repaired: dirty.length,
-      more: this.maintenancePending(),
+      more: !this.countsReady() || !libraryPagingReady(this.db),
     };
   }
 }

@@ -291,7 +291,9 @@ function commit(
   )
     fail("document-raw-stale");
   const current = db
-    .prepare("SELECT * FROM draft_current WHERE part_asset_id=?")
+    .prepare(
+      "SELECT part_asset_id,part_sha256,document_version_id,revision FROM draft_current WHERE part_asset_id=?",
+    )
     .get(material.asset_id);
   if ((current?.revision ?? null) !== p.expected_current_revision)
     fail("draft-current-conflict");
@@ -358,7 +360,9 @@ function commit(
     draft_content_media_type: v.draft_content.media_type,
   };
   const prior = db
-    .prepare("SELECT * FROM document_versions WHERE document_version_id=?")
+    .prepare(
+      "SELECT document_version_id,document_id,schema_version,literature_id,source_asset_id,source_sha256,source_byte_size,source_media_type,source_artifact_path,builder_version,locator_scheme,representation_sha256,markdown_artifact_path,markdown_sha256,markdown_byte_size,markdown_media_type,structure_artifact_path,structure_sha256,structure_byte_size,structure_media_type,proofread_id,proofread_content_sha256,created_at,raw_parse_id,raw_parse_result_sha256,page_layer_sha256,draft_method_sha256,draft_content_artifact_path,draft_content_sha256,draft_content_byte_size,draft_content_media_type FROM document_versions WHERE document_version_id=?",
+    )
     .get(v.document_version_id);
   if (prior && Object.entries(row).some(([key, value]) => prior[key] !== value))
     fail("document-version-conflict");
@@ -373,7 +377,7 @@ function commit(
     ).run(...Object.values(row), new Date().toISOString());
     v.resources.forEach((resource, ordinal) => {
       db.prepare(
-        "INSERT INTO document_version_resources VALUES(?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO document_version_resources(document_version_id,ordinal,resource_id,reference,relation,artifact_path,artifact_sha256,artifact_byte_size,artifact_media_type) VALUES(?,?,?,?,?,?,?,?,?)",
       ).run(
         v.document_version_id,
         ordinal,
@@ -386,7 +390,9 @@ function commit(
         resource.artifact.media_type,
       );
     });
-    db.prepare("INSERT INTO draft_version_facts VALUES(?,?,?,?)").run(
+    db.prepare(
+      "INSERT INTO draft_version_facts(document_version_id,differs_segments,differences,image_only_pages) VALUES(?,?,?,?)",
+    ).run(
       v.document_version_id,
       p.facts.differs_segments,
       p.facts.differences,
@@ -395,7 +401,7 @@ function commit(
   } else {
     const resources = db
       .prepare(
-        "SELECT * FROM document_version_resources WHERE document_version_id=? ORDER BY ordinal",
+        "SELECT document_version_id,ordinal,resource_id,reference,relation,artifact_path,artifact_sha256,artifact_byte_size,artifact_media_type FROM document_version_resources WHERE document_version_id=? ORDER BY ordinal",
       )
       .all(v.document_version_id);
     if (
@@ -416,7 +422,9 @@ function commit(
     )
       fail("document-version-conflict");
     const facts = db
-      .prepare("SELECT * FROM draft_version_facts WHERE document_version_id=?")
+      .prepare(
+        "SELECT document_version_id,differs_segments,differences,image_only_pages FROM draft_version_facts WHERE document_version_id=?",
+      )
       .get(v.document_version_id);
     if (
       !facts ||
@@ -432,7 +440,7 @@ function commit(
       : Number(current?.revision ?? 0) + 1;
   if (current?.document_version_id !== v.document_version_id)
     db.prepare(
-      "INSERT INTO draft_current VALUES(?,?,?,?) ON CONFLICT(part_asset_id) DO UPDATE SET part_sha256=excluded.part_sha256,document_version_id=excluded.document_version_id,revision=excluded.revision",
+      "INSERT INTO draft_current(part_asset_id,part_sha256,document_version_id,revision) VALUES(?,?,?,?) ON CONFLICT(part_asset_id) DO UPDATE SET part_sha256=excluded.part_sha256,document_version_id=excluded.document_version_id,revision=excluded.revision",
     ).run(
       material.asset_id,
       material.asset_sha256,

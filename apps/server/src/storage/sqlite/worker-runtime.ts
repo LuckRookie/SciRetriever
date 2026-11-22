@@ -318,7 +318,11 @@ const extractionModule = await import(
     import.meta.url,
   ).href
 );
-const { readCatalogIdentity } = await import(
+const {
+  readCatalogIdentity,
+  checkCatalogIdentityRows,
+  CatalogLayoutError,
+}: typeof import("./catalog-identity.js") = await import(
   new URL(
     import.meta.url.endsWith(".ts")
       ? "./catalog-identity.ts"
@@ -351,16 +355,7 @@ function getRetrievalEngine(): RetrievalStorageEngine {
   return (retrievalEngine ??= new retrievalModule.RetrievalStorageEngine(
     data.path,
     data.read_only,
-    {
-      schema_version: SCHEMA_VERSION,
-      schema_fingerprint: SCHEMA_FINGERPRINT,
-      schema_manifest: SCHEMA_MANIFEST,
-      execution_schema_version: EXECUTION_SCHEMA_VERSION,
-      execution_schema_fingerprint: EXECUTION_SCHEMA_FINGERPRINT,
-      execution_runtime_schema_version: EXECUTION_RUNTIME_SCHEMA_VERSION,
-      execution_runtime_schema_fingerprint:
-        EXECUTION_RUNTIME_SCHEMA_FINGERPRINT,
-    },
+    layoutModule.CURRENT_CATALOG_CONFIG,
   ));
 }
 let db: Dynamic;
@@ -395,12 +390,15 @@ function fail(): never {
   throw new Error("sqlite worker operation failed");
 }
 let verifiedDocumentSchema: string | null = null;
-function validDocumentSchema(version: number): boolean {
-  const identity = JSON.stringify([
+function documentSchemaProof(version: number): string {
+  return JSON.stringify([
     version,
     db.prepare("PRAGMA schema_version").get().schema_version,
     catalogIdentity(),
   ]);
+}
+function validDocumentSchema(version: number): boolean {
+  const identity = documentSchemaProof(version);
   if (verifiedDocumentSchema === identity) return true;
   verifiedDocumentSchema = null;
   try {
@@ -417,6 +415,11 @@ function validDocumentSchema(version: number): boolean {
     return true;
   } catch (error) {
     throwCatalogCorruption(error);
+    if (
+      error instanceof CatalogLayoutError &&
+      error.reason === "catalog-addition-required"
+    )
+      throw error;
     return false;
   }
 }
@@ -488,11 +491,11 @@ function initializeConnection(): Dynamic {
     )
   )
     fail();
-  if (
-    existing?.schema_version === SCHEMA_VERSION &&
-    !validDocumentSchema(existing.schema_version)
-  )
-    fail();
+  if (existing?.schema_version === SCHEMA_VERSION) {
+    if (verifiedDocumentSchema === documentSchemaProof(existing.schema_version))
+      checkCatalogIdentityRows(db, layoutModule.CURRENT_CATALOG_CONFIG);
+    else if (!validDocumentSchema(existing.schema_version)) fail();
+  }
   libraryState.registerWrites();
   observedDataVersion = Number(
     db.prepare("PRAGMA data_version").get().data_version,
@@ -503,20 +506,22 @@ function inspectQueryCatalog(): {
   readonly schema: Dynamic | null;
 } {
   try {
-    const identity = readCatalogIdentity(
-      db,
-      layoutModule.CURRENT_CATALOG_CONFIG,
-      true,
-    );
+    const proof = documentSchemaProof(SCHEMA_VERSION);
+    const identity =
+      verifiedDocumentSchema === proof
+        ? checkCatalogIdentityRows(db, layoutModule.CURRENT_CATALOG_CONFIG)
+        : readCatalogIdentity(db, layoutModule.CURRENT_CATALOG_CONFIG, true);
     if (!identity) return { status: "not-initialized", schema: null };
-    verifiedDocumentSchema = JSON.stringify([
-      SCHEMA_VERSION,
-      db.prepare("PRAGMA schema_version").get().schema_version,
-      catalogIdentity(),
-    ]);
+    verifiedDocumentSchema = proof;
     return { status: "ready", schema: identity };
   } catch (error) {
+    verifiedDocumentSchema = null;
     throwCatalogCorruption(error);
+    if (
+      error instanceof CatalogLayoutError &&
+      error.reason === "catalog-addition-required"
+    )
+      throw error;
     return { status: "unavailable", schema: null };
   }
 }
@@ -2288,7 +2293,7 @@ function acceptObservation(c: Dynamic): Dynamic {
       )
       .all(c.observationId))
       db.prepare(
-        "INSERT INTO literature_metadata_subject_terms VALUES(?,?,?,?)",
+        "INSERT INTO literature_metadata_subject_terms(literature_id,ordinal,term,normalized_term) VALUES(?,?,?,?)",
       ).run(
         c.literatureId,
         r.ordinal,
@@ -2325,7 +2330,9 @@ function insertExact(table: Dynamic, values: Dynamic, key: Dynamic): Dynamic {
       ") DO NOTHING",
   ).run(...Object.values(values));
   const row = db
-    .prepare("SELECT * FROM " + table + " WHERE " + key + "=?")
+    .prepare(
+      "SELECT " + columns.join(",") + " FROM " + table + " WHERE " + key + "=?",
+    )
     .get(values[key]);
   if (!row || columns.some((column: Dynamic) => row[column] !== values[column]))
     fail();
@@ -2439,13 +2446,20 @@ function requireExecution(): Dynamic {
   )
     fail();
 }
-function runtimeTables(): Dynamic {
-  return db
+const executionTables = new Set(
+  SCHEMA_MANIFEST.flatMap((sql) => {
+    const name = /^CREATE TABLE (execution_[a-z0-9_]+)\(/u.exec(sql)?.[1];
+    return name ? [name] : [];
+  }),
+);
+function runtimeTables(connection: DatabaseSync = db): string[] {
+  return connection
     .prepare(
       "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'execution_%' ORDER BY name",
     )
     .all()
-    .map((row: Dynamic) => row.name);
+    .map((row) => String(row.name))
+    .filter((name) => executionTables.has(name));
 }
 function requireRuntime(): Dynamic {
   const row = db
@@ -2552,12 +2566,9 @@ function restoreCheck(path: Dynamic): Dynamic {
           )
           .get()
       : null;
-    const names = candidate
-      .prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'execution_%' ORDER BY name",
-      )
-      .all()
-      .map((row: Dynamic) => row.name);
+    if (!readCatalogIdentity(candidate, layoutModule.CURRENT_CATALOG_CONFIG))
+      fail();
+    const names = runtimeTables(candidate);
     const counts: Record<string, number> = {};
     for (const name of names) {
       if (name === "execution_runtime_schema_identity") continue;
@@ -2631,7 +2642,9 @@ function createExecutionJob(
       job.finished_at,
     );
     const row = db
-      .prepare("SELECT * FROM execution_jobs WHERE idempotency_key=?")
+      .prepare(
+        "SELECT job_id,target_kind,selector_json,policy_version,status,idempotency_key,created_at,finished_at FROM execution_jobs WHERE idempotency_key=?",
+      )
       .get(job.idempotency_key);
     if (
       !row ||
@@ -2719,7 +2732,9 @@ function createExecutionJob(
 function getExecutionJob(jobId: Dynamic): Dynamic {
   requireRuntime();
   const row = db
-    .prepare("SELECT * FROM execution_jobs WHERE job_id=?")
+    .prepare(
+      "SELECT job_id,target_kind,selector_json,policy_version,status,idempotency_key,created_at,finished_at FROM execution_jobs WHERE job_id=?",
+    )
     .get(jobId);
   if (!row) return null;
   return {
@@ -2790,7 +2805,7 @@ function listExecutionJobs(
   const rows = db
     .prepare(
       `WITH selected_jobs AS MATERIALIZED (
-        SELECT * FROM execution_jobs${filters.length ? ` WHERE ${filters.join(" AND ")}` : ""}
+        SELECT job_id,target_kind,selector_json,policy_version,status,idempotency_key,created_at,finished_at FROM execution_jobs${filters.length ? ` WHERE ${filters.join(" AND ")}` : ""}
         ORDER BY ${sort} LIMIT ?
       ), progress AS (
         SELECT job_id, count(*) AS total,
@@ -2889,7 +2904,11 @@ function executionBudget(row: Dynamic): Dynamic {
 function getExecutionBudget(jobId: Dynamic): Dynamic {
   requireRuntime();
   return executionBudget(
-    db.prepare("SELECT * FROM execution_budgets WHERE job_id=?").get(jobId),
+    db
+      .prepare(
+        "SELECT job_id,max_attempts,max_network_bytes,max_model_calls,used_attempts,used_network_bytes,used_model_calls,updated_at FROM execution_budgets WHERE job_id=?",
+      )
+      .get(jobId),
   );
 }
 function consumeExecutionBudget(
@@ -2900,7 +2919,9 @@ function consumeExecutionBudget(
   requireRuntime();
   return transaction(() => {
     const current = db
-      .prepare("SELECT * FROM execution_budgets WHERE job_id=?")
+      .prepare(
+        "SELECT job_id,max_attempts,max_network_bytes,max_model_calls,used_attempts,used_network_bytes,used_model_calls,updated_at FROM execution_budgets WHERE job_id=?",
+      )
       .get(jobId);
     if (!current) fail();
     const nextAttempts = current.used_attempts + usage.attempts,
@@ -2931,7 +2952,7 @@ function listExecutionTargets(
     fail();
   return db
     .prepare(
-      `SELECT * FROM execution_targets WHERE job_id=? ${visibleOnly ? "AND (literature_id IS NULL OR " + visibilityModule.visibleLiteratureSql("literature_id") + ")" : ""} ORDER BY ordinal,target_id LIMIT ?`,
+      `SELECT target_id,job_id,ordinal,literature_id,version_role,stage,disposition,next_eligible_at FROM execution_targets WHERE job_id=? ${visibleOnly ? "AND (literature_id IS NULL OR " + visibilityModule.visibleLiteratureSql("literature_id") + ")" : ""} ORDER BY ordinal,target_id LIMIT ?`,
     )
     .all(jobId, limit)
     .map((row: Dynamic) => ({
@@ -2950,7 +2971,7 @@ function listExecutionAttempts(targetId: Dynamic, limit: Dynamic): Dynamic {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10000) fail();
   return db
     .prepare(
-      "SELECT * FROM execution_attempts WHERE target_id=? ORDER BY started_at,attempt_id LIMIT ?",
+      "SELECT attempt_id,target_id,stage,status,started_at,finished_at,failure_code,failure_reason,failure_action,failure_retryable,usage_json FROM execution_attempts WHERE target_id=? ORDER BY started_at,attempt_id LIMIT ?",
     )
     .all(targetId, limit)
     .map((row: Dynamic) => ({
@@ -3081,7 +3102,9 @@ function putExecutionTarget(target: Dynamic): Dynamic {
       target.next_eligible_at,
     );
     const row = db
-      .prepare("SELECT * FROM execution_targets WHERE target_id=?")
+      .prepare(
+        "SELECT target_id,job_id,ordinal,literature_id,version_role,stage,disposition,next_eligible_at FROM execution_targets WHERE target_id=?",
+      )
       .get(target.target_id);
     if (!row || row.job_id !== target.job_id || row.ordinal !== target.ordinal)
       fail();
@@ -3100,7 +3123,9 @@ function putExecutionTarget(target: Dynamic): Dynamic {
 function getExecutionTarget(targetId: Dynamic): Dynamic {
   requireRuntime();
   const row = db
-    .prepare("SELECT * FROM execution_targets WHERE target_id=?")
+    .prepare(
+      "SELECT target_id,job_id,ordinal,literature_id,version_role,stage,disposition,next_eligible_at FROM execution_targets WHERE target_id=?",
+    )
     .get(targetId);
   if (!row) return null;
   return {
@@ -3123,7 +3148,7 @@ function claimExecutionTarget(
   return transaction(() => {
     const row = db
       .prepare(
-        "SELECT target.* FROM execution_targets target JOIN execution_jobs job ON job.job_id=target.job_id WHERE target.job_id=? AND job.status IN ('queued','running') AND target.stage='queued' AND (target.next_eligible_at IS NULL OR target.next_eligible_at<=?) AND (? IS NULL OR target.target_id=?) ORDER BY target.ordinal,target.target_id LIMIT 1",
+        "SELECT target.target_id,target.job_id,target.ordinal,target.literature_id,target.version_role,target.stage,target.disposition,target.next_eligible_at FROM execution_targets target JOIN execution_jobs job ON job.job_id=target.job_id WHERE target.job_id=? AND job.status IN ('queued','running') AND target.stage='queued' AND (target.next_eligible_at IS NULL OR target.next_eligible_at<=?) AND (? IS NULL OR target.target_id=?) ORDER BY target.ordinal,target.target_id LIMIT 1",
       )
       .get(jobId, now, targetId, targetId);
     if (!row) return null;
@@ -3178,7 +3203,9 @@ function startExecutionAttempt(attempt: Dynamic): Dynamic {
       attempt.usage === null ? null : JSON.stringify(attempt.usage),
     );
     const row = db
-      .prepare("SELECT * FROM execution_attempts WHERE attempt_id=?")
+      .prepare(
+        "SELECT attempt_id,target_id,stage,status,started_at,finished_at,failure_code,failure_reason,failure_action,failure_retryable,usage_json FROM execution_attempts WHERE attempt_id=?",
+      )
       .get(attempt.attempt_id);
     if (!row) fail();
     return {
@@ -3226,7 +3253,9 @@ function finishExecutionAttempt(
       );
     if (result.changes !== 1) fail();
     const row = db
-      .prepare("SELECT * FROM execution_attempts WHERE attempt_id=?")
+      .prepare(
+        "SELECT attempt_id,target_id,stage,status,started_at,finished_at,failure_code,failure_reason,failure_action,failure_retryable,usage_json FROM execution_attempts WHERE attempt_id=?",
+      )
       .get(attemptId);
     return {
       attempt_id: row.attempt_id,
@@ -3313,8 +3342,8 @@ function listExecutionEvents(
   return db
     .prepare(
       order === "newest"
-        ? `SELECT * FROM execution_events WHERE job_id=? AND sequence>?${filter} ORDER BY sequence DESC LIMIT ?`
-        : `SELECT * FROM execution_events WHERE job_id=? AND sequence>?${filter} ORDER BY sequence LIMIT ?`,
+        ? `SELECT event_id,job_id,sequence,kind,payload_json,created_at FROM execution_events WHERE job_id=? AND sequence>?${filter} ORDER BY sequence DESC LIMIT ?`
+        : `SELECT event_id,job_id,sequence,kind,payload_json,created_at FROM execution_events WHERE job_id=? AND sequence>?${filter} ORDER BY sequence LIMIT ?`,
     )
     .all(jobId, after, limit)
     .map((row: Dynamic) => ({
@@ -3386,7 +3415,7 @@ function putExecutionIntervention(
     return executionIntervention(
       db
         .prepare(
-          "SELECT * FROM execution_interventions WHERE intervention_id=?",
+          "SELECT intervention_id,job_id,target_id,mode,status,failure_json,created_at,expires_at,resolved_at,resolution_json FROM execution_interventions WHERE intervention_id=?",
         )
         .get(value.intervention_id),
     );
@@ -3397,7 +3426,7 @@ function listExecutionInterventions(jobId: Dynamic, limit: Dynamic): Dynamic {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) fail();
   return db
     .prepare(
-      "SELECT * FROM execution_interventions WHERE job_id=? ORDER BY created_at,intervention_id LIMIT ?",
+      "SELECT intervention_id,job_id,target_id,mode,status,failure_json,created_at,expires_at,resolved_at,resolution_json FROM execution_interventions WHERE job_id=? ORDER BY created_at,intervention_id LIMIT ?",
     )
     .all(jobId, limit)
     .map(executionIntervention);
@@ -3420,7 +3449,7 @@ function resolveExecutionIntervention(
     return executionIntervention(
       db
         .prepare(
-          "SELECT * FROM execution_interventions WHERE intervention_id=?",
+          "SELECT intervention_id,job_id,target_id,mode,status,failure_json,created_at,expires_at,resolved_at,resolution_json FROM execution_interventions WHERE intervention_id=?",
         )
         .get(interventionId),
     );
@@ -3787,7 +3816,9 @@ function documentMaterial(literatureId: Dynamic, assetId: Dynamic): Dynamic {
 function documentVersion(versionId: Dynamic): Dynamic {
   requireDocumentV3();
   const v = db
-    .prepare("SELECT * FROM document_versions WHERE document_version_id=?")
+    .prepare(
+      "SELECT document_version_id,document_id,schema_version,literature_id,source_asset_id,source_sha256,source_byte_size,source_media_type,source_artifact_path,builder_version,locator_scheme,representation_sha256,markdown_artifact_path,markdown_sha256,markdown_byte_size,markdown_media_type,structure_artifact_path,structure_sha256,structure_byte_size,structure_media_type,proofread_id,proofread_content_sha256,created_at,raw_parse_id,raw_parse_result_sha256,page_layer_sha256,draft_method_sha256,draft_content_artifact_path,draft_content_sha256,draft_content_byte_size,draft_content_media_type FROM document_versions WHERE document_version_id=?",
+    )
     .get(versionId);
   if (!v || visibilityModule.literatureWithdrawn(db, v.literature_id))
     return null;
@@ -3916,7 +3947,7 @@ function commitDocumentVersion(p: Dynamic): Dynamic {
     {
       const proofread = db
         .prepare(
-          "SELECT p.* FROM proofread_versions p JOIN proofread_current c ON c.proofread_id=p.proofread_id WHERE p.proofread_id=? AND p.part_asset_id=? AND p.part_sha256=? AND p.content_sha256=? AND p.status='complete'",
+          "SELECT p.proofread_id,p.part_asset_id,p.part_sha256,p.content_sha256,p.status,p.manifest_reference,p.manifest_sha256,p.manifest_size,p.manifest_media_type,p.created_at FROM proofread_versions p JOIN proofread_current c ON c.proofread_id=p.proofread_id WHERE p.proofread_id=? AND p.part_asset_id=? AND p.part_sha256=? AND p.content_sha256=? AND p.status='complete'",
         )
         .get(
           v.proofread_id,
@@ -3950,7 +3981,7 @@ function commitDocumentVersion(p: Dynamic): Dynamic {
       if (stale) throw new DocumentCommitError("document-raw-stale");
       const markdown = db
         .prepare(
-          "SELECT * FROM proofread_resources WHERE proofread_id=? AND kind='markdown' AND sha256=? AND artifact_reference=? LIMIT 1",
+          "SELECT proofread_id,kind,reference,artifact_reference,sha256,byte_size,media_type FROM proofread_resources WHERE proofread_id=? AND kind='markdown' AND sha256=? AND artifact_reference=? LIMIT 1",
         )
         .get(v.proofread_id, v.markdown.sha256, p.markdown_artifact_path);
       if (
@@ -3960,7 +3991,7 @@ function commitDocumentVersion(p: Dynamic): Dynamic {
         throw new DocumentCommitError("document-markdown-unregistered");
       const images = db
         .prepare(
-          "SELECT * FROM proofread_resources WHERE proofread_id=? AND kind='image'",
+          "SELECT proofread_id,kind,reference,artifact_reference,sha256,byte_size,media_type FROM proofread_resources WHERE proofread_id=? AND kind='image'",
         )
         .all(v.proofread_id);
       if (
@@ -3997,7 +4028,9 @@ function commitDocumentVersion(p: Dynamic): Dynamic {
     for (const r of v.resources)
       exactArtifact(p.resource_artifact_paths[r.reference], r.artifact);
     const previousStructure = db
-      .prepare("SELECT * FROM artifact_objects WHERE sha256=?")
+      .prepare(
+        "SELECT artifact_id,sha256,byte_size,media_type,relative_path FROM artifact_objects WHERE sha256=?",
+      )
       .get(v.structure.sha256);
     if (previousStructure)
       exactArtifact(p.structure_artifact_path, v.structure);
@@ -5043,7 +5076,12 @@ port.on("message", (message: WorkerMessage) => {
           value: Reflect.apply(engine[operation], engine, args),
         };
       } catch (error) {
-        if (message.command.operation === "verifyCatalog") throw error;
+        if (
+          message.command.operation === "verifyCatalog" ||
+          (error instanceof CatalogLayoutError &&
+            error.reason === "catalog-addition-required")
+        )
+          throw error;
         value = {
           ok: false,
           code: sqliteStorageFull(error)
@@ -6139,14 +6177,17 @@ port.on("message", (message: WorkerMessage) => {
       value: null,
       ...(corruption
         ? { code: corruption.code, sqlite_code: corruption.sqlite_code }
-        : message.command.kind === "document_commit"
-          ? { code: publicationCode }
-          : message.command.kind === "library_search_page" &&
-              error instanceof Error &&
-              "code" in error &&
-              error.code === LIBRARY_SORT_SCOPE_LIMIT
-            ? { code: LIBRARY_SORT_SCOPE_LIMIT }
-            : {}),
+        : error instanceof CatalogLayoutError &&
+            error.reason === "catalog-addition-required"
+          ? { code: error.reason, addition: error.addition }
+          : message.command.kind === "document_commit"
+            ? { code: publicationCode }
+            : message.command.kind === "library_search_page" &&
+                error instanceof Error &&
+                "code" in error &&
+                error.code === LIBRARY_SORT_SCOPE_LIMIT
+              ? { code: LIBRARY_SORT_SCOPE_LIMIT }
+              : {}),
       cancelled: !!cancellation && Atomics.load(cancellation, 0) !== 0,
     });
   } finally {

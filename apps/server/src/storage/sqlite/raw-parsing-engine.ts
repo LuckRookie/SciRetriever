@@ -61,7 +61,7 @@ function transaction<T>(db: DatabaseSync, fn: () => T): T {
 function register(db: DatabaseSync, reference: string, a: ArtifactRef) {
   const prior = one(
     db,
-    "SELECT * FROM artifact_objects WHERE relative_path=? OR sha256=?",
+    "SELECT artifact_id,sha256,byte_size,media_type,relative_path FROM artifact_objects WHERE relative_path=? OR sha256=?",
     reference,
     a.sha256,
   );
@@ -95,19 +95,19 @@ export function runRawParseStorage(
   if (action === "get")
     return one(
       db,
-      "SELECT * FROM raw_parses WHERE raw_parse_id=?",
+      "SELECT raw_parse_id,source_asset_id,source_sha256,profile,parameters_sha256,result_sha256,manifest_reference,manifest_sha256,manifest_size,manifest_media_type,created_at FROM raw_parses WHERE raw_parse_id=?",
       String(args),
     );
   if (action === "resources")
     return db
       .prepare(
-        "SELECT * FROM raw_parse_resources WHERE raw_parse_id=? ORDER BY kind,reference",
+        "SELECT raw_parse_id,kind,reference,artifact_reference,sha256,byte_size,media_type FROM raw_parse_resources WHERE raw_parse_id=? ORDER BY kind,reference",
       )
       .all(String(args));
   if (action === "current")
     return db
       .prepare(
-        "SELECT c.*,p.manifest_reference,p.manifest_sha256,p.manifest_size,p.manifest_media_type,p.result_sha256,p.parameters_sha256 FROM raw_parse_current c LEFT JOIN raw_parses p ON p.raw_parse_id=c.raw_parse_id WHERE c.source_asset_id=? ORDER BY c.profile",
+        "SELECT c.source_asset_id,c.source_sha256,c.profile,c.raw_parse_id,c.last_failure_code,c.last_parameters_sha256,p.manifest_reference,p.manifest_sha256,p.manifest_size,p.manifest_media_type,p.result_sha256,p.parameters_sha256 FROM raw_parse_current c LEFT JOIN raw_parses p ON p.raw_parse_id=c.raw_parse_id WHERE c.source_asset_id=? ORDER BY c.profile",
       )
       .all(String(args));
   return transaction(db, () => {
@@ -141,7 +141,7 @@ export function runRawParseStorage(
         fail("raw-parse-source-stale");
       const prior = one(
         db,
-        "SELECT * FROM raw_parses WHERE raw_parse_id=?",
+        "SELECT raw_parse_id,source_asset_id,source_sha256,profile,parameters_sha256,result_sha256,manifest_reference,manifest_sha256,manifest_size,manifest_media_type,created_at FROM raw_parses WHERE raw_parse_id=?",
         r.raw_parse_id,
       );
       if (

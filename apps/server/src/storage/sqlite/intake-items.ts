@@ -182,7 +182,7 @@ export function readIntakeItem(db: DatabaseSync, r: IntakeItemRead): unknown {
   if (r.kind === "duplicate-candidates")
     return db
       .prepare(
-        "SELECT m.literature_id,m.title,m.publication_year,m.publication_form,(SELECT json_group_array(json_object('kind',kind,'display_name',display_name,'given_name',given_name,'family_name',family_name,'orcid',orcid,'affiliations',json('[]'))) FROM (SELECT * FROM literature_metadata_authors a WHERE a.literature_id=m.literature_id ORDER BY ordinal)) AS authors_json FROM literature_metadata m WHERE m.title IS NOT NULL AND NOT EXISTS(SELECT 1 FROM intake_withdrawn_objects w WHERE w.object_kind='literature' AND w.object_id=m.literature_id) ORDER BY m.literature_id",
+        "SELECT m.literature_id,m.title,m.publication_year,m.publication_form,(SELECT json_group_array(json_object('kind',kind,'display_name',display_name,'given_name',given_name,'family_name',family_name,'orcid',orcid,'affiliations',json('[]'))) FROM (SELECT literature_id,ordinal,kind,display_name,given_name,family_name,orcid FROM literature_metadata_authors a WHERE a.literature_id=m.literature_id ORDER BY ordinal)) AS authors_json FROM literature_metadata m WHERE m.title IS NOT NULL AND NOT EXISTS(SELECT 1 FROM intake_withdrawn_objects w WHERE w.object_kind='literature' AND w.object_id=m.literature_id) ORDER BY m.literature_id",
       )
       .all()
       .map((row) => {
@@ -235,14 +235,16 @@ export function readIntakeItem(db: DatabaseSync, r: IntakeItemRead): unknown {
     );
   if (r.kind === "one") {
     const row = db
-      .prepare("SELECT * FROM intake_items WHERE batch_id=? AND item_id=?")
+      .prepare(
+        "SELECT item_id,batch_id,origin,sequence,record_index,external_id,title,file_name,candidate_transfer_id,recognition_json,possible_duplicates_json,unpaired,needs_decision,decision_json,decided_by,decided_at,disposition,literature_id,retain_until,created_at FROM intake_items WHERE batch_id=? AND item_id=?",
+      )
       .get(r.batch_id, r.item_id);
     if (!row) fail("intake-item-missing");
     return stored(row);
   }
   return db
     .prepare(
-      "SELECT * FROM intake_items WHERE batch_id=? ORDER BY created_at,item_id",
+      "SELECT item_id,batch_id,origin,sequence,record_index,external_id,title,file_name,candidate_transfer_id,recognition_json,possible_duplicates_json,unpaired,needs_decision,decision_json,decided_by,decided_at,disposition,literature_id,retain_until,created_at FROM intake_items WHERE batch_id=? ORDER BY created_at,item_id",
     )
     .all(r.batch_id)
     .map(stored);
@@ -394,7 +396,7 @@ export function writeIntakeItem(db: DatabaseSync, r: IntakeItemWrite): unknown {
   if (r.kind === "needs") {
     if (r.needed)
       db.prepare(
-        "INSERT INTO literature_needs_metadata VALUES(?,?,?) ON CONFLICT DO NOTHING",
+        "INSERT INTO literature_needs_metadata(literature_id,set_at,batch_id) VALUES(?,?,?) ON CONFLICT DO NOTHING",
       ).run(r.literature_id, r.now, r.batch_id);
     else
       db.prepare(

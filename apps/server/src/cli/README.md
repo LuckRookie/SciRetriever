@@ -18,6 +18,8 @@
 
 业务流程复用 Application/Entry，配置规则归 configuration；不要在命令分支中复制下载或解析实现。
 
+`storage schema-inspect --catalog PATH` 列出增补集、回填进度和额外对象。缺少本版本需要的增补集时返回 `catalog-addition-required` 和 `addition`。`storage schema-apply --catalog PATH --addition NAME` 只接受本版本声明的增补集。首个增补集 `library-scale-04-07` 遵循首次停服切换规则。
+
 `import metadata` 在本进程同步完成自己的书目入库，不恢复或过期其它批次。`import pdf` 直接流式读取显式路径或 stdin，委托公共入库文件通道，归入 CLI 当天的“补充文件”开放批次；保留 receipt 结果，没有 16 MiB 上限。
 
 `literature search --request FILE|-` 接受完整 LibraryQuery 及排序，包括主 PDF 默认初稿的事实筛选和四种降序；查询范围可以直接交给显式任务。`literature read` 的 PDF 资产带默认文本版本与事实，`archive status` 按部分返回同样的事实；读取不启动校订。

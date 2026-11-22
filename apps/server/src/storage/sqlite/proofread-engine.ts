@@ -102,7 +102,7 @@ function transaction<T>(db: DatabaseSync, write: boolean, fn: () => T): T {
 function register(db: DatabaseSync, a: LocatedProofreadArtifact) {
   const old = one(
     db,
-    "SELECT * FROM artifact_objects WHERE sha256=? OR relative_path=?",
+    "SELECT artifact_id,sha256,byte_size,media_type,relative_path FROM artifact_objects WHERE sha256=? OR relative_path=?",
     a.sha256,
     a.reference,
   );
@@ -145,7 +145,7 @@ export function runProofreadStorage(
   if (action === "cache-read")
     return one(
       db,
-      "SELECT * FROM proofread_correction_cache WHERE cache_key=? OR cache_id=?",
+      "SELECT cache_key,cache_id,artifact_reference,sha256,byte_size,media_type FROM proofread_correction_cache WHERE cache_key=? OR cache_id=?",
       String(args),
       String(args),
     );
@@ -156,7 +156,7 @@ export function runProofreadStorage(
       const id = `${r.key.slice(0, 8)}-${r.key.slice(8, 12)}-${r.key.slice(12, 16)}-${r.key.slice(16, 20)}-${r.key.slice(20, 32)}`;
       const old = one(
         db,
-        "SELECT * FROM proofread_correction_cache WHERE cache_key=?",
+        "SELECT cache_key,cache_id,artifact_reference,sha256,byte_size,media_type FROM proofread_correction_cache WHERE cache_key=?",
         r.key,
       );
       if (old) {
@@ -165,7 +165,7 @@ export function runProofreadStorage(
       }
       register(db, r.artifact);
       db.prepare(
-        "INSERT INTO proofread_correction_cache VALUES(?,?,?,?,?,?)",
+        "INSERT INTO proofread_correction_cache(cache_key,cache_id,artifact_reference,sha256,byte_size,media_type) VALUES(?,?,?,?,?,?)",
       ).run(
         r.key,
         id,
@@ -185,39 +185,39 @@ export function runProofreadStorage(
   if (action === "current")
     return one(
       db,
-      "SELECT c.*,v.content_sha256,v.status FROM proofread_current c JOIN proofread_versions v ON v.proofread_id=c.proofread_id WHERE c.part_asset_id=?",
+      "SELECT c.part_asset_id,c.manual_revision,c.part_sha256,c.proofread_id,c.revision,v.content_sha256,v.status FROM proofread_current c JOIN proofread_versions v ON v.proofread_id=c.proofread_id WHERE c.part_asset_id=?",
       String(args),
     );
   if (action === "get")
     return one(
       db,
-      "SELECT * FROM proofread_versions WHERE proofread_id=?",
+      "SELECT proofread_id,part_asset_id,part_sha256,content_sha256,status,manifest_reference,manifest_sha256,manifest_size,manifest_media_type,created_at FROM proofread_versions WHERE proofread_id=?",
       String(args),
     );
   if (action === "document-source")
     return transaction(db, false, () => ({
       version: one(
         db,
-        "SELECT * FROM proofread_versions WHERE proofread_id=?",
+        "SELECT proofread_id,part_asset_id,part_sha256,content_sha256,status,manifest_reference,manifest_sha256,manifest_size,manifest_media_type,created_at FROM proofread_versions WHERE proofread_id=?",
         String(args),
       ),
       blocks: one(
         db,
-        "SELECT * FROM proofread_resources WHERE proofread_id=? AND kind='blocks' AND reference=''",
+        "SELECT proofread_id,kind,reference,artifact_reference,sha256,byte_size,media_type FROM proofread_resources WHERE proofread_id=? AND kind='blocks' AND reference=''",
         String(args),
       ),
     }));
   if (action === "resources")
     return db
       .prepare(
-        "SELECT * FROM proofread_resources WHERE proofread_id=? ORDER BY kind,reference",
+        "SELECT proofread_id,kind,reference,artifact_reference,sha256,byte_size,media_type FROM proofread_resources WHERE proofread_id=? ORDER BY kind,reference",
       )
       .all(String(args));
   if (action === "state")
     return transaction(db, false, () => ({
       current: one(
         db,
-        "SELECT c.*,v.content_sha256,v.status FROM proofread_current c JOIN proofread_versions v ON v.proofread_id=c.proofread_id WHERE c.part_asset_id=?",
+        "SELECT c.part_asset_id,c.manual_revision,c.part_sha256,c.proofread_id,c.revision,v.content_sha256,v.status FROM proofread_current c JOIN proofread_versions v ON v.proofread_id=c.proofread_id WHERE c.part_asset_id=?",
         String(args),
       ),
       last_manual_edit:
@@ -229,7 +229,7 @@ export function runProofreadStorage(
       manual_revision: revision(db, String(args)),
       decisions: db
         .prepare(
-          "SELECT * FROM proofread_manual_decisions WHERE part_asset_id=? AND active=1 ORDER BY decision_id",
+          "SELECT decision_id,part_asset_id,block_id,scope_key,manifest_reference,manifest_sha256,manifest_size,manifest_media_type,active,actor,created_at,revoked_by,revoked_at FROM proofread_manual_decisions WHERE part_asset_id=? AND active=1 ORDER BY decision_id",
         )
         .all(String(args)),
     }));
@@ -242,7 +242,7 @@ export function runProofreadStorage(
       };
       const current = one(
         db,
-        "SELECT p.* FROM proofread_current c JOIN proofread_versions p USING(proofread_id) WHERE p.proofread_id=?",
+        "SELECT p.proofread_id,p.part_asset_id,p.part_sha256,p.content_sha256,p.status,p.manifest_reference,p.manifest_sha256,p.manifest_size,p.manifest_media_type,p.created_at FROM proofread_current c JOIN proofread_versions p USING(proofread_id) WHERE p.proofread_id=?",
         p.proofread_id,
       );
       if (
@@ -255,7 +255,7 @@ export function runProofreadStorage(
         register(db, r);
         const old = one(
           db,
-          "SELECT * FROM proofread_resources WHERE proofread_id=? AND kind=? AND reference=?",
+          "SELECT proofread_id,kind,reference,artifact_reference,sha256,byte_size,media_type FROM proofread_resources WHERE proofread_id=? AND kind=? AND reference=?",
           p.proofread_id,
           r.kind,
           r.logical_reference,
@@ -267,7 +267,7 @@ export function runProofreadStorage(
           fail("proofread-artifact-conflict");
         if (!old)
           db.prepare(
-            "INSERT INTO proofread_resources VALUES(?,?,?,?,?,?,?)",
+            "INSERT INTO proofread_resources(proofread_id,kind,reference,artifact_reference,sha256,byte_size,media_type) VALUES(?,?,?,?,?,?,?)",
           ).run(
             p.proofread_id,
             r.kind,
@@ -287,7 +287,7 @@ export function runProofreadStorage(
         fail("proofread-manual-stale");
       const head = one(
         db,
-        "SELECT * FROM proofread_current WHERE part_asset_id=?",
+        "SELECT part_asset_id,manual_revision,part_sha256,proofread_id,revision FROM proofread_current WHERE part_asset_id=?",
         v.part_asset_id,
       );
       if (
@@ -443,7 +443,7 @@ export function runProofreadStorage(
       }
       const current = one(
         db,
-        "SELECT * FROM proofread_current WHERE part_asset_id=?",
+        "SELECT part_asset_id,manual_revision,part_sha256,proofread_id,revision FROM proofread_current WHERE part_asset_id=?",
         v.part_asset_id,
       );
       if (

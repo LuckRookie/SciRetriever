@@ -45,5 +45,6 @@
 
 14.1–14.5 完成。
 
+- 并入 14.3：11 的首个增补集 `library-scale-04-07`。同一次迁移把 118 个按位置写入的触发器改成按列名并按原顺序重建，并建增补集登记表；迁移后 `56d843ab` 打不开，是规格 4.4 登记的第一个例外。之后的结构变化用 `storage schema-apply` 在服务运行时应用。
 - 并入 14.3：10.3 的三个索引（FTS 内容表的 `c0`、两张发现原因表的 `actual_literature_id`）与 07 的变更表、触发器是同一次迁移，用 `scripts/migrate-literature-search-indexes.mjs`：先建表与索引（1 百万篇约 1.1–1.5 s），再用 `--reconcile` 做一次全量比对补齐（约 13–16 s）。补齐之前索引刷新返回 `index-reconcile-required`。部署 10.3 之后的任何版本都要先做这两步。
 - 并入 14.2：`apps/server/test/document-read.test.ts` 的“外部 DDL 后重新核对”用例偶发 `database is locked`（bac6b5a3 上 8 次失败 1 次），查明是哪一块引入的并修掉。

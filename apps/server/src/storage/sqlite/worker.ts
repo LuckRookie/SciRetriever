@@ -2,6 +2,7 @@ import { FilterError } from "../../literature/filters.js";
 import { FolderError } from "../../literature/folders.js";
 import { MarkError } from "../../literature/marks.js";
 import { IntakeWithdrawalError } from "../../literature/intake-withdrawal.js";
+import { CatalogSchemaError } from "./schema-path.js";
 import { isIntakeWithdrawalRead } from "./intake-withdrawal-engine.js";
 import {
   canonicalJsonBytes,
@@ -1270,6 +1271,7 @@ interface Reply {
   readonly cancelled?: boolean;
   readonly value?: unknown;
   readonly code?: string;
+  readonly addition?: string;
   readonly sqlite_code?: "SQLITE_CORRUPT" | "SQLITE_NOTADB" | null;
 }
 
@@ -1427,13 +1429,15 @@ export class SqliteWorker {
             ? new DOMException("Library query cancelled", "AbortError")
             : reply.code === "catalog-corrupt"
               ? new CatalogCorruptionError(reply.sqlite_code ?? null)
-              : reply.code === LIBRARY_SORT_SCOPE_LIMIT
-                ? new LibrarySortScopeLimitError()
-                : new SqliteWorkerError(
-                    isDocumentCommitFailureCode(reply.code)
-                      ? reply.code
-                      : "sqlite-worker",
-                  ),
+              : reply.code === "catalog-addition-required"
+                ? new CatalogSchemaError(reply.code, undefined, reply.addition)
+                : reply.code === LIBRARY_SORT_SCOPE_LIMIT
+                  ? new LibrarySortScopeLimitError()
+                  : new SqliteWorkerError(
+                      isDocumentCommitFailureCode(reply.code)
+                        ? reply.code
+                        : "sqlite-worker",
+                    ),
         );
     });
     this.worker.on("error", () => {

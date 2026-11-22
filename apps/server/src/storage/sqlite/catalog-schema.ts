@@ -16,8 +16,20 @@ import {
   schemaTargetFile,
   schemaTargetPath,
 } from "./schema-path.js";
-import { SCHEMA_FINGERPRINT, SCHEMA_VERSION } from "./schema.js";
-import { readCatalogIdentity, CatalogLayoutError } from "./catalog-identity.js";
+import {
+  CATALOG_ADDITIONS,
+  LIBRARY_SCALE_ADDITION,
+  SCHEMA_FINGERPRINT,
+  SCHEMA_VERSION,
+} from "./schema.js";
+import {
+  readCatalogIdentity,
+  readCatalogLayout,
+  CatalogLayoutError,
+  type CatalogAdditionStatus,
+} from "./catalog-identity.js";
+import type { CatalogExtraColumn, CatalogObjectType } from "./catalog-ddl.js";
+import { applyCatalogAddition } from "./catalog-additions.js";
 import { throwCatalogCorruption } from "./errors.js";
 export { CatalogSchemaError } from "./schema-path.js";
 
@@ -27,6 +39,12 @@ export interface CatalogSchemaInspection {
   readonly status: "ready" | "not-initialized";
   readonly schema_version: number | null;
   readonly schema_fingerprint: string | null;
+  readonly additions?: readonly CatalogAdditionStatus[];
+  readonly extra_objects?: readonly {
+    readonly type: CatalogObjectType;
+    readonly name: string;
+  }[];
+  readonly extra_columns?: readonly CatalogExtraColumn[];
 }
 export interface CatalogSchemaResult {
   readonly action: "initialized";
@@ -47,7 +65,11 @@ export async function catalogNeedsInitialization(
   } catch (error) {
     throwCatalogCorruption(error);
     if (error instanceof CatalogLayoutError)
-      throw new CatalogSchemaError(error.reason, { cause: error });
+      throw new CatalogSchemaError(
+        error.reason,
+        { cause: error },
+        error.addition,
+      );
     throw new CatalogSchemaError("catalog-layout-not-current", {
       cause: error,
     });
@@ -72,7 +94,7 @@ export async function inspectCatalogSchema(
     };
   const db = new DatabaseSync(path, { readOnly: true });
   try {
-    const result = readCatalogIdentity(db, CURRENT_CATALOG_CONFIG);
+    const result = readCatalogLayout(db, CURRENT_CATALOG_CONFIG);
     if (!result)
       return {
         ...target,
@@ -88,18 +110,43 @@ export async function inspectCatalogSchema(
     return {
       ...target,
       status: "ready",
-      schema_version: Number(result.schema_version),
-      schema_fingerprint: String(result.schema_fingerprint),
+      schema_version: Number(result.identity.schema_version),
+      schema_fingerprint: String(result.identity.schema_fingerprint),
+      additions: result.additions,
+      extra_objects: result.extra_objects,
+      extra_columns: result.extra_columns,
     };
   } catch (error) {
     throwCatalogCorruption(error);
     if (error instanceof CatalogSchemaError) throw error;
     if (error instanceof CatalogLayoutError)
-      throw new CatalogSchemaError(error.reason, { cause: error });
+      throw new CatalogSchemaError(
+        error.reason,
+        { cause: error },
+        error.addition,
+      );
     throw new CatalogSchemaError("catalog-integrity-refused", { cause: error });
   } finally {
     db.close();
   }
+}
+
+export async function applyDeclaredCatalogAddition(
+  path: string,
+  name: string,
+  signal?: AbortSignal,
+) {
+  const addition = CATALOG_ADDITIONS.find(
+    (candidate) => candidate.name === name,
+  );
+  if (!addition) throw new CatalogSchemaError("catalog-addition-unknown");
+  if (addition === LIBRARY_SCALE_ADDITION) {
+    const { migrateLiteratureSearchSchema } = await import(
+      "./literature-search-schema-migration.js"
+    );
+    return migrateLiteratureSearchSchema(path);
+  }
+  return applyCatalogAddition(path, addition, signal);
 }
 
 export async function initializeCatalogSchema(

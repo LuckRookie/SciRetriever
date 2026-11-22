@@ -36,7 +36,7 @@ export function recomputeDocumentDefault(
   const { literature_id, asset_id, asset_sha256 } = request;
   const current = db
     .prepare(
-      "SELECT dd.*,d.schema_version FROM document_defaults dd JOIN document_versions d ON d.document_version_id=dd.document_version_id WHERE d.literature_id=? AND d.source_asset_id=? AND d.source_sha256=?",
+      "SELECT dd.document_id,dd.document_version_id,dd.revision,d.schema_version FROM document_defaults dd JOIN document_versions d ON d.document_version_id=dd.document_version_id WHERE d.literature_id=? AND d.source_asset_id=? AND d.source_sha256=?",
     )
     .get(literature_id, asset_id, asset_sha256);
   if ((current?.revision ?? null) !== request.expected_default_revision)

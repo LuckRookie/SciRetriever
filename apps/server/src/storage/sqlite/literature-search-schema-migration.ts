@@ -9,24 +9,33 @@ import {
   CatalogWriteAdmission,
 } from "../write-admission.js";
 import { verifySchemaObjects } from "./archive-schema-migration.js";
+import {
+  manifestObject,
+  objectKey,
+  registerCatalogAddition,
+} from "./catalog-ddl.js";
 import { readCatalogIdentity } from "./catalog-identity.js";
 import { CURRENT_CATALOG_CONFIG } from "./catalog-layout.js";
+import { libraryPagingReady } from "./library-paging-state.js";
 import { RetrievalStorageEngine } from "./retrieval-engine.js";
 import { schemaTargetFile, schemaTargetPath } from "./schema-path.js";
 import {
   SCHEMA_FINGERPRINT,
   SCHEMA_FINGERPRINT_V19,
   SCHEMA_FINGERPRINT_V19_COUNTS,
+  SCHEMA_FINGERPRINT_V19_COMBINED,
   SCHEMA_FINGERPRINT_V19_INTAKE_LOOKUPS,
   SCHEMA_FINGERPRINT_V19_RETRIEVAL_CHANGES,
   SCHEMA_FINGERPRINT_V19_STORED_STATES,
   SCHEMA_MANIFEST,
   SCHEMA_MANIFEST_V19,
   SCHEMA_MANIFEST_V19_COUNTS,
+  SCHEMA_MANIFEST_V19_COMBINED,
   SCHEMA_MANIFEST_V19_INTAKE_LOOKUPS,
   SCHEMA_MANIFEST_V19_RETRIEVAL_CHANGES,
   SCHEMA_MANIFEST_V19_STORED_STATES,
   SCHEMA_VERSION,
+  LIBRARY_SCALE_ADDITION,
 } from "./schema.js";
 
 function refuse(cause?: unknown): never {
@@ -47,7 +56,18 @@ const previousLayouts = new Map<string, readonly string[]>([
   ],
   [SCHEMA_FINGERPRINT_V19_STORED_STATES, SCHEMA_MANIFEST_V19_STORED_STATES],
   [SCHEMA_FINGERPRINT_V19_COUNTS, SCHEMA_MANIFEST_V19_COUNTS],
+  [SCHEMA_FINGERPRINT_V19_COMBINED, SCHEMA_MANIFEST_V19_COMBINED],
 ]);
+const legacyConfig = {
+  schema_version: SCHEMA_VERSION,
+  execution_schema_version: CURRENT_CATALOG_CONFIG.execution_schema_version,
+  execution_schema_fingerprint:
+    CURRENT_CATALOG_CONFIG.execution_schema_fingerprint,
+  execution_runtime_schema_version:
+    CURRENT_CATALOG_CONFIG.execution_runtime_schema_version,
+  execution_runtime_schema_fingerprint:
+    CURRENT_CATALOG_CONFIG.execution_runtime_schema_fingerprint,
+};
 
 /** Explicit, additive upgrade from earlier layout 19 fingerprints. */
 export async function migrateLiteratureSearchSchema(path: string) {
@@ -70,20 +90,76 @@ export async function migrateLiteratureSearchSchema(path: string) {
         .get()?.schema_fingerprint;
       if (typeof previous !== "string") refuse();
       const manifest = previousLayouts.get(previous);
-      if (!manifest || !manifest.every((sql, i) => SCHEMA_MANIFEST[i] === sql))
-        refuse();
+      if (!manifest) refuse();
       verifySchemaObjects(db, manifest, refuse);
       if (
         !readCatalogIdentity(db, {
-          ...CURRENT_CATALOG_CONFIG,
+          ...legacyConfig,
           schema_manifest: manifest,
           schema_fingerprint: previous,
         })
       )
         refuse();
-      for (const sql of SCHEMA_MANIFEST.slice(manifest.length)) db.exec(sql);
+      const existing = new Map(
+        manifest.map((sql) => {
+          const object = manifestObject(sql);
+          return [objectKey(object), object];
+        }),
+      );
+      const target = new Map(
+        SCHEMA_MANIFEST.map((sql) => {
+          const object = manifestObject(sql);
+          return [objectKey(object), sql];
+        }),
+      );
+      // This release is the documented offline exception. Table and index DDL
+      // is kept verbatim. Only the trigger definitions that gain column lists
+      // change. Preserve SQLite's current firing order on each affected table
+      // by recreating the later triggers in their original creation order.
+      const triggerTables = new Set<string>();
+      const triggers = db
+        .prepare(
+          "SELECT name,tbl_name,sql FROM sqlite_schema WHERE type='trigger' ORDER BY rowid",
+        )
+        .all();
+      const recreate = triggers.flatMap((trigger) => {
+        const sql = target.get(`trigger:${trigger.name}`);
+        if (!sql) refuse();
+        if (sql !== trigger.sql) triggerTables.add(String(trigger.tbl_name));
+        return triggerTables.has(String(trigger.tbl_name))
+          ? [{ name: trigger.name, sql }]
+          : [];
+      });
+      for (const trigger of recreate) db.exec(`DROP TRIGGER ${trigger.name}`);
+      for (const trigger of recreate) db.exec(trigger.sql);
+      for (const sql of SCHEMA_MANIFEST) {
+        const object = manifestObject(sql);
+        const before = existing.get(objectKey(object));
+        if (!before) db.exec(sql);
+        else if (before.sql !== sql && before.type !== "trigger") refuse();
+      }
       if (manifest.length < SCHEMA_MANIFEST_V19_RETRIEVAL_CHANGES.length)
-        db.exec("INSERT INTO retrieval_change_state VALUES(1,NULL)");
+        db.exec(
+          "INSERT INTO retrieval_change_state(singleton,processed_position) VALUES(1,NULL)",
+        );
+      const backfilled =
+        !!db
+          .prepare(
+            "SELECT 1 FROM library_state_progress WHERE singleton=1 AND ready=1 AND collection_ready=1",
+          )
+          .get() &&
+        !!db
+          .prepare(
+            "SELECT 1 FROM library_count_progress WHERE singleton=1 AND ready=1",
+          )
+          .get() &&
+        libraryPagingReady(db);
+      registerCatalogAddition(
+        db,
+        LIBRARY_SCALE_ADDITION,
+        new Date().toISOString(),
+        backfilled,
+      );
       db.prepare(
         "UPDATE schema_identity SET schema_fingerprint=? WHERE singleton=1",
       ).run(SCHEMA_FINGERPRINT);

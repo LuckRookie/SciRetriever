@@ -162,7 +162,9 @@ function vocabularyStore(db: DatabaseSync): VocabularyStore {
       db.prepare("DELETE FROM tag_search WHERE tag_id=?").run(t.tag_id);
       if (t.status === "active") {
         for (const name of tagNames(t))
-          db.prepare("INSERT INTO tag_aliases VALUES(?,?)").run(name, t.tag_id);
+          db.prepare(
+            "INSERT INTO tag_aliases(normalized_name,tag_id) VALUES(?,?)",
+          ).run(name, t.tag_id);
         db.prepare(
           "INSERT INTO tag_search(tag_id,names,definition) VALUES(?,?,?)",
         ).run(
@@ -218,7 +220,7 @@ function vocabularyStore(db: DatabaseSync): VocabularyStore {
       const body = json(next);
       if (Buffer.byteLength(body) > 262144) throw new TagError("tag-limit");
       db.prepare(
-        "INSERT INTO literature_tag_assignments VALUES(?,?,?,?,?) ON CONFLICT(literature_id) DO UPDATE SET revision=excluded.revision,vocab_version=excluded.vocab_version,assignment_sha256=excluded.assignment_sha256,row_json=excluded.row_json",
+        "INSERT INTO literature_tag_assignments(literature_id,revision,vocab_version,assignment_sha256,row_json) VALUES(?,?,?,?,?) ON CONFLICT(literature_id) DO UPDATE SET revision=excluded.revision,vocab_version=excluded.vocab_version,assignment_sha256=excluded.assignment_sha256,row_json=excluded.row_json",
       ).run(
         next.literature_id,
         next.revision,
@@ -230,7 +232,7 @@ function vocabularyStore(db: DatabaseSync): VocabularyStore {
     },
     rememberAssignment(version, before, after) {
       db.prepare(
-        "INSERT INTO vocabulary_change_assignments VALUES(?,?,?,?,?)",
+        "INSERT INTO vocabulary_change_assignments(version,literature_id,before_json,after_sha256,after_revision) VALUES(?,?,?,?,?)",
       ).run(
         version,
         before.literature_id,
@@ -252,15 +254,13 @@ function vocabularyStore(db: DatabaseSync): VocabularyStore {
         };
     },
     record(change, touched) {
-      db.prepare("INSERT INTO vocabulary_changes VALUES(?,?,NULL)").run(
-        change.version,
-        json(change),
-      );
+      db.prepare(
+        "INSERT INTO vocabulary_changes(version,row_json,undone_by) VALUES(?,?,NULL)",
+      ).run(change.version, json(change));
       for (const id of new Set(touched))
-        db.prepare("INSERT INTO vocabulary_change_tags VALUES(?,?)").run(
-          change.version,
-          id,
-        );
+        db.prepare(
+          "INSERT INTO vocabulary_change_tags(version,tag_id) VALUES(?,?)",
+        ).run(change.version, id);
       db.prepare("UPDATE vocabulary_state SET version=? WHERE singleton=1").run(
         change.version,
       );
@@ -299,14 +299,11 @@ function vocabularyStore(db: DatabaseSync): VocabularyStore {
       next.literature_id,
     );
     for (const item of next.items)
-      db.prepare("INSERT INTO literature_tag_items VALUES(?,?,?,?)").run(
-        next.literature_id,
-        item.tag_id,
-        item.rank,
-        item.locked ? 1 : 0,
-      );
+      db.prepare(
+        "INSERT INTO literature_tag_items(literature_id,tag_id,rank,locked) VALUES(?,?,?,?)",
+      ).run(next.literature_id, item.tag_id, item.rank, item.locked ? 1 : 0);
     db.prepare(
-      "INSERT INTO tag_assignment_changes VALUES(?,?,?,?,?,?,?,?)",
+      "INSERT INTO tag_assignment_changes(change_id,literature_id,revision,actor,before_json,after_json,reason,created_at) VALUES(?,?,?,?,?,?,?,?)",
     ).run(
       randomUUID(),
       next.literature_id,
@@ -652,7 +649,7 @@ export function runTagStorage(
       for (const value of r.literature_ids)
         for (const id of ids)
           db.prepare(
-            "INSERT INTO tag_backfill_coverage VALUES(?,?,?) ON CONFLICT(tag_id,literature_id) DO UPDATE SET vocab_version=max(vocab_version,excluded.vocab_version)",
+            "INSERT INTO tag_backfill_coverage(tag_id,literature_id,vocab_version) VALUES(?,?,?) ON CONFLICT(tag_id,literature_id) DO UPDATE SET vocab_version=max(vocab_version,excluded.vocab_version)",
           ).run(id, parseLiteratureId(value), version);
       if (r.complete === true)
         for (const id of ids) {

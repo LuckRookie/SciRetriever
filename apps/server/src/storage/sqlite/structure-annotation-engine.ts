@@ -130,7 +130,7 @@ export function runAnnotationStorage(
   if (action === "get")
     return one(
       db,
-      "SELECT * FROM structure_annotations WHERE annotation_id=?",
+      "SELECT annotation_id,structure_satisfied,document_version_id,method_sha256,manual_revision,manifest_reference,manifest_sha256,manifest_size,manifest_media_type,created_at FROM structure_annotations WHERE annotation_id=?",
       String(args),
     );
   if (action === "state") return tx(db, false, () => state(db, String(args)));
@@ -142,7 +142,7 @@ export function runAnnotationStorage(
     };
     return one(
       db,
-      "SELECT * FROM structure_annotations WHERE document_version_id=? AND method_sha256=? AND manual_revision=?",
+      "SELECT annotation_id,structure_satisfied,document_version_id,method_sha256,manual_revision,manifest_reference,manifest_sha256,manifest_size,manifest_media_type,created_at FROM structure_annotations WHERE document_version_id=? AND method_sha256=? AND manual_revision=?",
       r.document_version_id,
       r.method_sha256,
       r.manual_revision,
@@ -173,7 +173,7 @@ export function runAnnotationStorage(
       fail("annotation-manual-stale");
     const existing = one(
       db,
-      "SELECT * FROM structure_annotations WHERE document_version_id=? AND method_sha256=? AND manual_revision=?",
+      "SELECT annotation_id,structure_satisfied,document_version_id,method_sha256,manual_revision,manifest_reference,manifest_sha256,manifest_size,manifest_media_type,created_at FROM structure_annotations WHERE document_version_id=? AND method_sha256=? AND manual_revision=?",
       id,
       p.method_sha256,
       a.manual_revision,
@@ -236,7 +236,7 @@ export function runAnnotationStorage(
       const m = p.manifest,
         prior = one(
           db,
-          "SELECT * FROM artifact_objects WHERE sha256=? OR relative_path=?",
+          "SELECT artifact_id,sha256,byte_size,media_type,relative_path FROM artifact_objects WHERE sha256=? OR relative_path=?",
           m.sha256,
           m.reference,
         );

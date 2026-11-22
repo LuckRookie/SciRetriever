@@ -69,7 +69,9 @@ export function readObservationRow(db: DatabaseSync, id: string) {
   return parseMetadataObservation({
     ...observation,
     provenance: db
-      .prepare("SELECT * FROM provenances WHERE provenance_id=?")
+      .prepare(
+        "SELECT provenance_id,source_kind,source_name,source_record_id,observed_at,input_sha256,parameters_sha256 FROM provenances WHERE provenance_id=?",
+      )
       .get(provenance_id!),
     metadata: readMetadataRow(db, "observation", id),
     declared_keywords: db
