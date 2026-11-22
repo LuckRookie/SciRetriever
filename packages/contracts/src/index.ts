@@ -319,8 +319,6 @@ export type LibrarySort =
   | "title-asc"
   | "title-desc"
   | "relevance";
-/** @deprecated Use LibrarySort for all library requests. */
-export type LibraryPageSort = LibrarySort;
 export const LIBRARY_SORT_SCOPE_LIMIT = "library-sort-scope-limit";
 
 export interface LibrarySearchRequest<Sort = LibrarySort> {
@@ -527,12 +525,6 @@ export function parseReferenceDetail(value: unknown): ReferenceDetail {
     supports: Object.freeze(supports),
   });
 }
-export function parseLibrarySearchRequest(value: unknown): LibrarySearchRequest;
-/** @deprecated All library sorts are accepted without the second argument. */
-export function parseLibrarySearchRequest(
-  value: unknown,
-  options: { readonly collectedSort: true },
-): LibrarySearchRequest;
 export function parseLibrarySearchRequest(
   value: unknown,
 ): LibrarySearchRequest {

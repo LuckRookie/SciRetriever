@@ -6,7 +6,6 @@ import {
   parseLiteratureSearchItem,
   parseLiteratureDetail,
   type CollectLiteraturesResult,
-  type LibraryPageSort,
   type LibraryQuery,
   type LibrarySort,
   type LiteratureSearchItem,
@@ -16,7 +15,7 @@ import { titleParts, titleText, type TitlePart } from "../../reading/title.js";
 import type { ApiClient } from "./api.js";
 import { archiveWrite } from "./archive.js";
 export const emptyQuery = () => parseLibrarySearchRequest({ query: {} }).query;
-export const SORT_LABELS: Record<LibraryPageSort, string> = {
+export const SORT_LABELS: Record<LibrarySort, string> = {
   "collected-desc": "最近收进来",
   "intake-desc": "最近入库",
   "opened-desc": "最近阅读",
@@ -35,7 +34,7 @@ export const SORT_LABELS: Record<LibraryPageSort, string> = {
  * what processing found in drafts stay out while it does not read drafts:
  * they are 0 for every paper until then.
  */
-export const LIBRARY_MENU_SORTS: readonly LibraryPageSort[] = [
+export const LIBRARY_MENU_SORTS: readonly LibrarySort[] = [
   "collected-desc",
   "intake-desc",
   "opened-desc",
@@ -50,15 +49,12 @@ export const LIBRARY_MENU_SORTS: readonly LibraryPageSort[] = [
 export async function searchLibrary(
   api: ApiClient,
   query: LibraryQuery,
-  sort: LibraryPageSort,
+  sort: LibrarySort,
   cursor: string | null,
   signal?: AbortSignal,
   limit = 50,
 ) {
-  const request = parseLibrarySearchRequest(
-    { query, sort, cursor, limit },
-    { collectedSort: true },
-  );
+  const request = parseLibrarySearchRequest({ query, sort, cursor, limit });
   const value = api.workspace.capabilities.query
     ? await api.query("search", request, signal)
     : await api.request("/api/library/search", request, signal);
@@ -176,7 +172,7 @@ export function paperCitation(item: LiteratureSearchItem): string {
 export async function scopeItems(
   api: ApiClient,
   scope: LibraryQuery,
-  sort: LibraryPageSort,
+  sort: LibrarySort,
   signal?: AbortSignal,
 ) {
   const query = pageQuery(scope);
@@ -202,7 +198,7 @@ export async function scopeItems(
 export async function scopeIds(
   api: ApiClient,
   query: LibraryQuery,
-  sort: LibraryPageSort,
+  sort: LibrarySort,
   signal?: AbortSignal,
 ) {
   return (await scopeItems(api, query, sort, signal)).map(
@@ -270,7 +266,7 @@ export function pageQuery(query: LibraryQuery): LibraryQuery {
  * The default sort of each view, which is also the one sort left beyond
  * 10,000 papers (page specs “超过一万篇”).
  */
-export function viewSort(query: LibraryQuery): LibraryPageSort {
+export function viewSort(query: LibraryQuery): LibrarySort {
   switch (libraryView(query)) {
     case "search":
       return "relevance";
@@ -282,13 +278,6 @@ export function viewSort(query: LibraryQuery): LibraryPageSort {
       return "intake-desc";
   }
 }
-/**
- * Saved filters and PDF scopes take the library sorts without “最近收进来”
- * (contracts `LibrarySort`); they use “最近入库” and their dialogs name it.
- */
-export const storedSort = (sort: LibraryPageSort): LibrarySort =>
-  sort === "collected-desc" ? "intake-desc" : sort;
-
 /** Registers papers as collected (user organization 7); never undone. */
 export async function collectLiteratures(
   api: ApiClient,

@@ -281,9 +281,6 @@ it("shares the collected sort between search and persisted PDF selectors", () =>
   const query = { collection_scope: "collected" };
   const search = parseLibrarySearchRequest({ query, sort });
   expect(search.sort).toBe(sort);
-  expect(
-    parseLibrarySearchRequest({ query, sort }, { collectedSort: true }),
-  ).toEqual(search);
   const selector = { kind: "query", query: search.query, sort, limit: 4 };
   expect(parseAcquirePdfSelector(selector)).toEqual(selector);
   const counts = {

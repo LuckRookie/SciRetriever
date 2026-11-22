@@ -2,7 +2,7 @@ import { useMemo, useSyncExternalStore } from "react";
 import {
   parseLibrarySearchRequest,
   parseLiteratureId,
-  type LibraryPageSort,
+  type LibrarySort,
   type LibraryQuery,
 } from "@sciretriever/contracts";
 import { viewSort } from "./library.js";
@@ -60,7 +60,7 @@ export interface UrlState {
   readerChosen: boolean;
   query: LibraryQuery;
   /** Without one in the address, the view's own (page specs “文献库”). */
-  sort: LibraryPageSort;
+  sort: LibrarySort;
   parameters: URLSearchParams;
   error: string | null;
   warning?: string | null;
@@ -72,10 +72,12 @@ export function parseUrl(search: string): UrlState {
   const reader = parameters.get("reader");
   let error: string | null = null,
     warning: string | null = null;
-  const fallback = parseLibrarySearchRequest(
-    { query: {}, sort: "collected-desc", limit: 50, cursor: null },
-    { collectedSort: true },
-  );
+  const fallback = parseLibrarySearchRequest({
+    query: {},
+    sort: "collected-desc",
+    limit: 50,
+    cursor: null,
+  });
   let query = fallback.query,
     sort = fallback.sort,
     literature: string | null = null;
@@ -88,19 +90,17 @@ export function parseUrl(search: string): UrlState {
           warning = "旧的文献类型筛选已忽略，请使用出版形式和文章性质。";
         }
       }
-    const parsed = parseLibrarySearchRequest(
-      { query: raw, limit: 50, cursor: null },
-      { collectedSort: true },
-    ).query;
-    const request = parseLibrarySearchRequest(
-      {
-        query: parsed,
-        sort: parameters.get("sort") ?? viewSort(parsed),
-        limit: 50,
-        cursor: null,
-      },
-      { collectedSort: true },
-    );
+    const parsed = parseLibrarySearchRequest({
+      query: raw,
+      limit: 50,
+      cursor: null,
+    }).query;
+    const request = parseLibrarySearchRequest({
+      query: parsed,
+      sort: parameters.get("sort") ?? viewSort(parsed),
+      limit: 50,
+      cursor: null,
+    });
     query = request.query;
     sort = request.sort;
     if (parameters.has("literature"))

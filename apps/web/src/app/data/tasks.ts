@@ -1,6 +1,8 @@
 import {
   parseAcquisitionTaskTrace,
+  parseTaskCitationSourceCooldowns,
   parseTaskSourceResults,
+  type CitationSourceCooldown,
   type AcquisitionTaskTrace,
   type TaskSourceResults,
 } from "@sciretriever/contracts";
@@ -239,64 +241,6 @@ function metadataTitle(operation: Json): string | null {
   return null;
 }
 
-/**
- * One source of a citation expansion that was rate limited (technical 02
- * “来源冷却”): its state now, and the work it still owes this task.
- */
-export interface CitationSourceCooldown {
-  readonly source: string;
-  readonly status: "cooling" | "disabled" | "recovered" | "retry-ended";
-  /** Retries already made; the next one is number `retries + 1`. */
-  readonly retries: number;
-  readonly next_retry_at: string | null;
-  readonly reason: { readonly code: string; readonly reason: string } | null;
-  readonly pending_count: number;
-  readonly pending_sample: readonly {
-    readonly literature_id: string;
-    readonly purpose: "reference-query" | "lookup";
-  }[];
-  readonly pending_truncated: boolean;
-}
-const COOLDOWN_STATES = [
-  "cooling",
-  "disabled",
-  "recovered",
-  "retry-ended",
-] as const;
-function parseCitationCooldown(value: unknown): CitationSourceCooldown {
-  const r = record(value, "citation source");
-  const count = (key: string) => {
-    const n = r[key];
-    if (typeof n !== "number" || !Number.isSafeInteger(n) || n < 0)
-      throw new Error(`invalid ${key}`);
-    return n;
-  };
-  const status = COOLDOWN_STATES.find((s) => s === r.status);
-  if (typeof r.source !== "string" || !status)
-    throw new Error("invalid citation source");
-  const reason = r.reason == null ? null : record(r.reason, "source reason");
-  return {
-    source: r.source,
-    status,
-    retries: count("retries"),
-    next_retry_at: typeof r.next_retry_at === "string" ? r.next_retry_at : null,
-    reason: reason
-      ? { code: String(reason.code ?? ""), reason: String(reason.reason ?? "") }
-      : null,
-    pending_count: count("pending_count"),
-    pending_sample: listField(r, "pending_sample").map((item) => {
-      const sample = record(item, "pending item");
-      if (
-        typeof sample.literature_id !== "string" ||
-        (sample.purpose !== "reference-query" && sample.purpose !== "lookup")
-      )
-        throw new Error("invalid pending item");
-      return { literature_id: sample.literature_id, purpose: sample.purpose };
-    }),
-    pending_truncated: r.pending_truncated === true,
-  };
-}
-
 export interface TaskDetail {
   readonly acquisition_traces?: readonly AcquisitionTaskTrace[];
   readonly acquisition_traces_truncated?: boolean;
@@ -357,14 +301,14 @@ export function parseTaskDetail(value: unknown): TaskDetail {
     budget: task.budget == null ? null : record(task.budget, "task budget"),
     runtime_failure:
       typeof task.runtime_failure === "string" ? task.runtime_failure : null,
-    citation_source_cooldowns:
-      task.citation_source_cooldowns == null
-        ? []
-        : listField(task, "citation_source_cooldowns").map(
-            parseCitationCooldown,
-          ),
-    citation_source_cooldowns_truncated:
-      task.citation_source_cooldowns_truncated === true,
+    ...(() => {
+      const cooldowns = parseTaskCitationSourceCooldowns(task);
+      return {
+        citation_source_cooldowns: cooldowns.citation_source_cooldowns ?? [],
+        citation_source_cooldowns_truncated:
+          cooldowns.citation_source_cooldowns_truncated === true,
+      };
+    })(),
   };
 }
 

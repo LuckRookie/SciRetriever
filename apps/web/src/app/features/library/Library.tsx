@@ -25,7 +25,7 @@ import {
   PUBLICATION_FORM_LABELS,
   parseLibrarySearchRequest,
   type LibraryCounts,
-  type LibraryPageSort,
+  type LibrarySort,
   type LibraryQuery,
   type TextLevel,
   type LiteratureSearchItem,
@@ -68,7 +68,6 @@ import {
   libraryView,
   overCountLimit,
   pageQuery,
-  storedSort,
   viewSort,
   literatureChoice,
   metadataTitleParts,
@@ -168,7 +167,7 @@ export const TEXT_LEVEL_LABELS = {
  * The draft mark on a row; sorted by a draft fact, followed by its count
  * (page specs “文献库”): “未校对 · 差异 12 段”, “未校对 · 扫描 3 页”.
  */
-function draftNote(item: LiteratureSearchItem, sort: LibraryPageSort) {
+function draftNote(item: LiteratureSearchItem, sort: LibrarySort) {
   const facts = item.draft_facts;
   if (facts && sort === "draft-differences-desc")
     return `未校对 · 差异 ${facts.differs_segments} 段`;
@@ -512,7 +511,7 @@ export default function Library() {
    * A new query keeps the chosen sort; a view's own sort follows the view,
    * and relevance goes with the search words.
    */
-  const updateQuery = (query: LibraryQuery, sort?: LibraryPageSort) => {
+  const updateQuery = (query: LibraryQuery, sort?: LibrarySort) => {
     const chosen =
       sort ??
       (route.sort === viewSort(route.query) ||
@@ -892,7 +891,7 @@ export default function Library() {
               setAcquire({
                 kind: "query",
                 query: effective,
-                sort: storedSort(route.sort),
+                sort: route.sort,
                 label: scopeLabel(),
               });
             },
@@ -1002,7 +1001,7 @@ export default function Library() {
                 onAction: () => {
                   void updateFilter(api, activeView, {
                     query: route.query,
-                    sort: storedSort(route.sort),
+                    sort: route.sort,
                   })
                     .then(refreshFilters)
                     .catch((error: unknown) =>
@@ -1082,10 +1081,7 @@ export default function Library() {
         onChange={(sort) =>
           updateQuery(
             route.query,
-            parseLibrarySearchRequest(
-              { query: route.query, sort },
-              { collectedSort: true },
-            ).sort,
+            parseLibrarySearchRequest({ query: route.query, sort }).sort,
           )
         }
         options={LIBRARY_MENU_SORTS.filter(
@@ -1613,7 +1609,7 @@ export default function Library() {
                           ? {
                               kind: "query",
                               query: effective,
-                              sort: storedSort(route.sort),
+                              sort: route.sort,
                               label: scopeLabel(),
                             }
                           : {
@@ -1750,7 +1746,7 @@ export default function Library() {
               void createFilter(api, {
                 name: viewName.trim(),
                 query: route.query,
-                sort: storedSort(route.sort),
+                sort: route.sort,
               })
                 .then((saved) => {
                   setActiveView(saved.filter_id);
@@ -2018,7 +2014,7 @@ const KEEPS_KEYS =
  * by it with the service's own orders; the other columns have none.
  */
 const TABLE_SORTS: Readonly<
-  Record<"title" | "year", { first: LibraryPageSort; second: LibraryPageSort }>
+  Record<"title" | "year", { first: LibrarySort; second: LibrarySort }>
 > = {
   title: { first: "title-asc", second: "title-desc" },
   year: { first: "publication-year-desc", second: "publication-year-asc" },
@@ -2029,8 +2025,8 @@ function TableHead({
   sortDisabled,
   selectAll,
 }: {
-  sort: LibraryPageSort;
-  onSort: (sort: LibraryPageSort) => void;
+  sort: LibrarySort;
+  onSort: (sort: LibrarySort) => void;
   /** Why the heads do not sort, beyond 10,000 papers. */
   sortDisabled: string | undefined;
   selectAll: ReactNode;
@@ -2125,8 +2121,8 @@ const LibraryList = memo(function LibraryList({
   display: LibraryDisplay;
   items: readonly LiteratureSearchItem[];
   total: number;
-  sort: LibraryPageSort;
-  onSort: (sort: LibraryPageSort) => void;
+  sort: LibrarySort;
+  onSort: (sort: LibrarySort) => void;
   sortDisabled: string | undefined;
   selectAll: ReactNode;
   empty: ReactNode;
@@ -2453,7 +2449,7 @@ const LibraryRow = memo(function LibraryRow({
   row: VirtualItem;
   offset: number;
   item: LiteratureSearchItem;
-  sort: LibraryPageSort;
+  sort: LibrarySort;
   /** Collected on this page: “已收进来” in place of the button. */
   collectedNow: boolean;
   onCollect: ((ids: readonly string[]) => Promise<unknown>) | undefined;

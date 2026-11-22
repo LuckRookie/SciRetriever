@@ -927,6 +927,8 @@ export const designSamplePages: readonly DesignSamplePage[] = [
         retries: number,
         extra: object = {},
       ) => ({
+        target_id: "sample-citation-target",
+        run_id: "sample-citation-run",
         source: name,
         status,
         retries,
@@ -946,11 +948,21 @@ export const designSamplePages: readonly DesignSamplePage[] = [
             source("openalex", "cooling", 1, {
               next_retry_at: soon,
               pending_count: 37,
-              pending_sample: [
-                { literature_id: ids.literature, purpose: "reference-query" },
-                { literature_id: ids.draft, purpose: "lookup" },
-                { literature_id: ids.metadataOnly, purpose: "reference-query" },
-              ],
+              // The service keeps a sample of 20.
+              pending_sample: Array.from({ length: 20 }, (_, n) => {
+                const literature_id = [
+                  ids.literature,
+                  ids.draft,
+                  ids.metadataOnly,
+                ][n % 3]!;
+                return n % 3 === 1
+                  ? {
+                      literature_id,
+                      purpose: "lookup",
+                      relation_id: `sample-${n}`,
+                    }
+                  : { literature_id, purpose: "reference-query" };
+              }),
               pending_truncated: true,
             }),
             source("semantic-scholar", "cooling", 0, {

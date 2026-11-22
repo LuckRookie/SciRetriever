@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import type { Page, Route } from "playwright";
 import { parseFolderNode, parseLiterature } from "@sciretriever/contracts";
-import { nextWorkspace } from "./next-workspace-fixture.js";
+import { nextWorkspace, openSavedViews } from "./next-workspace-fixture.js";
 import { missingId } from "./processor-workspace-fixture.js";
 import { FIXTURE_LITERATURE } from "../../server/src/workbench/synthetic-fixture.js";
 
@@ -515,19 +515,29 @@ it("lists a citation expansion's rate-limited sources under the summary, with th
         };
         value.task.citation_source_cooldowns = [
           {
+            target_id: "cooldown-target",
+            run_id: "cooldown-run",
             source: "openalex",
             status: "cooling",
             retries: 1,
             next_retry_at: soon,
             reason: reason("metadata-provider-rate-limited"),
             pending_count: 37,
-            pending_sample: [
-              { literature_id: missingId, purpose: "reference-query" },
-              { literature_id: DISCOVERED[0][0], purpose: "lookup" },
-            ],
+            // The service keeps a sample of 20 (technical 02 “来源冷却”).
+            pending_sample: Array.from({ length: 20 }, (_, n) =>
+              n % 2
+                ? {
+                    literature_id: n === 1 ? DISCOVERED[0][0] : missingId,
+                    purpose: "lookup",
+                    relation_id: `relation-${n}`,
+                  }
+                : { literature_id: missingId, purpose: "reference-query" },
+            ),
             pending_truncated: true,
           },
           {
+            target_id: "cooldown-target",
+            run_id: "cooldown-run",
             source: "semantic-scholar",
             status: "cooling",
             retries: 0,
@@ -538,6 +548,8 @@ it("lists a citation expansion's rate-limited sources under the summary, with th
             pending_truncated: false,
           },
           {
+            target_id: "cooldown-target",
+            run_id: "cooldown-run",
             source: "core",
             status: "disabled",
             retries: 6,
@@ -548,6 +560,8 @@ it("lists a citation expansion's rate-limited sources under the summary, with th
             pending_truncated: false,
           },
           {
+            target_id: "cooldown-target",
+            run_id: "cooldown-run",
             source: "crossref",
             status: "recovered",
             retries: 0,
@@ -558,6 +572,8 @@ it("lists a citation expansion's rate-limited sources under the summary, with th
             pending_truncated: false,
           },
           {
+            target_id: "cooldown-target",
+            run_id: "cooldown-run",
             source: "opencitations",
             status: "retry-ended",
             retries: 1,
@@ -597,13 +613,70 @@ it("lists a citation expansion's rate-limited sources under the summary, with th
     const sample = sources.locator(".citation-source-sample");
     await expect
       .poll(() => sample.locator(".citation-source-title").allTextContents())
-      .toEqual(["Unparsed source", DISCOVERED[0][1]]);
+      .toEqual(
+        Array.from({ length: 20 }, (_, n) =>
+          n === 1 ? DISCOVERED[0][1] : "Unparsed source",
+        ),
+      );
     expect(
-      await sample.locator(".citation-source-purpose").allTextContents(),
+      (
+        await sample.locator(".citation-source-purpose").allTextContents()
+      ).slice(0, 2),
     ).toEqual(["查参考文献", "查书目"]);
     expect(await sample.locator(".citation-source-more").textContent()).toBe(
-      "只列出前 2 项",
+      "只列出前 20 项",
     );
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);
+
+it("saves a filter in the order “最近收进来” and reads it back unchanged", async () => {
+  const w = await nextWorkspace({ setup: withDiscovered });
+  try {
+    const page = w.page;
+    const list = async () =>
+      (
+        (await w.env.app.filters.query({ operation: "list", request: {} })) as {
+          items: { name: string; query: unknown; sort: string }[];
+        }
+      ).items;
+    // The collected papers' own order, with a condition.
+    await page.goto(
+      new URL(
+        `/?view=lib&sort=collected-desc&query=${encode({ publication_year_from: 2000 })}`,
+        page.url(),
+      ).href,
+    );
+    await page.locator(".paper-row").first().waitFor();
+    await (await openSavedViews(page))
+      .getByRole("menuitem", { name: "保存当前筛选…", exact: true })
+      .click();
+    const dialog = page.getByRole("dialog", { name: "保存筛选" });
+    await dialog
+      .getByRole("textbox", { name: "筛选名称" })
+      .fill("最近收进来的");
+    await dialog.getByRole("button", { name: "保存", exact: true }).click();
+    await dialog.waitFor({ state: "detached" });
+    // Stored as it was asked, not as another order.
+    expect(
+      (await list()).find((filter) => filter.name === "最近收进来的")?.sort,
+    ).toBe("collected-desc");
+    // Applied from another order, it brings its own back.
+    await page.goto(new URL("/?view=lib&sort=title-asc", page.url()).href);
+    await page.locator(".paper-row").first().waitFor();
+    await (await openSavedViews(page))
+      .getByRole("menuitem", { name: "最近收进来的", exact: true })
+      .click();
+    await expect.poll(() => sort(page)).toBe("collected-desc");
+    expect(query(page).publication_year_from).toBe(2000);
+    expect(
+      await page
+        .getByRole("button", { name: /排序/u })
+        .and(page.locator('[aria-haspopup="listbox"]'))
+        .textContent(),
+    ).toBe("排序：最近收进来");
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();

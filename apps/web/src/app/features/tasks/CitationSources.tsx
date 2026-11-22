@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { sourceProblemForCode } from "@sciretriever/contracts";
+import {
+  sourceProblemForCode,
+  type CitationSourceCooldown,
+} from "@sciretriever/contracts";
 import { Button, RichTitle } from "../../components/index.js";
 import { sourceName } from "../../data/acquisition-wording.js";
 import { paperTitleParts, readLiterature } from "../../data/library.js";
 import { useApi } from "../../data/query.js";
-import type { CitationSourceCooldown } from "../../data/tasks.js";
 import { problemText } from "../sources/problem.js";
 
 const count = new Intl.NumberFormat("zh-CN");
@@ -71,7 +73,7 @@ export function CitationSources({
       <ul>
         {sources.map((source) => (
           <SourceRow
-            key={source.source}
+            key={`${source.target_id}:${source.run_id}:${source.source}`}
             source={source}
             text={stateText(source, now)}
           />
@@ -110,9 +112,9 @@ function SourceRow({
       </span>
       {open ? (
         <ul className="citation-source-sample">
-          {source.pending_sample.map((item) => (
+          {source.pending_sample.map((item, index) => (
             <PendingItem
-              key={`${item.literature_id}:${item.purpose}`}
+              key={index}
               id={item.literature_id}
               purpose={PURPOSES[item.purpose]}
             />
