@@ -4,12 +4,14 @@ import type {
   ArtifactRef,
 } from "@sciretriever/contracts";
 import {
+  openFileForRanges,
   openVerifiedFile,
   storedFileFingerprint,
   type FileFingerprint,
   type VerifiedFileScope,
   type ArtifactReadOptions,
   type ScopedFileReader,
+  type FileRangeChunks,
 } from "./reader.js";
 import {
   PreparedFilePublication,
@@ -34,14 +36,18 @@ export class FileStoreError extends Error {
   }
 }
 
+interface ReadScope {
+  close(): Promise<void>;
+}
+
 export class FileStore {
   readonly root: string;
   private closed = false;
   private readonly stages = new Set<StagingFile>();
   private readonly readerStop = new AbortController();
-  private readonly opening = new Set<Promise<VerifiedFileScope>>();
+  private readonly opening = new Set<Promise<ReadScope>>();
   private readonly fingerprinting = new Set<Promise<FileFingerprint>>();
-  private readonly readers = new Set<VerifiedFileScope>();
+  private readonly readers = new Set<ReadScope>();
   private readonly preparing = new Set<Promise<PreparedFilePublication>>();
   private readonly prepared = new Set<PreparedFilePublication>();
   private readonly preparedStages = new Map<
@@ -201,21 +207,52 @@ export class FileStore {
       this.readers.delete(scope);
     }
   }
-  async openVerifiedScope(
+  async withFileRanges<T>(
+    reference: string,
+    expected: ArtifactRef,
+    consume: (chunks: FileRangeChunks) => Promise<T>,
+    options: ArtifactReadOptions = {},
+  ): Promise<T> {
+    const scope = await this.openReadScope(
+      (signal) =>
+        openFileForRanges(this.root, reference, expected, {
+          ...options,
+          signal,
+        }),
+      options.signal,
+    );
+    try {
+      return await scope.use(consume);
+    } finally {
+      this.readers.delete(scope);
+    }
+  }
+  openVerifiedScope(
     reference: string,
     expected: ArtifactRef,
     options: ArtifactReadOptions = {},
   ): Promise<VerifiedFileScope> {
+    return this.openReadScope(
+      (signal) =>
+        openVerifiedFile(this.root, reference, expected, {
+          ...options,
+          signal,
+        }),
+      options.signal,
+    );
+  }
+  private async openReadScope<T extends ReadScope>(
+    open: (signal: AbortSignal) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
     if (this.closed) throw new FileStoreError();
-    const signal = options.signal
-      ? AbortSignal.any([options.signal, this.readerStop.signal])
-      : this.readerStop.signal;
-    const pending = openVerifiedFile(this.root, reference, expected, {
-      ...options,
-      signal,
-    });
+    const pending = open(
+      signal
+        ? AbortSignal.any([signal, this.readerStop.signal])
+        : this.readerStop.signal,
+    );
     this.opening.add(pending);
-    let scope: VerifiedFileScope;
+    let scope: T;
     try {
       scope = await pending;
     } finally {
@@ -225,7 +262,7 @@ export class FileStore {
       await scope.close();
       throw new FileStoreError();
     }
-    const managed: VerifiedFileScope = {
+    const managed = {
       ...scope,
       close: async () => {
         try {

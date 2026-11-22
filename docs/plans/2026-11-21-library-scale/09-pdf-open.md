@@ -2,7 +2,7 @@
 
 类型：计划（结果块）
 负责：阅读页打开 PDF 时第一页尽快出来
-状态：Ready（设计已定，等 G-dispatch）
+状态：9.1 Done（待部署）；9.2–9.4 待前端
 
 ## 现状
 
@@ -29,10 +29,15 @@
 
 做法见 [ADR 0065](../../architecture/decisions/0065-scale-rules.md) 第 6 节第 6 条。按 02.1 的分段测量决定先做哪一项。
 
-- [ ] **9.1 分段读取（后端）**：PDF 字节接口支持 HTTP Range，并按内容地址给出可长期缓存的响应头。
+- [x] **9.1 分段读取（后端）**：PDF 字节接口支持 HTTP Range，并按内容地址给出可长期缓存的响应头。
 - [ ] **9.2 边下载边显示（前端）**：pdf.js 按段请求，第一页先显示；完整 SHA-256 在后台计算。
 - [ ] **9.3 校验失败**：校验不通过时页面换成“文件与记录不一致”，停止显示，缓存作废；写进阅读体验的传输一节。
 - [ ] **9.4 测试**：大、小 PDF 的第一页耗时；再次打开的耗时；校验失败的页面；阅读体验验收表“不重复下载”一行继续成立。
+
+## 进度
+
+- 2026-11-22：9.1 完成（后端实施者，一轮）。新增 `GET /api/v1/query/material-bytes/:literature_id/:asset_id/:asset_sha256`，写进[产品接口](../../architecture/technical/01-product-interface.md)的查询路由表；POST 不变。总设计师复跑 material-bytes-range 8、extraction-delivery 18、artifact-reclamation 17、artifact-recovery 12、device-connections 13、workbench-http 2，`pnpm build` 通过。document-read 的“外部 DDL 后重新核对”用例偶发 `database is locked`，在 9.1 之前的提交上 8 次也失败 1 次，不是 9.1 引入的，记为 14.2 的后续项。报告 `sandbox/reports/2026-11-22-pdf-range/REPORT.md`。
+- 02.1 的分段测量仍等 Owner 的 Chrome 与 4174 登录；9.2 先按 ADR 的做法实施，测量后再看是否调整。
 
 ## 退出条件
 

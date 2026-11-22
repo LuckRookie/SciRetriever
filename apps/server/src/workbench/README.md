@@ -20,6 +20,8 @@
 
 正式工作台绑定启动配置选中的同一组 catalog 与资产根目录。所有业务调用复用 Application、Entry 或只读 QueryApplication，不在 HTTP 内另建业务库或任务事实。
 
+`GET /api/v1/query/material-bytes/:literature_id/:asset_id/:asset_sha256` 读取固定 PDF。正式工作台使用登录会话、`client_id` 和同源准入，设备用途沿用 POST 的准入。单段返回 206，多段使用整份 200。成功响应以 SHA-256 为 ETag 支持浏览器私有长期缓存，整份流在全文校验结束后交付最后一块。HTTP 选择与头部见 [material-bytes.ts](material-bytes.ts)。
+
 `POST /api/v1/query/folders-export` 接受协议版本 1 和空 request，在单个只读快照中流式输出 `sciretriever-folders` JSON 附件，成员嵌在各自文件夹下；按 HTTP 背压逐批读取书目，连接中断后释放快照。`POST /api/v1/query/filters` 的 `export` 一次返回 `sciretriever-filters`。两者走现有 Web 登录、client/Origin/CSRF 校验；设备通过 HTTP MCP 的对应查询工具读取。
 
 | 路径                                            | 当前用途                                                                                                                                                                                                                                                                                                                                                |

@@ -29,6 +29,7 @@ import {
   type EvidenceRef,
 } from "@sciretriever/contracts";
 import type { SqliteWorker } from "../storage/sqlite/worker.js";
+import type { FileRangeChunks } from "../storage/files/reader.js";
 import { SqliteDocumentStorage } from "./storage.js";
 import {
   isProofreadDocumentStructure,
@@ -1165,6 +1166,26 @@ export class DocumentReadService {
       }
     });
   }
+  private async locateMaterial(value: unknown, signal?: AbortSignal) {
+    let selected;
+    try {
+      selected = parseDocumentMaterialBytesRequest(value);
+    } catch (error) {
+      if (error instanceof ContractValidationError) return invalid();
+      throw error;
+    }
+    check(signal);
+    const located = await this.database.documentMaterial(
+      selected.literature_id,
+      selected.asset_id,
+    );
+    if (!located) throw new DocumentReadError("material-missing");
+    if (located.material.asset_sha256 !== selected.asset_sha256)
+      throw new DocumentReadError("material-stale");
+    if (located.material.byte_size > MAX_MATERIAL_BYTES)
+      throw new DocumentReadError("document-unsupported");
+    return located;
+  }
   withMaterialBytes<T>(
     value: unknown,
     consume: (
@@ -1174,23 +1195,7 @@ export class DocumentReadService {
     signal?: AbortSignal,
   ): Promise<T> {
     return this.run(async () => {
-      let selected;
-      try {
-        selected = parseDocumentMaterialBytesRequest(value);
-      } catch (error) {
-        if (error instanceof ContractValidationError) return invalid();
-        throw error;
-      }
-      check(signal);
-      const located = await this.database.documentMaterial(
-        selected.literature_id,
-        selected.asset_id,
-      );
-      if (!located) throw new DocumentReadError("material-missing");
-      if (located.material.asset_sha256 !== selected.asset_sha256)
-        throw new DocumentReadError("material-stale");
-      if (located.material.byte_size > MAX_MATERIAL_BYTES)
-        throw new DocumentReadError("document-unsupported");
+      const located = await this.locateMaterial(value, signal);
       let consumerError: unknown;
       try {
         const result = await this.storage.withVerifiedArtifact(
@@ -1221,6 +1226,50 @@ export class DocumentReadService {
           throw new DocumentReadError("document-cancelled", { cause: error });
         if (error === consumerError) throw error;
         throw new DocumentReadError("document-integrity", { cause: error });
+      }
+    });
+  }
+  /** The file stays open until the selected range or metadata response is checked. */
+  withMaterialFile<T>(
+    value: unknown,
+    consume: (
+      material: DocumentMaterialRef,
+      chunks: FileRangeChunks,
+    ) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    return this.run(async () => {
+      const { material, path } = await this.locateMaterial(value, signal);
+      try {
+        const result = await this.storage.withArtifactRanges(
+          path,
+          material.artifact,
+          (read) => {
+            check(signal);
+            return consume(material, (offset, length) => {
+              const chunks = read(offset, length);
+              if (offset !== 0 || length !== material.byte_size) return chunks;
+              return (async function* () {
+                const digest = createHash("sha256");
+                for await (const chunk of chunks) {
+                  digest.update(chunk);
+                  yield chunk;
+                }
+                if (digest.digest("hex") !== material.asset_sha256)
+                  throw new DocumentReadError("document-integrity");
+              })();
+            });
+          },
+          signal,
+        );
+        check(signal);
+        return result;
+      } catch (error) {
+        if (error instanceof DocumentReadError) throw error;
+        throw new DocumentReadError(
+          signal?.aborted ? "document-cancelled" : "document-integrity",
+          { cause: error },
+        );
       }
     });
   }

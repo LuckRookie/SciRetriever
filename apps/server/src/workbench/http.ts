@@ -121,6 +121,11 @@ import {
 import { ProductionWorkbenchSession } from "./production-session.js";
 import { WorkbenchSession, WorkbenchSessionError } from "./session.js";
 import { staticAssetCacheControl } from "./assets.js";
+import {
+  materialBytesPath,
+  pdfMaterialHeaders,
+  sendMaterialBytes,
+} from "./material-bytes.js";
 
 export interface WorkbenchStaticAsset {
   readonly contentType: string;
@@ -3076,6 +3081,49 @@ function createQueryHttpHandler(
       response.end(staticAsset.body);
       return;
     }
+    const application = options.application;
+    const material =
+      request.method === "GET" ? materialBytesPath(url.pathname) : null;
+    if (material) {
+      if (
+        [...url.searchParams.keys()].some((key) => key !== "client_id") ||
+        url.searchParams.getAll("client_id").length > 1
+      )
+        invalidInput();
+      if (
+        !application.query ||
+        !application.documentRead ||
+        application.readiness.status !== "ready"
+      ) {
+        json(response, 503, {
+          protocol_version: 1,
+          code:
+            application.readiness.status === "not-initialized"
+              ? "query-not-initialized"
+              : "query-unavailable",
+        });
+        return;
+      }
+      const stop = new AbortController();
+      const abort = () => stop.abort();
+      response.once("close", abort);
+      streams.add(response);
+      verifiedBinaryStreams.add(response);
+      try {
+        await sendMaterialBytes(
+          request,
+          response,
+          application.documentRead,
+          material,
+          AbortSignal.any([stop.signal, stopUploads.signal]),
+        );
+      } finally {
+        verifiedBinaryStreams.delete(response);
+        streams.delete(response);
+        response.off("close", abort);
+      }
+      return;
+    }
     if (request.method !== "POST") {
       if (request.method === "GET" && !url.pathname.startsWith("/api/")) {
         json(response, 404, { protocol_version: 1, code: "not-found" });
@@ -3084,7 +3132,6 @@ function createQueryHttpHandler(
       json(response, 405, { protocol_version: 1, code: "method-not-allowed" });
       return;
     }
-    const application = options.application;
     if (url.pathname === "/api/v1/query/processors") {
       const stop = new AbortController();
       const abort = () => stop.abort();
@@ -3454,14 +3501,7 @@ function createQueryHttpHandler(
           await application.documentRead.withMaterialBytes(
             command.request,
             async (material, chunks) => {
-              response.writeHead(200, {
-                "Content-Type": "application/pdf",
-                "Content-Disposition": `attachment; filename="${material.asset_id}.pdf"`,
-                "X-Sciretriever-Protocol-Version": "1",
-                "X-Sciretriever-Asset-Id": material.asset_id,
-                "X-Sciretriever-Asset-Sha256": material.asset_sha256,
-                "X-Sciretriever-Byte-Size": String(material.byte_size),
-              });
+              response.writeHead(200, pdfMaterialHeaders(material));
               for await (const chunk of chunks) {
                 if (stop.signal.aborted)
                   throw new DocumentReadError("document-cancelled");

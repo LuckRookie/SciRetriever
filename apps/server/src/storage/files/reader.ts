@@ -56,6 +56,11 @@ export interface ScopedFileReader {
   withDescriptor<T>(consume: (descriptor: number) => Promise<T>): Promise<T>;
   assertUnchanged(): Promise<void>;
 }
+export type FileRangeChunks = (
+  offset: number,
+  length: number,
+) => AsyncIterable<Uint8Array>;
+
 async function openFile(root: string, reference: string): Promise<OpenFile> {
   const handles: FileHandle[] = [];
   let openingFinalName = false;
@@ -116,13 +121,7 @@ async function scan(
 ): Promise<BigIntStats> {
   try {
     checkSignal(signal);
-    const initial = await file.stat({ bigint: true });
-    if (
-      !initial.isFile() ||
-      initial.nlink !== 1n ||
-      initial.size !== BigInt(expected.byte_size)
-    )
-      fail();
+    const initial = await sizedFileStat(file, expected.byte_size);
     const digest = createHash("sha256");
     let total = 0;
     const buffer = Buffer.allocUnsafe(CHUNK);
@@ -146,6 +145,11 @@ async function scan(
   } catch {
     return fail();
   }
+}
+async function sizedFileStat(file: FileHandle, size: number) {
+  const stat = await file.stat({ bigint: true });
+  if (!stat.isFile() || stat.nlink !== 1n || stat.size !== BigInt(size)) fail();
+  return stat;
 }
 async function verifyName(
   root: string,
@@ -197,12 +201,42 @@ export interface VerifiedFileScope {
   useFile<T>(consume: (file: ScopedFileReader) => Promise<T>): Promise<T>;
   close(): Promise<void>;
 }
-export async function openVerifiedFile(
+export interface FileRangeScope {
+  use<T>(consume: (chunks: FileRangeChunks) => Promise<T>): Promise<T>;
+  close(): Promise<void>;
+}
+
+export function openVerifiedFile(
   root: string,
   reference: string,
   value: ArtifactRef,
   options: ArtifactReadOptions = {},
 ): Promise<VerifiedFileScope> {
+  return openArtifactScope(root, reference, value, options, true);
+}
+
+/** Check the fixed size and file identity. The caller owns digest validation. */
+export async function openFileForRanges(
+  root: string,
+  reference: string,
+  value: ArtifactRef,
+  options: ArtifactReadOptions = {},
+): Promise<FileRangeScope> {
+  const scope = await openArtifactScope(root, reference, value, options, false);
+  return { use: scope.useRanges, close: scope.close };
+}
+
+async function openArtifactScope(
+  root: string,
+  reference: string,
+  value: ArtifactRef,
+  options: ArtifactReadOptions,
+  verifyContents: boolean,
+): Promise<
+  VerifiedFileScope & {
+    useRanges<T>(consume: (chunks: FileRangeChunks) => Promise<T>): Promise<T>;
+  }
+> {
   const expected = parseArtifactRef(value);
   const maxBytes = options.maxBytes ?? Number.MAX_SAFE_INTEGER;
   if (
@@ -222,7 +256,9 @@ export async function openVerifiedFile(
     await opened.close();
   };
   try {
-    const identity = await scan(opened.file, expected, options.signal);
+    const identity = verifyContents
+      ? await scan(opened.file, expected, options.signal)
+      : await sizedFileStat(opened.file, expected.byte_size);
     await verifyName(root, reference, identity);
     const assertUnchanged = async () => {
       checkSignal(options.signal);
@@ -230,45 +266,54 @@ export async function openVerifiedFile(
         fail();
       await verifyName(root, reference, identity);
     };
-    const stream: AsyncIterable<Uint8Array> = {
-      async *[Symbol.asyncIterator]() {
-        if (!active || iteratorStarted) fail();
-        iteratorStarted = true;
-        let offset = 0;
-        while (offset < expected.byte_size) {
-          checkSignal(options.signal);
-          if (!active) fail();
-          try {
-            if (!same(identity, await opened.file.stat({ bigint: true })))
-              fail();
-            const buffer = Buffer.allocUnsafe(
-              Math.min(CHUNK, expected.byte_size - offset),
-            );
-            const { bytesRead } = await opened.file.read(
-              buffer,
-              0,
-              buffer.length,
-              offset,
-            );
-            if (
-              !bytesRead ||
-              !same(identity, await opened.file.stat({ bigint: true }))
-            )
-              fail();
-            offset += bytesRead;
-            yield new Uint8Array(buffer.subarray(0, bytesRead));
-          } catch {
+    const rangeChunks: FileRangeChunks = (start, length) =>
+      Object.freeze({
+        async *[Symbol.asyncIterator]() {
+          if (!active || iteratorStarted) fail();
+          if (
+            !Number.isSafeInteger(start) ||
+            !Number.isSafeInteger(length) ||
+            start < 0 ||
+            length < 1 ||
+            start + length > expected.byte_size
+          )
             fail();
+          iteratorStarted = true;
+          const end = start + length;
+          let offset = start;
+          while (offset < end) {
+            checkSignal(options.signal);
+            if (!active) fail();
+            try {
+              if (!same(identity, await opened.file.stat({ bigint: true })))
+                fail();
+              const buffer = Buffer.allocUnsafe(Math.min(CHUNK, end - offset));
+              const { bytesRead } = await opened.file.read(
+                buffer,
+                0,
+                buffer.length,
+                offset,
+              );
+              if (
+                !bytesRead ||
+                !same(identity, await opened.file.stat({ bigint: true }))
+              )
+                fail();
+              offset += bytesRead;
+              yield new Uint8Array(buffer.subarray(0, bytesRead));
+            } catch {
+              fail();
+            }
           }
-        }
-        if (!active) fail();
-      },
-    };
+          if (!active) fail();
+        },
+      });
+    const stream = rangeChunks(0, expected.byte_size);
     const file: ScopedFileReader = Object.freeze({
       size: expected.byte_size,
       sha256: expected.sha256,
       assertUnchanged,
-      chunks: () => Object.freeze(stream),
+      chunks: () => stream,
       async readRange(offset: number, length: number) {
         if (
           !Number.isSafeInteger(offset) ||
@@ -315,6 +360,7 @@ export async function openVerifiedFile(
     });
     const verify = async () => {
       await assertUnchanged();
+      if (!verifyContents) return;
       const final = await scan(opened.file, expected, options.signal);
       if (!same(identity, final)) fail();
       await verifyName(root, reference, identity);
@@ -340,8 +386,9 @@ export async function openVerifiedFile(
       async use<T>(
         consume: (chunks: AsyncIterable<Uint8Array>) => Promise<T>,
       ): Promise<T> {
-        return useFile(() => consume(Object.freeze(stream)));
+        return useFile(() => consume(stream));
       },
+      useRanges: (consume) => useFile(() => consume(rangeChunks)),
     };
   } catch (error) {
     await close();

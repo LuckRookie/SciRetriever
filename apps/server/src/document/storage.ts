@@ -22,7 +22,10 @@ import {
 } from "@sciretriever/contracts";
 import type { FileStore } from "../storage/files/store.js";
 import type { SqliteWorker } from "../storage/sqlite/worker.js";
-import type { FileFingerprint } from "../storage/files/reader.js";
+import type {
+  FileFingerprint,
+  FileRangeChunks,
+} from "../storage/files/reader.js";
 import {
   DocumentVerificationCache,
   type DocumentVerificationCacheLimits,
@@ -694,6 +697,17 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
     signal?: AbortSignal,
   ): Promise<T> {
     return this.files.withVerified(reference, expected, consume, {
+      maxBytes: expected.byte_size,
+      ...(signal ? { signal } : {}),
+    });
+  }
+  withArtifactRanges<T>(
+    reference: string,
+    expected: ArtifactRef,
+    consume: (chunks: FileRangeChunks) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    return this.files.withFileRanges(reference, expected, consume, {
       maxBytes: expected.byte_size,
       ...(signal ? { signal } : {}),
     });

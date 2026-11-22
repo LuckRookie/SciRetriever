@@ -106,6 +106,7 @@ QueryApplication 的状态为 ready、not-initialized、unavailable。缺库不�
 | `/api/v1/query/reference`      | POST，同 envelope，Reference ID                               | 引用关系详情              |
 | `/api/v1/query/artifact`       | POST，同 envelope，文献 ID 与受支持 kind                      | 校验后的文件或明确缺口    |
 | `/api/v1/query/material-bytes` | POST，同 envelope，显式 Literature ID、Asset ID、预期 SHA-256 | 校验后的固定原 PDF 字节流 |
+| `/api/v1/query/material-bytes/:literature_id/:asset_id/:asset_sha256` | GET，同一认证与准入；支持单段 `Range`（多段返回整份 200，不可满足返回 416）；`If-None-Match` | 整份时边读边校验 SHA-256；按段时核对绑定、大小与文件指纹，全文校验由阅读页在后台完成。强 ETag 为 SHA-256，`Cache-Control: private, max-age=31536000, immutable` |
 
 该协议服务当前 Library；不能向它传入未来 KnowledgeQuery 然后声称支持文档片段。artifact 成功可以是二进制响应，失败/缺口为结构化 JSON；客户端不能无条件按 JSON 解码所有响应。`material-bytes` 按显式稳定资产 ID/hash 读取主件或补充件，不按 current 重选；流正常结束后客户端仍应校验完整 hash。它不暴露内部文件路径，也不提供任意 range 或持久读取会话。
 
