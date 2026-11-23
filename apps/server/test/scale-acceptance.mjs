@@ -15,7 +15,10 @@ import {
   parseLibrarySearchRequest,
   parseMetadataObservation,
 } from "@sciretriever/contracts";
-import { createApplication } from "../dist/bootstrap/application.js";
+import {
+  createApplication,
+  createQueryApplication,
+} from "../dist/bootstrap/application.js";
 import { startProductionWorkbench } from "../dist/bootstrap/workbench.js";
 import { parseCredentialText } from "../dist/configuration/credentials.js";
 import { activityContext, withActivity } from "../dist/logging/activity.js";
@@ -1726,11 +1729,51 @@ function taskFingerprint(task) {
     .digest("hex");
 }
 
+const taskCheckpointDirectory = join(
+  fixture.home,
+  ".sciretriever",
+  "cache",
+  "task-detail",
+);
+
+function taskCheckpointFile(jobId) {
+  return join(
+    taskCheckpointDirectory,
+    createHash("sha256")
+      .update(JSON.stringify([catalog, jobId]))
+      .digest("hex") + ".checkpoint",
+  );
+}
+
+async function taskCheckpointStamp(jobId) {
+  const checkpoint = await stat(taskCheckpointFile(jobId), { bigint: true });
+  assert.ok(checkpoint.isFile() && checkpoint.size > 0n);
+  return {
+    dev: checkpoint.dev.toString(),
+    ino: checkpoint.ino.toString(),
+    bytes: Number(checkpoint.size),
+  };
+}
+
+async function prepareTaskCheckpoint(jobId) {
+  const query = await createQueryApplication(fixture.home, {
+    catalog_path: catalog,
+    artifact_root: fixture.artifacts,
+  });
+  try {
+    assert.equal(query.readiness.status, "ready");
+    assert.ok(query.tasks);
+    assert.equal((await query.tasks.read(jobId)).job.status, "running");
+  } finally {
+    await query.close();
+  }
+  return taskCheckpointStamp(jobId);
+}
+
 async function taskSidecar() {
   const output = resolve(destination);
   assert.ok(output.startsWith(resolve("sandbox/reports") + "/"));
   const tasks = taskBands();
-  const directory = join(fixture.home, ".sciretriever", "cache", "task-detail");
   const result = {
     scale,
     corpus,
@@ -1757,13 +1800,6 @@ async function taskSidecar() {
       await server.close();
     }
   };
-  const fileFor = (jobId) =>
-    join(
-      directory,
-      createHash("sha256")
-        .update(JSON.stringify([catalog, jobId]))
-        .digest("hex") + ".checkpoint",
-    );
   const writer = spawn("writer", result.warnings);
   writer.child.on("message", (point) => result.points.push(point));
   try {
@@ -1771,7 +1807,7 @@ async function taskSidecar() {
     await wait(2500);
     const began = Date.now();
     for (const { records, jobId } of tasks) {
-      const path = fileFor(jobId);
+      const path = taskCheckpointFile(jobId);
       const entry = (result.tasks[records] = { samples: [] });
       await rm(path, { force: true });
       let expected;
@@ -1830,25 +1866,25 @@ async function taskSidecar() {
         await cli.close();
       }
     };
-    await rm(fileFor(jobId), { force: true });
+    await rm(taskCheckpointFile(jobId), { force: true });
     const cliPublished = await cliFingerprint();
-    await stat(fileFor(jobId));
-    await rm(fileFor(jobId), { force: true });
+    await stat(taskCheckpointFile(jobId));
+    await rm(taskCheckpointFile(jobId), { force: true });
     const concurrent = await withServer((read) =>
       cliFingerprint(() => read(jobId)),
     );
     assert.equal(concurrent, cliPublished);
-    const shared = await stat(fileFor(jobId), { bigint: true });
+    const shared = await stat(taskCheckpointFile(jobId), { bigint: true });
     await withServer(async (read) =>
       assert.equal(taskFingerprint(await read(jobId)), concurrent),
     );
     assert.equal(await cliFingerprint(), concurrent);
     assert.equal(
-      (await stat(fileFor(jobId), { bigint: true })).ino,
+      (await stat(taskCheckpointFile(jobId), { bigint: true })).ino,
       shared.ino,
     );
     result.concurrent_cli_http_agree = true;
-    await measureCheckpointWrites(directory, tasks, fileFor, result.tasks);
+    await measureCheckpointWrites(tasks, result.tasks);
   } catch (error) {
     result.failures.push(error.stack ?? String(error));
   } finally {
@@ -1867,7 +1903,7 @@ async function taskSidecar() {
   assert.deepEqual(result.failures, []);
 }
 
-async function measureCheckpointWrites(directory, tasks, fileFor, entries) {
+async function measureCheckpointWrites(tasks, entries) {
   const { TaskDetailSidecars, removeTaskScratch } = await import(
     "../dist/storage/sqlite/task-detail-sidecar.js"
   );
@@ -1888,7 +1924,7 @@ async function measureCheckpointWrites(directory, tasks, fileFor, entries) {
     const { schema_version: schemaVersion } = db
       .prepare("PRAGMA schema_version")
       .get();
-    const sidecars = new TaskDetailSidecars(directory, catalog);
+    const sidecars = new TaskDetailSidecars(taskCheckpointDirectory, catalog);
     for (const { records, jobId } of tasks) {
       const loaded = sidecars.load(
         jobId,
@@ -1902,7 +1938,9 @@ async function measureCheckpointWrites(directory, tasks, fileFor, entries) {
       try {
         for (let trial = 0; trial < 5; trial++) {
           samples.push(await measure(() => sidecars.save(loaded.transfer)));
-          const current = await stat(fileFor(jobId), { bigint: true });
+          const current = await stat(taskCheckpointFile(jobId), {
+            bigint: true,
+          });
           assert.notEqual(current.ino, inode);
           inode = current.ino;
         }
@@ -1999,6 +2037,10 @@ async function run() {
   const runtime = await acquireExecutionRuntime(catalog);
   let server, writer, probe, serviceReady;
   try {
+    // Seed the copied catalog before starting the process whose first task read is timed.
+    const jobId = fixture.jobs.running;
+    const checkpoint = { prepared: await prepareTaskCheckpoint(jobId) };
+    result.task_checkpoint = checkpoint;
     server = spawn("serve", result.warnings, "trace-wal");
     server.child.on("message", (event) => {
       if (event.wal_check) result.wal_checks.push(event.wal_check);
@@ -2066,7 +2108,7 @@ async function run() {
           sort: "relevance",
         }),
       task: async () => {
-        const { task } = await request(`/api/tasks/${fixture.jobs.running}`);
+        const { task } = await request(`/api/tasks/${jobId}`);
         assert.equal(task.job.status, "running");
       },
     };
@@ -2080,6 +2122,11 @@ async function run() {
       const samples = [];
       result.operations[name] = { samples };
       if (name === "task") {
+        assert.deepEqual(
+          await taskCheckpointStamp(jobId),
+          checkpoint.prepared,
+          "Prepared task checkpoint changed before the first HTTP read",
+        );
         let pending = true;
         const cold = measure(work).finally(() => {
           pending = false;
@@ -2111,6 +2158,12 @@ async function run() {
         const ms = await cold;
         samples.push(ms);
         result.operations.task.cold_ms = ms;
+        checkpoint.after_first_read = await taskCheckpointStamp(jobId);
+        assert.deepEqual(
+          checkpoint.after_first_read,
+          checkpoint.prepared,
+          "Restarted task read did not preserve the prepared checkpoint",
+        );
         if (ms > objectives.task)
           result.failures.push(
             `task cold ${ms.toFixed(1)} ms > ${objectives.task} ms`,
@@ -2224,7 +2277,20 @@ async function run() {
   assert.deepEqual(result.failures, []);
 }
 
-export { catalog, client, fixture, folder, measure, root, spawn, stats, stop };
+export {
+  catalog,
+  client,
+  fixture,
+  folder,
+  measure,
+  prepareTaskCheckpoint,
+  root,
+  spawn,
+  stats,
+  stop,
+  taskCheckpointFile,
+  taskCheckpointStamp,
+};
 
 if (resolve(process.argv[1]) === import.meta.filename) {
   if (mode === "serve") await serve();
