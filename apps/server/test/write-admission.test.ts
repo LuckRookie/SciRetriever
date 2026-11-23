@@ -1,5 +1,6 @@
 import {
   appendFile,
+  mkdir,
   mkdtemp,
   readFile,
   readdir,
@@ -8,6 +9,7 @@ import {
   symlink,
   link,
 } from "node:fs/promises";
+import { watch } from "node:fs";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { tmpdir } from "node:os";
@@ -219,10 +221,73 @@ async function queuedTickets(home: string, catalog: string) {
   return names.filter((name) => /^\d+-/u.test(name));
 }
 
-it("hands off to a registered remote writer before later callers and bounds handoff waits", async () => {
+async function watchTickets(home: string, catalog: string) {
+  const directory = queueDirectory(home, catalog);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const seen = new Set<string>();
+  const watcher = watch(directory, { persistent: false }, (_, name) => {
+    if (name) seen.add(name);
+  });
+  return {
+    async tickets() {
+      // The marker follows admissions in the directory event stream. A
+      // snapshot alone would miss tickets removed on claim before the write.
+      const marker = "fixture-watch-marker";
+      await writeFile(join(directory, marker), "");
+      await expect.poll(() => seen.has(marker), { timeout: 20_000 }).toBe(true);
+      return [...seen].filter((name) => /^\d+-/u.test(name));
+    },
+    close: () => watcher.close(),
+  };
+}
+
+it("takes the catalog flock without publishing a ticket when there are no waiters", async () => {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-write-queue-"));
   const catalog = join(home, "catalog.sqlite");
   const admission = new CatalogWriteAdmission(catalog, { waitMs: 10_000 });
+  const observed = await watchTickets(home, catalog);
+  try {
+    await admission.run(async () => {
+      expect(admission.hasQueuedWrites).toBe(false);
+      expect(await probe(catalog)).toBe("conflict");
+    });
+    expect(await observed.tickets()).toEqual([]);
+  } finally {
+    observed.close();
+    await admission.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+it("publishes tickets for local heads that still have callers behind them", async () => {
+  const home = await mkdtemp(join(tmpdir(), "sciretriever-write-queue-"));
+  const catalog = join(home, "catalog.sqlite");
+  const admission = new CatalogWriteAdmission(catalog, { waitMs: 10_000 });
+  const observed = await watchTickets(home, catalog);
+  const turns: number[] = [];
+  try {
+    await Promise.all(
+      [1, 2, 3].map((turn) =>
+        admission.run(async () => {
+          turns.push(turn);
+        }),
+      ),
+    );
+    expect(turns).toEqual([1, 2, 3]);
+    expect(await observed.tickets()).toHaveLength(2);
+    expect(await queuedTickets(home, catalog)).toEqual([]);
+  } finally {
+    observed.close();
+    await admission.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+it("hands off from a ticketless holder to a registered remote writer before later callers", async () => {
+  const home = await mkdtemp(join(tmpdir(), "sciretriever-write-queue-"));
+  const catalog = join(home, "catalog.sqlite");
+  const admission = new CatalogWriteAdmission(catalog, { waitMs: 10_000 });
+  const observed = await watchTickets(home, catalog);
   let release!: () => void, started!: () => void;
   const held = new Promise<void>((resolve) => {
     release = resolve;
@@ -237,6 +302,7 @@ it("hands off to a registered remote writer before later callers and bounds hand
   let remote: ReturnType<typeof childWriter> | undefined;
   try {
     await Promise.race([entered, initial]);
+    expect(await observed.tickets()).toEqual([]);
     expect(admission.hasQueuedWrites).toBe(false);
     remote = childWriter(catalog, "series");
     await expect
@@ -274,6 +340,7 @@ it("hands off to a registered remote writer before later callers and bounds hand
     expect(await queuedTickets(home, catalog)).toEqual([]);
   } finally {
     release();
+    observed.close();
     await remote?.close();
     await admission.close();
     await rm(home, { recursive: true, force: true });

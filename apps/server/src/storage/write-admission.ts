@@ -248,7 +248,6 @@ export function acquireRestartLock(
 type WriteKind = "foreground" | "backfill";
 interface Ticket {
   readonly name: string;
-  readonly kind: WriteKind;
 }
 interface ShareWindow {
   readonly held_ms: number;
@@ -265,6 +264,9 @@ const TICKET =
 const monotonicMs = () => Number(process.hrtime.bigint() / 1_000_000n);
 const noSuchFile = (error: unknown) =>
   (error as NodeJS.ErrnoException).code === "ENOENT";
+const isWriteConflict = (error: unknown) =>
+  error instanceof WriteAdmissionError &&
+  error.code === "write-admission-conflict";
 
 function processStart(pid: string): string | null {
   try {
@@ -287,7 +289,7 @@ function removeTicket(path: string) {
   }
 }
 
-/** Only the selected ticket contends for the original catalog flock. */
+/** Orders registered writers for the original catalog flock. */
 class CatalogWriteQueue {
   private readonly path: string;
 
@@ -334,7 +336,7 @@ class CatalogWriteQueue {
     await this.directory.close();
   }
 
-  private async verify() {
+  async verify() {
     const current = await lstat(this.absolutePath, { bigint: true });
     if (!current.isDirectory() || !identity(this.directoryStat, current))
       fail();
@@ -358,11 +360,7 @@ class CatalogWriteQueue {
           );
           break;
         } catch (error) {
-          if (
-            !(error instanceof WriteAdmissionError) ||
-            error.code !== "write-admission-conflict"
-          )
-            throw error;
+          if (!isWriteConflict(error)) throw error;
           await waitForTurn(signal);
         }
       }
@@ -381,7 +379,7 @@ class CatalogWriteQueue {
         0o600,
       );
       await ticket.close();
-      return { kind, name } satisfies Ticket;
+      return { name } satisfies Ticket;
     } finally {
       await directory.close();
     }
@@ -389,6 +387,11 @@ class CatalogWriteQueue {
 
   remove(ticket: Ticket) {
     removeTicket(`${this.path}/${ticket.name}`);
+  }
+
+  hasTickets() {
+    // Leave stale tickets to the normal queue path, which reaps them.
+    return readdirSync(this.path).some((name) => TICKET.test(name));
   }
 
   hasWaiting(kind?: WriteKind) {
@@ -477,8 +480,8 @@ class CatalogWriteQueue {
     }
   }
 
-  async record(ticket: Ticket, held: number) {
-    if (ticket.kind === "foreground" && !this.hasWaiting("backfill")) {
+  async record(kind: WriteKind, held: number) {
+    if (kind === "foreground" && !this.hasWaiting("backfill")) {
       // Uncontended foreground work creates no debt for a future backfill.
       removeTicket(this.path + "/share.json");
       return;
@@ -486,7 +489,7 @@ class CatalogWriteQueue {
     const share = this.window();
     const value: ShareWindow = {
       held_ms: share.held_ms + held,
-      backfill_ms: share.backfill_ms + (ticket.kind === "backfill" ? held : 0),
+      backfill_ms: share.backfill_ms + (kind === "backfill" ? held : 0),
       updated_ms: monotonicMs(),
     };
     // Only the catalog flock holder updates accounting. An interrupted
@@ -589,6 +592,30 @@ export class CatalogWriteAdmission {
     }
   }
 
+  private async tryWithoutTicket(queue: CatalogWriteQueue, check: () => void) {
+    // A second pending call could be a local backfill yet to register.
+    const uncontended = () => this.pending.size === 1 && !queue.hasTickets();
+    if (!uncontended()) return;
+    let lock: CatalogWriteLock;
+    try {
+      lock = await acquireCatalogWriteLock(this.catalogPath);
+    } catch (error) {
+      if (!isWriteConflict(error)) throw error;
+      return;
+    }
+    let keep = false;
+    try {
+      await queue.verify();
+      check();
+      // The scan under the catalog flock gives priority to published tickets.
+      // A later registration waits behind this holder and is visible to it.
+      keep = uncontended();
+      if (keep) return lock;
+    } finally {
+      if (!keep) await lock.release();
+    }
+  }
+
   private async takeTurn(
     queue: CatalogWriteQueue,
     ticket: Ticket,
@@ -607,11 +634,7 @@ export class CatalogWriteAdmission {
             Math.min(FLOCK_WAIT_MS, deadline - monotonicMs()),
           );
         } catch (error) {
-          if (
-            !(error instanceof WriteAdmissionError) ||
-            error.code !== "write-admission-conflict"
-          )
-            throw error;
+          if (!isWriteConflict(error)) throw error;
         }
         if (lock) {
           let claimed = false;
@@ -670,20 +693,25 @@ export class CatalogWriteAdmission {
       const registered = this.registration.then(async () => {
         check();
         queue = await CatalogWriteQueue.open(this.catalogPath);
+        if (kind === "foreground") {
+          const lock = await this.tryWithoutTicket(queue, check);
+          if (lock) return { queue, lock };
+        }
         ticket = await queue.register(kind, deadline, check, waitSignal);
         return { queue, ticket };
       });
       this.registration = registered.catch(() => {});
       const turn = await registered;
-      let next = turn.ticket;
-      for (;;) {
-        const lock = await this.takeTurn(
+      let lock =
+        turn.lock ??
+        (await this.takeTurn(
           turn.queue,
-          next,
+          turn.ticket,
           deadline,
           check,
           waitSignal,
-        );
+        ));
+      for (;;) {
         ticket = undefined;
         doneWaiting();
         try {
@@ -693,21 +721,23 @@ export class CatalogWriteAdmission {
           try {
             result = await this.admitted(operation, turn.queue);
           } finally {
-            await turn.queue.record(next, performance.now() - started);
+            await turn.queue.record(kind, performance.now() - started);
           }
           if (!hasMore?.(result) || waitSignal.aborted) return result;
           // Publish the next bounded backfill batch before releasing this one.
           // Otherwise an active backfill momentarily disappears between turns.
           deadline = monotonicMs() + waitMs;
-          ticket = next = await turn.queue.register(
-            kind,
-            deadline,
-            check,
-            waitSignal,
-          );
+          ticket = await turn.queue.register(kind, deadline, check, waitSignal);
         } finally {
           await lock.release();
         }
+        lock = await this.takeTurn(
+          turn.queue,
+          ticket,
+          deadline,
+          check,
+          waitSignal,
+        );
       }
     } finally {
       doneWaiting();
