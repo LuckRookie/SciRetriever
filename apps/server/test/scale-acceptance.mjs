@@ -427,6 +427,148 @@ async function measure(work) {
   return performance.now() - started;
 }
 
+function searchBands(sweep) {
+  const admission = new CatalogWriteAdmission(catalog, { waitMs: 10_000 });
+  return admission.run(() => {
+    const db = new DatabaseSync(catalog);
+    try {
+      const count = (text) =>
+        db
+          .prepare(
+            "SELECT count(*) AS n FROM literature_search_fts WHERE literature_search_fts MATCH ?",
+          )
+          .get(text).n;
+      const bands = [{ name: "near-all", text: "of", hits: count("of") }];
+      if (sweep) return bands;
+      bands.push({
+        name: "common",
+        text: "spectroscopy",
+        hits: count("spectroscopy"),
+      });
+      const fixed = [
+        [1000, "acceptancefixedone"],
+        [10_000, "acceptancefixedten"],
+        [100_000, "acceptancefixedhundred"],
+      ].filter(([hits]) => hits <= corpus.versions);
+      // Apply distinct probe terms to exactly the same number of indexed versions.
+      // Using a metadata filter on a ubiquitous word would vary the postings scanned.
+      db.exec("BEGIN IMMEDIATE");
+      for (const [hits, text] of fixed) {
+        if (count(text) === 0) {
+          const { id } = db
+            .prepare(
+              "SELECT id FROM literature_search_fts_content ORDER BY id LIMIT 1 OFFSET ?",
+            )
+            .get(hits - 1);
+          assert.equal(
+            db
+              .prepare(
+                "UPDATE literature_search_fts SET keywords=coalesce(keywords,'') || ? WHERE rowid<=?",
+              )
+              .run(" " + text, id).changes,
+            hits,
+          );
+        }
+        assert.equal(count(text), hits);
+        bands.push({ name: `fixed-${hits}`, text, hits });
+      }
+      db.exec("COMMIT");
+      return bands;
+    } finally {
+      if (db.isTransaction) db.exec("ROLLBACK");
+      db.close();
+    }
+  });
+}
+
+async function searchCandidates(sweep) {
+  const bands = await searchBands(sweep);
+  const result = {
+    scale,
+    mode,
+    environment: {
+      node: process.version,
+      kernel: release(),
+      load_start: loadavg(),
+    },
+    points: [],
+    warnings: [],
+    failures: [],
+    search: {},
+  };
+  const server = spawn("serve", result.warnings);
+  let writer;
+  try {
+    const { origin } = await server.first();
+    const request = await client(origin);
+    writer = spawn("writer", result.warnings);
+    writer.child.on("message", (point) => result.points.push(point));
+    await writer.first();
+    await wait(2500);
+    const began = Date.now();
+    for (const { name, text, hits } of bands) {
+      const entry = (result.search[name] = { text, hits, samples: [] });
+      for (let trial = 0; trial < trials; trial++) {
+        stop.signal.throwIfAborted();
+        let page;
+        const duration = await measure(async () => {
+          ({ page } = await request("/api/v1/query/search", {
+            query: { text, collection_scope: "all" },
+            sort: "relevance",
+            limit: 50,
+          }));
+        });
+        assert.equal(page.items.length, 50);
+        assert.equal(page.total_count, Math.min(10_000, hits));
+        assert.equal(page.count_truncated, hits > 10_000 ? true : undefined);
+        if (name === "near-all" && scale === "1m")
+          assert.ok(page.relevance_candidate_limit < hits);
+        entry.relevance_candidate_limit =
+          page.relevance_candidate_limit ?? null;
+        entry.samples.push(duration);
+        if (duration > 10 * objectives.search) break;
+        await wait(40);
+      }
+      Object.assign(entry, stats(entry.samples));
+      console.log(
+        scale,
+        name,
+        JSON.stringify(stats(entry.samples)),
+        entry.relevance_candidate_limit,
+      );
+      if (entry.n !== trials || (!sweep && entry.p95_ms > objectives.search))
+        result.failures.push(
+          `${name} P95 ${entry.p95_ms.toFixed(1)} ms (${entry.n} trials)`,
+        );
+    }
+    const finished = Date.now();
+    const points = result.points.filter(
+      (point) => point.committed >= began && point.committed <= finished,
+    );
+    const first = points[0];
+    const last = points.at(-1);
+    result.papers_per_second =
+      last?.committed > first?.committed
+        ? (1000 * (last.papers - first.papers)) /
+          (last.committed - first.committed)
+        : 0;
+    if (result.papers_per_second < 100)
+      result.failures.push("Write load below 100 committed papers/s");
+  } finally {
+    try {
+      await writer?.close();
+    } finally {
+      try {
+        await server.close();
+      } finally {
+        result.environment.load_finish = loadavg();
+        await writeFile(destination, JSON.stringify(result, null, 2) + "\n");
+      }
+    }
+  }
+  assert.deepEqual(result.failures, []);
+}
+
 function taskBands() {
   assert.equal(scale, "1m");
   assert.equal(fixture.source_records, 1_000_000);
@@ -996,5 +1138,7 @@ if (resolve(process.argv[1]) === import.meta.filename) {
   else if (mode === "writer") await write();
   else if (mode === "inspect-task") await inspectTask();
   else if (mode === "task-sidecar") await taskSidecar();
+  else if (mode === "search-candidates" || mode === "search-candidates-sweep")
+    await searchCandidates(mode === "search-candidates-sweep");
   else await run();
 }

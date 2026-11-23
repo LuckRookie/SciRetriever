@@ -105,6 +105,7 @@ export interface LibraryQueryRepository {
       readonly rows: readonly SearchSnapshotRow[];
       readonly tag_backfill_pending?: number;
       readonly ranking_id?: string;
+      readonly candidate_window?: LibraryRelevanceWindow;
     }
   >;
   literatureDetailSnapshot(literatureId: string): Promise<{
@@ -289,6 +290,12 @@ export interface Position {
   readonly secondary?: number | null;
   readonly total?: Pick<LibrarySearchTotal, "total_count" | "count_truncated">;
   readonly ranking_id?: string;
+  readonly candidate_window?: LibraryRelevanceWindow;
+}
+export interface LibraryRelevanceWindow {
+  readonly oldest_rowid: string;
+  readonly newest_rowid: string;
+  readonly limit: number;
 }
 export interface LibraryPageQuery {
   readonly query: LibraryQuery;
@@ -411,6 +418,7 @@ function encodePosition(
   sort: LibrarySort,
   total: NonNullable<Position["total"]>,
   rankingId?: string,
+  candidateWindow?: LibraryRelevanceWindow,
 ): string {
   const core = {
     kind: "library-search",
@@ -419,9 +427,13 @@ function encodePosition(
       query_fingerprint: queryFingerprint(query),
       sort,
       total,
-      ...(rankingId ? { ranking_id: rankingId } : {}),
+      ...(candidateWindow
+        ? { ranking_id: rankingId ?? null, candidate_window: candidateWindow }
+        : rankingId
+          ? { ranking_id: rankingId }
+          : {}),
     },
-    version: rankingId ? 3 : 2,
+    version: candidateWindow ? 4 : rankingId ? 3 : 2,
   };
   return Buffer.from(canonical({ checksum: digest(core), ...core })).toString(
     "base64url",
@@ -440,6 +452,31 @@ function object(
     fail();
   return value as Record<string, unknown>;
 }
+
+export function parseLibraryRelevanceWindow(
+  value: unknown,
+): LibraryRelevanceWindow {
+  const { oldest_rowid, newest_rowid, limit } = object(value, [
+    "oldest_rowid",
+    "newest_rowid",
+    "limit",
+  ]);
+  const validRowid = (id: unknown): id is string =>
+    typeof id === "string" &&
+    /^(?:0|-?[1-9]\d{0,18})$/u.test(id) &&
+    BigInt.asIntN(64, BigInt(id)) === BigInt(id);
+  if (
+    !validRowid(oldest_rowid) ||
+    !validRowid(newest_rowid) ||
+    BigInt(oldest_rowid) > BigInt(newest_rowid) ||
+    typeof limit !== "number" ||
+    !Number.isSafeInteger(limit) ||
+    limit < 1
+  )
+    return fail();
+  return { oldest_rowid, newest_rowid, limit };
+}
+
 function decodePosition(
   cursor: string,
   query: LibraryQuery,
@@ -457,7 +494,10 @@ function decodePosition(
     ]);
     if (
       canonical(e) !== raw.toString("utf8") ||
-      (e.version !== 1 && e.version !== 2 && e.version !== 3) ||
+      (e.version !== 1 &&
+        e.version !== 2 &&
+        e.version !== 3 &&
+        e.version !== 4) ||
       e.kind !== "library-search" ||
       digest({ kind: e.kind, payload: e.payload, version: e.version }) !==
         e.checksum
@@ -468,7 +508,8 @@ function decodePosition(
       "query_fingerprint",
       "sort",
       ...(e.version !== 1 ? ["total"] : []),
-      ...(e.version === 3 ? ["ranking_id"] : []),
+      ...(e.version === 3 || e.version === 4 ? ["ranking_id"] : []),
+      ...(e.version === 4 ? ["candidate_window"] : []),
     ]);
     if (
       payload.query_fingerprint !== queryFingerprint(query) ||
@@ -478,13 +519,17 @@ function decodePosition(
     const total =
       e.version !== 1 ? parseLibrarySearchTotal(payload.total) : undefined;
     const rankingId = payload.ranking_id;
+    if ((e.version === 3 || e.version === 4) && sort !== "relevance") fail();
     if (
-      e.version === 3 &&
-      (sort !== "relevance" ||
-        typeof rankingId !== "string" ||
+      (e.version === 3 || (e.version === 4 && rankingId !== null)) &&
+      (typeof rankingId !== "string" ||
         !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(rankingId))
     )
       fail();
+    const candidateWindow =
+      e.version === 4
+        ? parseLibraryRelevanceWindow(payload.candidate_window)
+        : undefined;
     if (total && (total.status_updating || total.counts_backfill_pending))
       fail();
     const metrics = draftSortFields(sort);
@@ -591,6 +636,7 @@ function decodePosition(
       value: value as Position["value"],
       ...(total ? { total } : {}),
       ...(typeof rankingId === "string" ? { ranking_id: rankingId } : {}),
+      ...(candidateWindow ? { candidate_window: candidateWindow } : {}),
     };
   } catch {
     return fail();
@@ -1042,8 +1088,11 @@ export class LiteratureQueryService {
       ...total,
       ...(mode !== "selection" &&
       sort === "relevance" &&
-      result.total_count > RELEVANCE_RESULT_LIMIT
+      (result.total_count > RELEVANCE_RESULT_LIMIT || result.candidate_window)
         ? { relevance_limit: RELEVANCE_RESULT_LIMIT }
+        : {}),
+      ...(result.candidate_window
+        ? { relevance_candidate_limit: result.candidate_window.limit }
         : {}),
       ...(result.tag_backfill_pending === undefined
         ? {}
@@ -1060,6 +1109,7 @@ export class LiteratureQueryService {
               sort,
               total,
               result.ranking_id,
+              result.candidate_window,
             )
           : null,
     });

@@ -90,9 +90,13 @@ import {
 import type {
   LibraryCollectRequest,
   LibraryPageQuery,
+  LibraryRelevanceWindow,
   SearchSnapshotRow,
 } from "../../literature/query.js";
-import { LibrarySortScopeLimitError } from "../../literature/query.js";
+import {
+  LibrarySortScopeLimitError,
+  parseLibraryRelevanceWindow,
+} from "../../literature/query.js";
 import { MetadataTextNormalization } from "../../literature/unicode-casefold.js";
 import { RetrievalStorageError } from "../../retrieval/model.js";
 import { TagError } from "../../tags/rules.js";
@@ -3492,12 +3496,14 @@ export class SqliteWorker {
       readonly rows: readonly SearchSnapshotRow[];
       readonly tag_backfill_pending?: number;
       readonly ranking_id?: string;
+      readonly candidate_window?: LibraryRelevanceWindow;
     }
   > {
     type Page = {
       rows: unknown;
       tag_backfill_pending?: number;
       ranking_id?: string;
+      candidate_window?: unknown;
     } & Record<string, unknown>;
     const result = await this.run<Page | { defer: true }>(
       {
@@ -3533,11 +3539,15 @@ export class SqliteWorker {
       rows: rawRows,
       tag_backfill_pending,
       ranking_id,
+      candidate_window,
       ...summary
     } = page;
     let total: LibrarySearchTotal;
+    let window: LibraryRelevanceWindow | undefined;
     try {
       total = parseLibrarySearchTotal(summary);
+      if (candidate_window !== undefined)
+        window = parseLibraryRelevanceWindow(candidate_window);
     } catch {
       throw new SqliteWorkerError();
     }
@@ -3555,8 +3565,10 @@ export class SqliteWorker {
     )
       throw new SqliteWorkerError();
     if (
-      ranking_id !== undefined &&
-      ((request.sort !== "relevance" && !request.relevanceForLargeScope) ||
+      ((ranking_id !== undefined || window !== undefined) &&
+        ((request.sort !== "relevance" && !request.relevanceForLargeScope) ||
+          request.fullRelevance)) ||
+      (ranking_id !== undefined &&
         !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(ranking_id))
     )
       throw new SqliteWorkerError();
@@ -3565,6 +3577,7 @@ export class SqliteWorker {
       ...total,
       ...(tag_backfill_pending === undefined ? {} : { tag_backfill_pending }),
       ...(ranking_id === undefined ? {} : { ranking_id }),
+      ...(window ? { candidate_window: window } : {}),
     };
   }
   async librarySnapshot(

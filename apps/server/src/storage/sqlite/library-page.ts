@@ -47,6 +47,7 @@ import type { DatabaseSync, SQLInputValue, SQLOutputValue } from "node:sqlite";
 import type {
   LibraryCollectRequest,
   LibraryPageQuery,
+  LibraryRelevanceWindow,
   Position,
 } from "../../literature/query.js";
 import type { LibraryCollectionTargets } from "./library-state.js";
@@ -407,6 +408,9 @@ function libraryFilter(
   }
   return {
     from: singleScope ? memberFrom : from,
+    ftsOrderedFrom: `FROM literature_search_fts
+      CROSS JOIN literatures l ON l.literature_id=literature_search_fts.literature_id
+      CROSS ${metadata} ${orderedState} ${orderedCollection}`,
     orderedFrom,
     where: singleScope ? `${where} AND om.kind=? AND om.scope_id=?` : where,
     args: singleScope ? [...args, workset.kind, workset.ids[0]!] : args,
@@ -605,25 +609,36 @@ export function librarySearchTotal(
 type PageRow = Record<string, SQLOutputValue>;
 type RankingRow = { literature_id: string; relevance: number };
 type Filter = ReturnType<typeof libraryFilter>;
+type Ranking = {
+  rows: RankingRow[];
+  candidate_window?: LibraryRelevanceWindow;
+};
+
+const LIBRARY_RELEVANCE_CANDIDATE_LIMIT = 200_000;
 
 /** One worker owns each text page and its continuation. Same-file reconnects keep this cache. */
 export class LibraryRelevanceCache {
   private readonly windows = new Map<
     string,
-    { key: string; rows: RankingRow[] }
+    { key: string; ranking: Ranking }
   >();
+  readonly candidateLimit: number;
+
+  constructor(candidateLimit = LIBRARY_RELEVANCE_CANDIDATE_LIMIT) {
+    this.candidateLimit = candidateLimit;
+  }
 
   get(id: string, key: string) {
     const window = this.windows.get(id);
     if (!window || window.key !== key) return undefined;
     this.windows.delete(id);
     this.windows.set(id, window);
-    return window.rows;
+    return window.ranking;
   }
 
-  put(key: string, rows: RankingRow[]) {
+  put(key: string, ranking: Ranking) {
     const id = randomUUID();
-    this.windows.set(id, { key, rows });
+    this.windows.set(id, { key, ranking });
     if (this.windows.size > 16)
       this.windows.delete(this.windows.keys().next().value!);
     return id;
@@ -634,25 +649,94 @@ export class LibraryRelevanceCache {
   }
 }
 
+function rankCandidates(
+  db: DatabaseSync,
+  filter: Filter,
+  cap: number,
+  previous?: LibraryRelevanceWindow,
+): Ranking {
+  const rowid = "literature_search_fts.rowid";
+  const limit = Math.min(cap, previous?.limit ?? cap);
+  const withinWindow = previous ? `AND ${rowid} BETWEEN ? AND ?` : "";
+  const args = previous
+    ? [
+        ...filter.args,
+        BigInt(previous.oldest_rowid),
+        BigInt(previous.newest_rowid),
+      ]
+    : filter.args;
+  // CROSS JOIN keeps the FTS cursor outermost so it supplies rowid order.
+  // Materialization stops the outer score sort from visiting any more hits.
+  const rows = db
+    .prepare(
+      `WITH candidates AS MATERIALIZED (
+       SELECT l.literature_id,bm25(literature_search_fts) AS relevance,${rowid} AS doc
+       ${filter.ftsOrderedFrom} ${filter.where} ${withinWindow}
+       ORDER BY ${rowid} DESC LIMIT ?
+     ), ranked AS (
+       SELECT literature_id,relevance FROM candidates
+       ORDER BY relevance,literature_id LIMIT ${RELEVANCE_RESULT_LIMIT}
+     ), edges AS (
+       SELECT CAST(min(doc) AS TEXT) AS oldest_rowid,
+         CAST(max(doc) AS TEXT) AS newest_rowid,count(*) AS hits FROM candidates
+     )
+     SELECT ranked.*,edges.* FROM ranked CROSS JOIN edges ORDER BY relevance,literature_id`,
+    )
+    .all(...args, limit) as (RankingRow &
+    Pick<LibraryRelevanceWindow, "oldest_rowid" | "newest_rowid"> & {
+      hits: number;
+    })[];
+  const edge = rows[0];
+  const ranked = rows.map(({ literature_id, relevance }) => ({
+    literature_id,
+    relevance,
+  }));
+  if (previous)
+    return { rows: ranked, candidate_window: { ...previous, limit } };
+  if (
+    edge?.hits === limit &&
+    db
+      .prepare(
+        `SELECT 1 ${filter.ftsOrderedFrom} ${filter.where} AND ${rowid}<? ORDER BY ${rowid} DESC LIMIT 1`,
+      )
+      .get(...filter.args, BigInt(edge.oldest_rowid))
+  )
+    return {
+      rows: ranked,
+      candidate_window: {
+        oldest_rowid: edge.oldest_rowid,
+        newest_rowid: edge.newest_rowid,
+        limit,
+      },
+    };
+  return { rows: ranked };
+}
+
 function relevancePage(
   db: DatabaseSync,
   filter: Filter,
   after: Position | null,
   limit: number,
-  relevance: string,
+  total: LibrarySearchTotal,
   cache: LibraryRelevanceCache | undefined,
   key: string | undefined,
 ) {
   const previousId = after?.ranking_id;
   const cached = previousId && key ? cache?.get(previousId, key) : undefined;
-  const ranked: RankingRow[] =
+  const cap = cache?.candidateLimit ?? LIBRARY_RELEVANCE_CANDIDATE_LIMIT;
+  const ranking =
     cached ??
-    (db
-      .prepare(
-        `SELECT l.literature_id,${relevance} AS relevance ${filter.from} ${filter.where}
-     ORDER BY relevance ASC,l.literature_id ASC LIMIT ${RELEVANCE_RESULT_LIMIT}`,
-      )
-      .all(...filter.args) as RankingRow[]);
+    (!after && !total.count_truncated && total.total_count <= cap
+      ? {
+          rows: db
+            .prepare(
+              `SELECT l.literature_id,bm25(literature_search_fts) AS relevance ${filter.from} ${filter.where}
+               ORDER BY relevance,l.literature_id LIMIT ${RELEVANCE_RESULT_LIMIT}`,
+            )
+            .all(...filter.args) as RankingRow[],
+        }
+      : rankCandidates(db, filter, cap, after?.candidate_window));
+  const ranked = ranking.rows;
   if (
     !cached &&
     new Set(ranked.map((row) => row.literature_id)).size !== ranked.length
@@ -661,7 +745,7 @@ function relevancePage(
   const rankingId = cached
     ? previousId
     : key
-      ? cache?.put(key, ranked)
+      ? cache?.put(key, ranking)
       : undefined;
   let start = 0;
   if (after) {
@@ -690,7 +774,13 @@ function relevancePage(
     const row = ranked[i]!;
     if (!visible || visible.get(row.literature_id)) rows.push(row);
   }
-  return { rows, ...(rankingId ? { ranking_id: rankingId } : {}) };
+  return {
+    rows,
+    ...(rankingId ? { ranking_id: rankingId } : {}),
+    ...(ranking.candidate_window
+      ? { candidate_window: ranking.candidate_window }
+      : {}),
+  };
 }
 
 /** Seek in the timestamp partition, then at an earlier timestamp, then through the null tail. */
@@ -803,7 +893,12 @@ export function libraryPageIds(
   db: DatabaseSync,
   request: LibraryPageQuery,
   cache?: LibraryRelevanceCache,
-) {
+): LibrarySearchTotal & {
+  readonly rows: PageRow[];
+  readonly tag_backfill_pending?: number;
+  readonly ranking_id?: string;
+  readonly candidate_window?: LibraryRelevanceWindow;
+} {
   const { query: q, after, limit, ftsQuery } = request;
   let { sort } = request;
   const filter = libraryFilter(db, q, ftsQuery, {
@@ -865,13 +960,14 @@ export function libraryPageIds(
   };
   const relevance = ftsQuery === null ? "NULL" : "bm25(literature_search_fts)";
   if (sort === "relevance" && !request.fullRelevance) {
+    if (!after && summary.total_count === 0) return { rows: [], ...summary };
     return {
       ...relevancePage(
         db,
         filter,
         after,
         limit,
-        relevance,
+        summary,
         cache,
         request.rankingKey,
       ),

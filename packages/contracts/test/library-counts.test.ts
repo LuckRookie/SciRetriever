@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, expectTypeOf, it } from "vitest";
 import {
   parseFullTextCounts,
   parseLibraryCounts,
@@ -7,6 +7,7 @@ import {
   parseLibraryFacets,
   parseLibrarySearchTotal,
   parseLibrarySearchRequest,
+  type LibrarySearchPage,
 } from "../src/index.js";
 
 const counts = {
@@ -24,6 +25,27 @@ const counts = {
     EXCLUDED: 0,
   },
 };
+
+it("reports the optional relevance candidate cap separately from result and count limits", () => {
+  expectTypeOf<LibrarySearchPage["relevance_candidate_limit"]>().toEqualTypeOf<
+    number | undefined
+  >();
+  const page: LibrarySearchPage = {
+    total_count: 10_000,
+    count_truncated: true,
+    relevance_limit: 1_000,
+    relevance_candidate_limit: 20_000,
+    items: [],
+    next_cursor: null,
+  };
+  const { relevance_candidate_limit, ...original } = page;
+  expect(relevance_candidate_limit).toBe(20_000);
+  expect(original).toMatchObject({
+    total_count: 10_000,
+    relevance_limit: 1_000,
+  });
+});
+
 it("parses exact version counts and paper counts without equating their units", () => {
   // The matching preprint can lack PDF while its sibling outside the scope has one.
   expect(parseLibraryCounts(counts)).toEqual(counts);

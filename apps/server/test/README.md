@@ -45,6 +45,13 @@ timeout --kill-after=45s 10m node apps/server/test/scale-acceptance.mjs 1m "$cop
 timeout --kill-after=45s 9m node apps/server/test/scale-acceptance.mjs task-sidecar "$copy_1m" "$report_dir/task-sidecar-1m.json"
 ```
 
+`search-candidates` 模式只测相关度第一页。两种规模均用相同的合成索引词构造 1,000 和 10,000 个命中，1m 另测 100,000 个命中。也测几乎命中全库的 `of` 和常用词 `spectroscopy`。从发出回环 HTTP 请求到解析完首批 50 项，各取 20 次，断言 P95 ≤1,500 ms，同期提交至少 100 篇/s。写测试索引词、启动与登录在计时之外。`search-candidates-sweep` 只测 `of`，用于比较不同构建的候选上限。
+
+```sh
+timeout --kill-after=35s 5m node apps/server/test/scale-acceptance.mjs search-candidates "$copy_10k" "$report_dir/search-10k.json"
+timeout --kill-after=35s 8m node apps/server/test/scale-acceptance.mjs search-candidates "$copy_1m" "$report_dir/search-1m.json"
+```
+
 [上级目录](../README.md) · [项目 README](../../../README.md)
 
 `workbench-auth-fixture.ts` 只服务隔离回归：使用合成密码、绑定 loopback，并经真实 `/auth/login` 为 HTTP/浏览器旅程取得会话，不绕过统一认证。默认对外监听和自动密钥由 `web-remote-access.test.ts` 验证。

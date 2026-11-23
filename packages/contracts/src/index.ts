@@ -372,6 +372,8 @@ export interface LibrarySearchPage extends LibrarySearchTotal {
   readonly tag_backfill_pending?: number;
   /** Present when only the highest-ranked results are available to paginate. */
   readonly relevance_limit?: typeof RELEVANCE_RESULT_LIMIT;
+  /** Present only when relevance ranking used this many newest matches. */
+  readonly relevance_candidate_limit?: number;
   readonly items: readonly LiteratureSearchItem[];
   readonly next_cursor: string | null;
 }
