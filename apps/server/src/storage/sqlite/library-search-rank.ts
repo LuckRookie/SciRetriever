@@ -16,6 +16,9 @@ const PRINTABLE_ASCII = /^[ -~]*$/u;
 const SPAN_CACHE_LIMIT = 256;
 const CACHED_SPAN_LENGTH = 128;
 const MAX_UNCACHED_CHUNKS_PER_ROW = 4;
+export const LIBRARY_MEMBER_SCORE_BUDGET = 6_000_000;
+// Account for each scored row's lookup and setup as well as its tokens.
+const SCORE_LOOKUP_COST = 256;
 // The first FTS column is an unindexed ID. Index text never contains START or END.
 const highlightColumns = Array.from(
   { length: 12 },
@@ -36,6 +39,12 @@ const INDEXED_TEXT = textColumns
 type Sql = { sql: string; args: SQLInputValue[] };
 type Row = Record<string, SQLOutputValue>;
 type Score = { literature_id: string; relevance: number };
+type Unscored = {
+  literature_id: string;
+  relevance: null;
+  workset_at: string | null;
+};
+export type LibraryRelevanceRow = Score | Unscored;
 
 // The default unicode61 tokenizer uses ASCII letters and digits as tokens.
 const asciiTokens = (text: string) =>
@@ -229,22 +238,23 @@ const orderScores = (a: Score, b: Score) =>
     ? -1
     : Number(a.literature_id > b.literature_id));
 
-/** A required phrase locates each candidate and one pass over its indexed
- * text counts all phrases. Text that exceeds the tokenization budget uses a
- * full MATCH and combined highlights. Both share global BM25 statistics. */
+/** Matches already passed FTS in workset order. Only the scoring prefix
+ * reads indexed text. Both frequency paths share global BM25 statistics. */
 export function rankLibraryMembers(
   db: DatabaseSync,
-  project: (extra: string, options?: { match?: string }) => Sql,
+  matches: Sql,
   ftsQuery: string,
-  recentlyOpened: boolean,
+  budget = LIBRARY_MEMBER_SCORE_BUDGET,
 ) {
   const terms = ftsQuery.split(" AND ");
   const tokenizer = new PhraseTokenizer();
   const seen = new Set<string>();
   const scores: Score[] = [];
+  const tail: Unscored[] = [];
   let average = 0;
   let weights: number[] | undefined;
   let total = 0;
+  let scored = 0;
   try {
     const tokens = terms.map((term) => tokenizer.tokens(term.slice(1, -1)));
     const frequencies = terms.map(() => 0);
@@ -253,37 +263,56 @@ export function rankLibraryMembers(
       terms.length === 1 && tokens[0]!.length === 1
         ? undefined
         : spanCounter(phraseStarts, tokenizer);
-    // Recently opened uses a SQL LIMIT after the full MATCH, before scoring.
-    const useAnchor =
-      !recentlyOpened &&
-      terms.length > 1 &&
-      terms.every(
-        (term, i) => /^"[^"]+"$/u.test(term) && tokens[i]!.length > 0,
-      );
-    const docLength = `(SELECT sz FROM ${FTS}_docsize WHERE id=document.id) AS lengths`;
-    const input = useAnchor
-      ? project(`${docLength},${INDEXED_TEXT}`, { match: terms[0]! })
-      : project(`${docLength},${HIGHLIGHTS}`);
-    const members = db.prepare(input.sql);
+    const indexedText =
+      terms.length > 1 && tokens.every((phrase) => phrase.length > 0)
+        ? db.prepare(
+            `SELECT ${INDEXED_TEXT} FROM ${FTS}_content document WHERE id=?`,
+          )
+        : undefined;
+    const highlights = db.prepare(
+      `SELECT ${HIGHLIGHTS} FROM ${FTS}
+       CROSS JOIN ${FTS}_content document ON document.id=${FTS}.rowid
+       WHERE ${FTS}.rowid=? AND ${FTS} MATCH ?`,
+    );
+    const docLength = db.prepare(`SELECT sz FROM ${FTS}_docsize WHERE id=?`);
+    const members = db.prepare(matches.sql);
     members.setReadBigInts(true);
-    const nativeMatch = useAnchor
-      ? db.prepare(
-          `SELECT ${HIGHLIGHTS} FROM ${FTS}
-           CROSS JOIN ${FTS}_content document ON document.id=${FTS}.rowid
-           WHERE ${FTS}.rowid=? AND ${FTS} MATCH ?`,
-        )
-      : undefined;
-    for (const row of members.iterate(...input.args)) {
+    for (const row of members.iterate(...matches.args)) {
+      const literature_id = String(row.literature_id);
+      if (total <= LIBRARY_COUNT_LIMIT) {
+        if (seen.has(literature_id))
+          throw new Error("duplicate library search rows");
+        seen.add(literature_id);
+        total++;
+      }
+      const doc = row.doc as bigint;
+      const length = budget
+        ? lengths(docLength.get(doc)?.sz).reduce(
+            (sum, tokens) => sum + tokens,
+            0,
+          )
+        : 0;
+      const cost = (length + SCORE_LOOKUP_COST) * terms.length;
+      if (cost > budget) {
+        budget = 0;
+        if (tail.length < RELEVANCE_RESULT_LIMIT)
+          tail.push({
+            literature_id,
+            relevance: null,
+            workset_at: row.workset_at as string | null,
+          });
+        continue;
+      }
+      budget -= cost;
+      scored++;
+      const text = indexedText?.get(doc);
       if (
-        nativeMatch &&
-        countIndexedText(row, phraseStarts, frequencies, tokenizer)
+        !text ||
+        !countIndexedText(text, phraseStarts, frequencies, tokenizer) ||
+        frequencies.includes(0)
       ) {
-        if (frequencies.includes(0)) continue;
-      } else {
-        const marked = nativeMatch
-          ? nativeMatch.get(row.doc as bigint, ftsQuery)
-          : row;
-        if (!marked) continue;
+        const marked = highlights.get(doc, ftsQuery);
+        if (!marked) throw new Error("missing FTS5 match");
         countHighlights(marked, frequencies, countSpan);
       }
       if (!weights) {
@@ -299,17 +328,6 @@ export function rankLibraryMembers(
           return idf > 0 ? idf : 0.000001;
         });
       }
-      const literature_id = String(row.literature_id);
-      if (total <= LIBRARY_COUNT_LIMIT) {
-        if (seen.has(literature_id))
-          throw new Error("duplicate library search rows");
-        seen.add(literature_id);
-        total++;
-      }
-      const length = lengths(row.lengths).reduce(
-        (sum, tokens) => sum + tokens,
-        0,
-      );
       let score = 0;
       for (let index = 0; index < weights.length; index++) {
         const weight = weights[index]!;
@@ -330,6 +348,10 @@ export function rankLibraryMembers(
   }
   return {
     total,
-    rows: scores.sort(orderScores).slice(0, RELEVANCE_RESULT_LIMIT),
+    rows: [...scores.sort(orderScores), ...tail].slice(
+      0,
+      RELEVANCE_RESULT_LIMIT,
+    ),
+    ...(tail.length ? { relevance_scored_count: scored } : {}),
   };
 }

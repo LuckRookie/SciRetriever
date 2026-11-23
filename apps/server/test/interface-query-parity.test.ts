@@ -1,6 +1,7 @@
 import { processorFixture } from "./processor-fixture.js";
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it, vi } from "vitest";
@@ -9,6 +10,7 @@ import { createMcpServer } from "../src/mcp/server.js";
 import { createQueryApplication } from "../src/bootstrap/application.js";
 import { startQueryOnlyHttp } from "../src/workbench/http.js";
 import { coreProcessingFixture } from "./core-processing-fixture.js";
+import { LIBRARY_MEMBER_SCORE_BUDGET } from "../src/storage/sqlite/library-search-rank.js";
 
 async function* input(value: unknown) {
   yield Buffer.from(JSON.stringify(value));
@@ -89,6 +91,36 @@ describe("shared Web, CLI and MCP query operations", () => {
       });
       expect(await cli(["literature", "search"], search)).toEqual(expected);
       expect(await machine("search_library", search)).toEqual(expected);
+      const terms = Array.from({ length: 80 }, (_, n) => `budgetword${n}`);
+      {
+        using db = new DatabaseSync(join(env.home, "catalog.sqlite"));
+        db.prepare(
+          "INSERT OR IGNORE INTO library_collected(literature_id,intake_at) VALUES(?,NULL)",
+        ).run(literature_id);
+        db.prepare(
+          "UPDATE literature_search_fts SET content_body=? WHERE literature_id=?",
+        ).run(
+          terms.join(" ") +
+            " filler".repeat(
+              Math.ceil(LIBRARY_MEMBER_SCORE_BUDGET / terms.length),
+            ),
+          literature_id,
+        );
+      }
+      const budgeted = {
+        query: { collection_scope: "collected", text: terms.join(" ") },
+        sort: "relevance",
+        limit: 10,
+      };
+      const partial = await http("search", budgeted, "page");
+      expect(partial).toMatchObject({
+        total_count: 1,
+        relevance_scored_count: 0,
+        items: [{ literature: { literature_id } }],
+        next_cursor: null,
+      });
+      expect(await cli(["literature", "search"], budgeted)).toEqual(partial);
+      expect(await machine("search_library", budgeted)).toEqual(partial);
       const miss = {
         ...search,
         query: { title: "nonexistent synthetic title" },

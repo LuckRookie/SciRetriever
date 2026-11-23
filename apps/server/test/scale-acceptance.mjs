@@ -26,7 +26,10 @@ import {
   libraryPageIds,
 } from "../dist/storage/sqlite/library-page.js";
 import { StoredLibraryState } from "../dist/storage/sqlite/library-state.js";
-import { rankLibraryMembers } from "../dist/storage/sqlite/library-search-rank.js";
+import {
+  LIBRARY_MEMBER_SCORE_BUDGET,
+  rankLibraryMembers,
+} from "../dist/storage/sqlite/library-search-rank.js";
 import { queryTerms } from "../dist/literature/query.js";
 import { normalizeQueryText } from "../dist/literature/unicode-casefold.js";
 import { SqliteWorker } from "../dist/storage/sqlite/worker.js";
@@ -781,18 +784,15 @@ function profileFulltextMembers(db, members) {
     for (const [name, { text, author }] of Object.entries(fulltextQueries)) {
       if (author) continue; // No version reaches the FTS cursor.
       const match = fulltextMatch(text);
-      const project = (extra, { match: required = match } = {}) => ({
-        sql: `SELECT document.c0 AS literature_id,document.id AS doc
-          ${extra ? "," + extra : ""}
+      const matches = {
+        sql: `SELECT document.c0 AS literature_id,document.id AS doc,NULL AS workset_at
           FROM json_each(?) member
           CROSS JOIN literature_search_fts_content document ON document.c0=member.value
           CROSS JOIN literature_search_fts ON literature_search_fts.rowid=document.id
           WHERE literature_search_fts MATCH ? AND sr_query_continue()`,
-        args: [scope, required],
-      });
-      const { sql, args } = project("", {
-        match: match.split(" AND ")[0],
-      });
+        args: [scope, match],
+      };
+      const { sql, args } = matches;
       const locate = db.prepare(sql);
       locate.setReadBigInts(true);
       const samples = [];
@@ -814,7 +814,8 @@ function profileFulltextMembers(db, members) {
               };
             if (
               statement.includes("FROM json_each(?) member") ||
-              statement.includes("SELECT CASE WHEN document.c")
+              statement.includes("SELECT CASE WHEN document.c") ||
+              statement.includes("SELECT document.c1,")
             )
               return {
                 setReadBigInts(value) {
@@ -853,7 +854,12 @@ function profileFulltextMembers(db, members) {
         };
         const rank = () => {
           const began = performance.now();
-          matched = rankLibraryMembers(timedDb, project, match, false).total;
+          matched = rankLibraryMembers(
+            timedDb,
+            matches,
+            match,
+            Number.MAX_SAFE_INTEGER,
+          ).total;
           rankedMs = performance.now() - began;
         };
         if (trial % 2 === 0) {
@@ -1129,6 +1135,250 @@ async function fulltextSearch() {
     db.close();
     result.environment.load_finish = loadavg();
     await save();
+  }
+}
+
+async function setBudgetBenchmarkCollection(ids) {
+  const db = new DatabaseSync(catalog);
+  try {
+    db.exec(`PRAGMA foreign_keys=ON; BEGIN IMMEDIATE;
+      CREATE TEMP TABLE selected(literature_id TEXT PRIMARY KEY) WITHOUT ROWID;`);
+    db.prepare("INSERT INTO selected SELECT value FROM json_each(?)").run(
+      JSON.stringify(ids),
+    );
+    db.exec(`DELETE FROM library_collected WHERE literature_id NOT IN (SELECT literature_id FROM selected);
+      DELETE FROM library_collection_times WHERE literature_id NOT IN (SELECT literature_id FROM selected);
+      INSERT INTO library_collected(literature_id,intake_at)
+      SELECT s.literature_id, i.intake_at FROM selected s LEFT JOIN literature_intake i USING(literature_id)
+      WHERE true ON CONFLICT DO NOTHING;
+      COMMIT;`);
+    assert.equal(
+      db.prepare("SELECT count(*) AS n FROM library_collected").get().n,
+      ids.length,
+    );
+  } finally {
+    if (db.isTransaction) db.exec("ROLLBACK");
+    db.close();
+  }
+  const worker = new SqliteWorker(catalog);
+  try {
+    while (await worker.libraryStatePending()) {
+      stop.signal.throwIfAborted();
+      await worker.refreshLibraryState();
+    }
+  } finally {
+    await worker.close();
+  }
+}
+
+function budgetBenchmarkGroups() {
+  const db = new DatabaseSync(catalog, { readOnly: true });
+  try {
+    const { all, half } = fulltextWorksets(db);
+    const noBody = db
+      .prepare(
+        `WITH original AS MATERIALIZED (
+      SELECT representative_literature_id FROM meta_literatures ORDER BY rowid LIMIT ?
+    ), ordered AS (
+      SELECT m.representative_literature_id AS literature_id,
+        row_number() OVER (ORDER BY m.representative_literature_id) AS ordinal
+      FROM original m
+      WHERE NOT EXISTS(
+        SELECT 1 FROM literature_assets a WHERE a.literature_id=m.representative_literature_id
+          AND a.role='primary-pdf'
+      )
+    )
+    SELECT literature_id,0 AS has_body FROM ordered WHERE (ordinal-1) % ?=0
+    ORDER BY ordinal LIMIT ?`,
+      )
+      .all(
+        corpus.papers,
+        (corpus.papers - corpus.obtained) / all.length,
+        all.length,
+      );
+    assert.equal(noBody.length, all.length);
+    const ordinary = db
+      .prepare(
+        `SELECT m.literature_id,EXISTS(
+      SELECT 1 FROM literature_assets a WHERE a.literature_id=m.literature_id AND a.role='primary-pdf'
+    ) AS has_body FROM library_ordered_members m WHERE m.kind='folder' AND scope_id=?`,
+      )
+      .all(folder);
+    assert.equal(ordinary.length, 10_000);
+    return { all, half, none: noBody, folder: ordinary };
+  } finally {
+    db.close();
+  }
+}
+
+async function worksetBudgetSearch() {
+  assert.ok(resolve(destination).startsWith(resolve("sandbox/reports") + "/"));
+  const data = {
+    scale,
+    budget: LIBRARY_MEMBER_SCORE_BUDGET,
+    environment: { node: process.version, kernel: release(), load: loadavg() },
+    groups: {},
+    warnings: [],
+  };
+  const save = () =>
+    writeFile(destination, JSON.stringify(data, null, 2) + "\n");
+  for (const [group, cohort] of Object.entries(budgetBenchmarkGroups())) {
+    if (group !== "folder")
+      await setBudgetBenchmarkCollection(
+        cohort.map(({ literature_id }) => literature_id),
+      );
+    const scope =
+      group === "folder"
+        ? {
+            collection_scope: "all",
+            folder: { id: folder, include_descendants: false },
+          }
+        : { collection_scope: "collected" };
+    const ids = new Set(cohort.map(({ literature_id }) => literature_id));
+    const entry = (data.groups[group] = {
+      versions: ids.size,
+      with_body: cohort.filter(({ has_body }) => has_body).length,
+      queries: {},
+      points: [],
+    });
+    const server = spawn("serve", data.warnings);
+    let writer;
+    try {
+      const { origin } = await server.first();
+      const request = await client(origin);
+      writer = spawn("writer", data.warnings);
+      writer.child.on("message", (point) => entry.points.push(point));
+      await writer.first();
+      await wait(2500);
+      const started = Date.now();
+      for (const [name, criteria] of Object.entries(fulltextQueries)) {
+        const samples = [];
+        for (let trial = 0; trial < (scale === "1m" ? trials : 3); trial++) {
+          let page;
+          const ms = await measure(async () => {
+            ({ page } = await request("/api/v1/query/search", {
+              query: { ...scope, ...criteria },
+              sort: "relevance",
+              limit: 50,
+            }));
+          });
+          const scored = page.relevance_scored_count ?? page.total_count;
+          assert.equal(page.items.length, criteria.author ? 0 : 50);
+          assert.equal(page.count_truncated, undefined);
+          assert.equal(page.scan_incomplete, undefined);
+          assert.ok(scored >= 0 && scored <= page.total_count);
+          assert.ok(
+            page.items.every(({ literature }) =>
+              ids.has(literature.literature_id),
+            ),
+          );
+          if (name !== "spectroscopy")
+            assert.equal(page.total_count, criteria.author ? 0 : ids.size);
+          samples.push({ ms, scored, total: page.total_count });
+          await wait(40);
+        }
+        const distribution = stats(samples.map(({ ms }) => ms));
+        assert.equal(new Set(samples.map(({ scored }) => scored)).size, 1);
+        entry.queries[name] = {
+          ...distribution,
+          scored: samples[0].scored,
+          samples,
+        };
+        console.log(group, name, distribution, "scored", samples[0].scored);
+        await save();
+      }
+      const points = entry.points.filter(
+        ({ committed }) => committed >= started,
+      );
+      const first = points[0],
+        last = points.at(-1);
+      assert.ok(first && last.committed > first.committed);
+      entry.papers_per_second =
+        (1000 * (last.papers - first.papers)) /
+        (last.committed - first.committed);
+    } finally {
+      try {
+        await writer?.close();
+      } finally {
+        await server.close();
+        await save();
+      }
+    }
+  }
+  data.completed = true;
+  await save();
+}
+
+async function worksetBudgetSweep() {
+  assert.ok(resolve(destination).startsWith(resolve("sandbox/reports") + "/"));
+  const budgets = (reference ?? "0,1000000,2000000,4000000")
+    .split(",")
+    .map(Number);
+  assert.ok(budgets.every((n) => Number.isSafeInteger(n) && n >= 0));
+  const data = { scale, budgets, samples: {}, points: [], warnings: [] };
+  const db = new DatabaseSync(catalog, { readOnly: true });
+  const writer = spawn("writer", data.warnings);
+  try {
+    db.exec("PRAGMA query_only=ON; PRAGMA busy_timeout=5000");
+    new StoredLibraryState(db, { max_tags: 6, archive_profile: "vlm-engine" });
+    db.function("sr_query_continue", () => {
+      stop.signal.throwIfAborted();
+      return 1;
+    });
+    db.function("sr_normalize", { deterministic: true }, (x) =>
+      x === null ? null : normalizeQueryText(x),
+    );
+    writer.child.on("message", (point) => data.points.push(point));
+    await writer.first();
+    await wait(2500);
+    for (const [name, criteria] of Object.entries(fulltextQueries)) {
+      if (criteria.author) continue;
+      const query = parseLibrarySearchRequest({
+        query: {
+          ...criteria,
+          folder: {
+            id: prepared.fulltext_folders.all,
+            include_descendants: false,
+          },
+        },
+      }).query;
+      const plan = {
+        query,
+        ftsQuery: fulltextMatch(criteria.text),
+        after: null,
+        sort: "relevance",
+        limit: 50,
+      };
+      const byBudget = (data.samples[name] = {});
+      for (const budget of budgets) {
+        const samples = [];
+        const cache = new LibraryRelevanceCache(undefined, budget);
+        for (let i = 0; i < 7; i++) {
+          await wait(40);
+          db.exec("BEGIN");
+          try {
+            const start = performance.now();
+            const page = libraryPageIds(db, plan, cache);
+            samples.push({
+              ms: performance.now() - start,
+              scored: page.relevance_scored_count ?? page.total_count,
+            });
+          } finally {
+            db.exec("COMMIT");
+          }
+        }
+        byBudget[budget] = { ...stats(samples.map(({ ms }) => ms)), samples };
+        console.log(name, budget, byBudget[budget].p95_ms, samples[0].scored);
+      }
+    }
+    data.completed = true;
+  } finally {
+    try {
+      await writer.close();
+    } finally {
+      db.close();
+      await writeFile(destination, JSON.stringify(data, null, 2) + "\n");
+    }
   }
 }
 
@@ -1702,6 +1952,8 @@ if (resolve(process.argv[1]) === import.meta.filename) {
   else if (mode === "inspect-task") await inspectTask();
   else if (mode === "task-sidecar") await taskSidecar();
   else if (mode === "fulltext-search") await fulltextSearch();
+  else if (mode === "workset-budget") await worksetBudgetSearch();
+  else if (mode === "workset-budget-sweep") await worksetBudgetSweep();
   else if (mode === "search-windows" || mode === "search-candidates")
     await searchWindows();
   else if (

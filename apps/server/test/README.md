@@ -61,6 +61,13 @@ timeout --kill-after=35s 8m node apps/server/test/scale-acceptance.mjs search-wi
 timeout --kill-after=40s 25m node apps/server/test/scale-acceptance.mjs fulltext-search "$copy_1m" "$report_dir/fulltext-1m.json"
 ```
 
+`workset-budget` 复用同一正文夹具，依次测全正文、半正文、纯书目的三个收进来范围，以及原来的万篇文件夹。每档使用独立服务与写入进程。按上述四条查询从发出 HTTP 请求计到首批 50 项解析完成，各取 20 次，记录 P50、P95、实际打分数和写速率。`workset-budget-sweep` 在全正文文件夹直接读取 SQLite 首页，测试不同预算的定位和计分耗时。准备成员及回填计数在计时之外。
+
+```sh
+timeout --kill-after=35s 8m node apps/server/test/scale-acceptance.mjs workset-budget-sweep "$copy_1m" "$report_dir/workset-budget-sweep.json"
+timeout --kill-after=40s 25m node apps/server/test/scale-acceptance.mjs workset-budget "$copy_1m" "$report_dir/workset-budget-1m.json"
+```
+
 [上级目录](../README.md) · [项目 README](../../../README.md)
 
 `workbench-auth-fixture.ts` 只服务隔离回归：使用合成密码、绑定 loopback，并经真实 `/auth/login` 为 HTTP/浏览器旅程取得会话，不绕过统一认证。默认对外监听和自动密钥由 `web-remote-access.test.ts` 验证。

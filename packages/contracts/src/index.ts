@@ -373,6 +373,8 @@ export interface LibrarySearchPage extends LibrarySearchTotal {
   readonly tag_backfill_pending?: number;
   /** Present when only the highest-ranked results are available to paginate. */
   readonly relevance_limit?: typeof RELEVANCE_RESULT_LIMIT;
+  /** Only this many workset matches were scored. The rest follow in workset order. */
+  readonly relevance_scored_count?: number;
   /** Raw FTS hits in an incomplete scan window, before applying filters. */
   readonly scan_limit?: number;
   /** Start a search (or counts/facets) in the next, earlier raw-hit window. */

@@ -23,6 +23,7 @@ import {
   parseLiteratureId,
   parseLiteratureReferenceRequest,
   parseReferenceId,
+  parseUtcTimestamp,
   sha256,
   type LibraryQuery,
   type LibrarySearchPage,
@@ -42,6 +43,7 @@ import { ftsIndexText, normalizeQueryText } from "./unicode-casefold.js";
 export interface SearchSnapshotRow {
   readonly item: LiteratureSearchItem;
   readonly relevance: number | null;
+  readonly workset_at?: string | null;
   readonly discovery_run_ids: readonly string[];
   readonly has_pdf_exhaustion: boolean;
   readonly tag_match?: boolean;
@@ -107,6 +109,7 @@ export interface LibraryQueryRepository {
       readonly rows: readonly SearchSnapshotRow[];
       readonly tag_backfill_pending?: number;
       readonly ranking_id?: string;
+      readonly relevance_scored_count?: number;
       readonly search_window?: LibrarySearchWindow;
     }
   >;
@@ -299,6 +302,7 @@ export interface Position {
   readonly secondary?: number | null;
   readonly total?: Pick<LibrarySearchTotal, "total_count" | "count_truncated">;
   readonly ranking_id?: string;
+  readonly workset_at?: string | null;
   readonly search_window?: LibrarySearchWindow;
   readonly legacy_newest_rowid?: string;
 }
@@ -341,6 +345,12 @@ function position(row: SearchSnapshotRow, sort: LibrarySort): Position {
       ...(fields.length === 2
         ? { secondary: facts?.[fields[1]!] ?? null }
         : {}),
+    };
+  if (sort === "relevance" && row.workset_at !== undefined)
+    return {
+      literature_id: l.literature_id,
+      value: null,
+      workset_at: row.workset_at,
     };
   return {
     literature_id: l.literature_id,
@@ -422,7 +432,9 @@ function positionPayload(p: Position, sort: LibrarySort): object {
       normalized_title: p.value,
       title_is_null: p.value === null,
     };
-  return { literature_id: p.literature_id, bm25: p.value };
+  return p.workset_at !== undefined
+    ? { literature_id: p.literature_id, workset_at: p.workset_at }
+    : { literature_id: p.literature_id, bm25: p.value };
 }
 function encodePosition(
   p: Position,
@@ -432,6 +444,7 @@ function encodePosition(
   rankingId?: string,
   window?: LibrarySearchWindow,
 ): string {
+  const unscored = p.workset_at !== undefined;
   const core = {
     kind: "library-search",
     payload: {
@@ -441,11 +454,13 @@ function encodePosition(
       total,
       ...(window
         ? { ranking_id: rankingId ?? null, search_window: window }
-        : rankingId
-          ? { ranking_id: rankingId }
-          : {}),
+        : unscored
+          ? { ranking_id: rankingId ?? null }
+          : rankingId
+            ? { ranking_id: rankingId }
+            : {}),
     },
-    version: window ? 5 : rankingId ? 3 : 2,
+    version: unscored ? 6 : window ? 5 : rankingId ? 3 : 2,
   };
   return Buffer.from(canonical({ checksum: digest(core), ...core })).toString(
     "base64url",
@@ -574,7 +589,8 @@ function decodePosition(
         e.version !== 2 &&
         e.version !== 3 &&
         e.version !== 4 &&
-        e.version !== 5) ||
+        e.version !== 5 &&
+        e.version !== 6) ||
       e.kind !== "library-search" ||
       digest({ kind: e.kind, payload: e.payload, version: e.version }) !==
         e.checksum
@@ -585,9 +601,7 @@ function decodePosition(
       "query_fingerprint",
       "sort",
       ...(e.version !== 1 ? ["total"] : []),
-      ...(e.version === 3 || e.version === 4 || e.version === 5
-        ? ["ranking_id"]
-        : []),
+      ...(Number(e.version) >= 3 ? ["ranking_id"] : []),
       ...(e.version === 4 ? ["candidate_window"] : []),
       ...(e.version === 5 ? ["search_window"] : []),
     ]);
@@ -599,10 +613,17 @@ function decodePosition(
     const total =
       e.version !== 1 ? parseLibrarySearchTotal(payload.total) : undefined;
     const rankingId = payload.ranking_id;
-    if ((e.version === 3 || e.version === 4) && sort !== "relevance") fail();
+    const unscored = e.version === 6;
+    if (
+      ((e.version === 3 || e.version === 4 || unscored) &&
+        sort !== "relevance") ||
+      (unscored && query.text === null)
+    )
+      fail();
     if (
       (e.version === 3 ||
-        ((e.version === 4 || e.version === 5) && rankingId !== null)) &&
+        ((e.version === 4 || e.version === 5 || unscored) &&
+          rankingId !== null)) &&
       (sort !== "relevance" ||
         typeof rankingId !== "string" ||
         !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(rankingId))
@@ -679,7 +700,9 @@ function decodePosition(
               ? "publication_year"
               : sort.startsWith("title")
                 ? "normalized_title"
-                : "bm25";
+                : unscored
+                  ? "workset_at"
+                  : "bm25";
     const flag =
       field === "last_opened_at"
         ? "opened_is_null"
@@ -692,7 +715,7 @@ function decodePosition(
               : "title_is_null";
     const p = object(
       payload.position,
-      field === "bm25"
+      field === "bm25" || field === "workset_at"
         ? ["literature_id", field]
         : ["literature_id", field, flag],
     );
@@ -710,7 +733,13 @@ function decodePosition(
         new Date(value).toISOString() !== value)
     )
       fail();
-    if (field !== "bm25" && p[flag] !== (value === null)) fail();
+    if (field === "workset_at" && value !== null) parseUtcTimestamp(value);
+    if (
+      field !== "bm25" &&
+      field !== "workset_at" &&
+      p[flag] !== (value === null)
+    )
+      fail();
     if (
       field === "publication_year" &&
       value !== null &&
@@ -735,7 +764,8 @@ function decodePosition(
       fail();
     return {
       literature_id: p.literature_id,
-      value: value as Position["value"],
+      value: unscored ? null : (value as Position["value"]),
+      ...(unscored ? { workset_at: value as string | null } : {}),
       ...(total && !legacy ? { total } : {}),
       ...(typeof rankingId === "string" && !legacy
         ? { ranking_id: rankingId }
@@ -1207,6 +1237,9 @@ export class LiteratureQueryService {
         result.search_window?.scan_incomplete)
         ? { relevance_limit: RELEVANCE_RESULT_LIMIT }
         : {}),
+      ...(result.relevance_scored_count === undefined
+        ? {}
+        : { relevance_scored_count: result.relevance_scored_count }),
       ...(ftsQuery && result.search_window?.scan_incomplete
         ? {
             scan_incomplete: true as const,

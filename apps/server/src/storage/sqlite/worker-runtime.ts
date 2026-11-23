@@ -1410,6 +1410,7 @@ function librarySearchPage(
           : {}),
       },
       relevance: row.relevance,
+      ...(row.workset_at === undefined ? {} : { workset_at: row.workset_at }),
       has_pdf_exhaustion: !!db
         .prepare(
           "SELECT 1 FROM automatic_pdf_acquisition_exhaustions WHERE literature_id=?",

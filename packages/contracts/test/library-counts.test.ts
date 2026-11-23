@@ -76,6 +76,24 @@ it("keeps an unfinished text scan separate from count and relevance limits", () 
     expect(() => parseLibrarySearchRequest(invalid)).toThrow();
 });
 
+it("exposes the number of scored workset matches only on a search page", () => {
+  expectTypeOf<LibrarySearchPage["relevance_scored_count"]>().toEqualTypeOf<
+    number | undefined
+  >();
+  const page: LibrarySearchPage = {
+    total_count: 1,
+    relevance_scored_count: 0,
+    items: [],
+    next_cursor: null,
+  };
+  expect(() =>
+    parseLibrarySearchTotal({
+      total_count: page.total_count,
+      relevance_scored_count: page.relevance_scored_count,
+    }),
+  ).toThrow();
+});
+
 it("parses exact version counts and paper counts without equating their units", () => {
   // The matching preprint can lack PDF while its sibling outside the scope has one.
   expect(parseLibraryCounts(counts)).toEqual(counts);

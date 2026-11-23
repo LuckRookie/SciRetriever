@@ -53,9 +53,14 @@ import type {
 } from "../../literature/query.js";
 import type { LibraryCollectionTargets } from "./library-state.js";
 import type { WorksetKind } from "./library-paging-schema.js";
+import type { LibraryRelevanceRow } from "./library-search-rank.js";
 const suffix = import.meta.url.endsWith(".ts") ? ".ts" : ".js";
-const { rankLibraryMembers }: typeof import("./library-search-rank.js") =
-  await import(new URL("./library-search-rank" + suffix, import.meta.url).href);
+const {
+  rankLibraryMembers,
+  LIBRARY_MEMBER_SCORE_BUDGET,
+}: typeof import("./library-search-rank.js") = await import(
+  new URL("./library-search-rank" + suffix, import.meta.url).href
+);
 const { libraryPagingReady }: typeof import("./library-paging-state.js") =
   await import(
     new URL("./library-paging-state" + suffix, import.meta.url).href
@@ -553,6 +558,23 @@ function memberTextSource(
   return undefined;
 }
 
+function indexedTitleMatch(ftsQuery: string): Sql | undefined {
+  const terms = ftsQuery.split(" AND ");
+  if (terms.length > 8 || terms.some((term) => !/^"[a-z0-9]+"$/u.test(term)))
+    return undefined;
+  // Spaces delimit ASCII tokens in unicode61. A positive title check
+  // proves the match. Other titles still need the complete FTS lookup.
+  return {
+    sql: `CASE WHEN instr(document.c1,char(0))=0 AND ${terms
+      .map(() => "instr(' '||document.c1||' ',?)>0")
+      .join(" AND ")}
+      THEN 1 ELSE EXISTS(
+        SELECT 1 FROM ${FTS} WHERE ${FTS_ROWID}=document.id AND ${FTS} MATCH ?
+      ) END`,
+    args: [...terms.map((term) => ` ${term.slice(1, -1)} `), ftsQuery],
+  };
+}
+
 function textScope(
   db: DatabaseSync,
   query: LibraryQuery,
@@ -567,15 +589,17 @@ function textScope(
   });
   const source = memberTextSource(query, filter, cutoff);
   const columns = `l.literature_id${countStatuses ? `,${filter.status} AS status` : ""}`;
+  const worksetAt = query.recently_opened
+    ? "member.last_opened_at"
+    : orderedWorkset(query)
+      ? INTAKE_SQL
+      : collectionTimeSql("l.literature_id", filter.pagingReady);
   const memberProjection =
     source &&
-    ((
-      extra?: string,
-      {
-        match = ftsQuery,
-        completeHitsJson,
-      }: { match?: string; completeHitsJson?: string } = {},
-    ): Sql => {
+    (({
+      ordered = false,
+      completeHitsJson,
+    }: { ordered?: boolean; completeHitsJson?: string } = {}): Sql => {
       const members =
         completeHitsJson === undefined
           ? source
@@ -585,20 +609,28 @@ function textScope(
               args: [...source.args, completeHitsJson],
             };
       const seekFts = completeHitsJson === undefined;
+      const titleMatch =
+        seekFts && ordered ? indexedTitleMatch(ftsQuery) : undefined;
       return {
-        sql: `SELECT ${columns}${seekFts ? ", document.id AS doc" : ""} ${extra ? "," + extra : ""}
+        sql: `SELECT ${columns}${seekFts ? ", document.id AS doc" : ""}
+        ${ordered ? `,${worksetAt} AS workset_at` : ""}
         FROM (${members.sql}) member
         CROSS JOIN literatures l ON l.literature_id=member.literature_id
         CROSS ${filter.joins}
         ${
           seekFts
             ? `CROSS JOIN ${FTS_OWNER} document ON document.c0=l.literature_id
-          CROSS JOIN ${FTS} ON ${FTS_ROWID}=document.id`
+          ${titleMatch ? "" : `CROSS JOIN ${FTS} ON ${FTS_ROWID}=document.id`}`
             : ""
         }
-        ${filter.where} ${seekFts ? `AND ${FTS} MATCH ?` : ""}
-        ${query.recently_opened ? "ORDER BY member.last_opened_at DESC,member.literature_id LIMIT 100" : ""}`,
-        args: [...members.args, ...filter.args, ...(seekFts ? [match] : [])],
+        ${filter.where} ${seekFts ? `AND ${titleMatch?.sql ?? `${FTS} MATCH ?`}` : ""}
+        ${ordered || query.recently_opened ? `ORDER BY ${ordered ? "workset_at" : "member.last_opened_at"} DESC,member.literature_id` : ""}
+        ${query.recently_opened ? "LIMIT 100" : ""}`,
+        args: [
+          ...members.args,
+          ...filter.args,
+          ...(seekFts ? (titleMatch?.args ?? [ftsQuery]) : []),
+        ],
       };
     });
   return {
@@ -649,7 +681,7 @@ function textAggregation(
     const members =
       completeHits === undefined
         ? memberProjection()
-        : memberProjection(undefined, { completeHitsJson: completeHits });
+        : memberProjection({ completeHitsJson: completeHits });
     return {
       filter,
       matching: `SELECT * FROM (${members.sql})`,
@@ -878,8 +910,10 @@ export function librarySearchTotal(
 }
 
 type PageRow = Record<string, SQLOutputValue>;
-type RankingRow = { literature_id: string; relevance: number };
-type Ranking = { rows: RankingRow[] };
+type Ranking = {
+  rows: LibraryRelevanceRow[];
+  relevance_scored_count?: number;
+};
 
 /** One worker owns each text page and its continuation. Same-file reconnects keep this cache. */
 export class LibraryRelevanceCache {
@@ -889,9 +923,14 @@ export class LibraryRelevanceCache {
   >();
 
   readonly windowLimit: number;
+  readonly memberScoreBudget: number;
 
-  constructor(windowLimit = LIBRARY_SEARCH_WINDOW_LIMIT) {
+  constructor(
+    windowLimit = LIBRARY_SEARCH_WINDOW_LIMIT,
+    memberScoreBudget = LIBRARY_MEMBER_SCORE_BUDGET,
+  ) {
     this.windowLimit = windowLimit;
+    this.memberScoreBudget = memberScoreBudget;
   }
 
   get(id: string, key: string) {
@@ -917,7 +956,7 @@ export class LibraryRelevanceCache {
 
 function relevancePage(
   db: DatabaseSync,
-  ranked: RankingRow[],
+  ranked: LibraryRelevanceRow[],
   after: Position | null,
   limit: number,
   cached: boolean,
@@ -929,18 +968,31 @@ function relevancePage(
     throw new Error("duplicate library search rows");
   let start = 0;
   if (after) {
-    const anchor = ranked.findIndex(
-      (row) => row.literature_id === after.literature_id,
-    );
-    if (anchor >= 0) start = anchor + 1;
-    else {
+    const at = after.workset_at;
+    if (at !== undefined) {
       const next = ranked.findIndex(
         (row) =>
-          row.relevance > Number(after.value) ||
-          (row.relevance === after.value &&
-            row.literature_id > after.literature_id),
+          row.relevance === null &&
+          (row.workset_at === at
+            ? row.literature_id > after.literature_id
+            : at !== null && (row.workset_at === null || row.workset_at < at)),
       );
       start = next < 0 ? ranked.length : next;
+    } else {
+      const anchor = ranked.findIndex(
+        (row) => row.literature_id === after.literature_id,
+      );
+      if (anchor >= 0) start = anchor + 1;
+      else {
+        const next = ranked.findIndex(
+          (row) =>
+            row.relevance === null ||
+            row.relevance > Number(after.value) ||
+            (row.relevance === after.value &&
+              row.literature_id > after.literature_id),
+        );
+        start = next < 0 ? ranked.length : next;
+      }
     }
   }
   const visible = cached
@@ -949,7 +1001,7 @@ function relevancePage(
       WHERE l.literature_id=? AND sr_query_continue() AND ${visibleLiteratureSql("l.literature_id")}`,
       )
     : undefined;
-  const rows: RankingRow[] = [];
+  const rows: LibraryRelevanceRow[] = [];
   for (let i = start; i < ranked.length && rows.length <= limit; i++) {
     const row = ranked[i]!;
     if (!visible || visible.get(row.literature_id)) rows.push(row);
@@ -961,6 +1013,7 @@ type Page = LibrarySearchTotal & {
   readonly rows: PageRow[];
   readonly tag_backfill_pending?: number;
   readonly ranking_id?: string;
+  readonly relevance_scored_count?: number;
   readonly search_window?: LibrarySearchWindow;
 };
 
@@ -1100,6 +1153,9 @@ function textLibraryPage(
       ...flags,
       ...tags,
       ranking_id: previousId!,
+      ...(cached.relevance_scored_count === undefined
+        ? {}
+        : { relevance_scored_count: cached.relevance_scored_count }),
       ...(after.search_window ? { search_window: after.search_window } : {}),
       ...(after.search_window?.scan_incomplete
         ? { scan_incomplete: true as const }
@@ -1110,17 +1166,19 @@ function textLibraryPage(
   let total: LibrarySearchTotal;
   let window: LibrarySearchWindow | undefined;
   let matches: Sql;
-  let ranked: RankingRow[] | undefined;
+  let ranking: Ranking | undefined;
+  const rankMembers = () =>
+    rankLibraryMembers(
+      db,
+      memberProjection!({ ordered: true }),
+      ftsQuery!,
+      cache?.memberScoreBudget,
+    );
   if (memberMatches && memberProjection) {
     if (beforeRowid !== undefined) invalidWindow();
     if (sort === "relevance") {
-      const initial = rankLibraryMembers(
-        db,
-        memberProjection,
-        ftsQuery!,
-        query.recently_opened === true,
-      );
-      ranked = initial.rows;
+      const initial = rankMembers();
+      ranking = initial;
       total = after?.total ?? countFromSample(initial.total);
     } else if (after?.total) total = after.total;
     else {
@@ -1144,7 +1202,7 @@ function textLibraryPage(
     );
     window = first.window;
     total = after?.total ?? countFromSample(first.total);
-    ranked = first.rows;
+    ranking = { rows: first.rows };
     matches = {
       sql: "SELECT value AS literature_id FROM json_each(?)",
       args: [JSON.stringify(first.rows.map((row) => row.literature_id))],
@@ -1167,17 +1225,15 @@ function textLibraryPage(
   };
   if (sort === "relevance") {
     if (!after && total.total_count === 0) return { rows: [], ...summary };
-    ranked ??= rankLibraryMembers(
-      db,
-      memberProjection!,
-      ftsQuery!,
-      query.recently_opened === true,
-    ).rows;
-    const rankingId = rankingKey && cache?.put(rankingKey, { rows: ranked });
+    ranking ??= rankMembers();
+    const rankingId = rankingKey && cache?.put(rankingKey, ranking);
     return {
       ...summary,
       ...(rankingId ? { ranking_id: rankingId } : {}),
-      rows: relevancePage(db, ranked, after, limit, false),
+      ...(ranking.relevance_scored_count === undefined
+        ? {}
+        : { relevance_scored_count: ranking.relevance_scored_count }),
+      rows: relevancePage(db, ranking.rows, after, limit, false),
     };
   }
   return {

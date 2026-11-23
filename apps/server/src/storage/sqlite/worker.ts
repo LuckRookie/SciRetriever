@@ -41,6 +41,7 @@ import {
   parseReference,
   parseReferenceDetail,
   parseTaskProgress,
+  parseUtcTimestamp,
   sha256,
   type ArticleIdentityAssessment,
   type ArtifactRef,
@@ -3511,6 +3512,7 @@ export class SqliteWorker {
       readonly rows: readonly SearchSnapshotRow[];
       readonly tag_backfill_pending?: number;
       readonly ranking_id?: string;
+      readonly relevance_scored_count?: number;
       readonly search_window?: LibrarySearchWindow;
     }
   > {
@@ -3518,6 +3520,7 @@ export class SqliteWorker {
       rows: unknown;
       tag_backfill_pending?: number;
       ranking_id?: string;
+      relevance_scored_count?: number;
       search_window?: unknown;
     } & Record<string, unknown>;
     const result = await this.run<Page | { defer: true }>(
@@ -3553,6 +3556,7 @@ export class SqliteWorker {
       rows: rawRows,
       tag_backfill_pending,
       ranking_id,
+      relevance_scored_count,
       search_window,
       ...summary
     } = page;
@@ -3580,11 +3584,23 @@ export class SqliteWorker {
       throw new SqliteWorkerError();
     if (
       total.scan_incomplete !== window?.scan_incomplete ||
-      ((ranking_id !== undefined || window?.scan_incomplete) &&
+      ((ranking_id !== undefined ||
+        window?.scan_incomplete ||
+        relevance_scored_count !== undefined) &&
         ((request.sort !== "relevance" && !request.relevanceForLargeScope) ||
           request.fullRelevance)) ||
       (ranking_id !== undefined &&
         !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(ranking_id))
+    )
+      throw new SqliteWorkerError();
+    if (
+      relevance_scored_count !== undefined &&
+      (window ||
+        !Number.isSafeInteger(relevance_scored_count) ||
+        relevance_scored_count < 0 ||
+        (!request.after?.total &&
+          !total.count_truncated &&
+          relevance_scored_count >= total.total_count))
     )
       throw new SqliteWorkerError();
     return {
@@ -3592,6 +3608,9 @@ export class SqliteWorker {
       ...total,
       ...(tag_backfill_pending === undefined ? {} : { tag_backfill_pending }),
       ...(ranking_id === undefined ? {} : { ranking_id }),
+      ...(relevance_scored_count === undefined
+        ? {}
+        : { relevance_scored_count }),
       ...(window ? { search_window: window } : {}),
     };
   }
@@ -3640,6 +3659,7 @@ export class SqliteWorker {
         typeof row.has_pdf_exhaustion !== "boolean" ||
         !Array.isArray(row.discovery_run_ids) ||
         row.discovery_run_ids.some((id: unknown) => typeof id !== "string") ||
+        (row.workset_at !== undefined && row.relevance !== null) ||
         (row.relevance !== null &&
           (typeof row.relevance !== "number" ||
             !Number.isFinite(row.relevance)))
@@ -3654,6 +3674,14 @@ export class SqliteWorker {
           : { tag_match: row.tag_match === true }),
         item: parseLiteratureSearchItem(row.item),
         relevance: row.relevance as number | null,
+        ...(row.workset_at === undefined
+          ? {}
+          : {
+              workset_at:
+                row.workset_at === null
+                  ? null
+                  : parseUtcTimestamp(row.workset_at),
+            }),
         has_pdf_exhaustion: row.has_pdf_exhaustion as boolean,
         discovery_run_ids: Object.freeze(row.discovery_run_ids as string[]),
       });

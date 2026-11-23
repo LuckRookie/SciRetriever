@@ -364,6 +364,118 @@ it("preserves member BM25 scores for overlapping phrases and Unicode terms", () 
   }
 });
 
+it("uses actual frequencies for clamped IDF and ranks only the workset prefix that fits", async () => {
+  using db = new DatabaseSync(":memory:");
+  initialize(db);
+  const folder = id(100);
+  const january = "2026-01-01T00:00:00.000Z";
+  const february = "2026-02-01T00:00:00.000Z";
+  const march = "2026-03-01T00:00:00.000Z";
+  db.prepare(
+    "INSERT INTO folders(folder_id,name,position,created_at,updated_at) VALUES(?,'budget',0,?,?)",
+  ).run(folder, january, january);
+  const insertMember = db.prepare(
+    "INSERT INTO folder_members(folder_id,literature_id,added_at,actor) VALUES(?,?,?,'user')",
+  );
+  const intake = db.prepare(
+    `INSERT INTO literature_intake(literature_id,intake_at) VALUES(?,?)
+     ON CONFLICT(literature_id) DO UPDATE SET intake_at=excluded.intake_at`,
+  );
+  for (const [n, terms, at] of [
+    [1, "ranked ranked ranked", january],
+    [2, "ranked ranked filler", february],
+    [3, "ranked filler filler", march],
+    [4, "ranked ranked ranked", null],
+    [5, "ranked filler filler", january],
+    [6, "filler filler filler", march],
+  ] as const) {
+    add(db, n, n, "Fixture", 2026);
+    db.prepare(
+      "UPDATE literature_search_fts SET title='',content_body=? WHERE rowid=?",
+    ).run(terms, n);
+    intake.run(id(n), at);
+    insertMember.run(folder, id(n), january);
+  }
+  const query = {
+    ...page.query,
+    folder: { id: folder, include_descendants: false },
+  };
+  const storageRequest = { ...page, query };
+  const exact = allRanks(db);
+  expect(exact).toHaveLength(5);
+  expect(new Set(exact.map(({ relevance }) => relevance)).size).toBe(3);
+  const ample = libraryPageIds(
+    db,
+    storageRequest,
+    new LibraryRelevanceCache(1, 2_000),
+  );
+  expect(ample.rows).toEqual(exact);
+  expect(ample).not.toHaveProperty("relevance_scored_count");
+  const cache = new LibraryRelevanceCache(1, 2 * (3 + 256));
+  const limited = libraryPageIds(db, storageRequest, cache);
+  expect(limited).toMatchObject({ total_count: 5, relevance_scored_count: 2 });
+  expect(limited.rows).toEqual([
+    ...exact.filter(({ literature_id }) =>
+      [id(2), id(3)].includes(String(literature_id)),
+    ),
+    { literature_id: id(1), relevance: null, workset_at: january },
+    { literature_id: id(5), relevance: null, workset_at: january },
+    { literature_id: id(4), relevance: null, workset_at: null },
+  ]);
+  expect(libraryCounts(db, query, page.ftsQuery).total).toBe(5);
+  expect(libraryFacets(db, query, page.ftsQuery, 5).total).toBe(5);
+  expect(
+    libraryPageIds(db, { ...storageRequest, sort: "title-asc" }, cache),
+  ).not.toHaveProperty("relevance_scored_count");
+
+  const hash = await sha256(new Uint8Array());
+  const unexpected = () => {
+    throw new Error("unexpected repository call");
+  };
+  const service = new LiteratureQueryService({
+    literatureDetailSnapshot: unexpected,
+    librarySnapshot: unexpected,
+    referenceQuerySnapshot: unexpected,
+    libraryCounts: unexpected,
+    async librarySearchPage(request) {
+      const { rows, ...summary } = libraryPageIds(db, request, cache);
+      return {
+        ...summary,
+        rows: rows.map(({ literature_id, relevance, workset_at }) => ({
+          item: {
+            literature: {
+              ...FIXTURE_LITERATURE,
+              literature_id: parseLiteratureId(literature_id),
+            },
+            metadata_revision: 1,
+            metadata_sha256: hash,
+            missing_step: null,
+            needs_manual_pdf: false,
+          },
+          relevance: relevance as number | null,
+          ...(workset_at === undefined
+            ? {}
+            : { workset_at: workset_at as string | null }),
+          has_pdf_exhaustion: false,
+          discovery_run_ids: [],
+        })),
+      };
+    },
+  });
+  const request = { query, sort: "relevance", limit: 1 };
+  const actual: string[] = [];
+  let cursor: string | null = null;
+  do {
+    if (actual.length === 3) cache.clear(); // Recompute after an unscored cursor.
+    const result = await service.search({ ...request, cursor });
+    expect(result).toMatchObject({ total_count: 5, relevance_scored_count: 2 });
+    actual.push(result.items[0]!.literature.literature_id);
+    cursor = result.next_cursor;
+  } while (cursor && actual.length <= 5);
+  expect(cursor).toBeNull();
+  expect(actual).toEqual([id(2), id(3), id(1), id(5), id(4)]);
+});
+
 it("binds a separately resumable window cursor to the normalized query", async () => {
   const calls: LibraryPageQuery[] = [];
   const unexpected = () => {

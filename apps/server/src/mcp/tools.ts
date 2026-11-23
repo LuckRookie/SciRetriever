@@ -610,7 +610,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "search_library",
-    "Search existing literature with full LibraryQuery filters, sorting and pagination. Listing defaults to collected papers. Use query.collection_scope='all' to list the entire library. Text search defaults to the entire library. A miss never starts discovery or PDF acquisition. The legacy text/limit/cursor form remains supported. scan_incomplete means older raw text hits remain even when the current window is empty. Pass next_window_cursor as window_cursor with the same search terms to search those hits with the current filters. Use cursor for another page in the current window.",
+    "Search existing literature with full LibraryQuery filters, sorting and pagination. Listing defaults to collected papers. Use query.collection_scope='all' to list the entire library. Text search defaults to the entire library. A miss never starts discovery or PDF acquisition. The legacy text/limit/cursor form remains supported. relevance_scored_count means only that many workset matches were scored. Other matches follow in workset order. scan_incomplete means older raw text hits remain even when the current window is empty. Pass next_window_cursor as window_cursor with the same search terms to search those hits with the current filters. Use cursor for another page in the current ranking or window.",
     {
       type: "object",
       oneOf: [
