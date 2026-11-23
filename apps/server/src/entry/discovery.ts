@@ -4,7 +4,9 @@ import {
   type IntakeOrigin,
 } from "../literature/intake.js";
 import { randomUUID } from "node:crypto";
+import { setImmediate as yieldToEvents } from "node:timers/promises";
 import { writeMetadataItems } from "./metadata-write.js";
+import { WriteAdmissionError } from "../storage/write-admission.js";
 import {
   parseReference,
   parseLiteratureDetail,
@@ -187,11 +189,18 @@ type ReferencePage = {
 /** Only drain records already buffered by the current provider response. */
 async function* citationPages(
   stream: AsyncGenerator<MetadataScanEvent>,
+  signal?: AbortSignal,
 ): AsyncGenerator<ReferencePage> {
   let items: CitationItem[] = [];
   try {
     for (;;) {
-      const next = await withMetadataRateLimitHandling(() => stream.next());
+      if (items.length === 0) await yieldToEvents();
+      signal?.throwIfAborted();
+      const next = await withMetadataRateLimitHandling(
+        () => stream.next(),
+        signal,
+      );
+      signal?.throwIfAborted();
       if (next.done) return;
       const event = next.value;
       if (event.kind === "end") {
@@ -529,6 +538,13 @@ export class CitationDiscoveryService {
     states: Map<string, CitationProviderState>,
     traversal: CitationProgress<CitationDeferredWork>,
   ): Promise<CitationDiscoveryReport> {
+    const { signal } = request;
+    const paused = (error: unknown) =>
+      error instanceof CitationPaused ||
+      (signal?.aborted &&
+        (error === signal.reason ||
+          (error instanceof WriteAdmissionError &&
+            error.code === "write-admission-cancelled")));
     const tail = await request.source_run?.latestCheckpoint();
     const latest = tail ? parseCitationCheckpoint(tail.payload) : undefined;
     const resume =
@@ -553,16 +569,24 @@ export class CitationDiscoveryService {
       for (const state of resume.providers)
         states.set(state.provider_name, { ...state });
     }
-    if (request.source_run && tail)
-      await restoreCitationProgress(
-        request.source_run,
-        resume,
-        tail.sequence,
-        traversal,
-      );
-    const sourceResults = (): CitationDiscoveryReport["source_results"] =>
+    const restore = async () => {
+      if (request.source_run && tail)
+        await restoreCitationProgress(
+          request.source_run,
+          resume,
+          tail.sequence,
+          traversal,
+          signal,
+        );
+    };
+    const sourceResults = (
+      interrupted = false,
+    ): CitationDiscoveryReport["source_results"] =>
       request.providers
-        .filter((provider) => states.get(provider.provider_name)!.attempted)
+        .filter((provider) => {
+          const state = states.get(provider.provider_name)!;
+          return state.attempted && (!interrupted || state.terminal !== null);
+        })
         .map((provider) => {
           const state = states.get(provider.provider_name)!;
           return {
@@ -579,7 +603,7 @@ export class CitationDiscoveryService {
         discovery_run_id: runId,
         status,
         result_count: traversal.resultCount,
-        source_results: Object.freeze(sourceResults()),
+        source_results: Object.freeze(sourceResults(status === "INTERRUPTED")),
       });
     type CheckpointFields = Partial<
       Omit<
@@ -644,9 +668,13 @@ export class CitationDiscoveryService {
       write: (expired: () => boolean) => Promise<CheckpointFields>,
     ) => {
       const checkpoint = await this.database.writeMetadataSegment(
-        async (expired) => save(await write(expired)),
+        async (expired) => {
+          signal?.throwIfAborted();
+          return save(await write(expired));
+        },
+        signal,
       );
-      applyCitationCheckpoint(traversal, checkpoint);
+      await applyCitationCheckpoint(traversal, checkpoint, signal);
     };
     const rateLimit = async (
       state: CitationProviderState,
@@ -704,29 +732,19 @@ export class CitationDiscoveryService {
     } as const;
     if (resume) {
       batchId = resume.batch_id;
-      if (resume.closed) return report(resume.closed);
-      const previous = await this.database.writeMetadataSegment(async () => {
-        const status = await this.database.startCitationDiscovery(
-          publication,
-          true,
-        );
+      if (resume.closed) {
+        await restore();
+        return report(resume.closed);
+      }
+      await this.database.writeMetadataSegment(async () => {
+        await this.database.startCitationDiscovery(publication, true);
         await this.database.writeIntake({
           operation: "resume-citation",
           batch_id: batchId,
           discovery_run_id: runId,
           owner_pid: process.pid,
         });
-        return status;
       });
-      // Older writers saved causes in checkpoints but could stop before
-      // publishing them. An INTERRUPTED run from the old final transaction
-      // already has its prefix. Retry an unfinished catch-up idempotently.
-      if (!resume.results_published && previous !== "INTERRUPTED")
-        await writeMetadataItems(
-          this.database,
-          traversal.publicationCauses(),
-          (cause) => this.database.appendCitationCause(runId, cause),
-        );
     } else {
       const seedTitle =
         (await this.database.getLiterature(seeds[0]!))?.metadata.title ??
@@ -773,15 +791,17 @@ export class CitationDiscoveryService {
       request.result_limit !== null &&
       traversal.resultCount + partMetas.size >= request.result_limit;
     const lookup = (state: CitationProviderState, key: ProviderLiteratureKey) =>
-      withMetadataRateLimitHandling(() =>
-        this.metadata.lookupProvider(
-          {
-            provider_name: state.provider_name,
-            key,
-            scan_limit: 1,
-          },
-          request.signal,
-        ),
+      withMetadataRateLimitHandling(
+        () =>
+          this.metadata.lookupProvider(
+            {
+              provider_name: state.provider_name,
+              key,
+              scan_limit: 1,
+            },
+            request.signal,
+          ),
+        signal,
       );
     const acceptLookup = async (
       answer: CitationLookup,
@@ -968,6 +988,7 @@ export class CitationDiscoveryService {
       const startCooldown = state.cooldown;
       const pendingWork = new Map<string, CitationDeferredWork>();
       let sourceChecked = false;
+      signal?.throwIfAborted();
       const progress = await request.source_run?.begin(
         provider.provider_name,
         "reference-query",
@@ -990,6 +1011,7 @@ export class CitationDiscoveryService {
       let stream: AsyncGenerator<MetadataScanEvent>;
       state.attempted = true;
       try {
+        signal?.throwIfAborted();
         stream = this.metadata.streamReferencesProvider(
           request.direction,
           provider.provider_name,
@@ -1067,7 +1089,8 @@ export class CitationDiscoveryService {
           if (event.item.relations.length > 0) referenceListProvided = true;
           // Raw reference text about the anchor remains available even when no
           // related work can yet be identified.
-          for (const observation of event.item.observations)
+          for (const observation of event.item.observations) {
+            signal?.throwIfAborted();
             if (observationMatches(observation, provider.provider_name, key)) {
               const decision = await this.identity.observe(observation);
               if (decision.disposition === "accepted") {
@@ -1081,6 +1104,7 @@ export class CitationDiscoveryService {
                   );
               }
             }
+          }
         }
         const firstRelation = nextRelation ?? 0;
         for (let i = firstRelation; i < event.item.relations.length; i++) {
@@ -1144,6 +1168,7 @@ export class CitationDiscoveryService {
             observationMatches(observation, provider.provider_name, targetKey),
           );
           for (const observation of inline) {
+            signal?.throwIfAborted();
             const decision = await this.identity.observe(observation, {
               intake_batch_id: batchId,
               intake_exclude_ids: seeds,
@@ -1264,6 +1289,7 @@ export class CitationDiscoveryService {
       try {
         for await (const page of citationPages(
           progress ? progress.stream(stream) : stream,
+          signal,
         )) {
           // The pending item already consumed its raw scan slot. The
           // replay allowance cannot pay for a different item.
@@ -1274,6 +1300,7 @@ export class CitationDiscoveryService {
             key: string;
             nextRelation: number | null;
           }>((event) => {
+            signal?.throwIfAborted();
             const key = citationItemKey(event);
             if (activeQuery && traversal.consumeRawItem(work.id, key)) {
               return [];
@@ -1472,6 +1499,7 @@ export class CitationDiscoveryService {
               offset = start;
               nextRelation = relationStart;
               if (!(error instanceof CitationLookupNeeded)) throw error;
+              signal?.throwIfAborted();
               const answer = await fetchCitationLookup(error.lookup);
               lookups.set(error.key, answer);
               continue;
@@ -1485,7 +1513,7 @@ export class CitationDiscoveryService {
         }
       } catch (error) {
         partMetas.clear();
-        if (!(error instanceof CitationPaused)) throw error;
+        if (!paused(error)) throw error;
         await progress?.finish("cancelled");
         interrupted = true;
         return false;
@@ -1504,6 +1532,7 @@ export class CitationDiscoveryService {
           ? target
           : { record_id: null, identifiers: target.identifiers };
       const state = states.get(work.provider_name)!;
+      signal?.throwIfAborted();
       const answer = await fetchCitationLookup(() => lookup(state, key));
       clearSegment();
       await commit(async () => {
@@ -1586,11 +1615,23 @@ export class CitationDiscoveryService {
       return { work: next?.work, wake };
     };
     try {
+      await restore();
+      // Old checkpoints can contain a committed prefix that was never published.
+      // Reapply it idempotently, including after recovery marked the run interrupted.
+      if (resume && !resume.results_published)
+        await writeMetadataItems(
+          this.database,
+          traversal.publicationCauses(),
+          (cause) => this.database.appendCitationCause(runId, cause),
+          signal,
+        );
       while (
         !interrupted &&
         !request.signal?.aborted &&
         !resultLimitReached()
       ) {
+        await yieldToEvents();
+        signal?.throwIfAborted();
         const anchor = traversal.pending();
         const sourceResume =
           resume?.source_id === anchor?.[0] && !resume?.checked
@@ -1613,7 +1654,7 @@ export class CitationDiscoveryService {
               );
             }
           } catch (error) {
-            if (!(error instanceof CitationPaused)) throw error;
+            if (!paused(error)) throw error;
             interrupted = true;
           }
           continue;
@@ -1677,11 +1718,11 @@ export class CitationDiscoveryService {
         }
         if (!interrupted && !request.signal?.aborted && !checked) {
           const checkpoint = await save({ source_id: sourceId, checked: true });
-          applyCitationCheckpoint(traversal, checkpoint);
+          await applyCitationCheckpoint(traversal, checkpoint, signal);
         }
       }
       if (request.signal?.aborted) interrupted = true;
-      const outcomes = sourceResults();
+      const outcomes = sourceResults(interrupted);
       const status: CitationDiscoveryReport["status"] = interrupted
         ? "INTERRUPTED"
         : outcomes.length > 0 &&
@@ -1694,6 +1735,11 @@ export class CitationDiscoveryService {
       await settle(status, outcomes);
       settled = true;
       return report(status);
+    } catch (error) {
+      if (!paused(error)) throw error;
+      await settle("INTERRUPTED", sourceResults(true));
+      settled = true;
+      return report("INTERRUPTED");
     } finally {
       if (!settled) await settle("INTERRUPTED", []);
     }

@@ -3074,6 +3074,9 @@ function listExecutionAttempts(targetId: Dynamic, limit: Dynamic): Dynamic {
       usage: row.usage_json === null ? null : JSON.parse(row.usage_json),
     }));
 }
+const citationCheckpointsSql =
+  "SELECT sequence,payload_json FROM execution_events INDEXED BY task_event_target WHERE job_id=? AND kind='citation-write-checkpoint' AND json_extract(payload_json,'$.target_id')=?";
+
 function recoverExecution(bootId: Dynamic, now: Dynamic): Dynamic {
   requireRuntime();
   if (
@@ -3086,10 +3089,39 @@ function recoverExecution(bootId: Dynamic, now: Dynamic): Dynamic {
   return transaction(() => {
     const running = db
       .prepare(
-        "SELECT attempt_id,target_id FROM execution_attempts WHERE status='running'",
+        `SELECT a.attempt_id,a.target_id,t.job_id
+         FROM execution_attempts a JOIN execution_targets t USING(target_id)
+         WHERE a.status='running'`,
       )
       .all();
+    const latestCitation = db.prepare(
+      citationCheckpointsSql + " ORDER BY sequence DESC LIMIT 1",
+    );
+    const stopRun = db.prepare(
+      `UPDATE discovery_runs SET status='INTERRUPTED'
+       WHERE discovery_run_id=? AND kind='citation' AND status='RUNNING'
+       AND EXISTS(SELECT 1 FROM intake_batches b WHERE b.batch_id=?
+          AND b.discovery_run_id=discovery_runs.discovery_run_id
+          AND b.kind='citation' AND b.state='running')`,
+    );
+    const stopBatch = db.prepare(
+      `UPDATE intake_batches SET state='finished',result='interrupted',
+          finished_at=?,owner_pid=NULL
+       WHERE batch_id=? AND discovery_run_id=? AND kind='citation' AND state='running'`,
+    );
     for (const attempt of running) {
+      // The runtime lease excludes a live runner. Match the batch to this
+      // attempt's durable checkpoint rather than a potentially recycled PID.
+      const tail = latestCitation.get(attempt.job_id, attempt.target_id);
+      if (typeof tail?.payload_json === "string") {
+        const { run_id, batch_id } = JSON.parse(tail.payload_json);
+        if (
+          typeof run_id === "string" &&
+          typeof batch_id === "string" &&
+          stopRun.run(run_id, batch_id).changes === 1
+        )
+          stopBatch.run(now, batch_id, run_id);
+      }
       db.prepare(
         "UPDATE execution_attempts SET status='unknown',finished_at=?,failure_code='execution-outcome-unknown',failure_reason='The process stopped before the attempt outcome was durable.',failure_action='Reconcile current facts and retry only when safe.',failure_retryable=1 WHERE attempt_id=? AND status='running'",
       ).run(now, attempt.attempt_id);
@@ -5311,17 +5343,17 @@ port.on("message", (message: WorkerMessage) => {
       case "citation_checkpoints": {
         requireRuntime();
         const { jobId, targetId, range } = message.command;
-        const sql =
-          "SELECT sequence,payload_json FROM execution_events INDEXED BY task_event_target WHERE job_id=? AND kind='citation-write-checkpoint' AND json_extract(payload_json,'$.target_id')=?";
         const rows = range
           ? db
               .prepare(
-                sql +
+                citationCheckpointsSql +
                   " AND sequence>? AND sequence<=? ORDER BY sequence LIMIT 32",
               )
               .all(jobId, targetId, range.after, range.through)
           : db
-              .prepare(sql + " ORDER BY sequence DESC LIMIT 1")
+              .prepare(
+                citationCheckpointsSql + " ORDER BY sequence DESC LIMIT 1",
+              )
               .all(jobId, targetId);
         value = rows.map((row: Dynamic) => ({
           sequence: row.sequence,

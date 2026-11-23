@@ -50,7 +50,10 @@ import {
   type MetadataCapability,
   type MetadataRegistry,
 } from "./registry.js";
-import { hasMetadataRateLimitHandling } from "./service.js";
+import {
+  hasMetadataRateLimitHandling,
+  metadataRequestSignal,
+} from "./service.js";
 
 type ProviderName = string;
 
@@ -272,10 +275,13 @@ function providerTransport(
     async request(url, requestOptions = {}) {
       if (new URL(url).origin !== expectedOrigin)
         throw new Error("metadata provider changed origin");
-      const signal =
-        options.signal && requestOptions.signal
-          ? AbortSignal.any([options.signal, requestOptions.signal])
-          : (options.signal ?? requestOptions.signal);
+      const signals = [
+        options.signal,
+        requestOptions.signal,
+        metadataRequestSignal(),
+      ].filter((value): value is AbortSignal => value !== undefined);
+      const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+      signal?.throwIfAborted();
       const headers = {
         ...(requestOptions.headers ?? {}),
         ...(options.currentCredential
@@ -286,6 +292,7 @@ function providerTransport(
         ? await currentProviderCredentialQuery(provider, options)
         : providerCredentialQuery(credentials, provider);
       assertRequiredMetadataCredential(provider, headers, credentialQuery);
+      signal?.throwIfAborted();
       if (injected)
         return injected.request(
           credentialQuery.length

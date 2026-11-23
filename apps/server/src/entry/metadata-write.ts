@@ -5,14 +5,16 @@ export async function writeMetadataItems<T>(
   database: SqliteWorker,
   items: Iterable<T>,
   write: (item: T) => Promise<void>,
+  signal?: AbortSignal,
 ): Promise<void> {
   const iterator = items[Symbol.iterator]();
   let next = iterator.next();
   while (!next.done)
     await database.writeMetadataSegment(async (expired) => {
       do {
+        signal?.throwIfAborted();
         await write(next.value as T);
         next = iterator.next();
       } while (!next.done && !expired());
-    });
+    }, signal);
 }

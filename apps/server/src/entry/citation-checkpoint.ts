@@ -250,6 +250,7 @@ export function lookupWorkId(relationId: string, provider: string) {
 export function applyCitationCheckpoint(
   progress: CitationProgress<CitationDeferredWork>,
   checkpoint: CitationCheckpoint,
+  signal?: AbortSignal,
 ) {
   const { source_id, raw_provider, deferred } = checkpoint;
   const id =
@@ -262,13 +263,14 @@ export function applyCitationCheckpoint(
   const retain =
     checkpoint.active_query !== null ||
     deferred?.added.some((work) => work.id === id);
-  progress.record(
+  return progress.record(
     checkpoint.causes,
     checkpoint.checked ? source_id : null,
     deferred,
     id === undefined
       ? undefined
       : { id, items: retain ? checkpoint.raw_items : null },
+    signal,
   );
 }
 
@@ -278,12 +280,15 @@ export async function restoreCitationProgress(
   resume: CitationCheckpoint | undefined,
   through: number,
   progress: CitationProgress<CitationDeferredWork>,
+  signal?: AbortSignal,
 ) {
   for (let after = -1; after < through; ) {
+    signal?.throwIfAborted();
     const page = await source.checkpoints(after, through);
     if (!page.length)
       throw new Error("citation checkpoint history is incomplete");
     for (const event of page) {
+      signal?.throwIfAborted();
       const checkpoint = parseCitationCheckpoint(event.payload);
       if (!resume || checkpoint.run_id !== resume.run_id) continue;
       if (
@@ -291,7 +296,7 @@ export async function restoreCitationProgress(
         checkpoint.started_at !== resume.started_at
       )
         throw new Error("citation checkpoint belongs to another run");
-      applyCitationCheckpoint(progress, checkpoint);
+      await applyCitationCheckpoint(progress, checkpoint, signal);
     }
     after = page.at(-1)!.sequence;
   }

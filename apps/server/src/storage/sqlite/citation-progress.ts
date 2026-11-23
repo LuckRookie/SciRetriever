@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { setImmediate as yieldToEvents } from "node:timers/promises";
 import type { DiscoveryPublication } from "./worker.js";
 
 type CitationCause = DiscoveryPublication["citation_causes"][number];
@@ -185,11 +186,12 @@ export class CitationProgress<Work extends CitationDeferredEntry> {
   }
 
   /** Apply only after the matching catalog transaction has committed. */
-  record(
+  async record(
     causes: readonly CitationCause[],
     checked: string | null,
     deferred?: CitationDeferredChanges<Work>,
     replay?: { readonly id: string; readonly items: readonly string[] | null },
+    signal?: AbortSignal,
   ) {
     if (causes.length === 0 && checked === null && !deferred && !replay) return;
     this.db.exec("BEGIN");
@@ -207,7 +209,12 @@ export class CitationProgress<Work extends CitationDeferredEntry> {
       if (cause.depth < this.maxDepth)
         this.enqueue.run(cause.actual_literature_id, cause.depth);
     }
-    if (causes.length) this.propagateShorterPaths();
+    if (causes.length) {
+      for (const cancellation of this.propagateShorterPaths(signal)) {
+        await yieldToEvents();
+        cancellation.throwIfAborted();
+      }
+    }
     if (checked !== null) this.markChecked.run(checked);
     if (deferred) {
       for (const work of deferred.added)
@@ -247,22 +254,29 @@ export class CitationProgress<Work extends CitationDeferredEntry> {
     return depth === undefined ? undefined : Number(depth);
   }
 
-  private propagateShorterPaths() {
+  private *propagateShorterPaths(signal?: AbortSignal) {
     // A deferred query can reveal a shorter route after other anchors have
     // already been checked. Reuse their committed edges to reach newly
     // eligible anchors while keeping each recorded cause at its observed depth.
+    const edges =
+      this.direction === "references"
+        ? [this.outgoing]
+        : this.direction === "cited-by"
+          ? [this.incoming]
+          : [this.outgoing, this.incoming];
+    let visited = 0;
     let next;
     while ((next = this.lowered.get())) {
+      if (signal && ++visited % CAUSE_PAGE === 0) yield signal;
       const anchor = String(next.literature_id);
       const depth = Number(next.depth) + 1;
       this.clearLowered.run(anchor);
       if (depth >= this.maxDepth) continue;
-      if (this.direction !== "cited-by")
-        for (const row of this.outgoing.iterate(anchor))
+      for (const statement of edges)
+        for (const row of statement.iterate(anchor)) {
           this.enqueue.run(String(row.literature_id), depth);
-      if (this.direction !== "references")
-        for (const row of this.incoming.iterate(anchor))
-          this.enqueue.run(String(row.literature_id), depth);
+          if (signal && ++visited % CAUSE_PAGE === 0) yield signal;
+        }
     }
   }
 

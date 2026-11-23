@@ -24,14 +24,23 @@ import {
 
 // A citation task owns the retry schedule for its calls. Other Metadata
 // callers keep their transport retries and all callers keep Network admission.
-const externalRateLimitHandling = new AsyncLocalStorage<true>();
+const externalRateLimitHandling = new AsyncLocalStorage<{
+  readonly signal: AbortSignal | undefined;
+}>();
 
-export function withMetadataRateLimitHandling<T>(action: () => T): T {
-  return externalRateLimitHandling.run(true, action);
+export function withMetadataRateLimitHandling<T>(
+  action: () => T,
+  signal?: AbortSignal,
+): T {
+  return externalRateLimitHandling.run({ signal }, action);
 }
 
 export function hasMetadataRateLimitHandling() {
-  return externalRateLimitHandling.getStore() === true;
+  return externalRateLimitHandling.getStore() !== undefined;
+}
+
+export function metadataRequestSignal() {
+  return externalRateLimitHandling.getStore()?.signal;
 }
 
 function providerName(value: string): string {

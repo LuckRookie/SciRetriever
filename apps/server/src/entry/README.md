@@ -34,6 +34,8 @@ CLI/MCP/HTTP 只适配请求；供应商协议、材料验收和事实写入仍�
 
 `discovery.ts` 在引用扩展的首段创建 `RUNNING` 的 Run 并关联入库批次。书目、关系、发现结果和本篇检查点按段一起提交，只有末段记录本篇已查。任务恢复从原批次与 Run 继续。结算写终态和来源结果。 [检查点实现](citation-checkpoint.ts)
 
+引用扩展在节点、Provider 回包和段边界检查停止信号，在途来源请求与冷却等待使用同一信号。中断时结算 Run 与批次，保留已提交的段和检查点。执行运行时在取得独占接管锁后，会根据遗留引用尝试的检查点结算对应的 Run 与批次。
+
 引用扩展的来源限流由 [citation-cooldown.ts](citation-cooldown.ts) 计算下次可用时间。正常队列继续推进，延后的引用与关系目标查询随段检查点保存，恢复后按登记顺序补查。任务详情中的 `citation_source_cooldowns` 汇总最近的来源状态与待补查项，技术事件保留每次状态变化和队列增删。
 
 入库批次读取（intake-batches）、批次改名（intake-batch-rename）、范围词频（library-facets）与 PDF 预览（acquire-pdf-preview）复用 Literature/SQLite owner。PDF 任务创建在 catalog admission 内固定成员：query 按筛选、排序排除已有/无法获取项并应用 limit；literatures 保留全部显式 ID，包括已有 PDF 和无法获取项，并在执行时允许清除无法获取标记后重试。scope 保存原选择器与 disjoint 计数；任务详情和列表读取同一 scope。

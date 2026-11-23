@@ -2135,14 +2135,22 @@ async function execute(
     if (!jobId || !/^[A-Za-z0-9._:-]{1,128}$/u.test(jobId)) invalidInput();
     const value = await withApplication(options, async (app) => {
       const job = await app.jobs?.getJob(jobId);
-      if (
-        app.processingTasks &&
-        (job?.selector as { schema_version?: unknown } | undefined)
-          ?.schema_version === 3
-      )
-        return app.processingTasks.run(jobId, options.signal);
-      if (app.processingTasks)
-        return app.processingTasks.runResults(jobId, options.signal);
+      if (app.processingTasks) {
+        const results = await app.processingTasks.runResults(
+          jobId,
+          options.signal,
+        );
+        if (
+          (job?.selector as { schema_version?: unknown } | undefined)
+            ?.schema_version === 3
+        ) {
+          // The interrupted state is already durable. Avoid replaying task
+          // history just to print a detail response after a stop signal.
+          options.signal?.throwIfAborted();
+          return app.processingTasks.read(jobId);
+        }
+        return results;
+      }
       if (!app.taskService) throw new Error("execution runtime is unavailable");
       return app.taskService.runJob(jobId);
     });
@@ -2328,19 +2336,35 @@ async function isMainModule(): Promise<boolean> {
   }
 }
 
-if (await isMainModule()) {
-  // SIGINT is the user-controlled stop: it aborts the frozen scope so the
-  // running target becomes `interrupted` and the remaining ones keep their
-  // single `notStarted` partition instead of vanishing from the run.
+/** Keep the handlers installed until the command has finished closing its application. */
+export async function runWithCliSignals<T>(
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
   const controller = new AbortController();
-  process.once("SIGINT", () => controller.abort());
-  process.once("SIGTERM", () => controller.abort());
-  const result = await runCli(process.argv.slice(2), {
-    stdout: (text) => process.stdout.write(text),
-    stdoutBytes: (bytes) => process.stdout.write(bytes),
-    stderr: (text) => process.stderr.write(text),
-    stdin: process.stdin,
-    signal: controller.signal,
-  });
+  const stop = () => {
+    if (controller.signal.aborted)
+      process.stderr.write("Stop already requested. Finishing shutdown.\n");
+    else controller.abort();
+  };
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+  try {
+    return await run(controller.signal);
+  } finally {
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+  }
+}
+
+if (await isMainModule()) {
+  const result = await runWithCliSignals((signal) =>
+    runCli(process.argv.slice(2), {
+      stdout: (text) => process.stdout.write(text),
+      stdoutBytes: (bytes) => process.stdout.write(bytes),
+      stderr: (text) => process.stderr.write(text),
+      stdin: process.stdin,
+      signal,
+    }),
+  );
   process.exitCode = result.code;
 }
