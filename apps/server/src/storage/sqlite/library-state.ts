@@ -95,7 +95,7 @@ export function collectedMembersSql(ready: boolean) {
   const stored = "SELECT literature_id FROM library_collected";
   return ready
     ? stored
-    : [stored, ...historicalCollectionProofs()].join(" UNION ");
+    : `SELECT DISTINCT literature_id FROM (${[stored, ...historicalCollectionProofs()].join(" UNION ALL ")})`;
 }
 
 export function recordCollectedLiteratures(

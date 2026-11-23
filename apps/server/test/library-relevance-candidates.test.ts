@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   parseLibrarySearchRequest,
   parseLiteratureId,
@@ -37,11 +37,15 @@ const page: LibraryPageQuery = {
 
 function initialize(db: DatabaseSync) {
   initializeCurrentCatalog(db);
-  new StoredLibraryState(db, { max_tags: 6, archive_profile: "vlm-engine" });
+  const state = new StoredLibraryState(db, {
+    max_tags: 6,
+    archive_profile: "vlm-engine",
+  });
   db.function("sr_query_continue", () => 1);
   db.function("sr_normalize", (value) =>
     typeof value === "string" ? value.toLowerCase() : null,
   );
+  return state;
 }
 
 function add(
@@ -78,6 +82,258 @@ function allRanks(db: DatabaseSync, fts = '"ranked"') {
     )
     .all(fts);
 }
+
+async function worksetService(db: DatabaseSync, cache: LibraryRelevanceCache) {
+  const metadata_sha256 = await sha256(new Uint8Array());
+  const unexpected = () => {
+    throw new Error("unexpected repository call");
+  };
+  return new LiteratureQueryService({
+    literatureDetailSnapshot: unexpected,
+    librarySnapshot: unexpected,
+    referenceQuerySnapshot: unexpected,
+    async librarySearchPage(request) {
+      const { rows, ...summary } = libraryPageIds(db, request, cache);
+      return {
+        ...summary,
+        rows: rows.map(({ literature_id, relevance, workset_at }) => ({
+          item: {
+            literature: {
+              ...FIXTURE_LITERATURE,
+              literature_id: parseLiteratureId(literature_id),
+            },
+            metadata_revision: 1,
+            metadata_sha256,
+            missing_step: null,
+            needs_manual_pdf: false,
+            collected_at:
+              (db
+                .prepare(
+                  "SELECT collected_at FROM library_collection_times WHERE literature_id=?",
+                )
+                .get(literature_id!)?.collected_at as string | null) ?? null,
+          },
+          relevance: relevance as number | null,
+          ...(workset_at === undefined
+            ? {}
+            : { workset_at: workset_at as string | null }),
+          has_pdf_exhaustion: false,
+          discovery_run_ids: [],
+        })),
+      };
+    },
+    async libraryCounts(query, fts, _signal, start) {
+      return libraryCounts(db, query, fts, false, Date.now(), start, cache);
+    },
+    async libraryFacets(query, limit, fts, _signal, start) {
+      return libraryFacets(
+        db,
+        query,
+        fts,
+        limit,
+        false,
+        Date.now(),
+        start,
+        cache,
+      );
+    },
+  });
+}
+
+it("selects either side by estimated cost while keeping small workset results exact", async () => {
+  using db = new DatabaseSync(":memory:");
+  initialize(db);
+  db.function("sr_derive_status", () => "UNREVIEWED");
+  const collect = db.prepare(
+    "INSERT INTO library_collected(literature_id,intake_at) VALUES(?,NULL)",
+  );
+  for (let n = 1; n <= 16; n++) {
+    add(db, n, n, n % 2 ? "ranked ranked" : "ranked");
+    if (n <= 6) collect.run(id(n));
+  }
+  db.prepare(
+    "INSERT INTO literature_metadata_keywords(literature_id,ordinal,keyword) VALUES(?,0,'match')",
+  ).run(id(1));
+  const query = { text: "ranked", collection_scope: "collected" };
+  const plan = vi.spyOn(db, "prepare");
+  const read = async (cap: number) => {
+    plan.mockClear();
+    const service = await worksetService(db, new LibraryRelevanceCache(cap));
+    const page = await service.search({ query, sort: "relevance" });
+    expect(page).not.toHaveProperty("scan_side");
+    expect(page).not.toHaveProperty("scan_incomplete");
+    expect(page.total_count).toBe(6);
+    const counts = await service.counts(query);
+    expect(counts.total).toBe(6);
+    const facets = await service.facets({ query, limit: 10 });
+    expect(facets.keywords).toEqual([{ value: "match", count: 1, tag: null }]);
+    return { page, counts, facets };
+  };
+  const hits = await read(20);
+  expect(
+    plan.mock.calls.some(([sql]) => sql.includes("FROM json_each(?) raw")),
+  ).toBe(true);
+  const members = await read(3);
+  expect(
+    plan.mock.calls.some(([sql]) => sql.includes("FROM json_each(?) raw")),
+  ).toBe(false);
+  expect(members).toEqual(hits);
+});
+
+it("continues member windows by collected time across ties, new members and a shrinking scope", async () => {
+  using db = new DatabaseSync(":memory:");
+  initialize(db).configure();
+  db.exec("UPDATE library_state_progress SET ready=0");
+  db.function("sr_derive_status", (value) =>
+    value === id(5) ? "READY" : "UNREVIEWED",
+  );
+  for (let n = 1; n <= 35; n++) add(db, n, n);
+  const collect = db.prepare(
+    "INSERT INTO library_collected(literature_id,intake_at) VALUES(?,NULL)",
+  );
+  const stamp = db.prepare(
+    "UPDATE library_collection_times SET collected_at=? WHERE literature_id=?",
+  );
+  for (const [n, month] of [
+    [1, null],
+    [2, null],
+    [3, "01"],
+    [4, "02"],
+    [5, "02"],
+    [6, "03"],
+    [7, "04"],
+  ] as const) {
+    collect.run(id(n));
+    stamp.run(month && `2026-${month}-01T00:00:00.000Z`, id(n));
+  }
+  db.prepare(
+    "INSERT INTO literature_metadata_keywords(literature_id,ordinal,keyword) VALUES(?,0,'second')",
+  ).run(id(5));
+  const cache = new LibraryRelevanceCache(30, 0, 3, 5);
+  const service = await worksetService(db, cache);
+  const query = { text: "ranked", collection_scope: "collected" };
+  const timeRequest = { query, sort: "collected-desc" };
+  const ids = (p: Awaited<ReturnType<typeof service.search>>) =>
+    p.items.map(({ literature }) => literature.literature_id);
+  const first = await service.search({ ...timeRequest, limit: 2 });
+  expect(first).toMatchObject({
+    scan_incomplete: true,
+    scan_side: "members",
+    scan_limit: 3,
+    total_count: 3,
+  });
+  expect(ids(first)).toEqual([id(7), id(6)]);
+  expect(
+    ids(await service.search({ ...timeRequest, cursor: first.next_cursor })),
+  ).toEqual([id(4)]);
+  await expect(
+    service.search({ query, sort: "title-asc" }),
+  ).rejects.toMatchObject({
+    code: "library-sort-scope-limit",
+  });
+  const relevance = { query, sort: "relevance", limit: 1 };
+  const ranked = await service.search(relevance);
+  expect(ranked).toMatchObject({
+    scan_side: "members",
+    relevance_scored_count: 0,
+  });
+  cache.clear();
+  expect(
+    ids(await service.search({ ...relevance, cursor: ranked.next_cursor })),
+  ).toEqual([id(6)]);
+  db.exec("UPDATE library_paging_progress SET stage=0");
+  expect(await service.search(relevance)).toMatchObject({
+    scan_side: "hits",
+    scan_limit: 30,
+  });
+
+  // The live workset now fits an exact scan. An earlier window still
+  // begins after the same key, and a new member at the front stays there.
+  db.exec(
+    "DELETE FROM library_collected WHERE literature_id IN (SELECT literature_id FROM library_collection_times WHERE collected_at>='2026-03')",
+  );
+  db.prepare("DELETE FROM library_collected WHERE literature_id=?").run(id(4));
+  collect.run(id(8));
+  stamp.run("2026-05-01T00:00:00.000Z", id(8));
+  const window_cursor = first.next_window_cursor!;
+  const second = await service.search({ ...timeRequest, window_cursor });
+  expect(second).toMatchObject({ scan_side: "members", total_count: 3 });
+  expect(ids(second)).toEqual([id(5), id(3), id(1)]);
+  expect(await service.counts(query, undefined, window_cursor)).toMatchObject({
+    total: 3,
+    scan_incomplete: true,
+    statuses: { READY: 1, UNREVIEWED: 2 },
+  });
+  expect(
+    await service.facets({ query, limit: 10, window_cursor }),
+  ).toMatchObject({
+    total: 3,
+    scan_incomplete: true,
+    keywords: [{ value: "second", count: 1 }],
+  });
+  expect(
+    ids(
+      await service.search({
+        ...timeRequest,
+        query: { ...query, statuses: ["READY"] },
+        window_cursor,
+      }),
+    ),
+  ).toEqual([id(5)]);
+  const last = await service.search({
+    ...timeRequest,
+    window_cursor: second.next_window_cursor,
+  });
+  expect(last).not.toHaveProperty("scan_incomplete");
+  expect(last).not.toHaveProperty("scan_side");
+  expect(last).not.toHaveProperty("next_window_cursor");
+  expect(ids(last)).toEqual([id(2)]);
+  await expect(
+    service.search({
+      ...timeRequest,
+      query: { ...query, text: "different" },
+      window_cursor,
+    }),
+  ).rejects.toMatchObject({ code: "literature-query" });
+});
+
+it("keeps an earlier hit window when the same workset would now choose members", async () => {
+  using db = new DatabaseSync(":memory:");
+  initialize(db);
+  const collect = db.prepare(
+    "INSERT INTO library_collected(literature_id,intake_at) VALUES(?,NULL)",
+  );
+  for (let n = 1; n <= 9; n++) {
+    add(db, n, n);
+    collect.run(id(n));
+  }
+  const service = await worksetService(
+    db,
+    new LibraryRelevanceCache(3, undefined, 3, 5),
+  );
+  const request = {
+    query: { text: "ranked", collection_scope: "collected" },
+    sort: "relevance",
+  };
+  const first = await service.search(request);
+  expect(first).toMatchObject({ scan_side: "hits", total_count: 3 });
+  for (let n = 5; n <= 9; n++)
+    db.prepare("DELETE FROM library_collected WHERE literature_id=?").run(
+      id(n),
+    );
+  expect(await service.search(request)).not.toHaveProperty("scan_side");
+  const next = { ...request, window_cursor: first.next_window_cursor };
+  expect(await service.search(next)).toMatchObject({
+    scan_side: "hits",
+    total_count: 1,
+    items: [{ literature: { literature_id: id(4) } }],
+  });
+  await expect(
+    service.search({ ...next, sort: "collected-desc" }),
+  ).rejects.toMatchObject({
+    code: "library-sort-scope-limit",
+  });
+});
 
 it("preserves full BM25 scores and ID ties for a query at the candidate limit", () => {
   using db = new DatabaseSync(":memory:");
@@ -211,8 +467,10 @@ it("reports only this window's matches and exposes the same scope for counts and
   ).toMatchObject({ total: 2, scan_incomplete: true, keywords: [] });
 
   add(db, 7, 7); // A new index entry belongs to the newer end of the scan.
-  const before = latest.search_window!.oldest_rowid;
-  const earlier = libraryPageIds(db, { ...page, beforeRowid: before }, cache);
+  const window = latest.search_window!;
+  if ("side" in window) throw new Error("expected a hit window");
+  const before = window.oldest_rowid;
+  const earlier = libraryPageIds(db, { ...page, windowStart: before }, cache);
   expect(earlier).not.toHaveProperty("scan_incomplete");
   expect(earlier.total_count).toBe(3);
   expect(earlier.rows.map(({ literature_id }) => literature_id)).toEqual([
@@ -488,7 +746,7 @@ it("binds a separately resumable window cursor to the normalized query", async (
     referenceQuerySnapshot: unexpected,
     async librarySearchPage(request: LibraryPageQuery) {
       calls.push(request);
-      return request.beforeRowid
+      return request.windowStart
         ? { rows: [], total_count: 0 }
         : {
             rows: [],
@@ -508,6 +766,7 @@ it("binds a separately resumable window cursor to the normalized query", async (
   const first = await service.search(request);
   expect(first).toMatchObject({
     scan_incomplete: true,
+    scan_side: "hits",
     scan_limit: 2,
     total_count: 0,
     next_cursor: null,
@@ -519,7 +778,7 @@ it("binds a separately resumable window cursor to the normalized query", async (
     total_count: 0,
     next_cursor: null,
   });
-  expect(calls.at(-1)?.beforeRowid).toBe("19");
+  expect(calls.at(-1)?.windowStart).toBe("19");
   await expect(
     service.search({ ...next, query: { text: "other" } }),
   ).rejects.toMatchObject({ code: "literature-query" });

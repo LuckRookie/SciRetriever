@@ -14,7 +14,7 @@
 
 `search_library` 接受完整的 LibraryQuery，包括主 PDF 默认文本的等级和初稿事实筛选、四种事实降序及分页；`read_literature` 返回主 PDF 事实与各 PDF 的 `default_text`，`archive_query` 在各部分返回同一默认版本的事实。读取这些计数只查 catalog，不形成初稿或启动校订。
 
-整库文本搜索在 `scan_incomplete` 时返回当前窗口的计数下界，零条也可能有更早命中。保留同一检索词，把 `next_window_cursor` 作为 `window_cursor` 传给 `search_library`、`library_counts` 或 `library_facets` 可查更早一窗。调用可各自设置筛选。
+文本搜索在 `scan_incomplete` 时返回当前窗口的计数下界，零条也可能有更早命中。`scan_side` 表明窗口按原始命中（`hits`）或工作集成员（`members`）划定。保留同一检索词，把 `next_window_cursor` 作为 `window_cursor` 传给 `search_library`、`library_counts` 或 `library_facets` 可查更早一窗。成员窗须保留同一工作集。调用可各自设置筛选。
 
 `library_counts` 的 full_text 按论文统计取得、未取得与其中已试完的数量；statuses、with_primary_pdf 按版本。它忽略 statuses、needs_manual_pdf 的当前选择，保留其它条件；has_primary_pdf 按版本筛选。全部数字来自同一只读快照。筛选计数超过一万个版本时带 `count_truncated`。用 `library_exact_count` 在长请求道计算精确聚合、分面或列表总数，响应带 `snapshot_at`。
 

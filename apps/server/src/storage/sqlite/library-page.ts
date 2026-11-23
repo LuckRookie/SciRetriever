@@ -45,16 +45,27 @@ import type {
 } from "@sciretriever/contracts";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync, SQLInputValue, SQLOutputValue } from "node:sqlite";
+import type { LibraryMemberPosition } from "../../literature/library-workset-order.js";
 import type {
   LibraryCollectRequest,
+  LibraryHitWindow,
+  LibraryMemberWindow,
   LibraryPageQuery,
   LibrarySearchWindow,
+  LibraryWindowStart,
   Position,
 } from "../../literature/query.js";
 import type { LibraryCollectionTargets } from "./library-state.js";
 import type { WorksetKind } from "./library-paging-schema.js";
 import type { LibraryRelevanceRow } from "./library-search-rank.js";
 const suffix = import.meta.url.endsWith(".ts") ? ".ts" : ".js";
+const {
+  libraryWorksetTimeSort,
+  compareLibraryMemberPositions,
+}: typeof import("../../literature/library-workset-order.js") = await import(
+  new URL("../../literature/library-workset-order" + suffix, import.meta.url)
+    .href
+);
 const {
   rankLibraryMembers,
   LIBRARY_MEMBER_SCORE_BUDGET,
@@ -452,8 +463,25 @@ type Sql = { sql: string; args: SQLInputValue[] };
 const FTS = "literature_search_fts";
 const FTS_ROWID = FTS + ".rowid";
 const FTS_OWNER = "literature_search_fts_content";
-const LIBRARY_SEARCH_WINDOW_LIMIT = 95_000;
-const WORKSET_FTS_PROBE_LIMIT = 256;
+const LIBRARY_SEARCH_WINDOW_LIMIT = 75_000;
+const LIBRARY_MEMBER_WINDOW_LIMIT = 8_000;
+const HIT_COST_US = 10;
+const MEMBER_COST_US = 77;
+type WindowLimits = {
+  readonly windowLimit: number;
+  readonly memberWindowLimit: number;
+  readonly exactMembersLimit: number;
+};
+const defaultWindowLimits: WindowLimits = {
+  windowLimit: LIBRARY_SEARCH_WINDOW_LIMIT,
+  memberWindowLimit: LIBRARY_MEMBER_WINDOW_LIMIT,
+  exactMembersLimit: LIBRARY_COUNT_LIMIT,
+};
+function resolvedWindowLimits(limits?: number | WindowLimits): WindowLimits {
+  return typeof limits === "number"
+    ? { ...defaultWindowLimits, windowLimit: limits }
+    : (limits ?? defaultWindowLimits);
+}
 
 /** The limit is applied to raw FTS hits. A separate rowid seek tests one
  * earlier hit without evaluating the filters or scoring the sentinel. */
@@ -462,7 +490,7 @@ function rawSearchWindow(
   limit: number,
   projection: Sql,
   beforeRowid?: string,
-  previous?: LibrarySearchWindow,
+  previous?: LibraryHitWindow,
   legacyNewestRowid?: string,
 ) {
   const bounds = previous
@@ -543,10 +571,12 @@ function memberTextSource(
   if (q.discovery_run_ids.length) {
     const ids = JSON.stringify(q.discovery_run_ids);
     return {
-      sql: `SELECT actual_literature_id AS literature_id FROM topic_discovery_causes
+      sql: `SELECT DISTINCT literature_id FROM (
+        SELECT actual_literature_id AS literature_id FROM topic_discovery_causes
         WHERE discovery_run_id IN (SELECT value FROM json_each(?))
-        UNION SELECT actual_literature_id FROM citation_discovery_causes
-        WHERE discovery_run_id IN (SELECT value FROM json_each(?)) AND ${visibleCitationSql()}`,
+        UNION ALL SELECT actual_literature_id FROM citation_discovery_causes
+        WHERE discovery_run_id IN (SELECT value FROM json_each(?)) AND ${visibleCitationSql()}
+      )`,
       args: [ids, ids],
     };
   }
@@ -589,54 +619,63 @@ function textScope(
   });
   const source = memberTextSource(query, filter, cutoff);
   const columns = `l.literature_id${countStatuses ? `,${filter.status} AS status` : ""}`;
-  const worksetAt = query.recently_opened
-    ? "member.last_opened_at"
-    : orderedWorkset(query)
-      ? INTAKE_SQL
-      : collectionTimeSql("l.literature_id", filter.pagingReady);
+  const timeSort = libraryWorksetTimeSort(query);
+  const titleMatch = indexedTitleMatch(ftsQuery);
+  const worksetAt =
+    timeSort === "opened-desc"
+      ? "member.last_opened_at"
+      : timeSort === "intake-desc"
+        ? INTAKE_SQL
+        : collectionTimeSql("l.literature_id", filter.pagingReady);
   const memberProjection =
     source &&
     (({
       ordered = false,
-      completeHitsJson,
-    }: { ordered?: boolean; completeHitsJson?: string } = {}): Sql => {
-      const members =
-        completeHitsJson === undefined
-          ? source
-          : {
-              sql: `SELECT * FROM (${source.sql})
-                WHERE literature_id IN (SELECT value FROM json_each(?))`,
-              args: [...source.args, completeHitsJson],
-            };
-      const seekFts = completeHitsJson === undefined;
-      const titleMatch =
-        seekFts && ordered ? indexedTitleMatch(ftsQuery) : undefined;
+      members = source,
+    }: { ordered?: boolean; members?: Sql } = {}): Sql => {
       return {
-        sql: `SELECT ${columns}${seekFts ? ", document.id AS doc" : ""}
+        sql: `SELECT ${columns}, document.id AS doc
         ${ordered ? `,${worksetAt} AS workset_at` : ""}
         FROM (${members.sql}) member
         CROSS JOIN literatures l ON l.literature_id=member.literature_id
         CROSS ${filter.joins}
-        ${
-          seekFts
-            ? `CROSS JOIN ${FTS_OWNER} document ON document.c0=l.literature_id
-          ${titleMatch ? "" : `CROSS JOIN ${FTS} ON ${FTS_ROWID}=document.id`}`
-            : ""
-        }
-        ${filter.where} ${seekFts ? `AND ${titleMatch?.sql ?? `${FTS} MATCH ?`}` : ""}
+        CROSS JOIN ${FTS_OWNER} document ON document.c0=l.literature_id
+        ${titleMatch ? "" : `CROSS JOIN ${FTS} ON ${FTS_ROWID}=document.id`}
+        ${filter.where} AND ${titleMatch?.sql ?? `${FTS} MATCH ?`}
         ${ordered || query.recently_opened ? `ORDER BY ${ordered ? "workset_at" : "member.last_opened_at"} DESC,member.literature_id` : ""}
         ${query.recently_opened ? "LIMIT 100" : ""}`,
         args: [
           ...members.args,
           ...filter.args,
-          ...(seekFts ? (titleMatch?.args ?? [ftsQuery]) : []),
+          ...(titleMatch?.args ?? [ftsQuery]),
         ],
       };
     });
   return {
     filter,
+    source,
+    timeSort,
     memberProjection,
-    memberMatches: memberProjection?.(),
+    matchesFromHits(hits: string, ordered: boolean): Sql {
+      return {
+        sql: `SELECT ${columns}, document.id AS doc
+          ${ordered ? `,${worksetAt} AS workset_at` : ""}
+          FROM json_each(?) raw
+          CROSS JOIN ${FTS_OWNER} document ON document.id=CAST(raw.value AS INTEGER)
+          CROSS JOIN literatures l ON l.literature_id=document.c0
+          CROSS ${filter.joins}
+          ${query.recently_opened ? "CROSS JOIN reading_history member ON member.literature_id=l.literature_id" : ""}
+          ${filter.where}
+          ${query.recently_opened ? "AND member.last_opened_at>=?" : ""}
+          ${ordered || query.recently_opened ? `ORDER BY ${ordered ? "workset_at" : "member.last_opened_at"} DESC,l.literature_id` : ""}
+          ${query.recently_opened ? "LIMIT 100" : ""}`,
+        args: [
+          hits,
+          ...filter.args,
+          ...(query.recently_opened ? [cutoff] : []),
+        ],
+      };
+    },
     windowMatches: `SELECT ${columns} FROM raw_hits
       CROSS JOIN ${FTS_OWNER} document ON document.id=raw_hits.doc
       CROSS JOIN literatures l ON l.literature_id=document.c0
@@ -645,59 +684,348 @@ function textScope(
   };
 }
 
+type TextScope = ReturnType<typeof textScope>;
+
+function hasMemberOrder(scope: TextScope) {
+  return (
+    scope.timeSort === "opened-desc" ||
+    (scope.filter.pagingReady &&
+      (scope.timeSort !== "collected-desc" || scope.filter.collectionReady))
+  );
+}
+
+function worksetSize(db: DatabaseSync, scope: TextScope, limit: number) {
+  const source = scope.source!;
+  return Number(
+    db
+      .prepare(
+        `SELECT count(*) AS n FROM (
+        SELECT 1 FROM (${source.sql}) workset
+        WHERE sr_query_continue() AND ${visibleLiteratureSql("workset.literature_id")} LIMIT ?
+      )`,
+      )
+      .get(...source.args, limit)!.n,
+  );
+}
+
+function chooseWorksetSide(
+  db: DatabaseSync,
+  scope: TextScope,
+  ftsQuery: string,
+  limits: WindowLimits,
+) {
+  const { exactMembersLimit, memberWindowLimit, windowLimit } = limits;
+  const state = storedLibraryState(db);
+  const knownMembers =
+    scope.timeSort === "collected-desc" && state.countsReady()
+      ? state.counts.read("collected").versions
+      : undefined;
+  // Until the ordered projection is ready, fetching the newest members
+  // would sort the entire workset. Large worksets use the raw-hit index then.
+  const indexedOrder = hasMemberOrder(scope);
+  const cappedHitsCheaper =
+    !indexedOrder ||
+    windowLimit * HIT_COST_US <= memberWindowLimit * MEMBER_COST_US;
+  if (
+    knownMembers !== undefined &&
+    knownMembers > exactMembersLimit &&
+    cappedHitsCheaper
+  )
+    return { side: "hits" as const };
+
+  const estimate =
+    knownMembers === undefined
+      ? Math.max(exactMembersLimit, memberWindowLimit)
+      : knownMembers <= exactMembersLimit
+        ? knownMembers
+        : memberWindowLimit;
+
+  // Compare the planned work in microseconds. Only a large workset can
+  // choose an incomplete hit window. A small one scans all its members
+  // when the bounded probe cannot prove that scanning all hits is cheaper.
+  const breakEven = Math.floor((estimate * MEMBER_COST_US) / HIT_COST_US);
+  const probeLimit = Math.min(windowLimit, breakEven);
+  const { n } = db
+    .prepare(
+      `SELECT count(*) AS n FROM (
+        SELECT 1 FROM ${FTS} WHERE ${FTS} MATCH ? AND sr_query_continue() LIMIT ?
+      )`,
+    )
+    .get(ftsQuery, probeLimit + 1)!;
+  const hits = Number(n);
+  const neededMembers = Math.ceil((hits * HIT_COST_US) / MEMBER_COST_US);
+  if (
+    knownMembers === undefined &&
+    hits <= probeLimit &&
+    neededMembers <= Math.min(exactMembersLimit, memberWindowLimit)
+  ) {
+    // A selective query only needs a lower bound to settle the comparison.
+    return !neededMembers ||
+      worksetSize(db, scope, neededMembers) >= neededMembers
+      ? { side: "hits" as const }
+      : { side: "members" as const };
+  }
+  const members = knownMembers ?? worksetSize(db, scope, exactMembersLimit + 1);
+  const exact = members <= exactMembersLimit;
+  if (
+    (hits <= probeLimit &&
+      neededMembers <= (exact ? members : memberWindowLimit)) ||
+    (!exact && cappedHitsCheaper)
+  )
+    return { side: "hits" as const };
+  return {
+    side: "members" as const,
+    limit: exact ? undefined : memberWindowLimit,
+  };
+}
+
+function hitWindowIds(
+  db: DatabaseSync,
+  ftsQuery: string,
+  cap: number,
+  before?: string,
+  previous?: LibraryHitWindow,
+  legacyNewest?: string,
+) {
+  const limit = Math.min(cap, previous?.limit ?? cap);
+  const where = previous
+    ? {
+        sql: "AND rowid BETWEEN ? AND ?",
+        args: [BigInt(previous.oldest_rowid), BigInt(previous.newest_rowid)],
+      }
+    : before !== undefined
+      ? { sql: "AND rowid<?", args: [BigInt(before)] }
+      : legacyNewest !== undefined
+        ? { sql: "AND rowid<=?", args: [BigInt(legacyNewest)] }
+        : { sql: "", args: [] };
+  const rows = db
+    .prepare(
+      `SELECT CAST(rowid AS TEXT) AS id FROM ${FTS}
+     WHERE ${FTS} MATCH ? ${where.sql} AND sr_query_continue()
+     ORDER BY rowid DESC LIMIT ?`,
+    )
+    .all(ftsQuery, ...where.args, limit + (previous ? 0 : 1));
+  const incomplete = rows.length > limit;
+  if (incomplete) rows.pop();
+  const window: LibraryHitWindow | undefined =
+    previous ??
+    (rows.length &&
+    (incomplete || before !== undefined || legacyNewest !== undefined)
+      ? {
+          oldest_rowid: String(rows.at(-1)!.id),
+          newest_rowid: String(rows[0]!.id),
+          limit,
+          ...(incomplete ? { scan_incomplete: true as const } : {}),
+        }
+      : undefined);
+  return { ids: rows.map(({ id }) => id), window };
+}
+
+function orderedMemberScans(
+  scope: TextScope,
+  query: LibraryQuery,
+  cutoff: string,
+) {
+  const visible = `WHERE sr_query_continue() AND ${visibleLiteratureSql("l.literature_id")}`;
+  if (scope.timeSort === "opened-desc")
+    return [
+      {
+        from: "FROM reading_history l INDEXED BY reading_history_opened",
+        at: "l.last_opened_at",
+        where: visible + " AND l.last_opened_at>=?",
+        args: [cutoff],
+      },
+    ];
+  const workset = orderedWorkset(query);
+  if (workset && scope.filter.pagingReady)
+    return [...new Set(workset.ids)].map((id) => ({
+      from: "FROM library_ordered_members l INDEXED BY library_ordered_members_order",
+      at: "l.intake_at",
+      where: visible + " AND l.kind=? AND l.scope_id=?",
+      args: [workset.kind, id],
+    }));
+  if (
+    scope.timeSort === "collected-desc" &&
+    scope.filter.pagingReady &&
+    scope.filter.collectionReady
+  )
+    return [
+      {
+        from: `FROM library_collection_times l INDEXED BY library_collection_time_order
+        CROSS JOIN library_collected c ON c.literature_id=l.literature_id`,
+        at: "l.collected_at",
+        where: visible,
+        args: [],
+      },
+    ];
+  return [
+    {
+      from: `FROM (${scope.source!.sql}) l`,
+      at: workset
+        ? INTAKE_SQL
+        : collectionTimeSql("l.literature_id", scope.filter.pagingReady),
+      where: visible,
+      args: scope.source!.args,
+    },
+  ];
+}
+
+function memberWindowSource(
+  db: DatabaseSync,
+  scope: TextScope,
+  query: LibraryQuery,
+  cutoff: string,
+  cap: number,
+  before?: LibraryMemberPosition,
+  previous?: LibraryMemberWindow,
+) {
+  const limit = Math.min(cap, previous?.limit ?? cap);
+  const start = previous?.newest ?? before;
+  const after = start && {
+    literature_id: start.literature_id,
+    value: start.workset_at,
+  };
+  let rows: PageRow[] = [];
+  for (const scan of orderedMemberScans(scope, query, cutoff)) {
+    const next = indexPage(
+      db,
+      scan.from,
+      scan.where,
+      scan.args,
+      scan.at,
+      "l.literature_id",
+      after ?? null,
+      limit,
+      previous !== undefined,
+    );
+    rows = rows.length ? mergeWorksetPrefix(rows, next, limit) : next;
+  }
+  const incomplete = rows.length > limit;
+  const positions = rows.slice(0, limit).map(memberPosition);
+  const members = previous
+    ? positions.filter(
+        (p) => compareLibraryMemberPositions(p, previous.oldest) <= 0,
+      )
+    : positions;
+  const window: LibraryMemberWindow | undefined =
+    previous ??
+    (members.length && (incomplete || before !== undefined)
+      ? {
+          side: "members",
+          newest: members[0]!,
+          oldest: members.at(-1)!,
+          limit,
+          ...(incomplete ? { scan_incomplete: true as const } : {}),
+        }
+      : undefined);
+  return {
+    source: {
+      sql: `SELECT json_extract(value,'$.literature_id') AS literature_id,
+                  json_extract(value,'$.workset_at') AS last_opened_at
+             FROM json_each(?)`,
+      args: [JSON.stringify(members)],
+    },
+    window,
+  };
+}
+
+function readWorksetText(
+  db: DatabaseSync,
+  scope: TextScope,
+  query: LibraryQuery,
+  ftsQuery: string,
+  cutoff: string,
+  limits: WindowLimits,
+  before?: LibraryWindowStart,
+  after?: Position | null,
+) {
+  const previous = after?.search_window;
+  const plan =
+    (previous && "side" in previous) ||
+    (before !== undefined && typeof before !== "string")
+      ? { side: "members" as const, limit: limits.memberWindowLimit }
+      : previous ||
+          before !== undefined ||
+          after?.legacy_newest_rowid !== undefined
+        ? { side: "hits" as const }
+        : chooseWorksetSide(db, scope, ftsQuery, limits);
+  if (plan.side === "hits") {
+    const { ids, window } = hitWindowIds(
+      db,
+      ftsQuery,
+      limits.windowLimit,
+      typeof before === "string" ? before : undefined,
+      previous && !("side" in previous) ? previous : undefined,
+      after?.legacy_newest_rowid,
+    );
+    const hits = JSON.stringify(ids);
+    return {
+      matches: (ordered: boolean) => scope.matchesFromHits(hits, ordered),
+      window,
+    };
+  }
+  const window =
+    plan.limit === undefined
+      ? undefined
+      : memberWindowSource(
+          db,
+          scope,
+          query,
+          cutoff,
+          plan.limit,
+          typeof before === "string" ? undefined : before,
+          previous && "side" in previous ? previous : undefined,
+        );
+  return {
+    matches: (ordered: boolean) =>
+      scope.memberProjection!({
+        ordered,
+        ...(window ? { members: window.source } : {}),
+      }),
+    window: window?.window,
+  };
+}
+
 function textAggregation(
   db: DatabaseSync,
   query: LibraryQuery,
   ftsQuery: string,
   cutoff: string,
-  beforeRowid?: string,
+  windowStart?: LibraryWindowStart,
   countStatuses = false,
-  windowLimit = LIBRARY_SEARCH_WINDOW_LIMIT,
+  limits = defaultWindowLimits,
 ) {
-  const { filter, memberProjection, windowMatches } = textScope(
-    db,
-    query,
-    ftsQuery,
-    cutoff,
-    countStatuses,
-  );
-  if (memberProjection) {
-    if (beforeRowid !== undefined) invalidWindow();
-    // A selective MATCH can rule out most members before their individual
-    // FTS seeks. Use the IDs only when the probe read the entire hit set.
-    const hits = db
-      .prepare(
-        `SELECT literature_id FROM ${FTS} WHERE ${FTS} MATCH ? AND sr_query_continue()
-          LIMIT ${WORKSET_FTS_PROBE_LIMIT + 1}`,
-      )
-      .all(ftsQuery)
-      .map(({ literature_id }) => literature_id);
-    const completeHits =
-      hits.length <= WORKSET_FTS_PROBE_LIMIT &&
-      hits.every((id) => typeof id === "string") &&
-      new Set(hits).size === hits.length
-        ? JSON.stringify(hits)
-        : undefined;
-    const members =
-      completeHits === undefined
-        ? memberProjection()
-        : memberProjection({ completeHitsJson: completeHits });
+  const scope = textScope(db, query, ftsQuery, cutoff, countStatuses);
+  const { filter, windowMatches } = scope;
+  if (scope.source) {
+    const read = readWorksetText(
+      db,
+      scope,
+      query,
+      ftsQuery,
+      cutoff,
+      limits,
+      windowStart,
+    );
+    const matching = read.matches(false);
     return {
       filter,
-      matching: `SELECT * FROM (${members.sql})`,
-      args: members.args,
+      matching: matching.sql,
+      args: matching.args,
       prefix: "",
-      incomplete: "0",
+      incomplete: read.window?.scan_incomplete ? "1" : "0",
     };
   }
+  if (windowStart !== undefined && typeof windowStart !== "string")
+    invalidWindow();
   const raw = rawSearchWindow(
     ftsQuery,
-    windowLimit,
+    limits.windowLimit,
     {
       sql: `FROM ${FTS}`,
       args: [],
     },
-    beforeRowid,
+    typeof windowStart === "string" ? windowStart : undefined,
   );
   return {
     filter,
@@ -779,8 +1107,8 @@ export function libraryCounts(
   ftsQuery: string | null,
   exact = false,
   at = Date.now(),
-  beforeRowid?: string,
-  windowLimit?: number,
+  windowStart?: LibraryWindowStart,
+  limits?: number | WindowLimits,
 ): LibraryCounts {
   // Quick-filter counts ignore both quick selections, but retain all other facets.
   const q = { ...query, statuses: [], needs_manual_pdf: null };
@@ -797,9 +1125,9 @@ export function libraryCounts(
           q,
           ftsQuery,
           recentCutoff,
-          beforeRowid,
+          windowStart,
           true,
-          windowLimit,
+          resolvedWindowLimits(limits),
         )
       : undefined;
   const { from, where, status, updating, collectionReady, args } =
@@ -924,13 +1252,19 @@ export class LibraryRelevanceCache {
 
   readonly windowLimit: number;
   readonly memberScoreBudget: number;
+  readonly memberWindowLimit: number;
+  readonly exactMembersLimit: number;
 
   constructor(
     windowLimit = LIBRARY_SEARCH_WINDOW_LIMIT,
     memberScoreBudget = LIBRARY_MEMBER_SCORE_BUDGET,
+    memberWindowLimit = LIBRARY_MEMBER_WINDOW_LIMIT,
+    exactMembersLimit = LIBRARY_COUNT_LIMIT,
   ) {
     this.windowLimit = windowLimit;
     this.memberScoreBudget = memberScoreBudget;
+    this.memberWindowLimit = memberWindowLimit;
+    this.exactMembersLimit = exactMembersLimit;
   }
 
   get(id: string, key: string) {
@@ -1035,8 +1369,11 @@ function searchWindowRows(
   request: LibraryPageQuery,
   cap: number,
 ) {
-  const { after, ftsQuery, beforeRowid, sort } = request;
+  const { after, ftsQuery, windowStart: beforeRowid, sort } = request;
   const previous = after?.search_window;
+  if (previous && "side" in previous) invalidWindow();
+  if (beforeRowid !== undefined && typeof beforeRowid !== "string")
+    invalidWindow();
   const limit = Math.min(cap, previous?.limit ?? cap);
   const maySwitch = !!request.relevanceForLargeScope && !after;
   const canRank = sort === "relevance" || maySwitch;
@@ -1126,14 +1463,12 @@ function textLibraryPage(
   request: LibraryPageQuery,
   cache?: LibraryRelevanceCache,
 ): Page {
-  const { query, ftsQuery, after, limit, rankingKey, beforeRowid } = request;
+  const { query, ftsQuery, after, limit, rankingKey, windowStart } = request;
   let { sort } = request;
-  const { filter, memberMatches, memberProjection } = textScope(
-    db,
-    query,
-    ftsQuery!,
-    recentCutoffAt(Date.now()),
-  );
+  const cutoff = recentCutoffAt(Date.now());
+  const scope = textScope(db, query, ftsQuery!, cutoff);
+  const { filter } = scope;
+  const limits = cache ?? defaultWindowLimits;
   const flags = countReadFlags(storedLibraryState(db), filter.updating);
   const tags = filter.tagIds.length
     ? {
@@ -1167,39 +1502,62 @@ function textLibraryPage(
   let window: LibrarySearchWindow | undefined;
   let matches: Sql;
   let ranking: Ranking | undefined;
+  const restrictSort = (truncated?: true) => {
+    const memberTime = window && "side" in window && sort === scope.timeSort;
+    if (
+      (window?.scan_incomplete || truncated) &&
+      sort !== "relevance" &&
+      !memberTime
+    ) {
+      if (request.relevanceForLargeScope && !after) sort = "relevance";
+      else sortScopeLimit();
+    }
+  };
+  const workset = scope.source
+    ? readWorksetText(
+        db,
+        scope,
+        query,
+        ftsQuery!,
+        cutoff,
+        limits,
+        windowStart,
+        after,
+      )
+    : undefined;
   const rankMembers = () =>
     rankLibraryMembers(
       db,
-      memberProjection!({ ordered: true }),
+      workset!.matches(true),
       ftsQuery!,
       cache?.memberScoreBudget,
     );
-  if (memberMatches && memberProjection) {
-    if (beforeRowid !== undefined) invalidWindow();
+  if (workset) {
+    window = workset.window;
+    restrictSort();
+    matches = workset.matches(false);
     if (sort === "relevance") {
       const initial = rankMembers();
       ranking = initial;
       total = after?.total ?? countFromSample(initial.total);
     } else if (after?.total) total = after.total;
     else {
-      const result = db
+      const rows = db
         .prepare(
-          `SELECT count(*) AS total,count(DISTINCT literature_id) AS unique_count
-          FROM (SELECT literature_id FROM (${memberMatches.sql}) LIMIT ${LIBRARY_COUNT_LIMIT + 1})`,
+          `SELECT literature_id FROM (${matches.sql}) LIMIT ${LIBRARY_COUNT_LIMIT + 1}`,
         )
-        .get(...memberMatches.args)!;
-      if (result.total !== result.unique_count)
+        .all(...matches.args);
+      const ids = rows.map(({ literature_id }) => literature_id);
+      if (ids.length !== new Set(ids).size)
         throw new Error("duplicate library search rows");
-      total = countFromSample(Number(result.total));
+      total = countFromSample(ids.length);
+      matches = {
+        sql: "SELECT value AS literature_id FROM json_each(?)",
+        args: [JSON.stringify(ids)],
+      };
     }
-    matches = memberMatches;
   } else {
-    const first = searchWindowRows(
-      db,
-      filter,
-      request,
-      cache?.windowLimit ?? LIBRARY_SEARCH_WINDOW_LIMIT,
-    );
+    const first = searchWindowRows(db, filter, request, limits.windowLimit);
     window = first.window;
     total = after?.total ?? countFromSample(first.total);
     ranking = { rows: first.rows };
@@ -1208,14 +1566,7 @@ function textLibraryPage(
       args: [JSON.stringify(first.rows.map((row) => row.literature_id))],
     };
   }
-  const restricted =
-    window?.scan_incomplete ||
-    total.count_truncated ||
-    total.total_count > LIBRARY_COUNT_LIMIT;
-  if (restricted && sort !== "relevance") {
-    if (request.relevanceForLargeScope && !after) sort = "relevance";
-    else sortScopeLimit();
-  }
+  restrictSort(total.count_truncated);
   const summary = {
     ...total,
     ...flags,
@@ -1266,6 +1617,7 @@ function indexPage(
   id: string,
   after: Position | null,
   limit: number,
+  inclusive = false,
 ) {
   const rows: PageRow[] = [];
   const read = (seek: string, ...values: SQLInputValue[]) => {
@@ -1278,15 +1630,37 @@ function indexPage(
       .all(...args, ...values, limit + 1 - rows.length))
       rows.push(row);
   };
+  const comparison = inclusive ? ">=" : ">";
   if (!after) read("");
   else if (after.value === null)
-    read(`AND ${at} IS NULL AND ${id}>?`, after.literature_id);
+    read(`AND ${at} IS NULL AND ${id}${comparison}?`, after.literature_id);
   else {
-    read(`AND ${at}=? AND ${id}>?`, after.value, after.literature_id);
+    read(
+      `AND ${at}=? AND ${id}${comparison}?`,
+      after.value,
+      after.literature_id,
+    );
     read(`AND ${at}<?`, after.value);
     read(`AND ${at} IS NULL`);
   }
   return rows;
+}
+
+function memberPosition(row: PageRow): LibraryMemberPosition {
+  return {
+    workset_at: row.sort_value === null ? null : String(row.sort_value),
+    literature_id: String(row.literature_id),
+  };
+}
+
+function mergeWorksetPrefix(page: PageRow[], rows: PageRow[], limit: number) {
+  return Array.from(
+    new Map([...page, ...rows].map((row) => [row.literature_id, row])).values(),
+  )
+    .sort((a, b) =>
+      compareLibraryMemberPositions(memberPosition(a), memberPosition(b)),
+    )
+    .slice(0, limit + 1);
 }
 
 function worksetPage(
@@ -1310,20 +1684,7 @@ function worksetPage(
     );
     if (workset.ids.length === 1) return rows;
     // The first limit+1 distinct IDs of a union are in these prefixes.
-    page = Array.from(
-      new Map(
-        [...page, ...rows].map((row) => [row.literature_id, row]),
-      ).values(),
-    )
-      .sort((a, b) => {
-        if (a.sort_value !== b.sort_value) {
-          if (a.sort_value === null) return 1;
-          if (b.sort_value === null) return -1;
-          return String(a.sort_value) > String(b.sort_value) ? -1 : 1;
-        }
-        return String(a.literature_id) < String(b.literature_id) ? -1 : 1;
-      })
-      .slice(0, limit + 1);
+    page = mergeWorksetPrefix(page, rows, limit);
   }
   return page;
 }
@@ -1583,8 +1944,8 @@ export function libraryFacets(
   limit: number,
   exact = false,
   at = Date.now(),
-  beforeRowid?: string,
-  windowLimit?: number,
+  windowStart?: LibraryWindowStart,
+  limits?: number | WindowLimits,
 ): LibraryFacets {
   const state = storedLibraryState(db);
   const scope = ftsQuery === null ? globalLibraryCountScope(query) : null;
@@ -1596,9 +1957,9 @@ export function libraryFacets(
           query,
           ftsQuery,
           recentCutoff,
-          beforeRowid,
+          windowStart,
           false,
-          windowLimit,
+          resolvedWindowLimits(limits),
         )
       : undefined;
   const filter =

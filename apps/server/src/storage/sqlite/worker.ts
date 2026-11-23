@@ -88,10 +88,12 @@ import {
   fallbackIdentitySha256,
   stableIdentifierKeys,
 } from "../../literature/identity-rules.js";
+import { libraryWorksetTimeSort } from "../../literature/library-workset-order.js";
 import type {
   LibraryCollectRequest,
   LibraryPageQuery,
   LibrarySearchWindow,
+  LibraryWindowStart,
   SearchSnapshotRow,
 } from "../../literature/query.js";
 import {
@@ -424,7 +426,7 @@ export type SqliteCommand =
       readonly request: import("@sciretriever/contracts").LibraryQuery;
       readonly limit: number;
       readonly ftsQuery: string | null;
-      readonly beforeRowid?: string;
+      readonly windowStart?: LibraryWindowStart;
     }
   | {
       readonly kind: "acquire_pdf_selection";
@@ -782,7 +784,7 @@ export type SqliteCommand =
       readonly kind: "library_counts";
       readonly query: LibraryPageQuery["query"];
       readonly ftsQuery: string | null;
-      readonly beforeRowid?: string;
+      readonly windowStart?: LibraryWindowStart;
       readonly counterRead?: "defer";
     }
   | {
@@ -3211,7 +3213,7 @@ export class SqliteWorker {
     limit: number,
     ftsQuery: string | null,
     signal?: AbortSignal,
-    beforeRowid?: string,
+    windowStart?: LibraryWindowStart,
   ) {
     return this.run<import("@sciretriever/contracts").LibraryFacets>(
       {
@@ -3219,7 +3221,7 @@ export class SqliteWorker {
         request: query,
         limit,
         ftsQuery,
-        ...(beforeRowid === undefined ? {} : { beforeRowid }),
+        ...(windowStart === undefined ? {} : { windowStart }),
       },
       signal,
     );
@@ -3396,13 +3398,13 @@ export class SqliteWorker {
     query: LibraryPageQuery["query"],
     ftsQuery: string | null,
     signal?: AbortSignal,
-    beforeRowid?: string,
+    windowStart?: LibraryWindowStart,
   ): Promise<LibraryCounts> {
     const command = {
       kind: "library_counts" as const,
       query,
       ftsQuery,
-      ...(beforeRowid === undefined ? {} : { beforeRowid }),
+      ...(windowStart === undefined ? {} : { windowStart }),
     };
     if (
       this.options.readLane &&
@@ -3582,11 +3584,13 @@ export class SqliteWorker {
       (!Number.isSafeInteger(tag_backfill_pending) || tag_backfill_pending < 0)
     )
       throw new SqliteWorkerError();
+    const timeSort = libraryWorksetTimeSort(request.query);
+    const memberTime = window && "side" in window && request.sort === timeSort;
     if (
       total.scan_incomplete !== window?.scan_incomplete ||
       ((ranking_id !== undefined ||
-        window?.scan_incomplete ||
-        relevance_scored_count !== undefined) &&
+        relevance_scored_count !== undefined ||
+        (window?.scan_incomplete && !memberTime)) &&
         ((request.sort !== "relevance" && !request.relevanceForLargeScope) ||
           request.fullRelevance)) ||
       (ranking_id !== undefined &&
@@ -3595,7 +3599,7 @@ export class SqliteWorker {
       throw new SqliteWorkerError();
     if (
       relevance_scored_count !== undefined &&
-      (window ||
+      (!timeSort ||
         !Number.isSafeInteger(relevance_scored_count) ||
         relevance_scored_count < 0 ||
         (!request.after?.total &&

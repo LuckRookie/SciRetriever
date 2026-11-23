@@ -68,6 +68,14 @@ timeout --kill-after=35s 8m node apps/server/test/scale-acceptance.mjs workset-b
 timeout --kill-after=40s 25m node apps/server/test/scale-acceptance.mjs workset-budget "$copy_1m" "$report_dir/workset-budget-1m.json"
 ```
 
+`side-window-sweep` 将两个零匹配作者查询与各个原始命中上限轮换采样，各取 20 次。计时从调用 SQLite 首页查询到取出首批 ID，选两组 P95 都不超过 1,200 ms 的最大试验档。`side-member-sweep` 在有 10,001 篇全文的合成批次上对照成员窗口大小，从 SQLite 首页查询计到取出首批 ID。`search-side-windows` 走生产 HTTP，测整库、全正文与纯书目的万篇工作集，以及 10,001 篇和 10 万篇的收进来范围与批次。每种组合从发请求到解析 50 项，每组取 20 次，含首屏及高频词的第二窗。断言 P95 不超过 1,500 ms、同期提交至少 100 篇/s。准备范围和登录在计时之外。
+
+```sh
+timeout --kill-after=35s 8m node apps/server/test/scale-acceptance.mjs side-window-sweep "$copy_1m" "$report_dir/hit-sweep.json" 65000,70000,72500,75000,77500,80000
+timeout --kill-after=35s 6m node apps/server/test/scale-acceptance.mjs side-member-sweep "$copy_1m" "$report_dir/member-sweep.json" 8000,9000,10000
+timeout --kill-after=40s 20m node apps/server/test/scale-acceptance.mjs search-side-windows "$copy_1m" "$report_dir/search-side-windows.json"
+```
+
 [上级目录](../README.md) · [项目 README](../../../README.md)
 
 `workbench-auth-fixture.ts` 只服务隔离回归：使用合成密码、绑定 loopback，并经真实 `/auth/login` 为 HTTP/浏览器旅程取得会话，不绕过统一认证。默认对外监听和自动密钥由 `web-remote-access.test.ts` 验证。

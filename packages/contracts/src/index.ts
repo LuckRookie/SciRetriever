@@ -375,9 +375,11 @@ export interface LibrarySearchPage extends LibrarySearchTotal {
   readonly relevance_limit?: typeof RELEVANCE_RESULT_LIMIT;
   /** Only this many workset matches were scored. The rest follow in workset order. */
   readonly relevance_scored_count?: number;
-  /** Raw FTS hits in an incomplete scan window, before applying filters. */
+  /** Which population an incomplete window scans before applying filters. */
+  readonly scan_side?: "hits" | "members";
+  /** Maximum raw entries in this window, in units of scan_side. */
   readonly scan_limit?: number;
-  /** Start a search (or counts/facets) in the next, earlier raw-hit window. */
+  /** Start a search (or counts/facets) in the next window on the same side. */
   readonly next_window_cursor?: string;
   readonly items: readonly LiteratureSearchItem[];
   readonly next_cursor: string | null;

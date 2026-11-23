@@ -31,9 +31,13 @@ it("keeps an unfinished text scan separate from count and relevance limits", () 
   expectTypeOf<LibrarySearchPage["scan_incomplete"]>().toEqualTypeOf<
     true | undefined
   >();
+  expectTypeOf<LibrarySearchPage["scan_side"]>().toEqualTypeOf<
+    "hits" | "members" | undefined
+  >();
   const page: LibrarySearchPage = {
     total_count: 0,
     scan_incomplete: true,
+    scan_side: "members",
     scan_limit: 20_000,
     relevance_limit: 1_000,
     next_window_cursor: "earlier",

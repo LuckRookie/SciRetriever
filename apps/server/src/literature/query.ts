@@ -38,6 +38,11 @@ import {
   type ReferenceDetail,
 } from "@sciretriever/contracts";
 import { createHash } from "node:crypto";
+import {
+  compareLibraryMemberPositions,
+  libraryWorksetTimeSort,
+  type LibraryMemberPosition,
+} from "./library-workset-order.js";
 import { ftsIndexText, normalizeQueryText } from "./unicode-casefold.js";
 
 export interface SearchSnapshotRow {
@@ -80,7 +85,7 @@ export interface LibraryQueryRepository {
     limit: number,
     ftsQuery: string | null,
     signal?: AbortSignal,
-    beforeRowid?: string,
+    windowStart?: LibraryWindowStart,
   ): Promise<LibraryFacets>;
   acquirePdfSelection?(
     request: PdfSelectionRequest,
@@ -94,7 +99,7 @@ export interface LibraryQueryRepository {
     query: LibraryQuery,
     ftsQuery: string | null,
     signal?: AbortSignal,
-    beforeRowid?: string,
+    windowStart?: LibraryWindowStart,
   ): Promise<LibraryCounts>;
   libraryExactCount?(
     request: LibraryExactCountRequest,
@@ -306,19 +311,29 @@ export interface Position {
   readonly search_window?: LibrarySearchWindow;
   readonly legacy_newest_rowid?: string;
 }
-export interface LibrarySearchWindow {
+export interface LibraryHitWindow {
   readonly oldest_rowid: string;
   readonly newest_rowid: string;
   readonly limit: number;
   readonly scan_incomplete?: true;
 }
+export interface LibraryMemberWindow {
+  readonly side: "members";
+  readonly newest: LibraryMemberPosition;
+  readonly oldest: LibraryMemberPosition;
+  readonly limit: number;
+  readonly scan_incomplete?: true;
+}
+export type LibrarySearchWindow = LibraryHitWindow | LibraryMemberWindow;
+/** A hit continuation is its exclusive rowid. Member continuations carry a workset key. */
+export type LibraryWindowStart = string | LibraryMemberPosition;
 export interface LibraryPageQuery {
   readonly query: LibraryQuery;
   readonly ftsQuery: string | null;
   readonly sort: LibrarySort;
   readonly after: Position | null;
   readonly limit: number;
-  readonly beforeRowid?: string;
+  readonly windowStart?: LibraryWindowStart;
   readonly fullRelevance?: true;
   readonly relevanceForLargeScope?: true;
   readonly rankingKey?: string;
@@ -326,13 +341,6 @@ export interface LibraryPageQuery {
 export interface LibraryCollectRequest {
   readonly selector: import("@sciretriever/contracts").CollectLiteraturesRequest["selector"];
   readonly ftsQuery: string | null;
-}
-function libraryWorksetUsesIntake(query: LibraryQuery): boolean {
-  return Boolean(
-    query.folder ||
-      query.intake_batch_ids.length ||
-      query.discovery_run_ids.length,
-  );
 }
 function position(row: SearchSnapshotRow, sort: LibrarySort): Position {
   const l = row.item.literature;
@@ -445,6 +453,7 @@ function encodePosition(
   window?: LibrarySearchWindow,
 ): string {
   const unscored = p.workset_at !== undefined;
+  const typedWindow = window && ("side" in window || unscored);
   const core = {
     kind: "library-search",
     payload: {
@@ -460,7 +469,7 @@ function encodePosition(
             ? { ranking_id: rankingId }
             : {}),
     },
-    version: unscored ? 6 : window ? 5 : rankingId ? 3 : 2,
+    version: typedWindow ? 7 : unscored ? 6 : window ? 5 : rankingId ? 3 : 2,
   };
   return Buffer.from(canonical({ checksum: digest(core), ...core })).toString(
     "base64url",
@@ -487,7 +496,18 @@ function validRowid(id: unknown): id is string {
     BigInt.asIntN(64, BigInt(id)) === BigInt(id)
   );
 }
-export function parseLibrarySearchWindow(value: unknown): LibrarySearchWindow {
+function parseMemberPosition(value: unknown): LibraryMemberPosition {
+  const { workset_at, literature_id } = object(value, [
+    "workset_at",
+    "literature_id",
+  ]);
+  return {
+    workset_at: workset_at === null ? null : parseUtcTimestamp(workset_at),
+    literature_id: parseLiteratureId(literature_id),
+  };
+}
+
+function parseHitWindow(value: unknown): LibraryHitWindow {
   const incomplete =
     !!value &&
     typeof value === "object" &&
@@ -516,11 +536,71 @@ export function parseLibrarySearchWindow(value: unknown): LibrarySearchWindow {
   };
 }
 
-function encodeWindowCursor(ftsQuery: string, before_rowid: string) {
+export function parseLibrarySearchWindow(value: unknown): LibrarySearchWindow {
+  if (!value || typeof value !== "object" || !Object.hasOwn(value, "side"))
+    return parseHitWindow(value);
+  const incomplete = Object.hasOwn(value, "scan_incomplete");
+  const r = object(value, [
+    "side",
+    "newest",
+    "oldest",
+    "limit",
+    ...(incomplete ? ["scan_incomplete"] : []),
+  ]);
+  const newest = parseMemberPosition(r.newest);
+  const oldest = parseMemberPosition(r.oldest);
+  if (
+    r.side !== "members" ||
+    typeof r.limit !== "number" ||
+    !Number.isSafeInteger(r.limit) ||
+    r.limit < 1 ||
+    compareLibraryMemberPositions(newest, oldest) > 0 ||
+    (incomplete && r.scan_incomplete !== true)
+  )
+    fail();
+  return {
+    side: "members",
+    newest,
+    oldest,
+    limit: r.limit as number,
+    ...(incomplete ? { scan_incomplete: true as const } : {}),
+  };
+}
+
+function memberScopeFingerprint(query: LibraryQuery) {
+  if (query.recently_opened) return digest({ recently_opened: true });
+  if (query.folder) return digest(query.folder);
+  if (query.intake_batch_ids.length)
+    return digest({ intake_batch_ids: unique(query.intake_batch_ids) });
+  if (query.discovery_run_ids.length)
+    return digest({ discovery_run_ids: unique(query.discovery_run_ids) });
+  if (query.collection_scope === "collected")
+    return digest({ collection_scope: "collected" });
+  return fail();
+}
+
+function encodeWindowCursor(
+  query: LibraryQuery,
+  ftsQuery: string,
+  window: LibrarySearchWindow,
+) {
+  const fts_fingerprint = digest(ftsQuery);
+  const scoped = libraryWorksetTimeSort(query) !== undefined;
   const core = {
     kind: "library-search-window",
-    payload: { fts_fingerprint: digest(ftsQuery), before_rowid },
-    version: 2,
+    payload: scoped
+      ? {
+          fts_fingerprint,
+          scope_fingerprint: memberScopeFingerprint(query),
+          ...("side" in window
+            ? { side: "members", after: window.oldest }
+            : { side: "hits", after: window.oldest_rowid }),
+        }
+      : {
+          fts_fingerprint,
+          before_rowid: "oldest_rowid" in window ? window.oldest_rowid : fail(),
+        },
+    version: scoped ? 3 : 2,
   };
   return Buffer.from(canonical({ checksum: digest(core), ...core })).toString(
     "base64url",
@@ -531,14 +611,8 @@ function decodeWindowCursor(
   cursor: string,
   query: LibraryQuery,
   ftsQuery: string | null,
-): string {
-  if (
-    !ftsQuery ||
-    query.recently_opened ||
-    query.collection_scope === "collected" ||
-    libraryWorksetUsesIntake(query)
-  )
-    fail();
+): LibraryWindowStart {
+  if (!ftsQuery) return fail();
   try {
     const raw = Buffer.from(cursor, "base64url");
     if (raw.toString("base64url") !== cursor) fail();
@@ -551,16 +625,36 @@ function decodeWindowCursor(
     if (
       canonical(e) !== raw.toString("utf8") ||
       e.kind !== "library-search-window" ||
-      e.version !== 2 ||
+      (e.version !== 2 && e.version !== 3) ||
       digest({ kind: e.kind, payload: e.payload, version: e.version }) !==
         e.checksum
     )
       fail();
+    if (e.version === 3) {
+      const r = object(e.payload, [
+        "fts_fingerprint",
+        "scope_fingerprint",
+        "side",
+        "after",
+      ]);
+      if (
+        r.fts_fingerprint !== digest(ftsQuery) ||
+        r.scope_fingerprint !== memberScopeFingerprint(query)
+      )
+        fail();
+      if (r.side === "members") return parseMemberPosition(r.after);
+      if (r.side === "hits" && validRowid(r.after)) return r.after;
+      return fail();
+    }
     const { fts_fingerprint, before_rowid } = object(e.payload, [
       "fts_fingerprint",
       "before_rowid",
     ]);
-    if (fts_fingerprint !== digest(ftsQuery) || !validRowid(before_rowid))
+    if (
+      libraryWorksetTimeSort(query) ||
+      fts_fingerprint !== digest(ftsQuery) ||
+      !validRowid(before_rowid)
+    )
       return fail();
     return before_rowid;
   } catch {
@@ -590,7 +684,8 @@ function decodePosition(
         e.version !== 3 &&
         e.version !== 4 &&
         e.version !== 5 &&
-        e.version !== 6) ||
+        e.version !== 6 &&
+        e.version !== 7) ||
       e.kind !== "library-search" ||
       digest({ kind: e.kind, payload: e.payload, version: e.version }) !==
         e.checksum
@@ -603,7 +698,7 @@ function decodePosition(
       ...(e.version !== 1 ? ["total"] : []),
       ...(Number(e.version) >= 3 ? ["ranking_id"] : []),
       ...(e.version === 4 ? ["candidate_window"] : []),
-      ...(e.version === 5 ? ["search_window"] : []),
+      ...(e.version === 5 || e.version === 7 ? ["search_window"] : []),
     ]);
     if (
       payload.query_fingerprint !== queryFingerprint(query) ||
@@ -613,7 +708,12 @@ function decodePosition(
     const total =
       e.version !== 1 ? parseLibrarySearchTotal(payload.total) : undefined;
     const rankingId = payload.ranking_id;
-    const unscored = e.version === 6;
+    const unscored =
+      e.version === 6 ||
+      (e.version === 7 &&
+        !!payload.position &&
+        typeof payload.position === "object" &&
+        Object.hasOwn(payload.position, "workset_at"));
     if (
       ((e.version === 3 || e.version === 4 || unscored) &&
         sort !== "relevance") ||
@@ -622,7 +722,7 @@ function decodePosition(
       fail();
     if (
       (e.version === 3 ||
-        ((e.version === 4 || e.version === 5 || unscored) &&
+        ((e.version === 4 || e.version === 5 || e.version === 7 || unscored) &&
           rankingId !== null)) &&
       (sort !== "relevance" ||
         typeof rankingId !== "string" ||
@@ -630,14 +730,14 @@ function decodePosition(
     )
       fail();
     const searchWindow =
-      e.version === 5
+      e.version === 5 || e.version === 7
         ? parseLibrarySearchWindow(payload.search_window)
         : undefined;
     // V4 measured its limit after filtering. Rebase it to a raw window at
     // the old upper edge and recalculate its total with the new semantics.
     const legacy =
       e.version === 4
-        ? parseLibrarySearchWindow(
+        ? parseHitWindow(
             object(payload.candidate_window, [
               "oldest_rowid",
               "newest_rowid",
@@ -645,9 +745,15 @@ function decodePosition(
             ]),
           )
         : undefined;
+    const memberWindow = searchWindow && "side" in searchWindow;
+    const timeSort = libraryWorksetTimeSort(query);
     if (
+      (e.version === 5 && memberWindow) ||
+      (e.version === 7 && (!timeSort || (!memberWindow && !unscored))) ||
       ((searchWindow || legacy) && query.text === null) ||
-      (searchWindow?.scan_incomplete && sort !== "relevance") ||
+      (searchWindow?.scan_incomplete &&
+        sort !== "relevance" &&
+        !(memberWindow && sort === timeSort)) ||
       (total &&
         (total.status_updating ||
           total.counts_backfill_pending ||
@@ -941,7 +1047,7 @@ export class LiteratureQueryService {
     if (!this.repository.libraryFacets) throw new LiteratureQueryError();
     const r = parseLibraryFacetsRequest(value);
     const ftsQuery = libraryFtsMatch(r.query.text);
-    const beforeRowid = r.window_cursor
+    const windowStart = r.window_cursor
       ? decodeWindowCursor(r.window_cursor, r.query, ftsQuery)
       : undefined;
     if (ftsQuery === "")
@@ -957,7 +1063,7 @@ export class LiteratureQueryService {
       r.limit,
       ftsQuery,
       signal,
-      beforeRowid,
+      windowStart,
     );
   }
   pdfSelection(value: unknown, signal?: AbortSignal) {
@@ -1121,7 +1227,7 @@ export class LiteratureQueryService {
     });
     const query = request.query;
     const ftsQuery = libraryFtsMatch(query.text);
-    const beforeRowid = request.window_cursor
+    const windowStart = request.window_cursor
       ? decodeWindowCursor(request.window_cursor, query, ftsQuery)
       : undefined;
     if (ftsQuery === "")
@@ -1135,7 +1241,7 @@ export class LiteratureQueryService {
           LITERATURE_STATUSES.map((s) => [s, 0]),
         ) as Record<(typeof LITERATURE_STATUSES)[number], number>,
       };
-    return this.repository.libraryCounts(query, ftsQuery, signal, beforeRowid);
+    return this.repository.libraryCounts(query, ftsQuery, signal, windowStart);
   }
   async exactCount(
     value: unknown,
@@ -1171,7 +1277,7 @@ export class LiteratureQueryService {
       mode === "browse" ? browseQuery(request.query) : request.query;
     const ftsQuery = libraryFtsMatch(query.text);
     if (request.window_cursor && mode === "selection") fail();
-    const beforeRowid = request.window_cursor
+    const windowStart = request.window_cursor
       ? decodeWindowCursor(request.window_cursor, query, ftsQuery)
       : undefined;
     const defaultSort =
@@ -1179,10 +1285,8 @@ export class LiteratureQueryService {
     const relevanceForLargeScope = defaultSort && query.text !== null;
     let sort =
       defaultSort &&
-      !query.recently_opened &&
-      !libraryWorksetUsesIntake(query) &&
-      query.collection_scope === "collected" &&
-      query.text === null
+      query.text === null &&
+      libraryWorksetTimeSort(query) === "collected-desc"
         ? "collected-desc"
         : request.sort;
     let after: Position | null = null;
@@ -1210,7 +1314,7 @@ export class LiteratureQueryService {
         sort,
         after,
         limit: request.limit,
-        ...(beforeRowid === undefined ? {} : { beforeRowid }),
+        ...(windowStart === undefined ? {} : { windowStart }),
         ...(relevanceForLargeScope
           ? { relevanceForLargeScope: true as const }
           : {}),
@@ -1222,7 +1326,17 @@ export class LiteratureQueryService {
       signal,
     );
     signal?.throwIfAborted();
-    if (result.ranking_id) sort = "relevance";
+    const window = result.search_window;
+    const memberTime =
+      window && "side" in window && sort === libraryWorksetTimeSort(query);
+    if (
+      result.ranking_id ||
+      (relevanceForLargeScope &&
+        !after &&
+        (window?.scan_incomplete || result.count_truncated) &&
+        !memberTime)
+    )
+      sort = "relevance";
     const page = result.rows.slice(0, request.limit);
     const total = {
       total_count: result.total_count,
@@ -1240,14 +1354,14 @@ export class LiteratureQueryService {
       ...(result.relevance_scored_count === undefined
         ? {}
         : { relevance_scored_count: result.relevance_scored_count }),
-      ...(ftsQuery && result.search_window?.scan_incomplete
+      ...(ftsQuery && window?.scan_incomplete
         ? {
             scan_incomplete: true as const,
-            scan_limit: result.search_window.limit,
-            next_window_cursor: encodeWindowCursor(
-              ftsQuery,
-              result.search_window.oldest_rowid,
-            ),
+            scan_side: ("side" in window ? "members" : "hits") as
+              | "members"
+              | "hits",
+            scan_limit: window.limit,
+            next_window_cursor: encodeWindowCursor(query, ftsQuery, window),
           }
         : {}),
       ...(result.tag_backfill_pending === undefined

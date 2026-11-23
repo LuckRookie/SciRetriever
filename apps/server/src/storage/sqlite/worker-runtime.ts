@@ -6061,7 +6061,7 @@ port.on("message", (message: WorkerMessage) => {
             command.ftsQuery,
             false,
             Date.now(),
-            command.beforeRowid,
+            command.windowStart,
           );
         });
         break;
@@ -6096,7 +6096,7 @@ port.on("message", (message: WorkerMessage) => {
             c.limit,
             false,
             Date.now(),
-            c.beforeRowid,
+            c.windowStart,
           );
         });
         break;

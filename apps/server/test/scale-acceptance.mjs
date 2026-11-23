@@ -670,11 +670,19 @@ async function searchWindowSweep() {
     writer.child.on("message", (point) => result.points.push(point));
     await writer.first();
     await wait(2_500);
-    for (const [name, text, extra] of [
-      ["sparse-author", nearAllText, authorFilter],
-      ["near-all", nearAllText, {}],
-      ["three-frequent", "studies of in", {}],
-    ]) {
+    const probes =
+      mode === "side-window-sweep"
+        ? [
+            ["sparse-author", nearAllText, authorFilter],
+            ["three-sparse-author", "studies of in", authorFilter],
+          ]
+        : [
+            ["sparse-author", nearAllText, authorFilter],
+            ["near-all", nearAllText, {}],
+            ["three-frequent", "studies of in", {}],
+          ];
+    const plans = [];
+    for (const [name, text, extra] of probes) {
       const query = parseLibrarySearchRequest({
         query: { text, ...extra },
       }).query;
@@ -690,28 +698,50 @@ async function searchWindowSweep() {
       };
       const search = (result.search[name] = {});
       for (const cap of caps) {
-        const cache = new LibraryRelevanceCache(cap);
-        const samples = [];
-        let scan_limit = null;
-        for (let trial = 0; trial < trials; trial++) {
-          await wait(35);
-          db.exec("BEGIN");
-          try {
-            samples.push(
-              await measure(() => {
-                const page = libraryPageIds(db, plan, cache);
-                scan_limit = page.search_window?.limit ?? null;
-                if (extra.author) assert.equal(page.total_count, 0);
-              }),
-            );
-          } finally {
-            db.exec("COMMIT");
-          }
-          if (samples.at(-1) > 10 * objectives.search) break;
-        }
-        search[cap] = { ...stats(samples), scan_limit, samples };
-        console.log(scale, name, cap, JSON.stringify(stats(samples)));
+        plans.push({
+          name,
+          cap,
+          search,
+          plan,
+          empty: !!extra.author,
+          cache: new LibraryRelevanceCache(cap),
+          samples: [],
+          scan_limit: null,
+        });
       }
+    }
+    async function sample(probe) {
+      if (probe.samples.at(-1) > 10 * objectives.search) return;
+      stop.signal.throwIfAborted();
+      await wait(35);
+      db.exec("BEGIN");
+      try {
+        probe.samples.push(
+          await measure(() => {
+            const page = libraryPageIds(db, probe.plan, probe.cache);
+            probe.scan_limit = page.search_window?.limit ?? null;
+            if (probe.empty) assert.equal(page.total_count, 0);
+          }),
+        );
+      } finally {
+        db.exec("COMMIT");
+      }
+    }
+    // Rotate the two expensive author probes and their caps so a busy or
+    // quiet stretch cannot affect only one candidate in the sizing run.
+    if (mode === "side-window-sweep") {
+      for (let trial = 0; trial < trials; trial++) {
+        for (let index = 0; index < plans.length; index++)
+          await sample(plans[(trial * 3 + index) % plans.length]);
+        console.log(scale, "completed sizing trial", trial + 1);
+      }
+    } else {
+      for (const probe of plans)
+        for (let trial = 0; trial < trials; trial++) await sample(probe);
+    }
+    for (const { name, cap, search, samples, scan_limit } of plans) {
+      search[cap] = { ...stats(samples), scan_limit, samples };
+      console.log(scale, name, cap, JSON.stringify(stats(samples)));
     }
     for (const text of [nearAllText, "of", "spectroscopy", "studies of in"]) {
       const fts = queryTerms(text)
@@ -1309,13 +1339,252 @@ async function worksetBudgetSearch() {
   await save();
 }
 
+function sideWindowCohorts() {
+  const { all, none } = budgetBenchmarkGroups();
+  const db = new DatabaseSync(catalog, { readOnly: true });
+  try {
+    const extraBody = db
+      .prepare(
+        `SELECT literature_id FROM literature_assets WHERE role='primary-pdf'
+       AND literature_id NOT IN (SELECT value FROM json_each(?)) LIMIT 1`,
+      )
+      .get(JSON.stringify(all.map(({ literature_id }) => literature_id)));
+    assert.ok(extraBody);
+    const large = db
+      .prepare(
+        `SELECT literature_id FROM literatures
+       WHERE (rowid-1) % 10=0 ORDER BY rowid LIMIT 100000`,
+      )
+      .all();
+    assert.equal(large.length, 100_000);
+    return { all, none, over: [...all, extraBody], large };
+  } finally {
+    db.close();
+  }
+}
+
+function seedSideWindowBatch(ids) {
+  const db = new DatabaseSync(catalog);
+  const batch = randomUUID();
+  const at = new Date().toISOString();
+  db.exec("PRAGMA foreign_keys=ON; BEGIN IMMEDIATE");
+  try {
+    db.prepare(
+      `INSERT INTO intake_batches(batch_id,kind,default_label,origin,created_at,finished_at,state,result,initiated_by,request_json)
+       VALUES(?,'import','Synthetic search acceptance','cli',?,?,'finished','completed','local:cli','{}')`,
+    ).run(batch, at, at);
+    db.prepare(
+      `INSERT INTO intake_batch_members(batch_id,literature_id,disposition)
+       SELECT ?,value,'matched' FROM json_each(?)`,
+    ).run(batch, JSON.stringify(ids));
+    db.exec("COMMIT");
+    return batch;
+  } finally {
+    if (db.isTransaction) db.exec("ROLLBACK");
+    db.close();
+  }
+}
+
+async function searchSideWindows() {
+  assert.equal(scale, "1m");
+  assert.ok(resolve(destination).startsWith(resolve("sandbox/reports") + "/"));
+  const { all, none, over, large } = sideWindowCohorts();
+  const groups = [
+    { name: "library" },
+    { name: "collected-full", cohort: all },
+    { name: "collected-no-body", cohort: none },
+    { name: "collected-10001", cohort: over },
+    { name: "batch-10001", cohort: over, batch: true },
+    { name: "collected-100000", cohort: large },
+    { name: "batch-100000", cohort: large, batch: true },
+  ].filter(({ name }) => !reference || reference.split(",").includes(name));
+  assert.ok(groups.length);
+  const data = {
+    scale,
+    environment: { node: process.version, kernel: release(), load: loadavg() },
+    groups: {},
+    failures: [],
+    warnings: [],
+  };
+  const save = () =>
+    writeFile(destination, JSON.stringify(data, null, 2) + "\n");
+  const queries = {
+    ...fulltextQueries,
+    threeAuthor: { text: "studies of in", ...authorFilter },
+  };
+  for (const { name, cohort, batch } of groups) {
+    const ids = cohort?.map(({ literature_id }) => literature_id);
+    const members = ids && new Set(ids);
+    let scope = { collection_scope: "all" };
+    if (batch)
+      scope = { ...scope, intake_batch_ids: [seedSideWindowBatch(ids)] };
+    else if (cohort) {
+      await setBudgetBenchmarkCollection(ids);
+      scope = { collection_scope: "collected" };
+    }
+    const entry = (data.groups[name] = {
+      members: ids?.length ?? null,
+      queries: {},
+      points: [],
+    });
+    const server = spawn("serve", data.warnings);
+    let writer;
+    try {
+      const { origin } = await server.first();
+      const request = await client(origin);
+      writer = spawn("writer", data.warnings);
+      writer.child.on("message", (point) => entry.points.push(point));
+      await writer.first();
+      await wait(2500);
+      const began = Date.now();
+      const probes = Object.entries(queries).filter(
+        ([key]) =>
+          !cohort ||
+          (ids.length <= 10_000
+            ? key !== "threeAuthor"
+            : ["in", "three", "author"].includes(key)),
+      );
+      async function takePage(query, cursor) {
+        const samples = [];
+        let page;
+        for (let trial = 0; trial < trials; trial++) {
+          stop.signal.throwIfAborted();
+          const ms = await measure(async () => {
+            ({ page } = await request("/api/v1/query/search", {
+              query,
+              sort: "relevance",
+              limit: 50,
+              ...(cursor ? { window_cursor: cursor } : {}),
+            }));
+          });
+          assert.ok(
+            page.items.every(
+              ({ literature }) =>
+                !members || members.has(literature.literature_id),
+            ),
+          );
+          if (query.author) assert.equal(page.total_count, 0);
+          if (ids?.length <= 10_000)
+            assert.equal(page.scan_incomplete, undefined);
+          assert.equal(!!page.next_window_cursor, !!page.scan_incomplete);
+          assert.equal(
+            page.scan_side === "members" || page.scan_side === "hits",
+            !!page.scan_incomplete,
+          );
+          samples.push(ms);
+          if (ms > 10 * objectives.search) break;
+          await wait(40);
+        }
+        return {
+          page,
+          sample: {
+            ...stats(samples),
+            scan_side: page.scan_side ?? null,
+            scan_limit: page.scan_limit ?? null,
+            total_count: page.total_count,
+            relevance_scored_count: page.relevance_scored_count ?? null,
+            samples,
+          },
+        };
+      }
+      for (const [key, criteria] of probes) {
+        const query = { ...scope, ...criteria };
+        const { page, sample } = await takePage(query);
+        entry.queries[key] = sample;
+        console.log(
+          name,
+          key,
+          JSON.stringify({ ...sample, samples: undefined }),
+        );
+        await save();
+        if (sample.n !== trials || sample.p95_ms > objectives.search)
+          data.failures.push(
+            `${name} ${key} P95 ${sample.p95_ms.toFixed(1)} ms`,
+          );
+        if (key === "in" && page.next_window_cursor) {
+          const next = await takePage(query, page.next_window_cursor);
+          entry.queries.second = next.sample;
+          assert.ok(
+            next.page.scan_side === page.scan_side ||
+              !next.page.scan_incomplete,
+          );
+          assert.ok(
+            next.page.items.every(
+              ({ literature }) =>
+                !page.items.some(
+                  ({ literature: first }) =>
+                    first.literature_id === literature.literature_id,
+                ),
+            ),
+          );
+          console.log(
+            name,
+            "second",
+            JSON.stringify({ ...next.sample, samples: undefined }),
+          );
+          if (next.sample.p95_ms > objectives.search)
+            data.failures.push(
+              `${name} second P95 ${next.sample.p95_ms.toFixed(1)} ms`,
+            );
+          await save();
+        }
+      }
+      const points = entry.points.filter(({ committed }) => committed >= began);
+      const first = points[0],
+        last = points.at(-1);
+      entry.papers_per_second =
+        first && last.committed > first.committed
+          ? (1000 * (last.papers - first.papers)) /
+            (last.committed - first.committed)
+          : 0;
+      if (entry.papers_per_second < 100)
+        data.failures.push(`${name} write load below 100 committed papers/s`);
+    } finally {
+      try {
+        await writer?.close();
+      } finally {
+        await server.close();
+        await save();
+      }
+    }
+  }
+  data.completed = true;
+  await save();
+  assert.deepEqual(data.failures, []);
+}
+
 async function worksetBudgetSweep() {
   assert.ok(resolve(destination).startsWith(resolve("sandbox/reports") + "/"));
-  const budgets = (reference ?? "0,1000000,2000000,4000000")
+  const sizing = mode === "side-member-sweep";
+  const values = (
+    reference ?? (sizing ? "8000,9000,10000" : "0,1000000,2000000,4000000")
+  )
     .split(",")
     .map(Number);
-  assert.ok(budgets.every((n) => Number.isSafeInteger(n) && n >= 0));
-  const data = { scale, budgets, samples: {}, points: [], warnings: [] };
+  assert.ok(
+    values.every((n) => Number.isSafeInteger(n) && n >= Number(sizing)),
+  );
+  const data = {
+    scale,
+    ...(sizing ? { mode, caps: values } : { budgets: values }),
+    samples: {},
+    points: [],
+    warnings: [],
+  };
+  const scope = sizing
+    ? {
+        intake_batch_ids: [
+          seedSideWindowBatch(
+            sideWindowCohorts().over.map(({ literature_id }) => literature_id),
+          ),
+        ],
+      }
+    : {
+        folder: {
+          id: prepared.fulltext_folders.all,
+          include_descendants: false,
+        },
+      };
   const db = new DatabaseSync(catalog, { readOnly: true });
   const writer = spawn("writer", data.warnings);
   try {
@@ -1332,15 +1601,9 @@ async function worksetBudgetSweep() {
     await writer.first();
     await wait(2500);
     for (const [name, criteria] of Object.entries(fulltextQueries)) {
-      if (criteria.author) continue;
+      if (sizing ? name === "spectroscopy" : criteria.author) continue;
       const query = parseLibrarySearchRequest({
-        query: {
-          ...criteria,
-          folder: {
-            id: prepared.fulltext_folders.all,
-            include_descendants: false,
-          },
-        },
+        query: { ...criteria, ...scope },
       }).query;
       const plan = {
         query,
@@ -1349,16 +1612,20 @@ async function worksetBudgetSweep() {
         sort: "relevance",
         limit: 50,
       };
-      const byBudget = (data.samples[name] = {});
-      for (const budget of budgets) {
+      const byValue = (data.samples[name] = {});
+      for (const value of values) {
         const samples = [];
-        const cache = new LibraryRelevanceCache(undefined, budget);
+        // Force the member side to measure its actual cost at each cap.
+        const cache = sizing
+          ? new LibraryRelevanceCache(100_000, undefined, value)
+          : new LibraryRelevanceCache(undefined, value);
         for (let i = 0; i < 7; i++) {
           await wait(40);
           db.exec("BEGIN");
           try {
             const start = performance.now();
             const page = libraryPageIds(db, plan, cache);
+            if (sizing) assert.equal(page.search_window?.side, "members");
             samples.push({
               ms: performance.now() - start,
               scored: page.relevance_scored_count ?? page.total_count,
@@ -1367,8 +1634,8 @@ async function worksetBudgetSweep() {
             db.exec("COMMIT");
           }
         }
-        byBudget[budget] = { ...stats(samples.map(({ ms }) => ms)), samples };
-        console.log(name, budget, byBudget[budget].p95_ms, samples[0].scored);
+        byValue[value] = { ...stats(samples.map(({ ms }) => ms)), samples };
+        console.log(name, value, byValue[value].p95_ms, samples[0].scored);
       }
     }
     data.completed = true;
@@ -1953,10 +2220,13 @@ if (resolve(process.argv[1]) === import.meta.filename) {
   else if (mode === "task-sidecar") await taskSidecar();
   else if (mode === "fulltext-search") await fulltextSearch();
   else if (mode === "workset-budget") await worksetBudgetSearch();
-  else if (mode === "workset-budget-sweep") await worksetBudgetSweep();
+  else if (mode === "workset-budget-sweep" || mode === "side-member-sweep")
+    await worksetBudgetSweep();
+  else if (mode === "search-side-windows") await searchSideWindows();
   else if (mode === "search-windows" || mode === "search-candidates")
     await searchWindows();
   else if (
+    mode === "side-window-sweep" ||
     mode === "search-windows-sweep" ||
     mode === "search-candidates-sweep"
   )

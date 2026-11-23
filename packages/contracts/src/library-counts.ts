@@ -43,7 +43,7 @@ export interface LibraryCountFlags {
   readonly count_truncated?: true;
   readonly counts_backfill_pending?: true;
   readonly status_updating?: true;
-  /** There are older raw text hits outside the current scan window. */
+  /** There are earlier entries on the scan side outside the current window. */
   readonly scan_incomplete?: true;
 }
 
