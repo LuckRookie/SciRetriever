@@ -26,6 +26,7 @@ import {
   libraryPageIds,
 } from "../dist/storage/sqlite/library-page.js";
 import { StoredLibraryState } from "../dist/storage/sqlite/library-state.js";
+import { rankLibraryMembers } from "../dist/storage/sqlite/library-search-rank.js";
 import { queryTerms } from "../dist/literature/query.js";
 import { normalizeQueryText } from "../dist/literature/unicode-casefold.js";
 import { SqliteWorker } from "../dist/storage/sqlite/worker.js";
@@ -36,9 +37,10 @@ const root = resolve(directory);
 assert.equal(dirname(root), resolve("sandbox/runs"));
 assert.match(basename(root), /^scale-acceptance-(10k|1m)-\w+$/u);
 assert.equal(await realpath(root), root);
-const { scale, fixture, folder, corpus } = JSON.parse(
+const prepared = JSON.parse(
   await readFile(join(root, "prepared.json"), "utf8"),
 );
+const { scale, fixture, folder, corpus } = prepared;
 const catalog = join(root, "catalog.sqlite");
 assert.equal(fixture.catalog, catalog);
 assert.equal(fixture.home, join(root, "home"));
@@ -730,6 +732,406 @@ async function searchWindowSweep() {
   }
 }
 
+const fulltextQueries = {
+  in: { text: nearAllText },
+  spectroscopy: { text: "spectroscopy" },
+  three: { text: "studies of in" },
+  author: { text: nearAllText, ...authorFilter },
+};
+
+function fulltextMatch(text) {
+  return queryTerms(text)
+    .map((term) => `"${term}"`)
+    .join(" AND ");
+}
+
+function fulltextWorksets(db) {
+  const { all, half, members } = prepared.fulltext_folders;
+  const read = db.prepare(
+    `SELECT m.literature_id, EXISTS (
+       SELECT 1 FROM literature_assets a
+       WHERE a.literature_id=m.literature_id AND a.role='primary-pdf'
+     ) AS has_body
+     FROM library_ordered_members m WHERE m.kind='folder' AND m.scope_id=?
+     ORDER BY m.literature_id`,
+  );
+  const full = read.all(all);
+  const mixed = read.all(half);
+  assert.equal(full.length, members);
+  assert.equal(mixed.length, members);
+  assert.ok(full.every(({ has_body }) => has_body === 1));
+  assert.equal(
+    mixed.filter(({ has_body }) => has_body === 1).length,
+    members / 2,
+  );
+  return { all: full, half: mixed };
+}
+
+// Attribute the same member ranker's work without instrumenting the HTTP
+// service. The IDs have already passed the workset filter.
+function profileFulltextMembers(db, members) {
+  const result = {};
+  for (const [group, has_body] of [
+    ["body", 1],
+    ["metadata", 0],
+  ]) {
+    const ids = members.filter((row) => row.has_body === has_body);
+    const scope = JSON.stringify(ids.map(({ literature_id }) => literature_id));
+    result[group] = {};
+    for (const [name, { text, author }] of Object.entries(fulltextQueries)) {
+      if (author) continue; // No version reaches the FTS cursor.
+      const match = fulltextMatch(text);
+      const project = (extra, { match: required = match } = {}) => ({
+        sql: `SELECT document.c0 AS literature_id,document.id AS doc
+          ${extra ? "," + extra : ""}
+          FROM json_each(?) member
+          CROSS JOIN literature_search_fts_content document ON document.c0=member.value
+          CROSS JOIN literature_search_fts ON literature_search_fts.rowid=document.id
+          WHERE literature_search_fts MATCH ? AND sr_query_continue()`,
+        args: [scope, required],
+      });
+      const { sql, args } = project("", {
+        match: match.split(" AND ")[0],
+      });
+      const locate = db.prepare(sql);
+      locate.setReadBigInts(true);
+      const samples = [];
+      for (let trial = 0; trial < 5; trial++) {
+        let lookupMs, rankedMs, candidates, matched;
+        let idfMs = 0;
+        let projectionMs = 0;
+        const timedDb = {
+          prepare(statement) {
+            const query = db.prepare(statement);
+            if (statement.includes(" AS idf"))
+              return {
+                get(...args) {
+                  const began = performance.now();
+                  const row = query.get(...args);
+                  idfMs += performance.now() - began;
+                  return row;
+                },
+              };
+            if (
+              statement.includes("FROM json_each(?) member") ||
+              statement.includes("SELECT CASE WHEN document.c")
+            )
+              return {
+                setReadBigInts(value) {
+                  query.setReadBigInts(value);
+                },
+                *iterate(...args) {
+                  const rows = query.iterate(...args);
+                  try {
+                    for (;;) {
+                      const began = performance.now();
+                      const next = rows.next();
+                      projectionMs += performance.now() - began;
+                      if (next.done) break;
+                      yield next.value;
+                    }
+                  } finally {
+                    rows.return();
+                  }
+                },
+                get(...args) {
+                  const began = performance.now();
+                  const row = query.get(...args);
+                  projectionMs += performance.now() - began;
+                  return row;
+                },
+              };
+            return query;
+          },
+        };
+        const lookup = () => {
+          const began = performance.now();
+          candidates = 0;
+          for (const row of locate.iterate(...args))
+            if (row.doc !== undefined) candidates++;
+          lookupMs = performance.now() - began;
+        };
+        const rank = () => {
+          const began = performance.now();
+          matched = rankLibraryMembers(timedDb, project, match, false).total;
+          rankedMs = performance.now() - began;
+        };
+        if (trial % 2 === 0) {
+          lookup();
+          rank();
+        } else {
+          rank();
+          lookup();
+        }
+        assert.ok(matched <= candidates && candidates <= ids.length);
+        if (name !== "spectroscopy") assert.equal(matched, ids.length);
+        samples.push({
+          candidates,
+          matched,
+          lookup_ms: lookupMs,
+          ranked_ms: rankedMs,
+          projection_ms: projectionMs,
+          idf_ms: idfMs,
+          lookup_us: (1000 * lookupMs) / ids.length,
+          score_us: (1000 * (rankedMs - idfMs - lookupMs)) / ids.length,
+          rank_work_us: (1000 * (rankedMs - idfMs - projectionMs)) / ids.length,
+        });
+      }
+      result[group][name] = {
+        versions: ids.length,
+        lookup_p50_us: stats(samples.map((row) => row.lookup_us)).p50_ms,
+        score_p50_us: stats(samples.map((row) => row.score_us)).p50_ms,
+        rank_work_p50_us: stats(samples.map((row) => row.rank_work_us)).p50_ms,
+        idf_p50_ms: stats(samples.map((row) => row.idf_ms)).p50_ms,
+        samples,
+      };
+    }
+  }
+  return result;
+}
+
+function profileFulltextSnippets(db, ids, column, repeats) {
+  const rowid = db.prepare(
+    "SELECT id FROM literature_search_fts_content WHERE c0=?",
+  );
+  // A JS number binds as REAL, which FTS5 does not use as a seek bound.
+  rowid.setReadBigInts(true);
+  const fetch = db.prepare(
+    `SELECT snippet(literature_search_fts,?,'','',' … ',24) AS fragment
+     FROM literature_search_fts WHERE rowid=? AND literature_search_fts MATCH ?`,
+  );
+  const rows = ids.map((id) => rowid.get(id).id);
+  const match = fulltextMatch(nearAllText);
+  const samples = [];
+  let outputBytes = 0;
+  for (let trial = 0; trial < repeats; trial++) {
+    stop.signal.throwIfAborted();
+    const began = performance.now();
+    outputBytes = 0;
+    for (const row of rows) {
+      const { fragment } = fetch.get(column, row, match);
+      assert.ok(fragment);
+      outputBytes += Buffer.byteLength(fragment);
+    }
+    samples.push(performance.now() - began);
+  }
+  return {
+    ...stats(samples),
+    fragments: rows.length,
+    output_bytes: outputBytes,
+    samples,
+  };
+}
+
+async function fulltextSearch() {
+  const output = resolve(destination);
+  assert.ok(output.startsWith(resolve("sandbox/reports") + "/"));
+  assert.equal(prepared.fulltext.result.papers, corpus.papers / 10);
+  const repeats = scale === "1m" ? trials : 3;
+  const result = {
+    scale,
+    mode,
+    corpus,
+    fulltext: prepared.fulltext_folders,
+    environment: {
+      node: process.version,
+      kernel: release(),
+      load_start: loadavg(),
+    },
+    points: [],
+    warnings: [],
+    reads: {},
+  };
+  const save = () => writeFile(output, JSON.stringify(result, null, 2) + "\n");
+  const db = new DatabaseSync(catalog, { readOnly: true });
+  try {
+    db.exec("PRAGMA query_only=ON; PRAGMA busy_timeout=5000");
+    db.function("sr_query_continue", () => {
+      stop.signal.throwIfAborted();
+      return 1;
+    });
+    result.environment.sqlite = db
+      .prepare("SELECT sqlite_version() AS version")
+      .get().version;
+    const worksets = fulltextWorksets(db);
+    const server = spawn("serve", result.warnings);
+    const pages = {};
+    let writer;
+    try {
+      const { origin } = await server.first();
+      const request = await client(origin);
+      writer = spawn("writer", result.warnings);
+      writer.child.on("message", (point) => result.points.push(point));
+      await writer.first();
+      await wait(2500);
+      const began = Date.now();
+      const search = async (query, sort) =>
+        (await request("/api/v1/query/search", { query, limit: 50, sort }))
+          .page;
+      const sample = async (name, work, validate, target) => {
+        const entry = (result.reads[name] = { samples: [], target_ms: target });
+        for (let trial = 0; trial < repeats; trial++) {
+          stop.signal.throwIfAborted();
+          let page;
+          entry.samples.push(
+            await measure(async () => {
+              page = await work();
+            }),
+          );
+          validate(page);
+          if (trial === 0)
+            pages[name] = page.items.map(
+              ({ literature }) => literature.literature_id,
+            );
+          entry.total_count = page.total_count;
+          entry.count_truncated = !!page.count_truncated;
+          entry.scan_limit = page.scan_limit ?? null;
+          if ((trial + 1) % 5 === 0 && trial + 1 < repeats) {
+            console.log(scale, name, trial + 1, "of", repeats);
+            await save();
+          }
+          await wait(40);
+        }
+        const distribution = stats(entry.samples);
+        Object.assign(entry, distribution, {
+          meets_target: distribution.p95_ms <= target,
+        });
+        console.log(scale, name, JSON.stringify(distribution));
+        await save();
+      };
+      await sample(
+        "home",
+        async () => {
+          const [page, { result: counts }] = await Promise.all([
+            search({}),
+            request("/api/v1/query/library-counts", {
+              query: { collection_scope: "collected" },
+            }),
+          ]);
+          assert.ok(counts.total > 0 && !counts.counts_backfill_pending);
+          return page;
+        },
+        (page) => {
+          assert.equal(page.items.length, 50);
+          assert.ok(page.items.every(({ collected }) => collected));
+        },
+        objectives.home,
+      );
+      for (const [name, criteria] of Object.entries(fulltextQueries)) {
+        if (name === "spectroscopy") continue;
+        await sample(
+          `window-${name}`,
+          () => search({ collection_scope: "all", ...criteria }, "relevance"),
+          (page) => {
+            assert.equal(page.items.length, criteria.author ? 0 : 50);
+            if (criteria.author) assert.equal(page.total_count, 0);
+            assert.equal(!!page.scan_incomplete, scale === "1m");
+          },
+          objectives.search,
+        );
+      }
+      for (const [group, rows] of Object.entries(worksets)) {
+        const folder = {
+          id: prepared.fulltext_folders[group],
+          include_descendants: false,
+        };
+        const set = new Set(rows.map(({ literature_id }) => literature_id));
+        for (const [name, criteria] of Object.entries(fulltextQueries)) {
+          await sample(
+            `members-${group}-${name}`,
+            () =>
+              search(
+                { collection_scope: "all", folder, ...criteria },
+                "relevance",
+              ),
+            (page) => {
+              assert.equal(page.items.length, criteria.author ? 0 : 50);
+              assert.equal(page.scan_incomplete, undefined);
+              assert.equal(page.count_truncated, undefined);
+              if (name !== "spectroscopy")
+                assert.equal(
+                  page.total_count,
+                  criteria.author ? 0 : rows.length,
+                );
+              assert.ok(
+                page.items.every(({ literature }) =>
+                  set.has(literature.literature_id),
+                ),
+              );
+            },
+            objectives.search,
+          );
+        }
+      }
+      const finished = Date.now();
+      const points = result.points.filter(
+        ({ committed }) => committed >= began && committed <= finished,
+      );
+      const first = points[0],
+        last = points.at(-1);
+      assert.ok(first && last.committed > first.committed);
+      result.papers_per_second =
+        (1000 * (last.papers - first.papers)) /
+        (last.committed - first.committed);
+    } finally {
+      try {
+        await writer?.close();
+      } finally {
+        await server.close();
+        await save();
+      }
+    }
+    // The fragment probe isolates FTS5 extraction from the ranked search.
+    // The actual library page returns bibliographies, not these excerpts.
+    const hasBody = db.prepare(
+      "SELECT 1 FROM literature_assets WHERE literature_id=? AND role='primary-pdf'",
+    );
+    result.first_page_bodies = Object.fromEntries(
+      Object.entries(pages).map(([name, ids]) => [
+        name,
+        ids.filter((id) => hasBody.get(id)).length,
+      ]),
+    );
+    const metadataPage = worksets.half
+      .filter(({ has_body }) => !has_body)
+      .slice(0, 50)
+      .map(({ literature_id }) => literature_id);
+    result.snippets = {
+      window: profileFulltextSnippets(db, pages["window-in"], -1, repeats),
+      body: profileFulltextSnippets(db, pages["members-all-in"], 12, repeats),
+      metadata: profileFulltextSnippets(db, metadataPage, -1, repeats),
+    };
+    if (scale === "1m") {
+      const raw = db.prepare(
+        `SELECT count(*) AS versions,sum(EXISTS(
+           SELECT 1 FROM literature_assets a
+           WHERE a.literature_id=hits.literature_id AND a.role='primary-pdf'
+         )) AS bodies
+         FROM (
+           SELECT literature_id FROM literature_search_fts
+           WHERE literature_search_fts MATCH ?
+           ORDER BY rowid DESC LIMIT ?
+         ) hits`,
+      );
+      result.windows = Object.fromEntries(
+        ["in", "three", "author"].map((name) => [
+          name,
+          raw.get(
+            fulltextMatch(fulltextQueries[name].text),
+            result.reads[`window-${name}`].scan_limit,
+          ),
+        ]),
+      );
+    }
+    result.members = profileFulltextMembers(db, worksets.half);
+    result.completed = true;
+  } finally {
+    db.close();
+    result.environment.load_finish = loadavg();
+    await save();
+  }
+}
+
 function taskBands() {
   assert.equal(scale, "1m");
   assert.equal(fixture.source_records, 1_000_000);
@@ -1299,6 +1701,7 @@ if (resolve(process.argv[1]) === import.meta.filename) {
   else if (mode === "writer") await write();
   else if (mode === "inspect-task") await inspectTask();
   else if (mode === "task-sidecar") await taskSidecar();
+  else if (mode === "fulltext-search") await fulltextSearch();
   else if (mode === "search-windows" || mode === "search-candidates")
     await searchWindows();
   else if (

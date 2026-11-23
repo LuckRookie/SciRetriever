@@ -18,7 +18,7 @@
 
 ## 规模性能验收
 
-从仓库根目录显式运行 `scale-acceptance.mjs`。它使用 14.1 的固定种子 20261121 合成库，各有 1 万／100 万篇书目和 1 千／10 万篇已取得全文的论文。准备脚本创建独立副本、迁移、补齐检索并完成回填。测量使用 Node 22.19.0、SQLite WAL 和回环地址上的生产工作台，同期由独立进程提交合成书目。验收按实测至少 100 篇／秒的提交速率判断负载是否有效。共用机器串行运行两个规模，各轮都设总时限。
+从仓库根目录显式运行 `scale-acceptance.mjs`。它使用 14.1 的固定种子 20261121 合成库，各有 1 万／100 万篇书目和 1 千／10 万篇已取得全文的论文。准备脚本创建独立副本、迁移并完成回填，再按种子和文献 ID 为每个带主 PDF 的版本生成合成正文。正文中位约 6,000 词，少量接近 30,000 词。沿用生产 FTS 行写入语句，按原 rowid 顺序重放，保留正文在原始命中窗口中的分布。重放后用 FTS5 `optimize` 合并索引段并清除旧书目留下的删除标记，模拟从头生成的索引。`prepared.json` 记录正文覆盖、长度、指纹、库大小和准备耗时。测量使用 Node 22.19.0、SQLite WAL 和回环地址上的生产工作台，同期由独立进程提交合成书目。验收按实测至少 100 篇／秒的提交速率判断负载是否有效。共用机器串行运行两个规模，各轮都设总时限。
 
 每项最多取 20 次，从发出 HTTP 请求计到读完并解析响应。首页包含并行读取收进来列表的前 50 项和计数。工作集包含固定的万项文件夹、状态筛选、第一页、计数、分面及续页。搜索测相关度前 1,000 条排名的首批 50 项。任务详情含服务启动后对同一个有 2,000,001 条事件和 100 万条来源记录的任务的首次访问。数据准备、启动与登录不计时。
 
@@ -33,7 +33,7 @@ copy_10k=$(mktemp -d sandbox/runs/scale-acceptance-10k-XXXXXX)
 copy_1m=$(mktemp -d sandbox/runs/scale-acceptance-1m-XXXXXX)
 timeout --kill-after=20s 5m node apps/server/test/scale-acceptance-fixture.mjs 10k "$copy_10k"
 timeout --kill-after=45s 5m node apps/server/test/scale-acceptance.mjs 10k "$copy_10k" "$report_dir/acceptance-10k.json"
-timeout --kill-after=20s 15m node apps/server/test/scale-acceptance-fixture.mjs 1m "$copy_1m"
+timeout --kill-after=25s 30m node apps/server/test/scale-acceptance-fixture.mjs 1m "$copy_1m"
 timeout --kill-after=45s 10m node apps/server/test/scale-acceptance.mjs 1m "$copy_1m" "$report_dir/acceptance-1m.json" "$report_dir/acceptance-10k.json"
 ```
 
@@ -51,6 +51,14 @@ timeout --kill-after=45s 9m node apps/server/test/scale-acceptance.mjs task-side
 timeout --kill-after=35s 5m node apps/server/test/scale-acceptance.mjs search-windows "$copy_10k" "$report_dir/search-10k.json"
 timeout --kill-after=35s 8m node apps/server/test/scale-acceptance.mjs search-windows-sweep "$copy_1m" "$report_dir/sweep-1m.json" 60000,80000,90000,100000,120000
 timeout --kill-after=35s 8m node apps/server/test/scale-acceptance.mjs search-windows "$copy_1m" "$report_dir/search-1m.json"
+```
+
+`fulltext-search` 使用新准备的副本。1m 库测两个万篇文件夹，正文占比分别为 100% 与 50%。每组测 `in`、`spectroscopy`、`studies of in` 与 `in` 加零匹配作者，另测整库窗口和文献库首页。每组从发出回环 HTTP 请求到解析响应取 20 次，10k 冒烟取 3 次。记录 P50、P95、实际写速率和超出搜索 1,500 ms／首页 1,000 ms 的项，保留超标样本。计时前完成准备、启动和登录。
+
+服务与写入进程关闭后，在相同副本上拆分成员逐条 FTS 查找和打分的成本，打分扣除单独计时的全局词频查询。片段探针对首批 50 个 ID 计时读取 FTS5 `snippet()`，并取 50 篇纯书目对照。文献库 HTTP 首屏本身只读书目和文本等级。正文夹具覆盖文献库 FTS 的 `content_body`，材料检索的版本化文档和片段索引沿用 14.1 原始材料。
+
+```sh
+timeout --kill-after=40s 25m node apps/server/test/scale-acceptance.mjs fulltext-search "$copy_1m" "$report_dir/fulltext-1m.json"
 ```
 
 [上级目录](../README.md) · [项目 README](../../../README.md)
