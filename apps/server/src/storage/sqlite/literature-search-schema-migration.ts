@@ -193,7 +193,7 @@ export async function reconcileLiteratureSearchSchema(path: string) {
   await schemaTargetPath(path);
   if (!(await schemaTargetFile(path))) refuse();
   const generations = new CatalogWriteAdmission(`${path}.retrieval-index`);
-  const writes = new CatalogWriteAdmission(path);
+  const writes = new CatalogWriteAdmission(path, { waitMs: 10_000 });
   const started = performance.now();
   try {
     return await generations.run(async () => {

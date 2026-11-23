@@ -5,7 +5,7 @@
 ## 内容入口
 
 - [catalog-schema.ts](catalog-schema.ts) 提供显式检查、空库初始化和按名称应用增补集。普通打开核对基础 DDL、执行层身份与所有必需增补集。显式检查列出额外的表、索引、触发器、视图，以及已知表末尾可空或带默认值的列。
-- [catalog-additions.ts](catalog-additions.ts) 在业务写许可内以同一事务应用已声明的 DDL 和增补集登记。新增触发器在未注册应用函数的连接上编译。[catalog-backfill.ts](catalog-backfill.ts) 在同一短事务内提交回填和游标。排队中的业务写入先取写许可，已经开始的回填每处理一小段键就检查前台排队信号和时间预算，提交后从持久游标继续。
+- [catalog-additions.ts](catalog-additions.ts) 在业务写许可内以同一事务应用已声明的 DDL 和增补集登记。新增触发器在未注册应用函数的连接上编译。[catalog-backfill.ts](catalog-backfill.ts) 在专用 worker 的短事务中提交回填和游标，每 32 个键检查 40 ms 工作预算，每批最多 1,024 个键。有剩余工作时通过共享队列登记下一批，持续写入时按实际持许可时间取得保留份额。
 - [repositories.ts](repositories.ts)：文献等事实仓库。
 - [worker.ts](worker.ts)：Worker 调用边界；`withReadSnapshot` 为多次关联读取创建独立只读连接，消费结束或失败时关闭，不占用普通查询连接的事务。
 - [read-lanes.ts](read-lanes.ts) 列出读取的分道与耗时上限。工作台的查询与应用对象共用一个只读长请求线程。许可内的读取继续随原写入处理。短读排队及执行合计超过 5 秒时记录 `sqlite-short-read-slow`。

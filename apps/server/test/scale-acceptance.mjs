@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { fork } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { once } from "node:events";
+import { once, on } from "node:events";
 import { readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { loadavg, release } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -113,8 +113,29 @@ function watchParent() {
   process.once("disconnect", () => stop.abort());
 }
 
+function traceBackfill() {
+  const run = CatalogWriteAdmission.prototype.runBackfill;
+  CatalogWriteAdmission.prototype.runBackfill = function (batch, signal) {
+    return run.call(
+      this,
+      async () => {
+        const started = Date.now();
+        const admitted = performance.now();
+        const more = await batch();
+        if (process.connected)
+          process.send({
+            backfill: { started, held_ms: performance.now() - admitted, more },
+          });
+        return more;
+      },
+      signal,
+    );
+  };
+}
+
 async function serve() {
   watchParent();
+  if (destination === "count-backfill") traceBackfill();
   const traceWrites = destination === "trace-writes";
   if (destination === "trace-wal") {
     const idle = SqliteWorker.prototype.idleWalCheckpoint;
@@ -184,6 +205,7 @@ async function serve() {
 
 async function write() {
   watchParent();
+  if (destination === "saturate-count-backfill") traceBackfill();
   const app = await createApplication(fixture.home, {
     ...options,
     indexRefreshIntervalMs: null,
@@ -195,7 +217,7 @@ async function write() {
   );
   const start = performance.now();
   const run = randomUUID();
-  const period = destination === "saturate" ? 0 : batchPeriod;
+  const period = destination?.startsWith("saturate") ? 0 : batchPeriod;
   let papers = 0;
   let total = 0;
   try {
@@ -279,15 +301,18 @@ function spawn(role, warnings, flag) {
     }
   });
   const exit = once(child, "exit");
-  const first = () =>
-    Promise.race([
-      once(child, "message", {
-        signal: AbortSignal.any([stop.signal, AbortSignal.timeout(45_000)]),
-      }).then(([message]) => message),
-      exit.then(([code]) => {
-        throw new Error(`${role} exited before readiness (${code})`);
-      }),
-    ]);
+  const first = async (accept = () => true) => {
+    const ended = new AbortController();
+    void exit.then(() => ended.abort());
+    for await (const [message] of on(child, "message", {
+      signal: AbortSignal.any([
+        stop.signal,
+        ended.signal,
+        AbortSignal.timeout(45_000),
+      ]),
+    }))
+      if (accept(message)) return message;
+  };
   return {
     child,
     first,

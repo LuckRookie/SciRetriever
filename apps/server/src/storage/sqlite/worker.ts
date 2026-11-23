@@ -764,7 +764,6 @@ export type SqliteCommand =
       readonly kind: "library_state_refresh";
       readonly budget?: {
         readonly deadline: number;
-        readonly foregroundWaiting: SharedArrayBuffer;
       };
     }
   | { readonly kind: "library_collect"; readonly ids: readonly string[] }
@@ -1343,6 +1342,9 @@ const LIBRARY_SELECTION_COMMANDS = new Set<string>([
 ]);
 // Leave room for the last indivisible record and the durable commit.
 const METADATA_WRITE_BUDGET_MS = 150;
+// Give a bulk writer time to admit items before handing off to a remote
+// waiter. Connection revalidation before BEGIN is charged to the overall cap.
+const METADATA_REMOTE_YIELD_MS = 80;
 export const METADATA_SEGMENT_ITEMS = 128;
 interface LibraryStateRefreshResult {
   readonly rebuilt: number;
@@ -1378,7 +1380,6 @@ function validateExecutionEvent(event: ExecutionEvent): void {
 export class SqliteWorker {
   private readonly worker: Worker;
   private nextId = 1;
-  private inFlight = 0;
   private readonly pending = new Map<
     number,
     {
@@ -1452,7 +1453,6 @@ export class SqliteWorker {
       },
     });
     this.worker.on("message", (reply: Reply) => {
-      this.inFlight--;
       const pending = this.pending.get(reply.id);
       if (!pending) return;
       this.pending.delete(reply.id);
@@ -1527,15 +1527,7 @@ export class SqliteWorker {
         cancellableQuery ? signal : undefined,
       );
     };
-    // A running Entry operation retains catalog write admission for its whole
-    // frozen scope. Operator pause/cancel must still reach the same SQLite
-    // worker immediately; its single-threaded, transactional command is the
-    // control lane that can stop later target admission.
-    if (
-      copy.kind === "execution_control_job" ||
-      copy.kind === "idle_wal_checkpoint"
-    )
-      return send();
+    if (copy.kind === "idle_wal_checkpoint") return send();
     return this.timeRead(read, () =>
       this.admission &&
       (!read || (!this.initialized && !this.longReader(copy, read)))
@@ -1586,13 +1578,16 @@ export class SqliteWorker {
         return await this.metadataWrites.run(scope, async () => {
           const deadline = performance.now() + METADATA_WRITE_BUDGET_MS;
           await this.send({ kind: "metadata_write_begin" });
+          const remoteYield = performance.now() + METADATA_REMOTE_YIELD_MS;
           try {
             // Incoming foreground writes get the next slot without waiting
             // for the remainder of the time budget.
             const result = await write(
               () =>
                 scope.citationCauses === METADATA_SEGMENT_ITEMS ||
-                admission.hasQueuedWrites ||
+                admission.hasQueuedForegroundWrites(
+                  performance.now() >= remoteYield,
+                ) ||
                 performance.now() >= deadline,
             );
             await this.send({
@@ -1757,7 +1752,6 @@ export class SqliteWorker {
         command,
         ...(cancellation ? { cancellation: cancellation.buffer } : {}),
       });
-      this.inFlight++;
     });
   }
 
@@ -3436,23 +3430,19 @@ export class SqliteWorker {
   refreshLibraryState(): Promise<LibraryStateRefreshResult> {
     return this.run({ kind: "library_state_refresh" });
   }
-  refreshLibraryStateWhenIdle(): Promise<
-    LibraryStateRefreshResult | undefined
-  > {
+  refreshLibraryStateInBackground(signal?: AbortSignal): Promise<void> {
     if (!this.admission || this.readOnly || this.closed || this.failed)
       return Promise.reject(new SqliteWorkerError());
-    return this.admission.runWhenIdle(async (foregroundWaiting) => {
-      // A local read, including a cancelled read that is still unwinding, can
-      // occupy the worker without owning write admission.
-      if (this.inFlight) return undefined;
-      return this.send<LibraryStateRefreshResult>({
-        kind: "library_state_refresh",
-        budget: {
-          deadline: performance.now() + CATALOG_BACKFILL_WRITE_MS,
-          foregroundWaiting,
-        },
-      });
-    });
+    return this.admission.runBackfill(
+      async () =>
+        (
+          await this.send<LibraryStateRefreshResult>({
+            kind: "library_state_refresh",
+            budget: { deadline: performance.now() + CATALOG_BACKFILL_WRITE_MS },
+          })
+        ).more,
+      signal,
+    );
   }
   collectLiteratures(
     ids: readonly string[],
@@ -3936,7 +3926,6 @@ export class SqliteWorker {
         reject: () => resolve(),
       });
       this.worker.postMessage({ id, command: { kind: "close" } });
-      this.inFlight++;
     });
     await this.worker.terminate();
   }

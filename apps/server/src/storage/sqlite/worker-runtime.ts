@@ -2459,11 +2459,7 @@ function refreshLibraryState(
 ) {
   if (!budget) return transaction(() => libraryState.refreshBatch());
   const retry = { rebuilt: 0, repaired: 0, more: true };
-  const foregroundWaiting = new Int32Array(budget.foregroundWaiting);
-  const shouldYield = () =>
-    Atomics.load(foregroundWaiting, 0) !== 0 ||
-    performance.now() >= budget.deadline;
-  if (shouldYield()) return retry;
+  const shouldYield = () => performance.now() >= budget.deadline;
   // A writer outside the admission protocol may own SQLite's lock.
   db.exec("PRAGMA busy_timeout=0");
   try {
@@ -5212,16 +5208,29 @@ port.on("message", (message: WorkerMessage) => {
       );
       const catalogChanged = openedCatalogIdentity !== catalogIdentity();
       if (current !== observedDataVersion || catalogChanged) {
-        // A refresh of the same catalog keeps the task cache. Task reads
-        // validate its event prefix against their new SQLite snapshot.
-        if (catalogChanged) {
-          taskDetails.clear();
-          libraryRankings.clear();
+        if (
+          !catalogChanged &&
+          !data.read_only &&
+          message.command.kind === "library_state_refresh" &&
+          verifiedDocumentSchema === documentSchemaProof(SCHEMA_VERSION)
+        ) {
+          // Projection backfill reads ordinary SQLite tables. Keep its hot
+          // statements and pages between admitted batches, with the same
+          // layout proof and identity-row checks as a fresh connection.
+          // Leave observedDataVersion unchanged for later FTS commands.
+          checkCatalogIdentityRows(db, layoutModule.CURRENT_CATALOG_CONFIG);
+        } else {
+          // A refresh of the same catalog keeps the task cache. Task reads
+          // validate its event prefix against their new SQLite snapshot.
+          if (catalogChanged) {
+            taskDetails.clear();
+            libraryRankings.clear();
+          }
+          db.close();
+          db = undefined;
+          queryPreflight = null;
+          initialize();
         }
-        db.close();
-        db = undefined;
-        queryPreflight = null;
-        initialize();
       }
     }
     if (

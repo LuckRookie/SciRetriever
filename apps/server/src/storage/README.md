@@ -17,7 +17,7 @@
 初稿内容与 Markdown 的新对象目录分别为 `parsed/draft/content`、`parsed/draft/markdown`；结构继续使用 `parsed/structure`，图片只引用原始解析已经登记的资源对象。固定文档的初稿读写通过相邻 document 模块与 sqlite/draft-text-engine 协作。
 
 - [locking.ts](locking.ts)：文件锁与写入协作。
-- [write-admission.ts](write-admission.ts)：写入准入。
+- [write-admission.ts](write-admission.ts)：CLI、服务和回填共享的写许可。catalog 旁的 `.sciretriever-locks/catalog-<路径 SHA-256>.queue/` 保存 FIFO 等待登记及最近的回填份额。等待登记按 PID、进程启动时刻和截止时间核对，原 catalog flock 仍是唯一的写入准入。只使用原 flock 的写入者与队列写入者互斥。所有写入进程停止后，可删除 `.queue` 目录，下次使用会重建空队列并重新累计份额。
 - [retrieval-refresh.ts](retrieval-refresh.ts)：catalog 旁的非秘密索引刷新队列状态，严格读取、原子替换和写入串行化；不保存文献正文或配置。
 - [processor-results.ts](processor-results.ts)：不可变算子结果/集合、固定依赖与可重建查询投影，负责 summary 引用固定范围与真实缺失的发布/回读核验；指定结果重建时同时覆盖其快照 map 依赖，避免逐篇结果缺少投影使检索过期。
 

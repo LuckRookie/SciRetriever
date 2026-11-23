@@ -1,4 +1,15 @@
-import { mkdtemp, rm, writeFile, symlink, link } from "node:fs/promises";
+import {
+  appendFile,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+  symlink,
+  link,
+} from "node:fs/promises";
+import { once } from "node:events";
+import { setTimeout as delay } from "node:timers/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -116,120 +127,320 @@ it("serializes sibling operations, allows scoped nesting, and rejects an escaped
     await rm(home, { recursive: true, force: true });
   }
 });
-it("leaves the next admission to a waiting foreground writer", async () => {
-  const home = await mkdtemp(join(tmpdir(), "sciretriever-write-lock-"));
-  const admission = new CatalogWriteAdmission(join(home, "catalog.sqlite"));
-  let start: () => void = () => {};
-  let finish: () => void = () => {};
-  const entered = new Promise<void>((resolve) => {
-    start = resolve;
-  });
-  const waiting = new Promise<void>((resolve) => {
-    finish = resolve;
-  });
-  const calls: string[] = [];
-  const write = admission.run(async () => {
-    start();
-    await waiting;
-  });
-  const backfill = async () => calls.push("backfill");
-  try {
-    await Promise.race([entered, write]);
-    const background = admission.runWhenIdle(backfill);
-    expect(admission.hasQueuedWrites).toBe(false);
-    const foreground = admission.run(async () => calls.push("foreground"));
-    expect(admission.hasQueuedWrites).toBe(true);
-    await expect(admission.runWhenIdle(backfill)).resolves.toBeUndefined();
-    finish();
-    await write;
-    await expect(background).resolves.toBeUndefined();
-    await foreground;
-    expect(calls).toEqual(["foreground"]);
-    await admission.runWhenIdle(backfill);
-    expect(calls).toEqual(["foreground", "backfill"]);
-
-    const acquiring = admission.runWhenIdle(backfill);
-    // Let the background attempt start the asynchronous lock acquisition.
-    await Promise.resolve();
-    await admission.run(async () => calls.push("arrived-during-acquisition"));
-    await expect(acquiring).resolves.toBeUndefined();
-    expect(calls).toEqual([
-      "foreground",
-      "backfill",
-      "arrived-during-acquisition",
-    ]);
-
-    const interrupted = new AbortController();
-    const backgroundForCancelledWriter = admission.runWhenIdle(backfill);
-    await Promise.resolve();
-    const writer = admission.run(
-      async () => calls.push("cancelled"),
-      interrupted.signal,
-    );
-    interrupted.abort();
-    await expect(writer).rejects.toMatchObject({
-      code: "write-admission-cancelled",
+function childWriter(
+  catalog: string,
+  mode: "series" | "hold" | "legacy" | "backfill",
+) {
+  const child = spawn(
+    process.execPath,
+    [
+      "--experimental-transform-types",
+      "--input-type=module",
+      "--eval",
+      `import { appendFile } from "node:fs/promises";
+import { once } from "node:events";
+import { setTimeout as delay } from "node:timers/promises";
+const [module, catalog, mode] = process.argv.slice(1);
+const { acquireCatalogWriteLock, CatalogWriteAdmission } = await import(module);
+const writes = new CatalogWriteAdmission(catalog, { waitMs: 10000 });
+const hold = async () => {
+  const release = once(process, "message");
+  process.send("held");
+  await release;
+};
+if (mode === "legacy") {
+  const lock = await acquireCatalogWriteLock(catalog);
+  try { await hold(); }
+  finally { await lock.release(); }
+} else if (mode === "hold") {
+  await writes.run(hold);
+} else if (mode === "series") {
+  for (let i = 0; i < 12; i++) {
+    const started = performance.now();
+    await writes.run(async () => {
+      await appendFile(catalog + ".turns", "remote:" + (performance.now() - started) + "\\n");
+      await delay(25);
     });
-    await expect(backgroundForCancelledWriter).resolves.toBeUndefined();
-    await admission.run(async () => calls.push("after-cancellation"));
-    expect(calls.slice(3)).toEqual(["after-cancellation"]);
-  } finally {
-    finish();
-    await admission.close();
-    await rm(home, { recursive: true, force: true });
   }
-});
+} else {
+  const until = performance.now() + 3400;
+  await writes.runBackfill(async () => {
+    const start = performance.now();
+    await delay(15);
+    await appendFile(catalog + ".turns", "backfill:" + (performance.now() - start) + "\\n");
+    return performance.now() < until;
+  });
+}
+await writes.close();
+process.disconnect();`,
+      new URL("../src/storage/write-admission.ts", import.meta.url).href,
+      catalog,
+      mode,
+    ],
+    {
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
+      env: { PATH: "/usr/bin:/bin" },
+    },
+  );
+  let stderr = "";
+  child.stderr?.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString("utf8");
+  });
+  const messages: unknown[] = [];
+  child.on("message", (message) => messages.push(message));
+  const exit = once(child, "exit");
+  return {
+    child,
+    exit,
+    messages,
+    async finish() {
+      await expect(exit, stderr).resolves.toEqual([0, null]);
+    },
+    async close() {
+      if (child.exitCode === null && child.signalCode === null)
+        child.kill("SIGKILL");
+      await exit;
+    },
+  };
+}
 
-it("skips a background batch if another admission holds the catalog lock", async () => {
-  const home = await mkdtemp(join(tmpdir(), "sciretriever-write-lock-"));
-  const path = join(home, "catalog.sqlite");
-  const admission = new CatalogWriteAdmission(path, { waitMs: 10_000 });
-  const lock = await acquireCatalogWriteLock(path);
-  try {
-    const backfill = async () => true;
-    await expect(admission.runWhenIdle(backfill)).resolves.toBeUndefined();
-    await lock.release();
-    await expect(admission.runWhenIdle(backfill)).resolves.toBe(true);
-  } finally {
-    await lock.release();
-    await admission.close();
-    await rm(home, { recursive: true, force: true });
-  }
-});
-it("signals a running background batch to commit when a writer joins", async () => {
-  const home = await mkdtemp(join(tmpdir(), "sciretriever-write-lock-"));
-  const admission = new CatalogWriteAdmission(join(home, "catalog.sqlite"));
-  let release: () => void = () => {};
-  const committing = new Promise<void>((resolve) => {
+function queueDirectory(home: string, catalog: string) {
+  const hash = createHash("sha256").update(catalog).digest("hex");
+  return join(home, ".sciretriever-locks", `catalog-${hash}.queue`);
+}
+
+async function queuedTickets(home: string, catalog: string) {
+  const names = await readdir(queueDirectory(home, catalog)).catch(
+    (error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
+      return [];
+    },
+  );
+  return names.filter((name) => /^\d+-/u.test(name));
+}
+
+it("hands off to a registered remote writer before later callers and bounds handoff waits", async () => {
+  const home = await mkdtemp(join(tmpdir(), "sciretriever-write-queue-"));
+  const catalog = join(home, "catalog.sqlite");
+  const admission = new CatalogWriteAdmission(catalog, { waitMs: 10_000 });
+  let release!: () => void, started!: () => void;
+  const held = new Promise<void>((resolve) => {
     release = resolve;
   });
-  let started: (flag: Int32Array) => void = () => {};
-  const entering = new Promise<Int32Array>((resolve) => {
+  const entered = new Promise<void>((resolve) => {
     started = resolve;
   });
-  const batch = admission.runWhenIdle(async (foregroundWaiting) => {
-    started(new Int32Array(foregroundWaiting));
-    await committing;
+  const initial = admission.run(async () => {
+    started();
+    await held;
   });
+  let remote: ReturnType<typeof childWriter> | undefined;
   try {
-    const flag = await Promise.race([
-      entering,
-      batch.then(() => {
-        throw new Error("background batch did not enter");
-      }),
-    ]);
-    expect(Atomics.load(flag, 0)).toBe(0);
-    const writer = admission.run(async () => "written");
-    expect(Atomics.load(flag, 0)).toBe(1);
+    await Promise.race([entered, initial]);
+    expect(admission.hasQueuedWrites).toBe(false);
+    remote = childWriter(catalog, "series");
+    await expect
+      .poll(() => admission.hasQueuedWrites, { timeout: 20_000 })
+      .toBe(true);
+    const local = (async () => {
+      for (let i = 0; i < 12; i++) {
+        const start = performance.now();
+        await admission.run(async () => {
+          await appendFile(
+            catalog + ".turns",
+            `local:${performance.now() - start}\n`,
+          );
+          await delay(25);
+        });
+      }
+    })();
+    await expect
+      .poll(async () => (await queuedTickets(home, catalog)).length, {
+        timeout: 20_000,
+      })
+      .toBe(2);
     release();
-    await batch;
-    await expect(writer).resolves.toBe("written");
+    await initial;
+    await local;
+    await remote.finish();
+    const turns = (await readFile(catalog + ".turns", "utf8"))
+      .trim()
+      .split("\n");
+    expect(turns).toHaveLength(24);
+    expect(turns[0]).toMatch(/^remote:/u);
+    expect(turns[1]).toMatch(/^local:/u);
+    expect(
+      Math.max(...turns.map((turn) => Number(turn.split(":")[1]))),
+    ).toBeLessThanOrEqual(1_000);
+    expect(await queuedTickets(home, catalog)).toEqual([]);
   } finally {
     release();
+    await remote?.close();
     await admission.close();
     await rm(home, { recursive: true, force: true });
   }
 });
+
+it("reaps a dead waiter and automatically releases a crashed holder", async () => {
+  const home = await mkdtemp(join(tmpdir(), "sciretriever-write-queue-"));
+  const catalog = join(home, "catalog.sqlite");
+  const admission = new CatalogWriteAdmission(catalog, { waitMs: 10_000 });
+  let localLock:
+    | Awaited<ReturnType<typeof acquireCatalogWriteLock>>
+    | undefined;
+  let remote: ReturnType<typeof childWriter> | undefined;
+  try {
+    localLock = await acquireCatalogWriteLock(catalog);
+    remote = childWriter(catalog, "hold");
+    await expect
+      .poll(async () => (await queuedTickets(home, catalog)).length, {
+        timeout: 20_000,
+      })
+      .toBe(1);
+    await remote.close();
+    await localLock.release();
+    await expect(admission.run(async () => "after dead waiter")).resolves.toBe(
+      "after dead waiter",
+    );
+    expect(await queuedTickets(home, catalog)).toEqual([]);
+
+    remote = childWriter(catalog, "hold");
+    const holder = remote;
+    await expect
+      .poll(() => holder.messages, { timeout: 20_000 })
+      .toEqual(["held"]);
+    const next = admission.run(async () => performance.now());
+    await expect
+      .poll(async () => (await queuedTickets(home, catalog)).length, {
+        timeout: 20_000,
+      })
+      .toBe(1);
+    const killedAt = performance.now();
+    await remote.close();
+    expect((await next) - killedAt).toBeLessThanOrEqual(1_000);
+    expect(await queuedTickets(home, catalog)).toEqual([]);
+  } finally {
+    await remote?.close();
+    await localLock?.release();
+    await admission.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+it("shares the original flock with an unqueued writer and removes a cancelled ticket", async () => {
+  const home = await mkdtemp(join(tmpdir(), "sciretriever-write-queue-"));
+  const catalog = join(home, "catalog.sqlite");
+  const admission = new CatalogWriteAdmission(catalog, { waitMs: 10_000 });
+  const deadline = new CatalogWriteAdmission(catalog, { waitMs: 100 });
+  const legacy = childWriter(catalog, "legacy");
+  try {
+    await expect
+      .poll(() => legacy.messages, { timeout: 20_000 })
+      .toEqual(["held"]);
+    await expect(deadline.run(async () => "unexpected")).rejects.toMatchObject({
+      code: "write-admission-conflict",
+    });
+    expect(await queuedTickets(home, catalog)).toEqual([]);
+    const cancel = new AbortController();
+    const cancelled = admission.run(async () => {
+      throw new Error("cancelled writer was admitted");
+    }, cancel.signal);
+    const rejected = expect(cancelled).rejects.toMatchObject({
+      code: "write-admission-cancelled",
+    });
+    await expect
+      .poll(async () => (await queuedTickets(home, catalog)).length, {
+        timeout: 20_000,
+      })
+      .toBe(1);
+    cancel.abort();
+    await rejected;
+    expect(await queuedTickets(home, catalog)).toEqual([]);
+    const writing = admission.run(async () => {
+      expect(await probe(catalog)).toBe("conflict");
+      return "new writer";
+    });
+    await expect
+      .poll(async () => (await queuedTickets(home, catalog)).length, {
+        timeout: 20_000,
+      })
+      .toBe(1);
+    legacy.child.send("release");
+    await legacy.finish();
+    await expect(writing).resolves.toBe("new writer");
+    expect(await probe(catalog)).toBe("acquired");
+  } finally {
+    await legacy.close();
+    await deadline.close();
+    await admission.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+it("reserves at least one fifth of held time for backfill despite continuously queued writes", async () => {
+  const home = await mkdtemp(join(tmpdir(), "sciretriever-write-queue-"));
+  const catalog = join(home, "catalog.sqlite");
+  const admission = new CatalogWriteAdmission(catalog, { waitMs: 10_000 });
+  const backfill = childWriter(catalog, "backfill");
+  let stopped = false;
+  const foreground = async () => {
+    while (!stopped) {
+      await admission.run(async () => {
+        const start = performance.now();
+        await delay(90);
+        await appendFile(
+          catalog + ".turns",
+          `foreground:${performance.now() - start}\n`,
+        );
+      });
+    }
+  };
+  const writers = Promise.all([foreground(), foreground()]);
+  void writers.catch(() => {});
+  try {
+    await backfill.finish();
+    stopped = true;
+    await writers;
+    const turns = (await readFile(catalog + ".turns", "utf8"))
+      .trim()
+      .split("\n");
+    const isBackfill = (turn: string) => turn.startsWith("backfill:");
+    const contended = turns.slice(
+      turns.findIndex(isBackfill),
+      turns.map(isBackfill).lastIndexOf(true) + 1,
+    );
+    const held = (rows: readonly string[]) =>
+      rows.reduce((sum, row) => sum + Number(row.split(":")[1]), 0);
+    expect(held(contended)).toBeGreaterThan(2_000);
+    expect(
+      held(contended.filter(isBackfill)) / held(contended),
+    ).toBeGreaterThanOrEqual(0.2);
+    expect(await queuedTickets(home, catalog)).toEqual([]);
+  } finally {
+    stopped = true;
+    await backfill.close();
+    await writers.catch(() => {});
+    await admission.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+it("clears the share window when foreground writing has no backfill waiting", async () => {
+  const home = await mkdtemp(join(tmpdir(), "sciretriever-write-queue-"));
+  const catalog = join(home, "catalog.sqlite");
+  const admission = new CatalogWriteAdmission(catalog, { waitMs: 10_000 });
+  const share = join(queueDirectory(home, catalog), "share.json");
+  try {
+    await admission.runBackfill(async () => false);
+    await expect(readFile(share, "utf8")).resolves.toContain("backfill_ms");
+    await admission.run(async () => {});
+    await expect(readFile(share)).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    await admission.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 it("rejects corrupt markers, linked catalogs and linked lock files without modifying their bytes", async () => {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-write-lock-")),
     path = join(home, "catalog.sqlite");

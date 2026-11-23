@@ -847,6 +847,8 @@ async function createApplicationOwned(
   let walCheck: Promise<void> | undefined;
   let stateTimer: ReturnType<typeof setTimeout> | undefined;
   let stateCheck: Promise<void> | undefined;
+  let stateWorker: SqliteWorker | undefined;
+  const stateStop = new AbortController();
   const catalogPath =
     configuration.paths.catalog_path ?? join(home, "catalog.sqlite");
   const networkBudget = options.networkBudget ?? new NetworkBudgetCoordinator();
@@ -906,8 +908,10 @@ async function createApplicationOwned(
         },
         async () => {
           clearTimeout(stateTimer);
+          stateStop.abort();
           await stateCheck;
         },
+        () => stateWorker?.close(),
         () => indexRefresh?.close(),
         () => retrievalIndex?.close(),
         () => indexDatabase?.close(),
@@ -1667,26 +1671,27 @@ async function createApplicationOwned(
       configuration.parsing.archive_profile,
     );
     const stateDatabase = database;
-    const scheduleState = (delay: number, pending = false) => {
+    const scheduleState = (delay: number) => {
       if (closing) return;
       stateTimer = setTimeout(() => {
-        let delay = 5_000;
         stateCheck = (async () => {
-          pending ||= await stateDatabase.libraryStatePending();
-          if (pending) {
-            const result = await stateDatabase.refreshLibraryStateWhenIdle();
-            pending = result?.more !== false;
-            if (pending) delay = 25;
+          if (await stateDatabase.libraryStatePending()) {
+            stateWorker ??= new SqliteWorker(catalogPath, writes, {
+              maxTags: configuration.tags.max_per_literature,
+              archiveProfile: configuration.parsing.archive_profile,
+            });
+            await stateWorker.refreshLibraryStateInBackground(stateStop.signal);
           }
         })()
-          .catch(() =>
-            logger.warn("Library state refresh failed", {
-              code: "library-state-refresh-failed",
-            }),
-          )
+          .catch(() => {
+            if (!stateStop.signal.aborted)
+              logger.warn("Library state refresh failed", {
+                code: "library-state-refresh-failed",
+              });
+          })
           .finally(() => {
             stateCheck = undefined;
-            scheduleState(delay, pending);
+            scheduleState(5_000);
           });
       }, delay);
       stateTimer.unref();

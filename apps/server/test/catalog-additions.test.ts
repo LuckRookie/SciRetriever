@@ -252,6 +252,29 @@ it("reports a missing required addition from the CLI and both application opener
   });
 });
 
+it("rechecks the required addition on an already open backfill connection", async () => {
+  await catalogFixture(async (_home, path) => {
+    const db = new DatabaseSync(path);
+    const worker = new SqliteWorker(path);
+    try {
+      initializeCurrentCatalog(db, at);
+      await expect(worker.refreshLibraryState()).resolves.toMatchObject({
+        more: false,
+      });
+      db.prepare("DELETE FROM catalog_schema_additions WHERE name=?").run(
+        LIBRARY_SCALE_ADDITION.name,
+      );
+      await expect(worker.refreshLibraryState()).rejects.toMatchObject({
+        code: "catalog-addition-required",
+        addition: LIBRARY_SCALE_ADDITION.name,
+      });
+    } finally {
+      await worker.close();
+      db.close();
+    }
+  });
+});
+
 it("keeps known DDL exact and refuses an incompatible or non-additive application atomically", async () => {
   await catalogFixture(async (home, path) => {
     const db = new DatabaseSync(path);
