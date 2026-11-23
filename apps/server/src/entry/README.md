@@ -32,7 +32,7 @@ CLI/MCP/HTTP 只适配请求；供应商协议、材料验收和事实写入仍�
 
 `metadata-task.ts` 在准入时冻结来源并保存/运行现有加工任务；`metadata-task-runtime.ts` 编排主题、引用与逐篇补全，只由身份 owner 接纳观察，来源计数不成为另一份文献事实。
 
-`discovery.ts` 在来源回包后按段接纳书目与关系。引用扩展在段内记下已提交的结果和本篇检查位置，只有末段结算本篇。任务恢复从原批次与 Run 继续。 [检查点实现](citation-checkpoint.ts)
+`discovery.ts` 在引用扩展的首段创建 `RUNNING` 的 Run 并关联入库批次。书目、关系、发现结果和本篇检查点按段一起提交，只有末段记录本篇已查。任务恢复从原批次与 Run 继续。结算写终态和来源结果。 [检查点实现](citation-checkpoint.ts)
 
 引用扩展的来源限流由 [citation-cooldown.ts](citation-cooldown.ts) 计算下次可用时间。正常队列继续推进，延后的引用与关系目标查询随段检查点保存，恢复后按登记顺序补查。任务详情中的 `citation_source_cooldowns` 汇总最近的来源状态与待补查项，技术事件保留每次状态变化和队列增删。
 

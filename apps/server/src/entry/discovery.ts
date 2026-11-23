@@ -58,6 +58,7 @@ import type { ObservationRepository } from "../storage/sqlite/repositories.js";
 import type { ReferenceRepository } from "../storage/sqlite/repositories.js";
 import { CitationProgress } from "../storage/sqlite/citation-progress.js";
 import {
+  METADATA_SEGMENT_ITEMS,
   type DiscoveryPublication,
   type SqliteWorker,
 } from "../storage/sqlite/worker.js";
@@ -200,7 +201,9 @@ async function* citationPages(
       items.push(event);
       if (
         !event.end_follows &&
-        (!event.buffered_next || event.failure || items.length >= 128)
+        (!event.buffered_next ||
+          event.failure ||
+          items.length >= METADATA_SEGMENT_ITEMS)
       ) {
         yield { items };
         items = [];
@@ -581,7 +584,12 @@ export class CitationDiscoveryService {
     type CheckpointFields = Partial<
       Omit<
         CitationCheckpoint,
-        "version" | "run_id" | "batch_id" | "started_at" | "providers"
+        | "version"
+        | "run_id"
+        | "batch_id"
+        | "started_at"
+        | "providers"
+        | "results_published"
       >
     >;
     const save = async (fields: CheckpointFields = {}) => {
@@ -598,6 +606,7 @@ export class CitationDiscoveryService {
         raw_provider: -1,
         raw_items: [],
         causes: [],
+        results_published: true,
         closed: null,
         ...fields,
       };
@@ -680,20 +689,50 @@ export class CitationDiscoveryService {
         reason: failure,
       });
     };
+    const publication = {
+      run: {
+        discovery_run_id: runId,
+        kind: "citation",
+        status: "RUNNING",
+        started_at: startedAt,
+        direction: request.direction,
+        max_depth: request.max_depth,
+        result_limit: request.result_limit,
+        seed_literature_ids: seeds,
+      },
+      providers: request.providers,
+    } as const;
     if (resume) {
       batchId = resume.batch_id;
       if (resume.closed) return report(resume.closed);
-      await this.database.writeIntake({
-        operation: "resume-citation",
-        batch_id: batchId,
-        discovery_run_id: runId,
-        owner_pid: process.pid,
+      const previous = await this.database.writeMetadataSegment(async () => {
+        const status = await this.database.startCitationDiscovery(
+          publication,
+          true,
+        );
+        await this.database.writeIntake({
+          operation: "resume-citation",
+          batch_id: batchId,
+          discovery_run_id: runId,
+          owner_pid: process.pid,
+        });
+        return status;
       });
+      // Older writers saved causes in checkpoints but could stop before
+      // publishing them. An INTERRUPTED run from the old final transaction
+      // already has its prefix. Retry an unfinished catch-up idempotently.
+      if (!resume.results_published && previous !== "INTERRUPTED")
+        await writeMetadataItems(
+          this.database,
+          traversal.publicationCauses(),
+          (cause) => this.database.appendCitationCause(runId, cause),
+        );
     } else {
       const seedTitle =
         (await this.database.getLiterature(seeds[0]!))?.metadata.title ??
         seeds[0]!;
       batchId = await this.database.writeMetadataSegment(async () => {
+        await this.database.startCitationDiscovery(publication, false);
         batchId = await startIntake(
           this.database,
           "citation",
@@ -706,11 +745,27 @@ export class CitationDiscoveryService {
             providers: request.providers.map((p) => p.provider_name),
           },
           request.origin,
+          runId,
         );
         await save();
         return batchId;
       });
     }
+    const settle = (
+      status: CitationDiscoveryReport["status"],
+      outcomes: CitationDiscoveryReport["source_results"],
+    ) =>
+      this.database.writeMetadataSegment(async () => {
+        await this.database.finishCitationDiscovery(runId, status, outcomes);
+        await finishIntake(
+          this.database,
+          batchId,
+          status.toLowerCase() as Lowercase<CitationDiscoveryReport["status"]>,
+          runId,
+          outcomes.filter((s) => s.outcome !== "EXHAUSTED").length,
+        );
+        if (status !== "INTERRUPTED") await save({ closed: status });
+      });
     let settled = false;
     let interrupted = request.signal?.aborted ?? false;
     const partMetas = new Set<string>();
@@ -860,13 +915,15 @@ export class CitationDiscoveryService {
         });
       if (!traversal.hasResult(target.meta_literature_id))
         partMetas.add(target.meta_literature_id);
-      partCauses.push({
+      const cause = {
         meta_literature_id: target.meta_literature_id,
         source_literature_id: edgeSource,
         target_literature_id: edgeTarget,
         actual_literature_id: target.literature_id,
         depth: depth + 1,
-      });
+      };
+      await this.database.appendCitationCause(runId, cause);
+      partCauses.push(cause);
       return true;
     };
     const readAnchor = async (sourceId: string) => {
@@ -1634,42 +1691,11 @@ export class CitationDiscoveryService {
           : outcomes.some((item) => item.outcome === "FAILED")
             ? "PARTIAL"
             : "COMPLETED";
-      await this.database.writeMetadataSegment(async () => {
-        await this.database.putCitationDiscovery(
-          {
-            run: {
-              discovery_run_id: runId,
-              kind: "citation",
-              status,
-              started_at: startedAt,
-              direction: request.direction,
-              max_depth: request.max_depth,
-              result_limit: request.result_limit,
-              seed_literature_ids: seeds,
-            },
-            providers: request.providers,
-            source_results: outcomes,
-          },
-          traversal.publicationPages(),
-          resume !== undefined,
-        );
-        await finishIntake(
-          this.database,
-          batchId,
-          status.toLowerCase() as
-            | "completed"
-            | "partial"
-            | "failed"
-            | "interrupted",
-          runId,
-          outcomes.filter((s) => s.outcome !== "EXHAUSTED").length,
-        );
-        if (status !== "INTERRUPTED") await save({ closed: status });
-      });
+      await settle(status, outcomes);
       settled = true;
       return report(status);
     } finally {
-      if (!settled) await finishIntake(this.database, batchId, "interrupted");
+      if (!settled) await settle("INTERRUPTED", []);
     }
   }
 }

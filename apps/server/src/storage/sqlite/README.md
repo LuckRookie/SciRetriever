@@ -11,7 +11,7 @@
 - [read-lanes.ts](read-lanes.ts) 列出读取的分道与耗时上限。工作台的查询与应用对象共用一个只读长请求线程。许可内的读取继续随原写入处理。短读排队及执行合计超过 5 秒时记录 `sqlite-short-read-slow`。
 - [literature-bibliographies.ts](literature-bibliographies.ts)：文献公开批量书目读取的存储适配，只取当前标识、题名与年份；与文件夹导出共享同一快照，不读取正文或状态。
 - [worker-runtime.ts](worker-runtime.ts)：SQLite worker 运行实现。
-- [citation-progress.ts](citation-progress.ts) 将引用扩展的待查队列、原因去重、待补查队列和未完成查询的回放键放入临时 SQLite。持久来源为业务事务同写的 `citation-write-checkpoint`，恢复按事件序号每页取 32 条，执行按索引取各队列的最早待查项。原因事实按页送回同一个发布事务，catalog 结构沿用原版。
+- [citation-progress.ts](citation-progress.ts) 将引用扩展的待查队列、原因去重、待补查队列和未完成查询的回放键放入临时 SQLite。持久来源为与发现结果同一事务提交的 `citation-write-checkpoint`。恢复按事件序号每页取 32 条，执行按索引取各队列的最早待查项。旧检查点中尚未发布的原因按段补写。
 - [literature-search-rows.ts](literature-search-rows.ts) 使用内容表的 `c0` 覆盖索引按文献 ID 找到书目 FTS 的 rowid，供改写和撤回使用。FTS5 内部内容表的文件格式规定 `id` 为 rowid，`c0` 为第一个声明列，此处是 `literature_id`。SQLite 随每次 FTS 写入维护该索引。
 - [literature-search-schema-migration.ts](literature-search-schema-migration.ts) 接受五个旧结构 19 指纹与已经合并 04–07 的旧指纹，登记首个增补集 `library-scale-04-07`。首次切换将存量触发器改为按列名写入并保留原执行顺序。已完成的状态、计数和分页投影沿用原水位。需要补齐检索水位时，用迁移入口的 `--reconcile` 显式比对并登记差异。
 - [library-state.ts](library-state.ts) 保存在写事务中计算的文献状态和缺失步骤、选用记录以及回填游标。SQLite 触发器为其他写入者记录受影响的 Literature ID，后台以短事务核对。读取在同一快照内优先使用当前代的存储值，回填和后台核对期间按篇现算缺少或已改变的值。

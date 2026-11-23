@@ -234,10 +234,14 @@ export interface DiscoveryPublication {
   }[];
 }
 
-type CitationPublicationHeader = Omit<
-  DiscoveryPublication,
-  "results" | "topic_causes" | "citation_causes"
->;
+type CitationPublicationHeader = {
+  readonly run: DiscoveryPublication["run"] & {
+    readonly kind: "citation";
+    readonly status: "RUNNING";
+  };
+  readonly providers: DiscoveryPublication["providers"];
+};
+type CitationRunEnd = Exclude<DiscoveryPublication["run"]["status"], "RUNNING">;
 
 export interface CitationCheckpointEvent {
   readonly sequence: number;
@@ -356,13 +360,20 @@ export type SqliteCommand =
       readonly kind: "citation_publication";
       readonly part:
         | {
-            readonly kind: "header";
+            readonly kind: "start";
             readonly publication: CitationPublicationHeader;
             readonly resume: boolean;
           }
         | {
-            readonly kind: "causes";
-            readonly causes: DiscoveryPublication["citation_causes"];
+            readonly kind: "append";
+            readonly runId: string;
+            readonly cause: DiscoveryPublication["citation_causes"][number];
+          }
+        | {
+            readonly kind: "finish";
+            readonly runId: string;
+            readonly status: CitationRunEnd;
+            readonly sources: DiscoveryPublication["source_results"];
           };
     }
   | { readonly kind: "intake_withdrawn"; readonly literature_id: string }
@@ -1332,6 +1343,7 @@ const LIBRARY_SELECTION_COMMANDS = new Set<string>([
 ]);
 // Leave room for the last indivisible record and the durable commit.
 const METADATA_WRITE_BUDGET_MS = 150;
+export const METADATA_SEGMENT_ITEMS = 128;
 interface LibraryStateRefreshResult {
   readonly rebuilt: number;
   readonly repaired: number;
@@ -1341,6 +1353,7 @@ type MetadataWriteScope = {
   readonly done: Promise<void>;
   readonly events: ExecutionEvent[];
   readonly commands: ReadonlySet<string>;
+  citationCauses: number;
   readonly textValidation?: ContractTextValidation;
   readonly textNormalization?: MetadataTextNormalization;
 };
@@ -1560,6 +1573,7 @@ export class SqliteWorker {
         done,
         events: [],
         commands,
+        citationCauses: 0,
         ...(commands === METADATA_WRITE_COMMANDS
           ? {
               textValidation: new ContractTextValidation(),
@@ -1576,7 +1590,10 @@ export class SqliteWorker {
             // Incoming foreground writes get the next slot without waiting
             // for the remainder of the time budget.
             const result = await write(
-              () => admission.hasQueuedWrites || performance.now() >= deadline,
+              () =>
+                scope.citationCauses === METADATA_SEGMENT_ITEMS ||
+                admission.hasQueuedWrites ||
+                performance.now() >= deadline,
             );
             await this.send({
               kind: "metadata_write_commit",
@@ -3229,28 +3246,44 @@ export class SqliteWorker {
       }),
     );
   }
-  async putCitationDiscovery(
+  async startCitationDiscovery(
     publication: CitationPublicationHeader,
-    pages: Iterable<DiscoveryPublication["citation_causes"]>,
     resume: boolean,
-  ): Promise<void> {
-    if (!this.metadataWrites.getStore() || publication.run.kind !== "citation")
-      throw new SqliteWorkerError();
+  ): Promise<DiscoveryPublication["run"]["status"] | null> {
     parseDiscoveryPublication({
       ...publication,
+      source_results: [],
       results: [],
       topic_causes: [],
       citation_causes: [],
     });
+    return this.run({
+      kind: "citation_publication",
+      part: { kind: "start", publication, resume },
+    });
+  }
+  async appendCitationCause(
+    runId: string,
+    cause: DiscoveryPublication["citation_causes"][number],
+  ): Promise<void> {
+    const scope = this.metadataWrites.getStore();
+    if (!scope || scope.citationCauses >= METADATA_SEGMENT_ITEMS)
+      throw new SqliteWorkerError();
+    scope.citationCauses++;
     await this.run({
       kind: "citation_publication",
-      part: { kind: "header", publication, resume },
+      part: { kind: "append", runId, cause },
     });
-    for (const causes of pages)
-      await this.run({
-        kind: "citation_publication",
-        part: { kind: "causes", causes },
-      });
+  }
+  async finishCitationDiscovery(
+    runId: string,
+    status: CitationRunEnd,
+    sources: DiscoveryPublication["source_results"],
+  ): Promise<void> {
+    await this.run({
+      kind: "citation_publication",
+      part: { kind: "finish", runId, status, sources },
+    });
   }
   async getDiscovery(
     discoveryRunId: string,

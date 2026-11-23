@@ -369,7 +369,7 @@ let metadataWrite:
       readonly textNormalization: InstanceType<
         typeof queryTextModule.MetadataTextNormalization
       >;
-      citationRun?: string;
+      citationRun?: { readonly id: string; finished: boolean };
     }
   | undefined;
 let observedDataVersion: number | null = null;
@@ -1031,19 +1031,22 @@ function readAutomaticPdfExhaustion(command: Dynamic): Dynamic {
       .get(id);
   });
 }
+function validateProjectedDiscovery(id: string) {
+  if (
+    db
+      .prepare(
+        "SELECT 1 FROM library_discovery_invalid WHERE discovery_run_id=? LIMIT 1",
+      )
+      .get(id)
+  )
+    fail();
+}
 function validateDiscoveryCauses(ids: Dynamic): Dynamic {
   if (!ids.length) return;
   const indexed = libraryPagingReady(db);
   for (const id of new Set<Dynamic>(ids)) {
     if (indexed) {
-      if (
-        db
-          .prepare(
-            "SELECT 1 FROM library_discovery_invalid WHERE discovery_run_id=? LIMIT 1",
-          )
-          .get(id)
-      )
-        fail();
+      validateProjectedDiscovery(id);
       continue;
     }
     const kind =
@@ -4930,12 +4933,16 @@ function putDiscoveryHeader(p: Dynamic, resumeCitation: boolean): string {
       "INSERT INTO discovery_run_providers(discovery_run_id,provider_ordinal,provider_name,scan_limit,kind) VALUES(?,?,?,?,?) ON CONFLICT(discovery_run_id,provider_ordinal) DO NOTHING",
     ).run(r.discovery_run_id, i, x.provider_name, x.scan_limit, r.kind);
   }
-  for (const x of p.source_results) {
+  putDiscoverySourceResults(r.discovery_run_id, p.source_results);
+  return r.discovery_run_id;
+}
+function putDiscoverySourceResults(id: string, sources: Dynamic) {
+  for (const x of sources) {
     const f = x.failure;
     db.prepare(
       "INSERT INTO discovery_source_results(discovery_run_id,provider_name,outcome,failure_code,failure_reason,failure_action,failure_retryable) VALUES(?,?,?,?,?,?,?) ON CONFLICT(discovery_run_id,provider_name) DO NOTHING",
     ).run(
-      r.discovery_run_id,
+      id,
       x.provider_name,
       x.outcome,
       f?.code ?? null,
@@ -4944,7 +4951,6 @@ function putDiscoveryHeader(p: Dynamic, resumeCitation: boolean): string {
       f?.retryable === undefined ? null : Number(f.retryable),
     );
   }
-  return r.discovery_run_id;
 }
 function insertDiscoveryResult(runId: string, metaId: string) {
   db.prepare(
@@ -4992,20 +4998,53 @@ function putCitationPublication(
   part: Extract<SqliteCommand, { kind: "citation_publication" }>["part"],
 ) {
   if (!metadataWrite) fail();
-  if (part.kind === "header") {
-    if (metadataWrite.citationRun || part.publication.run.kind !== "citation")
+  if (part.kind === "start") {
+    const { run } = part.publication;
+    if (
+      metadataWrite.citationRun ||
+      run.kind !== "citation" ||
+      run.status !== "RUNNING"
+    )
       fail();
-    metadataWrite.citationRun = putDiscoveryHeader(
-      part.publication,
+    const existing = db
+      .prepare("SELECT status FROM discovery_runs WHERE discovery_run_id=?")
+      .get(run.discovery_run_id);
+    if (existing && !part.resume) fail();
+    const id = putDiscoveryHeader(
+      { ...part.publication, source_results: [] },
       part.resume,
     );
-    return true;
+    metadataWrite.citationRun = { id, finished: false };
+    return existing?.status ?? null;
   }
-  const id = metadataWrite.citationRun;
-  if (!id) fail();
-  for (const cause of part.causes) {
-    insertDiscoveryResult(id, cause.meta_literature_id);
-    insertCitationCause(id, cause);
+  const id = part.runId;
+  if (!metadataWrite.citationRun) {
+    if (
+      !db
+        .prepare(
+          "SELECT 1 FROM discovery_runs WHERE discovery_run_id=? AND kind='citation' AND status='RUNNING'",
+        )
+        .get(id)
+    )
+      fail();
+    metadataWrite.citationRun = { id, finished: false };
+  }
+  if (metadataWrite.citationRun.id !== id || metadataWrite.citationRun.finished)
+    fail();
+  if (part.kind === "append") {
+    insertDiscoveryResult(id, part.cause.meta_literature_id);
+    insertCitationCause(id, part.cause);
+  } else {
+    if (
+      !Array.isArray(part.sources) ||
+      !["COMPLETED", "PARTIAL", "FAILED", "INTERRUPTED"].includes(part.status)
+    )
+      fail();
+    putDiscoverySourceResults(id, part.sources);
+    db.prepare(
+      "UPDATE discovery_runs SET status=? WHERE discovery_run_id=?",
+    ).run(part.status, id);
+    metadataWrite.citationRun.finished = true;
   }
   return true;
 }
@@ -5233,7 +5272,9 @@ port.on("message", (message: WorkerMessage) => {
         if (!metadataWrite) fail();
         if (message.command.kind === "metadata_write_commit") {
           if (metadataWrite.citationRun)
-            validateDiscoveryCauses([metadataWrite.citationRun]);
+            // Triggers record the rows changed by publication even during the
+            // historical backfill. Do not scan the run in a write segment.
+            validateProjectedDiscovery(metadataWrite.citationRun.id);
           if (message.command.events.length) requireRuntime();
           for (const event of message.command.events)
             insertExecutionEvent(event);

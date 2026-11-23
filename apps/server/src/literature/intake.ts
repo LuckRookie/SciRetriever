@@ -26,6 +26,7 @@ export async function startIntake(
   label: string,
   request: IntakeBatch["request"],
   origin?: IntakeOrigin,
+  discoveryRunId: string | null = null,
 ) {
   const id = parseIntakeBatchId(randomUUID()),
     entryOrigin = intakeOrigin(origin);
@@ -65,7 +66,7 @@ export async function startIntake(
     full_text: { total: 0, obtained: 0, missing: 0, exhausted: 0 },
     estimates: { acquire_pdf: 0, parse: 0 },
     pdf: { has_pdf: 0, unavailable: 0, pending: 0 },
-    discovery_run_id: null,
+    discovery_run_id: discoveryRunId,
     source_failures: 0,
   });
   await database.writeIntake({

@@ -311,9 +311,14 @@ export function writeIntakeBatch(db: DatabaseSync, action: IntakeWrite) {
   else if (action.operation === "resume-citation") {
     const resumed = db
       .prepare(
-        "UPDATE intake_batches SET state='running',result=NULL,finished_at=NULL,owner_pid=? WHERE batch_id=? AND kind='citation' AND (discovery_run_id IS NULL OR discovery_run_id=?) AND (state='running' OR (state='finished' AND result='interrupted'))",
+        "UPDATE intake_batches SET state='running',result=NULL,finished_at=NULL,owner_pid=?,discovery_run_id=? WHERE batch_id=? AND kind='citation' AND (discovery_run_id IS NULL OR discovery_run_id=?) AND (state='running' OR (state='finished' AND result='interrupted'))",
       )
-      .run(action.owner_pid, action.batch_id, action.discovery_run_id);
+      .run(
+        action.owner_pid,
+        action.discovery_run_id,
+        action.batch_id,
+        action.discovery_run_id,
+      );
     if (resumed.changes !== 1) throw new Error("citation intake cannot resume");
   } else if (action.operation === "finish") {
     if (

@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { DiscoveryPublication } from "./worker.js";
 
 type CitationCause = DiscoveryPublication["citation_causes"][number];
-const PUBLICATION_PAGE = 256;
+const CAUSE_PAGE = 256;
 
 export interface CitationDeferredEntry {
   readonly id: string;
@@ -286,19 +286,18 @@ export class CitationProgress<Work extends CitationDeferredEntry> {
       };
   }
 
-  *publicationPages(): IterableIterator<readonly CitationCause[]> {
+  *publicationCauses(): IterableIterator<CitationCause> {
     let after = 0;
     for (;;) {
       const page = this.causePage.all(
         after,
-        PUBLICATION_PAGE,
+        CAUSE_PAGE,
       ) as unknown as readonly (CitationCause & { ordinal: number })[];
       if (page.length === 0) return;
-      yield page.map(({ ordinal, ...cause }) => {
-        void ordinal;
-        return cause;
-      });
-      after = page.at(-1)!.ordinal;
+      for (const { ordinal, ...cause } of page) {
+        after = ordinal;
+        yield cause;
+      }
     }
   }
 

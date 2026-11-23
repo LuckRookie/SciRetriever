@@ -16,10 +16,14 @@ import {
   type Application,
 } from "../src/bootstrap/application.js";
 import { startProductionWorkbench } from "../src/bootstrap/workbench.js";
+import { runCli } from "../src/cli/main.js";
 import {
   citationItemKey,
+  parseCitationCheckpoint,
   pendingCitationItem,
   restoreCitationItem,
+  type CitationCause,
+  type CitationCheckpoint,
 } from "../src/entry/citation-checkpoint.js";
 import { runMetadataTask } from "../src/entry/metadata-task.js";
 import { createTaskReader } from "../src/entry/task-read.js";
@@ -31,6 +35,7 @@ import type {
   ReferenceQueryPort,
 } from "../src/metadata/ports.js";
 import { ExecutionRepository } from "../src/storage/execution/repository.js";
+import { METADATA_SEGMENT_ITEMS } from "../src/storage/sqlite/worker.js";
 import {
   workbenchLogin,
   workbenchTestAccess,
@@ -217,15 +222,7 @@ function checkpoints(home: string, jobId: string) {
         "SELECT payload_json FROM execution_events WHERE job_id=? AND kind='citation-write-checkpoint' ORDER BY sequence",
       )
       .all(jobId)
-      .map(
-        (row) =>
-          JSON.parse(String(row.payload_json)) as {
-            source_id: string | null;
-            checked: boolean;
-            raw_items: string[];
-            causes: { actual_literature_id: string }[];
-          },
-      ),
+      .map((row) => JSON.parse(String(row.payload_json)) as CitationCheckpoint),
   );
 }
 
@@ -301,7 +298,7 @@ function snapshot(home: string, runId: string, batchId: string) {
 
 it("preserves fields and visible event order for new intake, match, enrichment and replay", async () => {
   const graph = new Map<number, readonly Row[]>([[0, [[1], [2, 1], [3], [1]]]]);
-  async function take(pageSize: number) {
+  async function take(pageSize: number, publishOnce = false) {
     const f = await fixture(source(graph, pageSize));
     try {
       while ((await f.app.database.refreshLibraryState()).more) {
@@ -310,6 +307,35 @@ it("preserves fields and visible event order for new intake, match, enrichment a
       const seed = await add(f.app, 0);
       await add(f.app, 2);
       await add(f.app, 3);
+      if (publishOnce) {
+        // Use the original one-transaction publication for the same inputs.
+        // All writes to the book, relation, and batch tables still go through Entry.
+        const db = f.app.database;
+        const start = vi.spyOn(db, "startCitationDiscovery");
+        const finish = db.finishCitationDiscovery.bind(db);
+        const causes: CitationCause[] = [];
+        vi.spyOn(db, "appendCitationCause").mockImplementation(
+          async (_id, cause) => {
+            causes.push(cause);
+          },
+        );
+        vi.spyOn(db, "finishCitationDiscovery").mockImplementation(
+          async (id, status, sources) => {
+            const header = start.mock.calls[0]![0];
+            await finish(id, status, sources);
+            await db.putDiscovery({
+              ...header,
+              run: { ...header.run, status },
+              source_results: sources,
+              results: [
+                ...new Set(causes.map((cause) => cause.meta_literature_id)),
+              ].map((meta_literature_id) => ({ meta_literature_id })),
+              topic_causes: [],
+              citation_causes: causes,
+            });
+          },
+        );
+      }
       const result = await run(f.app, [seed], "parity");
       expect(result.result_count).toBe(3);
       const stored = snapshot(
@@ -325,8 +351,147 @@ it("preserves fields and visible event order for new intake, match, enrichment a
       await f.close();
     }
   }
-  expect(await take(64)).toEqual(await take(1));
+  const legacy = await take(64, true);
+  expect(await take(64)).toEqual(legacy);
+  expect(await take(1)).toEqual(legacy);
 });
+
+it("exposes the running batch and only the results committed with its checkpoints", async () => {
+  const f = await fixture(source(new Map([[0, [[1], [2]]]]), 1));
+  try {
+    const seed = await add(f.app, 0);
+    const write = f.app.database.writeMetadataSegment.bind(f.app.database);
+    let firstCommit!: (checkpoint: CitationCheckpoint) => void;
+    const committed = new Promise<CitationCheckpoint>((resolve) => {
+      firstCommit = resolve;
+    });
+    let continueTask!: () => void;
+    const resume = new Promise<void>((resolve) => {
+      continueTask = resolve;
+    });
+    let paused = false;
+    const check = vi
+      .spyOn(f.app.database, "writeMetadataSegment")
+      .mockImplementation(async (body, signal) => {
+        const value = await write(body, signal);
+        if (
+          paused ||
+          !value ||
+          typeof value !== "object" ||
+          !("causes" in value)
+        )
+          return value;
+        const checkpoint = parseCitationCheckpoint(value);
+        if (checkpoint.causes.length === 0) return value;
+        paused = true;
+        firstCommit(checkpoint);
+        await resume;
+        return value;
+      });
+    const running = run(f.app, [seed], "visible-publication");
+    try {
+      const checkpoint = await Promise.race([
+        committed,
+        running.then(() => {
+          throw new Error("Task finished before the first publication");
+        }),
+      ]);
+      expect(checkpoint.results_published).toBe(true);
+      const job = await processingJobId("visible-publication");
+      expect(checkpoints(f.home, job).at(-1)).toMatchObject(checkpoint);
+      expect(
+        await f.app.database.getDiscovery(checkpoint.run_id),
+      ).toMatchObject({
+        run: { status: "RUNNING" },
+        citation_causes: checkpoint.causes,
+        results: [
+          { meta_literature_id: checkpoint.causes[0]!.meta_literature_id },
+        ],
+        source_results: [],
+      });
+      const page = await f.app.library.search({
+        query: { discovery_run_ids: [checkpoint.run_id] },
+      });
+      expect(page.items.map((item) => item.literature.literature_id)).toEqual(
+        checkpoint.causes.map((cause) => cause.actual_literature_id),
+      );
+      expect(page.items[0]?.discovery_origin).toEqual({
+        kind: "citation",
+        intake_batch_id: checkpoint.batch_id,
+      });
+      const cli = await runCli(
+        ["library", "batches", "--request", "-", "--json"],
+        {
+          home: f.home,
+          stdout: () => {},
+          stdin: (async function* () {
+            yield Buffer.from(
+              JSON.stringify({ operation: "list", request: {} }),
+            );
+          })(),
+        },
+      );
+      expect(cli).toMatchObject({
+        code: 0,
+        value: {
+          protocol_version: 1,
+          result: {
+            items: [
+              {
+                batch_id: checkpoint.batch_id,
+                discovery_run_id: checkpoint.run_id,
+                state: "running",
+                counts: { hits: 1 },
+              },
+            ],
+          },
+        },
+      });
+      continueTask();
+      const done = await running;
+      expect(done.discovery_run_id).toBe(checkpoint.run_id);
+      expect(done.result_count).toBe(2);
+    } finally {
+      continueTask();
+      check.mockRestore();
+      await Promise.allSettled([running]);
+    }
+  } finally {
+    await f.close();
+  }
+});
+
+it("bounds the publication segments even for a single item with many causes", async () => {
+  const size = METADATA_SEGMENT_ITEMS * 2 + 3;
+  const works = Array.from({ length: size }, (_, n) => n + 1);
+  const f = await fixture({
+    provider_name: "fixture",
+    open_reference_query({ keys: [anchor] }) {
+      let pulled = false;
+      return {
+        pull_raw_item() {
+          if (pulled) return null;
+          pulled = true;
+          return { raw_item: {}, source_exhausted_after: true };
+        },
+        convert_raw_item: () => groupedCitationItem(anchor!, works),
+      };
+    },
+  });
+  try {
+    const seed = await add(f.app, 0);
+    const result = await run(f.app, [seed], "large-provider-item");
+    const sizes = checkpoints(f.home, result.job_id)
+      .filter((row) => row.causes.length > 0)
+      .map((row) => row.causes.length);
+    expect(sizes.length).toBeGreaterThanOrEqual(3);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(METADATA_SEGMENT_ITEMS);
+    expect(sizes.reduce((sum, n) => sum + n, 0)).toBe(size);
+    expect(result.result_count).toBe(size);
+  } finally {
+    await f.close();
+  }
+}, 60_000);
 
 it("rolls back the segment on a write failure and retries from its first item", async () => {
   const f = await fixture(source(new Map([[0, [[1], [2], [3]]]]), 64));
@@ -484,72 +649,115 @@ it("records a withdrawn citation target as restored when it reenters intake", as
   }
 });
 
-it("reopens the catalog and repeats only the unfinished source, keeping its committed prefix", async () => {
-  const calls: number[] = [];
-  const port = source(
-    new Map([
-      [0, [[1]]],
-      [9, [[2], [3], [4], [5]]],
-    ]),
-    2,
-    calls,
-  );
-  const f = await fixture(port);
-  let reopened: Application | undefined;
-  try {
-    const a = await add(f.app, 0);
-    const b = await add(f.app, 9);
-    const abort = new AbortController();
-    const observe = f.app.identity.observe.bind(f.app.identity);
-    const fault = vi
-      .spyOn(f.app.identity, "observe")
-      .mockImplementation(async (value, given) => {
-        const result = await observe(value, given);
-        if (
-          (value as { observation_id: string }).observation_id ===
-          observation(4).observation_id
-        )
-          abort.abort();
-        return result;
-      });
+it.each(["segmented", "legacy without publication"])(
+  "reopens a %s run and repeats only the unfinished source",
+  async (publication) => {
+    const calls: number[] = [];
+    const port = source(
+      new Map([
+        [0, [[1]]],
+        [9, [[2], [3], [4], [5]]],
+      ]),
+      2,
+      calls,
+    );
+    const f = await fixture(port);
+    let reopened: Application | undefined;
     try {
-      await expect(
-        run(f.app, [a, b], "resume", abort.signal),
-      ).rejects.toThrow();
+      const a = await add(f.app, 0);
+      const b = await add(f.app, 9);
+      const abort = new AbortController();
+      const observe = f.app.identity.observe.bind(f.app.identity);
+      const fault = vi
+        .spyOn(f.app.identity, "observe")
+        .mockImplementation(async (value, given) => {
+          const result = await observe(value, given);
+          if (
+            (value as { observation_id: string }).observation_id ===
+            observation(4).observation_id
+          )
+            abort.abort();
+          return result;
+        });
+      try {
+        await expect(
+          run(f.app, [a, b], "resume", abort.signal),
+        ).rejects.toThrow();
+      } finally {
+        fault.mockRestore();
+      }
+      const job = await processingJobId("resume");
+      const prior = checkpoints(f.home, job);
+      const prefix = prior.flatMap((row) => row.causes);
+      const { run_id, batch_id } = prior[0]!;
+      expect(
+        prior.filter((item) => item.checked).map((item) => item.source_id),
+      ).toEqual([a]);
+      expect(
+        prior
+          .filter((item) => item.source_id === b)
+          .flatMap((item) => item.causes),
+      ).toHaveLength(2);
+      await f.app.close();
+      if (publication === "legacy without publication") {
+        // The old code could commit this prefix and finish the batch on error
+        // before inserting any DiscoveryRun or publication rows.
+        const db = new DatabaseSync(join(f.home, "catalog.sqlite"));
+        try {
+          db.exec("PRAGMA foreign_keys=ON; BEGIN IMMEDIATE");
+          db.prepare(
+            "UPDATE intake_batches SET discovery_run_id=NULL WHERE batch_id=?",
+          ).run(batch_id);
+          for (const table of [
+            "citation_discovery_causes",
+            "discovery_results",
+            "discovery_source_results",
+            "discovery_run_providers",
+            "citation_discovery_seeds",
+            "citation_discovery_inputs",
+            "discovery_runs",
+          ])
+            db.prepare(`DELETE FROM ${table} WHERE discovery_run_id=?`).run(
+              run_id,
+            );
+          db.prepare(
+            `UPDATE execution_events SET payload_json=json_remove(payload_json,'$.results_published')
+          WHERE job_id=? AND kind='citation-write-checkpoint'`,
+          ).run(job);
+          db.exec("COMMIT");
+        } finally {
+          db.close();
+        }
+      }
+      reopened = await createApplication(f.home, options(port));
+      await reopened.processingTasks!.control(job, "resume");
+      const result = await run(reopened, [a, b], "resume");
+      expect(calls).toEqual([0, 9, 9]);
+      expect(result).toMatchObject({
+        discovery_run_id: run_id,
+        intake_batch_id: batch_id,
+      });
+      expect(result.result_count).toBe(5);
+      const saved = await reopened.database.getDiscovery(run_id);
+      expect(saved?.results).toHaveLength(5);
+      expect(saved?.citation_causes).toHaveLength(5);
+      expect(saved?.citation_causes).toEqual(expect.arrayContaining(prefix));
+      expect(
+        (await reopened.database.referenceSnapshot()).map(
+          (row) => row.supports.length,
+        ),
+      ).toEqual([1, 1, 1, 1, 1]);
+      expect(
+        checkpoints(f.home, job)
+          .filter((item) => item.checked)
+          .map((item) => item.source_id),
+      ).toEqual([a, b]);
     } finally {
-      fault.mockRestore();
+      await reopened?.close();
+      await f.close();
     }
-    const job = await processingJobId("resume");
-    const prior = checkpoints(f.home, job);
-    expect(
-      prior.filter((item) => item.checked).map((item) => item.source_id),
-    ).toEqual([a]);
-    expect(
-      prior
-        .filter((item) => item.source_id === b)
-        .flatMap((item) => item.causes),
-    ).toHaveLength(2);
-    await f.app.close();
-    reopened = await createApplication(f.home, options(port));
-    await reopened.processingTasks!.control(job, "resume");
-    const result = await run(reopened, [a, b], "resume");
-    expect(calls).toEqual([0, 9, 9]);
-    expect(result.result_count).toBe(5);
-    expect(
-      (await reopened.database.referenceSnapshot()).map(
-        (row) => row.supports.length,
-      ),
-    ).toEqual([1, 1, 1, 1, 1]);
-    expect(
-      checkpoints(f.home, job)
-        .filter((item) => item.checked)
-        .map((item) => item.source_id),
-    ).toEqual([a, b]);
-  } finally {
-    await reopened?.close();
-    await f.close();
-  }
-});
+  },
+);
 
 const layeredGraph = new Map<number, readonly Row[]>([
   [0, [[1], [2], [2]]],
@@ -805,38 +1013,45 @@ it("restarts a pre-checkpoint two-layer task from its seeds without duplicating 
   }
 }, 60_000);
 
-it("validates the streamed publication before commit and retries it without another provider query", async () => {
+it("preserves committed results when settlement fails and retries without another provider query", async () => {
   const calls: number[] = [];
   const f = await fixture(source(new Map([[0, [[1], [2]]]]), 1, calls));
   try {
     const seed = await add(f.app, 0);
-    const publish = f.app.database.putCitationDiscovery.bind(f.app.database);
+    const finish = f.app.database.finishCitationDiscovery.bind(f.app.database);
     const fault = vi
-      .spyOn(f.app.database, "putCitationDiscovery")
-      .mockImplementation((header, pages, resume) => {
-        function* invalidPages() {
-          for (const page of pages)
-            yield page.map((cause) => ({
-              ...cause,
-              meta_literature_id: uuid(9, 10),
-            }));
-        }
-        return publish(header, invalidPages(), resume);
-      });
+      .spyOn(f.app.database, "finishCitationDiscovery")
+      .mockImplementation((id, status, sources) =>
+        finish(
+          id,
+          status,
+          status === "COMPLETED"
+            ? sources.map((outcome) => ({
+                ...outcome,
+                provider_name: "not-in-run",
+              }))
+            : sources,
+        ),
+      );
     try {
       await expect(run(f.app, [seed], "publication-fault")).rejects.toThrow();
     } finally {
       fault.mockRestore();
     }
     expect((await f.app.database.snapshotCounts()).tables).toMatchObject({
-      discovery_runs: 0,
+      discovery_runs: 1,
       literatures: 3,
       literature_references: 2,
     });
     const job = await processingJobId("publication-fault");
-    expect(checkpoints(f.home, job).filter((row) => row.checked)).toHaveLength(
-      1,
-    );
+    const saved = checkpoints(f.home, job);
+    expect(saved.filter((row) => row.checked)).toHaveLength(1);
+    const { run_id } = saved[0]!;
+    expect(await f.app.database.getDiscovery(run_id)).toMatchObject({
+      run: { status: "INTERRUPTED" },
+      citation_causes: [expect.anything(), expect.anything()],
+      source_results: [],
+    });
     await f.app.processingTasks!.control(job, "retry");
     const result = await run(f.app, [seed], "publication-fault");
     expect(calls).toEqual([0]);
@@ -846,6 +1061,42 @@ it("validates the streamed publication before commit and retries it without anot
     ).toMatchObject({
       run: { status: "COMPLETED" },
       citation_causes: [expect.anything(), expect.anything()],
+    });
+  } finally {
+    await f.close();
+  }
+});
+
+it("rolls an invalid cause back with the relation and checkpoint in its segment", async () => {
+  const f = await fixture(source(new Map([[0, [[1]]]]), 1));
+  try {
+    const seed = await add(f.app, 0);
+    const append = f.app.database.appendCitationCause.bind(f.app.database);
+    const fault = vi
+      .spyOn(f.app.database, "appendCitationCause")
+      .mockImplementation((id, cause) =>
+        append(id, { ...cause, meta_literature_id: uuid(9, 10) }),
+      );
+    try {
+      await expect(run(f.app, [seed], "invalid-cause")).rejects.toThrow();
+    } finally {
+      fault.mockRestore();
+    }
+    const job = await processingJobId("invalid-cause");
+    const checkpointsWritten = checkpoints(f.home, job);
+    expect(
+      checkpointsWritten.flatMap((checkpoint) => checkpoint.causes),
+    ).toEqual([]);
+    expect((await f.app.database.snapshotCounts()).tables).toMatchObject({
+      literatures: 1,
+      literature_references: 0,
+    });
+    expect(
+      await f.app.database.getDiscovery(checkpointsWritten[0]!.run_id),
+    ).toMatchObject({
+      run: { status: "INTERRUPTED" },
+      results: [],
+      citation_causes: [],
     });
   } finally {
     await f.close();

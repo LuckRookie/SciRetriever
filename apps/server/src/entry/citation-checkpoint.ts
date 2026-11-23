@@ -88,6 +88,8 @@ export interface CitationCheckpoint {
   readonly raw_provider: number;
   readonly raw_items: readonly string[];
   readonly causes: readonly CitationCause[];
+  /** All causes through this checkpoint also exist in the publication tables. */
+  readonly results_published?: true;
   readonly providers: readonly CitationProviderState[];
   readonly deferred?: CitationDeferredChanges<CitationDeferredWork>;
   readonly closed: "COMPLETED" | "PARTIAL" | "FAILED" | null;
@@ -149,6 +151,7 @@ export function parseCitationCheckpoint(input: unknown): CitationCheckpoint {
       (item) => typeof item === "string" && /^[a-f0-9]{64}$/u.test(item),
     ) ||
     !Array.isArray(row.causes) ||
+    (row.results_published !== undefined && row.results_published !== true) ||
     !Array.isArray(row.providers) ||
     row.raw_provider >= row.providers.length ||
     ![null, "COMPLETED", "PARTIAL", "FAILED"].includes(row.closed)
