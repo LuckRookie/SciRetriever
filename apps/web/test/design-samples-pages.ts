@@ -136,11 +136,11 @@ async function holdResponse(p: Page, path: string) {
 }
 /**
  * A whole-library text search with older raw hits unread (technical 06
- * 2.4): the sample is far below a 95,000-hit window, so the service's
+ * 2.4): the sample is far below a window of hits, so the service's
  * window receipts are given in their contract shape over its answers. The
  * first window has older hits left; the second is the last.
  */
-async function scanWindows(p: Page, empty = false) {
+async function scanWindows(p: Page, empty = false, members = false) {
   for (const name of ["search", "library-counts", "library-facets"])
     await p.route(
       (url) => url.pathname === `/api/v1/query/${name}`,
@@ -163,9 +163,11 @@ async function scanWindows(p: Page, empty = false) {
           if (first && request.cursor == null)
             Object.assign(value.page, {
               scan_incomplete: true,
-              scan_limit: 95000,
+              // A large working set is read by its newest members.
+              scan_side: members ? "members" : "hits",
+              scan_limit: members ? 8000 : 75000,
               next_window_cursor: "sample-window-2",
-              relevance_limit: 1000,
+              ...(members ? {} : { relevance_limit: 1000 }),
             });
         } else {
           // Nothing in the window: its counts and terms are empty too, as
@@ -511,6 +513,43 @@ export const designSamplePages: readonly DesignSamplePage[] = [
       await p.locator(".paper-unranked").scrollIntoViewIfNeeded();
     },
     ready: ".paper-unranked",
+  },
+  {
+    id: "folder-members-window",
+    name: "搜索 · 文件夹成员窗口（有结果）",
+    route: (ids: DesignSampleIds) =>
+      `/?view=lib&query=${query({ text: "Synthetic", folder: { id: ids.folder, include_descendants: true } })}`,
+    interaction:
+      "在超过一万篇的文件夹里搜索，只查了最近入库的 8,000 篇（成员窗口按合同样式模拟）",
+    prepare: (p) => scanWindows(p, false, true),
+    ready: ".library-search-scope .library-relevance-limit .ui-button",
+  },
+  {
+    id: "folder-members-empty",
+    name: "搜索 · 文件夹成员窗口（零结果）",
+    route: (ids: DesignSampleIds) =>
+      `/?view=lib&query=${query({ text: "Synthetic", folder: { id: ids.folder, include_descendants: true } })}`,
+    interaction:
+      "在超过一万篇的文件夹里搜索，最近入库的 8,000 篇里没有（成员窗口与零结果均为模拟）",
+    prepare: (p) => scanWindows(p, true, true),
+    ready: '.library-empty .ui-button:has-text("在更早入库的文献里继续找")',
+  },
+  {
+    id: "folder-members-second",
+    name: "搜索 · 文件夹成员窗口（第 2 批）",
+    route: (ids: DesignSampleIds) =>
+      `/?view=lib&query=${query({ text: "Synthetic", folder: { id: ids.folder, include_descendants: true } })}`,
+    interaction:
+      "按“在更早入库的文献里继续找”，换到更早入库的第 2 批（成员窗口按合同样式模拟）",
+    prepare: async (p) => {
+      await scanWindows(p, false, true);
+      await p
+        .locator(".library-search-scope")
+        .getByRole("button", { name: "在更早入库的文献里继续找", exact: true })
+        .click();
+      await p.mouse.move(0, 0);
+    },
+    ready: '.library-search-scope .ui-button:has-text("回到最近入库的文献")',
   },
   {
     id: "library-over-limit",

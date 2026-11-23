@@ -94,8 +94,12 @@ export async function searchLibrary(
     statusUpdating: page.status_updating === true,
     /** Older raw text hits wait outside this window (ADR 0065 §6.4). */
     scanIncomplete: page.scan_incomplete === true,
-    /** The raw hits a window reads, C. */
+    /** What a window reads, C: raw text hits, or a working set's newest members. */
     scanLimit: typeof page.scan_limit === "number" ? page.scan_limit : null,
+    scanSide:
+      page.scan_side === "hits" || page.scan_side === "members"
+        ? (page.scan_side as "hits" | "members")
+        : null,
     nextWindow:
       typeof page.next_window_cursor === "string"
         ? page.next_window_cursor
@@ -206,7 +210,8 @@ export async function scopeItems(
   do {
     signal?.throwIfAborted();
     const page = await searchLibrary(api, query, sort, cursor, signal);
-    if (page.scanIncomplete) throw new Error(SCAN_INCOMPLETE_REASON);
+    if (page.scanIncomplete)
+      throw new Error(scanIncompleteReason(page.scanSide));
     if (page.total > 1000 || page.truncated)
       throw new Error("当前范围超过 1,000 篇，请先筛选或选择。");
     for (const item of page.items)
@@ -285,6 +290,11 @@ export function libraryCount(
  * Why a whole search cannot be taken at once while older raw hits are
  * unread (ADR 0065 §6.4): its members are not all known.
  */
+export const scanIncompleteReason = (side: "hits" | "members" | null) =>
+  side === "members" ? SCAN_INCOMPLETE_MEMBERS_REASON : SCAN_INCOMPLETE_REASON;
+/** The same for a large working set read by its newest members. */
+export const SCAN_INCOMPLETE_MEMBERS_REASON =
+  "这次搜索只查了这个范围里最近的一部分文献，更早的还没查；请先加条件缩小范围。";
 export const SCAN_INCOMPLETE_REASON =
   "这次搜索只查了最近写入索引的命中，更早的还没查；请先加条件缩小范围。";
 /** Beyond 10,000 papers only the sorts with an index remain (technical 06 2.1.2). */

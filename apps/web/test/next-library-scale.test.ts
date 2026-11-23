@@ -709,12 +709,19 @@ it("saves a filter in the order “最近收进来” and reads it back unchange
 
 /**
  * Whole-library text search reads windows of raw hits (technical 06 2.4).
- * The fixture is far below the 95,000 hits of a window, so the service's
+ * The fixture is far below the hits of a window, so the service's
  * window receipts are given here, in their contract shape, over its answers.
  */
 async function scanWindows(
   page: Page,
-  options: { empty?: string; truncated?: boolean; lost?: boolean } = {},
+  options: {
+    empty?: string;
+    truncated?: boolean;
+    lost?: boolean;
+    /** A large working set read by its newest members (ADR 0065 §6.4). */
+    members?: boolean;
+    scored?: number;
+  } = {},
 ) {
   const asked: {
     name: string;
@@ -776,9 +783,13 @@ async function scanWindows(
           if (first && request.cursor == null) {
             Object.assign(p, {
               scan_incomplete: true,
-              scan_limit: 95000,
+              scan_side: options.members ? "members" : "hits",
+              scan_limit: options.members ? 8000 : 75000,
               next_window_cursor: "window-2",
-              relevance_limit: 1000,
+              ...(options.members ? {} : { relevance_limit: 1000 }),
+              ...(options.scored === undefined
+                ? {}
+                : { relevance_scored_count: options.scored }),
               ...(options.truncated
                 ? { total_count: 10000, count_truncated: true }
                 : {}),
@@ -807,7 +818,7 @@ it("says a search with older hits unread finds at least so many, goes on to the 
     await expect
       .poll(() => scope.locator(".library-relevance-limit").textContent())
       .toBe(
-        "在最近写入索引的 95,000 条命中里按相关度显示前 1,000 条在更早的命中里继续找",
+        "在最近写入索引的 75,000 条命中里按相关度显示前 1,000 条在更早的命中里继续找",
       );
     const quick = page.locator(".library-status-filters");
     await expect
@@ -857,7 +868,7 @@ it("says a search with older hits unread finds at least so many, goes on to the 
       .toEqual(expect.arrayContaining(["search", "library-counts"]));
     await expect
       .poll(() => scope.locator(".library-relevance-limit").textContent())
-      .toBe("在更早的第 2 批 95,000 条命中里查找回到最近的命中");
+      .toBe("在更早的第 2 批 75,000 条命中里查找回到最近的命中");
     // The last window: nothing older to go on to.
     expect(
       await page.getByRole("button", { name: "在更早的命中里继续找" }).count(),
@@ -892,7 +903,7 @@ it("says nothing was found in the newest hits, not in the library, and merges th
     );
     const empty = page.locator(".library-empty");
     await empty
-      .getByText("最近写入索引的 95,000 条命中里没有，更早的还没查", {
+      .getByText("最近写入索引的 75,000 条命中里没有，更早的还没查", {
         exact: true,
       })
       .waitFor();
@@ -993,7 +1004,7 @@ it("counts the quick filters in an earlier window too, and goes back to the newe
           .textContent(),
       )
       .toBe(
-        "在最近写入索引的 95,000 条命中里按相关度显示前 1,000 条在更早的命中里继续找",
+        "在最近写入索引的 75,000 条命中里按相关度显示前 1,000 条在更早的命中里继续找",
       );
     expect(await count.textContent()).toBe("至少 2 篇符合");
     expect(await page.getByRole("alert").count()).toBe(0);
@@ -1100,6 +1111,99 @@ it("says when relevance ranked only part of a working set, with the set's own or
       );
     await rows.first().waitFor();
     expect(await page.locator(".paper-unranked").count()).toBe(0);
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);
+
+it("says what a large working set's window reads: its newest members in its own order, with that order to sort by and one sentence with a partial ranking", async () => {
+  let folderId = "";
+  const w = await nextWorkspace({
+    setup: async (env) => {
+      await withDiscovered(env);
+      folderId = parseFolderNode(
+        await env.app.folders.manage({
+          operation: "create",
+          request: { name: "大文件夹", parent_id: null, position: null },
+        }),
+      ).folder_id;
+      await env.app.folders.manage({
+        operation: "add",
+        request: {
+          folder_id: folderId,
+          literature_ids: DISCOVERED.map(([id]) => id),
+        },
+      });
+    },
+  });
+  try {
+    const page = w.page;
+    const inFolder = (text: string) =>
+      page.goto(
+        new URL(
+          `/?view=lib&query=${encode({ text, folder: { id: folderId, include_descendants: true } })}`,
+          page.url(),
+        ).href,
+      );
+    const line = page.locator(".library-search-scope .library-relevance-limit");
+    await scanWindows(page, { members: true, empty: "Nothing" });
+    await inFolder("Discovered");
+    await expect
+      .poll(() => line.textContent())
+      .toBe("在这个文件夹最近入库的 8,000 篇里查找在更早入库的文献里继续找");
+    // Relevance and the set's own order can be paged; the others cannot.
+    await page
+      .getByRole("button", { name: /排序/u })
+      .and(page.locator('[aria-haspopup="listbox"]'))
+      .click();
+    const options = page.getByRole("option");
+    await options.first().waitFor();
+    const open = await options.evaluateAll((items) =>
+      items
+        .filter((item) => item.getAttribute("aria-disabled") !== "true")
+        .map((item) => item.querySelector('[slot="label"]')?.textContent),
+    );
+    expect(open.sort()).toEqual(["最近入库", "相关度"].sort());
+    expect(await page.getByRole("listbox").textContent()).toContain(
+      "超过 1 万篇时只能按这几种排序；先加条件，或缩小范围",
+    );
+    await page.keyboard.press("Escape");
+    // The earlier members, and back.
+    await line
+      .getByRole("button", { name: "在更早入库的文献里继续找", exact: true })
+      .click();
+    await expect
+      .poll(() => line.textContent())
+      .toBe("在这个文件夹更早入库的第 2 批 8,000 篇里查找回到最近入库的文献");
+    await line
+      .getByRole("button", { name: "回到最近入库的文献", exact: true })
+      .click();
+    await expect
+      .poll(() => line.textContent())
+      .toBe("在这个文件夹最近入库的 8,000 篇里查找在更早入库的文献里继续找");
+
+    // Nothing among them: said of the members, with the way on.
+    await inFolder("Nothing");
+    const empty = page.locator(".library-empty");
+    await empty
+      .getByText("这个文件夹最近入库的 8,000 篇里没有，更早的还没查", {
+        exact: true,
+      })
+      .waitFor();
+    await empty
+      .getByRole("button", { name: "在更早入库的文献里继续找", exact: true })
+      .waitFor();
+
+    // With a partial ranking: one sentence, no remainder for a lower bound.
+    await page.unrouteAll({ behavior: "wait" });
+    await scanWindows(page, { members: true, scored: 1 });
+    await inFolder("Discovered");
+    await expect
+      .poll(() => line.textContent())
+      .toBe(
+        "在这个文件夹最近入库的 8,000 篇里，按相关度排了最近入库的 1 篇，其余按入库时间排在后面；先加条件，或缩小范围，可全部按相关度排在更早入库的文献里继续找",
+      );
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();

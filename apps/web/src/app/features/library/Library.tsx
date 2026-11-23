@@ -68,7 +68,7 @@ import {
   libraryView,
   overCountLimit,
   pageQuery,
-  SCAN_INCOMPLETE_REASON,
+  scanIncompleteReason,
   viewSort,
   literatureChoice,
   metadataTitleParts,
@@ -205,7 +205,8 @@ export default function Library() {
     key: string;
     cursors: readonly string[];
     limit: number | null;
-  }>({ key: "", cursors: [], limit: null });
+    side: "hits" | "members" | null;
+  }>({ key: "", cursors: [], limit: null, side: null });
   const windowCursors = windows.key === windowKey ? windows.cursors : [];
   const windowCursor = windowCursors.at(-1) ?? null;
   const windowNumber = windowCursors.length + 1;
@@ -462,6 +463,21 @@ export default function Library() {
     next.error instanceof ApiError &&
     next.error.code === LIBRARY_SORT_SCOPE_LIMIT;
   const allowedSort = viewSort(route.query);
+  /**
+   * A working set's own order, newest first (ADR 0065 §6.4): folders,
+   * batches and task output by intake, the collected by collection, the
+   * recently read by opening.
+   */
+  const order = route.query.recently_opened
+    ? "打开"
+    : route.query.collection_scope === "collected"
+      ? "收进"
+      : "入库";
+  const worksetSort: LibrarySort = route.query.recently_opened
+    ? "opened-desc"
+    : route.query.collection_scope === "collected"
+      ? "collected-desc"
+      : "intake-desc";
   // Older raw hits wait outside this window: the count is a lower bound,
   // and only relevance can be paged (page specs “搜索结果”).
   // While another window loads, the last one's receipt is no guide to it.
@@ -469,6 +485,7 @@ export default function Library() {
   const scanIncomplete = windowPage?.scanIncomplete ?? false;
   const windowLimit =
     windowPage?.scanLimit ?? (windowCursor ? windows.limit : null);
+  const scanSide = windowPage?.scanSide ?? (windowCursor ? windows.side : null);
   const lowerBound = scanIncomplete && windowNumber === 1;
   const nextWindow = windowPage?.nextWindow ?? null;
   const continueWindow = nextWindow
@@ -477,15 +494,42 @@ export default function Library() {
           key: windowKey,
           cursors: [...windowCursors, nextWindow],
           limit: firstPage?.scanLimit ?? windows.limit,
+          side: firstPage?.scanSide ?? windows.side,
         })
     : null;
   const firstWindow = () =>
-    setWindows({ key: windowKey, cursors: [], limit: windows.limit });
-  /** The window in words: “最近写入索引的 95,000 条命中”, “更早的第 2 批 95,000 条命中”. */
+    setWindows({
+      key: windowKey,
+      cursors: [],
+      limit: windows.limit,
+      side: windows.side,
+    });
+  // What a window reads, in words (page specs “搜索结果”): the newest raw
+  // hits of the index, or a large working set's newest members in its own
+  // order. Only the object read changes; the sentences stay the same.
+  const members = scanSide === "members";
+  const owner = route.query.folder
+    ? "这个文件夹"
+    : route.query.intake_batch_ids.length
+      ? "这个批次"
+      : "";
+  /** “最近写入索引的 75,000 条命中”, “这个文件夹最近入库的 8,000 篇”, and their earlier batches. */
   const windowPhrase =
     windowLimit === null
       ? null
-      : `${windowNumber === 1 ? "最近写入索引的" : `更早的第 ${windowNumber} 批`} ${libraryCount(windowLimit, false)} 条命中`;
+      : members
+        ? `${owner}${windowNumber === 1 ? "最近" : "更早"}${order}的${windowNumber === 1 ? "" : `第 ${windowNumber} 批`} ${libraryCount(windowLimit, false)} 篇`
+        : `${windowNumber === 1 ? "最近写入索引的" : `更早的第 ${windowNumber} 批`} ${libraryCount(windowLimit, false)} 条命中`;
+  const continueLabel = members
+    ? `在更早${order}的文献里继续找`
+    : "在更早的命中里继续找";
+  const firstWindowLabel = members
+    ? `回到最近${order}的文献`
+    : "回到最近的命中";
+  /** The sorts a window can page: relevance, and a member window's own order. */
+  const windowSorts: readonly LibrarySort[] = members
+    ? ["relevance", worksetSort]
+    : ["relevance"];
   // An empty window with older hits left: the list says so and offers the
   // way on, so the line beside the sort keeps quiet.
   const emptyWindow =
@@ -499,17 +543,14 @@ export default function Library() {
     route.sort === "relevance" ? (windowPage?.relevanceScored ?? null) : null;
   const scoredNote = (() => {
     if (relevanceScored === null) return null;
-    const order = route.query.recently_opened
-      ? "打开"
-      : route.query.collection_scope === "collected"
-        ? "收进"
-        : "入库";
     const narrow = "；先加条件，或缩小范围，可全部按相关度排";
     if (relevanceScored === 0)
       return `没有按相关度排序，按${order}时间从近到远排列${narrow}`;
-    const rest = truncated
-      ? ""
-      : ` ${libraryCount(Math.max(0, total - relevanceScored), false)} 篇`;
+    // A count stopped at 10,000, or a lower bound, gives no remainder.
+    const rest =
+      truncated || scanIncomplete
+        ? ""
+        : ` ${libraryCount(Math.max(0, total - relevanceScored), false)} 篇`;
     return `按相关度排了最近${order}的 ${libraryCount(relevanceScored, false)} 篇，其余${rest}按${order}时间排在后面${narrow}`;
   })();
   const sortLimited = firstPage
@@ -942,7 +983,7 @@ export default function Library() {
   // The whole catalog is always over the limit, so the reason lives with the
   // disabled actions instead of occupying the toolbar.
   const overLimit = scanIncomplete
-    ? { disabled: true, description: SCAN_INCOMPLETE_REASON }
+    ? { disabled: true, description: scanIncompleteReason(scanSide) }
     : total > 1000 || truncated
       ? {
           disabled: true,
@@ -1182,7 +1223,11 @@ export default function Library() {
           // Beyond 10,000 papers only the view's own sort has an index
           // (page specs “超过一万篇”).
           // The chosen one stays as it is: the list says why it fails.
-          ...(sortLimited && value !== allowedSort && value !== route.sort
+          ...(sortLimited &&
+          value !== route.sort &&
+          (scanIncomplete || windowNumber > 1
+            ? !windowSorts.includes(value)
+            : value !== allowedSort)
             ? { disabled: true, description: SORT_LIMIT_REASON }
             : {}),
         }))}
@@ -1333,7 +1378,7 @@ export default function Library() {
         isPending={choosing}
         disabledReason={
           scanIncomplete
-            ? SCAN_INCOMPLETE_REASON
+            ? scanIncompleteReason(scanSide)
             : total > 1000 || truncated
               ? `共 ${libraryCount(total, truncated, "篇")}，超过 1,000 篇上限。获取 PDF 可用“批量操作 → 获取 PDF”整体提交。`
               : undefined
@@ -1386,6 +1431,8 @@ export default function Library() {
                 : null
             }
             scoredNote={scoredNote}
+            continueLabel={continueLabel}
+            firstWindowLabel={firstWindowLabel}
             windowPhrase={
               (scanIncomplete || windowNumber > 1) && !emptyWindow
                 ? windowPhrase
@@ -1612,7 +1659,7 @@ export default function Library() {
                     size="compact"
                     onPress={continueWindow}
                   >
-                    在更早的命中里继续找
+                    {continueLabel}
                   </Button>
                 }
               />
@@ -1676,7 +1723,7 @@ export default function Library() {
                     size="compact"
                     onPress={continueWindow}
                   >
-                    在更早的命中里继续找
+                    {continueLabel}
                   </Button>
                 </p>
               ) : null}
@@ -3379,6 +3426,8 @@ function SearchScope({
   relevanceLimit,
   scoredNote,
   windowPhrase,
+  continueLabel,
+  firstWindowLabel,
   onFirstWindow,
   onContinue,
   onChange,
@@ -3390,6 +3439,9 @@ function SearchScope({
   scoredNote: string | null;
   /** The scan window, when older hits are left or an earlier one is shown. */
   windowPhrase: string | null;
+  /** “在更早的命中里继续找”, or by the set's own order for a member window. */
+  continueLabel: string;
+  firstWindowLabel: string;
   onFirstWindow: (() => void) | null;
   onContinue: (() => void) | null;
   onChange: (query: LibraryQuery) => void;
@@ -3457,8 +3509,9 @@ function SearchScope({
       {relevanceLimit || windowPhrase || onFirstWindow || scoredNote ? (
         <span className="library-relevance-limit">
           {windowPhrase ? `在${windowPhrase}里` : ""}
+          {/* One sentence when both hold: the window, then the ranking. */}
           {scoredNote
-            ? scoredNote
+            ? `${windowPhrase ? "，" : ""}${scoredNote}`
             : relevanceLimit
               ? `按相关度显示前 ${relevanceLimit.toLocaleString()} 条`
               : windowPhrase
@@ -3466,12 +3519,12 @@ function SearchScope({
                 : ""}
           {onFirstWindow ? (
             <Button variant="text" size="compact" onPress={onFirstWindow}>
-              回到最近的命中
+              {firstWindowLabel}
             </Button>
           ) : null}
           {onContinue ? (
             <Button variant="text" size="compact" onPress={onContinue}>
-              在更早的命中里继续找
+              {continueLabel}
             </Button>
           ) : null}
         </span>
