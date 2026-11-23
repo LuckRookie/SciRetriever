@@ -1,4 +1,12 @@
-import { mkdtemp, rename, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import {
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -16,6 +24,7 @@ import {
   type TaskDetailRead,
 } from "../src/storage/sqlite/task-detail-engine.js";
 import {
+  SqliteReadLane,
   SqliteWorker,
   type ExecutionEvent,
 } from "../src/storage/sqlite/worker.js";
@@ -172,6 +181,211 @@ function successful(value: TaskDetailRead) {
     throw new Error("task projection fixture failed: " + value.status);
   return value;
 }
+
+async function sidecarFixture() {
+  const home = await mkdtemp(join(tmpdir(), "sciretriever-task-sidecar-"));
+  const path = join(home, "catalog.sqlite");
+  const directory = join(home, "cache", "task-detail");
+  const jobId = "sidecar";
+  const name = createHash("sha256")
+    .update(JSON.stringify([path, jobId]))
+    .digest("hex");
+  const file = join(directory, name + ".checkpoint");
+  const events = [
+    progress("source", { phase: "started" }),
+    progress("source", { phase: "returned", count: 4 }),
+    progress("source", finish("hit")),
+  ];
+  const writer = new SqliteWorker(path);
+  try {
+    const repository = new ExecutionRepository(writer);
+    await createJob(repository, jobId);
+    for (const [i, event] of events.entries())
+      await append(repository, jobId, `base-${i}`, event);
+  } catch (error) {
+    await writer.close();
+    await rm(home, { recursive: true, force: true });
+    throw error;
+  } finally {
+    await writer.close();
+  }
+  const read = async (persist = true) => {
+    const lane = new SqliteReadLane();
+    const worker = new SqliteWorker(path, undefined, {
+      readOnly: true,
+      readLane: lane,
+      ...(persist ? { taskDetailCacheDirectory: directory } : {}),
+    });
+    try {
+      return successful(await worker.taskDetailEvents(jobId, afterAt, true));
+    } finally {
+      await worker.close();
+      await lane.close();
+    }
+  };
+  const sql = (work: (db: DatabaseSync) => void) => {
+    const db = syntheticCatalog(path);
+    try {
+      work(db);
+    } finally {
+      db.close();
+    }
+  };
+  const appendEvents = (start: number, tail: readonly Event[]) =>
+    sql((db) => {
+      const insert = db.prepare(`
+      INSERT INTO execution_events(event_id,job_id,sequence,kind,payload_json,created_at)
+      VALUES(?,?,?,?,?,?)
+    `);
+      db.exec("BEGIN IMMEDIATE");
+      for (const [i, { kind, payload }] of tail.entries())
+        insert.run(
+          `tail-${start + i}`,
+          jobId,
+          start + i,
+          kind,
+          JSON.stringify(payload),
+          at,
+        );
+      db.exec("COMMIT");
+    });
+  return {
+    jobId,
+    directory,
+    file,
+    events,
+    read,
+    sql,
+    appendEvents,
+    close: () => rm(home, { recursive: true, force: true }),
+  };
+}
+
+it("restores a checkpoint in a new worker, replays only the tail, and republishes at 1,000 new events", async () => {
+  const fixture = await sidecarFixture();
+  try {
+    const { jobId, file, events, read, appendEvents } = fixture;
+    const first = await read();
+    expect(first.rows_read).toBe(events.length);
+    const previous = await stat(file, { bigint: true });
+    const progressForUnit = (id: string) => [
+      progress(id, { phase: "started" }, "crossref", "source"),
+      progress(id, finish("hit"), "crossref", "source"),
+    ];
+    const short = [
+      ...progressForUnit("new-source"),
+      attempt("pdf", "wiley", "hit", true),
+      publication("pdf", "wiley"),
+    ];
+    appendEvents(events.length, short);
+    const resumed = await read();
+    expect(resumed.rows_read).toBe(short.length);
+    expect(resumed.detail).toEqual((await read(false)).detail);
+    expect(resumed.detail.source_results).toEqual(
+      full(jobId, [...events, ...short]),
+    );
+    expect((await stat(file, { bigint: true })).ino).toBe(previous.ino);
+
+    const batch = Array.from({ length: 498 }, (_, i) =>
+      progressForUnit(`batch-${i}`),
+    ).flat();
+    appendEvents(events.length + short.length, batch);
+    const updated = await read();
+    expect(updated.rows_read).toBe(1_000);
+    const next = await stat(file, { bigint: true });
+    expect(next.ino).not.toBe(previous.ino);
+    const cold = await read();
+    expect(cold.rows_read).toBe(0);
+    expect(cold.detail).toEqual((await read(false)).detail);
+    expect(cold.detail.source_results).toEqual(
+      full(jobId, [...events, ...short, ...batch]),
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+it.each([
+  {
+    reason: "the directory was removed",
+    alter: ({ directory }: SidecarFixture) =>
+      rm(directory, { recursive: true }),
+  },
+  {
+    reason: "the scratch image was damaged",
+    alter: async ({ file }: SidecarFixture) => {
+      const bytes = await readFile(file);
+      bytes[bytes.length - 33] = bytes.at(-33)! ^ 0xff;
+      await writeFile(file, bytes);
+    },
+  },
+  {
+    reason: "the catalog identity changed",
+    alter: ({ sql }: SidecarFixture) =>
+      sql((db) => {
+        db.prepare(
+          "UPDATE schema_identity SET created_at=? WHERE singleton=1",
+        ).run(afterAt);
+      }),
+  },
+  {
+    reason: "the schema cookie changed",
+    alter: ({ sql }: SidecarFixture) =>
+      sql((db) => {
+        const before = Number(
+          db.prepare("PRAGMA schema_version").get()!.schema_version,
+        );
+        db.exec(`PRAGMA schema_version=${before + 1}`);
+      }),
+  },
+  {
+    reason: "the job creation time changed",
+    alter: ({ sql, jobId }: SidecarFixture) =>
+      sql((db) => {
+        db.prepare("UPDATE execution_jobs SET created_at=? WHERE job_id=?").run(
+          afterAt,
+          jobId,
+        );
+      }),
+  },
+  {
+    reason: "the prefix lost a row while the tail stayed the same",
+    alter: ({ sql }: SidecarFixture) =>
+      sql((db) => {
+        db.prepare(
+          "DELETE FROM execution_events WHERE event_id='base-1'",
+        ).run();
+      }),
+  },
+  {
+    reason: "the tail payload changed at the same index position",
+    alter: ({ sql }: SidecarFixture) =>
+      sql((db) => {
+        const event = progress("source", finish("miss"));
+        db.prepare(
+          "UPDATE execution_events SET payload_json=? WHERE event_id='base-2'",
+        ).run(JSON.stringify(event.payload));
+      }),
+  },
+])("rebuilds after $reason", async ({ alter }) => {
+  const fixture = await sidecarFixture();
+  const { file, read } = fixture;
+  try {
+    expect((await read()).rows_read).toBe(3);
+    await stat(file);
+    await alter(fixture);
+    const slow = await read(false);
+    const rebuilt = await read();
+    expect(rebuilt).toEqual(slow);
+    expect(rebuilt.rows_read).toBeGreaterThan(0);
+    await stat(file);
+    expect(await read()).toEqual({ ...slow, rows_read: 0 });
+  } finally {
+    await fixture.close();
+  }
+});
+
+type SidecarFixture = Awaited<ReturnType<typeof sidecarFixture>>;
 
 it("reads the appended rows for a million completed source records and measures detail and adjacent reads", async () => {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-task-detail-scale-"));

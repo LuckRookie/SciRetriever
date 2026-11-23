@@ -1438,6 +1438,7 @@ export class SqliteWorker {
         path,
         read_only: this.readOnly,
         long_read_lane: options.longReadWorker === true,
+        task_detail_cache_directory: options.taskDetailCacheDirectory ?? null,
         max_tags: options.maxTags ?? 6,
         archive_profile: options.archiveProfile ?? "vlm-engine",
         schema_version: SCHEMA_VERSION,
@@ -3945,6 +3946,7 @@ interface SqliteWorkerOptions {
   readonly archiveProfile?: "pipeline" | "vlm-engine" | undefined;
   readonly readLane?: SqliteReadLane;
   readonly longReadWorker?: boolean;
+  readonly taskDetailCacheDirectory?: string | undefined;
   readonly readLogger?: Pick<Logger, "warn">;
 }
 /** Shared by the two application graphs of one Workbench, created on demand. */
@@ -3959,6 +3961,7 @@ export class SqliteReadLane {
     return (this.worker ??= new SqliteWorker(path, undefined, {
       readOnly: true,
       longReadWorker: true,
+      taskDetailCacheDirectory: options.taskDetailCacheDirectory,
       maxTags: options.maxTags,
       archiveProfile: options.archiveProfile,
     }));

@@ -944,6 +944,12 @@ async function createApplicationOwned(
   try {
     database = new SqliteWorker(catalogPath, writes, {
       ...(options.readLane ? { readLane: options.readLane } : {}),
+      taskDetailCacheDirectory: join(
+        home,
+        ".sciretriever",
+        "cache",
+        "task-detail",
+      ),
       maxTags: configuration.tags.max_per_literature,
       archiveProfile: configuration.parsing.archive_profile,
     });
@@ -2377,12 +2383,19 @@ export async function createQueryApplication(
   if (!catalogStat.isFile() || catalogStat.isSymbolicLink())
     return unavailable();
   const readLane = options.readLane ?? new SqliteReadLane();
-  const database = new SqliteWorker(catalogPath, undefined, {
+  const readOptions = {
     readLane,
     readOnly: true,
+    taskDetailCacheDirectory: join(
+      home,
+      ".sciretriever",
+      "cache",
+      "task-detail",
+    ),
     maxTags: configuration.tags.max_per_literature,
     archiveProfile: configuration.parsing.archive_profile,
-  });
+  };
+  const database = new SqliteWorker(catalogPath, undefined, readOptions);
   let retrievalDatabase: SqliteWorker | undefined;
   let files: FileStore | undefined;
   let documentRead: DocumentReadService | null = null;
@@ -2524,12 +2537,11 @@ export async function createQueryApplication(
     // share one bounded worker
     // between both retrieval services, never one worker per request.
     const retrievalStorage = new RetrievalStorageClient(
-      (retrievalDatabase = new SqliteWorker(catalogPath, undefined, {
-        readOnly: true,
-        readLane,
-        maxTags: configuration.tags.max_per_literature,
-        archiveProfile: configuration.parsing.archive_profile,
-      })),
+      (retrievalDatabase = new SqliteWorker(
+        catalogPath,
+        undefined,
+        readOptions,
+      )),
     );
     context = new MaterialContextService(
       retrievalStorage,

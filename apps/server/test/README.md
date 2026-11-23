@@ -39,6 +39,12 @@ timeout --kill-after=45s 10m node apps/server/test/scale-acceptance.mjs 1m "$cop
 
 两档测试须各自运行，即使 10k 已返回失败也保留它的 JSON 给 1m 对比。退出后仅删除这两个刚创建的副本目录。结果与日志留在本机报告目录。脚本不进入默认 Vitest。
 
+任务详情的 `task-sidecar` 模式使用已准备的 1m 副本，从同一合成任务取 1 万、10 万和 100 万条来源记录三档。每档先读取一次生成旁路，再独立重启工作台 20 次，取每次登录后首个任务详情请求至响应解析完成的 P50、P95。写入进程沿用验收节奏，P95 上限为 500 ms。脚本同时核对 CLI 和 HTTP 并发读取并建缓存所得的详情，以及随后重启对该旁路的复用。指定一个新准备的副本，完成后按上面的方式删除副本。
+
+```sh
+timeout --kill-after=45s 9m node apps/server/test/scale-acceptance.mjs task-sidecar "$copy_1m" "$report_dir/task-sidecar-1m.json"
+```
+
 [上级目录](../README.md) · [项目 README](../../../README.md)
 
 `workbench-auth-fixture.ts` 只服务隔离回归：使用合成密码、绑定 loopback，并经真实 `/auth/login` 为 HTTP/浏览器旅程取得会话，不绕过统一认证。默认对外监听和自动密钥由 `web-remote-access.test.ts` 验证。

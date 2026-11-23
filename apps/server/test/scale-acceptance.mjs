@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { fork } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once, on } from "node:events";
-import { readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { loadavg, release } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -427,6 +427,277 @@ async function measure(work) {
   return performance.now() - started;
 }
 
+function taskBands() {
+  assert.equal(scale, "1m");
+  assert.equal(fixture.source_records, 1_000_000);
+  const source = fixture.jobs.running;
+  const db = new DatabaseSync(catalog);
+  const tasks = [10_000, 100_000].map((records) => ({
+    records,
+    jobId: `${source}-${records}`,
+  }));
+  try {
+    db.exec("PRAGMA foreign_keys=ON; BEGIN IMMEDIATE");
+    for (const { records, jobId } of tasks) {
+      // Use prefixes of the original fixture, including both events for each source record.
+      db.prepare("DELETE FROM execution_jobs WHERE job_id=?").run(jobId);
+      db.prepare(
+        `
+        INSERT INTO execution_jobs(job_id,target_kind,selector_json,policy_version,status,idempotency_key,created_at,finished_at)
+        SELECT ?,target_kind,selector_json,policy_version,status,?,created_at,finished_at
+        FROM execution_jobs WHERE job_id=?
+      `,
+      ).run(jobId, jobId, source);
+      db.prepare(
+        `
+        INSERT INTO execution_targets(target_id,job_id,ordinal,literature_id,version_role,stage,disposition,next_eligible_at)
+        SELECT ?,?,ordinal,literature_id,version_role,stage,disposition,next_eligible_at
+        FROM execution_targets WHERE job_id=? AND ordinal=0
+      `,
+      ).run(`${jobId}:0`, jobId, source);
+      db.prepare(
+        `
+        INSERT INTO execution_budgets(job_id,max_attempts,max_network_bytes,max_model_calls,used_attempts,used_network_bytes,used_model_calls,updated_at)
+        SELECT ?,max_attempts,max_network_bytes,max_model_calls,used_attempts,used_network_bytes,used_model_calls,updated_at
+        FROM execution_budgets WHERE job_id=?
+      `,
+      ).run(jobId, source);
+      const { changes } = db
+        .prepare(
+          `
+        INSERT INTO execution_events(event_id,job_id,sequence,kind,payload_json,created_at)
+        SELECT ? || ':' || sequence,?,sequence,kind,
+          CASE WHEN kind='metadata-source' THEN json_set(payload_json,'$.target_id',?) ELSE payload_json END,created_at
+        FROM execution_events WHERE job_id=? AND sequence<=? ORDER BY sequence
+      `,
+        )
+        .run(jobId, jobId, `${jobId}:0`, source, 2 * records);
+      assert.equal(changes, 2 * records + 1);
+    }
+    db.exec("COMMIT");
+  } finally {
+    db.close();
+  }
+  return [...tasks, { records: fixture.source_records, jobId: source }];
+}
+
+async function inspectTask() {
+  watchParent();
+  const { runCli } = await import("../dist/cli/main.js");
+  const job = JSON.stringify({ job_id: destination });
+  const { code, value } = await runCli(
+    ["jobs", "inspect", "--request", "-", "--json"],
+    {
+      home: fixture.home,
+      signal: stop.signal,
+      stdin: (async function* () {
+        yield Buffer.from(job);
+      })(),
+    },
+  );
+  assert.equal(code, 0, "CLI task inspection failed");
+  process.send({ fingerprint: taskFingerprint(value.result) });
+  if (!stop.signal.aborted) await once(stop.signal, "abort");
+  if (process.connected) process.disconnect();
+}
+
+function taskFingerprint(task) {
+  assert.equal(task.job.status, "running");
+  return createHash("sha256")
+    .update(canonicalJsonBytes(JSON.parse(JSON.stringify(task))))
+    .digest("hex");
+}
+
+async function taskSidecar() {
+  const output = resolve(destination);
+  assert.ok(output.startsWith(resolve("sandbox/reports") + "/"));
+  const tasks = taskBands();
+  const directory = join(fixture.home, ".sciretriever", "cache", "task-detail");
+  const result = {
+    scale,
+    corpus,
+    node: process.version,
+    load_start: loadavg(),
+    objective_ms: objectives.task,
+    points: [],
+    warnings: [],
+    tasks: {},
+    failures: [],
+  };
+  const runtime = await acquireExecutionRuntime(catalog);
+  const withServer = async (work) => {
+    const server = spawn("serve", result.warnings);
+    try {
+      const { origin } = await server.first();
+      const request = await client(origin);
+      return await work(async (jobId) => {
+        const { task } = await request(`/api/tasks/${jobId}`);
+        assert.equal(task.job.status, "running");
+        return task;
+      });
+    } finally {
+      await server.close();
+    }
+  };
+  const fileFor = (jobId) =>
+    join(
+      directory,
+      createHash("sha256")
+        .update(JSON.stringify([catalog, jobId]))
+        .digest("hex") + ".checkpoint",
+    );
+  const writer = spawn("writer", result.warnings);
+  writer.child.on("message", (point) => result.points.push(point));
+  try {
+    await writer.first();
+    await wait(2500);
+    const began = Date.now();
+    for (const { records, jobId } of tasks) {
+      const path = fileFor(jobId);
+      const entry = (result.tasks[records] = { samples: [] });
+      await rm(path, { force: true });
+      let expected;
+      entry.rebuild_ms = await withServer((read) =>
+        measure(async () => {
+          expected = await read(jobId);
+        }),
+      );
+      const published = await stat(path, { bigint: true });
+      entry.bytes = Number(published.size);
+      for (let trial = 0; trial < trials; trial++) {
+        entry.samples.push(
+          await withServer(async (read) => {
+            let task;
+            const elapsed = await measure(async () => {
+              task = await read(jobId);
+            });
+            assert.deepEqual(task, expected);
+            return elapsed;
+          }),
+        );
+      }
+      assert.equal((await stat(path, { bigint: true })).ino, published.ino);
+      Object.assign(entry, stats(entry.samples));
+      if (entry.p95_ms > objectives.task)
+        result.failures.push(
+          `${records} records P95 ${entry.p95_ms.toFixed(1)} ms exceeds ${objectives.task} ms`,
+        );
+      console.log(scale, records, JSON.stringify(stats(entry.samples)));
+    }
+    const finished = Date.now();
+    const points = result.points.filter(
+      (point) => point.committed >= began && point.committed <= finished,
+    );
+    const first = points[0];
+    const last = points.at(-1);
+    result.papers_per_second =
+      last?.committed > first?.committed
+        ? (1000 * (last.papers - first.papers)) /
+          (last.committed - first.committed)
+        : 0;
+    if (result.papers_per_second < 100)
+      result.failures.push("Write load below 100 committed papers/s");
+
+    const { jobId } = tasks[1];
+    const cliFingerprint = async (concurrentRead) => {
+      const cli = spawn("inspect-task", result.warnings, jobId);
+      try {
+        const [{ fingerprint }, task] = await Promise.all([
+          cli.first(),
+          concurrentRead?.(),
+        ]);
+        if (task) assert.equal(fingerprint, taskFingerprint(task));
+        return fingerprint;
+      } finally {
+        await cli.close();
+      }
+    };
+    await rm(fileFor(jobId), { force: true });
+    const cliPublished = await cliFingerprint();
+    await stat(fileFor(jobId));
+    await rm(fileFor(jobId), { force: true });
+    const concurrent = await withServer((read) =>
+      cliFingerprint(() => read(jobId)),
+    );
+    assert.equal(concurrent, cliPublished);
+    const shared = await stat(fileFor(jobId), { bigint: true });
+    await withServer(async (read) =>
+      assert.equal(taskFingerprint(await read(jobId)), concurrent),
+    );
+    assert.equal(await cliFingerprint(), concurrent);
+    assert.equal(
+      (await stat(fileFor(jobId), { bigint: true })).ino,
+      shared.ino,
+    );
+    result.concurrent_cli_http_agree = true;
+    await measureCheckpointWrites(directory, tasks, fileFor, result.tasks);
+  } catch (error) {
+    result.failures.push(error.stack ?? String(error));
+  } finally {
+    try {
+      await writer.close();
+    } finally {
+      await runtime.release();
+      result.load_finish = loadavg();
+      if (result.warnings.length)
+        result.failures.push("Short SQLite read budget log emitted");
+      await writeFile(output, JSON.stringify(result, null, 2) + "\n", {
+        mode: 0o600,
+      });
+    }
+  }
+  assert.deepEqual(result.failures, []);
+}
+
+async function measureCheckpointWrites(directory, tasks, fileFor, entries) {
+  const { TaskDetailSidecars, removeTaskScratch } = await import(
+    "../dist/storage/sqlite/task-detail-sidecar.js"
+  );
+  const { taskDetailCatalogIdentity } = await import(
+    "../dist/storage/sqlite/task-detail-engine.js"
+  );
+  const { EXECUTION_SCHEMA_VERSION, EXECUTION_RUNTIME_SCHEMA_VERSION } =
+    await import("../dist/storage/sqlite/execution-schema.js");
+  const { dev, ino } = await stat(catalog);
+  const db = new DatabaseSync(catalog, { readOnly: true });
+  try {
+    const identity = taskDetailCatalogIdentity(
+      db,
+      `${dev}:${ino}`,
+      EXECUTION_SCHEMA_VERSION,
+      EXECUTION_RUNTIME_SCHEMA_VERSION,
+    );
+    const { schema_version: schemaVersion } = db
+      .prepare("PRAGMA schema_version")
+      .get();
+    const sidecars = new TaskDetailSidecars(directory, catalog);
+    for (const { records, jobId } of tasks) {
+      const loaded = sidecars.load(
+        jobId,
+        identity,
+        schemaVersion,
+        new Date().toISOString(),
+      );
+      assert.ok(loaded, "Could not reopen the published checkpoint");
+      const samples = [];
+      let inode = loaded.file.ino;
+      try {
+        for (let trial = 0; trial < 5; trial++) {
+          samples.push(await measure(() => sidecars.save(loaded.transfer)));
+          const current = await stat(fileFor(jobId), { bigint: true });
+          assert.notEqual(current.ino, inode);
+          inode = current.ino;
+        }
+      } finally {
+        removeTaskScratch(loaded.transfer.path);
+      }
+      entries[records].checkpoint_write = { ...stats(samples), samples };
+    }
+  } finally {
+    db.close();
+  }
+}
+
 function indexProbe(points, lag) {
   const db = new DatabaseSync(catalog, { readOnly: true });
   db.exec("PRAGMA busy_timeout=1000");
@@ -723,5 +994,7 @@ export { catalog, client, fixture, folder, measure, root, spawn, stats, stop };
 if (resolve(process.argv[1]) === import.meta.filename) {
   if (mode === "serve") await serve();
   else if (mode === "writer") await write();
+  else if (mode === "inspect-task") await inspectTask();
+  else if (mode === "task-sidecar") await taskSidecar();
   else await run();
 }

@@ -5,7 +5,7 @@ import {
   type StatementSync,
 } from "node:sqlite";
 import { rmSync } from "node:fs";
-import { dirname } from "node:path";
+import { createHash } from "node:crypto";
 import {
   CITATION_PENDING_SAMPLE,
   CITATION_SOURCE_LIMIT,
@@ -16,6 +16,20 @@ import {
 } from "@sciretriever/contracts";
 import type { ExecutionEvent } from "./worker.js";
 import type { TaskResultScratch } from "../execution/task-source-results.js";
+import type { TaskSidecarFile } from "./task-detail-sidecar.js";
+
+const {
+  TaskDetailSidecars,
+  removeTaskScratch,
+  taskScratchPath,
+}: typeof import("./task-detail-sidecar.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./task-detail-sidecar.ts"
+      : "./task-detail-sidecar.js",
+    import.meta.url,
+  ).href
+);
 
 const {
   TaskSourceAggregation,
@@ -113,8 +127,8 @@ function pendingCitationPrefix(target: string, run: string, source: string) {
 
 /** Private working storage. SQLite spills to disk and unlinks on close. */
 class TaskScratch implements TaskResultScratch {
+  readonly path: string | undefined;
   private readonly db: DatabaseSync;
-  private readonly path: string | undefined;
   private readonly insert: StatementSync;
   private readonly get: StatementSync;
   private readonly upsert: StatementSync;
@@ -126,30 +140,37 @@ class TaskScratch implements TaskResultScratch {
   constructor(path?: string, restored = false) {
     this.path = path;
     this.db = new DatabaseSync(path ?? "");
-    this.db.exec(`
-      PRAGMA temp_store=FILE;
-      PRAGMA cache_size=-512;
-      PRAGMA journal_mode=OFF;
-    `);
-    if (!restored)
-      this.db.exec(
-        "CREATE TABLE entries(key TEXT PRIMARY KEY, value TEXT) WITHOUT ROWID",
+    try {
+      this.db.exec(`
+        PRAGMA temp_store=FILE;
+        PRAGMA cache_size=-512;
+        PRAGMA journal_mode=OFF;
+      `);
+      if (!restored)
+        this.db.exec(
+          "CREATE TABLE entries(key TEXT PRIMARY KEY, value TEXT) WITHOUT ROWID",
+        );
+      this.insert = this.db.prepare(
+        "INSERT OR IGNORE INTO entries VALUES(?,NULL)",
       );
-    this.insert = this.db.prepare(
-      "INSERT OR IGNORE INTO entries VALUES(?,NULL)",
-    );
-    this.get = this.db.prepare("SELECT value FROM entries WHERE key=?");
-    this.upsert = this.db.prepare("INSERT OR REPLACE INTO entries VALUES(?,?)");
-    this.remove = this.db.prepare("DELETE FROM entries WHERE key=?");
-    this.removeRange = this.db.prepare(
-      "DELETE FROM entries WHERE key>=? AND key<?",
-    );
-    this.first = this.db.prepare(
-      "SELECT key FROM entries WHERE key>=? AND key<? ORDER BY key LIMIT 1",
-    );
-    this.range = this.db.prepare(
-      "SELECT value FROM entries WHERE key>=? AND key<? ORDER BY key LIMIT ?",
-    );
+      this.get = this.db.prepare("SELECT value FROM entries WHERE key=?");
+      this.upsert = this.db.prepare(
+        "INSERT OR REPLACE INTO entries VALUES(?,?)",
+      );
+      this.remove = this.db.prepare("DELETE FROM entries WHERE key=?");
+      this.removeRange = this.db.prepare(
+        "DELETE FROM entries WHERE key>=? AND key<?",
+      );
+      this.first = this.db.prepare(
+        "SELECT key FROM entries WHERE key>=? AND key<? ORDER BY key LIMIT 1",
+      );
+      this.range = this.db.prepare(
+        "SELECT value FROM entries WHERE key>=? AND key<? ORDER BY key LIMIT ?",
+      );
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
   }
 
   // Every range prefix ends in '|'. The next byte ends the range.
@@ -197,8 +218,7 @@ class TaskScratch implements TaskResultScratch {
     try {
       this.db.close();
     } finally {
-      if (this.path && !keep)
-        rmSync(dirname(this.path), { recursive: true, force: true });
+      if (this.path && !keep) removeTaskScratch(this.path);
     }
   }
 }
@@ -210,6 +230,7 @@ interface EventHead {
   readonly position: number;
   readonly sequence: number;
   readonly id: string;
+  readonly sha256: string;
 }
 
 interface HistoryState {
@@ -237,6 +258,24 @@ export interface TaskDetailReplay {
   readonly transfer?: TaskHistoryTransfer;
 }
 
+export function taskDetailCatalogIdentity(
+  db: DatabaseSync,
+  inode: string,
+  executionVersion: number,
+  runtimeVersion: number,
+): string {
+  return JSON.stringify([
+    inode,
+    db
+      .prepare(
+        "SELECT created_at,schema_version,schema_fingerprint FROM schema_identity WHERE singleton=1",
+      )
+      .get(),
+    executionVersion,
+    runtimeVersion,
+  ]);
+}
+
 /** Materialize a bounded page, then aggregate without a live catalog snapshot. */
 function* eventPages(
   query: StatementSync,
@@ -260,9 +299,15 @@ function eventHead(
         position: Number(row.position),
         sequence: Number(row.sequence),
         id: String(row.event_id),
+        sha256: createHash("sha256")
+          .update(JSON.stringify([row.kind, row.payload_json, row.created_at]))
+          .digest("hex"),
       }
     : null;
 }
+
+const HEAD_COLUMNS =
+  "rowid AS position,sequence,event_id,kind,payload_json,created_at";
 
 class TaskHistory {
   private readonly scratch: TaskScratch;
@@ -278,14 +323,19 @@ class TaskHistory {
 
   constructor(path?: string, state?: HistoryState) {
     this.scratch = new TaskScratch(path, state !== undefined);
-    this.totals = new TaskSourceAggregation(this.scratch, state?.totals);
-    if (state) {
-      this.processed = state.processed;
-      this.storedEvents = state.storedEvents;
-      this.processingCount = state.processingCount;
-      this.firstProcessing = state.firstProcessing;
-      this.acquisitionCount = state.acquisitionCount;
-      this.head = state.head;
+    try {
+      this.totals = new TaskSourceAggregation(this.scratch, state?.totals);
+      if (state) {
+        this.processed = state.processed;
+        this.storedEvents = state.storedEvents;
+        this.processingCount = state.processingCount;
+        this.firstProcessing = state.firstProcessing;
+        this.acquisitionCount = state.acquisitionCount;
+        this.head = state.head;
+      }
+    } catch (error) {
+      this.scratch.close(true);
+      throw error;
     }
   }
 
@@ -303,6 +353,10 @@ class TaskHistory {
 
   get eventCount() {
     return this.storedEvents;
+  }
+
+  get path() {
+    return this.scratch.path;
   }
 
   close(keep = false) {
@@ -583,14 +637,32 @@ class TaskHistory {
   }
 }
 
+interface CachedTaskHistory {
+  readonly history: TaskHistory;
+  readonly through: string;
+  readonly created: string;
+  readonly file?: TaskSidecarFile;
+  checkpointed: number;
+}
+
+const CHECKPOINT_INTERVAL = 1_000;
+
 /** The caller pins a SQLite snapshot for the head check and the entire read. */
 export class TaskDetailCache {
-  private readonly entries = new Map<
-    string,
-    { history: TaskHistory; through: string; created: string }
-  >();
+  private readonly entries = new Map<string, CachedTaskHistory>();
+  private readonly sidecars:
+    | InstanceType<typeof TaskDetailSidecars>
+    | undefined;
   private catalogIdentity: string | undefined;
   private schemaVersion: number | undefined;
+
+  constructor(options?: { directory: string; catalog: string }) {
+    if (options)
+      this.sidecars = new TaskDetailSidecars(
+        options.directory,
+        options.catalog,
+      );
+  }
 
   clear() {
     for (const entry of this.entries.values()) entry.history.close();
@@ -610,18 +682,88 @@ export class TaskDetailCache {
     }
   }
 
-  private remember(
-    jobId: string,
-    history: TaskHistory,
-    through: string,
-    created: string,
-  ) {
-    this.entries.set(jobId, { history, through, created });
+  private remember(jobId: string, entry: CachedTaskHistory) {
+    this.entries.set(jobId, entry);
     if (this.entries.size > 32) {
       const [oldest, entry] = this.entries.entries().next().value!;
       entry.history.close();
       this.entries.delete(oldest);
     }
+  }
+
+  /** Copy and authenticate the sidecar before pinning a catalog snapshot. */
+  restore(
+    db: DatabaseSync,
+    catalogIdentity: () => string,
+    jobId: string,
+    through: string,
+  ) {
+    if (!this.sidecars || this.entries.has(jobId)) return;
+    const identity = catalogIdentity();
+    const cookie = Number(
+      db.prepare("PRAGMA schema_version").get()!.schema_version,
+    );
+    this.establishIdentity(identity, cookie);
+    const loaded = this.sidecars.load(jobId, identity, cookie, through);
+    if (!loaded) return;
+    const { transfer, file } = loaded;
+    try {
+      this.remember(jobId, {
+        history: new TaskHistory(transfer.path, transfer.state),
+        through: transfer.through,
+        created: transfer.created,
+        checkpointed: transfer.state.storedEvents,
+        file,
+      });
+    } catch {
+      this.sidecars.discard(file);
+      removeTaskScratch(transfer.path);
+    }
+  }
+
+  checkpoint(jobId: string) {
+    const entry = this.entries.get(jobId);
+    if (
+      !this.sidecars ||
+      !entry?.history.path ||
+      !entry.history.head ||
+      this.catalogIdentity === undefined ||
+      this.schemaVersion === undefined
+    )
+      return;
+    const count = entry.history.eventCount;
+    if (
+      entry.checkpointed >= 0 &&
+      count - entry.checkpointed < CHECKPOINT_INTERVAL
+    )
+      return;
+    entry.checkpointed = count;
+    this.saveTransfer({
+      path: entry.history.path,
+      jobId,
+      identity: this.catalogIdentity,
+      schemaVersion: this.schemaVersion,
+      through: entry.through,
+      created: entry.created,
+      state: entry.history.state(),
+    });
+  }
+
+  saveTransfer(transfer: TaskHistoryTransfer) {
+    this.sidecars?.save(transfer);
+  }
+
+  private freshHistory() {
+    if (this.sidecars) {
+      let path: string | undefined;
+      try {
+        path = taskScratchPath();
+        return new TaskHistory(path);
+      } catch {
+        if (path) removeTaskScratch(path);
+      }
+    }
+    return new TaskHistory();
   }
 
   install(
@@ -643,10 +785,20 @@ export class TaskDetailCache {
           (value.state.head?.sequence ?? -1))
     )
       return false;
-    const history = new TaskHistory(value.path, value.state);
+    let history: TaskHistory;
+    try {
+      history = new TaskHistory(value.path, value.state);
+    } catch {
+      return false;
+    }
     previous?.history.close();
     this.entries.delete(value.jobId);
-    this.remember(value.jobId, history, value.through, value.created);
+    this.remember(value.jobId, {
+      history,
+      through: value.through,
+      created: value.created,
+      checkpointed: value.state.storedEvents,
+    });
     return true;
   }
 
@@ -692,13 +844,14 @@ export class TaskDetailCache {
     if (!job) {
       // A deleted job and its cascaded events no longer own a cached history.
       cached?.history.close();
+      if (cached?.file) this.sidecars?.discard(cached.file);
       return { status: "not-found", rows_read: 0 };
     }
 
     const head = eventHead(
       db
         .prepare(
-          "SELECT rowid AS position, sequence, event_id FROM execution_events WHERE job_id=? ORDER BY sequence DESC LIMIT 1",
+          `SELECT ${HEAD_COLUMNS} FROM execution_events WHERE job_id=? ORDER BY sequence DESC LIMIT 1`,
         )
         .get(jobId),
     );
@@ -706,13 +859,15 @@ export class TaskDetailCache {
     const previousHead = cached?.history.head;
     const anchor =
       previousHead &&
-      eventHead(
-        db
-          .prepare(
-            "SELECT rowid AS position, sequence, event_id FROM execution_events WHERE job_id=? AND sequence=?",
-          )
-          .get(jobId, previousHead.sequence),
-      );
+      (head?.sequence === previousHead.sequence
+        ? head
+        : eventHead(
+            db
+              .prepare(
+                `SELECT ${HEAD_COLUMNS} FROM execution_events WHERE job_id=? AND sequence=?`,
+              )
+              .get(jobId, previousHead.sequence),
+          ));
     // Application writers only append execution events. Deleting a job cascades
     // to its events. The job creation time detects reuse of a job ID.
     // The tail identity detects a missing or replaced tail. An indexed prefix
@@ -724,6 +879,7 @@ export class TaskDetailCache {
       (!previousHead ||
         (anchor?.position === previousHead.position &&
           anchor.id === previousHead.id &&
+          anchor.sha256 === previousHead.sha256 &&
           head &&
           head.sequence >= previousHead.sequence &&
           db
@@ -737,6 +893,8 @@ export class TaskDetailCache {
       checkpoint();
       rows++;
     };
+    if (!canAppend && cached?.file && cached.through <= through)
+      this.sidecars?.discard(cached.file);
     if (incrementalOnly && !canAppend) {
       cached?.history.close();
       return { status: "replay-required", rows_read: 0 };
@@ -748,7 +906,7 @@ export class TaskDetailCache {
         : (["full", "rowid"] as const);
     if (!canAppend) cached?.history.close();
     for (const mode of modes) {
-      const history = mode === "append" ? cached!.history : new TaskHistory();
+      const history = mode === "append" ? cached!.history : this.freshHistory();
       try {
         const detail = history.read(
           db,
@@ -761,16 +919,29 @@ export class TaskDetailCache {
           withActivity,
         );
         if (!history.deferred && mode !== "rowid") {
-          this.remember(jobId, history, through, created);
+          this.remember(jobId, {
+            history,
+            through,
+            created,
+            checkpointed: mode === "append" ? cached!.checkpointed : -1,
+            ...(mode === "append" && cached!.file
+              ? { file: cached!.file }
+              : {}),
+          });
         } else history.close();
         return { status: "ok", detail, rows_read: rows };
       } catch (error) {
         history.close();
+        if (mode === "append" && cached!.file) {
+          this.sidecars?.discard(cached!.file);
+          checkpoint();
+        }
         if (error instanceof ProcessingBudgetExceeded)
           return { status: "budget-exceeded", rows_read: rows };
         if (
           mode !== "rowid" &&
-          (error instanceof ReplayRequired ||
+          ((mode === "append" && cached!.file) ||
+            error instanceof ReplayRequired ||
             error instanceof ContractValidationError)
         ) {
           if (incrementalOnly)
@@ -805,7 +976,7 @@ function taskBoundary(
         ? eventHead(
             db
               .prepare(
-                "SELECT rowid AS position,sequence,event_id FROM execution_events WHERE job_id=? ORDER BY sequence DESC LIMIT 1",
+                `SELECT ${HEAD_COLUMNS} FROM execution_events WHERE job_id=? ORDER BY sequence DESC LIMIT 1`,
               )
               .get(jobId),
           )
@@ -813,7 +984,7 @@ function taskBoundary(
           eventHead(
             db
               .prepare(
-                "SELECT rowid AS position,sequence,event_id FROM execution_events WHERE job_id=? AND sequence=?",
+                `SELECT ${HEAD_COLUMNS} FROM execution_events WHERE job_id=? AND sequence=?`,
               )
               .get(jobId, previous.sequence),
           );

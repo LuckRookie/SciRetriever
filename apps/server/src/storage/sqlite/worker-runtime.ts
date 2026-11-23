@@ -25,6 +25,7 @@ interface WorkerRuntimeData {
   readonly path: string;
   readonly read_only: boolean;
   readonly long_read_lane: boolean;
+  readonly task_detail_cache_directory: string | null;
   readonly max_tags: number;
   readonly archive_profile: "pipeline" | "vlm-engine";
   readonly schema_version: number;
@@ -208,6 +209,7 @@ const reviewModule = await import(
 const {
   TaskDetailCache,
   replayTaskDetail,
+  taskDetailCatalogIdentity,
 }: typeof import("./task-detail-engine.js") = await import(
   new URL(
     import.meta.url.endsWith(".ts")
@@ -216,7 +218,11 @@ const {
     import.meta.url,
   ).href
 );
-const taskDetails = new TaskDetailCache();
+const taskDetails = new TaskDetailCache(
+  data.task_detail_cache_directory
+    ? { directory: data.task_detail_cache_directory, catalog: data.path }
+    : undefined,
+);
 const proofreadModule = await import(
   new URL(
     import.meta.url.endsWith(".ts")
@@ -379,6 +385,14 @@ function catalogIdentity(): string {
   if (data.path === ":memory:") return "memory";
   const stat = statSync(data.path);
   return `${stat.dev}:${stat.ino}`;
+}
+function taskCatalogIdentity(inode: string): string {
+  return taskDetailCatalogIdentity(
+    db,
+    inode,
+    EXECUTION_SCHEMA_VERSION,
+    EXECUTION_RUNTIME_SCHEMA_VERSION,
+  );
 }
 let queryPreflight: {
   readonly status: "ready" | "not-initialized" | "unavailable";
@@ -5882,33 +5896,37 @@ port.on("message", (message: WorkerMessage) => {
       case "execution_task_detail_events": {
         const { jobId, through, withActivity, incrementalOnly } =
           message.command;
-        const identity = openedCatalogIdentity;
-        if (identity === null) fail();
+        const inode = openedCatalogIdentity;
+        if (inode === null) fail();
         requireRuntime();
+        const identity = () => taskCatalogIdentity(inode);
+        const pinned = db.isTransaction;
+        if (!pinned) taskDetails.restore(db, identity, jobId, through);
         const read = () =>
           taskDetails.read(
             db,
-            identity,
+            identity(),
             jobId,
             through,
             withActivity,
             queryCheckpoint,
             incrementalOnly === true,
           );
-        value = db.isTransaction ? read() : readTransaction(read);
+        value = pinned ? read() : readTransaction(read);
+        if (!pinned && value.status === "ok") taskDetails.checkpoint(jobId);
         break;
       }
       case "execution_task_detail_replay": {
         if (!data.read_only || !data.long_read_lane || db.isTransaction) fail();
-        const identity = openedCatalogIdentity;
+        const inode = openedCatalogIdentity;
         requireRuntime();
         const { jobId, through, withActivity, scratchPath } = message.command;
         value = replayTaskDetail(
           db,
           () => {
             const current = catalogIdentity();
-            if (current !== identity) fail();
-            return current;
+            if (current !== inode) fail();
+            return taskCatalogIdentity(current);
           },
           jobId,
           through,
@@ -5916,11 +5934,13 @@ port.on("message", (message: WorkerMessage) => {
           scratchPath,
           queryCheckpoint,
         );
+        if (value.transfer) taskDetails.saveTransfer(value.transfer);
         break;
       }
       case "execution_task_detail_install": {
-        const identity = openedCatalogIdentity;
-        if (identity === null || data.long_read_lane) fail();
+        const inode = openedCatalogIdentity;
+        if (inode === null || data.long_read_lane) fail();
+        const identity = taskCatalogIdentity(inode);
         value = taskDetails.install(db, identity, message.command.transfer);
         break;
       }
