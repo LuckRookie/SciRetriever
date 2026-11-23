@@ -569,7 +569,13 @@ function textScope(
   const columns = `l.literature_id${countStatuses ? `,${filter.status} AS status` : ""}`;
   const memberProjection =
     source &&
-    ((extra?: string, completeHitsJson?: string): Sql => {
+    ((
+      extra?: string,
+      {
+        match = ftsQuery,
+        completeHitsJson,
+      }: { match?: string; completeHitsJson?: string } = {},
+    ): Sql => {
       const members =
         completeHitsJson === undefined
           ? source
@@ -592,7 +598,7 @@ function textScope(
         }
         ${filter.where} ${seekFts ? `AND ${FTS} MATCH ?` : ""}
         ${query.recently_opened ? "ORDER BY member.last_opened_at DESC,member.literature_id LIMIT 100" : ""}`,
-        args: [...members.args, ...filter.args, ...(seekFts ? [ftsQuery] : [])],
+        args: [...members.args, ...filter.args, ...(seekFts ? [match] : [])],
       };
     });
   return {
@@ -640,7 +646,10 @@ function textAggregation(
       new Set(hits).size === hits.length
         ? JSON.stringify(hits)
         : undefined;
-    const members = memberProjection(undefined, completeHits);
+    const members =
+      completeHits === undefined
+        ? memberProjection()
+        : memberProjection(undefined, { completeHitsJson: completeHits });
     return {
       filter,
       matching: `SELECT * FROM (${members.sql})`,
@@ -1105,7 +1114,12 @@ function textLibraryPage(
   if (memberMatches && memberProjection) {
     if (beforeRowid !== undefined) invalidWindow();
     if (sort === "relevance") {
-      const initial = rankLibraryMembers(db, memberProjection, ftsQuery!);
+      const initial = rankLibraryMembers(
+        db,
+        memberProjection,
+        ftsQuery!,
+        query.recently_opened === true,
+      );
       ranked = initial.rows;
       total = after?.total ?? countFromSample(initial.total);
     } else if (after?.total) total = after.total;
@@ -1153,7 +1167,12 @@ function textLibraryPage(
   };
   if (sort === "relevance") {
     if (!after && total.total_count === 0) return { rows: [], ...summary };
-    ranked ??= rankLibraryMembers(db, memberProjection!, ftsQuery!).rows;
+    ranked ??= rankLibraryMembers(
+      db,
+      memberProjection!,
+      ftsQuery!,
+      query.recently_opened === true,
+    ).rows;
     const rankingId = rankingKey && cache?.put(rankingKey, { rows: ranked });
     return {
       ...summary,

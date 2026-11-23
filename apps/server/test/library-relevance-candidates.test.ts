@@ -316,6 +316,54 @@ it("ranks exact folder matches from the member side and preserves native BM25 sc
     expect(libraryPageIds(db, { ...request, sort }, cache).total_count).toBe(3);
 });
 
+it("preserves member BM25 scores for overlapping phrases and Unicode terms", () => {
+  using db = new DatabaseSync(":memory:");
+  initialize(db);
+  add(db, 30, 1, "studies of materials in a a a café 研究");
+  add(db, 10, 2, "studies of systems in a a cafe 研究");
+  add(db, 20, 3, "Studies, of/a-a in CAFE cafe archive");
+  add(db, 40, 4, "studies of a a a in science café 研究");
+  add(db, 50, 5, "other results");
+  add(db, 60, 6, "studies of systems");
+  add(db, 70, 7, "studies of 研究");
+  add(
+    db,
+    80,
+    8,
+    "studies of methods in a a café 研究 Δοκιμή 日本語 รหัส اختبار Пример",
+  );
+  db.prepare(
+    "UPDATE literature_search_fts SET abstract=?,content_body=? WHERE rowid=30",
+  ).run("in vitro studies of 研究", "a á a cafe—in");
+  const collected = [1, 2, 3, 6, 7, 8].map(id);
+  for (const literature of collected)
+    db.prepare(
+      "INSERT INTO library_collected(literature_id,intake_at) VALUES(?,NULL)",
+    ).run(literature);
+
+  for (const [ftsQuery, matches] of [
+    ['"in"', 4],
+    ['"a a"', 4],
+    ['"studies" AND "of" AND "in"', 4],
+    ['"a a" AND "of" AND "in"', 4],
+    ['"研究"', 4],
+    ['"a a" AND "a" AND "café"', 4],
+    ['"café" AND "cafe" AND "研究"', 3],
+  ] as const) {
+    const exact = allRanks(db, ftsQuery).filter(({ literature_id }) =>
+      collected.includes(String(literature_id)),
+    );
+    expect(exact, ftsQuery).toHaveLength(matches);
+    const ranked = libraryPageIds(db, {
+      ...page,
+      query: { ...page.query, text: ftsQuery, collection_scope: "collected" },
+      ftsQuery,
+    });
+    expect(ranked.total_count, ftsQuery).toBe(exact.length);
+    expect(ranked.rows, ftsQuery).toEqual(exact);
+  }
+});
+
 it("binds a separately resumable window cursor to the normalized query", async () => {
   const calls: LibraryPageQuery[] = [];
   const unexpected = () => {
