@@ -341,7 +341,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "library_facets",
-    "Count direct active tags, author keywords and subject terms over at most 10,000 matching versions. facets_truncated marks limited coverage and rankings; count_truncated marks a limited total. Includes exact keyword-to-tag alias links. scan_incomplete marks earlier raw text hits. Pass search_library's next_window_cursor as window_cursor with the same query to read facets there.",
+    "Count direct active tags, author keywords and subject terms over at most 10,000 matching versions. facets_truncated marks limited coverage and rankings; count_truncated marks a limited total. Includes exact keyword-to-tag alias links. scan_incomplete marks earlier raw text hits. Pass search_library's next_window_cursor as window_cursor with the same search terms to apply these filters in the earlier window.",
     object(
       {
         query: { type: "object" },
@@ -587,7 +587,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "library_counts",
-    "Count library quick filters, ignoring statuses and needs_manual_pdf but preserving all other LibraryQuery facets, including has_primary_pdf. full_text counts papers (MetaLiterature) using all current sibling versions; statuses and with_primary_pdf count versions. count_truncated marks a scope limited to 10,000 matching versions. All counts share one read-only snapshot. scan_incomplete marks earlier raw text hits. Pass search_library's next_window_cursor as window_cursor with the same query to count that window.",
+    "Count library quick filters, ignoring statuses and needs_manual_pdf but preserving all other LibraryQuery facets, including has_primary_pdf. full_text counts papers (MetaLiterature) using all current sibling versions; statuses and with_primary_pdf count versions. count_truncated marks a scope limited to 10,000 matching versions. All counts share one read-only snapshot. scan_incomplete marks earlier raw text hits. Pass search_library's next_window_cursor as window_cursor with the same search terms to count the earlier window.",
     object({ query: { type: "object" }, window_cursor: text }, ["query"]),
   ),
   tool(
@@ -610,7 +610,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "search_library",
-    "Search existing literature with full LibraryQuery filters, sorting and pagination. Listing defaults to collected papers. Use query.collection_scope='all' to list the entire library. Text search defaults to the entire library. A miss never starts discovery or PDF acquisition. The legacy text/limit/cursor form remains supported. scan_incomplete means older raw text hits remain even when the current window is empty. Pass next_window_cursor as window_cursor with the same query to search those hits. Use cursor for another page in the current window.",
+    "Search existing literature with full LibraryQuery filters, sorting and pagination. Listing defaults to collected papers. Use query.collection_scope='all' to list the entire library. Text search defaults to the entire library. A miss never starts discovery or PDF acquisition. The legacy text/limit/cursor form remains supported. scan_incomplete means older raw text hits remain even when the current window is empty. Pass next_window_cursor as window_cursor with the same search terms to search those hits with the current filters. Use cursor for another page in the current window.",
     {
       type: "object",
       oneOf: [

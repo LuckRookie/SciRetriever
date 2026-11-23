@@ -8,7 +8,7 @@
 - [intake.ts](intake.ts)：主题、引用及书目导入批次的生命周期与真实入口归属；中断保留已接纳的成员。
 - [metadata-rules.ts](metadata-rules.ts)：来源元数据的确定性处理。
 - [primary-pdf.ts](primary-pdf.ts)：主 PDF 关系。
-- [query.ts](query.ts)：文献库查询。初稿事实的筛选、排序和范围冻结仅看主 PDF 默认文本。页游标绑定规范化查询、排序及位置。整库文本搜索在扫描未完时另发绑定查询的窗口游标，供搜索、计数和分面续查更早的原始命中。
+- [query.ts](query.ts)：文献库查询。初稿事实的筛选、排序和范围冻结仅看主 PDF 默认文本。页游标绑定规范化查询、排序及位置。整库文本搜索在扫描未完时另发窗口游标，以规范化后的 FTS 检索词绑定更早的原始命中，供搜索、计数和分面按各自筛选续查。
 - [article-identity.ts](article-identity.ts)：下载后的文章身份判断事实。
 
 ## 放置边界

@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
-import { parseLibrarySearchRequest } from "@sciretriever/contracts";
+import {
+  parseLibrarySearchRequest,
+  parseLiteratureId,
+  sha256,
+} from "@sciretriever/contracts";
 import {
   LiteratureQueryService,
   queryFingerprint,
@@ -16,6 +20,7 @@ import {
   libraryFacets,
 } from "../src/storage/sqlite/library-page.js";
 import { StoredLibraryState } from "../src/storage/sqlite/library-state.js";
+import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
 
 const id = (n: number) =>
   `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -235,6 +240,42 @@ it("reports only this window's matches and exposes the same scope for counts and
   });
 });
 
+it("counts sparse collected matches without an FTS seek for every member", () => {
+  using db = new DatabaseSync(":memory:");
+  initialize(db);
+  let visits = 0;
+  db.function("sr_query_continue", () => {
+    visits++;
+    return 1;
+  });
+  const collect = db.prepare(
+    "INSERT INTO library_collected(literature_id,intake_at) VALUES(?,NULL)",
+  );
+  const addPaper = (n: number) => {
+    add(db, n, n, `Paper ${String(n).padStart(5, "0")}`);
+    collect.run(id(n));
+  };
+  addPaper(1);
+  const query = parseLibrarySearchRequest({
+    query: { text: "Paper 00001", collection_scope: "collected" },
+  }).query;
+  const ftsQuery = '"paper" AND "00001"';
+  const reads = () => {
+    visits = 0;
+    expect(libraryCounts(db, query, ftsQuery)).toMatchObject({ total: 1 });
+    expect(libraryFacets(db, query, ftsQuery, 10)).toMatchObject({ total: 1 });
+    return visits;
+  };
+  const oneMember = reads();
+  for (let n = 2; n <= 260; n++) addPaper(n);
+  expect(reads()).toBe(oneMember);
+
+  // The probe's cutoff cannot limit exact workset aggregation.
+  const broad = { ...query, text: "Paper" };
+  expect(libraryCounts(db, broad, '"paper"')).toMatchObject({ total: 260 });
+  expect(libraryFacets(db, broad, '"paper"', 10)).toMatchObject({ total: 260 });
+});
+
 it("ranks exact folder matches from the member side and preserves native BM25 scores", () => {
   using db = new DatabaseSync(":memory:");
   initialize(db);
@@ -358,6 +399,138 @@ it("binds a separately resumable window cursor to the normalized query", async (
     value: -0.1,
     legacy_newest_rowid: "20",
   });
+});
+
+it("reuses one raw window for changed filters, quick counts, facets and sort", async () => {
+  using db = new DatabaseSync(":memory:");
+  initialize(db);
+  db.function("sr_derive_status", (value) =>
+    value === id(2) ? "READY" : "UNREVIEWED",
+  );
+  for (let n = 1; n <= 6; n++) add(db, n, n, `Ranked ${n}`);
+  const keyword = db.prepare(
+    "INSERT INTO literature_metadata_keywords(literature_id,ordinal,keyword) VALUES(?,0,?)",
+  );
+  keyword.run(id(1), "earlier");
+  keyword.run(id(4), "newer");
+  const cache = new LibraryRelevanceCache(3);
+  const metadataHash = await sha256(new Uint8Array());
+  const unexpected = () => {
+    throw new Error("unexpected repository call");
+  };
+  const repository: LibraryQueryRepository = {
+    literatureDetailSnapshot: unexpected,
+    librarySnapshot: unexpected,
+    referenceQuerySnapshot: unexpected,
+    async librarySearchPage(request) {
+      const { rows, ...summary } = libraryPageIds(db, request, cache);
+      return {
+        ...summary,
+        rows: rows.map(({ literature_id, relevance }) => ({
+          item: {
+            literature: {
+              ...FIXTURE_LITERATURE,
+              literature_id: parseLiteratureId(literature_id),
+            },
+            metadata_revision: 1,
+            metadata_sha256: metadataHash,
+            missing_step: null,
+            needs_manual_pdf: false,
+          },
+          relevance: typeof relevance === "number" ? relevance : null,
+          has_pdf_exhaustion: false,
+          discovery_run_ids: [],
+        })),
+      };
+    },
+    async libraryCounts(query, fts, _signal, before) {
+      return libraryCounts(
+        db,
+        query,
+        fts,
+        false,
+        Date.now(),
+        before,
+        cache.windowLimit,
+      );
+    },
+    async libraryFacets(query, limit, fts, _signal, before) {
+      return libraryFacets(
+        db,
+        query,
+        fts,
+        limit,
+        false,
+        Date.now(),
+        before,
+        cache.windowLimit,
+      );
+    },
+  };
+  const service = new LiteratureQueryService(repository);
+  const firstQuery = { text: "Ranked", statuses: ["UNREVIEWED"] };
+  const first = await service.search({ query: firstQuery, sort: "relevance" });
+  expect(first).toMatchObject({ total_count: 3, scan_incomplete: true });
+  const window_cursor = first.next_window_cursor!;
+  const query = { text: "RANKED! ranked" };
+  const earlier = await service.search({
+    query: { ...query, statuses: ["UNREVIEWED"], publication_year_from: 2020 },
+    window_cursor,
+    sort: "title-desc",
+  });
+  expect(earlier.total_count).toBe(2);
+  expect(
+    earlier.items.map(({ literature }) => literature.literature_id),
+  ).toEqual([id(3), id(1)]);
+  expect(earlier).not.toHaveProperty("scan_incomplete");
+  expect(await service.counts(query, undefined, window_cursor)).toMatchObject({
+    total: 3,
+    statuses: { UNREVIEWED: 2, READY: 1 },
+  });
+  expect(
+    await service.facets({ query, limit: 10, window_cursor }),
+  ).toMatchObject({
+    total: 3,
+    keywords: [{ value: "earlier", count: 1, tag: null }],
+  });
+
+  const other = { text: "different" };
+  const invalid = expect.objectContaining({ code: "literature-query" });
+  await expect(service.search({ query: other, window_cursor })).rejects.toThrow(
+    invalid,
+  );
+  await expect(service.counts(other, undefined, window_cursor)).rejects.toThrow(
+    invalid,
+  );
+  expect(() =>
+    service.facets({ query: other, limit: 10, window_cursor }),
+  ).toThrow(invalid);
+  await expect(
+    service.search({
+      query: { ...query, collection_scope: "collected" },
+      window_cursor,
+    }),
+  ).rejects.toThrow(invalid);
+
+  const old = {
+    kind: "library-search-window",
+    payload: {
+      before_rowid: "4",
+      query_fingerprint: queryFingerprint(
+        parseLibrarySearchRequest({ query: firstQuery }).query,
+      ),
+    },
+    version: 1,
+  };
+  const checksum = createHash("sha256")
+    .update(JSON.stringify(old))
+    .digest("hex");
+  const oldCursor = Buffer.from(JSON.stringify({ checksum, ...old })).toString(
+    "base64url",
+  );
+  await expect(
+    service.search({ query: firstQuery, window_cursor: oldCursor }),
+  ).rejects.toThrow(invalid);
 });
 
 it("finds collected members with durable selection evidence during backfill", () => {

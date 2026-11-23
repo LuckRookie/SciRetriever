@@ -172,6 +172,13 @@ const unique = (values: readonly string[]) =>
 export function queryTerms(value: string): readonly string[] {
   return [...new Set(ftsIndexText(value).split(" ").filter(Boolean))];
 }
+function libraryFtsMatch(text: string | null): string | null {
+  return text === null
+    ? null
+    : queryTerms(text)
+        .map((term) => `"${term}"`)
+        .join(" AND ");
+}
 function browseQuery(q: LibraryQuery): LibraryQuery {
   const listing =
     q.text === null &&
@@ -494,19 +501,24 @@ export function parseLibrarySearchWindow(value: unknown): LibrarySearchWindow {
   };
 }
 
-function encodeWindowCursor(query: LibraryQuery, before_rowid: string) {
+function encodeWindowCursor(ftsQuery: string, before_rowid: string) {
   const core = {
     kind: "library-search-window",
-    payload: { query_fingerprint: queryFingerprint(query), before_rowid },
-    version: 1,
+    payload: { fts_fingerprint: digest(ftsQuery), before_rowid },
+    version: 2,
   };
   return Buffer.from(canonical({ checksum: digest(core), ...core })).toString(
     "base64url",
   );
 }
 
-function decodeWindowCursor(cursor: string, query: LibraryQuery): string {
+function decodeWindowCursor(
+  cursor: string,
+  query: LibraryQuery,
+  ftsQuery: string | null,
+): string {
   if (
+    !ftsQuery ||
     query.recently_opened ||
     query.collection_scope === "collected" ||
     libraryWorksetUsesIntake(query)
@@ -524,19 +536,16 @@ function decodeWindowCursor(cursor: string, query: LibraryQuery): string {
     if (
       canonical(e) !== raw.toString("utf8") ||
       e.kind !== "library-search-window" ||
-      e.version !== 1 ||
+      e.version !== 2 ||
       digest({ kind: e.kind, payload: e.payload, version: e.version }) !==
         e.checksum
     )
       fail();
-    const { query_fingerprint, before_rowid } = object(e.payload, [
-      "query_fingerprint",
+    const { fts_fingerprint, before_rowid } = object(e.payload, [
+      "fts_fingerprint",
       "before_rowid",
     ]);
-    if (
-      query_fingerprint !== queryFingerprint(query) ||
-      !validRowid(before_rowid)
-    )
+    if (fts_fingerprint !== digest(ftsQuery) || !validRowid(before_rowid))
       return fail();
     return before_rowid;
   } catch {
@@ -901,10 +910,11 @@ export class LiteratureQueryService {
   facets(value: unknown, signal?: AbortSignal) {
     if (!this.repository.libraryFacets) throw new LiteratureQueryError();
     const r = parseLibraryFacetsRequest(value);
+    const ftsQuery = libraryFtsMatch(r.query.text);
     const beforeRowid = r.window_cursor
-      ? decodeWindowCursor(r.window_cursor, r.query)
+      ? decodeWindowCursor(r.window_cursor, r.query, ftsQuery)
       : undefined;
-    if (r.query.text !== null && queryTerms(r.query.text).length === 0)
+    if (ftsQuery === "")
       return Promise.resolve<LibraryFacets>({
         total: 0,
         coverage: { tags: 0, keywords: 0, subject_terms: 0 },
@@ -915,11 +925,7 @@ export class LiteratureQueryService {
     return this.repository.libraryFacets(
       r.query,
       r.limit,
-      r.query.text === null
-        ? null
-        : queryTerms(r.query.text)
-            .map((t) => `"${t}"`)
-            .join(" AND "),
+      ftsQuery,
       signal,
       beforeRowid,
     );
@@ -1084,11 +1090,11 @@ export class LiteratureQueryService {
       ...(windowCursor === undefined ? {} : { window_cursor: windowCursor }),
     });
     const query = request.query;
+    const ftsQuery = libraryFtsMatch(query.text);
     const beforeRowid = request.window_cursor
-      ? decodeWindowCursor(request.window_cursor, query)
+      ? decodeWindowCursor(request.window_cursor, query, ftsQuery)
       : undefined;
-    const terms = query.text === null ? null : queryTerms(query.text);
-    if (terms?.length === 0)
+    if (ftsQuery === "")
       return {
         total: 0,
         recently_opened: 0,
@@ -1099,12 +1105,7 @@ export class LiteratureQueryService {
           LITERATURE_STATUSES.map((s) => [s, 0]),
         ) as Record<(typeof LITERATURE_STATUSES)[number], number>,
       };
-    return this.repository.libraryCounts(
-      query,
-      terms === null ? null : terms.map((term) => `"${term}"`).join(" AND "),
-      signal,
-      beforeRowid,
-    );
+    return this.repository.libraryCounts(query, ftsQuery, signal, beforeRowid);
   }
   async exactCount(
     value: unknown,
@@ -1138,9 +1139,10 @@ export class LiteratureQueryService {
     const request = parseLibrarySearchRequest(value);
     const query =
       mode === "browse" ? browseQuery(request.query) : request.query;
+    const ftsQuery = libraryFtsMatch(query.text);
     if (request.window_cursor && mode === "selection") fail();
     const beforeRowid = request.window_cursor
-      ? decodeWindowCursor(request.window_cursor, query)
+      ? decodeWindowCursor(request.window_cursor, query, ftsQuery)
       : undefined;
     const defaultSort =
       !Object.hasOwn(value as object, "sort") && mode !== "selection";
@@ -1169,16 +1171,12 @@ export class LiteratureQueryService {
         after = decodePosition(request.cursor, query, sort);
       }
     }
-    const terms = query.text === null ? null : queryTerms(query.text);
-    if (terms?.length === 0)
+    if (ftsQuery === "")
       return Object.freeze({ items: [], total_count: 0, next_cursor: null });
     const result = await this.repository.librarySearchPage(
       {
         query,
-        ftsQuery:
-          terms === null
-            ? null
-            : terms.map((term) => `"${term}"`).join(" AND "),
+        ftsQuery,
         sort,
         after,
         limit: request.limit,
@@ -1209,12 +1207,12 @@ export class LiteratureQueryService {
         result.search_window?.scan_incomplete)
         ? { relevance_limit: RELEVANCE_RESULT_LIMIT }
         : {}),
-      ...(result.search_window?.scan_incomplete
+      ...(ftsQuery && result.search_window?.scan_incomplete
         ? {
             scan_incomplete: true as const,
             scan_limit: result.search_window.limit,
             next_window_cursor: encodeWindowCursor(
-              query,
+              ftsQuery,
               result.search_window.oldest_rowid,
             ),
           }

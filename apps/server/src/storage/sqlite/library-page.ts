@@ -448,6 +448,7 @@ const FTS = "literature_search_fts";
 const FTS_ROWID = FTS + ".rowid";
 const FTS_OWNER = "literature_search_fts_content";
 const LIBRARY_SEARCH_WINDOW_LIMIT = 95_000;
+const WORKSET_FTS_PROBE_LIMIT = 256;
 
 /** The limit is applied to raw FTS hits. A separate rowid seek tests one
  * earlier hit without evaluating the filters or scoring the sentinel. */
@@ -568,17 +569,32 @@ function textScope(
   const columns = `l.literature_id${countStatuses ? `,${filter.status} AS status` : ""}`;
   const memberProjection =
     source &&
-    ((extra?: string): Sql => ({
-      sql: `SELECT ${columns}, document.id AS doc ${extra ? "," + extra : ""}
-      FROM (${source.sql}) member
-      CROSS JOIN literatures l ON l.literature_id=member.literature_id
-      CROSS ${filter.joins}
-      CROSS JOIN ${FTS_OWNER} document ON document.c0=l.literature_id
-      CROSS JOIN ${FTS} ON ${FTS_ROWID}=document.id
-      ${filter.where} AND ${FTS} MATCH ?
-      ${query.recently_opened ? "ORDER BY member.last_opened_at DESC,member.literature_id LIMIT 100" : ""}`,
-      args: [...source.args, ...filter.args, ftsQuery],
-    }));
+    ((extra?: string, completeHitsJson?: string): Sql => {
+      const members =
+        completeHitsJson === undefined
+          ? source
+          : {
+              sql: `SELECT * FROM (${source.sql})
+                WHERE literature_id IN (SELECT value FROM json_each(?))`,
+              args: [...source.args, completeHitsJson],
+            };
+      const seekFts = completeHitsJson === undefined;
+      return {
+        sql: `SELECT ${columns}${seekFts ? ", document.id AS doc" : ""} ${extra ? "," + extra : ""}
+        FROM (${members.sql}) member
+        CROSS JOIN literatures l ON l.literature_id=member.literature_id
+        CROSS ${filter.joins}
+        ${
+          seekFts
+            ? `CROSS JOIN ${FTS_OWNER} document ON document.c0=l.literature_id
+          CROSS JOIN ${FTS} ON ${FTS_ROWID}=document.id`
+            : ""
+        }
+        ${filter.where} ${seekFts ? `AND ${FTS} MATCH ?` : ""}
+        ${query.recently_opened ? "ORDER BY member.last_opened_at DESC,member.literature_id LIMIT 100" : ""}`,
+        args: [...members.args, ...filter.args, ...(seekFts ? [ftsQuery] : [])],
+      };
+    });
   return {
     filter,
     memberProjection,
@@ -600,19 +616,35 @@ function textAggregation(
   countStatuses = false,
   windowLimit = LIBRARY_SEARCH_WINDOW_LIMIT,
 ) {
-  const { filter, memberMatches, windowMatches } = textScope(
+  const { filter, memberProjection, windowMatches } = textScope(
     db,
     query,
     ftsQuery,
     cutoff,
     countStatuses,
   );
-  if (memberMatches) {
+  if (memberProjection) {
     if (beforeRowid !== undefined) invalidWindow();
+    // A selective MATCH can rule out most members before their individual
+    // FTS seeks. Use the IDs only when the probe read the entire hit set.
+    const hits = db
+      .prepare(
+        `SELECT literature_id FROM ${FTS} WHERE ${FTS} MATCH ? AND sr_query_continue()
+          LIMIT ${WORKSET_FTS_PROBE_LIMIT + 1}`,
+      )
+      .all(ftsQuery)
+      .map(({ literature_id }) => literature_id);
+    const completeHits =
+      hits.length <= WORKSET_FTS_PROBE_LIMIT &&
+      hits.every((id) => typeof id === "string") &&
+      new Set(hits).size === hits.length
+        ? JSON.stringify(hits)
+        : undefined;
+    const members = memberProjection(undefined, completeHits);
     return {
       filter,
-      matching: `SELECT * FROM (${memberMatches.sql})`,
-      args: memberMatches.args,
+      matching: `SELECT * FROM (${members.sql})`,
+      args: members.args,
       prefix: "",
       incomplete: "0",
     };
