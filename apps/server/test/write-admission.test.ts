@@ -254,11 +254,10 @@ it("hands off to a registered remote writer before later callers and bounds hand
         });
       }
     })();
-    await expect
-      .poll(async () => (await queuedTickets(home, catalog)).length, {
-        timeout: 20_000,
-      })
-      .toBe(2);
+    expect(admission.hasQueuedForegroundWrites(false)).toBe(true);
+    expect(await queuedTickets(home, catalog)).toEqual([
+      expect.stringContaining(`-foreground-${remote.child.pid}-`),
+    ]);
     release();
     await initial;
     await local;
@@ -280,6 +279,117 @@ it("hands off to a registered remote writer before later callers and bounds hand
     await rm(home, { recursive: true, force: true });
   }
 });
+
+it("cancels a local waiter before it registers a ticket", async () => {
+  const home = await mkdtemp(join(tmpdir(), "sciretriever-write-queue-"));
+  const catalog = join(home, "catalog.sqlite");
+  const admission = new CatalogWriteAdmission(catalog, { waitMs: 1_000 });
+  let held!: () => void, release!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    held = resolve;
+  });
+  const finishing = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const first = admission.run(async () => {
+    held();
+    await finishing;
+  });
+  try {
+    await Promise.race([entered, first]);
+    const cancel = new AbortController();
+    const cancelled = expect(
+      admission.run(async () => "unexpected", cancel.signal),
+    ).rejects.toMatchObject({ code: "write-admission-cancelled" });
+    expect(admission.hasQueuedForegroundWrites(false)).toBe(true);
+    expect(await queuedTickets(home, catalog)).toEqual([]);
+    cancel.abort();
+    await cancelled;
+    expect(admission.hasQueuedForegroundWrites(false)).toBe(false);
+    expect(await queuedTickets(home, catalog)).toEqual([]);
+    const next = admission.run(async () => "next");
+    release();
+    await first;
+    await expect(next).resolves.toBe("next");
+  } finally {
+    release();
+    await admission.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+it("commits a local burst in order when its total wait exceeds the deadline", async () => {
+  const home = await mkdtemp(join(tmpdir(), "sciretriever-write-queue-"));
+  const catalog = join(home, "catalog.sqlite");
+  const waitMs = 1_000;
+  const admission = new CatalogWriteAdmission(catalog, { waitMs });
+  const sequence = Array.from({ length: 128 }, (_, index) => index);
+  try {
+    const writes = sequence.map((index) =>
+      admission.run(async () => {
+        if (index === 0) await delay(waitMs + 50);
+        await appendFile(catalog + ".turns", `${index}\n`);
+      }),
+    );
+    await Promise.all(writes);
+    expect(await readFile(catalog + ".turns", "utf8")).toBe(
+      sequence.join("\n") + "\n",
+    );
+    expect(await queuedTickets(home, catalog)).toEqual([]);
+  } finally {
+    await admission.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+it("gives each local head ten seconds when a remote process holds the lock", async () => {
+  const home = await mkdtemp(join(tmpdir(), "sciretriever-write-queue-"));
+  const catalog = join(home, "catalog.sqlite");
+  const waitMs = 10_000;
+  const admission = new CatalogWriteAdmission(catalog, { waitMs });
+  const remote = childWriter(catalog, "legacy");
+  try {
+    await expect
+      .poll(() => remote.messages, { timeout: 20_000 })
+      .toEqual(["held"]);
+    const submit = () =>
+      admission
+        .run(async () => "admitted")
+        .then(
+          (result) => ({ at: performance.now(), result }),
+          (error: unknown) => ({ at: performance.now(), error }),
+        );
+    const started = performance.now();
+    const first = submit();
+    const second = submit();
+    const third = submit();
+    for (const waiter of [first, second]) {
+      await expect
+        .poll(async () => (await queuedTickets(home, catalog)).length, {
+          timeout: 20_000,
+        })
+        .toBe(1);
+      const result = await waiter;
+      expect(result).toMatchObject({
+        error: { code: "write-admission-conflict" },
+      });
+    }
+    const one = await first;
+    const two = await second;
+    for (const elapsed of [one.at - started, two.at - one.at]) {
+      expect(elapsed).toBeGreaterThanOrEqual(waitMs - 50);
+      expect(elapsed).toBeLessThan(waitMs + 2_000);
+    }
+    remote.child.send("release");
+    await remote.finish();
+    expect(await third).toMatchObject({ result: "admitted" });
+    expect(await queuedTickets(home, catalog)).toEqual([]);
+  } finally {
+    await remote.close();
+    await admission.close();
+    await rm(home, { recursive: true, force: true });
+  }
+}, 30_000);
 
 it("reaps a dead waiter and automatically releases a crashed holder", async () => {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-write-queue-"));

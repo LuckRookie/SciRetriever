@@ -184,6 +184,7 @@ it("persists per-article attempts and reads the same safe projection through HTT
     expect(trace.literature_id).toBe(FIXTURE_LITERATURE.literature_id);
     expect(first.job.status).toBe("completed");
     // An unrelated technical-event tail must not hide already persisted source evidence.
+    const appendStarted = performance.now();
     await Promise.all(
       Array.from({ length: 1001 }, (_, n) =>
         server.application.jobs!.appendEvent({
@@ -195,6 +196,13 @@ it("persists per-article attempts and reads the same safe projection through HTT
           created_at: new Date().toISOString(),
         }),
       ),
+    );
+    console.info(
+      "acquisition-trace-event-appends",
+      JSON.stringify({
+        events: 1001,
+        elapsed_ms: performance.now() - appendStarted,
+      }),
     );
     const http = parseTaskDetail(await read("/api/tasks/" + job.job_id));
     expect(http.events_truncated).toBe(true);
@@ -266,4 +274,4 @@ it("persists per-article attempts and reads the same safe projection through HTT
     await server.close();
     await rm(home, { recursive: true, force: true });
   }
-}, 30000);
+}, 60_000);

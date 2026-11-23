@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { addAbortListener } from "node:events";
 import {
   closeSync,
   constants,
@@ -510,6 +511,19 @@ function waitForTurn(signal: AbortSignal) {
   return delay(QUEUE_POLL_MS, undefined, { signal }).catch(() => {});
 }
 
+async function waitForLocalTurn(previous: Promise<void>, signal: AbortSignal) {
+  let wake!: () => void;
+  const interrupted = new Promise<void>((resolve) => {
+    wake = resolve;
+  });
+  const listener = addAbortListener(signal, wake);
+  try {
+    await Promise.race([previous, interrupted]);
+  } finally {
+    listener[Symbol.dispose]();
+  }
+}
+
 interface Scope {
   active: boolean;
 }
@@ -520,6 +534,7 @@ export class CatalogWriteAdmission {
   private readonly stop = new AbortController();
   private readonly pending = new Set<Promise<unknown>>();
   private registration: Promise<unknown> = Promise.resolve();
+  private foregroundTail = Promise.resolve();
   private tail: Promise<unknown> = Promise.resolve();
   private foregroundWaiting = 0;
   private activeQueue: CatalogWriteQueue | undefined;
@@ -621,15 +636,9 @@ export class CatalogWriteAdmission {
     hasMore?: (result: T) => boolean,
   ): Promise<T> {
     this.check(signal);
-    let deadline = monotonicMs() + waitMs;
-    const waitSignal = signal
-      ? AbortSignal.any([signal, this.stop.signal])
-      : this.stop.signal;
-    const check = () => {
-      this.check(signal);
-      if (monotonicMs() >= deadline)
-        throw new WriteAdmissionError("write-admission-conflict");
-    };
+    const waitSignal = AbortSignal.any(
+      signal ? [signal, this.stop.signal] : [this.stop.signal],
+    );
     if (kind === "foreground") this.foregroundWaiting++;
     let waiting = kind === "foreground";
     const doneWaiting = () => {
@@ -639,7 +648,25 @@ export class CatalogWriteAdmission {
 
     let queue: CatalogWriteQueue | undefined;
     let ticket: Ticket | undefined;
+    let previous: Promise<void> | undefined;
+    let releaseForeground: (() => void) | undefined;
+    if (kind === "foreground") {
+      // Only the front of the local FIFO registers a timed, shared ticket.
+      previous = this.foregroundTail;
+      const finished = new Promise<void>((resolve) => {
+        releaseForeground = resolve;
+      });
+      this.foregroundTail = previous.then(() => finished);
+    }
     try {
+      if (previous) await waitForLocalTurn(previous, waitSignal);
+      this.check(signal);
+      let deadline = monotonicMs() + waitMs;
+      const check = () => {
+        this.check(signal);
+        if (monotonicMs() >= deadline)
+          throw new WriteAdmissionError("write-admission-conflict");
+      };
       const registered = this.registration.then(async () => {
         check();
         queue = await CatalogWriteQueue.open(this.catalogPath);
@@ -687,7 +714,11 @@ export class CatalogWriteAdmission {
       try {
         if (ticket) queue?.remove(ticket);
       } finally {
-        await queue?.close();
+        try {
+          await queue?.close();
+        } finally {
+          releaseForeground?.();
+        }
       }
     }
   }
