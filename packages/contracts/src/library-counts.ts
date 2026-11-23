@@ -17,6 +17,7 @@ export const LIBRARY_COUNT_FLAGS = [
   "count_truncated",
   "counts_backfill_pending",
   "status_updating",
+  "scan_incomplete",
 ] as const;
 
 export function globalLibraryCountScope(
@@ -42,6 +43,8 @@ export interface LibraryCountFlags {
   readonly count_truncated?: true;
   readonly counts_backfill_pending?: true;
   readonly status_updating?: true;
+  /** There are older raw text hits outside the current scan window. */
+  readonly scan_incomplete?: true;
 }
 
 export interface LibrarySearchTotal extends LibraryCountFlags {
@@ -172,7 +175,11 @@ export function parseLibraryCounts(value: unknown): LibraryCounts {
             ]);
             const collected = count(scope.collected),
               discovered_only = count(scope.discovered_only);
-            if (flags.count_truncated || collected + discovered_only !== total)
+            if (
+              flags.count_truncated ||
+              flags.scan_incomplete ||
+              collected + discovered_only !== total
+            )
               fail();
             return Object.freeze({ collected, discovered_only });
           })(),
@@ -232,13 +239,18 @@ export function parseLibraryExactCount(value: unknown): LibraryExactCount {
     case "counts": {
       record(r, ["kind", "snapshot_at", "counts"]);
       const counts = parseLibraryCounts(r.counts);
-      if (counts.count_truncated) fail();
+      if (counts.count_truncated || counts.scan_incomplete) fail();
       return { kind: r.kind, snapshot_at, counts };
     }
     case "facets": {
       record(r, ["kind", "snapshot_at", "facets"]);
       const facets = parseLibraryFacets(r.facets);
-      if (facets.count_truncated || facets.facets_truncated) fail();
+      if (
+        facets.count_truncated ||
+        facets.facets_truncated ||
+        facets.scan_incomplete
+      )
+        fail();
       return { kind: r.kind, snapshot_at, facets };
     }
     case "search-total":

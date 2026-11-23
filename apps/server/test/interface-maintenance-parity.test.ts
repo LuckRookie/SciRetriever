@@ -115,7 +115,11 @@ describe("machine interfaces over shared maintenance owners", () => {
       const all: string[] = [];
       do {
         const request = {
-            query: { text_levels: ["draft"], has_image_only_pages: true },
+            query: {
+              collection_scope: "all",
+              text_levels: ["draft"],
+              has_image_only_pages: true,
+            },
             sort: "draft-differences-desc",
             limit: 1,
             cursor,

@@ -41,18 +41,21 @@ import type {
   LibraryFacets,
   LibraryQuery,
   LibrarySearchTotal,
+  LibrarySort,
 } from "@sciretriever/contracts";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync, SQLInputValue, SQLOutputValue } from "node:sqlite";
 import type {
   LibraryCollectRequest,
   LibraryPageQuery,
-  LibraryRelevanceWindow,
+  LibrarySearchWindow,
   Position,
 } from "../../literature/query.js";
 import type { LibraryCollectionTargets } from "./library-state.js";
 import type { WorksetKind } from "./library-paging-schema.js";
 const suffix = import.meta.url.endsWith(".ts") ? ".ts" : ".js";
+const { rankLibraryMembers }: typeof import("./library-search-rank.js") =
+  await import(new URL("./library-search-rank" + suffix, import.meta.url).href);
 const { libraryPagingReady }: typeof import("./library-paging-state.js") =
   await import(
     new URL("./library-paging-state" + suffix, import.meta.url).href
@@ -71,6 +74,7 @@ const {
   ).href
 );
 const {
+  collectedMembersSql,
   historicalCollectionSql,
   storedLibraryState,
 }: typeof import("./library-state.js") = await import(
@@ -185,6 +189,7 @@ function libraryFilter(
     intakeOrder = false,
     countStatuses = false,
     recentCutoff = recentCutoffAt(Date.now()),
+    textScope = false,
   } = {},
 ) {
   const state = storedLibraryState(db).readPlan();
@@ -192,6 +197,7 @@ function libraryFilter(
   const workset = pagingReady ? orderedWorkset(q) : undefined;
   const singleScope =
     workset &&
+    !textScope &&
     new Set(workset.ids).size === 1 &&
     ftsQuery === null &&
     !q.recently_opened;
@@ -229,13 +235,7 @@ function libraryFilter(
       );
   };
   const membership = (kind: WorksetKind, ids: readonly string[]) => {
-    if (
-      workset?.kind === kind &&
-      new Set(workset.ids).size === 1 &&
-      ftsQuery === null &&
-      !q.recently_opened
-    )
-      return;
+    if (workset?.kind === kind && singleScope) return;
     add(
       `EXISTS(SELECT 1 FROM library_ordered_members p WHERE p.kind='${kind}' AND
         p.scope_id IN (SELECT value FROM json_each(?)) AND p.literature_id=l.literature_id)`,
@@ -343,6 +343,8 @@ function libraryFilter(
     if (typeof q[key] === "boolean")
       add(`${primaryDraftFactSql(field)} ${q[key] ? ">" : "="} 0`);
   }
+  const criteria = terms.join(" AND ");
+  const criteriaArgs = [...args];
   if (ftsQuery === "") {
     add("0");
     ftsQuery = null;
@@ -356,6 +358,8 @@ function libraryFilter(
     : state.indexed
       ? stored
       : `LEFT ${stored} LEFT JOIN library_state_dirty sd ON sd.literature_id=l.literature_id`;
+  const optionalState =
+    statusNeeded && state.indexed ? `LEFT ${stored}` : stateJoins;
   const collectionJoin = collectedJoin
     ? "JOIN library_collected lc ON lc.literature_id=l.literature_id"
     : "";
@@ -408,9 +412,17 @@ function libraryFilter(
   }
   return {
     from: singleScope ? memberFrom : from,
-    ftsOrderedFrom: `FROM literature_search_fts
-      CROSS JOIN literatures l ON l.literature_id=literature_search_fts.literature_id
-      CROSS ${metadata} ${orderedState} ${orderedCollection}`,
+    joins: `${metadata} ${stateJoins} ${collectionJoin}`,
+    optionalJoins: `LEFT ${metadata} ${optionalState} ${collectedJoin ? "LEFT " + collectionJoin : ""}`,
+    criteria: [
+      "m.literature_id IS NOT NULL",
+      ...(statusNeeded && state.indexed
+        ? ["ls.literature_id IS NOT NULL"]
+        : []),
+      ...(collectedJoin ? ["lc.literature_id IS NOT NULL"] : []),
+      criteria,
+    ].join(" AND "),
+    criteriaArgs,
     orderedFrom,
     where: singleScope ? `${where} AND om.kind=? AND om.scope_id=?` : where,
     args: singleScope ? [...args, workset.kind, workset.ids[0]!] : args,
@@ -428,6 +440,205 @@ function libraryFilter(
     collectionReady: state.collectionReady,
     pagingReady,
   };
+}
+
+type Filter = ReturnType<typeof libraryFilter>;
+type Sql = { sql: string; args: SQLInputValue[] };
+const FTS = "literature_search_fts";
+const FTS_ROWID = FTS + ".rowid";
+const FTS_OWNER = "literature_search_fts_content";
+const LIBRARY_SEARCH_WINDOW_LIMIT = 95_000;
+
+/** The limit is applied to raw FTS hits. A separate rowid seek tests one
+ * earlier hit without evaluating the filters or scoring the sentinel. */
+function rawSearchWindow(
+  ftsQuery: string,
+  limit: number,
+  projection: Sql,
+  beforeRowid?: string,
+  previous?: LibrarySearchWindow,
+  legacyNewestRowid?: string,
+) {
+  const bounds = previous
+    ? {
+        sql: `AND ${FTS_ROWID} BETWEEN ? AND ?`,
+        args: [BigInt(previous.oldest_rowid), BigInt(previous.newest_rowid)],
+      }
+    : beforeRowid !== undefined
+      ? { sql: `AND ${FTS_ROWID} < ?`, args: [BigInt(beforeRowid)] }
+      : legacyNewestRowid !== undefined
+        ? { sql: `AND ${FTS_ROWID} <= ?`, args: [BigInt(legacyNewestRowid)] }
+        : { sql: "", args: [] };
+  const earlier = previous
+    ? previous.scan_incomplete
+      ? "1"
+      : "0"
+    : `CASE WHEN raw_count=? THEN EXISTS(
+        SELECT 1 FROM ${FTS} WHERE ${FTS} MATCH ? AND ${FTS_ROWID}<oldest AND sr_query_continue()
+        ORDER BY ${FTS_ROWID} DESC LIMIT 1
+      ) ELSE 0 END`;
+  return {
+    sql: `raw_hits AS MATERIALIZED (
+      SELECT ${FTS_ROWID} AS doc ${projection.sql}
+      WHERE ${FTS} MATCH ? ${bounds.sql} AND sr_query_continue()
+      ORDER BY ${FTS_ROWID} DESC LIMIT ?
+    ), raw_edges AS (
+      SELECT min(doc) AS oldest,max(doc) AS newest,count(*) AS raw_count FROM raw_hits
+    ), scan AS (
+      SELECT oldest,newest,${earlier} AS incomplete FROM raw_edges
+    )`,
+    args: [
+      ...projection.args,
+      ftsQuery,
+      ...bounds.args,
+      limit,
+      ...(previous ? [] : [limit, ftsQuery]),
+    ],
+  };
+}
+
+function memberTextSource(
+  q: LibraryQuery,
+  filter: Filter,
+  cutoff: string,
+): Sql | undefined {
+  if (q.recently_opened)
+    return {
+      sql: `SELECT literature_id,last_opened_at FROM reading_history INDEXED BY reading_history_opened WHERE last_opened_at>=?`,
+      args: [cutoff],
+    };
+  const workset = orderedWorkset(q);
+  if (workset && filter.pagingReady) {
+    const ids = [...new Set(workset.ids)];
+    return ids.length === 1
+      ? {
+          sql: "SELECT literature_id FROM library_ordered_members WHERE kind=? AND scope_id=?",
+          args: [workset.kind, ids[0]!],
+        }
+      : {
+          sql: "SELECT DISTINCT literature_id FROM library_ordered_members WHERE kind=? AND scope_id IN (SELECT value FROM json_each(?))",
+          args: [workset.kind, JSON.stringify(ids)],
+        };
+  }
+  if (q.folder) {
+    const ids = q.folder.include_descendants
+      ? "WITH RECURSIVE descendants(id) AS (SELECT folder_id FROM folders WHERE folder_id=? UNION SELECT f.folder_id FROM folders f JOIN descendants d ON f.parent_id=d.id) SELECT id FROM descendants"
+      : "SELECT folder_id FROM folders WHERE folder_id=?";
+    return {
+      sql: `SELECT DISTINCT fm.literature_id FROM folder_members fm WHERE fm.folder_id IN (${ids}) AND ${visibleObjectSql("folder-member", "json_array(fm.folder_id,fm.literature_id)")} AND ${visibleObjectSql("folder", "fm.folder_id")}`,
+      args: [q.folder.id],
+    };
+  }
+  if (q.intake_batch_ids.length)
+    return {
+      sql: "SELECT DISTINCT literature_id FROM intake_batch_members WHERE batch_id IN (SELECT value FROM json_each(?))",
+      args: [JSON.stringify(q.intake_batch_ids)],
+    };
+  if (q.discovery_run_ids.length) {
+    const ids = JSON.stringify(q.discovery_run_ids);
+    return {
+      sql: `SELECT actual_literature_id AS literature_id FROM topic_discovery_causes
+        WHERE discovery_run_id IN (SELECT value FROM json_each(?))
+        UNION SELECT actual_literature_id FROM citation_discovery_causes
+        WHERE discovery_run_id IN (SELECT value FROM json_each(?)) AND ${visibleCitationSql()}`,
+      args: [ids, ids],
+    };
+  }
+  if (q.collection_scope === "collected")
+    return {
+      sql: collectedMembersSql(filter.collectionReady),
+      args: [],
+    };
+  return undefined;
+}
+
+function textScope(
+  db: DatabaseSync,
+  query: LibraryQuery,
+  ftsQuery: string,
+  cutoff: string,
+  countStatuses = false,
+) {
+  const filter = libraryFilter(db, { ...query, recently_opened: false }, null, {
+    countStatuses,
+    recentCutoff: cutoff,
+    textScope: true,
+  });
+  const source = memberTextSource(query, filter, cutoff);
+  const columns = `l.literature_id${countStatuses ? `,${filter.status} AS status` : ""}`;
+  const memberProjection =
+    source &&
+    ((extra?: string): Sql => ({
+      sql: `SELECT ${columns}, document.id AS doc ${extra ? "," + extra : ""}
+      FROM (${source.sql}) member
+      CROSS JOIN literatures l ON l.literature_id=member.literature_id
+      CROSS ${filter.joins}
+      CROSS JOIN ${FTS_OWNER} document ON document.c0=l.literature_id
+      CROSS JOIN ${FTS} ON ${FTS_ROWID}=document.id
+      ${filter.where} AND ${FTS} MATCH ?
+      ${query.recently_opened ? "ORDER BY member.last_opened_at DESC,member.literature_id LIMIT 100" : ""}`,
+      args: [...source.args, ...filter.args, ftsQuery],
+    }));
+  return {
+    filter,
+    memberProjection,
+    memberMatches: memberProjection?.(),
+    windowMatches: `SELECT ${columns} FROM raw_hits
+      CROSS JOIN ${FTS_OWNER} document ON document.id=raw_hits.doc
+      CROSS JOIN literatures l ON l.literature_id=document.c0
+      CROSS ${filter.joins}
+      ${filter.where}`,
+  };
+}
+
+function textAggregation(
+  db: DatabaseSync,
+  query: LibraryQuery,
+  ftsQuery: string,
+  cutoff: string,
+  beforeRowid?: string,
+  countStatuses = false,
+  windowLimit = LIBRARY_SEARCH_WINDOW_LIMIT,
+) {
+  const { filter, memberMatches, windowMatches } = textScope(
+    db,
+    query,
+    ftsQuery,
+    cutoff,
+    countStatuses,
+  );
+  if (memberMatches) {
+    if (beforeRowid !== undefined) invalidWindow();
+    return {
+      filter,
+      matching: `SELECT * FROM (${memberMatches.sql})`,
+      args: memberMatches.args,
+      prefix: "",
+      incomplete: "0",
+    };
+  }
+  const raw = rawSearchWindow(
+    ftsQuery,
+    windowLimit,
+    {
+      sql: `FROM ${FTS}`,
+      args: [],
+    },
+    beforeRowid,
+  );
+  return {
+    filter,
+    matching: windowMatches,
+    args: [...raw.args, ...filter.args],
+    prefix: raw.sql + ",",
+    incomplete: "(SELECT incomplete FROM scan)",
+  };
+}
+
+function invalidWindow(): never {
+  throw Object.assign(new Error("invalid library search window"), {
+    code: "literature-query",
+  });
 }
 /** Full QuerySelector scope with the same predicates as paging. */
 export function libraryCollectionTargets(
@@ -495,6 +706,8 @@ export function libraryCounts(
   ftsQuery: string | null,
   exact = false,
   at = Date.now(),
+  beforeRowid?: string,
+  windowLimit?: number,
 ): LibraryCounts {
   // Quick-filter counts ignore both quick selections, but retain all other facets.
   const q = { ...query, statuses: [], needs_manual_pdf: null };
@@ -504,9 +717,24 @@ export function libraryCounts(
   if (scope && state.countsReady())
     return countsFromTotals(db, scope, recentCutoff);
   const bounded = !exact && scope === null;
-  const { from, where, args, status, updating, collectionReady } =
+  const text =
+    !exact && ftsQuery
+      ? textAggregation(
+          db,
+          q,
+          ftsQuery,
+          recentCutoff,
+          beforeRowid,
+          true,
+          windowLimit,
+        )
+      : undefined;
+  const { from, where, status, updating, collectionReady, args } =
+    text?.filter ??
     libraryFilter(db, q, ftsQuery, { countStatuses: true, recentCutoff });
-  const matching = `SELECT l.literature_id,${status} AS status ${from} ${where}`;
+  const matching =
+    text?.matching ??
+    `SELECT l.literature_id,${status} AS status ${from} ${where}`;
   const sample = bounded
     ? `window AS MATERIALIZED (${matching} LIMIT ${LIBRARY_COUNT_LIMIT + 1}),
        matches AS MATERIALIZED (SELECT * FROM window LIMIT ${LIBRARY_COUNT_LIMIT})`
@@ -520,7 +748,7 @@ export function libraryCounts(
     ${collectionReady ? "" : `OR ${historicalCollectionSql("l.literature_id")}`}`;
   const row = db
     .prepare(
-      `WITH ${sample}, ${paper.cte},
+      `WITH ${text?.prefix ?? ""} ${sample}, ${paper.cte},
       version_counts AS (
         SELECT count(*) AS versions,
           min(100,coalesce(sum(${OPENED_SQL}>=?),0)) AS recently_opened,
@@ -532,13 +760,15 @@ export function libraryCounts(
       ), paper_counts AS (SELECT ${paper.columns})
      SELECT v.*, p.total AS papers, p.obtained, p.exhausted
        ${bounded ? `, (SELECT count(*)>${LIBRARY_COUNT_LIMIT} FROM window) AS truncated` : ""}
+       ${text ? `, ${text.incomplete} AS incomplete` : ""}
      FROM version_counts v CROSS JOIN paper_counts p`,
     )
-    .get(...args, recentCutoff)!;
+    .get(...(text?.args ?? args), recentCutoff)!;
   const total = Number(row.versions);
   return {
     ...countReadFlags(state, updating),
     ...(row.truncated ? { count_truncated: true as const } : {}),
+    ...(row.incomplete ? { scan_incomplete: true as const } : {}),
     ...(scope === "all"
       ? {
           collection_counts: {
@@ -608,13 +838,7 @@ export function librarySearchTotal(
 
 type PageRow = Record<string, SQLOutputValue>;
 type RankingRow = { literature_id: string; relevance: number };
-type Filter = ReturnType<typeof libraryFilter>;
-type Ranking = {
-  rows: RankingRow[];
-  candidate_window?: LibraryRelevanceWindow;
-};
-
-const LIBRARY_RELEVANCE_CANDIDATE_LIMIT = 200_000;
+type Ranking = { rows: RankingRow[] };
 
 /** One worker owns each text page and its continuation. Same-file reconnects keep this cache. */
 export class LibraryRelevanceCache {
@@ -622,10 +846,11 @@ export class LibraryRelevanceCache {
     string,
     { key: string; ranking: Ranking }
   >();
-  readonly candidateLimit: number;
 
-  constructor(candidateLimit = LIBRARY_RELEVANCE_CANDIDATE_LIMIT) {
-    this.candidateLimit = candidateLimit;
+  readonly windowLimit: number;
+
+  constructor(windowLimit = LIBRARY_SEARCH_WINDOW_LIMIT) {
+    this.windowLimit = windowLimit;
   }
 
   get(id: string, key: string) {
@@ -649,104 +874,18 @@ export class LibraryRelevanceCache {
   }
 }
 
-function rankCandidates(
-  db: DatabaseSync,
-  filter: Filter,
-  cap: number,
-  previous?: LibraryRelevanceWindow,
-): Ranking {
-  const rowid = "literature_search_fts.rowid";
-  const limit = Math.min(cap, previous?.limit ?? cap);
-  const withinWindow = previous ? `AND ${rowid} BETWEEN ? AND ?` : "";
-  const args = previous
-    ? [
-        ...filter.args,
-        BigInt(previous.oldest_rowid),
-        BigInt(previous.newest_rowid),
-      ]
-    : filter.args;
-  // CROSS JOIN keeps the FTS cursor outermost so it supplies rowid order.
-  // Materialization stops the outer score sort from visiting any more hits.
-  const rows = db
-    .prepare(
-      `WITH candidates AS MATERIALIZED (
-       SELECT l.literature_id,bm25(literature_search_fts) AS relevance,${rowid} AS doc
-       ${filter.ftsOrderedFrom} ${filter.where} ${withinWindow}
-       ORDER BY ${rowid} DESC LIMIT ?
-     ), ranked AS (
-       SELECT literature_id,relevance FROM candidates
-       ORDER BY relevance,literature_id LIMIT ${RELEVANCE_RESULT_LIMIT}
-     ), edges AS (
-       SELECT CAST(min(doc) AS TEXT) AS oldest_rowid,
-         CAST(max(doc) AS TEXT) AS newest_rowid,count(*) AS hits FROM candidates
-     )
-     SELECT ranked.*,edges.* FROM ranked CROSS JOIN edges ORDER BY relevance,literature_id`,
-    )
-    .all(...args, limit) as (RankingRow &
-    Pick<LibraryRelevanceWindow, "oldest_rowid" | "newest_rowid"> & {
-      hits: number;
-    })[];
-  const edge = rows[0];
-  const ranked = rows.map(({ literature_id, relevance }) => ({
-    literature_id,
-    relevance,
-  }));
-  if (previous)
-    return { rows: ranked, candidate_window: { ...previous, limit } };
-  if (
-    edge?.hits === limit &&
-    db
-      .prepare(
-        `SELECT 1 ${filter.ftsOrderedFrom} ${filter.where} AND ${rowid}<? ORDER BY ${rowid} DESC LIMIT 1`,
-      )
-      .get(...filter.args, BigInt(edge.oldest_rowid))
-  )
-    return {
-      rows: ranked,
-      candidate_window: {
-        oldest_rowid: edge.oldest_rowid,
-        newest_rowid: edge.newest_rowid,
-        limit,
-      },
-    };
-  return { rows: ranked };
-}
-
 function relevancePage(
   db: DatabaseSync,
-  filter: Filter,
+  ranked: RankingRow[],
   after: Position | null,
   limit: number,
-  total: LibrarySearchTotal,
-  cache: LibraryRelevanceCache | undefined,
-  key: string | undefined,
+  cached: boolean,
 ) {
-  const previousId = after?.ranking_id;
-  const cached = previousId && key ? cache?.get(previousId, key) : undefined;
-  const cap = cache?.candidateLimit ?? LIBRARY_RELEVANCE_CANDIDATE_LIMIT;
-  const ranking =
-    cached ??
-    (!after && !total.count_truncated && total.total_count <= cap
-      ? {
-          rows: db
-            .prepare(
-              `SELECT l.literature_id,bm25(literature_search_fts) AS relevance ${filter.from} ${filter.where}
-               ORDER BY relevance,l.literature_id LIMIT ${RELEVANCE_RESULT_LIMIT}`,
-            )
-            .all(...filter.args) as RankingRow[],
-        }
-      : rankCandidates(db, filter, cap, after?.candidate_window));
-  const ranked = ranking.rows;
   if (
     !cached &&
     new Set(ranked.map((row) => row.literature_id)).size !== ranked.length
   )
     throw new Error("duplicate library search rows");
-  const rankingId = cached
-    ? previousId
-    : key
-      ? cache?.put(key, ranking)
-      : undefined;
   let start = 0;
   if (after) {
     const anchor = ranked.findIndex(
@@ -754,11 +893,11 @@ function relevancePage(
     );
     if (anchor >= 0) start = anchor + 1;
     else {
-      const value = Number(after.value);
       const next = ranked.findIndex(
         (row) =>
-          row.relevance > value ||
-          (row.relevance === value && row.literature_id > after.literature_id),
+          row.relevance > Number(after.value) ||
+          (row.relevance === after.value &&
+            row.literature_id > after.literature_id),
       );
       start = next < 0 ? ranked.length : next;
     }
@@ -774,12 +913,239 @@ function relevancePage(
     const row = ranked[i]!;
     if (!visible || visible.get(row.literature_id)) rows.push(row);
   }
+  return rows;
+}
+
+type Page = LibrarySearchTotal & {
+  readonly rows: PageRow[];
+  readonly tag_backfill_pending?: number;
+  readonly ranking_id?: string;
+  readonly search_window?: LibrarySearchWindow;
+};
+
+function sortScopeLimit(): never {
+  throw Object.assign(new Error("library sort requires a smaller scope"), {
+    code: LIBRARY_SORT_SCOPE_LIMIT,
+  });
+}
+
+function countFromSample(total: number): LibrarySearchTotal {
+  return total > LIBRARY_COUNT_LIMIT
+    ? { total_count: LIBRARY_COUNT_LIMIT, count_truncated: true }
+    : { total_count: total };
+}
+
+function searchWindowRows(
+  db: DatabaseSync,
+  filter: Filter,
+  request: LibraryPageQuery,
+  cap: number,
+) {
+  const { after, ftsQuery, beforeRowid, sort } = request;
+  const previous = after?.search_window;
+  const limit = Math.min(cap, previous?.limit ?? cap);
+  const maySwitch = !!request.relevanceForLargeScope && !after;
+  const canRank = sort === "relevance" || maySwitch;
+  const tooManyMatches = after?.total
+    ? Number(
+        !!after.total.count_truncated ||
+          after.total.total_count > LIBRARY_COUNT_LIMIT,
+      )
+    : `total>${LIBRARY_COUNT_LIMIT}`;
+  // A page cursor keeps its first count, even though its eligible rows are
+  // read again and may have changed since that count.
+  const nonRankedLimit = after?.total
+    ? "(SELECT count(*) FROM raw_hits WHERE score IS NOT NULL)"
+    : "total";
+  // One-to-one LEFT JOINs retain every raw hit through LIMIT. A null score
+  // marks an excluded hit, and BM25 runs only for matches in the FTS cursor.
+  const bounded = rawSearchWindow(
+    ftsQuery!,
+    limit,
+    {
+      sql: `, l.literature_id,
+      CASE WHEN ${filter.criteria}
+        THEN ${canRank ? `bm25(${FTS})` : "0"} END AS score
+      FROM ${FTS}
+      LEFT JOIN literatures l ON l.literature_id=${FTS}.literature_id
+      ${filter.optionalJoins}`,
+      args: filter.criteriaArgs,
+    },
+    beforeRowid,
+    previous,
+    after?.legacy_newest_rowid,
+  );
+  const rows = db
+    .prepare(
+      `WITH ${bounded.sql},
+      counted AS (
+        SELECT count(*) AS total,count(DISTINCT literature_id) AS unique_count
+        FROM (SELECT literature_id FROM raw_hits WHERE score IS NOT NULL LIMIT ${LIBRARY_COUNT_LIMIT + 1})
+      ), ranked AS (
+        SELECT literature_id,score FROM raw_hits WHERE score IS NOT NULL
+        ORDER BY score,literature_id LIMIT (
+          SELECT CASE WHEN ${sort === "relevance" ? "1" : "0"} THEN ${RELEVANCE_RESULT_LIMIT}
+            WHEN incomplete OR ${tooManyMatches}
+              THEN ${maySwitch ? RELEVANCE_RESULT_LIMIT : 0}
+            ELSE ${nonRankedLimit} END FROM counted CROSS JOIN scan
+        )
+      )
+      SELECT 0 AS type,NULL AS literature_id,NULL AS relevance,total,unique_count,
+        CAST(oldest AS TEXT) AS oldest_rowid,CAST(newest AS TEXT) AS newest_rowid,incomplete
+        FROM counted CROSS JOIN scan
+      UNION ALL
+      SELECT 1,literature_id,score,NULL,NULL,NULL,NULL,NULL FROM ranked
+      ORDER BY type,relevance,literature_id`,
+    )
+    .all(...bounded.args);
+  const meta = rows.shift()!;
+  if (meta.total !== meta.unique_count)
+    throw new Error("duplicate library search rows");
+  const total = Number(meta.total);
+  const incomplete = meta.incomplete === 1;
+  const window =
+    previous ??
+    ((beforeRowid !== undefined ||
+      after?.legacy_newest_rowid !== undefined ||
+      incomplete) &&
+    typeof meta.oldest_rowid === "string" &&
+    typeof meta.newest_rowid === "string"
+      ? {
+          oldest_rowid: meta.oldest_rowid,
+          newest_rowid: meta.newest_rowid,
+          limit,
+          ...(incomplete ? { scan_incomplete: true as const } : {}),
+        }
+      : undefined);
   return {
-    rows,
-    ...(rankingId ? { ranking_id: rankingId } : {}),
-    ...(ranking.candidate_window
-      ? { candidate_window: ranking.candidate_window }
-      : {}),
+    total,
+    window,
+    rows: rows.map(({ literature_id, relevance }) => ({
+      literature_id: String(literature_id),
+      relevance: Number(relevance),
+    })),
+  };
+}
+
+function textLibraryPage(
+  db: DatabaseSync,
+  request: LibraryPageQuery,
+  cache?: LibraryRelevanceCache,
+): Page {
+  const { query, ftsQuery, after, limit, rankingKey, beforeRowid } = request;
+  let { sort } = request;
+  const { filter, memberMatches, memberProjection } = textScope(
+    db,
+    query,
+    ftsQuery!,
+    recentCutoffAt(Date.now()),
+  );
+  const flags = countReadFlags(storedLibraryState(db), filter.updating);
+  const tags = filter.tagIds.length
+    ? {
+        tag_backfill_pending: tagBackfillPending(
+          db,
+          filter.tagIds,
+          query.tags!.mode,
+        ),
+      }
+    : {};
+  const previousId = after?.ranking_id;
+  const cached =
+    previousId && rankingKey ? cache?.get(previousId, rankingKey) : undefined;
+  if (cached && after?.total)
+    return {
+      ...after.total,
+      ...flags,
+      ...tags,
+      ranking_id: previousId!,
+      ...(after.search_window ? { search_window: after.search_window } : {}),
+      ...(after.search_window?.scan_incomplete
+        ? { scan_incomplete: true as const }
+        : {}),
+      rows: relevancePage(db, cached.rows, after, limit, true),
+    };
+
+  let total: LibrarySearchTotal;
+  let window: LibrarySearchWindow | undefined;
+  let matches: Sql;
+  let ranked: RankingRow[] | undefined;
+  if (memberMatches && memberProjection) {
+    if (beforeRowid !== undefined) invalidWindow();
+    if (sort === "relevance") {
+      const initial = rankLibraryMembers(db, memberProjection, ftsQuery!);
+      ranked = initial.rows;
+      total = after?.total ?? countFromSample(initial.total);
+    } else if (after?.total) total = after.total;
+    else {
+      const result = db
+        .prepare(
+          `SELECT count(*) AS total,count(DISTINCT literature_id) AS unique_count
+          FROM (SELECT literature_id FROM (${memberMatches.sql}) LIMIT ${LIBRARY_COUNT_LIMIT + 1})`,
+        )
+        .get(...memberMatches.args)!;
+      if (result.total !== result.unique_count)
+        throw new Error("duplicate library search rows");
+      total = countFromSample(Number(result.total));
+    }
+    matches = memberMatches;
+  } else {
+    const first = searchWindowRows(
+      db,
+      filter,
+      request,
+      cache?.windowLimit ?? LIBRARY_SEARCH_WINDOW_LIMIT,
+    );
+    window = first.window;
+    total = after?.total ?? countFromSample(first.total);
+    ranked = first.rows;
+    matches = {
+      sql: "SELECT value AS literature_id FROM json_each(?)",
+      args: [JSON.stringify(first.rows.map((row) => row.literature_id))],
+    };
+  }
+  const restricted =
+    window?.scan_incomplete ||
+    total.count_truncated ||
+    total.total_count > LIBRARY_COUNT_LIMIT;
+  if (restricted && sort !== "relevance") {
+    if (request.relevanceForLargeScope && !after) sort = "relevance";
+    else sortScopeLimit();
+  }
+  const summary = {
+    ...total,
+    ...flags,
+    ...tags,
+    ...(window ? { search_window: window } : {}),
+    ...(window?.scan_incomplete ? { scan_incomplete: true as const } : {}),
+  };
+  if (sort === "relevance") {
+    if (!after && total.total_count === 0) return { rows: [], ...summary };
+    ranked ??= rankLibraryMembers(db, memberProjection!, ftsQuery!).rows;
+    const rankingId = rankingKey && cache?.put(rankingKey, { rows: ranked });
+    return {
+      ...summary,
+      ...(rankingId ? { ranking_id: rankingId } : {}),
+      rows: relevancePage(db, ranked, after, limit, false),
+    };
+  }
+  return {
+    ...summary,
+    rows: materializedPage(
+      db,
+      sort,
+      after,
+      limit,
+      {
+        from: `FROM (${matches.sql}) matched
+        CROSS JOIN literatures l ON l.literature_id=matched.literature_id
+        CROSS JOIN literature_metadata m ON m.literature_id=l.literature_id`,
+        where: "",
+        args: matches.args,
+        pagingReady: filter.pagingReady,
+      },
+      "NULL",
+    ),
   };
 }
 
@@ -893,19 +1259,15 @@ export function libraryPageIds(
   db: DatabaseSync,
   request: LibraryPageQuery,
   cache?: LibraryRelevanceCache,
-): LibrarySearchTotal & {
-  readonly rows: PageRow[];
-  readonly tag_backfill_pending?: number;
-  readonly ranking_id?: string;
-  readonly candidate_window?: LibraryRelevanceWindow;
-} {
+): Page {
   const { query: q, after, limit, ftsQuery } = request;
+  if (ftsQuery && !request.fullRelevance)
+    return textLibraryPage(db, request, cache);
   let { sort } = request;
   const filter = libraryFilter(db, q, ftsQuery, {
     intakeOrder: sort === "intake-desc" && ftsQuery === null,
   });
-  const { from, orderedFrom, where, args, tagIds, intakeSource, updating } =
-    filter;
+  const { orderedFrom, where, args, tagIds, intakeSource, updating } = filter;
   const flags = countReadFlags(storedLibraryState(db), updating);
   const tags = tagIds.length
     ? { tag_backfill_pending: tagBackfillPending(db, tagIds, q.tags!.mode) }
@@ -944,36 +1306,9 @@ export function libraryPageIds(
             : "intake-desc";
     if (allowed === "relevance" && request.relevanceForLargeScope && !after)
       sort = allowed;
-    if (sort !== allowed)
-      throw Object.assign(new Error("library sort requires a smaller scope"), {
-        code: LIBRARY_SORT_SCOPE_LIMIT,
-      });
+    if (sort !== allowed) sortScopeLimit();
   }
-  const ensureUnique = (rows: PageRow[]) => {
-    if (
-      !request.fullRelevance &&
-      ftsQuery !== null &&
-      new Set(rows.map((row) => row.literature_id)).size !== rows.length
-    )
-      throw new Error("duplicate library search rows");
-    return rows;
-  };
   const relevance = ftsQuery === null ? "NULL" : "bm25(literature_search_fts)";
-  if (sort === "relevance" && !request.fullRelevance) {
-    if (!after && summary.total_count === 0) return { rows: [], ...summary };
-    return {
-      ...relevancePage(
-        db,
-        filter,
-        after,
-        limit,
-        summary,
-        cache,
-        request.rankingKey,
-      ),
-      ...summary,
-    };
-  }
   if (
     sort === "intake-desc" &&
     ftsQuery === null &&
@@ -1020,6 +1355,25 @@ export function libraryPageIds(
       ),
       ...summary,
     };
+  return {
+    rows: materializedPage(db, sort, after, limit, filter, relevance),
+    ...summary,
+  };
+}
+
+function materializedPage(
+  db: DatabaseSync,
+  sort: LibrarySort,
+  after: Position | null,
+  limit: number,
+  {
+    from,
+    where,
+    args,
+    pagingReady,
+  }: Pick<Filter, "from" | "where" | "args" | "pagingReady">,
+  relevance: string,
+): PageRow[] {
   const metrics = draftSortFields(sort);
   if (metrics) {
     const pageArgs = [...args],
@@ -1050,10 +1404,7 @@ export function libraryPageIds(
         `WITH matches AS MATERIALIZED (SELECT l.literature_id,${primaryDraftFactSql(metrics[0]!)} AS sort_value${second ? `,${primaryDraftFactSql(metrics[1]!)} AS sort_secondary` : ""},${relevance} AS relevance ${from} ${where}) SELECT literature_id,relevance FROM matches ${cursor} ORDER BY sort_value IS NULL,sort_value DESC,${second ? "sort_secondary DESC," : ""}literature_id ASC LIMIT ?`,
       )
       .all(...pageArgs, limit + 1);
-    return {
-      rows: ensureUnique(rows),
-      ...summary,
-    };
+    return rows;
   }
   const value =
     sort === "opened-desc"
@@ -1061,7 +1412,7 @@ export function libraryPageIds(
       : sort === "intake-desc"
         ? INTAKE_SQL
         : sort === "collected-desc"
-          ? collectionTimeSql("l.literature_id", filter.pagingReady)
+          ? collectionTimeSql("l.literature_id", pagingReady)
           : sort.startsWith("title")
             ? "sr_normalize(m.title)"
             : sort.startsWith("publication-year")
@@ -1086,10 +1437,7 @@ export function libraryPageIds(
       `WITH matches AS MATERIALIZED (SELECT l.literature_id, ${value} AS sort_value, ${relevance} AS relevance ${from} ${where}) SELECT literature_id,relevance FROM matches ${cursor} ORDER BY sort_value IS NULL, sort_value ${sort.endsWith("desc") ? "DESC" : "ASC"}, literature_id ASC LIMIT ?`,
     )
     .all(...pageArgs, limit + 1);
-  return {
-    rows: ensureUnique(rows),
-    ...summary,
-  };
+  return rows;
 }
 
 const TAG_DISPLAY_NAME =
@@ -1128,14 +1476,28 @@ export function libraryFacets(
   limit: number,
   exact = false,
   at = Date.now(),
+  beforeRowid?: string,
+  windowLimit?: number,
 ): LibraryFacets {
   const state = storedLibraryState(db);
   const scope = ftsQuery === null ? globalLibraryCountScope(query) : null;
-  const filter = libraryFilter(db, query, ftsQuery, {
-    recentCutoff: recentCutoffAt(at),
-  });
+  const recentCutoff = recentCutoffAt(at);
+  const text =
+    !exact && ftsQuery
+      ? textAggregation(
+          db,
+          query,
+          ftsQuery,
+          recentCutoff,
+          beforeRowid,
+          false,
+          windowLimit,
+        )
+      : undefined;
+  const filter =
+    text?.filter ?? libraryFilter(db, query, ftsQuery, { recentCutoff });
   const { from, where, args, updating } = filter;
-  const matching = `SELECT l.literature_id ${from} ${where}`;
+  const matching = text?.matching ?? `SELECT l.literature_id ${from} ${where}`;
   const sample = exact
     ? `matches AS MATERIALIZED (${matching})`
     : `window AS MATERIALIZED (${matching} LIMIT ${LIBRARY_COUNT_LIMIT + 1}),
@@ -1144,12 +1506,13 @@ export function libraryFacets(
   // All fields are read in the caller's one SQLite snapshot, without loading details.
   const result = db
     .prepare(
-      `WITH ${sample},
+      `WITH ${text?.prefix ?? ""} ${sample},
       scope_tags AS MATERIALIZED (SELECT i.literature_id,i.tag_id FROM matches m CROSS JOIN literature_tag_items i USING(literature_id) WHERE sr_query_continue()),
       scope_keywords AS MATERIALIZED (SELECT k.literature_id,k.keyword FROM matches m CROSS JOIN literature_metadata_keywords k USING(literature_id) WHERE sr_query_continue()),
       scope_subjects AS MATERIALIZED (SELECT s.literature_id,s.term,s.normalized_term FROM matches m CROSS JOIN literature_metadata_subject_terms s USING(literature_id) WHERE sr_query_continue())
     SELECT
       (SELECT count(*) FROM ${exact ? "matches" : "window"}) AS window_total,
+      ${text?.incomplete ?? "0"} AS incomplete,
       (SELECT count(DISTINCT literature_id) FROM scope_tags) AS tags_coverage,
       (SELECT count(DISTINCT literature_id) FROM scope_keywords) AS keywords_coverage,
       (SELECT count(DISTINCT literature_id) FROM scope_subjects) AS subjects_coverage,
@@ -1163,7 +1526,7 @@ export function libraryFacets(
         SELECT min(term) AS value,count(DISTINCT literature_id) AS count FROM scope_subjects GROUP BY normalized_term ORDER BY count DESC,value COLLATE BINARY ASC LIMIT ?
       )) AS subjects_json`,
     )
-    .get(...args, limit, limit, limit)!;
+    .get(...(text?.args ?? args), limit, limit, limit)!;
   const windowTotal = Number(result.window_total);
   const truncated = !exact && windowTotal > LIBRARY_COUNT_LIMIT;
   let total = truncated ? LIBRARY_COUNT_LIMIT : windowTotal;
@@ -1174,6 +1537,7 @@ export function libraryFacets(
     ...countReadFlags(state, updating),
     ...(truncated ? { facets_truncated: true as const } : {}),
     ...(truncated && !scope ? { count_truncated: true as const } : {}),
+    ...(result.incomplete ? { scan_incomplete: true as const } : {}),
     total,
     coverage: {
       tags: Number(result.tags_coverage),

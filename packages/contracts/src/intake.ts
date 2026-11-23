@@ -2,6 +2,7 @@ import {
   ContractValidationError,
   parseAssetId,
   parseLibrarySearchRequest,
+  parseOptionalLibraryWindowCursor,
   parseLiteratureId,
   parseUtcTimestamp,
   parseLiteratureMetadata,
@@ -290,10 +291,11 @@ export function parseIntakeBatchRename(value: unknown) {
   };
 }
 export function parseLibraryFacetsRequest(value: unknown) {
-  const r = tagRecord(value, ["query", "limit"]);
+  const r = tagRecord(value, ["query", "limit"], ["window_cursor"]);
   const limit = tagInteger(r.limit, 1);
   if (limit > 30) fail();
-  return { query: parseLibrarySearchRequest({ query: r.query }).query, limit };
+  const query = parseLibrarySearchRequest({ query: r.query }).query;
+  return { query, limit, ...parseOptionalLibraryWindowCursor(r, query) };
 }
 export function parseAcquirePdfSelector(value: unknown): AcquirePdfSelector {
   const r = tagRecord(

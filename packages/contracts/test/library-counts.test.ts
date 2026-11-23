@@ -5,6 +5,7 @@ import {
   parseLibraryExactCount,
   parseLibraryExactCountRequest,
   parseLibraryFacets,
+  parseLibraryFacetsRequest,
   parseLibrarySearchTotal,
   parseLibrarySearchRequest,
   type LibrarySearchPage,
@@ -26,24 +27,53 @@ const counts = {
   },
 };
 
-it("reports the optional relevance candidate cap separately from result and count limits", () => {
-  expectTypeOf<LibrarySearchPage["relevance_candidate_limit"]>().toEqualTypeOf<
-    number | undefined
+it("keeps an unfinished text scan separate from count and relevance limits", () => {
+  expectTypeOf<LibrarySearchPage["scan_incomplete"]>().toEqualTypeOf<
+    true | undefined
   >();
   const page: LibrarySearchPage = {
-    total_count: 10_000,
-    count_truncated: true,
+    total_count: 0,
+    scan_incomplete: true,
+    scan_limit: 20_000,
     relevance_limit: 1_000,
-    relevance_candidate_limit: 20_000,
+    next_window_cursor: "earlier",
     items: [],
     next_cursor: null,
   };
-  const { relevance_candidate_limit, ...original } = page;
-  expect(relevance_candidate_limit).toBe(20_000);
-  expect(original).toMatchObject({
-    total_count: 10_000,
-    relevance_limit: 1_000,
-  });
+  expect(
+    parseLibrarySearchTotal({
+      total_count: page.total_count,
+      scan_incomplete: page.scan_incomplete,
+    }),
+  ).toEqual({ total_count: 0, scan_incomplete: true });
+  expect(() =>
+    parseLibrarySearchTotal({ total_count: 0, scan_incomplete: false }),
+  ).toThrow();
+  expect(() =>
+    parseLibrarySearchTotal({
+      total_count: 0,
+      count_truncated: true,
+      scan_incomplete: true,
+    }),
+  ).toThrow();
+  expect(
+    parseLibraryCounts({ ...counts, scan_incomplete: true }).scan_incomplete,
+  ).toBe(true);
+  const query = { text: "ranked" };
+  expect(
+    parseLibrarySearchRequest({ query, window_cursor: "earlier" })
+      .window_cursor,
+  ).toBe("earlier");
+  expect(
+    parseLibraryFacetsRequest({ query, limit: 10, window_cursor: "earlier" })
+      .window_cursor,
+  ).toBe("earlier");
+  for (const invalid of [
+    { query, window_cursor: " not a cursor " },
+    { query, window_cursor: "earlier", cursor: "page" },
+    { query: {}, window_cursor: "earlier" },
+  ])
+    expect(() => parseLibrarySearchRequest(invalid)).toThrow();
 });
 
 it("parses exact version counts and paper counts without equating their units", () => {

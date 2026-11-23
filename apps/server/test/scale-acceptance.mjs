@@ -12,6 +12,7 @@ import { setTimeout as wait } from "node:timers/promises";
 import {
   canonicalJsonBytes,
   EMPTY_METADATA,
+  parseLibrarySearchRequest,
   parseMetadataObservation,
 } from "@sciretriever/contracts";
 import { createApplication } from "../dist/bootstrap/application.js";
@@ -20,6 +21,13 @@ import { parseCredentialText } from "../dist/configuration/credentials.js";
 import { activityContext, withActivity } from "../dist/logging/activity.js";
 import { acquireExecutionRuntime } from "../dist/storage/execution/runtime-owner.js";
 import { SHORT_READ_LIMIT_MS } from "../dist/storage/sqlite/read-lanes.js";
+import {
+  LibraryRelevanceCache,
+  libraryPageIds,
+} from "../dist/storage/sqlite/library-page.js";
+import { StoredLibraryState } from "../dist/storage/sqlite/library-state.js";
+import { queryTerms } from "../dist/literature/query.js";
+import { normalizeQueryText } from "../dist/literature/unicode-casefold.js";
 import { SqliteWorker } from "../dist/storage/sqlite/worker.js";
 import { CatalogWriteAdmission } from "../dist/storage/write-admission.js";
 
@@ -427,7 +435,13 @@ async function measure(work) {
   return performance.now() - started;
 }
 
-function searchBands(sweep) {
+const absentAuthor = "acceptance nonexistent synthetic author 27ce8bb5";
+const authorFilter = { author: absentAuthor };
+// The concurrent writer's text contains "of", but lacks "in", "studies",
+// and the fixed probe terms. Every cap therefore sees the same source corpus.
+const nearAllText = "in";
+
+function searchBands() {
   const admission = new CatalogWriteAdmission(catalog, { waitMs: 10_000 });
   return admission.run(() => {
     const db = new DatabaseSync(catalog);
@@ -438,13 +452,53 @@ function searchBands(sweep) {
             "SELECT count(*) AS n FROM literature_search_fts WHERE literature_search_fts MATCH ?",
           )
           .get(text).n;
-      const bands = [{ name: "near-all", text: "of", hits: count("of") }];
-      if (sweep) return bands;
+      const bands = [
+        { name: "near-all", text: nearAllText, hits: count(nearAllText) },
+      ];
       bands.push({
         name: "common",
         text: "spectroscopy",
         hits: count("spectroscopy"),
       });
+      bands.push(
+        {
+          name: "three-frequent",
+          text: "studies of in",
+          hits: count('"studies" AND "of" AND "in"'),
+        },
+        {
+          ...bands[0],
+          name: "sparse-author",
+          query: authorFilter,
+          matching: 0,
+        },
+      );
+      const folderQuery = {
+        folder: { id: folder, include_descendants: false },
+      };
+      const memberCount = db
+        .prepare(
+          `SELECT count(*) AS n
+        FROM library_ordered_members m
+        CROSS JOIN literature_search_fts_content c ON c.c0=m.literature_id
+        CROSS JOIN literature_search_fts ON literature_search_fts.rowid=c.id
+        WHERE m.kind='folder' AND m.scope_id=? AND literature_search_fts MATCH ?`,
+        )
+        .get(folder, nearAllText).n;
+      bands.push(
+        {
+          ...bands[0],
+          name: "folder-frequent",
+          query: folderQuery,
+          matching: memberCount,
+        },
+        {
+          ...bands[0],
+          name: "folder-sparse-author",
+          query: { ...folderQuery, ...authorFilter },
+          matching: 0,
+        },
+      );
       const fixed = [
         [1000, "acceptancefixedone"],
         [10_000, "acceptancefixedten"],
@@ -481,8 +535,12 @@ function searchBands(sweep) {
   });
 }
 
-async function searchCandidates(sweep) {
-  const bands = await searchBands(sweep);
+async function searchWindows() {
+  const selected = reference?.split(",");
+  const bands = (await searchBands()).filter(
+    ({ name }) => !selected || selected.includes(name),
+  );
+  assert.ok(bands.length);
   const result = {
     scale,
     mode,
@@ -506,25 +564,34 @@ async function searchCandidates(sweep) {
     await writer.first();
     await wait(2500);
     const began = Date.now();
-    for (const { name, text, hits } of bands) {
-      const entry = (result.search[name] = { text, hits, samples: [] });
+    for (const { name, text, hits, query = {}, matching = hits } of bands) {
+      const entry = (result.search[name] = {
+        text,
+        hits,
+        matching,
+        samples: [],
+      });
       for (let trial = 0; trial < trials; trial++) {
         stop.signal.throwIfAborted();
         let page;
         const duration = await measure(async () => {
           ({ page } = await request("/api/v1/query/search", {
-            query: { text, collection_scope: "all" },
+            query: { text, collection_scope: "all", ...query },
             sort: "relevance",
             limit: 50,
           }));
         });
-        assert.equal(page.items.length, 50);
-        assert.equal(page.total_count, Math.min(10_000, hits));
-        assert.equal(page.count_truncated, hits > 10_000 ? true : undefined);
-        if (name === "near-all" && scale === "1m")
-          assert.ok(page.relevance_candidate_limit < hits);
-        entry.relevance_candidate_limit =
-          page.relevance_candidate_limit ?? null;
+        assert.equal(page.items.length, Math.min(50, matching));
+        assert.equal(page.total_count, Math.min(10_000, matching));
+        assert.equal(
+          page.count_truncated,
+          matching > 10_000 ? true : undefined,
+        );
+        if (scale === "1m" && ["near-all", "sparse-author"].includes(name))
+          assert.ok(page.scan_incomplete && page.scan_limit < hits);
+        if (query.folder) assert.equal(page.scan_incomplete, undefined);
+        assert.equal(!!page.next_window_cursor, !!page.scan_incomplete);
+        entry.scan_limit = page.scan_limit ?? null;
         entry.samples.push(duration);
         if (duration > 10 * objectives.search) break;
         await wait(40);
@@ -534,9 +601,9 @@ async function searchCandidates(sweep) {
         scale,
         name,
         JSON.stringify(stats(entry.samples)),
-        entry.relevance_candidate_limit,
+        entry.scan_limit,
       );
-      if (entry.n !== trials || (!sweep && entry.p95_ms > objectives.search))
+      if (entry.n !== trials || entry.p95_ms > objectives.search)
         result.failures.push(
           `${name} P95 ${entry.p95_ms.toFixed(1)} ms (${entry.n} trials)`,
         );
@@ -567,6 +634,100 @@ async function searchCandidates(sweep) {
     }
   }
   assert.deepEqual(result.failures, []);
+}
+
+async function searchWindowSweep() {
+  const caps = (reference ?? "20000,50000,100000,150000,200000,250000")
+    .split(",")
+    .map(Number);
+  assert.ok(caps.every((cap) => Number.isSafeInteger(cap) && cap > 0));
+  const result = {
+    mode,
+    scale,
+    caps,
+    search: {},
+    frequencies: {},
+    points: [],
+    warnings: [],
+  };
+  const writer = spawn("writer", result.warnings);
+  const db = new DatabaseSync(catalog, { readOnly: true });
+  try {
+    db.exec("PRAGMA query_only=ON; PRAGMA busy_timeout=5000");
+    new StoredLibraryState(db, { max_tags: 6, archive_profile: "vlm-engine" });
+    db.function("sr_query_continue", () => {
+      stop.signal.throwIfAborted();
+      return 1;
+    });
+    db.function("sr_normalize", { deterministic: true }, (x) =>
+      x === null ? null : normalizeQueryText(x),
+    );
+    writer.child.on("message", (point) => result.points.push(point));
+    await writer.first();
+    await wait(2_500);
+    for (const [name, text, extra] of [
+      ["sparse-author", nearAllText, authorFilter],
+      ["near-all", nearAllText, {}],
+      ["three-frequent", "studies of in", {}],
+    ]) {
+      const query = parseLibrarySearchRequest({
+        query: { text, ...extra },
+      }).query;
+      const ftsQuery = queryTerms(text)
+        .map((term) => '"' + term + '"')
+        .join(" AND ");
+      const plan = {
+        query,
+        ftsQuery,
+        after: null,
+        sort: "relevance",
+        limit: 50,
+      };
+      const search = (result.search[name] = {});
+      for (const cap of caps) {
+        const cache = new LibraryRelevanceCache(cap);
+        const samples = [];
+        let scan_limit = null;
+        for (let trial = 0; trial < trials; trial++) {
+          await wait(35);
+          db.exec("BEGIN");
+          try {
+            samples.push(
+              await measure(() => {
+                const page = libraryPageIds(db, plan, cache);
+                scan_limit = page.search_window?.limit ?? null;
+                if (extra.author) assert.equal(page.total_count, 0);
+              }),
+            );
+          } finally {
+            db.exec("COMMIT");
+          }
+          if (samples.at(-1) > 10 * objectives.search) break;
+        }
+        search[cap] = { ...stats(samples), scan_limit, samples };
+        console.log(scale, name, cap, JSON.stringify(stats(samples)));
+      }
+    }
+    for (const text of [nearAllText, "of", "spectroscopy", "studies of in"]) {
+      const fts = queryTerms(text)
+        .map((term) => '"' + term + '"')
+        .join(" AND ");
+      const match =
+        "FROM literature_search_fts WHERE literature_search_fts MATCH ? ORDER BY rowid DESC LIMIT 1";
+      const seek = db.prepare("SELECT rowid " + match);
+      const score = db.prepare("SELECT bm25(literature_search_fts) " + match);
+      const samples = [];
+      for (let trial = 0; trial < trials; trial++) {
+        const probe = await measure(() => seek.get(fts));
+        samples.push((await measure(() => score.get(fts))) - probe);
+      }
+      result.frequencies[text] = { ...stats(samples), samples };
+    }
+  } finally {
+    db.close();
+    await writer.close();
+    await writeFile(destination, JSON.stringify(result, null, 2) + "\n");
+  }
 }
 
 function taskBands() {
@@ -1138,7 +1299,12 @@ if (resolve(process.argv[1]) === import.meta.filename) {
   else if (mode === "writer") await write();
   else if (mode === "inspect-task") await inspectTask();
   else if (mode === "task-sidecar") await taskSidecar();
-  else if (mode === "search-candidates" || mode === "search-candidates-sweep")
-    await searchCandidates(mode === "search-candidates-sweep");
+  else if (mode === "search-windows" || mode === "search-candidates")
+    await searchWindows();
+  else if (
+    mode === "search-windows-sweep" ||
+    mode === "search-candidates-sweep"
+  )
+    await searchWindowSweep();
   else await run();
 }

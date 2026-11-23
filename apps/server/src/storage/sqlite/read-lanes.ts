@@ -273,8 +273,7 @@ function readOperation(c: SqliteCommand): string {
         return "library_search_page.state-fallback";
       if (c.request.fullRelevance || c.request.limit > 200)
         return "library_search_page.selection";
-      if (c.request.sort === "relevance" || c.request.relevanceForLargeScope)
-        return "library_search_page.relevance";
+      if (c.request.ftsQuery !== null) return "library_search_page.relevance";
       return needsLibraryState(c.request.query)
         ? "library_search_page.state-filter"
         : "library_search_page.page";

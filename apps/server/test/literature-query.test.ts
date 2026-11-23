@@ -180,6 +180,9 @@ it("searches authoritative metadata with Unicode/AND filters and stable versione
       );
       expect(Buffer.from(raw).toString("base64url")).toBe(page.next_cursor);
     }
+    expect(normalizeQueryText("  Ada   LOVELACE Jr.  ")).toBe(
+      "ada lovelace jr.",
+    );
     expect(normalizeQueryText("  Straße\u0085ΟΣ İ  ")).toBe("strasse οσ i̇");
     expect(ftsIndexText("Straße OR 你好 — İ")).toBe("strasse 你好 i̇");
     await app.observations.publish({

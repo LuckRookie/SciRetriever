@@ -174,7 +174,7 @@ function usage(options: CliOptions): CliResult {
     "  discover topic QUERY | discover citations --seed-literature-id ID\n" +
     "  metadata lookup ID[,ID] | sources statistics --request FILE|-\n" +
     "  complete pdf|parser [--literature-id ID] [--transfers ID,...]\n" +
-    "  literature search [query options] [--collection-scope collected|all] | show ID | references ID | cited-by ID\n" +
+    "  literature search [query options] [--collection-scope collected|all] [--window-cursor CURSOR] | show ID | references ID | cited-by ID\n" +
     "  literature counts --request FILE|-  # full_text counts papers (MetaLiterature); statuses and with_primary_pdf count versions; read-only\n" +
     "  literature exact-count --request FILE|-  # kind=counts|facets|search-total, query, limit for facets; one read snapshot\n" +
     "    --needs-metadata | --no-needs-metadata filters the independent bibliographic recognition mark\n" +
@@ -1684,6 +1684,9 @@ async function execute(
       args[2] === undefined || args[2].startsWith("--") ? null : args[2];
     const text = argument(args, "--text") ?? positionalText;
     const sort = argument(args, "--sort");
+    const windowCursor = argument(args, "--window-cursor");
+    if (windowCursor === null && args.includes("--window-cursor"))
+      invalidInput();
     const value = await withQueryApplication(options, (app) =>
       app.query.search(
         {
@@ -1691,6 +1694,7 @@ async function execute(
           ...(sort === null ? {} : { sort }),
           limit: integerOption(args, "--limit", 50),
           cursor: argument(args, "--cursor"),
+          ...(windowCursor === null ? {} : { window_cursor: windowCursor }),
         },
         options.signal,
         "browse",

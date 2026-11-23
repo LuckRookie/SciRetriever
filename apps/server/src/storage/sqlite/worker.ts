@@ -90,12 +90,12 @@ import {
 import type {
   LibraryCollectRequest,
   LibraryPageQuery,
-  LibraryRelevanceWindow,
+  LibrarySearchWindow,
   SearchSnapshotRow,
 } from "../../literature/query.js";
 import {
   LibrarySortScopeLimitError,
-  parseLibraryRelevanceWindow,
+  parseLibrarySearchWindow,
 } from "../../literature/query.js";
 import { MetadataTextNormalization } from "../../literature/unicode-casefold.js";
 import { RetrievalStorageError } from "../../retrieval/model.js";
@@ -423,6 +423,7 @@ export type SqliteCommand =
       readonly request: import("@sciretriever/contracts").LibraryQuery;
       readonly limit: number;
       readonly ftsQuery: string | null;
+      readonly beforeRowid?: string;
     }
   | {
       readonly kind: "acquire_pdf_selection";
@@ -780,6 +781,7 @@ export type SqliteCommand =
       readonly kind: "library_counts";
       readonly query: LibraryPageQuery["query"];
       readonly ftsQuery: string | null;
+      readonly beforeRowid?: string;
       readonly counterRead?: "defer";
     }
   | {
@@ -3208,9 +3210,16 @@ export class SqliteWorker {
     limit: number,
     ftsQuery: string | null,
     signal?: AbortSignal,
+    beforeRowid?: string,
   ) {
     return this.run<import("@sciretriever/contracts").LibraryFacets>(
-      { kind: "library_facets", request: query, limit, ftsQuery },
+      {
+        kind: "library_facets",
+        request: query,
+        limit,
+        ftsQuery,
+        ...(beforeRowid === undefined ? {} : { beforeRowid }),
+      },
       signal,
     );
   }
@@ -3386,8 +3395,14 @@ export class SqliteWorker {
     query: LibraryPageQuery["query"],
     ftsQuery: string | null,
     signal?: AbortSignal,
+    beforeRowid?: string,
   ): Promise<LibraryCounts> {
-    const command = { kind: "library_counts" as const, query, ftsQuery };
+    const command = {
+      kind: "library_counts" as const,
+      query,
+      ftsQuery,
+      ...(beforeRowid === undefined ? {} : { beforeRowid }),
+    };
     if (
       this.options.readLane &&
       ftsQuery === null &&
@@ -3496,14 +3511,14 @@ export class SqliteWorker {
       readonly rows: readonly SearchSnapshotRow[];
       readonly tag_backfill_pending?: number;
       readonly ranking_id?: string;
-      readonly candidate_window?: LibraryRelevanceWindow;
+      readonly search_window?: LibrarySearchWindow;
     }
   > {
     type Page = {
       rows: unknown;
       tag_backfill_pending?: number;
       ranking_id?: string;
-      candidate_window?: unknown;
+      search_window?: unknown;
     } & Record<string, unknown>;
     const result = await this.run<Page | { defer: true }>(
       {
@@ -3521,8 +3536,7 @@ export class SqliteWorker {
             globalLibraryCountScope(request.query) !== null)) &&
         !request.fullRelevance &&
         request.limit <= 200 &&
-        request.sort !== "relevance" &&
-        !request.relevanceForLargeScope
+        request.ftsQuery === null
           ? { stateRead: "defer" as const }
           : {}),
       },
@@ -3539,15 +3553,15 @@ export class SqliteWorker {
       rows: rawRows,
       tag_backfill_pending,
       ranking_id,
-      candidate_window,
+      search_window,
       ...summary
     } = page;
     let total: LibrarySearchTotal;
-    let window: LibraryRelevanceWindow | undefined;
+    let window: LibrarySearchWindow | undefined;
     try {
       total = parseLibrarySearchTotal(summary);
-      if (candidate_window !== undefined)
-        window = parseLibraryRelevanceWindow(candidate_window);
+      if (search_window !== undefined)
+        window = parseLibrarySearchWindow(search_window);
     } catch {
       throw new SqliteWorkerError();
     }
@@ -3565,7 +3579,8 @@ export class SqliteWorker {
     )
       throw new SqliteWorkerError();
     if (
-      ((ranking_id !== undefined || window !== undefined) &&
+      total.scan_incomplete !== window?.scan_incomplete ||
+      ((ranking_id !== undefined || window?.scan_incomplete) &&
         ((request.sort !== "relevance" && !request.relevanceForLargeScope) ||
           request.fullRelevance)) ||
       (ranking_id !== undefined &&
@@ -3577,7 +3592,7 @@ export class SqliteWorker {
       ...total,
       ...(tag_backfill_pending === undefined ? {} : { tag_backfill_pending }),
       ...(ranking_id === undefined ? {} : { ranking_id }),
-      ...(window ? { candidate_window: window } : {}),
+      ...(window ? { search_window: window } : {}),
     };
   }
   async librarySnapshot(

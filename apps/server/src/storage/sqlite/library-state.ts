@@ -54,25 +54,48 @@ interface LiteratureState {
   missing_step: MissingStep | null;
 }
 
-/** Each proof of selection is joined by literature ID, including during migration. */
-export function historicalCollectionSql(id: string) {
-  return `(
-    EXISTS(SELECT 1 FROM intake_batch_members m JOIN intake_batches b USING(batch_id)
-      WHERE m.literature_id=${id} AND b.kind='import')
-    OR EXISTS(SELECT 1 FROM reading_history WHERE literature_id=${id})
-    OR EXISTS(SELECT 1 FROM folder_members WHERE literature_id=${id})
-    OR EXISTS(SELECT 1 FROM snapshot_members WHERE literature_id=${id})
-    OR EXISTS(SELECT 1 FROM intake_batch_objects WHERE object_kind='folder-member'
-      AND CASE WHEN json_valid(object_id) THEN json_extract(object_id,'$[1]') END=${id})
-    OR EXISTS(SELECT 1 FROM archive_runs WHERE literature_id=${id})
-    OR EXISTS(SELECT 1 FROM execution_targets t JOIN execution_jobs j USING(job_id)
-      WHERE t.literature_id=${id} AND ${collectionTaskTargetSql("t", "j")} AND (
+function historicalCollectionProofs(id?: string) {
+  const owner = (column: string) =>
+    id === undefined ? "" : `AND ${column}=${id}`;
+  const folderMember =
+    "CASE WHEN json_valid(object_id) THEN json_extract(object_id,'$[1]') END";
+  return [
+    `SELECT m.literature_id FROM intake_batch_members m JOIN intake_batches b USING(batch_id)
+      WHERE b.kind='import' ${owner("m.literature_id")}`,
+    ...[
+      "reading_history",
+      "folder_members",
+      "snapshot_members",
+      "archive_runs",
+    ].map(
+      (table) =>
+        `SELECT literature_id FROM ${table} WHERE true ${owner("literature_id")}`,
+    ),
+    `SELECT ${folderMember} AS literature_id FROM intake_batch_objects
+      WHERE object_kind='folder-member' ${owner(folderMember)}`,
+    `SELECT t.literature_id FROM execution_targets t JOIN execution_jobs j USING(job_id)
+      WHERE ${collectionTaskTargetSql("t", "j")} ${owner("t.literature_id")} AND (
         EXISTS(SELECT 1 FROM execution_events e WHERE e.job_id=t.job_id AND e.kind='task-start-requested')
         OR EXISTS(SELECT 1 FROM execution_attempts a WHERE a.target_id=t.target_id)
-      ))
-    OR EXISTS(SELECT 1 FROM tag_assignment_changes c
-      WHERE c.literature_id=${id} AND ${historicalManualTagSql(id)})
-  )`;
+      )`,
+    `SELECT c.literature_id FROM tag_assignment_changes c
+      WHERE ${historicalManualTagSql(id ?? "c.literature_id")} ${owner("c.literature_id")}`,
+  ];
+}
+
+/** Each proof of selection is joined by literature ID, including during migration. */
+export function historicalCollectionSql(id: string) {
+  return `(${historicalCollectionProofs(id)
+    .map((sql) => `EXISTS(${sql})`)
+    .join(" OR ")})`;
+}
+
+/** During backfill, enumerate the same durable proofs from their own tables. */
+export function collectedMembersSql(ready: boolean) {
+  const stored = "SELECT literature_id FROM library_collected";
+  return ready
+    ? stored
+    : [stored, ...historicalCollectionProofs()].join(" UNION ");
 }
 
 export function recordCollectedLiteratures(

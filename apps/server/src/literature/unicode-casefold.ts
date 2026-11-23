@@ -1582,6 +1582,9 @@ export function normalizeQueryText(value: string): string {
   return normalizeCached(value, normalizedTextCache?.queries, queryText);
 }
 function queryText(value: string): string {
+  // NFC leaves printable ASCII unchanged. Only U+0020 needs collapsing.
+  if (/^[\x20-\x7e]*$/u.test(value))
+    return value.trim().replace(/ {2,}/gu, " ").toLowerCase();
   let normalized = "",
     pendingSpace = false;
   for (const character of value.normalize("NFC")) {

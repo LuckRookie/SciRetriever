@@ -13,7 +13,7 @@
 - [worker-runtime.ts](worker-runtime.ts)：SQLite worker 运行实现。
 - [citation-progress.ts](citation-progress.ts) 将引用扩展的待查队列、原因去重、待补查队列和未完成查询的回放键放入临时 SQLite。持久来源为与发现结果同一事务提交的 `citation-write-checkpoint`。恢复按事件序号每页取 32 条，执行按索引取各队列的最早待查项。旧检查点中尚未发布的原因按段补写。
 - [literature-search-rows.ts](literature-search-rows.ts) 使用内容表的 `c0` 覆盖索引按文献 ID 找到书目 FTS 的 rowid，供改写和撤回使用。FTS5 内部内容表的文件格式规定 `id` 为 rowid，`c0` 为第一个声明列，此处是 `literature_id`。SQLite 随每次 FTS 写入维护该索引。
-- [library-page.ts](library-page.ts) 的相关度查询用 FTS5 rowid 倒序选择最新的命中，最多给固定数量的候选计算 BM25。多取的一条只用于判定截断。相关度排名缓存每个 worker 最多 16 份，每份最多 1,000 项。截断游标记录原候选窗口的 rowid 两端，未命中缓存时在该区间内按当前索引重排。SQLite BM25 的全局词频以及稀疏过滤所需的扫描独立于候选打分上限。
+- [library-page.ts](library-page.ts) 按 FTS5 rowid 倒序限制整库文字查询的原始命中，再筛选、计数、分面或排名。窗口外一条原始命中决定扫描是否未完。续查用最旧 rowid 的排他上界，窗口内的冷续页在原区间重排。文件夹、批次、收进来的文献和近期阅读从成员侧定位索引行。[library-search-rank.ts](library-search-rank.ts) 复用 FTS5 的词频、文档长度和命中位置计算成员的 BM25，每个查询短语读取一次全局词频。
 - [literature-search-schema-migration.ts](literature-search-schema-migration.ts) 接受五个旧结构 19 指纹与已经合并 04–07 的旧指纹，登记首个增补集 `library-scale-04-07`。首次切换将存量触发器改为按列名写入并保留原执行顺序。已完成的状态、计数和分页投影沿用原水位。需要补齐检索水位时，用迁移入口的 `--reconcile` 显式比对并登记差异。
 - [library-state.ts](library-state.ts) 保存在写事务中计算的文献状态和缺失步骤、选用记录以及回填游标。SQLite 触发器为其他写入者记录受影响的 Literature ID，后台以短事务核对。读取在同一快照内优先使用当前代的存储值，回填和后台核对期间按篇现算缺少或已改变的值。
 - [library-page.ts](library-page.ts) 依据首页总数选择允许的排序。收进来范围用 `collected_at`，其他范围用 `intake_at`。相关度查询在长请求道保留最多 16 个前 1,000 项的排名，续页沿用入选 ID 与评分并读取仍可见条目的当前事实。缓存淘汰或服务重启时重算。

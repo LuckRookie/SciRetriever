@@ -45,11 +45,12 @@ timeout --kill-after=45s 10m node apps/server/test/scale-acceptance.mjs 1m "$cop
 timeout --kill-after=45s 9m node apps/server/test/scale-acceptance.mjs task-sidecar "$copy_1m" "$report_dir/task-sidecar-1m.json"
 ```
 
-`search-candidates` 模式只测相关度第一页。两种规模均用相同的合成索引词构造 1,000 和 10,000 个命中，1m 另测 100,000 个命中。也测几乎命中全库的 `of` 和常用词 `spectroscopy`。从发出回环 HTTP 请求到解析完首批 50 项，各取 20 次，断言 P95 ≤1,500 ms，同期提交至少 100 篇/s。写测试索引词、启动与登录在计时之外。`search-candidates-sweep` 只测 `of`，用于比较不同构建的候选上限。
+`search-windows` 在 10k 和 1m 副本上测相关度第一页。两档用相同合成词构造 1,000 与 10,000 个原始命中，1m 另测 100,000 个。测近全库词 `in`、常用词 `spectroscopy`、三高频词 `studies of in`、零命中的作者子串，以及文件夹内的高频词与零命中组合。从发出回环 HTTP 请求到解析首批 50 项，各取 20 次，断言 P95 ≤1,500 ms，同期提交至少 100 篇/s。准备索引词、启动和登录在计时之外。`search-windows-sweep` 直接测同一读事务内的 SQLite 首页 ID 查询，用独立入库进程模拟写负载，以逗号分隔的试验上限量作者筛选、近全库词和三词组合，再比较原生 BM25 首行与仅取 rowid 的耗时，估计全局词频成本。
 
 ```sh
-timeout --kill-after=35s 5m node apps/server/test/scale-acceptance.mjs search-candidates "$copy_10k" "$report_dir/search-10k.json"
-timeout --kill-after=35s 8m node apps/server/test/scale-acceptance.mjs search-candidates "$copy_1m" "$report_dir/search-1m.json"
+timeout --kill-after=35s 5m node apps/server/test/scale-acceptance.mjs search-windows "$copy_10k" "$report_dir/search-10k.json"
+timeout --kill-after=35s 8m node apps/server/test/scale-acceptance.mjs search-windows-sweep "$copy_1m" "$report_dir/sweep-1m.json" 60000,80000,90000,100000,120000
+timeout --kill-after=35s 8m node apps/server/test/scale-acceptance.mjs search-windows "$copy_1m" "$report_dir/search-1m.json"
 ```
 
 [上级目录](../README.md) · [项目 README](../../../README.md)

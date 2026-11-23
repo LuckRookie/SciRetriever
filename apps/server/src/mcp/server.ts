@@ -431,6 +431,9 @@ export function createMcpServer(options: McpOptions = {}) {
               query: { text: args.text },
               limit: args.limit,
               cursor: args.cursor,
+              ...(args.window_cursor === undefined
+                ? {}
+                : { window_cursor: args.window_cursor }),
               ...(args.text ? { sort: "relevance" } : {}),
             },
         signal,

@@ -326,6 +326,7 @@ export interface LibrarySearchRequest<Sort = LibrarySort> {
   readonly sort: Sort;
   readonly limit: number;
   readonly cursor: string | null;
+  readonly window_cursor?: string;
 }
 export interface DiscoveryOrigin {
   readonly kind: "topic" | "citation";
@@ -372,8 +373,10 @@ export interface LibrarySearchPage extends LibrarySearchTotal {
   readonly tag_backfill_pending?: number;
   /** Present when only the highest-ranked results are available to paginate. */
   readonly relevance_limit?: typeof RELEVANCE_RESULT_LIMIT;
-  /** Present only when relevance ranking used this many newest matches. */
-  readonly relevance_candidate_limit?: number;
+  /** Raw FTS hits in an incomplete scan window, before applying filters. */
+  readonly scan_limit?: number;
+  /** Start a search (or counts/facets) in the next, earlier raw-hit window. */
+  readonly next_window_cursor?: string;
   readonly items: readonly LiteratureSearchItem[];
   readonly next_cursor: string | null;
 }
@@ -530,14 +533,21 @@ export function parseReferenceDetail(value: unknown): ReferenceDetail {
 export function parseLibrarySearchRequest(
   value: unknown,
 ): LibrarySearchRequest {
+  const input = object(value, []);
   const r = exact(
     {
       sort: "intake-desc",
       limit: 50,
       cursor: null,
-      ...object(value, []),
+      ...input,
     },
-    ["query", "sort", "limit", "cursor"],
+    [
+      "query",
+      "sort",
+      "limit",
+      "cursor",
+      ...(Object.hasOwn(input, "window_cursor") ? ["window_cursor"] : []),
+    ],
     [],
   );
   const query = parseLibraryQuery({
@@ -562,7 +572,7 @@ export function parseLibrarySearchRequest(
     ...object(r.query, []),
   });
   const sort = enumeration<LibrarySort>(
-    !Object.hasOwn(object(value, []), "sort") && query.recently_opened
+    !Object.hasOwn(input, "sort") && query.recently_opened
       ? "opened-desc"
       : r.sort,
     [
@@ -581,12 +591,29 @@ export function parseLibrarySearchRequest(
   if (sort === "relevance" && query.text === null) fail();
   if (r.cursor !== null && (typeof r.cursor !== "string" || !r.cursor.trim()))
     fail();
+  const window = parseOptionalLibraryWindowCursor(r, query);
+  if (window.window_cursor && r.cursor !== null) fail();
   return Object.freeze({
     query,
     sort,
     limit: integer(r.limit, [], 1, Number.MAX_SAFE_INTEGER),
     cursor: r.cursor as string | null,
+    ...window,
   });
+}
+export function parseOptionalLibraryWindowCursor(
+  request: Record<string, unknown>,
+  query: LibraryQuery,
+): { readonly window_cursor?: string } {
+  if (!Object.hasOwn(request, "window_cursor")) return {};
+  const { window_cursor } = request;
+  if (
+    query.text === null ||
+    typeof window_cursor !== "string" ||
+    !/^[A-Za-z0-9_-]{1,1024}$/u.test(window_cursor)
+  )
+    return fail();
+  return { window_cursor };
 }
 export function parseCollectLiteraturesRequest(
   value: unknown,

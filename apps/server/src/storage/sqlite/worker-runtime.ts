@@ -6058,6 +6058,9 @@ port.on("message", (message: WorkerMessage) => {
             db,
             command.query,
             command.ftsQuery,
+            false,
+            Date.now(),
+            command.beforeRowid,
           );
         });
         break;
@@ -6090,6 +6093,9 @@ port.on("message", (message: WorkerMessage) => {
             c.request,
             c.ftsQuery,
             c.limit,
+            false,
+            Date.now(),
+            c.beforeRowid,
           );
         });
         break;

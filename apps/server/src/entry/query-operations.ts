@@ -541,8 +541,10 @@ async function readQuery(
       return readLibraryArtifact(q, value, signal);
     case "bibliography-export":
       return exportBibliographyRequest(q, value);
-    case "library-counts":
-      return q.query.counts(operationRecord(value, ["query"]).query, signal);
+    case "library-counts": {
+      const r = operationRecord(value, ["query"], ["window_cursor"]);
+      return q.query.counts(r.query, signal, r.window_cursor);
+    }
     case "library-exact-count":
       return q.query.exactCount(value, signal);
     case "library-search":
