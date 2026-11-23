@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdir, mkdtemp, open, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -26,9 +26,13 @@ import { RetrievalStorageClient } from "../src/storage/sqlite/retrieval-client.j
 import { IndexRefreshService } from "../src/retrieval/refresh.js";
 import { CatalogWriteAdmission } from "../src/storage/write-admission.js";
 import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
-import { createQueryApplication } from "../src/bootstrap/application.js";
+import {
+  createApplication,
+  createQueryApplication,
+} from "../src/bootstrap/application.js";
 import { startProductionWorkbench } from "../src/bootstrap/workbench.js";
 import { parseConfiguration } from "../src/configuration/index.js";
+import { parseCredentialText } from "../src/configuration/credentials.js";
 import { runCli } from "../src/cli/main.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import { startQueryOnlyHttp } from "../src/workbench/http.js";
@@ -156,6 +160,85 @@ it("serves an initialized production workbench without running the explicit insp
     } finally {
       await server?.close();
       probe.mockRestore();
+    }
+  }));
+
+it("checks WAL on a worker separate from verification and truncates after readers release", async () =>
+  fixture(async (home, catalog) => {
+    const verification = vi.spyOn(SqliteWorker.prototype, "retrieval");
+    const checkpoint = vi.spyOn(SqliteWorker.prototype, "idleWalCheckpoint");
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    let app: Awaited<ReturnType<typeof createApplication>> | undefined;
+    const writer = new DatabaseSync(catalog);
+    const reader = new DatabaseSync(catalog, { readOnly: true });
+    const tick = async (n: number) => {
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(checkpoint).toHaveBeenCalledTimes(n);
+      const result = await checkpoint.mock.results[n - 1]!.value;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      return result;
+    };
+    try {
+      writer.exec("PRAGMA wal_autocheckpoint=0");
+      app = await createApplication(home, {
+        metadata: {},
+        browserHost: () => null,
+        maintainWal: true,
+        indexRefreshIntervalMs: null,
+        startupCredentials: parseCredentialText(""),
+      });
+      await app.maintenance!.verifyCatalog();
+      const indexWorker =
+        verification.mock.contexts[
+          verification.mock.calls.findIndex(
+            ([operation]) => operation === "verifyCatalog",
+          )
+        ];
+      expect(indexWorker).toBeInstanceOf(SqliteWorker);
+
+      writer.exec(
+        "INSERT INTO folders VALUES('wal-test',NULL,'before',0,'2026-11-24','2026-11-24')",
+      );
+      reader.exec("BEGIN");
+      const selected = reader.prepare(
+        "SELECT name FROM folders WHERE folder_id='wal-test'",
+      );
+      expect(selected.get()?.name).toBe("before");
+      writer.exec("UPDATE folders SET name='after' WHERE folder_id='wal-test'");
+
+      const fresh = await tick(1);
+      expect(fresh.before!.size).toBeGreaterThan(0);
+      expect(fresh.passive).toBeNull();
+      expect(checkpoint.mock.contexts[0]).not.toBe(indexWorker);
+
+      const aged = new Date(Date.now() - 16_000);
+      await utimes(`${catalog}-wal`, aged, aged);
+      const pinned = await tick(2);
+      expect(pinned.passive!.busy).toBe(0);
+      expect(pinned.passive!.checkpointed).toBeLessThan(pinned.passive!.log);
+      expect(pinned.truncate).toBeNull();
+      expect(selected.get()?.name).toBe("before");
+      reader.exec("COMMIT");
+
+      const released = await tick(3);
+      expect(released.passive).toEqual({
+        busy: 0,
+        log: pinned.passive!.log,
+        checkpointed: pinned.passive!.log,
+      });
+      expect(released.truncate).toEqual({ busy: 0, log: 0, checkpointed: 0 });
+      expect(released.after?.size).toBe(0);
+      expect(selected.get()?.name).toBe("after");
+    } finally {
+      reader.close();
+      writer.close();
+      try {
+        await app?.close();
+      } finally {
+        vi.useRealTimers();
+        verification.mockRestore();
+        checkpoint.mockRestore();
+      }
     }
   }));
 

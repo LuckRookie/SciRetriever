@@ -901,6 +901,25 @@ export interface SqliteSnapshotCounts {
   readonly tables: Readonly<Record<string, number>>;
 }
 
+export interface WalCheckpointFrames {
+  readonly busy: number;
+  readonly log: number;
+  readonly checkpointed: number;
+}
+
+interface WalFileState {
+  readonly size: number;
+  readonly mtime_ms: number;
+}
+
+export interface IdleWalCheckpointResult {
+  readonly started_at_ms: number;
+  readonly before: WalFileState | null;
+  readonly after: WalFileState | null;
+  readonly passive: WalCheckpointFrames | null;
+  readonly truncate: WalCheckpointFrames | null;
+}
+
 export type ExecutionJobStatus =
   | "queued"
   | "running"
@@ -3965,7 +3984,7 @@ export class SqliteWorker {
     return this.run({ kind: "snapshot_counts" });
   }
 
-  idleWalCheckpoint(): Promise<boolean> {
+  idleWalCheckpoint(): Promise<IdleWalCheckpointResult> {
     return this.run({ kind: "idle_wal_checkpoint" });
   }
 

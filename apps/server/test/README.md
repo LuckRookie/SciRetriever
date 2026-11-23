@@ -24,6 +24,8 @@
 
 1m 的五项 P95 上限分别是 1,000、200、1,000、1,500、500 ms，来自[查询技术篇 2.4](../../../docs/architecture/technical/06-retrieval-context.md#24-规模与目标耗时)。同一查询和响应批量下，`P95(1m) / P95(10k)` 的上限取 3，给索引层级和共享机器的 I/O 抖动留余量。索引延迟从提交到活动索引修订覆盖该提交，按 250 ms 轮询算上界，最长 120 s。任务详情仍在执行时另测翻页、单篇、状态、PDF Range。任一短读超过 5 s 或产生日志 `sqlite-short-read-slow` 即失败。超过单项指标十倍时结束该轮采样，保留已测数据并返回非零。任务的紧接读取仅用于诊断缓存影响。
 
+两档都在读请求结束、入库进程退出和索引追平后开始 WAL 验收。连续空闲起点取开始观察与最后一次 WAL 修改的较晚者，到 WAL 收缩至 0 字节最多 30 秒，若总观察 60 秒仍未收缩也判失败。JSON 记录 WAL 大小、修改时间、检查发出和实际开始的时间、每次 PASSIVE 和 TRUNCATE 的 `busy`／`log`／`checkpointed`，以及 Linux 在检查前后可见的 SQLite WAL 读锁进程。
+
 ```sh
 export COREPACK_ENABLE_NETWORK=0 npm_config_offline=true
 pnpm build

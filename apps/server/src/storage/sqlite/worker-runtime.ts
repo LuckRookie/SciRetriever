@@ -17,7 +17,11 @@ import {
 import { existsSync, statSync } from "node:fs";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { parentPort, workerData } from "node:worker_threads";
-import type { SqliteCommand } from "./worker.js";
+import type {
+  IdleWalCheckpointResult,
+  SqliteCommand,
+  WalCheckpointFrames,
+} from "./worker.js";
 import type { RetrievalStorageEngine } from "./retrieval-engine.js";
 /** Dynamic values are confined to SQLite rows and JSON columns at this adapter boundary. */
 type Dynamic = ReturnType<typeof JSON.parse>;
@@ -5118,31 +5122,46 @@ function counts(): Dynamic {
     );
   return { tables: result };
 }
-function idleWalCheckpoint(): boolean {
+function idleWalCheckpoint(): IdleWalCheckpointResult {
   if (data.read_only) fail();
-  if (data.path === ":memory:") return false;
-  const wal = () => statSync(data.path + "-wal", { throwIfNoEntry: false });
-  const before = wal();
-  if (!before?.size || Date.now() - before.mtimeMs < 15_000) return false;
+  const wal = () => {
+    const stat = statSync(data.path + "-wal", { throwIfNoEntry: false });
+    return stat ? { size: stat.size, mtime_ms: stat.mtimeMs } : null;
+  };
+  const before = data.path === ":memory:" ? null : wal();
+  const started_at_ms = Date.now();
+  if (!before?.size || started_at_ms - before.mtime_ms < 15_000)
+    return {
+      started_at_ms,
+      before,
+      after: before,
+      passive: null,
+      truncate: null,
+    };
   // PASSIVE can flush a backlog without waiting on foreign readers or writers.
   // Only truncate a fully checkpointed, idle WAL, with a zero busy timeout.
   const maintenance = new DatabaseSync(data.path);
   try {
     maintenance.exec("PRAGMA busy_timeout=0");
-    const passive = maintenance
-      .prepare("PRAGMA wal_checkpoint(PASSIVE)")
-      .get()!;
+    const checkpoint = (mode: "PASSIVE" | "TRUNCATE"): WalCheckpointFrames => {
+      const row = maintenance.prepare(`PRAGMA wal_checkpoint(${mode})`).get()!;
+      return {
+        busy: Number(row.busy),
+        log: Number(row.log),
+        checkpointed: Number(row.checkpointed),
+      };
+    };
+    const passive = checkpoint("PASSIVE");
     const after = wal();
     if (
       passive.busy !== 0 ||
       passive.log !== passive.checkpointed ||
-      after?.mtimeMs !== before.mtimeMs ||
+      after?.mtime_ms !== before.mtime_ms ||
       after.size !== before.size
     )
-      return false;
-    return (
-      maintenance.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()!.busy === 0
-    );
+      return { started_at_ms, before, after, passive, truncate: null };
+    const truncate = checkpoint("TRUNCATE");
+    return { started_at_ms, before, after: wal(), passive, truncate };
   } finally {
     maintenance.close();
   }

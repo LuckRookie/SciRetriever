@@ -34,6 +34,7 @@ import { queryTerms } from "../dist/literature/query.js";
 import { normalizeQueryText } from "../dist/literature/unicode-casefold.js";
 import { SqliteWorker } from "../dist/storage/sqlite/worker.js";
 import { CatalogWriteAdmission } from "../dist/storage/write-admission.js";
+import { traceWalChecks, watchIdleWal } from "./scale-wal.mjs";
 
 const [mode, directory, destination, reference] = process.argv.slice(2);
 const root = resolve(directory);
@@ -150,22 +151,17 @@ async function serve() {
   watchParent();
   if (destination === "count-backfill") traceBackfill();
   const traceWrites = destination === "trace-writes";
-  if (destination === "trace-wal") {
-    const idle = SqliteWorker.prototype.idleWalCheckpoint;
-    SqliteWorker.prototype.idleWalCheckpoint = async function () {
-      const file = await stat(catalog + "-wal").catch((error) => {
-        if (error.code !== "ENOENT") throw error;
-        return null;
-      });
-      const idle_ms = file ? Date.now() - file.mtimeMs : null;
-      const truncated = await idle.call(this);
-      if (process.connected)
-        process.send({
-          wal_check: { idle_ms, truncated, size: file?.size ?? 0 },
-        });
-      return truncated;
-    };
-  }
+  if (destination === "trace-wal")
+    traceWalChecks(
+      SqliteWorker,
+      catalog,
+      (wal_check) => {
+        if (process.connected) process.send({ wal_check });
+      },
+      (wal_check_requested) => {
+        if (process.connected) process.send({ wal_check_requested });
+      },
+    );
   if (traceWrites) {
     const run = CatalogWriteAdmission.prototype.run;
     CatalogWriteAdmission.prototype.run = async function (operation, signal) {
@@ -1994,14 +1990,25 @@ async function run() {
     points: [],
     index: { upper_bounds_ms: [] },
     short_reads: {},
+    wal: [],
+    wal_checks: [],
+    wal_check_requests: [],
   };
   const save = () =>
     writeFile(output, JSON.stringify(result, null, 2) + "\n", { mode: 0o600 });
   const runtime = await acquireExecutionRuntime(catalog);
-  let server, writer, probe;
+  let server, writer, probe, serviceReady;
   try {
-    server = spawn("serve", result.warnings);
-    const { origin } = await server.first();
+    server = spawn("serve", result.warnings, "trace-wal");
+    server.child.on("message", (event) => {
+      if (event.wal_check) result.wal_checks.push(event.wal_check);
+      if (event.wal_check_requested)
+        result.wal_check_requests.push(event.wal_check_requested);
+    });
+    const { origin } = await server.first(
+      (event) => typeof event.origin === "string",
+    );
+    serviceReady = true;
     const request = await client(origin);
     const search = async (input) => {
       const { page } = await request("/api/v1/query/search", input);
@@ -2195,6 +2202,12 @@ async function run() {
       result.failures.push(String(error));
     } finally {
       probe?.close();
+    }
+    try {
+      if (serviceReady) await watchIdleWal(catalog, result.wal, stop.signal);
+    } catch (error) {
+      result.failures.push(String(error));
+      await save().catch((failure) => result.failures.push(String(failure)));
     }
     try {
       await server?.close();

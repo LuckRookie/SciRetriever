@@ -843,6 +843,7 @@ async function createApplicationOwned(
   let retrievalIndex: RetrievalIndexService | null = null;
   let indexDatabase: SqliteWorker | undefined;
   let indexRefresh: IndexRefreshService | null = null;
+  let walDatabase: SqliteWorker | undefined;
   let walTimer: ReturnType<typeof setInterval> | undefined;
   let walCheck: Promise<void> | undefined;
   let stateTimer: ReturnType<typeof setTimeout> | undefined;
@@ -906,6 +907,7 @@ async function createApplicationOwned(
           clearInterval(walTimer);
           await walCheck;
         },
+        () => walDatabase?.close(),
         async () => {
           clearTimeout(stateTimer);
           stateStop.abort();
@@ -1704,11 +1706,15 @@ async function createApplicationOwned(
     };
     scheduleState(25);
     if (options.maintainWal) {
-      const checkWal = indexDatabase.idleWalCheckpoint.bind(indexDatabase);
+      const checkWal = async () => {
+        // Catalog and index verification can occupy the index worker for minutes.
+        // Let SQLite report a pinned snapshot without queuing behind the verifier.
+        walDatabase ??= new SqliteWorker(catalogPath);
+        await walDatabase.idleWalCheckpoint();
+      };
       walTimer = setInterval(() => {
         if (walCheck) return;
         walCheck = checkWal()
-          .then(() => {})
           .catch(() =>
             logger.warn("Idle catalog checkpoint failed", {
               code: "wal-checkpoint-failed",
