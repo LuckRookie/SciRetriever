@@ -1265,6 +1265,18 @@
   .library-status-updating {
     margin-inline-start: var(--space-2);
   }
+  /* The scan window in words, with the way back and the way on. */
+  .library-relevance-limit {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0 var(--space-2);
+  }
+  .library-window-end {
+    margin: 0;
+    padding: var(--space-3) var(--space-2);
+    text-align: center;
+  }
   .library-count-error {
     color: var(--status-problem);
     font-size: var(--text-secondary);

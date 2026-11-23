@@ -706,3 +706,214 @@ it("saves a filter in the order “最近收进来” and reads it back unchange
     await w.close();
   }
 }, 90000);
+
+/**
+ * Whole-library text search reads windows of raw hits (technical 06 2.4).
+ * The fixture is far below the 95,000 hits of a window, so the service's
+ * window receipts are given here, in their contract shape, over its answers.
+ */
+async function scanWindows(
+  page: Page,
+  options: { empty?: string; truncated?: boolean } = {},
+) {
+  const asked: { name: string; window: string | null }[] = [];
+  for (const name of ["search", "library-counts", "library-facets"])
+    await page.route(
+      (url) => url.pathname === `/api/v1/query/${name}`,
+      async (route) => {
+        const body = route.request().postDataJSON() as {
+          protocol_version: number;
+          request: Record<string, unknown> & {
+            query?: { text?: string | null };
+            cursor?: string | null;
+          };
+        };
+        const request = body.request;
+        const text = request.query?.text ?? null;
+        const window =
+          typeof request.window_cursor === "string"
+            ? request.window_cursor
+            : null;
+        if (
+          !text ||
+          (request.query as Record<string, unknown> | undefined)
+            ?.collection_scope
+        )
+          return route.continue();
+        asked.push({ name, window });
+        const { window_cursor: _drop, ...rest } = request;
+        void _drop;
+        const response = await route.fetch({
+          postData: JSON.stringify({ ...body, request: rest }),
+        });
+        const value = (await response.json()) as Record<
+          string,
+          Record<string, unknown>
+        >;
+        // The first window has older hits left; the second is the last.
+        const first = window === null;
+        if (name === "search") {
+          const p = value.page!;
+          if (text === options.empty) {
+            p.items = [];
+            p.total_count = 0;
+            p.next_cursor = null;
+          }
+          if (first && request.cursor == null) {
+            Object.assign(p, {
+              scan_incomplete: true,
+              scan_limit: 95000,
+              next_window_cursor: "window-2",
+              relevance_limit: 1000,
+              ...(options.truncated
+                ? { total_count: 10000, count_truncated: true }
+                : {}),
+            });
+          }
+        } else if (first) value.result!.scan_incomplete = true;
+        return route.fulfill({ response, json: value });
+      },
+    );
+  return asked;
+}
+
+it("says a search with older hits unread finds at least so many, goes on to the earlier hits and back, and keeps relevance alone", async () => {
+  const w = await nextWorkspace({ setup: withDiscovered });
+  try {
+    const page = w.page;
+    const asked = await scanWindows(page);
+    await page.goto(
+      new URL(`/?view=lib&query=${encode({ text: "Discovered" })}`, page.url())
+        .href,
+    );
+    const count = page.locator(".ui-page-header .ui-page-count");
+    // A lower bound, never an exact number.
+    await expect.poll(() => count.textContent()).toBe("至少 2 篇符合");
+    const scope = page.locator(".library-search-scope");
+    await expect
+      .poll(() => scope.locator(".library-relevance-limit").textContent())
+      .toBe(
+        "在最近写入索引的 95,000 条命中里按相关度显示前 1,000 条在更早的命中里继续找",
+      );
+    const quick = page.locator(".library-status-filters");
+    await expect
+      .poll(() =>
+        quick
+          .getByRole("button", { name: /^全部/u })
+          .locator(".filter-count")
+          .textContent(),
+      )
+      .toMatch(/^\d+\+$/u);
+    // At the end of the window, the way on, beside the rows.
+    const end = page.locator(".library-window-end");
+    await end.getByRole("button", { name: "在更早的命中里继续找" }).waitFor();
+
+    // Only relevance can be paged: the others are disabled, saying why.
+    await page
+      .getByRole("button", { name: /排序/u })
+      .and(page.locator('[aria-haspopup="listbox"]'))
+      .click();
+    const options = page.getByRole("option");
+    await options.first().waitFor();
+    const states = await options.evaluateAll((items) =>
+      items.map((item) => [
+        item.querySelector('[slot="label"]')?.textContent ?? "",
+        item.getAttribute("aria-disabled") === "true",
+      ]),
+    );
+    expect(states.find(([label]) => label === "相关度")?.[1]).toBe(false);
+    expect(
+      states.filter(([label]) => label !== "相关度").every(([, off]) => off),
+    ).toBe(true);
+    expect(await page.getByRole("listbox").textContent()).toContain(
+      "超过 1 万篇时只能按这几种排序；先加条件，或缩小范围",
+    );
+    await page.keyboard.press("Escape");
+
+    // On to the earlier hits: the list and the counts move together.
+    asked.length = 0;
+    await end
+      .getByRole("button", { name: "在更早的命中里继续找", exact: true })
+      .click();
+    await expect.poll(() => count.textContent()).toBe("这一批 2 篇符合");
+    await expect
+      .poll(() =>
+        asked.filter((a) => a.window === "window-2").map((a) => a.name),
+      )
+      .toEqual(expect.arrayContaining(["search", "library-counts"]));
+    await expect
+      .poll(() => scope.locator(".library-relevance-limit").textContent())
+      .toBe("在更早的第 2 批 95,000 条命中里查找回到最近的命中");
+    // The last window: nothing older to go on to.
+    expect(
+      await page.getByRole("button", { name: "在更早的命中里继续找" }).count(),
+    ).toBe(0);
+    await expect
+      .poll(() =>
+        quick
+          .getByRole("button", { name: /^全部/u })
+          .locator(".filter-count")
+          .textContent(),
+      )
+      .toMatch(/^\d+$/u);
+    // And back to the newest hits.
+    await scope
+      .getByRole("button", { name: "回到最近的命中", exact: true })
+      .click();
+    await expect.poll(() => count.textContent()).toBe("至少 2 篇符合");
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);
+
+it("says nothing was found in the newest hits, not in the library, and merges the 10,000 limit into one phrase", async () => {
+  const w = await nextWorkspace({ setup: withDiscovered });
+  try {
+    const page = w.page;
+    await scanWindows(page, { empty: "Nothing" });
+    await page.goto(
+      new URL(`/?view=lib&query=${encode({ text: "Nothing" })}`, page.url())
+        .href,
+    );
+    const empty = page.locator(".library-empty");
+    await empty
+      .getByText("最近写入索引的 95,000 条命中里没有，更早的还没查", {
+        exact: true,
+      })
+      .waitFor();
+    expect(await empty.getByText("没有符合条件的文献").count()).toBe(0);
+    // No “至少 0 篇”, and the line beside the sort keeps quiet: the list says it.
+    expect(await page.locator(".ui-page-header .ui-page-count").count()).toBe(
+      0,
+    );
+    expect(
+      await page
+        .locator(".library-search-scope .library-relevance-limit")
+        .count(),
+    ).toBe(0);
+    // None found yet is no number: “0” would say there are none.
+    const all = page
+      .locator(".library-status-filters")
+      .getByRole("button", { name: /^全部/u });
+    await all.waitFor();
+    expect(await all.textContent()).toBe("全部");
+    expect(await all.locator(".filter-count").count()).toBe(0);
+    await empty
+      .getByRole("button", { name: "在更早的命中里继续找", exact: true })
+      .waitFor();
+    await page.unrouteAll({ behavior: "wait" });
+    // Both limits: the 10,000 one says it, once.
+    await scanWindows(page, { truncated: true });
+    await page.goto(
+      new URL(`/?view=lib&query=${encode({ text: "Discovered" })}`, page.url())
+        .href,
+    );
+    await expect
+      .poll(() => page.locator(".ui-page-header .ui-page-count").textContent())
+      .toBe("1 万篇以上符合算出准确数");
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);

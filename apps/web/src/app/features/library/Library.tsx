@@ -68,6 +68,7 @@ import {
   libraryView,
   overCountLimit,
   pageQuery,
+  SCAN_INCOMPLETE_REASON,
   viewSort,
   literatureChoice,
   metadataTitleParts,
@@ -196,8 +197,20 @@ export default function Library() {
     setDisplay(value);
     preferences.write(DISPLAY_KEY, value);
   };
+  // A whole-library text search reads the newest window of raw hits first;
+  // the earlier windows it went on to, for this query and sort only (page
+  // specs “搜索结果”). Kept on the page, not in the address.
+  const windowKey = `${JSON.stringify(effective)}:${route.sort}`;
+  const [windows, setWindows] = useState<{
+    key: string;
+    cursors: readonly string[];
+    limit: number | null;
+  }>({ key: "", cursors: [], limit: null });
+  const windowCursors = windows.key === windowKey ? windows.cursors : [];
+  const windowCursor = windowCursors.at(-1) ?? null;
+  const windowNumber = windowCursors.length + 1;
   const scopeKey = `${queryString}:${route.sort}`;
-  const scrollKey = `${scopeKey}:${display}`;
+  const scrollKey = `${scopeKey}:${display}:${windowCursor ?? ""}`;
   if (!scrollPositions.has(api)) scrollPositions.set(api, new Map());
   if (!rowMeasurements.has(api)) rowMeasurements.set(api, new Map());
   const positions = scrollPositions.get(api)!;
@@ -414,9 +427,17 @@ export default function Library() {
   // the address.
   const [origin, setOrigin] = useState<SearchOrigin | null>(null);
   const next = useInfiniteQuery({
-    queryKey: ["library", effective, route.sort],
+    queryKey: ["library", effective, route.sort, windowCursor],
     queryFn: ({ pageParam, signal }) =>
-      searchLibrary(api, effective, route.sort, pageParam, signal),
+      searchLibrary(
+        api,
+        effective,
+        route.sort,
+        pageParam,
+        signal,
+        50,
+        windowCursor,
+      ),
     initialPageParam: null as string | null,
     getNextPageParam: (page) => page.cursor,
     placeholderData: keepPreviousData,
@@ -441,8 +462,39 @@ export default function Library() {
     next.error instanceof ApiError &&
     next.error.code === LIBRARY_SORT_SCOPE_LIMIT;
   const allowedSort = viewSort(route.query);
+  // Older raw hits wait outside this window: the count is a lower bound,
+  // and only relevance can be paged (page specs “搜索结果”).
+  // While another window loads, the last one's receipt is no guide to it.
+  const windowPage = next.isPlaceholderData ? undefined : firstPage;
+  const scanIncomplete = windowPage?.scanIncomplete ?? false;
+  const windowLimit =
+    windowPage?.scanLimit ?? (windowCursor ? windows.limit : null);
+  const lowerBound = scanIncomplete && windowNumber === 1;
+  const nextWindow = windowPage?.nextWindow ?? null;
+  const continueWindow = nextWindow
+    ? () =>
+        setWindows({
+          key: windowKey,
+          cursors: [...windowCursors, nextWindow],
+          limit: firstPage?.scanLimit ?? windows.limit,
+        })
+    : null;
+  const firstWindow = () =>
+    setWindows({ key: windowKey, cursors: [], limit: windows.limit });
+  /** The window in words: “最近写入索引的 95,000 条命中”, “更早的第 2 批 95,000 条命中”. */
+  const windowPhrase =
+    windowLimit === null
+      ? null
+      : `${windowNumber === 1 ? "最近写入索引的" : `更早的第 ${windowNumber} 批`} ${libraryCount(windowLimit, false)} 条命中`;
+  // An empty window with older hits left: the list says so and offers the
+  // way on, so the line beside the sort keeps quiet.
+  const emptyWindow =
+    !!windowPage &&
+    windowPage.total === 0 &&
+    scanIncomplete &&
+    !!continueWindow;
   const sortLimited = firstPage
-    ? overCountLimit(total, truncated)
+    ? overCountLimit(total, truncated) || scanIncomplete || windowNumber > 1
     : sortRefused;
   // Statuses seen in this session, so a selection made across scrolls and
   // filters can still be split into what each batch action applies to.
@@ -454,12 +506,21 @@ export default function Library() {
     setSelected: shell.setSelected,
   });
   const countScope = materialCountScope(effective);
-  const counts = useQuery({
-    queryKey: ["library", "counts", countScope],
-    queryFn: ({ signal }) => readLibraryCounts(api, countScope, signal),
+  // An earlier window's cursor holds the search's own query; the quick
+  // filters' counts read it without the quick filter, so they follow the
+  // window only while none is chosen.
+  const countsFollow =
+    windowCursor === null ||
+    (queryMaterialState(effective) === "" &&
+      typeof effective.has_primary_pdf !== "boolean");
+  const countsQuery = useQuery({
+    queryKey: ["library", "counts", countScope, windowCursor],
+    queryFn: ({ signal }) =>
+      readLibraryCounts(api, countScope, signal, windowCursor),
     placeholderData: keepPreviousData,
-    enabled: api.workspace.readiness === "ready",
+    enabled: api.workspace.readiness === "ready" && countsFollow,
   });
+  const counts = { data: countsFollow ? countsQuery.data : undefined };
   // The page's whole scope, before any filter: the collected papers, a
   // folder, the recently read or a batch.
   const baseScope = useMemo(
@@ -496,9 +557,12 @@ export default function Library() {
         ? counts.data.total
         : materialCount(counts.data, filter)
       : null;
-  /** Counted from the first 10,000 matches: “1 万+” (page specs “超过一万篇”). */
+  /** Counted from the first 10,000 matches, “1 万+”; with older hits unread, “n+”. */
   const quickCount = (filter: MaterialState | "") =>
-    libraryCount(countFor(filter)!, counts.data?.count_truncated === true);
+    libraryCount(countFor(filter)!, {
+      truncated: counts.data?.count_truncated === true,
+      incomplete: windowNumber === 1 && counts.data?.scan_incomplete === true,
+    });
   const folders = useFolders();
   const folder = route.query.folder ?? null;
   const folderLabel = folder
@@ -856,8 +920,9 @@ export default function Library() {
   const primary = selectionPrimary(acquireReason, archivingReason);
   // The whole catalog is always over the limit, so the reason lives with the
   // disabled actions instead of occupying the toolbar.
-  const overLimit =
-    total > 1000 || truncated
+  const overLimit = scanIncomplete
+    ? { disabled: true, description: SCAN_INCOMPLETE_REASON }
+    : total > 1000 || truncated
       ? {
           disabled: true,
           description: `当前 ${libraryCount(total, truncated, "篇")}，超过 1,000 篇上限；请先筛选或选择。`,
@@ -1169,13 +1234,24 @@ export default function Library() {
         : "搜索整个文献库";
   /** Totals at the title, once (page specs “文献库”, “超过一万篇”). */
   const headerCount = (() => {
+    // Nothing in a window is said below the list, not as “0 篇”.
+    if (
+      view === "search" &&
+      total === 0 &&
+      (scanIncomplete || windowNumber > 1)
+    )
+      return undefined;
     if (view === "search")
       return next.data ? (
         <CountFigure
-          key={JSON.stringify(effective)}
+          key={`${JSON.stringify(effective)}:${windowCursor ?? ""}`}
           query={effective}
           value={total}
           truncated={truncated}
+          incomplete={lowerBound}
+          exact={windowNumber === 1}
+          // An earlier window counts its own hits.
+          prefix={windowNumber > 1 ? "这一批 " : ""}
           suffix="符合"
         />
       ) : undefined;
@@ -1235,9 +1311,11 @@ export default function Library() {
         size="compact"
         isPending={choosing}
         disabledReason={
-          total > 1000 || truncated
-            ? `共 ${libraryCount(total, truncated, "篇")}，超过 1,000 篇上限。获取 PDF 可用“批量操作 → 获取 PDF”整体提交。`
-            : undefined
+          scanIncomplete
+            ? SCAN_INCOMPLETE_REASON
+            : total > 1000 || truncated
+              ? `共 ${libraryCount(total, truncated, "篇")}，超过 1,000 篇上限。获取 PDF 可用“批量操作 → 获取 PDF”整体提交。`
+              : undefined
         }
         onPress={selectScope}
       >
@@ -1282,10 +1360,17 @@ export default function Library() {
                 : null)
             }
             relevanceLimit={
-              route.sort === "relevance"
+              route.sort === "relevance" && !emptyWindow
                 ? (firstPage?.relevanceLimit ?? null)
                 : null
             }
+            windowPhrase={
+              (scanIncomplete || windowNumber > 1) && !emptyWindow
+                ? windowPhrase
+                : null
+            }
+            onFirstWindow={windowNumber > 1 ? firstWindow : null}
+            onContinue={emptyWindow ? null : continueWindow}
             onChange={updateQuery}
           />
         ) : null}
@@ -1351,8 +1436,10 @@ export default function Library() {
                   onChange={() => setStatusFilter(filter.id)}
                 >
                   {filter.label}
-                  {countFor(filter.id) !== null ? " " : null}
-                  {countFor(filter.id) !== null ? (
+                  {countFor(filter.id) !== null && quickCount(filter.id)
+                    ? " "
+                    : null}
+                  {countFor(filter.id) !== null && quickCount(filter.id) ? (
                     <span className="filter-count">
                       {quickCount(filter.id)}
                     </span>
@@ -1375,7 +1462,9 @@ export default function Library() {
                   label:
                     countFor(filter.id) === null
                       ? filter.label
-                      : `${filter.label} ${quickCount(filter.id)}`,
+                      : [filter.label, quickCount(filter.id)]
+                          .filter(Boolean)
+                          .join(" "),
                   onAction: () => setStatusFilter(filter.id),
                 }))}
               />
@@ -1430,6 +1519,8 @@ export default function Library() {
         {chips.length > 0 ? (
           <ScopeTerms
             query={effective}
+            windowCursor={windowCursor}
+            lowerBound={windowNumber === 1}
             onChange={(query) =>
               updateQuery(withoutScopeFlag(query, route.query))
             }
@@ -1487,6 +1578,20 @@ export default function Library() {
                   改按{SORT_LABELS[allowedSort]}
                 </Button>
               </div>
+            ) : scanIncomplete && continueWindow && windowPhrase ? (
+              // Nothing in this window is not nothing in the library.
+              <EmptyState
+                title={`${windowPhrase}里没有，更早的还没查`}
+                action={
+                  <Button
+                    variant="text"
+                    size="compact"
+                    onPress={continueWindow}
+                  >
+                    在更早的命中里继续找
+                  </Button>
+                }
+              />
             ) : view === "collected" && !narrowed ? (
               <EmptyState
                 title="还没有收进来的文献"
@@ -1529,15 +1634,29 @@ export default function Library() {
             )
           }
           footer={
-            firstPage?.relevanceLimit &&
-            route.sort === "relevance" &&
-            !next.hasNextPage &&
-            items.length >= firstPage.relevanceLimit ? (
-              <p className="library-relevance-end" role="status">
-                相关度排序只显示前 {firstPage.relevanceLimit.toLocaleString()}{" "}
-                条；加条件或换个检索词可以看到其余的
-              </p>
-            ) : null
+            <>
+              {firstPage?.relevanceLimit &&
+              route.sort === "relevance" &&
+              !next.hasNextPage &&
+              items.length >= firstPage.relevanceLimit ? (
+                <p className="library-relevance-end" role="status">
+                  相关度排序只显示前 {firstPage.relevanceLimit.toLocaleString()}{" "}
+                  条；加条件或换个检索词可以看到其余的
+                </p>
+              ) : null}
+              {/* At the end of a window, the way on to the earlier hits. */}
+              {continueWindow ? (
+                <p className="library-window-end">
+                  <Button
+                    variant="text"
+                    size="compact"
+                    onPress={continueWindow}
+                  >
+                    在更早的命中里继续找
+                  </Button>
+                </p>
+              ) : null}
+            </>
           }
           collectedNow={collectedNow}
           onCollect={mutable ? collect : undefined}
@@ -3131,12 +3250,18 @@ function CountFigure({
   query,
   value,
   truncated,
+  incomplete = false,
+  exact = true,
   prefix = "",
   suffix = "",
 }: {
   query: LibraryQuery;
   value: number;
   truncated: boolean;
+  /** Older raw hits are still unread: “至少 n 篇”. */
+  incomplete?: boolean;
+  /** Offers “算出准确数” for a count stopped at 10,000. */
+  exact?: boolean;
   prefix?: string;
   suffix?: string;
 }) {
@@ -3179,9 +3304,9 @@ function CountFigure({
   return (
     <>
       {prefix}
-      {libraryCount(value, truncated, "篇")}
+      {libraryCount(value, { truncated, incomplete }, "篇")}
       {suffix}
-      {truncated ? (
+      {truncated && exact ? (
         state.kind === "running" ? (
           <span className="library-count-running" role="status">
             正在计算…
@@ -3212,11 +3337,18 @@ function SearchScope({
   query,
   origin,
   relevanceLimit,
+  windowPhrase,
+  onFirstWindow,
+  onContinue,
   onChange,
 }: {
   query: LibraryQuery;
   origin: SearchOrigin | null;
   relevanceLimit: number | null;
+  /** The scan window, when older hits are left or an earlier one is shown. */
+  windowPhrase: string | null;
+  onFirstWindow: (() => void) | null;
+  onContinue: (() => void) | null;
   onChange: (query: LibraryQuery) => void;
 }) {
   const api = useApi();
@@ -3279,9 +3411,24 @@ function SearchScope({
           </>
         )}
       </RadioGroup>
-      {relevanceLimit ? (
+      {relevanceLimit || windowPhrase || onFirstWindow ? (
         <span className="library-relevance-limit">
-          按相关度显示前 {relevanceLimit.toLocaleString()} 条
+          {windowPhrase ? `在${windowPhrase}里` : ""}
+          {relevanceLimit
+            ? `按相关度显示前 ${relevanceLimit.toLocaleString()} 条`
+            : windowPhrase
+              ? "查找"
+              : ""}
+          {onFirstWindow ? (
+            <Button variant="text" size="compact" onPress={onFirstWindow}>
+              回到最近的命中
+            </Button>
+          ) : null}
+          {onContinue ? (
+            <Button variant="text" size="compact" onPress={onContinue}>
+              在更早的命中里继续找
+            </Button>
+          ) : null}
         </span>
       ) : null}
     </div>

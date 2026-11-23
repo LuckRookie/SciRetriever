@@ -134,6 +134,68 @@ async function holdResponse(p: Page, path: string) {
     },
   );
 }
+/**
+ * A whole-library text search with older raw hits unread (technical 06
+ * 2.4): the sample is far below a 95,000-hit window, so the service's
+ * window receipts are given in their contract shape over its answers. The
+ * first window has older hits left; the second is the last.
+ */
+async function scanWindows(p: Page, empty = false) {
+  for (const name of ["search", "library-counts", "library-facets"])
+    await p.route(
+      (url) => url.pathname === `/api/v1/query/${name}`,
+      async (route) => {
+        const body = route.request().postDataJSON();
+        const request = body?.request ?? {};
+        if (!request.query?.text || request.query.collection_scope)
+          return route.continue();
+        const first = typeof request.window_cursor !== "string";
+        delete request.window_cursor;
+        const response = await route.fetch({ postData: JSON.stringify(body) });
+        const value = await response.json();
+        if (name === "search") {
+          if (empty)
+            Object.assign(value.page, {
+              items: [],
+              total_count: 0,
+              next_cursor: null,
+            });
+          if (first && request.cursor == null)
+            Object.assign(value.page, {
+              scan_incomplete: true,
+              scan_limit: 95000,
+              next_window_cursor: "sample-window-2",
+              relevance_limit: 1000,
+            });
+        } else {
+          // Nothing in the window: its counts and terms are empty too, as
+          // the service would answer.
+          if (empty && name === "library-counts") {
+            const r = value.result;
+            for (const key of Object.keys(r.statuses)) r.statuses[key] = 0;
+            Object.assign(r, {
+              total: 0,
+              unavailable_pdf: 0,
+              with_primary_pdf: 0,
+              recently_opened: 0,
+              full_text: { total: 0, obtained: 0, missing: 0, exhausted: 0 },
+            });
+          }
+          if (empty && name === "library-facets")
+            Object.assign(value.result, {
+              total: 0,
+              coverage: { tags: 0, keywords: 0, subject_terms: 0 },
+              tags: [],
+              keywords: [],
+              subject_terms: [],
+            });
+          if (first) value.result.scan_incomplete = true;
+        }
+        await route.fulfill({ response, json: value });
+      },
+    );
+  await p.reload();
+}
 async function openSettings(p: Page, name: string) {
   // Desktop lists sections down the side; narrow screens use a menu.
   const tab = p.getByRole("tab", { name, exact: true });
@@ -362,6 +424,62 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     // Ready once the discovered rows are drawn; their action is shown only
     // on the touched row.
     ready: ".paper-row .paper-discovered",
+  },
+  {
+    id: "search-window-incomplete",
+    name: "搜索 · 更早的命中还没查",
+    route: route("lib", `&query=${query({ text: "Synthetic" })}`),
+    interaction:
+      "整库搜索，最近写入索引的一批之外还有更早的命中（扫描窗口按合同样式模拟）",
+    prepare: (p) => scanWindows(p),
+    ready: ".library-search-scope .library-relevance-limit .ui-button",
+  },
+  {
+    id: "search-window-empty",
+    name: "搜索 · 最近一批命中里没有",
+    route: route("lib", `&query=${query({ text: "Synthetic" })}`),
+    interaction:
+      "整库搜索，最近写入索引的一批命中里没有结果（扫描窗口与零结果均为模拟）",
+    prepare: (p) => scanWindows(p, true),
+    ready: '.library-empty .ui-button:has-text("在更早的命中里继续找")',
+  },
+  {
+    id: "search-window-second",
+    name: "搜索 · 更早的第 2 批",
+    route: route("lib", `&query=${query({ text: "Synthetic" })}`),
+    interaction:
+      "按“在更早的命中里继续找”，换到更早的第 2 批（扫描窗口按合同样式模拟）",
+    prepare: async (p) => {
+      await scanWindows(p);
+      await p
+        .locator(".library-search-scope")
+        .getByRole("button", { name: "在更早的命中里继续找", exact: true })
+        .click();
+    },
+    ready: '.library-search-scope .ui-button:has-text("回到最近的命中")',
+  },
+  {
+    id: "search-window-sort",
+    name: "搜索 · 更早的命中还没查时的排序",
+    route: route("lib", `&query=${query({ text: "Synthetic" })}`),
+    interaction:
+      "扫描未完时展开排序菜单：只有相关度可选（扫描窗口按合同样式模拟）",
+    prepare: async (p) => {
+      await scanWindows(p);
+      await p
+        .locator(".library-search-scope .library-relevance-limit .ui-button")
+        .first()
+        .waitFor();
+      // On a narrow screen the sort is in “更多操作”.
+      const more = p.getByRole("button", { name: "更多操作", exact: true });
+      if (await more.isVisible()) await more.click();
+      await p
+        .getByRole("button", { name: /排序/u })
+        .and(p.locator('[aria-haspopup="listbox"]'))
+        .filter({ visible: true })
+        .click();
+    },
+    ready: '[role="listbox"]',
   },
   {
     id: "library-over-limit",

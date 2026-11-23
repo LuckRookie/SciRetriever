@@ -53,8 +53,16 @@ export async function searchLibrary(
   cursor: string | null,
   signal?: AbortSignal,
   limit = 50,
+  /** An earlier window of raw text hits (technical 06 2.4); first page only. */
+  windowCursor: string | null = null,
 ) {
-  const request = parseLibrarySearchRequest({ query, sort, cursor, limit });
+  const request = parseLibrarySearchRequest({
+    query,
+    sort,
+    cursor,
+    limit,
+    ...(windowCursor && cursor === null ? { window_cursor: windowCursor } : {}),
+  });
   const value = api.workspace.capabilities.query
     ? await api.query("search", request, signal)
     : await api.request("/api/library/search", request, signal);
@@ -76,6 +84,14 @@ export async function searchLibrary(
     relevanceLimit:
       typeof page.relevance_limit === "number" ? page.relevance_limit : null,
     statusUpdating: page.status_updating === true,
+    /** Older raw text hits wait outside this window (ADR 0065 §6.4). */
+    scanIncomplete: page.scan_incomplete === true,
+    /** The raw hits a window reads, C. */
+    scanLimit: typeof page.scan_limit === "number" ? page.scan_limit : null,
+    nextWindow:
+      typeof page.next_window_cursor === "string"
+        ? page.next_window_cursor
+        : null,
     backfillPending: Number(page.tag_backfill_pending ?? 0),
     cursor: page.next_cursor as string | null,
   };
@@ -182,6 +198,7 @@ export async function scopeItems(
   do {
     signal?.throwIfAborted();
     const page = await searchLibrary(api, query, sort, cursor, signal);
+    if (page.scanIncomplete) throw new Error(SCAN_INCOMPLETE_REASON);
     if (page.total > 1000 || page.truncated)
       throw new Error("当前范围超过 1,000 篇，请先筛选或选择。");
     for (const item of page.items)
@@ -210,25 +227,47 @@ export async function readLibraryCounts(
   api: ApiClient,
   query: LibraryQuery,
   signal?: AbortSignal,
+  windowCursor: string | null = null,
 ) {
   return parseLibraryCounts(
-    (await api.query("library-counts", { query }, signal)).result,
+    (
+      await api.query(
+        "library-counts",
+        { query, ...(windowCursor ? { window_cursor: windowCursor } : {}) },
+        signal,
+      )
+    ).result,
   );
 }
 
 /**
- * A library number in words (page specs “超过一万篇”): a count limited to
- * 10,000 is “1 万篇以上” with its unit, “1 万+” without one; every other
- * number as it is. Every library count on a page goes through here.
+ * A library number in words (page specs “超过一万篇”, “搜索结果”): a count
+ * limited to 10,000 is “1 万篇以上” with its unit, “1 万+” without one; a
+ * count from a scan with older hits still unread is a lower bound, “至少 n
+ * 篇” or “n+”; when both hold, the 10,000 limit says it alone. None found
+ * yet with older hits unread is no number at all, “”: “0” would say there
+ * are none. Every other number as it is. Every library count on a page goes
+ * through here.
  */
 export function libraryCount(
   value: number,
-  truncated: boolean,
+  limits: boolean | { truncated?: boolean; incomplete?: boolean },
   unit?: "篇",
 ): string {
+  const { truncated = false, incomplete = false } =
+    typeof limits === "boolean" ? { truncated: limits } : limits;
   if (truncated) return unit ? `1 万${unit}以上` : "1 万+";
-  return unit ? `${value.toLocaleString()} ${unit}` : value.toLocaleString();
+  const number = value.toLocaleString();
+  if (incomplete)
+    return value === 0 ? "" : unit ? `至少 ${number} ${unit}` : `${number}+`;
+  return unit ? `${number} ${unit}` : number;
 }
+/**
+ * Why a whole search cannot be taken at once while older raw hits are
+ * unread (ADR 0065 §6.4): its members are not all known.
+ */
+export const SCAN_INCOMPLETE_REASON =
+  "这次搜索只查了最近写入索引的命中，更早的还没查；请先加条件缩小范围。";
 /** Beyond 10,000 papers only the sorts with an index remain (technical 06 2.1.2). */
 export const overCountLimit = (total: number, truncated: boolean) =>
   truncated || total > LIBRARY_COUNT_LIMIT;

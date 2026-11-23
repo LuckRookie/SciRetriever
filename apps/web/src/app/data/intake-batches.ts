@@ -63,8 +63,13 @@ export async function readLibraryFacets(
   query: LibraryQuery,
   limit: number,
   signal?: AbortSignal,
+  windowCursor: string | null = null,
 ) {
-  const value = await api.query("library-facets", { query, limit }, signal);
+  const value = await api.query(
+    "library-facets",
+    { query, limit, ...(windowCursor ? { window_cursor: windowCursor } : {}) },
+    signal,
+  );
   return parseLibraryFacets(value.result);
 }
 export async function previewAcquisition(
