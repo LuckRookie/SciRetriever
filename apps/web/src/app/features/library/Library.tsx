@@ -506,21 +506,22 @@ export default function Library() {
     setSelected: shell.setSelected,
   });
   const countScope = materialCountScope(effective);
-  // An earlier window's cursor holds the search's own query; the quick
-  // filters' counts read it without the quick filter, so they follow the
-  // window only while none is chosen.
-  const countsFollow =
-    windowCursor === null ||
-    (queryMaterialState(effective) === "" &&
-      typeof effective.has_primary_pdf !== "boolean");
-  const countsQuery = useQuery({
+  // A window's cursor holds only the search words, so the quick filters'
+  // counts, read without the quick filter, follow the window too.
+  const counts = useQuery({
     queryKey: ["library", "counts", countScope, windowCursor],
     queryFn: ({ signal }) =>
       readLibraryCounts(api, countScope, signal, windowCursor),
     placeholderData: keepPreviousData,
-    enabled: api.workspace.readiness === "ready" && countsFollow,
+    enabled: api.workspace.readiness === "ready",
   });
-  const counts = { data: countsFollow ? countsQuery.data : undefined };
+  // A cursor the service no longer knows (other words, an old cursor):
+  // back to the newest hits, not an error page.
+  const windowLost = [next.error, counts.error].some(isWindowInvalid);
+  useEffect(() => {
+    if (windowLost && windowCursor !== null) firstWindow();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [windowLost, windowCursor]);
   // The page's whole scope, before any filter: the collected papers, a
   // folder, the recently read or a batch.
   const baseScope = useMemo(
@@ -561,7 +562,8 @@ export default function Library() {
   const quickCount = (filter: MaterialState | "") =>
     libraryCount(countFor(filter)!, {
       truncated: counts.data?.count_truncated === true,
-      incomplete: windowNumber === 1 && counts.data?.scan_incomplete === true,
+      incomplete: counts.data?.scan_incomplete === true,
+      lowerBound: windowNumber === 1,
     });
   const folders = useFolders();
   const folder = route.query.folder ?? null;
@@ -1521,6 +1523,7 @@ export default function Library() {
             query={effective}
             windowCursor={windowCursor}
             lowerBound={windowNumber === 1}
+            onWindowInvalid={windowCursor === null ? undefined : firstWindow}
             onChange={(query) =>
               updateQuery(withoutScopeFlag(query, route.query))
             }
@@ -1554,7 +1557,7 @@ export default function Library() {
         ) : null}
       </div>
       <LayoutGroup className="library-results-region">
-        {next.isError && !sortRefused && (
+        {next.isError && !sortRefused && !isWindowInvalid(next.error) && (
           <ErrorNotice
             message={errorMessage(next.error)}
             onRetry={() => void next.refetch()}
@@ -3433,4 +3436,9 @@ function SearchScope({
       ) : null}
     </div>
   );
+}
+
+/** The service no longer knows a window's cursor (technical 06 2.4). */
+function isWindowInvalid(error: unknown): boolean {
+  return error instanceof ApiError && error.code === "query-reference-invalid";
 }

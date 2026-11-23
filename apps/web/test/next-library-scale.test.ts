@@ -714,9 +714,13 @@ it("saves a filter in the order “最近收进来” and reads it back unchange
  */
 async function scanWindows(
   page: Page,
-  options: { empty?: string; truncated?: boolean } = {},
+  options: { empty?: string; truncated?: boolean; lost?: boolean } = {},
 ) {
-  const asked: { name: string; window: string | null }[] = [];
+  const asked: {
+    name: string;
+    window: string | null;
+    query: Record<string, unknown>;
+  }[] = [];
   for (const name of ["search", "library-counts", "library-facets"])
     await page.route(
       (url) => url.pathname === `/api/v1/query/${name}`,
@@ -740,7 +744,17 @@ async function scanWindows(
             ?.collection_scope
         )
           return route.continue();
-        asked.push({ name, window });
+        asked.push({
+          name,
+          window,
+          query: request.query as Record<string, unknown>,
+        });
+        // An old cursor or other words: the service no longer knows it.
+        if (options.lost && window !== null)
+          return route.fulfill({
+            status: 409,
+            json: { protocol_version: 1, code: "query-reference-invalid" },
+          });
         const { window_cursor: _drop, ...rest } = request;
         void _drop;
         const response = await route.fetch({
@@ -912,6 +926,77 @@ it("says nothing was found in the newest hits, not in the library, and merges th
     await expect
       .poll(() => page.locator(".ui-page-header .ui-page-count").textContent())
       .toBe("1 万篇以上符合算出准确数");
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);
+
+it("counts the quick filters in an earlier window too, and goes back to the newest hits when the service no longer knows the window", async () => {
+  const w = await nextWorkspace({ setup: withDiscovered });
+  try {
+    const page = w.page;
+    const asked = await scanWindows(page);
+    await page.goto(
+      new URL(`/?view=lib&query=${encode({ text: "Discovered" })}`, page.url())
+        .href,
+    );
+    const count = page.locator(".ui-page-header .ui-page-count");
+    await expect.poll(() => count.textContent()).toBe("至少 2 篇符合");
+    const quick = page.locator(".library-status-filters");
+    const chip = (name: RegExp) => quick.getByRole("button", { name });
+    await chip(/^只有书目/u).click();
+    await expect.poll(() => query(page).statuses).toEqual(["UNREVIEWED"]);
+    // A quick filter chosen, on to the earlier hits: its counts follow.
+    asked.length = 0;
+    await page
+      .locator(".library-search-scope")
+      .getByRole("button", { name: "在更早的命中里继续找", exact: true })
+      .click();
+    await expect
+      .poll(
+        () =>
+          asked.find(
+            (a) => a.name === "library-counts" && a.window === "window-2",
+          )?.query.statuses,
+      )
+      .toEqual([]);
+    // The earlier window counts its own hits: plain numbers.
+    await expect
+      .poll(() =>
+        chip(/^只有书目/u)
+          .locator(".filter-count")
+          .textContent(),
+      )
+      .toMatch(/^\d+$/u);
+    await expect
+      .poll(() => chip(/^全部/u).locator(".filter-count").textContent())
+      .toMatch(/^\d+$/u);
+    expect(w.errors).toEqual([]);
+
+    // A window the service no longer knows: back to the newest hits.
+    await page.unrouteAll({ behavior: "wait" });
+    await scanWindows(page, { lost: true });
+    await page.goto(
+      new URL(`/?view=lib&query=${encode({ text: "Discovered" })}`, page.url())
+        .href,
+    );
+    await expect.poll(() => count.textContent()).toBe("至少 2 篇符合");
+    await page
+      .locator(".library-search-scope")
+      .getByRole("button", { name: "在更早的命中里继续找", exact: true })
+      .click();
+    await expect
+      .poll(() =>
+        page
+          .locator(".library-search-scope .library-relevance-limit")
+          .textContent(),
+      )
+      .toBe(
+        "在最近写入索引的 95,000 条命中里按相关度显示前 1,000 条在更早的命中里继续找",
+      );
+    expect(await count.textContent()).toBe("至少 2 篇符合");
+    expect(await page.getByRole("alert").count()).toBe(0);
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();

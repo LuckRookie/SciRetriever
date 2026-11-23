@@ -251,15 +251,26 @@ export async function readLibraryCounts(
  */
 export function libraryCount(
   value: number,
-  limits: boolean | { truncated?: boolean; incomplete?: boolean },
+  limits:
+    | boolean
+    | {
+        truncated?: boolean;
+        incomplete?: boolean;
+        /** False in an earlier window: it counts its own hits, exactly. */
+        lowerBound?: boolean;
+      },
   unit?: "篇",
 ): string {
-  const { truncated = false, incomplete = false } =
-    typeof limits === "boolean" ? { truncated: limits } : limits;
+  const {
+    truncated = false,
+    incomplete = false,
+    lowerBound = true,
+  } = typeof limits === "boolean" ? { truncated: limits } : limits;
   if (truncated) return unit ? `1 万${unit}以上` : "1 万+";
   const number = value.toLocaleString();
-  if (incomplete)
-    return value === 0 ? "" : unit ? `至少 ${number} ${unit}` : `${number}+`;
+  if (incomplete && value === 0) return "";
+  if (incomplete && lowerBound)
+    return unit ? `至少 ${number} ${unit}` : `${number}+`;
   return unit ? `${number} ${unit}` : number;
 }
 /**

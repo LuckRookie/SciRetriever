@@ -455,6 +455,8 @@ export const designSamplePages: readonly DesignSamplePage[] = [
         .locator(".library-search-scope")
         .getByRole("button", { name: "在更早的命中里继续找", exact: true })
         .click();
+      // The pointer leaves the spot, so “回到最近的命中” shows at rest.
+      await p.mouse.move(0, 0);
     },
     ready: '.library-search-scope .ui-button:has-text("回到最近的命中")',
   },

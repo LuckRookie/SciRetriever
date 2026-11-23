@@ -1,8 +1,9 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type { LibraryFacets, LibraryQuery } from "@sciretriever/contracts";
 import { Button, Icon } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
+import { ApiError } from "../../data/api.js";
 import { readLibraryFacets } from "../../data/intake-batches.js";
 import { libraryCount } from "../../data/library.js";
 
@@ -37,6 +38,7 @@ export function ScopeTerms({
   query,
   windowCursor = null,
   lowerBound = false,
+  onWindowInvalid,
   onChange,
 }: {
   query: LibraryQuery;
@@ -44,6 +46,8 @@ export function ScopeTerms({
   windowCursor?: string | null;
   /** Older hits are still unread: the numbers are lower bounds. */
   lowerBound?: boolean;
+  /** The service no longer knows the window's cursor. */
+  onWindowInvalid?: (() => void) | undefined;
   onChange: (query: LibraryQuery) => void;
 }) {
   const api = useApi();
@@ -55,6 +59,12 @@ export function ScopeTerms({
       readLibraryFacets(api, query, LONG, signal, windowCursor),
     placeholderData: keepPreviousData,
   });
+  const lost =
+    facets.error instanceof ApiError &&
+    facets.error.code === "query-reference-invalid";
+  useEffect(() => {
+    if (lost) onWindowInvalid?.();
+  }, [lost, onWindowInvalid]);
   const data = facets.data;
   if (
     !data ||
@@ -66,7 +76,8 @@ export function ScopeTerms({
   // unread (page specs “超过一万篇”, “搜索结果”).
   const limits = {
     truncated: !!data.facets_truncated,
-    incomplete: lowerBound && !!data.scan_incomplete,
+    incomplete: !!data.scan_incomplete,
+    lowerBound,
   };
   // Once most results carry tags, the source's subjects step back.
   const folded =
@@ -202,7 +213,7 @@ export function ScopeTerms({
   );
 }
 
-type Limits = { truncated: boolean; incomplete: boolean };
+type Limits = { truncated: boolean; incomplete: boolean; lowerBound: boolean };
 function Row({
   layer,
   data,
