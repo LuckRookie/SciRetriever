@@ -240,19 +240,39 @@ export default function Reader() {
     enabled: !!id,
     // Switching papers keeps the previous page until the new one can show (spec 5.1).
     placeholderData: keepPreviousData,
+    // Opening a paper reads what it has now: details cached elsewhere (a
+    // task row, the Browser page) may predate its PDF or its full text.
+    refetchOnMount: "always",
   });
+  /**
+   * Details that can decide the view (spec 6.4): this paper's own, read since
+   * it was opened. Cached or placeholder details only hold the page.
+   */
+  const detailCurrent =
+    !!detail.data && !detail.isPlaceholderData && !detail.isFetching;
+  const primaryPdf = detail.data?.primary_pdf?.asset ?? null;
   // The PDF view is asked for: its bytes download alongside the text's reads.
   const wantsPdf = useRef(false);
   const sources = useQuery({
     // Both views of one material share the resolution: the fixed PDF and, when
     // there is one, the full-text version it was published from.
-    queryKey: ["document", "reader-sources", id, materialKey],
+    // The primary PDF is part of the key: a PDF published since an earlier
+    // read is another resolution, never the cached one without it.
+    queryKey: [
+      "document",
+      "reader-sources",
+      id,
+      materialKey,
+      primaryPdf?.asset_id ?? null,
+      primaryPdf?.sha256 ?? null,
+    ],
     // Source mismatches are final integrity failures, never automatic retries.
     // A visible retry remains available for transient read failures.
     retry: false,
     enabled:
       !!detail.data &&
       !detail.isPlaceholderData &&
+      (chosen || detailCurrent) &&
       !source.error &&
       (!chosen || (route.reader !== "know" && route.reader !== "results")) &&
       source.value?.kind !== "metadata",
@@ -279,7 +299,7 @@ export default function Reader() {
    * those are still on their way.
    */
   const picked = useMemo((): ReaderMode | null => {
-    if (chosen || !detail.data || detail.isPlaceholderData) return null;
+    if (chosen || !detailCurrent || !detail.data) return null;
     const remembered = recallReading(catalog, id).view,
       hasPdf = !!detail.data.primary_pdf;
     if (remembered === "pdf" && hasPdf) return "pdf";
@@ -299,7 +319,7 @@ export default function Reader() {
   }, [
     chosen,
     detail.data,
-    detail.isPlaceholderData,
+    detailCurrent,
     catalog,
     id,
     source.value,
@@ -495,13 +515,14 @@ export default function Reader() {
     if (
       chosen &&
       route.reader === "pdf" &&
-      detailReady &&
+      // Details read before a PDF was published never send it away.
+      detailCurrent &&
       !detail.data?.primary_pdf &&
       !route.parameters.has("asset") &&
       !route.parameters.has("document")
     )
       navigate({ reader: "doc" }, { replace: true });
-  }, [chosen, route.reader, route.parameters, detailReady, detail.data]);
+  }, [chosen, route.reader, route.parameters, detailCurrent, detail.data]);
   useLayoutEffect(() => {
     // Until the view is picked nothing is built, and what shows stays.
     if (chosen) engines.view(viewOf(mode));

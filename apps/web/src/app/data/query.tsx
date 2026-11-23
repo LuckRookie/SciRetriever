@@ -66,6 +66,14 @@ function publicationKey(view: WorkbenchView | null): string {
       ? [view.session_id, view.session_outcome]
       : null,
     report: view?.operation_feedback?.report ?? null,
+    // The PDF read back through Library once the operation ends: its
+    // arrival is a publication of the paper's materials too.
+    primary_pdf: view?.operation_feedback
+      ? [
+          view.operation_feedback.primary_pdf_status,
+          view.operation_feedback.primary_pdf?.sha256 ?? null,
+        ]
+      : null,
   });
 }
 /** The server publishes a complete Browser view, never an untyped cache patch. */

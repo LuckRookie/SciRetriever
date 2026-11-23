@@ -542,6 +542,8 @@ async function installedBrowserJourney(
     );
     expect(artifact.status).toBe(200);
     expect(sha256(Buffer.from(await artifact.arrayBuffer()))).toBe(hash);
+    // Back to the library in the same page, as a person would: the details
+    // read before the Browser published must not decide the reader's view.
     await ui
       .getByRole("complementary", { name: "主导航" })
       .getByRole("button", { name: /^文献库/ })
@@ -554,16 +556,48 @@ async function installedBrowserJourney(
     await ui
       .locator(`[data-literature-id="${literatureId}"] .paper-open`)
       .click();
-    await expect.poll(() => ui.url()).toContain(`literature=${literatureId}`);
+    await ui.waitForURL(
+      (url) =>
+        url.searchParams.get("literature") === literatureId &&
+        url.searchParams.has("reader"),
+    );
     await expect
       .poll(() => ui.locator(".reader-information .reader-steps").innerText())
       .toContain("尚未核对这份 PDF 是否就是这篇文章");
-    await ui
+    const readerTools = ui.locator(".reader-topbar-tools");
+    const pdfTab = readerTools.getByRole("tab", { name: "PDF", exact: true });
+    const viewMenu = readerTools.getByRole("button", { name: /^视图：/u });
+    const pdfView = readerTools.getByRole("button", {
+      name: "视图：PDF",
+      exact: true,
+    });
+    await pdfTab.or(viewMenu).waitFor();
+    // Reading experience 6.4: a PDF and no full text open the PDF by
+    // themselves, before anyone picks it, in the wide and the narrow layout.
+    const readerView = () => new URL(ui.url()).searchParams.get("reader");
+    const showsPdf = async () =>
+      ((await pdfTab.isVisible()) &&
+        (await pdfTab.getAttribute("aria-selected")) === "true") ||
+      (await pdfView.isVisible());
+    const wide = ui.viewportSize()!;
+    for (const width of [wide.width, 600]) {
+      await ui.setViewportSize({ width, height: wide.height });
+      await expect.poll(readerView).toBe("pdf");
+      await expect.poll(showsPdf).toBe(true);
+    }
+    await ui.setViewportSize(wide);
+    await pdfTab.or(viewMenu).waitFor();
+    if (await pdfTab.isVisible()) await pdfTab.click();
+    else if (!(await pdfView.isVisible())) {
+      await viewMenu.click();
+      await ui.getByRole("menuitem", { name: "PDF", exact: true }).click();
+    }
+    const pdfPage = ui
       .locator('.reading-pdf-page[data-rendered="true"]')
-      .first()
-      .waitFor();
+      .first();
+    await pdfPage.waitFor();
     expect(
-      (await ui.locator(".textLayer").first().textContent())!.trim().length,
+      (await pdfPage.locator(".textLayer").textContent())!.trim().length,
     ).toBeGreaterThan(0);
     expect(errors).toEqual([]);
     return hash;
