@@ -1002,3 +1002,106 @@ it("counts the quick filters in an earlier window too, and goes back to the newe
     await w.close();
   }
 }, 90000);
+
+it("says when relevance ranked only part of a working set, with the set's own order for the rest and a line where the ranking stops", async () => {
+  let folderId = "";
+  const w = await nextWorkspace({
+    setup: async (env) => {
+      await withDiscovered(env);
+      const folder = parseFolderNode(
+        await env.app.folders.manage({
+          operation: "create",
+          request: { name: "排序文件夹", parent_id: null, position: null },
+        }),
+      );
+      folderId = folder.folder_id;
+      await env.app.folders.manage({
+        operation: "add",
+        request: {
+          folder_id: folderId,
+          literature_ids: DISCOVERED.map(([id]) => id),
+        },
+      });
+    },
+  });
+  try {
+    const page = w.page;
+    // The fixture's sets are far below the scoring budget: the service's
+    // receipt for a partly ranked set is given here, in its contract shape.
+    let scored = 1;
+    await page.route(
+      (url) => url.pathname === "/api/v1/query/search",
+      async (route) => {
+        const request = (
+          route.request().postDataJSON() as {
+            request: {
+              sort: string;
+              cursor: string | null;
+              query: Record<string, unknown>;
+            };
+          }
+        ).request;
+        const response = await route.fetch();
+        const value = (await response.json()) as {
+          page: Record<string, unknown>;
+        };
+        if (
+          request.sort === "relevance" &&
+          request.cursor === null &&
+          (request.query.folder || request.query.collection_scope)
+        )
+          value.page.relevance_scored_count = scored;
+        return route.fulfill({ response, json: value });
+      },
+    );
+    const open = (query: object) =>
+      page.goto(new URL(`/?view=lib&query=${encode(query)}`, page.url()).href);
+    await open({
+      text: "Discovered",
+      folder: { id: folderId, include_descendants: true },
+    });
+    const note = page.locator(".library-search-scope .library-relevance-limit");
+    await expect
+      .poll(() => note.textContent())
+      .toBe(
+        "按相关度排了最近入库的 1 篇，其余 1 篇按入库时间排在后面；先加条件，或缩小范围，可全部按相关度排",
+      );
+    // A quiet line where the ranked rows end.
+    const rows = page.locator(".paper-row");
+    await rows.nth(1).waitFor();
+    expect(await rows.nth(1).locator(".paper-unranked").textContent()).toBe(
+      "以下未按相关度排序",
+    );
+    expect(await page.locator(".paper-unranked").count()).toBe(1);
+    // Other sorts stay open.
+    await page
+      .getByRole("button", { name: /排序/u })
+      .and(page.locator('[aria-haspopup="listbox"]'))
+      .click();
+    const options = page.getByRole("option");
+    await options.first().waitFor();
+    expect(
+      await options.evaluateAll((items) =>
+        items.some((item) => item.getAttribute("aria-disabled") === "true"),
+      ),
+    ).toBe(false);
+    await page.keyboard.press("Escape");
+
+    // None ranked, said too; no line at the top.
+    scored = 0;
+    await open({
+      text: "Discovered",
+      collection_scope: "collected",
+    });
+    await expect
+      .poll(() => note.textContent())
+      .toBe(
+        "没有按相关度排序，按收进时间从近到远排列；先加条件，或缩小范围，可全部按相关度排",
+      );
+    await rows.first().waitFor();
+    expect(await page.locator(".paper-unranked").count()).toBe(0);
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);

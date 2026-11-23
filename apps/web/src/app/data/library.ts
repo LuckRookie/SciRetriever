@@ -81,6 +81,14 @@ export async function searchLibrary(
     /** Counted only to 10,000 (technical 06 2.1.2). */
     truncated: page.count_truncated === true,
     /** Ranked by relevance, only the first 1,000 can be paged to. */
+    /**
+     * In a working set, only this many matches were ranked by relevance;
+     * the rest follow in the set's own order (ADR 0065 §6.4).
+     */
+    relevanceScored:
+      typeof page.relevance_scored_count === "number"
+        ? page.relevance_scored_count
+        : null,
     relevanceLimit:
       typeof page.relevance_limit === "number" ? page.relevance_limit : null,
     statusUpdating: page.status_updating === true,

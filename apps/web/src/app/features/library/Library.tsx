@@ -493,6 +493,25 @@ export default function Library() {
     windowPage.total === 0 &&
     scanIncomplete &&
     !!continueWindow;
+  // A working set ranked by relevance only in part: the ranked ones first,
+  // the rest in the set's own order, newest first (page specs “搜索结果”).
+  const relevanceScored =
+    route.sort === "relevance" ? (windowPage?.relevanceScored ?? null) : null;
+  const scoredNote = (() => {
+    if (relevanceScored === null) return null;
+    const order = route.query.recently_opened
+      ? "打开"
+      : route.query.collection_scope === "collected"
+        ? "收进"
+        : "入库";
+    const narrow = "；先加条件，或缩小范围，可全部按相关度排";
+    if (relevanceScored === 0)
+      return `没有按相关度排序，按${order}时间从近到远排列${narrow}`;
+    const rest = truncated
+      ? ""
+      : ` ${libraryCount(Math.max(0, total - relevanceScored), false)} 篇`;
+    return `按相关度排了最近${order}的 ${libraryCount(relevanceScored, false)} 篇，其余${rest}按${order}时间排在后面${narrow}`;
+  })();
   const sortLimited = firstPage
     ? overCountLimit(total, truncated) || scanIncomplete || windowNumber > 1
     : sortRefused;
@@ -1366,6 +1385,7 @@ export default function Library() {
                 ? (firstPage?.relevanceLimit ?? null)
                 : null
             }
+            scoredNote={scoredNote}
             windowPhrase={
               (scanIncomplete || windowNumber > 1) && !emptyWindow
                 ? windowPhrase
@@ -1571,6 +1591,7 @@ export default function Library() {
           sort={route.sort}
           onSort={(sort) => updateQuery(route.query, sort)}
           sortDisabled={sortLimited ? SORT_LIMIT_REASON : undefined}
+          unrankedFrom={relevanceScored}
           selectAll={selectAll(false)}
           empty={
             sortRefused ? (
@@ -2209,6 +2230,7 @@ const LibraryList = memo(function LibraryList({
   sort,
   onSort,
   sortDisabled,
+  unrankedFrom,
   selectAll,
   empty,
   footer,
@@ -2246,6 +2268,8 @@ const LibraryList = memo(function LibraryList({
   sort: LibrarySort;
   onSort: (sort: LibrarySort) => void;
   sortDisabled: string | undefined;
+  /** The first row not ranked by relevance, in a partly ranked set. */
+  unrankedFrom: number | null;
   selectAll: ReactNode;
   empty: ReactNode;
   /** After the last row: the end of a relevance ranking. */
@@ -2487,6 +2511,13 @@ const LibraryList = memo(function LibraryList({
             collectedNow={collectedNow.has(
               items[row.index]!.literature.literature_id,
             )}
+            // Where the ranked rows end, among the loaded ones.
+            unrankedStart={
+              !table &&
+              unrankedFrom !== null &&
+              unrankedFrom > 0 &&
+              row.index === unrankedFrom
+            }
             onCollect={onCollect}
             selected={selected.has(items[row.index]!.literature.literature_id)}
             previewed={peek === items[row.index]!.literature.literature_id}
@@ -2549,6 +2580,7 @@ const LibraryRow = memo(function LibraryRow({
   item,
   sort,
   collectedNow,
+  unrankedStart,
   onCollect,
   selected,
   previewed,
@@ -2574,6 +2606,8 @@ const LibraryRow = memo(function LibraryRow({
   sort: LibrarySort;
   /** Collected on this page: “已收进来” in place of the button. */
   collectedNow: boolean;
+  /** The first row the relevance ranking did not reach. */
+  unrankedStart: boolean;
   onCollect: ((ids: readonly string[]) => Promise<unknown>) | undefined;
   selected: boolean;
   previewed: boolean;
@@ -2805,7 +2839,10 @@ const LibraryRow = memo(function LibraryRow({
     <span className="paper-terms">{rowTerms(item).join(" · ")}</span>
   ) : null;
   return (
-    <article {...shared}>
+    <article {...shared} data-unranked-start={unrankedStart || undefined}>
+      {unrankedStart ? (
+        <p className="paper-unranked">以下未按相关度排序</p>
+      ) : null}
       {check}
       {origin ? (
         // The origin is a button of its own, so it stays outside the
@@ -3340,6 +3377,7 @@ function SearchScope({
   query,
   origin,
   relevanceLimit,
+  scoredNote,
   windowPhrase,
   onFirstWindow,
   onContinue,
@@ -3348,6 +3386,8 @@ function SearchScope({
   query: LibraryQuery;
   origin: SearchOrigin | null;
   relevanceLimit: number | null;
+  /** Only part of a working set was ranked by relevance. */
+  scoredNote: string | null;
   /** The scan window, when older hits are left or an earlier one is shown. */
   windowPhrase: string | null;
   onFirstWindow: (() => void) | null;
@@ -3414,14 +3454,16 @@ function SearchScope({
           </>
         )}
       </RadioGroup>
-      {relevanceLimit || windowPhrase || onFirstWindow ? (
+      {relevanceLimit || windowPhrase || onFirstWindow || scoredNote ? (
         <span className="library-relevance-limit">
           {windowPhrase ? `在${windowPhrase}里` : ""}
-          {relevanceLimit
-            ? `按相关度显示前 ${relevanceLimit.toLocaleString()} 条`
-            : windowPhrase
-              ? "查找"
-              : ""}
+          {scoredNote
+            ? scoredNote
+            : relevanceLimit
+              ? `按相关度显示前 ${relevanceLimit.toLocaleString()} 条`
+              : windowPhrase
+                ? "查找"
+                : ""}
           {onFirstWindow ? (
             <Button variant="text" size="compact" onPress={onFirstWindow}>
               回到最近的命中

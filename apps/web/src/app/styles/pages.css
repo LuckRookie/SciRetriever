@@ -1272,6 +1272,14 @@
     flex-wrap: wrap;
     gap: 0 var(--space-2);
   }
+  /* Where a partly ranked working set stops being ranked: one line of
+     small type across the row, above its first unranked paper. */
+  .paper-unranked {
+    grid-column: 1 / -1;
+    margin: 0 0 var(--space-2);
+    color: var(--fg3);
+    font-size: var(--text-caption);
+  }
   .library-window-end {
     margin: 0;
     padding: var(--space-3) var(--space-2);

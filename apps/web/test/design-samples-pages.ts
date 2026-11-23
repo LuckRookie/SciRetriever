@@ -484,6 +484,35 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     ready: '[role="listbox"]',
   },
   {
+    id: "library-folder-scored",
+    name: "文献库 · 文件夹内部分打分",
+    route: (ids) =>
+      `/?view=lib&query=${query({ text: "Synthetic", folder: { id: ids.folder, include_descendants: true } })}`,
+    interaction:
+      "在文件夹里搜索，相关度只排了前 5 篇，其余按入库时间在后（部分打分的回执按合同样式模拟）",
+    prepare: async (p) => {
+      await p.route(
+        (url) => url.pathname === "/api/v1/query/search",
+        async (request) => {
+          const asked = request.request().postDataJSON()?.request ?? {};
+          const response = await request.fetch();
+          const value = await response.json();
+          if (
+            asked.sort === "relevance" &&
+            asked.cursor === null &&
+            asked.query?.folder
+          )
+            value.page.relevance_scored_count = 5;
+          await request.fulfill({ response, json: value });
+        },
+      );
+      await p.reload();
+      // The line where the ranking stops, in view on a narrow screen too.
+      await p.locator(".paper-unranked").scrollIntoViewIfNeeded();
+    },
+    ready: ".paper-unranked",
+  },
+  {
     id: "library-over-limit",
     name: "文献库 · 超过一万篇",
     route: route("lib", `&query=${query({ author: "Imaginary" })}`),
