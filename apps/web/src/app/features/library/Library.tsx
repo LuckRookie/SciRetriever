@@ -2474,15 +2474,17 @@ const LibraryRow = memo(function LibraryRow({
     title = paperTitle(item),
     table = display === "table";
   // Only discovered: said at the end of the citation, the batch that found
-  // it one press away, and “收进来” on the right (page specs “搜索结果”).
+  // it one press away, and “收进来” among the row's own actions, in the same
+  // place; once pressed, “已收进来” there (page specs “搜索结果”).
   const discovered = item.collected === false;
   const origin = discovered ? (item.discovery_origin ?? null) : null;
   const collectControl =
     discovered && onCollect ? (
       <Button
-        variant="secondary"
+        variant="text"
         size="compact"
         className="paper-collect"
+        icon={<Icon name="plus" />}
         onPress={async () => {
           await onCollect([id]);
         }}
@@ -2490,7 +2492,7 @@ const LibraryRow = memo(function LibraryRow({
         收进来
       </Button>
     ) : collectedNow && !discovered ? (
-      <small className="paper-status-note paper-collected">已收进来</small>
+      <small className="paper-collected">已收进来</small>
     ) : null;
   const check = (
     <span
@@ -2508,6 +2510,7 @@ const LibraryRow = memo(function LibraryRow({
   );
   const tools = (
     <span className="paper-tools" {...(table ? { role: "cell" } : {})}>
+      {collectControl}
       <IconButton
         className="paper-preview"
         size="compact"
@@ -2618,7 +2621,6 @@ const LibraryRow = memo(function LibraryRow({
         </span>
         <span role="cell" className="library-table-cell">
           {quietState(item) ? null : <MaterialBadge item={item} />}
-          {collectControl}
         </span>
         {tools}
       </div>
@@ -2700,61 +2702,60 @@ const LibraryRow = memo(function LibraryRow({
           </>,
         )
       )}
-      {quietState(item) ? (
-        collectControl ? (
-          <span className="paper-status-cell">{collectControl}</span>
-        ) : (
-          <span />
-        )
-      ) : (
-        <span className="paper-status-cell">
-          <MaterialBadge item={item}>
-            {item.literature.status === "ARCHIVING" ? (
-              <small>
-                {item.missing_step
-                  ? archiveReason(item.missing_step)
-                  : "正在执行"}
-              </small>
-            ) : null}
-            {item.literature.status === "EXCLUDED" ? (
-              <small>
-                {item.literature.metadata.article_kind
-                  ? ARTICLE_KIND_LABELS[item.literature.metadata.article_kind]
-                  : "待改判"}
-              </small>
-            ) : null}
-            {item.literature.status === "ARCHIVE_FAILED" ? (
-              <Button
-                variant="text"
-                size="compact"
-                onPress={() => navigate({ view: "archive", literature: null })}
-              >
-                查看问题
-              </Button>
-            ) : null}
-          </MaterialBadge>
-          {/* Page specs “文献库”: under the status, in small text — a long
+      {/* One column on the right: the status, then the row's actions,
+          side by side (page specs “搜索结果”). */}
+      <span className="paper-side">
+        {quietState(item) ? null : (
+          <span className="paper-status-cell">
+            <MaterialBadge item={item}>
+              {item.literature.status === "ARCHIVING" ? (
+                <small>
+                  {item.missing_step
+                    ? archiveReason(item.missing_step)
+                    : "正在执行"}
+                </small>
+              ) : null}
+              {item.literature.status === "EXCLUDED" ? (
+                <small>
+                  {item.literature.metadata.article_kind
+                    ? ARTICLE_KIND_LABELS[item.literature.metadata.article_kind]
+                    : "待改判"}
+                </small>
+              ) : null}
+              {item.literature.status === "ARCHIVE_FAILED" ? (
+                <Button
+                  variant="text"
+                  size="compact"
+                  onPress={() =>
+                    navigate({ view: "archive", literature: null })
+                  }
+                >
+                  查看问题
+                </Button>
+              ) : null}
+            </MaterialBadge>
+            {/* Page specs “文献库”: under the status, in small text — a long
             document, or a primary PDF whose default text is a draft. */}
-          {item.literature.status === "READY" && item.long_document ? (
-            <small
-              className="paper-status-note"
-              title="按简化流程生成全文，未逐页校对；以 PDF 为准"
-            >
-              长文档
-            </small>
-          ) : null}
-          {item.text_level === "draft" ? (
-            <small
-              className="paper-status-note"
-              title="全文未校对，文字可能含解析错误；以 PDF 为准"
-            >
-              {draftNote(item, sort)}
-            </small>
-          ) : null}
-          {collectControl}
-        </span>
-      )}
-      {tools}
+            {item.literature.status === "READY" && item.long_document ? (
+              <small
+                className="paper-status-note"
+                title="按简化流程生成全文，未逐页校对；以 PDF 为准"
+              >
+                长文档
+              </small>
+            ) : null}
+            {item.text_level === "draft" ? (
+              <small
+                className="paper-status-note"
+                title="全文未校对，文字可能含解析错误；以 PDF 为准"
+              >
+                {draftNote(item, sort)}
+              </small>
+            ) : null}
+          </span>
+        )}
+        {tools}
+      </span>
     </article>
   );
 });

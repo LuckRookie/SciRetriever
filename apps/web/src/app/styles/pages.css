@@ -611,7 +611,7 @@
     display: grid;
     grid-template-columns:
       26px minmax(0, 3fr) minmax(0, 1fr) minmax(0, 1fr) 3.5em
-      120px 64px;
+      120px 136px;
     align-items: center;
     column-gap: var(--space-3);
     padding: 0 var(--space-2);
@@ -724,7 +724,7 @@
     left: 0;
     width: 100%;
     display: grid;
-    grid-template-columns: 26px minmax(0, 1fr) auto auto;
+    grid-template-columns: 26px minmax(0, 1fr) auto;
     align-items: center;
     column-gap: var(--space-3);
     min-height: 56px;
@@ -738,23 +738,27 @@
     background: var(--hover);
     transition: var(--feedback-hot);
   }
-  /* Row tools stay out of sight until the row is touched or a selection begins. */
+  /* Row tools stay out of sight until the row is touched or a selection
+     begins; “已收进来” stays, it is the row's state now. Once a selection
+     is on, every row shows its box and its “收进来”. */
   .paper-row > .paper-check,
-  .paper-row > .paper-tools {
+  .paper-tools > :not(.paper-collected) {
     opacity: 0;
     transition: opacity var(--dur-out) var(--ease-out);
   }
-  .paper-row:hover > :is(.paper-check, .paper-tools) {
+  .paper-row:hover :is(.paper-check, .paper-tools > *) {
     transition-duration: 0ms;
   }
   .paper-row:is(:hover, :focus-within, [data-selected])
-    > :is(.paper-check, .paper-tools),
-  .paper-tools:has([aria-expanded="true"]),
-  .virtual-list:has(.paper-row[data-selected]) .paper-row > .paper-check {
+    :is(.paper-check, .paper-tools > *),
+  .paper-tools:has([aria-expanded="true"]) > *,
+  .virtual-list:has(.paper-row[data-selected])
+    .paper-row
+    :is(.paper-check, .paper-collect) {
     opacity: 1;
   }
   @media (hover: none) {
-    .paper-row > :is(.paper-check, .paper-tools) {
+    .paper-row :is(.paper-check, .paper-tools > *) {
       opacity: 1;
     }
   }
@@ -784,6 +788,34 @@
     display: flex;
     align-items: center;
     gap: var(--space-1);
+  }
+  /* The status and the row's actions in one column, side by side; the
+     actions keep one width, so the statuses line up down the list. */
+  .paper-side {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-2);
+  }
+  .paper-side > .paper-tools {
+    justify-content: flex-end;
+    width: 136px;
+  }
+  /* “收进来”: a quiet action in the pen's colour, with its plus. */
+  .paper-tools .ui-button.paper-collect,
+  .paper-tools .ui-button.paper-collect[data-hovered],
+  .paper-tools .ui-button.paper-collect > svg {
+    color: var(--blue);
+  }
+  .paper-tools .ui-button.paper-collect {
+    padding-inline: var(--space-2);
+    font-size: var(--text-secondary);
+  }
+  .paper-collected {
+    padding-inline: var(--space-2);
+    color: var(--fg3);
+    font-size: var(--text-caption);
+    white-space: nowrap;
   }
   .paper-venue-missing {
     color: var(--fg3);
@@ -992,20 +1024,19 @@
     .library-page {
       padding-inline: var(--space-5);
     }
-    .paper-row {
-      grid-template-columns: 26px minmax(0, 1fr) auto;
-    }
-    .paper-row > .paper-tools {
+    /* Preview and the paper's menu go by keyboard and right-click here;
+       “收进来” stays. */
+    .paper-tools > :not(.paper-collect, .paper-collected) {
       display: none;
+    }
+    .paper-side > .paper-tools {
+      width: 88px;
     }
     .library-table-head,
     .paper-row[data-display="table"] {
       grid-template-columns:
         26px minmax(0, 3fr) minmax(0, 1fr) minmax(0, 1fr) 3.5em
-        120px;
-    }
-    .library-table-head > .paper-tools {
-      display: none;
+        120px 88px;
     }
   }
   @media (max-width: 720px) {
@@ -1056,19 +1087,29 @@
       grid-template-columns: 24px minmax(0, 1fr) 3em 7.5em;
     }
     :is(.library-table-head, .paper-row[data-display="table"])
-      > :is(.paper-author, .paper-venue) {
+      > :is(.paper-author, .paper-venue, .paper-tools) {
       display: none;
     }
     .library-filters-top {
       flex-direction: column-reverse;
       align-items: stretch;
     }
-    /* The status cell drops under the citation, aligned with the title. */
-    .paper-row > .paper-status-cell {
+    /* The status and actions drop under the citation, aligned with the
+       title. */
+    .paper-row > .paper-side {
       grid-column: 2;
       justify-self: start;
+      justify-content: flex-start;
       align-items: flex-start;
       margin-top: var(--space-2);
+    }
+    .paper-side > .paper-tools {
+      width: auto;
+    }
+    .paper-side:not(
+      :has(.paper-status-cell, .paper-collect, .paper-collected)
+    ) {
+      display: none;
     }
     .paper-title {
       -webkit-line-clamp: 3;
@@ -1266,13 +1307,16 @@
     color: inherit;
     font: inherit;
     cursor: pointer;
-    text-decoration: underline;
-    text-decoration-color: var(--line2);
-    text-underline-offset: 2px;
+    text-decoration: none;
   }
-  .paper-origin:hover {
-    color: var(--fg2);
-    text-decoration-color: currentColor;
+  /* No standing underline: the row, touched, shows it in the pen's colour;
+     the words themselves, touched, underline (page specs “搜索结果”). */
+  .paper-row:is(:hover, :focus-within) .paper-origin {
+    color: var(--blue);
+  }
+  .paper-origin:is(:hover, :focus-visible) {
+    text-decoration: underline;
+    text-underline-offset: 2px;
   }
   .paper-origin:focus-visible {
     outline: 2px solid var(--focus);

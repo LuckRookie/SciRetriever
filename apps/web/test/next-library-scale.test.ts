@@ -226,12 +226,30 @@ it("marks only-discovered rows with where they came from and collects one in pla
       const path = new URL(request.url()).pathname;
       if (path === "/api/v1/query/search") requests.push(path);
     });
+    // “收进来” is a row action: out of sight until the row is touched or
+    // focused, then in the pen's colour beside the other actions.
+    const collectOf = (id: string) =>
+      row(id).getByRole("button", { name: "收进来", exact: true });
+    const shown = (id: string) =>
+      collectOf(id).evaluate((el) => getComputedStyle(el).opacity);
+    await page.mouse.move(0, 0);
+    await expect.poll(() => shown(DISCOVERED[0][0])).toBe("0");
+    await row(DISCOVERED[0][0]).hover();
+    await expect.poll(() => shown(DISCOVERED[0][0])).toBe("1");
+    // The status and the actions share one line on the right.
+    expect(
+      await row(DISCOVERED[0][0]).locator(".paper-side > .paper-tools").count(),
+    ).toBe(1);
+    // By keyboard: focused, it shows; Enter collects.
+    await page.mouse.move(0, 0);
+    await collectOf(DISCOVERED[1][0]).focus();
+    await expect.poll(() => shown(DISCOVERED[1][0])).toBe("1");
+    await page.keyboard.press("Enter");
     await row(DISCOVERED[1][0])
-      .getByRole("button", { name: "收进来", exact: true })
-      .click();
-    await row(DISCOVERED[1][0])
+      .locator(".paper-tools")
       .getByText("已收进来", { exact: true })
       .waitFor();
+    expect(await collectOf(DISCOVERED[1][0]).count()).toBe(0);
     expect(
       await row(DISCOVERED[1][0]).locator(".paper-citation").textContent(),
     ).not.toContain("只被发现");
@@ -241,11 +259,17 @@ it("marks only-discovered rows with where they came from and collects one in pla
     // The list is not read again.
     expect(requests).toEqual([]);
 
+    // Once a selection is on, every row shows its “收进来”.
+    await row(DISCOVERED[1][0]).focus();
+    await page.keyboard.press("Space");
+    await page.mouse.move(0, 0);
+    await page
+      .locator("body")
+      .evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await expect.poll(() => shown(DISCOVERED[0][0])).toBe("1");
     // Several: “收进来 n” counts only the discovered among the selected.
-    for (const id of [DISCOVERED[0][0], DISCOVERED[1][0]]) {
-      await row(id).focus();
-      await page.keyboard.press("Space");
-    }
+    await row(DISCOVERED[0][0]).focus();
+    await page.keyboard.press("Space");
     const bar = page.getByRole("region", { name: "文献选择" });
     await bar.getByRole("button", { name: "更多", exact: true }).click();
     await page.getByRole("menuitem", { name: "收进来 1", exact: true }).click();

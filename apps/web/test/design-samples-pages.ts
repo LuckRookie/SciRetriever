@@ -316,7 +316,7 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     name: "文献库 · 搜索结果（含只被发现的行）",
     route: route("lib", `&query=${query({ text: "Synthetic" })}`),
     interaction:
-      "搜索整个文献库；第一页的只被发现的行排到前面，分别标为来自引用扩展、来自主题搜索与没有来历（来历与排列为模拟）",
+      "搜索整个文献库；第一页的只被发现的行排到前面，分别标为来自引用扩展、来自主题搜索与没有来历（来历与排列为模拟）；指针停在第一行只被发现的文献上",
     // The sample's discovered papers have no discovery batch; the origins
     // are given in the service's shape for this page.
     prepare: async (p) => {
@@ -351,8 +351,17 @@ export const designSamplePages: readonly DesignSamplePage[] = [
         },
       );
       await p.reload();
+      // “收进来” is a row action: the pointer rests on the first discovered
+      // row, so the page shows it once, beside that row's status.
+      await p
+        .locator(".paper-row:has(.paper-discovered)")
+        .first()
+        .locator(".paper-title")
+        .hover();
     },
-    ready: ".paper-row .paper-collect",
+    // Ready once the discovered rows are drawn; their action is shown only
+    // on the touched row.
+    ready: ".paper-row .paper-discovered",
   },
   {
     id: "library-over-limit",
