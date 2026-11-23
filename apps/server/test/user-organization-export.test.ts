@@ -40,6 +40,7 @@ import {
 } from "../src/workbench/http.js";
 import { ProductionWorkbenchSession } from "../src/workbench/production-session.js";
 import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
+import { catalogRows } from "./catalog-rows-fixture.js";
 import {
   workbenchLogin,
   workbenchTestAccess,
@@ -147,35 +148,17 @@ async function seed(f: Fixture) {
   return { root, child, empty };
 }
 
-function catalogRows(db: DatabaseSync) {
-  return Object.fromEntries(
-    SCHEMA_MANIFEST.flatMap((sql) => {
-      const name = /^CREATE (?:VIRTUAL )?TABLE ([a-z_][a-z0-9_]*)/u.exec(
-        sql,
-      )?.[1];
-      if (!name) return [];
-      return [
-        [
-          name,
-          db
-            .prepare(
-              "SELECT " +
-                (sql.startsWith("CREATE VIRTUAL TABLE ") ? "rowid,*" : "*") +
-                " FROM " +
-                name +
-                " ORDER BY rowid",
-            )
-            .all(),
-        ],
-      ];
-    }),
-  );
-}
-function post(origin: string, path: string, request: unknown) {
+function post(
+  origin: string,
+  path: string,
+  request: unknown,
+  signal?: AbortSignal,
+) {
   return fetch(origin + "/api/v1/query/" + path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ protocol_version: 1, request }),
+    signal: signal ?? null,
   });
 }
 function withoutTime(value: unknown) {
@@ -192,7 +175,7 @@ it(
     const f = await fixture();
     try {
       const { root, child, empty } = await seed(f);
-      const before = catalogRows(f.db);
+      const before = catalogRows(f.db, SCHEMA_MANIFEST);
       expect(before.reading_history).toHaveLength(1);
       expect(before.operation_records!.length).toBeGreaterThan(0);
       const bytes = await readFile(join(f.home, "catalog.sqlite"));
@@ -287,7 +270,7 @@ it(
           .map(parseSavedFilter)
           .map(({ name, query, sort }) => ({ name, query, sort })),
       );
-      expect(catalogRows(f.db)).toEqual(before);
+      expect(catalogRows(f.db, SCHEMA_MANIFEST)).toEqual(before);
       expect(await readFile(join(f.home, "catalog.sqlite"))).toEqual(bytes);
       expect(await readFile(join(f.home, "catalog.sqlite-wal"))).toEqual(wal);
     } finally {
@@ -562,7 +545,7 @@ it("releases the export snapshot on consumer failure and cancellation", async ()
   const f = await fixture();
   try {
     await seed(f);
-    const before = catalogRows(f.db),
+    const before = catalogRows(f.db, SCHEMA_MANIFEST),
       failure = new Error("synthetic consumer failure");
     await expect(
       f.query.folders!.withExportFile({}, async (chunks) => {
@@ -588,7 +571,7 @@ it("releases the export snapshot on consumer failure and cancellation", async ()
     expect(f.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject(
       { busy: 0 },
     );
-    expect(catalogRows(f.db)).toEqual(before);
+    expect(catalogRows(f.db, SCHEMA_MANIFEST)).toEqual(before);
     // A new export still works after both failure paths.
     const web = await startQueryOnlyHttp({ application: f.query });
     try {
@@ -718,7 +701,7 @@ it("returns identical Web, CLI and actual stdio/HTTP MCP exports and preserves W
       });
       expect(direct.status).toBe(403);
     }
-    const before = catalogRows(f.db);
+    const before = catalogRows(f.db, SCHEMA_MANIFEST);
     const bytes = await readFile(join(f.home, "catalog.sqlite"));
     const wal = await readFile(join(f.home, "catalog.sqlite-wal"));
     const requestFile = join(f.home, "folder-export-request.json");
@@ -787,7 +770,7 @@ it("returns identical Web, CLI and actual stdio/HTTP MCP exports and preserves W
     expect((await webPost("folders-export", {}, "wrong")).status).toBe(403);
     expect((await webPost("folders-export", { extra: true })).status).toBe(400);
     expect((await post(web.origin, "folders-export", {})).status).toBe(401);
-    expect(catalogRows(f.db)).toEqual(before);
+    expect(catalogRows(f.db, SCHEMA_MANIFEST)).toEqual(before);
     expect(await readFile(join(f.home, "catalog.sqlite"))).toEqual(bytes);
     expect(await readFile(join(f.home, "catalog.sqlite-wal"))).toEqual(wal);
   } finally {
@@ -805,7 +788,8 @@ it("returns identical Web, CLI and actual stdio/HTTP MCP exports and preserves W
 
 it("keeps large HTTP downloads bounded by batches rather than accumulating members", async () => {
   const f = await fixture();
-  const folder = seedBulk(f, 10000, "x".repeat(8192));
+  const title = "x".repeat(8192);
+  const folder = seedBulk(f, 10000, title);
   // Smaller download uses the same catalog and code; only membership count differs.
   f.db
     .prepare("DELETE FROM folder_members WHERE literature_id>?")
@@ -820,12 +804,13 @@ it("keeps large HTTP downloads bounded by batches rather than accumulating membe
     first = 0,
     peakRss = 0,
     firstRss = 0;
+  let memberBytesReceived = Promise.resolve();
   LiteratureQueryService.prototype.bibliographies = async function (
     ids,
     signal,
   ) {
+    if (++batches === 2) await memberBytesReceived;
     const result = await original.call(this, ids, signal);
-    batches++;
     maxBatch = Math.max(maxBatch, ids.length);
     collect();
     const memory = process.memoryUsage(),
@@ -845,22 +830,37 @@ it("keeps large HTTP downloads bounded by batches rather than accumulating membe
     first = 0;
     peakRss = 0;
     firstRss = 0;
-    const started = performance.now(),
-      response = await post(web.origin, "folders-export", {});
-    expect(response.status).toBe(200);
-    let bytes = 0;
-    // Deliberately consume and discard, never collect the complete output in this client.
-    for await (const chunk of response.body!) {
-      bytes += chunk.byteLength;
+    let received!: () => void;
+    memberBytesReceived = new Promise<void>((resolve) => {
+      received = resolve;
+    });
+    try {
+      const started = performance.now(),
+        response = await post(
+          web.origin,
+          "folders-export",
+          {},
+          AbortSignal.timeout(30_000),
+        );
+      expect(response.status).toBe(200);
+      let bytes = 0;
+      for await (const chunk of response.body!) {
+        bytes += chunk.byteLength;
+        // The headers and empty folder prefix are smaller than a member title.
+        // The second page stays paused until the client reads member bytes.
+        if (bytes > title.length) received();
+      }
+      return {
+        bytes,
+        batches,
+        maxBatch,
+        heapGrowth: peak - first,
+        rssGrowth: peakRss - firstRss,
+        ms: performance.now() - started,
+      };
+    } finally {
+      received();
     }
-    return {
-      bytes,
-      batches,
-      maxBatch,
-      heapGrowth: peak - first,
-      rssGrowth: peakRss - firstRss,
-      ms: performance.now() - started,
-    };
   }
   try {
     const small = await download();
@@ -874,12 +874,13 @@ it("keeps large HTTP downloads bounded by batches rather than accumulating membe
     const large = await download();
     expect(small.batches).toBe(4);
     expect(large.batches).toBe(79);
+    expect(small.maxBatch).toBe(128);
     expect(large.maxBatch).toBe(128);
     expect(large.bytes).toBeGreaterThan(small.bytes * 19);
-    // 20x more output must not retain a corresponding copy of those bytes.
+    // Measure live heap and buffers. RSS includes pages that the allocator
+    // and SQLite keep resident after the objects retaining the bytes are gone.
     const additional = large.bytes - small.bytes;
     expect(large.heapGrowth - small.heapGrowth).toBeLessThan(additional / 5);
-    expect(large.rssGrowth - small.rssGrowth).toBeLessThan(additional / 2);
     console.info(
       "organization-export-stream",
       JSON.stringify({ small, large }),

@@ -10,6 +10,7 @@ import { CURRENT_CATALOG_CONFIG } from "../src/storage/sqlite/catalog-layout.js"
 import { verifyOfflineLayout } from "../src/storage/sqlite/archive-schema-migration.js";
 import { processorFixture } from "./processor-fixture.js";
 import { parseDeviceConnectionCode } from "@sciretriever/contracts";
+import { catalogRows } from "./catalog-rows-fixture.js";
 
 export function emptyUserOrganizationInput(path: string) {
   const db = new DatabaseSync(path);
@@ -50,21 +51,7 @@ export function seedLegacyIntakeObjects(db: DatabaseSync) {
 
 /** All logical rows, including virtual FTS rowids, but never FTS shadow internals. */
 export function organizationRows(db: DatabaseSync) {
-  return Object.fromEntries(
-    SCHEMA_MANIFEST_V17.flatMap((sql) => {
-      const name = /^CREATE (?:VIRTUAL )?TABLE ([a-z_][a-z0-9_]*)/u.exec(
-        sql,
-      )?.[1];
-      if (!name) return [];
-      const columns = sql.startsWith("CREATE VIRTUAL TABLE ") ? "rowid,*" : "*";
-      return [
-        [
-          name,
-          db.prepare(`SELECT ${columns} FROM ${name} ORDER BY rowid`).all(),
-        ],
-      ];
-    }),
-  );
+  return catalogRows(db, SCHEMA_MANIFEST_V17);
 }
 
 /** Build through real owners with fake parser/pages/model, then project onto frozen 17. */

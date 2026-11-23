@@ -1,4 +1,4 @@
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { setImmediate as yieldToEvents } from "node:timers/promises";
 import type { DiscoveryPublication } from "./worker.js";
 
@@ -18,7 +18,7 @@ export interface CitationDeferredChanges<Work extends CitationDeferredEntry> {
 
 /** A disposable, disk-backed projection of the catalog's citation checkpoints. */
 export class CitationProgress<Work extends CitationDeferredEntry> {
-  private readonly db = new DatabaseSync("");
+  private readonly db: DatabaseSync;
   private readonly maxDepth: number;
   private readonly direction: "references" | "cited-by" | "both";
   private resultTotal = 0;
@@ -52,6 +52,9 @@ export class CitationProgress<Work extends CitationDeferredEntry> {
     maxDepth: number,
     direction: "references" | "cited-by" | "both",
   ) {
+    // CLI and admission checks can finish before opening any SQLite catalog.
+    const { DatabaseSync } = process.getBuiltinModule("node:sqlite");
+    this.db = new DatabaseSync("");
     this.maxDepth = maxDepth;
     this.direction = direction;
     try {

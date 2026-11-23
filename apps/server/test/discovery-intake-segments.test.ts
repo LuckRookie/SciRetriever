@@ -3,7 +3,6 @@ import { createHash, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { setTimeout as delay } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import {
   EMPTY_METADATA,
@@ -1419,44 +1418,87 @@ it("admits a workbench folder write between active citation segments", async () 
     });
     const grant = (await init.json()) as { client_id: string; csrf: string };
     let trigger!: () => void;
+    let markAuditSubmitted!: () => void;
+    const auditSubmitted = new Promise<void>((resolve) => {
+      markAuditSubmitted = resolve;
+    });
+    let markFolderSubmitted!: () => void;
+    const folderSubmitted = new Promise<void>((resolve) => {
+      markFolderSubmitted = resolve;
+    });
     let processed = 0;
+    let processedAtFolderCommit = 0;
     const foreground = new Promise<void>((resolve) => {
       trigger = resolve;
-    }).then(async () => {
-      const started = performance.now();
-      const response = await fetch(
-        origin + "/api/v1/maintenance/folders?client_id=" + grant.client_id,
-        {
-          method: "POST",
-          headers: {
-            Cookie: cookie,
-            Origin: origin,
-            "Content-Type": "application/json",
-            "X-Workbench-Csrf": grant.csrf,
-            "X-Sciretriever-Protocol-Version": "1",
-          },
-          body: JSON.stringify({
-            protocol_version: 1,
-            request: {
-              operation: "create",
-              request: { name: "Foreground" },
+    })
+      .then(async () => {
+        const started = performance.now();
+        const response = await fetch(
+          origin + "/api/v1/maintenance/folders?client_id=" + grant.client_id,
+          {
+            method: "POST",
+            signal: AbortSignal.timeout(20_000),
+            headers: {
+              Cookie: cookie,
+              Origin: origin,
+              "Content-Type": "application/json",
+              "X-Workbench-Csrf": grant.csrf,
+              "X-Sciretriever-Protocol-Version": "1",
             },
-          }),
-        },
-      );
-      return {
-        status: response.status,
-        elapsed: performance.now() - started,
-        processed,
-        body: await response.json(),
-      };
-    });
+            body: JSON.stringify({
+              protocol_version: 1,
+              request: {
+                operation: "create",
+                request: { name: "Foreground" },
+              },
+            }),
+          },
+        );
+        return {
+          status: response.status,
+          elapsed: performance.now() - started,
+          body: await response.json(),
+        };
+      })
+      .finally(() => {
+        markAuditSubmitted();
+        markFolderSubmitted();
+      });
+    const review = app.database.review.bind(app.database);
+    const auditWrite = vi
+      .spyOn(app.database, "review")
+      .mockImplementation((action, args) => {
+        const completed = review(action, args);
+        if (
+          action === "audit-start" &&
+          args &&
+          typeof args === "object" &&
+          "operation" in args &&
+          args.operation === "folders"
+        )
+          markAuditSubmitted();
+        return completed;
+      });
+    const folders = app.database.folders.bind(app.database);
+    const folderWrite = vi
+      .spyOn(app.database, "folders")
+      .mockImplementation(async (value, signal) => {
+        const completed = folders(value, signal);
+        if (value.operation !== "create") return completed;
+        markFolderSubmitted();
+        const result = await completed;
+        processedAtFolderCommit = processed;
+        return result;
+      });
     const observe = app.identity.observe.bind(app.identity);
-    const slowed = vi
+    const firstSegment = vi
       .spyOn(app.identity, "observe")
       .mockImplementation(async (...args) => {
-        if (++processed === 1) trigger();
-        await delay(4);
+        if (++processed === 1) {
+          // The HTTP operation records its audit start before writing the folder.
+          trigger();
+          await auditSubmitted;
+        } else if (processed === 2) await folderSubmitted;
         return observe(...args);
       });
     try {
@@ -1465,19 +1507,26 @@ it("admits a workbench folder write between active citation segments", async () 
         foreground,
       ]);
       expect(write.status, JSON.stringify(write.body)).toBe(200);
-      expect(write.processed).toBeLessThan(rows.length);
-      expect(write.elapsed).toBeLessThan(250);
+      expect(processedAtFolderCommit).toBeGreaterThan(0);
+      expect(processedAtFolderCommit).toBeLessThan(rows.length);
+      expect(
+        inspect(home, (db) =>
+          db.prepare("SELECT name FROM folders WHERE name=?").get("Foreground"),
+        ),
+      ).toEqual({ name: "Foreground" });
       expect(result.result_count).toBe(rows.length);
       console.info(
         JSON.stringify({
-          folder_write_wait_ms: write.elapsed,
-          processed_when_written: write.processed,
+          folder_http_ms: write.elapsed,
+          processed_at_folder_commit: processedAtFolderCommit,
         }),
       );
     } finally {
-      slowed.mockRestore();
+      firstSegment.mockRestore();
       trigger();
       await Promise.allSettled([foreground]);
+      auditWrite.mockRestore();
+      folderWrite.mockRestore();
     }
   } finally {
     await server?.close();
