@@ -1,6 +1,6 @@
 # 03 搜索结果：先文献库里，再候选
 
-状态：Done（待部署给 Owner 看）
+状态：Done（已部署，待 Owner 看）
 
 ## 输出
 
@@ -23,3 +23,7 @@
 2026-11-24：与搜索和文献库相关的 8 个测试文件通过（`next-library-scale`、`next-library`、`next-library-density`、`next-library-relations`、`next-library-workflows`、`next-intake-seeds`、`next-command-palette`、`next-insights`）；段头样式修正后复跑前两个中的 `next-library-scale` 与 `next-library-density`，通过。格式、lint、类型检查与 `pnpm build` 通过。本地样例库截图看过（`sandbox/reports/design-samples/2026-11-24-search-{1,2}/`）。
 
 按 Owner 当天的提醒，这一块起每一步只跑改到的那一页的测试，全量留到动了全站外壳或整个计划收尾时。
+
+## 部署
+
+2026-11-24：执行会话确认后，把 4174 换到 `sandbox/runs/2026-11-24-web-redesign/candidate-1ff80314`（只换构建）。回执 `sandbox/reports/2026-11-24-web-redesign-deploy/03-search/`。
