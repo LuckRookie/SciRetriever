@@ -201,24 +201,24 @@ it("labels entry identities without exposing machine ids or changing scientific 
   });
   expect(value.items[0]).not.toHaveProperty("actor_label");
 });
-it("names an unlabelled filter without mistaking it for the entire library", () => {
-  expect(
-    generatedSnapshotName(
-      parseSnapshotDefinition({
-        kind: "query",
-        query: parseLibrarySearchRequest({ query: { statuses: ["READY"] } })
-          .query,
-      }),
-      12,
-    ),
-  ).toBe("筛选文献 · 12 篇");
-  expect(
-    generatedSnapshotName(
-      parseSnapshotDefinition({
-        kind: "query",
-        query: parseLibrarySearchRequest({ query: {} }).query,
-      }),
-      0,
-    ),
-  ).toBe("全部文献 · 0 篇");
-});
+it.each([
+  ["implicit", {}, "全部文献"],
+  ["all", { collection_scope: "all" }, "全部文献"],
+  ["collected", { collection_scope: "collected" }, "收进来的文献"],
+] as const)(
+  "uses the %s scope for unfiltered snapshot labels and keeps filter labels",
+  (_scope, query, scopeName) => {
+    const name = (filters: Record<string, unknown>, count: number) =>
+      generatedSnapshotName(
+        parseSnapshotDefinition({
+          kind: "query",
+          query: parseLibrarySearchRequest({ query: { ...query, ...filters } })
+            .query,
+        }),
+        count,
+      );
+    expect(name({}, 0)).toBe(`${scopeName} · 0 篇`);
+    expect(name({ statuses: ["READY"] }, 12)).toBe("筛选文献 · 12 篇");
+    expect(name({ author: "Ada" }, 12)).toBe("作者 Ada · 12 篇");
+  },
+);

@@ -214,10 +214,14 @@ it(
         .getByRole("menuitem", { name: "生成快照", exact: true })
         .click();
       await page
-        .getByRole("heading", { name: "全部文献 · 1 篇", exact: true })
+        .getByRole("heading", { name: "收进来的文献 · 1 篇", exact: true })
         .waitFor();
       const snapshot = new URL(page.url()).searchParams.get("snapshot")!;
       const original = await w.env.app.snapshots.all(snapshot);
+      expect(original.definition).toMatchObject({
+        kind: "query",
+        query: { collection_scope: "collected", statuses: [], text: null },
+      });
       await page.getByRole("button", { name: "重命名", exact: true }).click();
       const rename = page.getByRole("dialog", {
         name: "重命名快照",
@@ -239,7 +243,7 @@ it(
         .getByRole("button", { name: "恢复默认名称", exact: true })
         .click();
       await page
-        .getByRole("heading", { name: "全部文献 · 1 篇", exact: true })
+        .getByRole("heading", { name: "收进来的文献 · 1 篇", exact: true })
         .waitFor();
       expect(w.errors).toEqual([]);
       console.info(`Round-two release screenshots: ${evidence}`);

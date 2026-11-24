@@ -8,7 +8,7 @@ export function generatedSnapshotName(
   folderName: string | null = null,
 ): string {
   if (definition.kind === "literatures") return `手选 ${count} 篇`;
-  const q = definition.query,
+  const { collection_scope: scope, ...q } = definition.query,
     parts: string[] = [];
   if (q.folder)
     parts.push(folderName ? `文件夹 ${folderName}` : "文件夹（已删除）");
@@ -33,7 +33,8 @@ export function generatedSnapshotName(
           value !== false &&
           value !== "",
     );
-    parts.push(filtered ? "筛选文献" : "全部文献");
+    const scopeName = scope === "collected" ? "收进来的文献" : "全部文献";
+    parts.push(filtered ? "筛选文献" : scopeName);
   }
   return [
     ...parts

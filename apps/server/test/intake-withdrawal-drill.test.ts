@@ -132,7 +132,7 @@ async function fixture() {
           identity: "global",
           name: "WithdrawalDrill",
         },
-        scope: "Schema 16 withdrawal drill",
+        scope: "Withdrawal and restoration drill",
       },
       { kind: "local", origin: "cli" },
     );
@@ -370,7 +370,7 @@ function projections(f: ScopedDrill) {
 type ScopedDrill = Drill & { batchId: string };
 
 it.each(["finished", "cancelled"] as const)(
-  "drills %s batch withdrawal, identity-preserving re-entry and exact restoration using schema 16 only",
+  "drills %s batch withdrawal, identity-preserving re-entry and exact restoration on the current catalog",
   async (priorState) =>
     withActivity({ actor: "web:withdrawal-drill" }, async () => {
       const base = await fixture();
@@ -697,12 +697,31 @@ it.each(["finished", "cancelled"] as const)(
             f.app.files.read(String(a.relative_path), Number(a.byte_size)),
           ),
         );
-        const fts = f.rows("SELECT rowid,* FROM literature_search_fts");
-        const revision = Number(
-          f.rows(
-            "SELECT revision FROM retrieval_source_revision WHERE singleton=1",
-          )[0]!.revision,
-        );
+        const searchRows = () =>
+          f.rows("SELECT rowid,* FROM literature_search_fts ORDER BY rowid");
+        const fts = searchRows();
+        const retrievalWatermark = () => {
+          const { revision, position } = f.rows(
+            "SELECT revision,COALESCE((SELECT max(position) FROM retrieval_changes),0) AS position FROM retrieval_source_revision WHERE singleton=1",
+          )[0]!;
+          return { revision: Number(revision), position: Number(position) };
+        };
+        const expectRetrievalChanges = (
+          before: ReturnType<typeof retrievalWatermark>,
+          literatures: readonly string[],
+        ) => {
+          // The watermark signals staleness; the journal names the affected papers.
+          expect(retrievalWatermark().revision).toBeGreaterThan(
+            before.revision,
+          );
+          expect(
+            f.ids(
+              "SELECT DISTINCT literature_id AS id FROM retrieval_changes WHERE position>?",
+              before.position,
+            ),
+          ).toEqual([...literatures].sort());
+        };
+        const beforeWithdrawal = retrievalWatermark();
         f.settleClock();
         const report = {
           remove: {
@@ -763,11 +782,6 @@ it.each(["finished", "cancelled"] as const)(
               .run();
             f.db
               .prepare(
-                "UPDATE retrieval_source_revision SET revision=revision+1 WHERE singleton=1",
-              )
-              .run();
-            f.db
-              .prepare(
                 "UPDATE intake_batches SET state='withdrawn' WHERE batch_id=?",
               )
               .run(main.id);
@@ -780,7 +794,9 @@ it.each(["finished", "cancelled"] as const)(
         expect(f.rows("SELECT * FROM intake_withdrawals")).toEqual([]);
         expect(projections(f)).toEqual(beforeProjection);
         expect(objectRows(f)).toEqual(before);
+        expect(retrievalWatermark()).toEqual(beforeWithdrawal);
         await withdraw();
+        expectRetrievalChanges(beforeWithdrawal, expectedClean);
         expect(objectRows(f)).toEqual(before);
         expect(f.rows("PRAGMA foreign_key_check")).toEqual([]);
         const after = projections(f),
@@ -814,6 +830,7 @@ it.each(["finished", "cancelled"] as const)(
         expect(after.terms).toHaveLength(beforeProjection.terms.length - 3);
         // These temporary masks isolate representative projection capability:
         // the real merged papers are correctly kept by the withdrawal plan.
+        const beforeRepresentativeMasks = retrievalWatermark();
         await f.transaction(() => {
           const meta = f.rows(
             "SELECT meta_literature_id FROM literatures WHERE literature_id=?",
@@ -845,6 +862,10 @@ it.each(["finished", "cancelled"] as const)(
             )
             .run(rep, sibling);
         });
+        expectRetrievalChanges(beforeRepresentativeMasks, [
+          oldVersion,
+          id("merged"),
+        ]);
         // Identity, observation replay, hash and external-object matching NEVER join the mask.
         for (const key of ["clean-pdf", "clean-fallback"]) {
           const original = main.report.items.find(
@@ -904,7 +925,9 @@ it.each(["finished", "cancelled"] as const)(
             main.id,
           )[0]!.report_json,
         );
+        const beforeReentry = retrievalWatermark();
         const reentry = await f.batch([record("clean-pdf")], main.library);
+        expectRetrievalChanges(beforeReentry, [id("clean-pdf")]);
         expect(reentry.report.items[0]!.literature_id).toBe(id("clean-pdf"));
         const restoreIds = (lit: string) => {
           const relationIds = f.ids(
@@ -975,6 +998,7 @@ it.each(["finished", "cancelled"] as const)(
         expect(projections(f).library).not.toContain(id("clean-fallback"));
         expect(objectRows(f)).toEqual(before);
         expect(f.rows("PRAGMA foreign_key_check")).toEqual([]);
+        const beforeRestore = retrievalWatermark();
         await f.transaction(() => {
           const remaining = f.rows(
             "SELECT * FROM intake_withdrawn_objects WHERE batch_id=?",
@@ -1026,26 +1050,19 @@ it.each(["finished", "cancelled"] as const)(
               )
               .run(...columns.map((c) => row[c]!));
           }
-          f.db
-            .prepare(
-              "UPDATE retrieval_source_revision SET revision=revision+1 WHERE singleton=1",
-            )
-            .run();
         });
+        expectRetrievalChanges(
+          beforeRestore,
+          expectedClean.filter((lit) => lit !== id("clean-pdf")),
+        );
         expect(projections(f)).toEqual(beforeProjection);
         expect(objectRows(f)).toEqual(before);
+        expect(searchRows()).toEqual(fts);
         expect(f.rows("SELECT * FROM intake_withdrawn_objects")).toEqual([]);
         expect(f.rows("PRAGMA foreign_key_check")).toEqual([]);
         expect(
           f.rows("SELECT type,name,sql FROM sqlite_master ORDER BY type,name"),
         ).toEqual(layout);
-        expect(
-          Number(
-            f.rows(
-              "SELECT revision FROM retrieval_source_revision WHERE singleton=1",
-            )[0]!.revision,
-          ),
-        ).toBe(revision + 3);
         expect(
           f.rows(
             "SELECT state,result FROM intake_batches WHERE batch_id=?",
@@ -1063,7 +1080,7 @@ it.each(["finished", "cancelled"] as const)(
             ),
           ).toEqual(bytesBefore[index]);
         console.log(
-          "withdrawal-schema16-drill",
+          "withdrawal-drill",
           JSON.stringify({
             prior_state: priorState,
             removed: plan.objects.reduce<Record<string, number>>(

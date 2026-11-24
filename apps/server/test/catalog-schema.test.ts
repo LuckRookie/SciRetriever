@@ -71,8 +71,9 @@ it("pins the frozen 16–19 manifests, current additive layout and version-speci
   expect(SCHEMA_FINGERPRINT_V19_COMBINED).toBe(
     "14c693f06f287f426f3fde730f7b5743c9ec64d2304919272d1b1d2e51202952",
   );
+  // The indexed archive_current_parts view belongs to the current base only.
   expect(SCHEMA_FINGERPRINT).toBe(
-    "6b3eca115bc5e171b8eb4c8accca53d5780b234bac1b5326f8841658a4c89fb0",
+    "ce2c67b1c7465072a9fce1ab8799617c81c814377f42bd716a2c8442ce2db90f",
   );
   expect(SCHEMA_FINGERPRINT_V18).toBe(
     "a95b796f5f8dd69839748571476a8bcc0f3d38ed1547d8f8aab25c38b1e2d8cf",
