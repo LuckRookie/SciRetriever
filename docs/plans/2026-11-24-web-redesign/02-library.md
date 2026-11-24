@@ -1,6 +1,6 @@
 # 02 文献库：三栏
 
-状态：Done（待部署给 Owner 看）
+状态：Done（已部署，待 Owner 看）
 
 ## 输出
 
@@ -43,3 +43,7 @@
 - `next-query-parity`：标题旁的总数要等文献库的计数，比原来全库带里的那句晚出现，测试默认只等 1 秒；放宽到 20 秒后通过。页面本身正常。
 
 按新版面改写的测试：全库带改为“页面顶部一个搜索框、没有全库带”；预览改为“右栏显示当前行、可收起、从阅读页回来显示刚读的那一篇”；标签样式改到右栏里检查；“全选已加载”经 `selectAllLoaded` 先勾一行。格式、lint、类型检查与 `pnpm build` 通过。本地样例库上浅色、深色与 390 px 窄屏截图看过（`sandbox/reports/design-samples/2026-11-24-library-{1,2,3}/`）。
+
+## 部署
+
+2026-11-24：执行会话确认没有运行器与后台写入后，把 4174 从 `candidate-e0430b87` 换到 `sandbox/runs/2026-11-24-web-redesign/candidate-b17c23bb`（只换构建）。停服 13:41:56–13:42:04 UTC，约 8 秒；全库 351,458 篇，Suzuki 仍为已中断。回执 `sandbox/reports/2026-11-24-web-redesign-deploy/02-library/`。浏览器里的核对要等 Owner 重新登录。
