@@ -947,7 +947,9 @@ it("counts the quick filters in an earlier window too, and goes back to the newe
   const w = await nextWorkspace({ setup: withDiscovered });
   try {
     const page = w.page;
-    const asked = await scanWindows(page);
+    // One set of routes for the whole test; `lost` turns on below.
+    const windows: { lost?: boolean } = {};
+    const asked = await scanWindows(page, windows);
     await page.goto(
       new URL(`/?view=lib&query=${encode({ text: "Discovered" })}`, page.url())
         .href,
@@ -986,11 +988,11 @@ it("counts the quick filters in an earlier window too, and goes back to the newe
     expect(w.errors).toEqual([]);
 
     // A window the service no longer knows: back to the newest hits.
-    await page.unrouteAll({ behavior: "wait" });
-    await scanWindows(page, { lost: true });
+    windows.lost = true;
     await page.goto(
       new URL(`/?view=lib&query=${encode({ text: "Discovered" })}`, page.url())
         .href,
+      { waitUntil: "domcontentloaded" },
     );
     await expect.poll(() => count.textContent()).toBe("至少 2 篇符合");
     await page

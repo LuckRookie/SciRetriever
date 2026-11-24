@@ -22,6 +22,7 @@ import {
 } from "../../data/citations.js";
 import {
   emptyQuery,
+  viewSort,
   paperTitle,
   paperTitleParts,
   readLibraryCounts,
@@ -56,6 +57,9 @@ export default function Insights() {
       shell.selected.size > 0;
   const query = all ? emptyQuery() : route.query,
     ids = selection ? [...shell.selected].sort() : [];
+  // The address's order belongs to its own query (a search's is relevance);
+  // the whole library reads in its own default order.
+  const sort = all ? viewSort(query) : route.sort;
   const scopeName = all
     ? "全部文献库"
     : selection
@@ -64,7 +68,7 @@ export default function Insights() {
         ? "全部文献库"
         : "文献库当前筛选";
   const papers = useQuery({
-    queryKey: ["insights", query, route.sort, ids],
+    queryKey: ["insights", query, sort, ids],
     queryFn: async ({ signal }) => {
       const items: LiteratureSearchItem[] = [];
       let cursor: string | null = null,
@@ -75,13 +79,7 @@ export default function Insights() {
       } else {
         const seen = new Set<string>();
         do {
-          const page = await searchLibrary(
-            api,
-            query,
-            route.sort,
-            cursor,
-            signal,
-          );
+          const page = await searchLibrary(api, query, sort, cursor, signal);
           total = page.total;
           items.push(...page.items);
           cursor = page.cursor;

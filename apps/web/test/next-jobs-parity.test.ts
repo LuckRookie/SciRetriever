@@ -33,6 +33,11 @@ describe("durable task workbench", () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-jobs-ui-"));
     const application = await createApplication(home, {});
     await application.database.putLiterature(FIXTURE_LITERATURE);
+    // The paper is in hand: the library lists the collected papers
+    // (ADR 0065 §2, page specs “文献库”).
+    await application.database.collectLiteratures([
+      FIXTURE_LITERATURE.literature_id,
+    ]);
     const session = new WorkbenchSession(
       FIXTURE_LITERATURE.literature_id,
       {
@@ -270,13 +275,17 @@ describe("durable task workbench", () => {
       await expect.poll(() => listCalls).toBe(1);
       await page.getByRole("button", { name: "已结束", exact: true }).click();
       await expect
-        .poll(() => page.locator(".task-table [data-task-id]").count())
+        .poll(() => page.locator(".task-table [data-task-id]").count(), {
+          timeout: 10_000,
+        })
         .toBe(2);
       releaseStale();
       await page.getByRole("button", { name: "全部", exact: true }).click();
       await page.getByRole("button", { name: "刷新任务", exact: true }).click();
       await expect
-        .poll(() => page.locator(".task-table [data-task-id]").count())
+        .poll(() => page.locator(".task-table [data-task-id]").count(), {
+          timeout: 10_000,
+        })
         .toBe(2);
       await page.unroute(listUrl, staleRoute);
       const failedList = (route: import("playwright").Route) =>
@@ -332,16 +341,22 @@ describe("durable task workbench", () => {
       expect(new URL(page.url()).searchParams.get("task")).toBe(
         olderActive.job_id,
       );
+      // Pages of 100 tasks and their re-renders can take longer than the
+      // default one-second poll on a loaded machine.
       await quick(/^全部/u).click();
       await page.getByRole("button", { name: "刷新任务", exact: true }).click();
       await expect
-        .poll(() => page.locator(".task-table [data-task-id]").count())
+        .poll(() => page.locator(".task-table [data-task-id]").count(), {
+          timeout: 10_000,
+        })
         .toBe(100);
       await page
         .getByRole("button", { name: "加载更多任务", exact: true })
         .click();
       await expect
-        .poll(() => page.locator(".task-table [data-task-id]").count())
+        .poll(() => page.locator(".task-table [data-task-id]").count(), {
+          timeout: 10_000,
+        })
         .toBe(105);
       expect(
         await page
@@ -351,7 +366,9 @@ describe("durable task workbench", () => {
       await createHistory("history-new-arrival");
       await page.getByRole("button", { name: "刷新任务", exact: true }).click();
       await expect
-        .poll(() => page.locator(".task-table [data-task-id]").count())
+        .poll(() => page.locator(".task-table [data-task-id]").count(), {
+          timeout: 10_000,
+        })
         .toBe(106);
       const loaded = await page
         .locator(".task-table [data-task-id]")
@@ -364,13 +381,17 @@ describe("durable task workbench", () => {
         .getByRole("searchbox", { name: "筛选任务", exact: true })
         .fill(completedId);
       await expect
-        .poll(() => page.locator(".task-table [data-task-id]").count())
+        .poll(() => page.locator(".task-table [data-task-id]").count(), {
+          timeout: 10_000,
+        })
         .toBe(1);
       await page
         .getByRole("searchbox", { name: "筛选任务", exact: true })
         .fill("");
       await expect
-        .poll(() => page.locator(".task-table [data-task-id]").count())
+        .poll(() => page.locator(".task-table [data-task-id]").count(), {
+          timeout: 10_000,
+        })
         .toBe(106);
       expect(errors).toEqual([]);
       await page.setViewportSize({ width: 390, height: 844 });

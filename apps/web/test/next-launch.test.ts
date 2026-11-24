@@ -129,7 +129,8 @@ describe("formal Web launch and database binding", () => {
           .poll(() =>
             page.getByLabel("文献列表", { exact: true }).textContent(),
           )
-          .toContain("没有符合条件的文献");
+          // A new library has nothing collected yet (page specs “文献库”).
+          .toContain("还没有收进来的文献");
         // 入库 is in the sidebar; the library header has no button for it.
         await page
           .getByRole("complementary", { name: "主导航" })

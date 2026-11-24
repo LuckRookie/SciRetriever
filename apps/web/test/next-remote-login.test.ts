@@ -138,6 +138,12 @@ describe("IP-address HTTP login and workspace", () => {
         literature_id: FIXTURE_LITERATURE.literature_id,
         bytes: workbenchPdf(),
       });
+      // Both papers are in hand: the library lists the collected papers
+      // (ADR 0065 §2, page specs “文献库”).
+      await server.application.database.collectLiteratures([
+        FIXTURE_LITERATURE.literature_id,
+        "00000000-0000-0000-0000-000000005101",
+      ]);
       const context = await browser.newContext({
         ...motionOptions(),
         viewport: { width: 1280, height: 900 },

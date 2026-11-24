@@ -49,6 +49,12 @@ const setup: NonNullable<Parameters<typeof nextWorkspace>[0]>["setup"] = async (
       `00000000-0000-0000-0000-0000000053${String(10 + n).padStart(2, "0")}`,
       `Cyclic seed paper ${n}`,
     );
+  // All of them are in hand: the library lists the collected papers
+  // (ADR 0065 §2, page specs “文献库”).
+  await env.app.database.collectLiteratures([
+    salt,
+    ...Array.from({ length: 6 }, (_, n) => cyclic(n + 1)),
+  ]);
 };
 /** The listed seeds' titles, in order. */
 const listed = (page: Page) =>
