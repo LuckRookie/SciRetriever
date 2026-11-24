@@ -1382,6 +1382,47 @@
     color: var(--fg3);
     font-size: var(--text-caption);
   }
+  /* A whole-library search in two sections: each opens with a line across
+     the row above its first paper — the name, the count, a word on it. */
+  .paper-section-head {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    /* It covers the row's own padding, so the row's hover, tint and pen
+       line stop below it: the line belongs to the section, not the paper. */
+    margin: calc(-1 * var(--space-3)) calc(-1 * var(--space-2)) var(--space-3);
+    padding: var(--space-4) var(--space-2) var(--space-2);
+    border-bottom: 1px solid var(--line);
+    background: var(--bg);
+    color: var(--fg2);
+    font-size: var(--text-secondary);
+    cursor: default;
+  }
+  .paper-row:not(:first-child) > .paper-section-head {
+    padding-top: var(--space-5);
+  }
+  .paper-section-head > b {
+    color: var(--fg);
+    font-weight: 600;
+  }
+  .paper-section-note {
+    color: var(--fg3);
+    font-size: var(--text-caption);
+  }
+  /* The box of a row that opens a section stands beside the paper, not the line. */
+  .paper-row[data-section-start]:not([data-display="table"]) > .paper-check {
+    align-items: flex-end;
+    padding-bottom: 20px;
+  }
+  /* A table row that opens a section grows by the line above it. */
+  .paper-row[data-display="table"][data-section-start] {
+    height: auto;
+    row-gap: 0;
+  }
+  .paper-row[data-display="table"][data-section-start] > .paper-section-head {
+    margin: 0 calc(-1 * var(--space-2)) var(--space-1);
+  }
   .library-window-end {
     margin: 0;
     padding: var(--space-3) var(--space-2);

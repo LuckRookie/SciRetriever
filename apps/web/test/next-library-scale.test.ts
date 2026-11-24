@@ -114,20 +114,43 @@ it("tops the library with one search box and no band, counts the collected in th
         .and(page.locator('[aria-haspopup="listbox"]'))
         .textContent(),
     ).toBe("排序：相关度");
-    const scope = page.getByRole("radiogroup", { name: "范围" });
-    expect(
-      await scope.getByRole("radio", { name: "整个文献库" }).isChecked(),
-    ).toBe(true);
+    // No switch over the whole library: the results name what the library
+    // holds, then the candidates (page specs “搜索结果”). Neither of the two
+    // is in the library, so the candidates open the list.
+    expect(await page.getByRole("radiogroup", { name: "范围" }).count()).toBe(
+      0,
+    );
     await expect
       .poll(() => page.locator(".ui-page-header .ui-page-count").textContent())
       .toBe("2 篇符合");
-    // “只看收进来的 · n”: none of the two is collected.
-    const only = scope.getByRole("radio", { name: "只看收进来的 · 0" });
-    await only.waitFor();
-    await only.click({ force: true });
-    await expect.poll(() => query(page).collection_scope).toBe("collected");
-    expect(query(page).text).toBe("Discovered sulfide");
+    const heads = page.locator(".paper-section-head");
+    await expect.poll(() => heads.count()).toBe(1);
+    expect(await heads.first().textContent()).toMatch(/^候选2 篇/u);
+    expect(
+      await page
+        .locator(".paper-row")
+        .first()
+        .locator(".paper-section-head")
+        .count(),
+    ).toBe(1);
+    // Narrowed to the library, a chip says so; nothing of the two is there.
+    await page.goto(
+      new URL(
+        `/?view=lib&query=${encode({ text: "Discovered sulfide", collection_scope: "collected" })}`,
+        page.url(),
+      ).href,
+    );
+    const only = page.getByRole("button", { name: /只看文献库里的/u });
+    await only.first().waitFor();
     await page.getByText("没有符合条件的文献", { exact: true }).waitFor();
+    expect(await heads.count()).toBe(0);
+    // Taking it off lists the candidates again, with the same words.
+    await page
+      .getByRole("button", { name: "移除只看文献库里的", exact: true })
+      .click();
+    await expect.poll(() => query(page).collection_scope ?? null).toBeNull();
+    expect(query(page).text).toBe("Discovered sulfide");
+    await expect.poll(() => heads.count()).toBe(1);
 
     // A working set searches in itself, and can widen to the whole library.
     await page

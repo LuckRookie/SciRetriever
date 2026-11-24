@@ -157,6 +157,8 @@ interface ScrollPosition {
 const scrollPositions = new WeakMap<ApiClient, Map<string, ScrollPosition>>();
 /** The row the right column showed in each view, found again on coming back from a paper. */
 const currentRows = new WeakMap<ApiClient, Map<string, string>>();
+/** A whole-library search shows this many of the library's own hits before the candidates. */
+const LIBRARY_HITS_SHOWN = 5;
 /** The right column (page specs “右栏”): open or put away, remembered in this browser. */
 const PREVIEW_KEY = "sciretriever:library:preview:v1";
 /** Wider than this the right column stands beside the list; narrower, the preview is a layer. */
@@ -496,7 +498,12 @@ export default function Library() {
     placeholderData: keepPreviousData,
     enabled: api.workspace.readiness === "ready",
   });
-  const items = useMemo(
+  // Papers collected on this page: their rows say “已收进来” in place of
+  // the button (page specs “搜索结果”).
+  const [collectedNow, setCollectedNow] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const hits = useMemo(
     () => [
       ...new Map(
         next.data?.pages
@@ -506,6 +513,51 @@ export default function Library() {
     ],
     [next.data],
   );
+  // A search of the whole library lists what the library holds first, then
+  // the candidates (page specs “搜索结果”): the library's own hits are read
+  // on their own, a few of them, and the mixed hits keep the candidates.
+  const sectioned =
+    view === "search" &&
+    !route.query.folder &&
+    !route.query.recently_opened &&
+    route.query.intake_batch_ids.length === 0 &&
+    route.query.collection_scope !== "collected";
+  const libraryScope = useMemo(
+    () => inScope(effective, "collected"),
+    [effective],
+  );
+  const libraryHits = useQuery({
+    queryKey: ["library", "search-in-library", libraryScope, route.sort],
+    queryFn: ({ signal }) =>
+      searchLibrary(
+        api,
+        libraryScope,
+        route.sort,
+        null,
+        signal,
+        LIBRARY_HITS_SHOWN,
+      ),
+    placeholderData: keepPreviousData,
+    enabled: sectioned && api.workspace.readiness === "ready",
+  });
+  const libraryRows = sectioned ? libraryHits.data?.items : undefined;
+  const items = useMemo(() => {
+    if (!sectioned) return hits;
+    const own = libraryRows ?? [];
+    const shown = new Set(own.map((item) => item.literature.literature_id));
+    return [
+      ...own,
+      ...hits.filter(
+        (item) =>
+          // A candidate added to the library on this page stays in its place.
+          (item.collected === false ||
+            collectedNow.has(item.literature.literature_id)) &&
+          !shown.has(item.literature.literature_id),
+      ),
+    ];
+  }, [sectioned, hits, libraryRows, collectedNow]);
+  /** Where the candidates begin among the rows; the library's hits come before. */
+  const candidatesFrom = sectioned ? (libraryRows?.length ?? 0) : null;
   // The current row: the one chosen here, else the one left for the reader;
   // beside the right column, else the first. Never a paper that is not
   // among the rows.
@@ -880,11 +932,6 @@ export default function Library() {
     (id: string, file: File) =>
       setOperation({ ids: [id], kind: "upload", file }),
     [],
-  );
-  // Papers collected on this page: their rows say “已收进来” in place of
-  // the button (page specs “搜索结果”).
-  const [collectedNow, setCollectedNow] = useState<ReadonlySet<string>>(
-    () => new Set(),
   );
   const collect = useCallback(
     async (ids: readonly string[]) => {
@@ -1728,7 +1775,51 @@ export default function Library() {
           sort={route.sort}
           onSort={(sort) => updateQuery(route.query, sort)}
           sortDisabled={sortLimited ? SORT_LIMIT_REASON : undefined}
-          unrankedFrom={relevanceScored}
+          unrankedFrom={sectioned ? null : relevanceScored}
+          candidatesFrom={candidatesFrom}
+          libraryHead={
+            sectioned && libraryHits.data && libraryHits.data.items.length ? (
+              <>
+                <b>文献库里</b>
+                <span>
+                  {libraryCount(
+                    libraryHits.data.total,
+                    libraryHits.data.truncated,
+                    "篇",
+                  )}
+                </span>
+                {libraryHits.data.total > libraryHits.data.items.length ? (
+                  <Button
+                    variant="text"
+                    size="compact"
+                    onPress={() =>
+                      updateQuery(inScope(route.query, "collected"))
+                    }
+                  >
+                    只看文献库里的
+                  </Button>
+                ) : null}
+              </>
+            ) : null
+          }
+          candidatesHead={
+            sectioned ? (
+              <>
+                <b>候选</b>
+                <span>
+                  {lowerBound ? "至少 " : ""}
+                  {libraryCount(
+                    Math.max(0, total - (libraryHits.data?.total ?? 0)),
+                    truncated,
+                    "篇",
+                  )}
+                </span>
+                <span className="paper-section-note">
+                  发现任务找到、还没有加入文献库的文献
+                </span>
+              </>
+            ) : null
+          }
           selectAll={selectAll(false)}
           empty={
             sortRefused ? (
@@ -2381,6 +2472,9 @@ const LibraryList = memo(function LibraryList({
   onSort,
   sortDisabled,
   unrankedFrom,
+  candidatesFrom,
+  libraryHead,
+  candidatesHead,
   selectAll,
   empty,
   footer,
@@ -2421,6 +2515,10 @@ const LibraryList = memo(function LibraryList({
   sortDisabled: string | undefined;
   /** The first row not ranked by relevance, in a partly ranked set. */
   unrankedFrom: number | null;
+  /** In a whole-library search, the row the candidates begin at. */
+  candidatesFrom: number | null;
+  libraryHead: ReactNode;
+  candidatesHead: ReactNode;
   selectAll: ReactNode;
   empty: ReactNode;
   /** After the last row: the end of a relevance ranking. */
@@ -2671,6 +2769,16 @@ const LibraryList = memo(function LibraryList({
               unrankedFrom > 0 &&
               row.index === unrankedFrom
             }
+            // The two sections of a whole-library search open with a line.
+            head={
+              candidatesFrom === null
+                ? null
+                : row.index === candidatesFrom
+                  ? candidatesHead
+                  : row.index === 0
+                    ? libraryHead
+                    : null
+            }
             onCollect={onCollect}
             selected={selected.has(items[row.index]!.literature.literature_id)}
             previewed={peek === items[row.index]!.literature.literature_id}
@@ -2733,6 +2841,7 @@ const LibraryRow = memo(function LibraryRow({
   sort,
   collectedNow,
   unrankedStart,
+  head,
   onCollect,
   selected,
   previewed,
@@ -2761,6 +2870,8 @@ const LibraryRow = memo(function LibraryRow({
   collectedNow: boolean;
   /** The first row the relevance ranking did not reach. */
   unrankedStart: boolean;
+  /** The line that opens a section of the results, above this row. */
+  head: ReactNode;
   onCollect: ((ids: readonly string[]) => Promise<unknown>) | undefined;
   selected: boolean;
   previewed: boolean;
@@ -2854,6 +2965,7 @@ const LibraryRow = memo(function LibraryRow({
     "data-selected": selected || undefined,
     "data-previewed": previewed || undefined,
     "data-display": display,
+    "data-section-start": head ? "" : undefined,
     className: "paper-row",
     style: { transform: `translateY(${row.start - offset}px)` },
     tabIndex: 0,
@@ -2893,7 +3005,7 @@ const LibraryRow = memo(function LibraryRow({
     onClick: (event: ReactMouseEvent<HTMLElement>) => {
       if (
         (event.target as Element).closest?.(
-          "button, a, input, label, .paper-check, .paper-tools",
+          "button, a, input, label, .paper-check, .paper-tools, .paper-section-head",
         )
       )
         return;
@@ -2902,7 +3014,7 @@ const LibraryRow = memo(function LibraryRow({
     onDoubleClick: (event: ReactMouseEvent<HTMLElement>) => {
       if (
         (event.target as Element).closest?.(
-          "button:not(.paper-open), a, input, label, .paper-check, .paper-tools",
+          "button:not(.paper-open), a, input, label, .paper-check, .paper-tools, .paper-section-head",
         )
       )
         return;
@@ -2933,6 +3045,7 @@ const LibraryRow = memo(function LibraryRow({
     const m = item.literature.metadata;
     return (
       <div {...shared} role="row" aria-rowindex={row.index + 2}>
+        {head ? <div className="paper-section-head">{head}</div> : null}
         {check}
         <span role="cell" className="library-table-cell">
           {open(
@@ -2989,6 +3102,7 @@ const LibraryRow = memo(function LibraryRow({
   );
   return (
     <article {...shared} data-unranked-start={unrankedStart || undefined}>
+      {head ? <div className="paper-section-head">{head}</div> : null}
       {unrankedStart ? (
         <p className="paper-unranked">以下未按相关度排序</p>
       ) : null}
@@ -3536,7 +3650,6 @@ function SearchScope({
   onContinue: (() => void) | null;
   onChange: (query: LibraryQuery) => void;
 }) {
-  const api = useApi();
   const inView =
     !!query.folder ||
     !!query.recently_opened ||
@@ -3546,56 +3659,37 @@ function SearchScope({
     : query.collection_scope === "collected"
       ? "collected"
       : "all";
-  const collected = useMemo(() => inScope(query, "collected"), [query]);
-  // “只看收进来的 · n”: the collected matches under the same quick filter.
-  const counts = useQuery({
-    queryKey: ["library", "counts", materialCountScope(collected)],
-    queryFn: ({ signal }) =>
-      readLibraryCounts(api, materialCountScope(collected), signal),
-    placeholderData: keepPreviousData,
-    enabled: !origin,
-  });
-  const state = queryMaterialState(query);
-  const collectedCount = counts.data
-    ? libraryCount(
-        state === "" ? counts.data.total : materialCount(counts.data, state),
-        counts.data.count_truncated === true,
-      )
-    : null;
+  const note = relevanceLimit || windowPhrase || onFirstWindow || scoredNote;
+  // The whole library needs no switch: its results list the library's own
+  // hits and then the candidates. Nothing to say, nothing shown.
+  if (!origin && value === "all" && !note) return null;
   return (
     <div className="library-search-scope">
-      <RadioGroup
-        label="范围"
-        segmented
-        value={value}
-        onChange={(next) =>
-          onChange(
-            inScope(
-              query,
-              next === "view" && origin
-                ? origin.scope
-                : next === "collected"
-                  ? "collected"
-                  : "all",
-            ),
-          )
-        }
-      >
-        {origin ? (
-          <>
-            <Radio value="view">「{origin.name}」里</Radio>
-            <Radio value="all">整个文献库</Radio>
-          </>
-        ) : (
-          <>
-            <Radio value="all">整个文献库</Radio>
-            <Radio value="collected">
-              只看收进来的
-              {collectedCount === null ? "" : ` · ${collectedCount}`}
-            </Radio>
-          </>
-        )}
-      </RadioGroup>
+      {origin ? (
+        <RadioGroup
+          label="范围"
+          segmented
+          value={value}
+          onChange={(next) =>
+            onChange(inScope(query, next === "view" ? origin.scope : "all"))
+          }
+        >
+          <Radio value="view">「{origin.name}」里</Radio>
+          <Radio value="all">整个文献库</Radio>
+        </RadioGroup>
+      ) : value === "collected" ? (
+        // Narrowed to the library from the results; taking it off lists the
+        // candidates again.
+        <FilterChip
+          isSelected
+          onChange={() => onChange(inScope(query, "all"))}
+          onRemove={() => onChange(inScope(query, "all"))}
+        >
+          只看文献库里的
+        </FilterChip>
+      ) : (
+        <span />
+      )}
       {relevanceLimit || windowPhrase || onFirstWindow || scoredNote ? (
         <span className="library-relevance-limit">
           {windowPhrase ? `在${windowPhrase}里` : ""}
