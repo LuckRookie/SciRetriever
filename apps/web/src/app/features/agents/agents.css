@@ -1,8 +1,7 @@
 @layer pages {
   .agent-monitor {
-    max-width: 1400px;
-    margin: 0 auto;
-    padding: var(--space-6) var(--space-7) var(--space-5);
+    max-width: var(--page-max);
+    padding: var(--space-6) var(--page-gutter) var(--space-5);
   }
   .agent-session-list {
     display: grid;

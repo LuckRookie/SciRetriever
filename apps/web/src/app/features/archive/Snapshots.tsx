@@ -37,6 +37,7 @@ import { readProcessorResult } from "../../data/processor-results.js";
 import { renameSnapshot } from "../../data/snapshots.js";
 import { RunOperatorDialog } from "../processing/RunOperator.js";
 import { PaperName, SnapshotDefinition } from "./SnapshotInfo.js";
+import { ProcessingHeader } from "../processing/ProcessingPage.js";
 import "./archive.css";
 /** The stored display name; older servers without names fall back to time and size. */
 const name = (s: Record<string, unknown>) =>
@@ -218,6 +219,32 @@ export default function Snapshots() {
       setBusy(false);
     }
   };
+  const createSnapshot = (
+    <Button
+      isPending={action.isPending}
+      isDisabled={!!rerunId && !rerun.data}
+      onPress={() =>
+        action.mutate(
+          {
+            name: "snapshots",
+            request:
+              rerun.data?.definition ??
+              (shell.selected.size
+                ? {
+                    kind: "literatures",
+                    literature_ids: [...shell.selected],
+                  }
+                : { kind: "query", query: route.query }),
+          },
+          {
+            onSuccess: (v) => open(String(record(v, "snapshot").snapshot_id)),
+          },
+        )
+      }
+    >
+      {rerunId ? "按原结果范围生成新快照" : archiveStrings.createSnapshot}
+    </Button>
+  );
   return (
     <div className="feature-page archive-page">
       {selected ? (
@@ -287,43 +314,17 @@ export default function Snapshots() {
             />
           </Dialog>
         </>
+      ) : route.section === "snapshots" ? (
+        <ProcessingHeader tab="snapshots" action={createSnapshot} />
       ) : (
         <PageHeader
-          title={route.section === "syn" ? "综合" : archiveStrings.snapshot}
+          title="综合"
           count={
             snapshots.data && !snapshots.hasNextPage
               ? `${items.length} 个`
               : undefined
           }
-          action={
-            <Button
-              isPending={action.isPending}
-              isDisabled={!!rerunId && !rerun.data}
-              onPress={() =>
-                action.mutate(
-                  {
-                    name: "snapshots",
-                    request:
-                      rerun.data?.definition ??
-                      (shell.selected.size
-                        ? {
-                            kind: "literatures",
-                            literature_ids: [...shell.selected],
-                          }
-                        : { kind: "query", query: route.query }),
-                  },
-                  {
-                    onSuccess: (v) =>
-                      open(String(record(v, "snapshot").snapshot_id)),
-                  },
-                )
-              }
-            >
-              {rerunId
-                ? "按原结果范围生成新快照"
-                : archiveStrings.createSnapshot}
-            </Button>
-          }
+          action={createSnapshot}
         />
       )}
       {failure || action.error || snapshots.error || rerun.error ? (

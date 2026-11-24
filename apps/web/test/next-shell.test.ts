@@ -46,7 +46,7 @@ it("serves the React library under the production CSP with persisted preferences
     await page
       .getByRole("textbox", { name: "年份起", exact: true })
       .fill("2020");
-    await page.getByRole("button", { name: "应用筛选", exact: true }).click();
+    await page.keyboard.press("Enter");
     await expect
       .poll(() => new URL(page.url()).searchParams.get("query"))
       .toContain('"publication_year_from":2020');

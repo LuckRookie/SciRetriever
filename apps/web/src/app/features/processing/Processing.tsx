@@ -4,10 +4,9 @@ import { parseProcessorReads } from "@sciretriever/contracts";
 import {
   Button,
   ErrorNotice,
-  PageHeader,
   Section,
   Skeleton,
-  Tabs,
+  SegmentedControl,
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
 import { navigate, useUrlState } from "../../data/url.js";
@@ -21,6 +20,7 @@ import {
   type Operator,
   type OperatorScope,
 } from "./RunOperator.js";
+import { ProcessingHeader } from "./ProcessingPage.js";
 import "./processing.css";
 const Results = lazy(() => import("./Results.js"));
 const Maintenance = lazy(() => import("../maintenance/Maintenance.js"));
@@ -62,8 +62,8 @@ export default function Processing() {
   );
   return (
     <section className="feature-page processing-page">
-      <PageHeader
-        title="算子"
+      <ProcessingHeader
+        tab="ext"
         action={
           canCreate ? (
             <Button variant="primary" onPress={() => setDialog({})}>
@@ -72,7 +72,7 @@ export default function Processing() {
           ) : undefined
         }
       />
-      <Tabs
+      <SegmentedControl
         label="算子分区"
         value={catalog ? "operators" : "runs"}
         onChange={(value) =>
@@ -104,7 +104,7 @@ export default function Processing() {
             <Results />
           )}
         </Suspense>
-      </Tabs>
+      </SegmentedControl>
       {dialog ? (
         <RunOperatorDialog
           {...(dialog.fixed ? { fixed: dialog.fixed } : {})}

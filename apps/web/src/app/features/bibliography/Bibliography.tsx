@@ -55,8 +55,8 @@ export function paperKind(item: LiteratureSearchItem): string {
 }
 /**
  * A paper's bibliography as one block: what kind and when, the title, its
- * authors, where it appeared, the abstract, keywords, tags and what the
- * library holds of it, then the caller's actions. The library's preview shows
+ * authors, where it appeared, what the library holds of it with the caller's
+ * actions, then the abstract, keywords and tags. The library's preview shows
  * it; the reader's bibliography page shows the same (plan 25 block 30).
  */
 export function BibliographyContent({
@@ -110,28 +110,8 @@ export function BibliographyContent({
           </>
         ) : null}
       </p>
-      <section className="bibliography-part" aria-label="摘要">
-        <h3>摘要</h3>
-        <p>{m.abstract ?? "尚未提供摘要。"}</p>
-      </section>
-      {terms.length ? (
-        <p className="bibliography-terms">
-          <span>{m.keywords.length ? "关键词" : "主题词"}</span>
-          {terms.join(" · ")}
-        </p>
-      ) : null}
-      {holdings && item.tags?.length ? (
-        <p className="bibliography-tags" aria-label="标签">
-          {item.tags.map((tag) => (
-            <span
-              key={tag.tag_id}
-              className={tag.rank === 1 ? "paper-tag primary" : "paper-tag"}
-            >
-              {tag.name}
-            </span>
-          ))}
-        </p>
-      ) : null}
+      {/* What the library holds and what to do with it come before the
+          abstract: they are what a reader decides by. */}
       {holdings ? (
         <p className="bibliography-material">
           <span>材料</span>
@@ -147,6 +127,29 @@ export function BibliographyContent({
         </p>
       ) : null}
       {actions ? <div className="bibliography-actions">{actions}</div> : null}
+      <section className="bibliography-part" aria-label="摘要">
+        <h3>摘要</h3>
+        <p>{m.abstract ?? "尚未提供摘要。"}</p>
+      </section>
+      {terms.length ? (
+        <p className="bibliography-terms">
+          <span>{m.keywords.length ? "关键词" : "主题词"}</span>
+          {terms.join(" · ")}
+        </p>
+      ) : null}
+      {holdings && item.tags?.length ? (
+        <p className="bibliography-tags" aria-label="标签">
+          <span>标签</span>
+          {item.tags.map((tag) => (
+            <span
+              key={tag.tag_id}
+              className={tag.rank === 1 ? "paper-tag primary" : "paper-tag"}
+            >
+              {tag.name}
+            </span>
+          ))}
+        </p>
+      ) : null}
     </div>
   );
 }

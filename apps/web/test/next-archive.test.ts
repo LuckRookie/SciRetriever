@@ -276,7 +276,9 @@ it("previews undo dependencies before reverting a vocabulary change", async () =
       p.getByRole("dialog", { name: "导航" }),
       "标签词表",
     );
-    await p.getByRole("heading", { name: "标签词表", exact: true }).waitFor();
+    await p
+      .getByRole("tab", { name: "标签词表", exact: true, selected: true })
+      .waitFor();
     await p.getByRole("button", { name: "词表变更日志", exact: true }).click();
     await p
       .getByRole("article", { name: `词表变更 ${changed.version}` })

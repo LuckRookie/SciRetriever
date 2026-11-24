@@ -94,9 +94,9 @@
 }
 /* As wide as the other tabs of 任务, so switching tabs does not move the header. */
 .archive-page {
-  max-width: 1400px;
-  margin: 0 auto;
-  padding: var(--space-6) var(--space-7) var(--space-5);
+  max-width: var(--page-max);
+  margin: 0;
+  padding: var(--space-6) var(--page-gutter) var(--space-5);
 }
 .archive-empty {
   color: var(--fg2);

@@ -134,7 +134,7 @@ it("keeps the toolbar on one line and leaves the search words out of the filter 
     await page
       .getByRole("textbox", { name: "年份起", exact: true })
       .fill("2000");
-    await page.getByRole("button", { name: "应用筛选", exact: true }).click();
+    await page.keyboard.press("Enter");
     await expect.poll(() => filter.textContent()).toBe("筛选 · 1");
     const applied = page.locator(".library-applied");
     expect(await applied.innerText()).not.toContain("搜索");

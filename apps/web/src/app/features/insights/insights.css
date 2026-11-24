@@ -1,7 +1,7 @@
 @layer pages {
   .insights-page {
-    padding: var(--space-6) var(--space-7) var(--space-7);
-    max-width: 1320px;
+    padding: var(--space-6) var(--page-gutter) var(--space-7);
+    max-width: var(--page-max);
   }
   .insights-toolbar {
     display: flex;

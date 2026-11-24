@@ -522,7 +522,6 @@ it("marks draft rows, filters and sorts by the draft facts, and hands the result
     await openMoreConditions(page);
     await select(page, "文本等级", "未校对");
     await select(page, "全文和 PDF 自带的文字不一样", "没有");
-    await page.getByRole("button", { name: "应用筛选", exact: true }).click();
     await expect.poll(() => page.locator(".paper-row").count()).toBe(1);
     expect(
       JSON.parse(new URL(page.url()).searchParams.get("query")!),

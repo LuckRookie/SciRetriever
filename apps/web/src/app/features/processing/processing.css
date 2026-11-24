@@ -1,8 +1,11 @@
 @layer pages {
   .feature-page {
-    padding: var(--space-6) var(--space-7) var(--space-7);
-    max-width: 1500px;
-    margin: 0 auto;
+    padding: var(--space-6) var(--page-gutter) var(--space-7);
+    max-width: var(--page-max);
+  }
+  /* The tabs of “加工” sit as a row of their own above the tab's content. */
+  .processing-tabs {
+    margin-bottom: var(--space-4);
   }
   .feature-two-fields {
     display: grid;

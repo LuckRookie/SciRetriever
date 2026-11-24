@@ -10,7 +10,6 @@ import {
   EmptyState,
   ErrorNotice,
   Icon,
-  PageHeader,
   SearchField,
   Select,
   Skeleton,
@@ -26,6 +25,7 @@ import { navigate, useUrlState } from "../../data/url.js";
 import { useShell } from "../../shell/context.js";
 import { errorMessage, archiveStrings } from "../../strings.js";
 import { randomId } from "../../../browser-platform.js";
+import { ProcessingHeader } from "../processing/ProcessingPage.js";
 import "../archive/archive.css";
 const tagName = (t: Tag) => t.name_zh || t.name_en;
 export default function Tags() {
@@ -269,7 +269,7 @@ export default function Tags() {
   );
   return (
     <div className="feature-page archive-page">
-      <PageHeader title={archiveStrings.vocabulary} />
+      <ProcessingHeader tab="tags" />
       <div className="archive-toolbar vocabulary-toolbar">
         <SearchField
           label="搜索名称与同义词"

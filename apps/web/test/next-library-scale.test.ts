@@ -211,14 +211,15 @@ it("marks only-discovered rows with where they came from and collects one in pla
     await row(DISCOVERED[0][0]).waitFor();
     expect(
       await row(DISCOVERED[0][0]).locator(".paper-citation").textContent(),
-    ).toMatch(/ · 候选：来自引用扩展$/u);
+    ).toMatch(/ · 来自引用扩展$/u);
+    // Under the “候选” line a row says only where it came from; one with no
+    // known origin says nothing more.
     expect(
       await row(DISCOVERED[1][0]).locator(".paper-citation").textContent(),
-    ).toMatch(/ · 候选$/u);
-    // Only a known origin is a link; the other is plain words.
+    ).not.toContain("候选");
     expect(
       await row(DISCOVERED[1][0])
-        .getByRole("button", { name: /^候选/u })
+        .getByRole("button", { name: /^来自/u })
         .count(),
     ).toBe(0);
 
@@ -307,7 +308,7 @@ it("marks only-discovered rows with where they came from and collects one in pla
     });
     await page.reload();
     await row(DISCOVERED[0][0])
-      .getByRole("button", { name: "候选：来自主题搜索", exact: true })
+      .getByRole("button", { name: /来自主题搜索$/u })
       .click();
     await expect.poll(() => query(page).intake_batch_ids).toEqual([BATCH]);
     expect(query(page).text ?? null).toBeNull();

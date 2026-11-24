@@ -748,7 +748,6 @@ it("filters the papers whose bibliography is still to complete and marks their r
         .getByRole("checkbox", { name: "书目不全", exact: true })
         .isChecked(),
     ).toBe(true);
-    await page.getByRole("button", { name: "应用筛选", exact: true }).click();
     await expect.poll(() => rows.count()).toBe(1);
     expect(await rows.first().getAttribute("data-literature-id")).toBe(
       missingId,

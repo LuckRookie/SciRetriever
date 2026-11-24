@@ -1,7 +1,7 @@
 @layer pages {
   .settings-page {
-    padding: var(--space-6) var(--space-7);
-    max-width: 1300px;
+    padding: var(--space-6) var(--page-gutter);
+    max-width: var(--page-max);
   }
   /* Section navigation down the left; the content is a column of definition tables. */
   .settings-layout {

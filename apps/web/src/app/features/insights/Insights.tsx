@@ -7,10 +7,8 @@ import {
   EmptyState,
   ErrorNotice,
   Figure,
-  PageHeader,
   PageNote,
   SegmentedControl,
-  Tabs,
   TechDetails,
   RichTitle,
   literatureTone,
@@ -38,6 +36,7 @@ import {
 import { navigate, useUrlState } from "../../data/url.js";
 import { useShell } from "../../shell/context.js";
 import { errorMessage } from "../../strings.js";
+import { ProcessingHeader } from "../processing/ProcessingPage.js";
 import "./insights.css";
 
 /** The whole library: the user's own papers, without the candidates. */
@@ -202,9 +201,9 @@ export default function Insights() {
   }, [papers.data]);
   return (
     <section className="insights-page">
-      <PageHeader title="洞察" />
+      <ProcessingHeader tab="ins" />
       <div className="insights-toolbar">
-        <Tabs
+        <SegmentedControl
           label="洞察视图"
           value={tab}
           onChange={setTab}

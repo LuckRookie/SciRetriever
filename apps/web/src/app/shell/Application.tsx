@@ -17,7 +17,6 @@ import type { LibraryCounts } from "@sciretriever/contracts";
 import {
   Button,
   Drawer,
-  Icon as ComponentIcon,
   ErrorNotice,
   EmptyState,
   IconButton,
@@ -65,6 +64,7 @@ import { recordReadingOpen } from "../data/folders.js";
 import { runningTaskCount, taskCountText } from "../data/tasks.js";
 import { LibraryFolders, withoutScope } from "../features/library/Folders.js";
 import { taskTabs } from "../features/tasks/TaskPage.js";
+import { PROCESSING_TOP } from "../features/processing/ProcessingPage.js";
 import { useIssueCount } from "../data/archive.js";
 import { pacedInterval } from "../data/polling.js";
 import { createReadingState, closeReadingState } from "../../reading/state.js";
@@ -98,7 +98,6 @@ import {
 import { sectionLabels, errorMessage } from "../strings.js";
 import { warmInterfaceFonts } from "../styles/warm-fonts.js";
 
-const PROCESSING_KEY = "sciretriever:navigation:processing:v1";
 const NAVIGATION_KEY = "sciretriever:panel:navigation-open:v1";
 const processingLabel = "加工";
 /** At this width or less the sidebar is a drawer on every page (page specs “开合”). */
@@ -312,10 +311,6 @@ function Workspace({ api }: { api: ApiClient }) {
     ),
     [drawer, setDrawer] = useState(false),
     narrow = useNarrow(),
-    // The folding “加工” group, closed unless the person opened it.
-    [processingOpen, setProcessingOpen] = useState(
-      () => preferences.read(PROCESSING_KEY) === "open",
-    ),
     [search, setSearch] = useState(false),
     // Spec 1.3: the top bar's slot for the reader's controls, and its width.
     [readerBar, setReaderBar] = useState<HTMLElement | null>(null),
@@ -507,14 +502,6 @@ function Workspace({ api }: { api: ApiClient }) {
   const inProcessing =
     !route.literature &&
     (processingSections as readonly Section[]).includes(route.section);
-  // “加工” stays as the person left it; a page inside it opens it.
-  useEffect(() => {
-    if (inProcessing) setProcessingOpen(true);
-  }, [inProcessing]);
-  const toggleProcessing = (open: boolean) => {
-    setProcessingOpen(open);
-    preferences.write(PROCESSING_KEY, open ? "open" : "closed");
-  };
   /** “n 进行中 · m 需处理”, leaving out a zero; nothing when both are. */
   const taskCount = taskCountText(running, issues.data ?? 0);
   const isCurrent = (section: Section) =>
@@ -542,7 +529,7 @@ function Workspace({ api }: { api: ApiClient }) {
       {section === "lib" && (
         <span className="navigation-count">
           {/* The collected papers, not the whole library (page specs
-              “整体信息架构”); the whole library's count is in the band. */}
+              “整体信息架构”). */}
           {count.isPending
             ? "…"
             : (count.data?.collection_counts?.collected.toLocaleString() ?? "")}
@@ -570,30 +557,23 @@ function Workspace({ api }: { api: ApiClient }) {
         {placeSections.map((section) => (
           <Fragment key={section}>{sectionButton(section)}</Fragment>
         ))}
-        {processingSections.length ? (
-          <div
-            className="navigation-fold"
-            role="group"
-            aria-label={processingLabel}
+        {processingSections[0] ? (
+          // One entrance; its pages are tabs of the same page (page specs
+          // “整体信息架构”).
+          <Button
+            variant="text"
+            aria-current={inProcessing ? "page" : false}
+            icon={<Icon name="ext" />}
+            onPress={() => {
+              navigate(
+                { view: processingSections[0]!, ...PROCESSING_TOP },
+                { clearSource: true },
+              );
+              setDrawer(false);
+            }}
           >
-            <Button
-              variant="text"
-              className="navigation-fold-toggle"
-              aria-expanded={processingOpen}
-              data-open={processingOpen || undefined}
-              icon={<ComponentIcon name="chevron" />}
-              onPress={() => toggleProcessing(!processingOpen)}
-            >
-              {processingLabel}
-            </Button>
-            {processingOpen ? (
-              <div className="navigation-fold-items">
-                {processingSections.map((section) => (
-                  <Fragment key={section}>{sectionButton(section)}</Fragment>
-                ))}
-              </div>
-            ) : null}
-          </div>
+            {processingLabel}
+          </Button>
         ) : null}
         {api.kind !== "query" ? (
           <Button

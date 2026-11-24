@@ -244,7 +244,7 @@ describe("formal Web launch and database binding", () => {
         await expect
           .poll(() =>
             page
-              .getByRole("heading", { name: "快照", exact: true })
+              .getByRole("tab", { name: "快照", exact: true, selected: true })
               .isVisible(),
           )
           .toBe(true);

@@ -4,8 +4,6 @@ import { nextWorkspace } from "./next-workspace-fixture.js";
 import { missingId } from "./processor-workspace-fixture.js";
 
 /** Plan 25 block 27: the sidebar, the task page's tabs and the menus' order. */
-const PROCESSING_KEY =
-  "sciretriever:react:sciretriever:navigation:processing:v1";
 
 /** A sidebar entry's own name, without the count after it. */
 const entryNames = (scope: Locator, selector: string) =>
@@ -19,8 +17,7 @@ const entryNames = (scope: Locator, selector: string) =>
       ),
     );
 const topLevel =
-  ".navigation-library > .ui-button, .navigation-footer > .ui-button, .navigation-footer > .navigation-fold > .ui-button";
-const processing = ".navigation-fold-items > .ui-button";
+  ".navigation-library > .ui-button, .navigation-footer > .ui-button";
 
 /** The open menu's items, with each group title in brackets. */
 async function menuContent(page: Page) {
@@ -41,7 +38,7 @@ async function closeMenu(page: Page) {
   await page.locator(".ui-menu").waitFor({ state: "detached" });
 }
 
-it("keeps the library and its folders above and the other pages fixed below, with a folding “加工” remembered in the browser, the same in the drawer (page specs “整体信息架构”)", async () => {
+it("keeps the library and its folders above and the other pages fixed below, with “加工” one entrance whose pages are its tabs, the same in the drawer (page specs “整体信息架构”)", async () => {
   const w = await nextWorkspace();
   try {
     const page = w.page;
@@ -77,43 +74,41 @@ it("keeps the library and its folders above and the other pages fixed below, wit
         .getByRole("button", { name: "找文献" })
         .count(),
     ).toBe(0);
-    // “加工” starts folded.
-    const fold = nav.getByRole("button", { name: "加工", exact: true });
-    expect(await fold.getAttribute("aria-expanded")).toBe("false");
+    // “加工” is one entrance: 算子 opens, and the four pages are its tabs.
+    const entrance = nav.getByRole("button", { name: "加工", exact: true });
     expect(await nav.getByRole("button", { name: "算子" }).count()).toBe(0);
-    await fold.click();
-    expect(await fold.getAttribute("aria-expanded")).toBe("true");
-    expect(await entryNames(nav, processing)).toEqual([
+    await entrance.click();
+    await page.getByRole("heading", { level: 1, name: "加工" }).waitFor();
+    const tabs = page.getByRole("tablist", { name: "加工视图" });
+    expect(await tabs.getByRole("tab").allTextContents()).toEqual([
       "算子",
       "快照",
       "标签词表",
       "洞察",
     ]);
-    expect(
-      await page.evaluate((key) => localStorage.getItem(key), PROCESSING_KEY),
-    ).toBe("open");
-    await page.reload();
-    await fold.waitFor();
-    expect(await fold.getAttribute("aria-expanded")).toBe("true");
-    await fold.click();
-    expect(await fold.getAttribute("aria-expanded")).toBe("false");
-    expect(
-      await page.evaluate((key) => localStorage.getItem(key), PROCESSING_KEY),
-    ).toBe("closed");
-    await page.reload();
-    await fold.waitFor();
-    expect(await fold.getAttribute("aria-expanded")).toBe("false");
-    // A page inside the group opens it, without changing what is remembered.
-    await page.goto(`${w.origin}/?view=ext`);
-    await expect.poll(() => fold.getAttribute("aria-expanded")).toBe("true");
-    expect(
-      await nav
-        .getByRole("button", { name: "算子", exact: true })
-        .getAttribute("aria-current"),
-    ).toBe("page");
-    expect(
-      await page.evaluate((key) => localStorage.getItem(key), PROCESSING_KEY),
-    ).toBe("closed");
+    expect(new URL(page.url()).searchParams.get("view")).toBe("ext");
+    expect(await entrance.getAttribute("aria-current")).toBe("page");
+    // Each tab is its own address; the entrance stays current on all four.
+    for (const [name, view] of [
+      ["快照", "snapshots"],
+      ["标签词表", "tags"],
+      ["洞察", "ins"],
+    ] as const) {
+      await tabs.getByRole("tab", { name, exact: true }).click();
+      await expect
+        .poll(() => new URL(page.url()).searchParams.get("view"))
+        .toBe(view);
+      expect(
+        await tabs
+          .getByRole("tab", { name, exact: true })
+          .getAttribute("aria-selected"),
+      ).toBe("true");
+      expect(await entrance.getAttribute("aria-current")).toBe("page");
+    }
+    await page.goBack();
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get("view"))
+      .toBe("tags");
     // The reader's drawer and the narrow drawer hold the same sidebar.
     await page.goto(`${w.origin}/?literature=${missingId}&reader=pdf`);
     await page.getByRole("button", { name: "打开导航", exact: true }).click();

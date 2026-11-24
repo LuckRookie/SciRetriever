@@ -1030,24 +1030,9 @@ export const designSamplePages: readonly DesignSamplePage[] = [
   },
   {
     id: "navigation-processing",
-    name: "侧栏 · 加工展开",
-    route: route("task"),
-    interaction: "展开侧栏的“加工”",
-    prepare: async (p) => {
-      await p.locator(".task-table").waitFor();
-      // A narrow window keeps the same sidebar in its drawer.
-      const drawer = p.getByRole("button", { name: "打开导航", exact: true });
-      if (await drawer.isVisible()) await drawer.click();
-      const fold = p
-        .getByRole("group", { name: "加工", exact: true })
-        .filter({ visible: true })
-        .getByRole("button", { name: "加工", exact: true });
-      if ((await fold.getAttribute("aria-expanded")) !== "true")
-        await fold.click();
-    },
-    // On a narrow window the page's own sidebar stays mounted but hidden;
-    // the open fold to wait for is the one in the drawer.
-    ready: ".navigation-fold-items:visible",
+    name: "加工 · 一页四个标签页",
+    route: route("ext"),
+    ready: '[aria-label="加工视图"]',
   },
   {
     id: "task-detail",

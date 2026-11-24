@@ -1743,13 +1743,9 @@ export default function Library() {
           {filters && (
             <AnimatedPanel key="filters" preset="collapse">
               <Filters
-                key={queryString}
                 query={route.query}
                 menu={savedFilterMenu}
-                onApply={(query) => {
-                  updateQuery(query);
-                  setFilters(false);
-                }}
+                onApply={updateQuery}
               />
             </AnimatedPanel>
           )}
@@ -2366,7 +2362,9 @@ function LibraryPreview({
             item={item}
             actions={
               <>
-                <Button onPress={() => onOpen(id, title)}>打开阅读</Button>
+                <Button variant="primary" onPress={() => onOpen(id, title)}>
+                  打开阅读
+                </Button>
                 {mutable && item.literature.status === "UNREVIEWED" ? (
                   <Button
                     disabledReason={
@@ -2779,6 +2777,10 @@ const LibraryList = memo(function LibraryList({
                     ? libraryHead
                     : null
             }
+            // Under “候选” the rows need not each say so again.
+            underCandidates={
+              candidatesFrom !== null && row.index >= candidatesFrom
+            }
             onCollect={onCollect}
             selected={selected.has(items[row.index]!.literature.literature_id)}
             previewed={peek === items[row.index]!.literature.literature_id}
@@ -2842,6 +2844,7 @@ const LibraryRow = memo(function LibraryRow({
   collectedNow,
   unrankedStart,
   head,
+  underCandidates,
   onCollect,
   selected,
   previewed,
@@ -2872,6 +2875,8 @@ const LibraryRow = memo(function LibraryRow({
   unrankedStart: boolean;
   /** The line that opens a section of the results, above this row. */
   head: ReactNode;
+  /** Listed under the “候选” line: only where it came from is written. */
+  underCandidates: boolean;
   onCollect: ((ids: readonly string[]) => Promise<unknown>) | undefined;
   selected: boolean;
   previewed: boolean;
@@ -3091,10 +3096,11 @@ const LibraryRow = memo(function LibraryRow({
             className="paper-origin"
             onClick={() => openBatch(origin.intake_batch_id)}
           >
-            候选：{ORIGIN_LABELS[origin.kind]}
+            {underCandidates ? "" : "候选："}
+            {ORIGIN_LABELS[origin.kind]}
           </button>
         </span>
-      ) : discovered ? (
+      ) : discovered && !underCandidates ? (
         // Without a discovery batch the history is not guessed.
         <span className="paper-discovered"> · 候选</span>
       ) : null}
@@ -3246,39 +3252,117 @@ function Filters({
         signal,
       ),
   });
+  /** What the fields say, as a query; a field passed here wins over its state. */
+  type Fields = {
+    form: string;
+    kind: string;
+    tag: string;
+    tagMode: "any" | "primary";
+    level: string;
+    differs: string;
+    scanned: string;
+    needsMetadata: boolean;
+  };
+  const queryText = JSON.stringify(query);
+  // A condition changed from outside the panel (a chip removed, a saved
+  // filter opened) shows in its field; fields the change did not touch keep
+  // what is being typed in them.
+  const shown = useRef(query);
+  useEffect(() => {
+    const before = shown.current;
+    shown.current = query;
+    if (before === query) return;
+    const sync = <T,>(
+      read: (query: LibraryQuery) => T,
+      write: (value: T) => void,
+    ) => {
+      const value = read(query);
+      if (JSON.stringify(read(before)) !== JSON.stringify(value)) write(value);
+    };
+    sync((q) => String(q.publication_year_from ?? ""), setFrom);
+    sync((q) => String(q.publication_year_to ?? ""), setTo);
+    sync((q) => q.author ?? "", setAuthor);
+    sync((q) => q.venue ?? "", setVenue);
+    sync((q) => q.keywords[0] ?? "", setKeyword);
+    sync(
+      (q) => q.identifiers.find((id) => id.namespace === "doi")?.value ?? "",
+      setDoi,
+    );
+    sync((q) => q.publication_forms[0] ?? "", setForm);
+    sync((q) => q.article_kinds[0] ?? "", setKind);
+    sync((q) => q.tags?.ids[0] ?? "", setTag);
+    sync((q) => q.tags?.mode ?? "any", setTagMode);
+    sync<TextLevel | "">(
+      (q) => (q.text_levels?.length === 1 ? q.text_levels[0]! : ""),
+      setLevel,
+    );
+    sync((q) => flag(q.has_draft_differences), setDiffers);
+    sync((q) => flag(q.has_image_only_pages), setScanned);
+    sync((q) => q.needs_metadata === true, setNeedsMetadata);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the query's text is the dependency
+  }, [queryText]);
+  /**
+   * Page specs “条件”: a change takes effect at once, there is no button. A
+   * choice applies when it is made; words apply on Enter or on leaving the
+   * field.
+   */
+  const apply = (changed: Partial<Fields> = {}) => {
+    const now: Fields = {
+      form,
+      kind,
+      tag,
+      tagMode,
+      level,
+      differs,
+      scanned,
+      needsMetadata,
+      ...changed,
+    };
+    try {
+      // Present only when chosen: the field is a filter, never “false”.
+      const { needs_metadata: _drop, ...rest } = query;
+      void _drop;
+      const next = parseLibrarySearchRequest({
+        query: {
+          ...rest,
+          ...(now.needsMetadata ? { needs_metadata: true } : {}),
+          publication_year_from: from ? Number(from) : null,
+          publication_year_to: to ? Number(to) : null,
+          publication_forms: now.form ? [now.form] : [],
+          article_kinds: now.kind ? [now.kind] : [],
+          tags: { ids: now.tag ? [now.tag] : [], mode: now.tagMode },
+          author: author || null,
+          venue: venue || null,
+          keywords: keyword ? [keyword] : [],
+          identifiers: doi ? [{ namespace: "doi", value: doi }] : [],
+          text_levels: now.level ? [now.level] : [],
+          has_draft_differences: now.differs ? now.differs === "yes" : null,
+          has_image_only_pages: now.scanned ? now.scanned === "yes" : null,
+        },
+      }).query;
+      setError("");
+      if (JSON.stringify(next) !== queryText) onApply(next);
+    } catch (error) {
+      setError(errorMessage(error));
+    }
+  };
+  const words = (target: EventTarget) =>
+    target instanceof HTMLInputElement && target.type !== "checkbox";
   return (
     <form
       className="library-filters"
       aria-label="筛选条件"
       onSubmit={(event) => {
         event.preventDefault();
-        try {
-          // Present only when chosen: the field is a filter, never “false”.
-          const { needs_metadata: _drop, ...rest } = query;
-          void _drop;
-          onApply(
-            parseLibrarySearchRequest({
-              query: {
-                ...rest,
-                ...(needsMetadata ? { needs_metadata: true } : {}),
-                publication_year_from: from ? Number(from) : null,
-                publication_year_to: to ? Number(to) : null,
-                publication_forms: form ? [form] : [],
-                article_kinds: kind ? [kind] : [],
-                tags: { ids: tag ? [tag] : [], mode: tagMode },
-                author: author || null,
-                venue: venue || null,
-                keywords: keyword ? [keyword] : [],
-                identifiers: doi ? [{ namespace: "doi", value: doi }] : [],
-                text_levels: level ? [level] : [],
-                has_draft_differences: differs ? differs === "yes" : null,
-                has_image_only_pages: scanned ? scanned === "yes" : null,
-              },
-            }).query,
-          );
-        } catch (error) {
-          setError(errorMessage(error));
-        }
+        apply();
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" || !words(event.target)) return;
+        event.preventDefault();
+        apply();
+      }}
+      onBlur={(event) => {
+        if (words(event.target)) apply();
       }}
     >
       <div className="library-filters-top">
@@ -3314,7 +3398,10 @@ function Filters({
           <Select
             label="标签（包含下级）"
             value={tag}
-            onChange={setTag}
+            onChange={(value) => {
+              setTag(value);
+              apply({ tag: value });
+            }}
             options={[
               { value: "", label: "不限标签" },
               ...(vocabulary.data
@@ -3345,7 +3432,10 @@ function Filters({
           <Select
             label="出版形式"
             value={form}
-            onChange={setForm}
+            onChange={(value) => {
+              setForm(value);
+              apply({ form: value });
+            }}
             options={[
               { value: "", label: "全部" },
               ...Object.entries(PUBLICATION_FORM_LABELS).map(
@@ -3356,7 +3446,10 @@ function Filters({
           <Select
             label="文章性质"
             value={kind}
-            onChange={setKind}
+            onChange={(value) => {
+              setKind(value);
+              apply({ kind: value });
+            }}
             options={[
               { value: "", label: "全部" },
               ...Object.entries(ARTICLE_KIND_LABELS).map(([value, label]) => ({
@@ -3368,7 +3461,11 @@ function Filters({
           <Select
             label="标签范围"
             value={tagMode}
-            onChange={(v) => setTagMode(v as "any" | "primary")}
+            onChange={(v) => {
+              const value = v as "any" | "primary";
+              setTagMode(value);
+              apply({ tagMode: value });
+            }}
             options={[
               { value: "any", label: "任一标签" },
               { value: "primary", label: "主标签" },
@@ -3378,7 +3475,11 @@ function Filters({
           <Select
             label="文本等级"
             value={level}
-            onChange={(value) => setLevel(value as TextLevel | "")}
+            onChange={(v) => {
+              const value = v as TextLevel | "";
+              setLevel(value);
+              apply({ level: value });
+            }}
             options={[
               { value: "", label: "全部" },
               { value: "draft", label: TEXT_LEVEL_LABELS.draft },
@@ -3388,19 +3489,28 @@ function Filters({
           <Select
             label={DIFFERS_LABEL}
             value={differs}
-            onChange={setDiffers}
+            onChange={(value) => {
+              setDiffers(value);
+              apply({ differs: value });
+            }}
             options={FLAG_OPTIONS}
           />
           <Select
             label="含扫描页"
             value={scanned}
-            onChange={setScanned}
+            onChange={(value) => {
+              setScanned(value);
+              apply({ scanned: value });
+            }}
             options={FLAG_OPTIONS}
           />
           <Checkbox
             label="书目不全"
             isSelected={needsMetadata}
-            onChange={setNeedsMetadata}
+            onChange={(value) => {
+              setNeedsMetadata(value);
+              apply({ needsMetadata: value });
+            }}
           />
         </div>
       ) : null}
@@ -3416,7 +3526,6 @@ function Filters({
         >
           更多条件
         </Button>
-        <Button type="submit">应用筛选</Button>
       </div>
     </form>
   );

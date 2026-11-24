@@ -42,6 +42,8 @@ for (let i = 0; i < args.length; i += 2) {
 }
 // Spec 8.2: desktop, small laptop and phone; `--sizes 1024` captures one.
 const viewports = new Map([
+  // The Owner's own window (2026-11-24 screenshots).
+  [2048, 865],
   [1440, 900],
   [1024, 768],
   [390, 844],
@@ -208,7 +210,7 @@ async function capture() {
     widths.some((w) => !viewports.has(w)) ||
     new Set(widths).size !== widths.length
   )
-    throw new Error("Use --sizes with any of 1440,1024,390");
+    throw new Error("Use --sizes with any of 2048,1440,1024,390");
   const state = JSON.parse(await readFile(sessionFile, "utf8"));
   if (
     new URL(state.origin).hostname !== "127.0.0.1" ||
@@ -446,5 +448,5 @@ if (command === "serve") await serve();
 else if (command === "capture") await capture();
 else
   throw new Error(
-    "Use: node scripts/design-samples.mjs serve [--port 4175] [--repository path]; or capture --label before [--themes light,dark] [--sizes 1440,1024,390] [--pages id,id]",
+    "Use: node scripts/design-samples.mjs serve [--port 4175] [--repository path]; or capture --label before [--themes light,dark] [--sizes 2048,1440,1024,390] [--pages id,id]",
   );
