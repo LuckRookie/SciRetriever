@@ -261,7 +261,7 @@ export default function Library() {
       venue: "期刊",
       keywords: "作者关键词",
       subject_terms: "主题词",
-      intake_batch_ids: "入库批次",
+      intake_batch_ids: "批次",
       identifiers: "标识符",
       publication_year_from: "起始年份",
       publication_year_to: "结束年份",
@@ -365,15 +365,15 @@ export default function Library() {
   const scopeLabel = () =>
     [
       folderLabel ? `文件夹：${folderLabel}` : "",
-      route.query.recently_opened ? "最近阅读" : "",
+      route.query.recently_opened ? "最近读过" : "",
       route.query.text ? `搜索：${route.query.text}` : "",
       route.query.text && route.query.collection_scope === "collected"
-        ? "只看收进来的"
+        ? "只看文献库里的"
         : "",
       ...conditions.map((chip) => chip.label),
     ]
       .filter(Boolean)
-      .join("；") || "收进来的文献";
+      .join("；") || "文献库";
   const [text, setText] = useState(route.query.text ?? "");
   const [filters, setFilters] = useState(false);
   const [mobileTools, setMobileTools] = useState(false);
@@ -498,7 +498,7 @@ export default function Library() {
     placeholderData: keepPreviousData,
     enabled: api.workspace.readiness === "ready",
   });
-  // Papers collected on this page: their rows say “已收进来” in place of
+  // Papers collected on this page: their rows say “已加入” in place of
   // the button (page specs “搜索结果”).
   const [collectedNow, setCollectedNow] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -593,8 +593,8 @@ export default function Library() {
   const order = route.query.recently_opened
     ? "打开"
     : route.query.collection_scope === "collected"
-      ? "收进"
-      : "入库";
+      ? "加入"
+      : "新增";
   const worksetSort: LibrarySort = route.query.recently_opened
     ? "opened-desc"
     : route.query.collection_scope === "collected"
@@ -823,11 +823,11 @@ export default function Library() {
     if (q.folder)
       setOrigin({ scope: { folder: q.folder }, name: folderName ?? "文件夹" });
     else if (q.recently_opened)
-      setOrigin({ scope: { recently_opened: true }, name: "最近阅读" });
+      setOrigin({ scope: { recently_opened: true }, name: "最近读过" });
     else if (q.intake_batch_ids.length)
       setOrigin({
         scope: { intake_batch_ids: q.intake_batch_ids },
-        name: batchName ?? "入库批次",
+        name: batchName ?? "批次",
       });
   }, [view, route.query, folderName, batchName]);
   useEffect(() => {
@@ -1410,10 +1410,10 @@ export default function Library() {
   const pageName =
     folderLabel ??
     (view === "recent"
-      ? "最近阅读"
+      ? "最近读过"
       : view === "batch"
-        ? (batch.data?.label ?? "入库批次")
-        : "收进来的文献");
+        ? (batch.data?.label ?? "批次")
+        : "文献库");
   const inView =
     !!route.query.folder ||
     !!route.query.recently_opened ||
@@ -1422,7 +1422,7 @@ export default function Library() {
     view !== "search" || inView
       ? `在「${pageName}」里搜索`
       : route.query.collection_scope === "collected"
-        ? "在收进来的文献里搜索"
+        ? "在文献库里搜索"
         : "搜索文献";
   /** Totals at the title, once (page specs “文献库”, “超过一万篇”). */
   const headerCount = (() => {
@@ -1846,10 +1846,10 @@ export default function Library() {
               />
             ) : view === "collected" && !narrowed ? (
               <EmptyState
-                title="还没有收进来的文献"
+                title="文献库里还没有文献"
                 {...((libraryTotals.data?.collection_counts?.discovered_only ??
                   0) > 0
-                  ? { description: "可以在上方搜索整个文献库" }
+                  ? { description: "在上方搜索，也会列出候选" }
                   : {})}
                 action={
                   mutable ? (
@@ -1863,7 +1863,7 @@ export default function Library() {
                         )
                       }
                     >
-                      去入库
+                      去找文献
                     </Button>
                   ) : undefined
                 }
@@ -2030,7 +2030,7 @@ export default function Library() {
                         ? [
                             {
                               id: "collect",
-                              label: `收进来 ${discovered.length.toLocaleString()}`,
+                              label: `加入文献库 ${discovered.length.toLocaleString()}`,
                               onAction: () =>
                                 void collect(discovered).catch(
                                   (error: unknown) =>
@@ -2866,7 +2866,7 @@ const LibraryRow = memo(function LibraryRow({
   offset: number;
   item: LiteratureSearchItem;
   sort: LibrarySort;
-  /** Collected on this page: “已收进来” in place of the button. */
+  /** Collected on this page: “已加入” in place of the button. */
   collectedNow: boolean;
   /** The first row the relevance ranking did not reach. */
   unrankedStart: boolean;
@@ -2895,8 +2895,8 @@ const LibraryRow = memo(function LibraryRow({
     title = paperTitle(item),
     table = display === "table";
   // Only discovered: said at the end of the citation, the batch that found
-  // it one press away, and “收进来” among the row's own actions, in the same
-  // place; once pressed, “已收进来” there (page specs “搜索结果”).
+  // it one press away, and “加入文献库” among the row's own actions, in the same
+  // place; once pressed, “已加入” there (page specs “搜索结果”).
   const discovered = item.collected === false;
   const origin = discovered ? (item.discovery_origin ?? null) : null;
   const collectControl =
@@ -2910,10 +2910,10 @@ const LibraryRow = memo(function LibraryRow({
           await onCollect([id]);
         }}
       >
-        收进来
+        加入文献库
       </Button>
     ) : collectedNow && !discovered ? (
-      <small className="paper-collected">已收进来</small>
+      <small className="paper-collected">已加入</small>
     ) : null;
   const check = (
     <span
@@ -3091,12 +3091,12 @@ const LibraryRow = memo(function LibraryRow({
             className="paper-origin"
             onClick={() => openBatch(origin.intake_batch_id)}
           >
-            只被发现：{ORIGIN_LABELS[origin.kind]}
+            候选：{ORIGIN_LABELS[origin.kind]}
           </button>
         </span>
       ) : discovered ? (
         // Without a discovery batch the history is not guessed.
-        <span className="paper-discovered"> · 只被发现</span>
+        <span className="paper-discovered"> · 候选</span>
       ) : null}
     </span>
   );
@@ -3675,7 +3675,7 @@ function SearchScope({
           }
         >
           <Radio value="view">「{origin.name}」里</Radio>
-          <Radio value="all">整个文献库</Radio>
+          <Radio value="all">全部文献</Radio>
         </RadioGroup>
       ) : value === "collected" ? (
         // Narrowed to the library from the results; taking it off lists the

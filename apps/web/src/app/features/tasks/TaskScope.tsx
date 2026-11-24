@@ -26,7 +26,7 @@ function useQueryText(query: LibraryQuery | null) {
   return (
     [
       query.intake_batch_ids.length
-        ? `入库批次：${single ? (batch.data?.label ?? "…") : `${query.intake_batch_ids.length} 批`}`
+        ? `批次：${single ? (batch.data?.label ?? "…") : `${query.intake_batch_ids.length} 批`}`
         : "",
       query.text ? `搜索：${query.text}` : "",
       query.keywords.length ? `作者关键词：${query.keywords.join("、")}` : "",

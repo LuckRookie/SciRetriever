@@ -429,7 +429,7 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
           onNavigate();
         }}
       >
-        <span className="folder-name">最近阅读</span>
+        <span className="folder-name">最近读过</span>
         <span className="navigation-count">
           {counts.data?.recently_opened.toLocaleString() ?? ""}
         </span>

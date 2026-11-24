@@ -110,7 +110,7 @@ export function ParseDialog({
       <div className="acquire-form">
         <dl className="acquire-scope">
           <dt>范围</dt>
-          <dd>入库批次：{batch.label}</dd>
+          <dd>批次：{batch.label}</dd>
           <dt>处理</dt>
           <dd role="status">
             <b>{count.toLocaleString()} 篇</b>有 PDF、还没有解析的文献（预估）

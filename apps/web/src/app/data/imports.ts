@@ -21,7 +21,7 @@ export const readBatch = (value: unknown): IntakeBatch =>
 export const BATCH_STATES: Record<IntakeBatchState, string> = {
   collecting: "收集中",
   "awaiting-confirmation": "待确认",
-  running: "入库中",
+  running: "进行中",
   finished: "已结束",
   cancelled: "已取消",
   withdrawn: "已撤回",

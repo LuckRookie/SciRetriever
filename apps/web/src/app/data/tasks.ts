@@ -187,7 +187,7 @@ function taskSubject(job: Json): TaskSubject | string {
     const query = record(input.query, "task query");
     scope =
       Array.isArray(query.intake_batch_ids) && query.intake_batch_ids.length
-        ? "入库批次"
+        ? "批次"
         : typeof query.text === "string" && query.text
           ? query.text
           : "按筛选";

@@ -350,7 +350,7 @@ export function Discovery({
         </div>
         {mutation.isPending ? (
           <p role="status">
-            正在查找，进度见下方入库记录；完成前请不要关闭本页。
+            正在查找，进度见下方批次记录；完成前请不要关闭本页。
           </p>
         ) : null}
         {mutation.isError ? (
@@ -361,7 +361,7 @@ export function Discovery({
         ) : null}
         {mutation.isSuccess ? (
           <p role="status">
-            操作已结束，结果见下方入库记录；未自动启动 PDF 获取。
+            操作已结束，结果见下方批次记录；未自动启动 PDF 获取。
           </p>
         ) : null}
       </div>

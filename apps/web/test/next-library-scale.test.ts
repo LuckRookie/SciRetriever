@@ -78,11 +78,9 @@ it("tops the library with one search box and no band, counts the collected in th
   const w = await nextWorkspace({ setup: withDiscovered });
   try {
     const page = w.page;
-    await page
-      .getByRole("heading", { level: 1, name: "收进来的文献" })
-      .waitFor();
+    await page.getByRole("heading", { level: 1, name: "文献库" }).waitFor();
     // No band and no whole-library totals over the list (page specs “搜索框”).
-    expect(await page.getByRole("region", { name: "整个文献库" }).count()).toBe(
+    expect(await page.getByRole("region", { name: "全部文献" }).count()).toBe(
       0,
     );
     expect(await page.getByText(/^全库 \d+ 篇/u).count()).toBe(0);
@@ -171,7 +169,7 @@ it("tops the library with one search box and no band, counts the collected in th
         .isChecked(),
     ).toBe(true);
     await folderScope
-      .getByRole("radio", { name: "整个文献库" })
+      .getByRole("radio", { name: "全部文献" })
       .click({ force: true });
     await expect.poll(() => query(page).folder ?? null).toBeNull();
     expect(query(page).text).toBe("Discovered");
@@ -213,14 +211,14 @@ it("marks only-discovered rows with where they came from and collects one in pla
     await row(DISCOVERED[0][0]).waitFor();
     expect(
       await row(DISCOVERED[0][0]).locator(".paper-citation").textContent(),
-    ).toMatch(/ · 只被发现：来自引用扩展$/u);
+    ).toMatch(/ · 候选：来自引用扩展$/u);
     expect(
       await row(DISCOVERED[1][0]).locator(".paper-citation").textContent(),
-    ).toMatch(/ · 只被发现$/u);
+    ).toMatch(/ · 候选$/u);
     // Only a known origin is a link; the other is plain words.
     expect(
       await row(DISCOVERED[1][0])
-        .getByRole("button", { name: /^只被发现/u })
+        .getByRole("button", { name: /^候选/u })
         .count(),
     ).toBe(0);
 
@@ -230,10 +228,10 @@ it("marks only-discovered rows with where they came from and collects one in pla
       const path = new URL(request.url()).pathname;
       if (path === "/api/v1/query/search") requests.push(path);
     });
-    // “收进来” is a row action: out of sight until the row is touched or
+    // “加入文献库” is a row action: out of sight until the row is touched or
     // focused, then in the pen's colour beside the other actions.
     const collectOf = (id: string) =>
-      row(id).getByRole("button", { name: "收进来", exact: true });
+      row(id).getByRole("button", { name: "加入文献库", exact: true });
     const shown = (id: string) =>
       collectOf(id).evaluate((el) => getComputedStyle(el).opacity);
     await page.mouse.move(0, 0);
@@ -251,19 +249,19 @@ it("marks only-discovered rows with where they came from and collects one in pla
     await page.keyboard.press("Enter");
     await row(DISCOVERED[1][0])
       .locator(".paper-tools")
-      .getByText("已收进来", { exact: true })
+      .getByText("已加入", { exact: true })
       .waitFor();
     expect(await collectOf(DISCOVERED[1][0]).count()).toBe(0);
     expect(
       await row(DISCOVERED[1][0]).locator(".paper-citation").textContent(),
-    ).not.toContain("只被发现");
+    ).not.toContain("候选");
     await expect
       .poll(() => sidebarCount(page).textContent())
       .toBe(String(collected + 1));
     // The list is not read again.
     expect(requests).toEqual([]);
 
-    // Once a selection is on, every row shows its “收进来”.
+    // Once a selection is on, every row shows its “加入文献库”.
     await row(DISCOVERED[1][0]).focus();
     await page.keyboard.press("Space");
     await page.mouse.move(0, 0);
@@ -271,22 +269,22 @@ it("marks only-discovered rows with where they came from and collects one in pla
       .locator("body")
       .evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await expect.poll(() => shown(DISCOVERED[0][0])).toBe("1");
-    // Several: “收进来 n” counts only the discovered among the selected.
+    // Several: “加入文献库 n” counts only the discovered among the selected.
     await row(DISCOVERED[0][0]).focus();
     await page.keyboard.press("Space");
     const bar = page.getByRole("region", { name: "文献选择" });
     await bar.getByRole("button", { name: "更多", exact: true }).click();
-    await page.getByRole("menuitem", { name: "收进来 1", exact: true }).click();
-    await row(DISCOVERED[0][0])
-      .getByText("已收进来", { exact: true })
-      .waitFor();
+    await page
+      .getByRole("menuitem", { name: "加入文献库 1", exact: true })
+      .click();
+    await row(DISCOVERED[0][0]).getByText("已加入", { exact: true }).waitFor();
     await expect
       .poll(() => sidebarCount(page).textContent())
       .toBe(String(collected + 2));
     await bar.getByRole("button", { name: "更多", exact: true }).click();
-    expect(await page.getByRole("menuitem", { name: /^收进来/u }).count()).toBe(
-      0,
-    );
+    expect(
+      await page.getByRole("menuitem", { name: /^加入文献库/u }).count(),
+    ).toBe(0);
     await page.keyboard.press("Escape");
 
     // The origin opens that task's discovery batch in the library.
@@ -309,7 +307,7 @@ it("marks only-discovered rows with where they came from and collects one in pla
     });
     await page.reload();
     await row(DISCOVERED[0][0])
-      .getByRole("button", { name: "只被发现：来自主题搜索", exact: true })
+      .getByRole("button", { name: "候选：来自主题搜索", exact: true })
       .click();
     await expect.poll(() => query(page).intake_batch_ids).toEqual([BATCH]);
     expect(query(page).text ?? null).toBeNull();
@@ -462,7 +460,7 @@ it("beyond 10,000 keeps only the view's own sort, and offers it in words when th
     );
     expect(sort(page)).toBe("title-asc");
     await notice
-      .getByRole("button", { name: "改按最近收进来", exact: true })
+      .getByRole("button", { name: "改按最近加入", exact: true })
       .click();
     await expect.poll(() => sort(page)).toBe("collected-desc");
     await page.locator(".paper-row").first().waitFor();
@@ -479,10 +477,10 @@ it("beyond 10,000 keeps only the view's own sort, and offers it in words when th
         item.getAttribute("aria-disabled") === "true",
       ]),
     );
-    expect(states.find(([label]) => label === "最近收进来")?.[1]).toBe(false);
+    expect(states.find(([label]) => label === "最近加入")?.[1]).toBe(false);
     expect(
       states
-        .filter(([label]) => label !== "最近收进来")
+        .filter(([label]) => label !== "最近加入")
         .every(([, disabled]) => disabled),
     ).toBe(true);
     expect(await page.getByRole("listbox").textContent()).toContain(
@@ -660,7 +658,7 @@ it("lists a citation expansion's rate-limited sources under the summary, with th
   }
 }, 90000);
 
-it("saves a filter in the order “最近收进来” and reads it back unchanged", async () => {
+it("saves a filter in the order “最近加入” and reads it back unchanged", async () => {
   const w = await nextWorkspace({ setup: withDiscovered });
   try {
     const page = w.page;
@@ -682,20 +680,18 @@ it("saves a filter in the order “最近收进来” and reads it back unchange
       .getByRole("menuitem", { name: "保存当前筛选…", exact: true })
       .click();
     const dialog = page.getByRole("dialog", { name: "保存筛选" });
-    await dialog
-      .getByRole("textbox", { name: "筛选名称" })
-      .fill("最近收进来的");
+    await dialog.getByRole("textbox", { name: "筛选名称" }).fill("最近加入的");
     await dialog.getByRole("button", { name: "保存", exact: true }).click();
     await dialog.waitFor({ state: "detached" });
     // Stored as it was asked, not as another order.
     expect(
-      (await list()).find((filter) => filter.name === "最近收进来的")?.sort,
+      (await list()).find((filter) => filter.name === "最近加入的")?.sort,
     ).toBe("collected-desc");
     // Applied from another order, it brings its own back.
     await page.goto(new URL("/?view=lib&sort=title-asc", page.url()).href);
     await page.locator(".paper-row").first().waitFor();
     await (await openSavedViews(page))
-      .getByRole("menuitem", { name: "最近收进来的", exact: true })
+      .getByRole("menuitem", { name: "最近加入的", exact: true })
       .click();
     await expect.poll(() => sort(page)).toBe("collected-desc");
     expect(query(page).publication_year_from).toBe(2000);
@@ -704,7 +700,7 @@ it("saves a filter in the order “最近收进来” and reads it back unchange
         .getByRole("button", { name: /排序/u })
         .and(page.locator('[aria-haspopup="listbox"]'))
         .textContent(),
-    ).toBe("排序：最近收进来");
+    ).toBe("排序：最近加入");
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();
@@ -1081,7 +1077,7 @@ it("says when relevance ranked only part of a working set, with the set's own or
     await expect
       .poll(() => note.textContent())
       .toBe(
-        "按相关度排了最近入库的 1 篇，其余 1 篇按入库时间排在后面；先加条件，或缩小范围，可全部按相关度排",
+        "按相关度排了最近新增的 1 篇，其余 1 篇按新增时间排在后面；先加条件，或缩小范围，可全部按相关度排",
       );
     // A quiet line where the ranked rows end.
     const rows = page.locator(".paper-row");
@@ -1113,7 +1109,7 @@ it("says when relevance ranked only part of a working set, with the set's own or
     await expect
       .poll(() => note.textContent())
       .toBe(
-        "没有按相关度排序，按收进时间从近到远排列；先加条件，或缩小范围，可全部按相关度排",
+        "没有按相关度排序，按加入时间从近到远排列；先加条件，或缩小范围，可全部按相关度排",
       );
     await rows.first().waitFor();
     expect(await page.locator(".paper-unranked").count()).toBe(0);
@@ -1157,7 +1153,7 @@ it("says what a large working set's window reads: its newest members in its own 
     await inFolder("Discovered");
     await expect
       .poll(() => line.textContent())
-      .toBe("在这个文件夹最近入库的 8,000 篇里查找在更早入库的文献里继续找");
+      .toBe("在这个文件夹最近新增的 8,000 篇里查找在更早新增的文献里继续找");
     // Relevance and the set's own order can be paged; the others cannot.
     await page
       .getByRole("button", { name: /排序/u })
@@ -1170,35 +1166,35 @@ it("says what a large working set's window reads: its newest members in its own 
         .filter((item) => item.getAttribute("aria-disabled") !== "true")
         .map((item) => item.querySelector('[slot="label"]')?.textContent),
     );
-    expect(open.sort()).toEqual(["最近入库", "相关度"].sort());
+    expect(open.sort()).toEqual(["最近新增", "相关度"].sort());
     expect(await page.getByRole("listbox").textContent()).toContain(
       "超过 1 万篇时只能按这几种排序；先加条件，或缩小范围",
     );
     await page.keyboard.press("Escape");
     // The earlier members, and back.
     await line
-      .getByRole("button", { name: "在更早入库的文献里继续找", exact: true })
+      .getByRole("button", { name: "在更早新增的文献里继续找", exact: true })
       .click();
     await expect
       .poll(() => line.textContent())
-      .toBe("在这个文件夹更早入库的第 2 批 8,000 篇里查找回到最近入库的文献");
+      .toBe("在这个文件夹更早新增的第 2 批 8,000 篇里查找回到最近新增的文献");
     await line
-      .getByRole("button", { name: "回到最近入库的文献", exact: true })
+      .getByRole("button", { name: "回到最近新增的文献", exact: true })
       .click();
     await expect
       .poll(() => line.textContent())
-      .toBe("在这个文件夹最近入库的 8,000 篇里查找在更早入库的文献里继续找");
+      .toBe("在这个文件夹最近新增的 8,000 篇里查找在更早新增的文献里继续找");
 
     // Nothing among them: said of the members, with the way on.
     await inFolder("Nothing");
     const empty = page.locator(".library-empty");
     await empty
-      .getByText("这个文件夹最近入库的 8,000 篇里没有，更早的还没查", {
+      .getByText("这个文件夹最近新增的 8,000 篇里没有，更早的还没查", {
         exact: true,
       })
       .waitFor();
     await empty
-      .getByRole("button", { name: "在更早入库的文献里继续找", exact: true })
+      .getByRole("button", { name: "在更早新增的文献里继续找", exact: true })
       .waitFor();
 
     // With a partial ranking: one sentence, no remainder for a lower bound.
@@ -1208,7 +1204,7 @@ it("says what a large working set's window reads: its newest members in its own 
     await expect
       .poll(() => line.textContent())
       .toBe(
-        "在这个文件夹最近入库的 8,000 篇里，按相关度排了最近入库的 1 篇，其余按入库时间排在后面；先加条件，或缩小范围，可全部按相关度排在更早入库的文献里继续找",
+        "在这个文件夹最近新增的 8,000 篇里，按相关度排了最近新增的 1 篇，其余按新增时间排在后面；先加条件，或缩小范围，可全部按相关度排在更早新增的文献里继续找",
       );
     expect(w.errors).toEqual([]);
   } finally {

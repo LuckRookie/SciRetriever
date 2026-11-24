@@ -46,7 +46,7 @@ const labels: Record<string, string> = {
   discovery_run_ids: "发现批次",
   tags: "标签",
   folder: "文件夹",
-  recently_opened: "最近阅读",
+  recently_opened: "最近读过",
 };
 export function SnapshotDefinition({ value }: { value: unknown }) {
   const definition = parseSnapshotDefinition(value);

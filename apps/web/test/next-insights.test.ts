@@ -32,13 +32,13 @@ it("explains citation scope and keeps a late graph response from replacing stati
       "不表示全库没有引用",
     );
     await page
-      .getByRole("button", { name: "查看全部文献库", exact: true })
+      .getByRole("button", { name: "查看整个文献库", exact: true })
       .click();
     await expect
       .poll(() => page.locator(".citation-network").textContent())
       .toContain("2 篇起始文献");
     expect(await page.locator(".citation-network").textContent()).toContain(
-      "全部文献库",
+      "整个文献库",
     );
     let started: () => void = () => {};
     const gate = new Promise<void>((resolve) => {

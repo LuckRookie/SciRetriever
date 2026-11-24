@@ -146,7 +146,7 @@ function Palette({ onClose }: { onClose: () => void }) {
         />
       </div>
       <p className="command-heading" aria-live="polite">
-        {term ? null : "最近阅读"}
+        {term ? null : "最近读过"}
       </p>
       <ul id={list} role="listbox" aria-label="文献" className="command-list">
         {items.map((item, index) => (
@@ -193,7 +193,7 @@ function Palette({ onClose }: { onClose: () => void }) {
         </p>
       ) : results.data && !items.length ? (
         <p className="command-empty" role="status">
-          {term ? "没有找到匹配的文献。" : "还没有最近阅读的文献。"}
+          {term ? "没有找到匹配的文献。" : "还没有最近读过的文献。"}
         </p>
       ) : null}
       <footer className="command-footer">

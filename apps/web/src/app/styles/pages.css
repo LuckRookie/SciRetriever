@@ -859,8 +859,8 @@
     transition: var(--feedback-hot);
   }
   /* Row tools stay out of sight until the row is touched or a selection
-     begins; “已收进来” stays, it is the row's state now. Once a selection
-     is on, every row shows its box and its “收进来”. */
+     begins; “已加入” stays, it is the row's state now. Once a selection
+     is on, every row shows its box and its “加入文献库”. */
   .paper-row > .paper-check,
   .paper-tools > :not(.paper-collected) {
     opacity: 0;
@@ -930,7 +930,7 @@
     justify-content: flex-end;
     width: 136px;
   }
-  /* “收进来”: a quiet action in the pen's colour, with its plus. */
+  /* “加入文献库”: a quiet action in the pen's colour, with its plus. */
   .paper-tools .ui-button.paper-collect,
   .paper-tools .ui-button.paper-collect[data-hovered],
   .paper-tools .ui-button.paper-collect > svg {
@@ -1158,7 +1158,7 @@
       padding-inline: var(--space-5);
     }
     /* Preview and the paper's menu go by keyboard and right-click here;
-       “收进来” stays. */
+       “加入文献库” stays. */
     .paper-tools > :not(.paper-collect, .paper-collected) {
       display: none;
     }

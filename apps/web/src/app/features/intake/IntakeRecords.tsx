@@ -89,14 +89,14 @@ export function IntakeRecords({
   }, [connections, unknown]);
   return (
     <section className="intake-records" aria-labelledby="intake-records-title">
-      <h2 id="intake-records-title">入库记录</h2>
+      <h2 id="intake-records-title">批次记录</h2>
       {batches.isError ? (
         <ErrorNotice
           message={errorMessage(batches.error)}
           onRetry={() => void batches.refetch()}
         />
       ) : batches.isPending ? (
-        <p role="status">正在读取入库记录…</p>
+        <p role="status">正在读取批次记录…</p>
       ) : items.length ? (
         <ol className="intake-record-list">
           {items.map((batch) => (
@@ -110,7 +110,7 @@ export function IntakeRecords({
         </ol>
       ) : (
         <EmptyState
-          title="还没有入库记录"
+          title="还没有批次记录"
           description="用上方的检索、文件、Zotero 或网页带进文献后，每一批都会在这里留下一条记录。"
         />
       )}

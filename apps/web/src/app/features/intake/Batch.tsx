@@ -491,7 +491,7 @@ export function BatchPage({ id }: { id: string }) {
 
   const back = (
     <Button variant="text" onPress={() => navigate({ session: null })}>
-      返回入库
+      返回找文献
     </Button>
   );
   if (status.isError)
@@ -508,7 +508,7 @@ export function BatchPage({ id }: { id: string }) {
     return (
       <section className="intake-batch">
         {back}
-        <p role="status">正在读取入库批次…</p>
+        <p role="status">正在读取这一批…</p>
       </section>
     );
   const state = batch.state;
@@ -547,7 +547,7 @@ export function BatchPage({ id }: { id: string }) {
   // A withdrawal or restoration done on this page shows its report.
   const known = withdrawalReports.get(id);
   return (
-    <section className="intake-batch" aria-label="入库批次">
+    <section className="intake-batch" aria-label="批次">
       {back}
       <header className="intake-batch-header">
         <div className="intake-batch-title">
@@ -1025,7 +1025,7 @@ export function BatchPage({ id }: { id: string }) {
             kind: "query",
             query: { ...emptyQuery(), intake_batch_ids: [batch.batch_id] },
             sort: "intake-desc",
-            label: `入库批次：${batch.label}`,
+            label: `批次：${batch.label}`,
           }}
           onClose={() => setAcquire(false)}
         />

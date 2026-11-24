@@ -14,7 +14,7 @@ it("keeps discovery and import explicit and uploads a selected PDF without hidde
     // Four ways in, by where papers come from (page specs “入库”).
     expect(
       await w.page
-        .getByRole("tablist", { name: "入库方式" })
+        .getByRole("tablist", { name: "找文献的方式" })
         .getByRole("tab")
         .allTextContents(),
     ).toEqual(["检索", "文件", "Zotero", "网页"]);
@@ -63,7 +63,7 @@ it("keeps discovery and import explicit and uploads a selected PDF without hidde
       exact: true,
     });
     expect(await running.isDisabled()).toBe(true);
-    expect(await w.page.getByText("正在查找，进度见下方入库记录").count()).toBe(
+    expect(await w.page.getByText("正在查找，进度见下方批次记录").count()).toBe(
       1,
     );
     release();
@@ -103,7 +103,7 @@ it("keeps discovery and import explicit and uploads a selected PDF without hidde
       content: "@article{fixture,title={Synthetic bibliography}}",
     });
     await imported.getByText("新增 1").waitFor();
-    await imported.getByRole("button", { name: "返回入库" }).click();
+    await imported.getByRole("button", { name: "返回找文献" }).click();
     // The intake page has no upload tab; a PDF is added from the paper's reader.
     expect(
       await w.page.getByRole("tab", { name: "上传 PDF", exact: true }).count(),
@@ -152,7 +152,7 @@ it("records each import as a batch, narrows it by its keywords and gets PDFs for
         "@article{c,title={Halide electrolyte three},year={2023},doi={10.5555/batch-c},keywords={Halide}}",
       ].join("\n"),
     });
-    await imported.getByRole("button", { name: "返回入库" }).click();
+    await imported.getByRole("button", { name: "返回找文献" }).click();
     // The import is a persistent record, not a session receipt.
     const record = page.locator(".intake-record", {
       hasText: "batch-fixture.bib",
@@ -270,7 +270,7 @@ it("says how to connect the extension until one is connected, then where Zotero 
     await panel.getByText("已连接扩展 · Chrome 扩展").waitFor();
     await panel
       .getByText(
-        "在扩展里选择要导入的库和分组。导入开始后，这里的入库记录会出现这一批。",
+        "在扩展里选择要导入的库和分组。导入开始后，这里的批次记录会出现这一批。",
       )
       .waitFor();
     expect(await steps.count()).toBe(0);

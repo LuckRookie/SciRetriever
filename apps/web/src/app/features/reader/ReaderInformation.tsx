@@ -425,7 +425,7 @@ export function ReaderInformation({
     ...(detail.intake_batches.length
       ? [
           [
-            "入库",
+            "批次",
             <span className="reader-batches" key="batches">
               {detail.intake_batches.map((batch) => (
                 <Button

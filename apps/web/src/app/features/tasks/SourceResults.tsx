@@ -164,7 +164,7 @@ function MetadataResults({ metadata }: { metadata: MetadataSourceSummary }) {
     <>
       <div className="source-results-head">
         <p className="source-results-summary">
-          返回 {count.format(metadata.returned)} 条 · 新入库{" "}
+          返回 {count.format(metadata.returned)} 条 · 新增{" "}
           {count.format(metadata.new_literatures)} · 合并到已有{" "}
           {count.format(metadata.matched_literatures)} · 被拒{" "}
           {count.format(metadata.rejected)}

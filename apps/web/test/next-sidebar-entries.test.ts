@@ -48,7 +48,7 @@ it("keeps the library and its folders above and the other pages fixed below, wit
     const nav = page.getByRole("complementary", { name: "主导航" });
     expect(await entryNames(nav, topLevel)).toEqual([
       "文献库",
-      "入库",
+      "找文献",
       "全文检索",
       "任务",
       "加工",
@@ -70,11 +70,11 @@ it("keeps the library and its folders above and the other pages fixed below, wit
         await nav.getByRole("button", { name, exact: true }).count(),
         name,
       ).toBe(0);
-    // 入库 is in the sidebar, not in the library's header.
+    // 找文献 is in the sidebar, not in the library's header.
     expect(
       await page
         .locator(".ui-page-header")
-        .getByRole("button", { name: "入库" })
+        .getByRole("button", { name: "找文献" })
         .count(),
     ).toBe(0);
     // “加工” starts folded.
@@ -121,7 +121,7 @@ it("keeps the library and its folders above and the other pages fixed below, wit
     await readerDrawer.waitFor();
     expect(await entryNames(readerDrawer, topLevel)).toEqual([
       "文献库",
-      "入库",
+      "找文献",
       "全文检索",
       "任务",
       "加工",
@@ -136,7 +136,7 @@ it("keeps the library and its folders above and the other pages fixed below, wit
     await drawer.waitFor();
     expect(await entryNames(drawer, topLevel)).toEqual([
       "文献库",
-      "入库",
+      "找文献",
       "全文检索",
       "任务",
       "加工",

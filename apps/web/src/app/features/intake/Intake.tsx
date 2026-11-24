@@ -25,19 +25,19 @@ export default function Intake() {
   if (api.kind !== "workspace")
     return (
       <EmptyState
-        title="此入口不提供发现与入库"
-        description="请从完整工作台启动发现或入库。"
+        title="此入口不能找文献"
+        description="请从完整工作台查找或导入。"
       />
     );
   return (
     <section className="feature-page intake-page">
-      <PageHeader title="入库" />
+      <PageHeader title="找文献" />
       {batch ? (
         <BatchPage id={batch} />
       ) : (
         <>
           <Tabs
-            label="入库方式"
+            label="找文献的方式"
             value={tab}
             onChange={(value) => {
               // A discovery still waiting keeps its tab until it returns.

@@ -40,6 +40,12 @@ import { useShell } from "../../shell/context.js";
 import { errorMessage } from "../../strings.js";
 import "./insights.css";
 
+/** The whole library: the user's own papers, without the candidates. */
+const LIBRARY_QUERY = {
+  ...emptyQuery(),
+  collection_scope: "collected" as const,
+};
+
 export default function Insights() {
   const api = useApi(),
     shell = useShell(),
@@ -55,18 +61,22 @@ export default function Insights() {
       !all &&
       route.parameters.get("scope") === "selection" &&
       shell.selected.size > 0;
-  const query = all ? emptyQuery() : route.query,
+  // The whole library is the user's own papers; candidates are not charted
+  // unless the address's own filter names them (page specs “界面用词”).
+  const whole =
+    all ||
+    JSON.stringify({ ...route.query, collection_scope: undefined }) ===
+      JSON.stringify({ ...emptyQuery(), collection_scope: undefined });
+  const query = whole ? LIBRARY_QUERY : route.query,
     ids = selection ? [...shell.selected].sort() : [];
   // The address's order belongs to its own query (a search's is relevance);
   // the whole library reads in its own default order.
   const sort = all ? viewSort(query) : route.sort;
-  const scopeName = all
-    ? "全部文献库"
-    : selection
-      ? "已选文献"
-      : JSON.stringify(query) === JSON.stringify(emptyQuery())
-        ? "全部文献库"
-        : "文献库当前筛选";
+  const scopeName = selection
+    ? "已选文献"
+    : whole
+      ? "整个文献库"
+      : "文献库当前筛选";
   const papers = useQuery({
     queryKey: ["insights", query, sort, ids],
     queryFn: async ({ signal }) => {
@@ -209,7 +219,7 @@ export default function Insights() {
             ? ` · ${papers.data.items.length.toLocaleString()} 篇`
             : ""}
         </span>
-        {!all && (selection || scopeName !== "全部文献库") && (
+        {!all && (selection || !whole) && (
           <Button
             variant="text"
             size="compact"
@@ -218,7 +228,7 @@ export default function Insights() {
               navigate({ view: "ins", scope: "all" });
             }}
           >
-            查看全部文献库
+            查看整个文献库
           </Button>
         )}
         {tab === "stats" && papers.isSuccess ? (

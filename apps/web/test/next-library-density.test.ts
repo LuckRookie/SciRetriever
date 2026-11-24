@@ -30,9 +30,7 @@ it("has one top bar above every page and no “活动” panel; on a narrow scre
   const w = await nextWorkspace();
   try {
     const page = w.page;
-    await page
-      .getByRole("heading", { level: 1, name: "收进来的文献" })
-      .waitFor();
+    await page.getByRole("heading", { level: 1, name: "文献库" }).waitFor();
     expect(await page.locator(".workspace-header.top-bar").count()).toBe(1);
     // The first tab names the page outside the reader and is the current one.
     expect(
@@ -90,13 +88,13 @@ it("keeps the toolbar on one line and leaves the search words out of the filter 
     const toolbar = page.locator(".library-toolbar-actions");
     const filter = toolbar.getByRole("button", { name: /^筛选/u });
     expect(await filter.textContent()).toBe("筛选");
-    // “排序：最近收进来”, “显示：列表 / 表格”, 批量操作.
+    // “排序：最近加入”, “显示：列表 / 表格”, 批量操作.
     expect(
       await toolbar
         .getByRole("button", { name: /排序/u })
         .and(page.locator('[aria-haspopup="listbox"]'))
         .textContent(),
-    ).toBe("排序：最近收进来");
+    ).toBe("排序：最近加入");
     const display = toolbar.locator(".library-display");
     expect(await display.innerText()).toMatch(/^显示\s*列表\s*表格$/u);
     const batch = toolbar.getByRole("button", {

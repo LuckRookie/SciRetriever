@@ -224,7 +224,7 @@ async function searchSample(p: Page, text: string) {
 export const designSamplePages: readonly DesignSamplePage[] = [
   {
     id: "intake",
-    name: "入库 · 发现与导入",
+    name: "找文献 · 发现与导入",
     route: route("disc"),
     ready: ".intake-form",
   },
@@ -377,10 +377,10 @@ export const designSamplePages: readonly DesignSamplePage[] = [
   },
   {
     id: "library-search-discovered",
-    name: "文献库 · 搜索结果（含只被发现的行）",
+    name: "文献库 · 搜索结果（含候选）",
     route: route("lib", `&query=${query({ text: "Synthetic" })}`),
     interaction:
-      "搜索整个文献库；第一页的只被发现的行排到前面，分别标为来自引用扩展、来自主题搜索与没有来历（来历与排列为模拟）；指针停在第一行只被发现的文献上",
+      "搜索文献；第一页的候选的行排到前面，分别标为来自引用扩展、来自主题搜索与没有来历（来历与排列为模拟）；指针停在第一行候选的文献上",
     // The sample's discovered papers have no discovery batch; the origins
     // are given in the service's shape for this page.
     prepare: async (p) => {
@@ -415,7 +415,7 @@ export const designSamplePages: readonly DesignSamplePage[] = [
         },
       );
       await p.reload();
-      // “收进来” is a row action: the pointer rests on the first discovered
+      // “加入文献库” is a row action: the pointer rests on the first discovered
       // row, so the page shows it once, beside that row's status.
       await p
         .locator(".paper-row:has(.paper-discovered)")
@@ -491,7 +491,7 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     route: (ids) =>
       `/?view=lib&query=${query({ text: "Synthetic", folder: { id: ids.folder, include_descendants: true } })}`,
     interaction:
-      "在文件夹里搜索，相关度只排了前 5 篇，其余按入库时间在后（部分打分的回执按合同样式模拟）",
+      "在文件夹里搜索，相关度只排了前 5 篇，其余按新增时间在后（部分打分的回执按合同样式模拟）",
     prepare: async (p) => {
       await p.route(
         (url) => url.pathname === "/api/v1/query/search",
@@ -520,7 +520,7 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     route: (ids: DesignSampleIds) =>
       `/?view=lib&query=${query({ text: "Synthetic", folder: { id: ids.folder, include_descendants: true } })}`,
     interaction:
-      "在超过一万篇的文件夹里搜索，只查了最近入库的 8,000 篇（成员窗口按合同样式模拟）",
+      "在超过一万篇的文件夹里搜索，只查了最近新增的 8,000 篇（成员窗口按合同样式模拟）",
     prepare: (p) => scanWindows(p, false, true),
     ready: ".library-search-scope .library-relevance-limit .ui-button",
   },
@@ -530,9 +530,9 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     route: (ids: DesignSampleIds) =>
       `/?view=lib&query=${query({ text: "Synthetic", folder: { id: ids.folder, include_descendants: true } })}`,
     interaction:
-      "在超过一万篇的文件夹里搜索，最近入库的 8,000 篇里没有（成员窗口与零结果均为模拟）",
+      "在超过一万篇的文件夹里搜索，最近新增的 8,000 篇里没有（成员窗口与零结果均为模拟）",
     prepare: (p) => scanWindows(p, true, true),
-    ready: '.library-empty .ui-button:has-text("在更早入库的文献里继续找")',
+    ready: '.library-empty .ui-button:has-text("在更早新增的文献里继续找")',
   },
   {
     id: "folder-members-second",
@@ -540,23 +540,23 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     route: (ids: DesignSampleIds) =>
       `/?view=lib&query=${query({ text: "Synthetic", folder: { id: ids.folder, include_descendants: true } })}`,
     interaction:
-      "按“在更早入库的文献里继续找”，换到更早入库的第 2 批（成员窗口按合同样式模拟）",
+      "按“在更早新增的文献里继续找”，换到更早新增的第 2 批（成员窗口按合同样式模拟）",
     prepare: async (p) => {
       await scanWindows(p, false, true);
       await p
         .locator(".library-search-scope")
-        .getByRole("button", { name: "在更早入库的文献里继续找", exact: true })
+        .getByRole("button", { name: "在更早新增的文献里继续找", exact: true })
         .click();
       await p.mouse.move(0, 0);
     },
-    ready: '.library-search-scope .ui-button:has-text("回到最近入库的文献")',
+    ready: '.library-search-scope .ui-button:has-text("回到最近新增的文献")',
   },
   {
     id: "library-over-limit",
     name: "文献库 · 超过一万篇",
     route: route("lib", `&query=${query({ author: "Imaginary" })}`),
     interaction:
-      "按作者筛选收进来的文献；列表、快速筛选与范围内的词按超过一万篇的截断标记模拟，状态正在更新",
+      "按作者筛选文献库；列表、快速筛选与范围内的词按超过一万篇的截断标记模拟，状态正在更新",
     prepare: async (p) => {
       await p.route(
         (url) => url.pathname === "/api/v1/query/search",
@@ -1376,7 +1376,7 @@ export const designSamplePages: readonly DesignSamplePage[] = [
   ),
   {
     id: "discovery-confirm",
-    name: "入库 · 确认发现文献",
+    name: "找文献 · 确认发现文献",
     route: route("disc"),
     interaction: "填写主题后点“开始发现”",
     prepare: async (p) => {

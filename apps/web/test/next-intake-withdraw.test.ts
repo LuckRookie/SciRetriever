@@ -22,7 +22,7 @@ function withdrawalLog(page: Page) {
 }
 const more = (page: Page) =>
   page
-    .getByRole("region", { name: "入库批次" })
+    .getByRole("region", { name: "批次" })
     .getByRole("button", { name: "更多", exact: true })
     .click();
 
@@ -36,7 +36,7 @@ it("withdraws a batch only after its estimate, keeps what came before it, report
       name: "first.bib",
       content: record("a", "Argyrodite electrolyte one"),
     });
-    await first.getByRole("button", { name: "返回入库" }).click();
+    await first.getByRole("button", { name: "返回找文献" }).click();
     const view = await importExport(page, {
       name: "second.bib",
       content: [
@@ -124,7 +124,7 @@ it("withdraws a batch only after its estimate, keeps what came before it, report
     ).toBe("文献 1文件 0文件夹 0文件夹成员 0批注 0");
 
     // A later batch brings the withdrawn paper back on its own.
-    await view.getByRole("button", { name: "返回入库" }).click();
+    await view.getByRole("button", { name: "返回找文献" }).click();
     const later = await importExport(page, {
       name: "third.bib",
       content: record("b", "Argyrodite electrolyte two"),
@@ -168,7 +168,7 @@ it("offers withdrawal only once a batch has ended, and says so when a task or th
       buffer: Buffer.from(record("w", "Halide electrolyte three")),
     });
     await page.getByRole("button", { name: "继续", exact: true }).click();
-    const view = page.getByRole("region", { name: "入库批次" });
+    const view = page.getByRole("region", { name: "批次" });
     await view.getByRole("heading", { name: "waiting.bib" }).waitFor();
     await more(page);
     const entry = page.getByRole("menuitem", { name: /^撤回这一批/u });
@@ -250,7 +250,7 @@ it("shows the estimate, the withdrawal report and a withdrawn batch (plan 25 blo
       name: "first.bib",
       content: record("a", "Argyrodite electrolyte one"),
     });
-    await first.getByRole("button", { name: "返回入库" }).click();
+    await first.getByRole("button", { name: "返回找文献" }).click();
     const view = await importExport(page, {
       name: "second.bib",
       content: [

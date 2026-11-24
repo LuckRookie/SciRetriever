@@ -18,7 +18,7 @@ async function exportBatch(page: Page) {
     ),
   });
   await page.getByRole("button", { name: "继续", exact: true }).click();
-  const view = page.getByRole("region", { name: "入库批次" });
+  const view = page.getByRole("region", { name: "批次" });
   await view.getByRole("heading", { name: "library.bib" }).waitFor();
   return {
     view,
@@ -361,7 +361,7 @@ it("confirms without blocking, follows the progress by polling, restores after a
     });
     await view.getByText(/^书目入库 · 已处理 1 \/ 2$/u).waitFor();
     await view.getByText(/^书目入库 · 已处理 2 \/ 2$/u).waitFor();
-    await view.getByRole("button", { name: "返回入库" }).waitFor();
+    await view.getByRole("button", { name: "返回找文献" }).waitFor();
     // Then it finishes: the result, the report and what can follow.
     await view.getByText("完成").first().waitFor();
     await view.getByText(/^全文已取得 0 \/ 总数 2，未取得 2/u).waitFor();
@@ -382,7 +382,7 @@ it("confirms without blocking, follows the progress by polling, restores after a
     const dialog = page.getByRole("dialog", { name: "获取 PDF", exact: true });
     await expect
       .poll(() => dialog.locator(".acquire-scope").textContent())
-      .toContain("入库批次：library.bib");
+      .toContain("批次：library.bib");
     expect(started).toEqual(["POST /api/v1/query/acquire-pdf-preview"]);
     await dialog.getByRole("button", { name: "取消", exact: true }).click();
     expect(started).toEqual(["POST /api/v1/query/acquire-pdf-preview"]);
@@ -432,7 +432,7 @@ it("parses a batch's PDFs only from its dialog: one parse-documents task scoped 
     });
     await parse.click();
     const dialog = page.getByRole("dialog", { name: "解析并形成未校对的全文" });
-    await dialog.getByText("入库批次：library.bib").waitFor();
+    await dialog.getByText("批次：library.bib").waitFor();
     await dialog
       .getByText(
         "会把 PDF 交给 MinerU 解析，可能花费；解析完成后自动形成未校对的全文，不调用模型。",
@@ -535,7 +535,7 @@ it("shows each state's parts: collecting, running with files owed, cancelled and
       await view.getByRole("heading", { name: "接着做什么" }).count(),
     ).toBe(0);
     // In the records, the same row whatever the state.
-    await view.getByRole("button", { name: "返回入库" }).click();
+    await view.getByRole("button", { name: "返回找文献" }).click();
     await page
       .locator(".intake-record", { hasText: "library.bib" })
       .getByText("网页")
@@ -680,7 +680,7 @@ it("shows the intake page's four parts, the drop zone and the batch page in each
     await shot("batch-withdrawn");
     // The records, one kind of row.
     await page.unroute(batchRead);
-    await view.getByRole("button", { name: "返回入库" }).click();
+    await view.getByRole("button", { name: "返回找文献" }).click();
     await page.locator(".intake-record").first().waitFor();
     await shot("intake-records");
     // The two dialogs of what can follow.

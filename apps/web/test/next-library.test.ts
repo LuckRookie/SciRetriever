@@ -480,7 +480,7 @@ const fullTextId = (n: number) =>
 async function openBatch(page: Page, label: string) {
   await page
     .getByRole("complementary", { name: "主导航" })
-    .getByRole("button", { name: /^入库/u })
+    .getByRole("button", { name: /^找文献/u })
     .click();
   await page
     .locator(".intake-record", { hasText: label })

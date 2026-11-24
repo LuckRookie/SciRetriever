@@ -12,7 +12,7 @@ it("serves the React library under the production CSP with persisted preferences
   try {
     const page = w.page;
     await page
-      .getByRole("heading", { name: "收进来的文献", exact: true })
+      .getByRole("heading", { name: "文献库", exact: true })
       .waitFor()
       .catch(async (error: unknown) => {
         throw new Error(

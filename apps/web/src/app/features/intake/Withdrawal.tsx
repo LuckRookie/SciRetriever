@@ -219,7 +219,7 @@ export function WithdrawDialog({
       }
     >
       <div className="intake-withdraw">
-        <p className="ui-description">入库批次：{batch.label}</p>
+        <p className="ui-description">批次：{batch.label}</p>
         {preview.isPending ? (
           <p role="status">正在核对将移除与将保留的内容…</p>
         ) : busy ? (
@@ -330,7 +330,7 @@ function RestoreDialog({
       }
     >
       <div className="intake-withdraw">
-        <p className="ui-description">入库批次：{batch.label}</p>
+        <p className="ui-description">批次：{batch.label}</p>
         {preview.isPending ? (
           <p role="status">正在核对将恢复的内容…</p>
         ) : preview.isError ? (

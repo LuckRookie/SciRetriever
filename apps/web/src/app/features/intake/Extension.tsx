@@ -81,7 +81,7 @@ export function ZoteroIntake() {
       <ConnectionLine devices={list} />
       {list === null ? null : linkedExtensions(list).length ? (
         <p>
-          在扩展里选择要导入的库和分组。导入开始后，这里的入库记录会出现这一批。
+          在扩展里选择要导入的库和分组。导入开始后，这里的批次记录会出现这一批。
         </p>
       ) : (
         <ConnectSteps />

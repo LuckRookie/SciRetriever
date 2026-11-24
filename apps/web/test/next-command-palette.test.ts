@@ -23,7 +23,7 @@ it(
         name: "搜索文献",
         exact: true,
       });
-      await palette.getByText("最近阅读", { exact: true }).waitFor();
+      await palette.getByText("最近读过", { exact: true }).waitFor();
       await expect
         .poll(() => palette.getByRole("option").first().textContent())
         .toContain(recent);

@@ -130,11 +130,11 @@ describe("formal Web launch and database binding", () => {
             page.getByLabel("文献列表", { exact: true }).textContent(),
           )
           // A new library has nothing collected yet (page specs “文献库”).
-          .toContain("还没有收进来的文献");
-        // 入库 is in the sidebar; the library header has no button for it.
+          .toContain("文献库里还没有文献");
+        // 找文献 is in the sidebar; the library header has no button for it.
         await page
           .getByRole("complementary", { name: "主导航" })
-          .getByRole("button", { name: "入库", exact: true })
+          .getByRole("button", { name: "找文献", exact: true })
           .click();
         const imported = await importExport(page, {
           name: "fixture.bib",

@@ -221,9 +221,9 @@ it("organizes papers into nested folders by dialog and drag, scopes the library,
     // The reader page's navigation is in its drawer (reading-experience 1.3).
     await readerNavigation(p);
     await folders(p)
-      .getByRole("button", { name: /^最近阅读/ })
+      .getByRole("button", { name: /^最近读过/ })
       .click();
-    await p.getByRole("heading", { name: "最近阅读", exact: true }).waitFor();
+    await p.getByRole("heading", { name: "最近读过", exact: true }).waitFor();
     await expect.poll(() => rows.count()).toBe(1);
     expect(await rows.first().getAttribute("aria-label")).toBe(second);
     // Its own order, the last opened first, without one in the address.
@@ -233,7 +233,7 @@ it("organizes papers into nested folders by dialog and drag, scopes the library,
         .getByRole("button", { name: /排序/u })
         .and(p.locator('[aria-haspopup="listbox"]'))
         .textContent(),
-    ).toBe("排序：最近阅读");
+    ).toBe("排序：最近读过");
 
     // Deleting a folder previews the impact and only removes memberships.
     await folderRow(p, "表面界面")
@@ -253,9 +253,7 @@ it("organizes papers into nested folders by dialog and drag, scopes the library,
       .getByLabel("主导航", { exact: true })
       .getByRole("button", { name: /^文献库/ })
       .click();
-    await p
-      .getByRole("heading", { name: "收进来的文献", exact: true })
-      .waitFor();
+    await p.getByRole("heading", { name: "文献库", exact: true }).waitFor();
     await expect.poll(() => rows.count()).toBeGreaterThan(1);
   } finally {
     await w.close();

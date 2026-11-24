@@ -16,9 +16,9 @@ import type { ApiClient } from "./api.js";
 import { archiveWrite } from "./archive.js";
 export const emptyQuery = () => parseLibrarySearchRequest({ query: {} }).query;
 export const SORT_LABELS: Record<LibrarySort, string> = {
-  "collected-desc": "最近收进来",
-  "intake-desc": "最近入库",
-  "opened-desc": "最近阅读",
+  "collected-desc": "最近加入",
+  "intake-desc": "最近新增",
+  "opened-desc": "最近读过",
   "publication-year-desc": "年份：新到旧",
   "publication-year-asc": "年份：旧到新",
   "title-asc": "标题：A–Z",
@@ -361,7 +361,7 @@ export async function collectLiteratures(
     !Number.isSafeInteger(result.target_count) ||
     !Number.isSafeInteger(result.newly_collected)
   )
-    throw new Error("收进来的回执无效");
+    throw new Error("加入文献库的回执无效");
   return {
     target_count: Number(result.target_count),
     newly_collected: Number(result.newly_collected),

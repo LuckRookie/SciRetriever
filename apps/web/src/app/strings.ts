@@ -8,7 +8,7 @@ export const sectionLabels = {
   archive: "需处理",
   tags: "标签词表",
   snapshots: "快照",
-  disc: "入库",
+  disc: "找文献",
   ins: "洞察",
   ask: "全文检索",
   syn: "综合",
@@ -271,10 +271,10 @@ export function serviceMessage(code: string): string {
           "不支持这种导出格式，请选择 BibTeX、RIS 或 CSL JSON。",
         "local-identity-required":
           "这个来源只给出了本地库号，请让 Agent 经设备连接入库。",
-        "intake-batch-missing": "这个入库批次已不存在，请刷新后重试。",
+        "intake-batch-missing": "这个批次已不存在，请刷新后重试。",
         "intake-file-missing": "清单里已没有这个文件，请刷新批次。",
         "intake-source-busy":
-          "同一个来源库已有进行中的入库批次，请先结束或取消它。",
+          "同一个来源库已有进行中的批次，请先结束或取消它。",
         "intake-batch-state": "批次状态已变化，请刷新后再操作。",
         "intake-batch-busy":
           "这一批有文献正在被任务处理，请等任务结束或取消后再撤回。",
