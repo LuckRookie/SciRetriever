@@ -30,7 +30,6 @@ import {
 import { download } from "../../data/download.js";
 import { useShell } from "../../shell/context.js";
 import { errorMessage } from "../../strings.js";
-import { useRecentBatches } from "../../data/intake-batches.js";
 
 /** Drag payloads between library rows and the folder tree. */
 export const LITERATURE_DRAG = "application/x-sciretriever-literature";
@@ -134,102 +133,7 @@ function dragKind(event: DragEvent) {
       : null;
 }
 
-/**
- * The newest intake batches under “入库” in the sidebar (page specs “整体信息架构”):
- * a batch opens the library limited to it.
- */
-export function IntakeBatches({ onNavigate }: { onNavigate: () => void }) {
-  const route = useUrlState();
-  const batches = useRecentBatches();
-  if (!batches.data?.items.length) return null;
-  return (
-    <div
-      className="folder-navigation folder-batches"
-      role="group"
-      aria-label="最近入库"
-    >
-      {batches.data.items.map((batch) => {
-        const current =
-          route.section === "lib" &&
-          !route.literature &&
-          route.query.intake_batch_ids.length === 1 &&
-          route.query.intake_batch_ids[0] === batch.batch_id;
-        return (
-          <Button
-            key={batch.batch_id}
-            variant="text"
-            className="folder-open folder-batch"
-            aria-current={current ? "page" : false}
-            aria-label={`${batch.label}，${batch.counts.hits} 篇`}
-            onPress={() => {
-              openBatch(batch.batch_id);
-              onNavigate();
-            }}
-          >
-            <span className="folder-name" title={batch.label}>
-              {batch.label}
-            </span>
-            <span className="navigation-count">
-              {batch.counts.hits.toLocaleString()}
-            </span>
-          </Button>
-        );
-      })}
-    </div>
-  );
-}
-
 /** The library's folder tree in the sidebar: recent papers, folders, management. */
-/** At most this many open papers are listed; the rest are counted. */
-const READING_SHOWN = 5;
-/**
- * “正在读” (plan 25 block 30): the papers open in the reader, so they can be
- * gone back to from any page. Each title on one line; past five, “另外 n
- * 篇” opens the next one in the reader. Absent while none is open.
- */
-function ReadingNow({ onNavigate }: { onNavigate: () => void }) {
-  const shell = useShell(),
-    route = useUrlState();
-  const open = shell.tabs.list;
-  if (!open.length) return null;
-  const shown = open.slice(0, READING_SHOWN),
-    more = open.length - shown.length;
-  const go = (id: string) => {
-    shell.tabs.show(id);
-    onNavigate();
-  };
-  return (
-    <div className="reading-now" role="group" aria-label="正在读">
-      <div className="folder-heading">
-        <span className="navigation-group-name">正在读</span>
-      </div>
-      {shown.map((tab) => (
-        <Button
-          key={tab.id}
-          variant="text"
-          className="folder-open reading-now-paper"
-          aria-current={route.literature === tab.id ? "page" : false}
-          icon={<Icon name="file" />}
-          onPress={() => go(tab.id)}
-        >
-          <span className="folder-name" title={tab.title}>
-            {tab.title}
-          </span>
-        </Button>
-      ))}
-      {more > 0 ? (
-        <Button
-          variant="text"
-          className="folder-open reading-now-more"
-          onPress={() => go(open[READING_SHOWN]!.id)}
-        >
-          另外 {more} 篇
-        </Button>
-      ) : null}
-    </div>
-  );
-}
-
 export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
   const api = useApi(),
     route = useUrlState(),
@@ -397,7 +301,10 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
           <li key={node.folder_id}>
             <div
               className="folder-row"
-              style={{ paddingInlineStart: `${depth * 14}px` }}
+              style={{
+                paddingInlineStart: `calc(var(--space-2) + ${depth * 14}px)`,
+              }}
+              data-current={current === node.folder_id || undefined}
               data-drop={target === node.folder_id || undefined}
               data-landed={landed === node.folder_id || undefined}
               draggable
@@ -427,7 +334,6 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
                 variant="text"
                 className="folder-open"
                 aria-current={current === node.folder_id ? "page" : false}
-                icon={<Icon name="folder" />}
                 onPress={() => open(node)}
               >
                 <span className="folder-name">{node.name}</span>
@@ -513,7 +419,6 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
         if (event.target === event.currentTarget) drop(null)(event);
       }}
     >
-      <ReadingNow onNavigate={onNavigate} />
       <Button
         variant="text"
         className="folder-open folder-recent"
@@ -531,6 +436,17 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
       </Button>
       <div className="folder-heading">
         <span className="navigation-group-name">文件夹</span>
+        <IconButton
+          size="inline"
+          variant="text"
+          className="folder-create"
+          aria-label="新建文件夹"
+          icon={<Icon name="plus" />}
+          onPress={() => {
+            setName("");
+            setEditing({ parent: null });
+          }}
+        />
         <Menu
           iconOnly
           className="folder-menu"
@@ -549,20 +465,11 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
         <Button variant="text" onPress={() => void folders.refetch()}>
           文件夹读取失败，重试
         </Button>
+      ) : folders.data && !(tree.get(null) ?? []).length ? (
+        <p className="folder-empty">还没有文件夹。新建一个，再把文献拖进来。</p>
       ) : (
         level(null, 0)
       )}
-      <Button
-        variant="text"
-        className="folder-create"
-        icon={<Icon name="plus" />}
-        onPress={() => {
-          setName("");
-          setEditing({ parent: null });
-        }}
-      >
-        新建文件夹
-      </Button>
       <Dialog
         title={editing?.folder ? "重命名文件夹" : "新建文件夹"}
         isOpen={editing !== null}

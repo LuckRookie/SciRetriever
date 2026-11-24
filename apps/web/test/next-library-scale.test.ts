@@ -50,7 +50,7 @@ async function withDiscovered(env: Env) {
 /** The sidebar's “文献库” and its number. */
 const sidebarCount = (page: Page) =>
   page
-    .locator(".application-shell")
+    .getByRole("complementary", { name: "主导航" })
     .getByRole("button", { name: /^文献库/u })
     .first()
     .locator(".navigation-count");

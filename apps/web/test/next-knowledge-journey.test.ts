@@ -4,7 +4,7 @@ import {
   readerNavigation,
   readerTextComplete,
   readerToLibrary,
-  readingNow,
+  paperTabs,
   reopenPaper,
 } from "./reader-controls.js";
 import {
@@ -252,7 +252,7 @@ it("keeps parsing separate from document publication and reads existing verified
       )
       .toBe(1);
     expect(env.modelCalls).toBe(0);
-    expect(await readingNow(page).textContent(), page.url()).toContain(
+    expect(await paperTabs(page).textContent(), page.url()).toContain(
       "Synthetic literature workbench",
     );
     await reopenPaper(page, "Synthetic literature workbench");

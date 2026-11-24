@@ -13,12 +13,6 @@ import { Icon } from "./icons.js";
 import { Disclosure } from "./navigation.js";
 import { AnimatedPanel, Presence } from "../motion/index.js";
 /**
- * What the shell puts before every page title: on narrow screens the button
- * that opens the navigation drawer, since no bar above the page carries it
- * (design core “页头”).
- */
-export const PageHeaderLead = createContext<ReactNode>(null);
-/**
  * Page title, an optional context figure ("35,177 篇") and at most one primary
  * action. `description` is only for internal demo pages; product pages express
  * system behaviour through their controls instead.
@@ -34,12 +28,10 @@ export function PageHeader({
   description?: string;
   action?: ReactNode;
 }) {
-  const lead = useContext(PageHeaderLead);
   return (
     <header className="ui-page-header">
       <div>
         <div className="ui-page-title">
-          {lead ? <span className="ui-page-lead">{lead}</span> : null}
           <h1>{title}</h1>
           {count === undefined || count === null ? null : (
             <span className="ui-page-count">{count}</span>
@@ -518,6 +510,7 @@ export function SplitPane({
   max = 520,
   defaultWidth = 280,
   edge = "right",
+  collapsed = false,
 }: {
   label: string;
   children: ReactNode;
@@ -528,6 +521,8 @@ export function SplitPane({
   max?: number;
   defaultWidth?: number;
   edge?: "right" | "left";
+  /** The side is put away and the main part takes the whole width; the tree keeps its shape. */
+  collapsed?: boolean;
 }) {
   const panel = useRef<HTMLDivElement>(null);
   const active = useRef<{ x: number; width: number } | null>(null);
@@ -537,14 +532,16 @@ export function SplitPane({
     <div
       className="ui-split-pane"
       data-edge={edge}
+      data-collapsed={collapsed || undefined}
       style={{
-        gridTemplateColumns:
-          edge === "right"
+        gridTemplateColumns: collapsed
+          ? "minmax(0, 1fr)"
+          : edge === "right"
             ? `${width}px minmax(0, 1fr)`
             : `minmax(0, 1fr) ${width}px`,
       }}
     >
-      <div ref={panel} id={id} className="ui-split-side">
+      <div ref={panel} id={id} className="ui-split-side" hidden={collapsed}>
         {side}
         <div
           role="separator"

@@ -5,6 +5,7 @@ import {
   showAllLibraryStatuses,
 } from "./next-workspace-fixture.js";
 import { expect, it } from "vitest";
+import type { Page } from "playwright";
 import {
   canonicalJsonBytes,
   parseFolderNode,
@@ -473,6 +474,17 @@ const fullTextId = (n: number) =>
  * an exhausted one, beside the fixture's ready paper and its paper without a
  * PDF; a folder and an intake batch over some of them.
  */
+/** Opens the library limited to an intake batch, from its record on the intake page. */
+async function openBatch(page: Page, label: string) {
+  await page
+    .getByRole("complementary", { name: "主导航" })
+    .getByRole("button", { name: /^入库/u })
+    .click();
+  await page
+    .locator(".intake-record", { hasText: label })
+    .getByRole("button", { name: "在文献库查看" })
+    .click();
+}
 async function seedFullText(w: Awaited<ReturnType<typeof nextWorkspace>>) {
   const id = fullTextId;
   const app = w.env.app;
@@ -601,10 +613,7 @@ it("writes the scope's total once beside the title, “符合 n 篇 / 共 m 篇�
     await chip("全部").click();
     await expect.poll(() => count.textContent()).toBe("共 6 篇");
     // An intake batch is a condition of the library.
-    await page
-      .getByRole("group", { name: "最近入库" })
-      .getByRole("button", { name: /^全文批次/u })
-      .click();
+    await openBatch(page, "全文批次");
     await expect.poll(() => count.textContent()).toBe("共 2 篇");
     expect(query().intake_batch_ids).toEqual([batch]);
     // A folder is the page's scope: its own total, narrowed by a search.
@@ -673,10 +682,7 @@ it("shows the title's count for the whole library, an intake batch and a folder 
       page.screenshot({ path: join(output, `${name}.png`) });
     await expect.poll(() => count.textContent()).toBe("共 6 篇");
     await shot("count-library");
-    await page
-      .getByRole("group", { name: "最近入库" })
-      .getByRole("button", { name: /^全文批次/u })
-      .click();
+    await openBatch(page, "全文批次");
     await expect.poll(() => count.textContent()).toBe("共 2 篇");
     await page.locator(".paper-row").first().waitFor();
     await shot("count-batch");

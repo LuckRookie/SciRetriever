@@ -161,11 +161,8 @@ it("records each import as a batch, narrows it by its keywords and gets PDFs for
     expect(await record.textContent()).toContain("待获取 3");
     await page.reload();
     await record.waitFor();
-    // The sidebar lists it under the newest batches.
-    await page
-      .getByRole("group", { name: "最近入库" })
-      .getByRole("button", { name: /batch-fixture\.bib/ })
-      .click();
+    // Its record opens the library limited to it.
+    await record.getByRole("button", { name: "在文献库查看" }).click();
     await expect.poll(() => page.locator(".paper-row").count()).toBe(3);
     const query = JSON.parse(new URL(page.url()).searchParams.get("query")!);
     expect(query.intake_batch_ids).toHaveLength(1);

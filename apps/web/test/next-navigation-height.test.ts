@@ -2,10 +2,6 @@ import { expect, it } from "vitest";
 import type { Locator, Page } from "playwright";
 import { parseFolderNode } from "@sciretriever/contracts";
 import { nextWorkspace } from "./next-workspace-fixture.js";
-import {
-  finishIntake,
-  startIntake,
-} from "../../server/src/literature/intake.js";
 
 /** Whether `target` lies wholly inside the window. */
 const inWindow = async (page: Page, target: Locator) => {
@@ -28,18 +24,8 @@ it("keeps the navigation scrollable in a short window, with “设置” in view
   try {
     const page = w.page;
     const app = w.env.app;
-    // More than a short window holds: recent batches and many folders.
-    for (let n = 1; n <= 4; n++) {
-      const batch = await startIntake(
-        app.database,
-        "topic",
-        `入库批次 ${n}`,
-        {},
-        "web",
-      );
-      await finishIntake(app.database, batch, "completed");
-    }
-    for (let n = 1; n <= 14; n++)
+    // More folders than a short window holds.
+    for (let n = 1; n <= 24; n++)
       parseFolderNode(
         await app.folders.manage({
           operation: "create",
@@ -49,17 +35,18 @@ it("keeps the navigation scrollable in a short window, with “设置” in view
     await page.setViewportSize({ width: 1280, height: 600 });
     await page.reload();
     const aside = page.getByRole("complementary", { name: "主导航" });
-    await aside.getByRole("button", { name: /^文件夹 14/u }).waitFor();
-    await aside.getByRole("button", { name: /^入库批次 4/u }).waitFor();
-    // The sidebar: its middle scrolls inside the window; the brand row and
-    // “设置” stay in view and can be pressed.
+    await aside.getByRole("button", { name: /^文件夹 24/u }).waitFor();
+    // The sidebar: the library and its folders scroll inside the window; the
+    // pages below them, “设置” last, stay in view and can be pressed.
     const content = aside.locator(".navigation-content");
     expect(await scrollToEnd(content)).toBe(true);
     const settings = aside.getByRole("button", { name: "设置", exact: true });
     expect(await inWindow(page, settings)).toBe(true);
-    expect(await inWindow(page, aside.locator(".brand"))).toBe(true);
     expect(
-      await inWindow(page, aside.getByRole("button", { name: /^文件夹 14/u })),
+      await inWindow(page, aside.getByRole("button", { name: /^任务/u })),
+    ).toBe(true);
+    expect(
+      await inWindow(page, aside.getByRole("button", { name: /^文件夹 24/u })),
     ).toBe(true);
     await settings.click({ trial: true });
     await settings.click();
@@ -72,7 +59,7 @@ it("keeps the navigation scrollable in a short window, with “设置” in view
     await page.setViewportSize({ width: 390, height: 600 });
     await page.getByRole("button", { name: "打开导航", exact: true }).click();
     const drawer = page.getByRole("dialog", { name: "导航" });
-    await drawer.getByRole("button", { name: /^文件夹 14/u }).waitFor();
+    await drawer.getByRole("button", { name: /^文件夹 24/u }).waitFor();
     await scrollToEnd(page.locator(".ui-drawer"));
     const drawerSettings = drawer.getByRole("button", {
       name: "设置",
@@ -88,7 +75,7 @@ it("keeps the navigation scrollable in a short window, with “设置” in view
     );
     await page.getByRole("button", { name: "打开导航", exact: true }).click();
     const readerDrawer = page.getByRole("dialog", { name: "导航" });
-    await readerDrawer.getByRole("button", { name: /^文件夹 14/u }).waitFor();
+    await readerDrawer.getByRole("button", { name: /^文件夹 24/u }).waitFor();
     await scrollToEnd(page.locator(".ui-drawer"));
     const readerSettings = readerDrawer.getByRole("button", {
       name: "设置",

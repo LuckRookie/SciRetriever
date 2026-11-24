@@ -26,42 +26,53 @@ const ready = FIXTURE_LITERATURE.metadata.title!;
 const query = (page: Page) =>
   JSON.parse(new URL(page.url()).searchParams.get("query") ?? "{}");
 
-it("has no bar above the page and no “活动” panel; on a narrow screen the navigation button is in the page header (plan 25 block 29)", async () => {
+it("has one top bar above every page and no “活动” panel; on a narrow screen its button opens the navigation as a drawer (page specs “顶栏”“开合”)", async () => {
   const w = await nextWorkspace();
   try {
     const page = w.page;
     await page
       .getByRole("heading", { level: 1, name: "收进来的文献" })
       .waitFor();
-    expect(await page.locator(".workspace-header").count()).toBe(0);
+    expect(await page.locator(".workspace-header.top-bar").count()).toBe(1);
+    // The first tab names the page outside the reader and is the current one.
     expect(
-      await page.getByRole("navigation", { name: "工作区与阅读标签" }).count(),
-    ).toBe(0);
+      await page
+        .locator(".workspace-tab")
+        .getByRole("button", { name: "文献库", exact: true })
+        .getAttribute("aria-current"),
+    ).toBe("page");
     expect(await page.getByRole("button", { name: /^活动/u }).count()).toBe(0);
-    // The page header is the first thing in the content area.
+    // The page header is the first thing in the content area, under the bar.
     expect(
       await page.evaluate(
         () =>
           document.querySelector(".workspace-content")!.getBoundingClientRect()
-            .top,
+            .top -
+          document.querySelector(".top-bar")!.getBoundingClientRect().bottom,
       ),
     ).toBe(0);
-    // Wide: no navigation button beside the title; the sidebar is there.
-    const lead = page.locator(".ui-page-header .ui-page-lead");
-    expect(await lead.isVisible()).toBe(false);
+    // Wide: the sidebar is docked, and the bar's button puts it away and back
+    // without reloading the page.
+    const nav = page.getByRole("complementary", { name: "主导航" });
+    await nav.waitFor();
+    await page.getByRole("button", { name: "收起导航", exact: true }).click();
+    await nav.waitFor({ state: "detached" });
+    expect(await page.locator(".paper-row").count()).toBeGreaterThan(0);
+    await page.getByRole("button", { name: "打开导航", exact: true }).click();
+    await nav.waitFor();
+    // Narrow: the same button opens the navigation as a drawer.
     await page.setViewportSize({ width: 390, height: 844 });
-    await lead.waitFor();
-    await lead.getByRole("button", { name: "打开导航", exact: true }).click();
+    await nav.waitFor({ state: "detached" });
+    await page.getByRole("button", { name: "打开导航", exact: true }).click();
     const drawer = page.getByRole("dialog", { name: "导航" });
     await drawer.getByRole("button", { name: /^任务/u }).click();
-    // Every page title carries it: the task page's too.
     await page.getByRole("heading", { level: 1, name: "任务" }).waitFor();
-    expect(
-      await page
-        .locator(".ui-page-header")
-        .getByRole("button", { name: "打开导航", exact: true })
-        .isVisible(),
-    ).toBe(true);
+    // The drawer closed with the move, and the first tab names the new page.
+    await drawer.waitFor({ state: "detached" });
+    await page
+      .locator(".workspace-tab")
+      .getByRole("button", { name: "任务", exact: true })
+      .waitFor();
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth),
     ).toBeLessThanOrEqual(390);

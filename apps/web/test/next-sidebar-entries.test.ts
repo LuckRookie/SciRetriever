@@ -19,7 +19,7 @@ const entryNames = (scope: Locator, selector: string) =>
       ),
     );
 const topLevel =
-  ".navigation-group > .ui-button, .navigation-group > .navigation-fold > .ui-button";
+  ".navigation-library > .ui-button, .navigation-footer > .ui-button, .navigation-footer > .navigation-fold > .ui-button";
 const processing = ".navigation-fold-items > .ui-button";
 
 /** The open menu's items, with each group title in brackets. */
@@ -41,7 +41,7 @@ async function closeMenu(page: Page) {
   await page.locator(".ui-menu").waitFor({ state: "detached" });
 }
 
-it("keeps the sidebar to one column with a folding “加工” remembered in the browser, the same in both drawers (page specs “整体信息架构”)", async () => {
+it("keeps the library and its folders above and the other pages fixed below, with a folding “加工” remembered in the browser, the same in the drawer (page specs “整体信息架构”)", async () => {
   const w = await nextWorkspace();
   try {
     const page = w.page;
@@ -52,11 +52,19 @@ it("keeps the sidebar to one column with a folding “加工” remembered in th
       "全文检索",
       "任务",
       "加工",
+      "设置",
     ]);
     // No group titles, and the three entries that moved are gone.
     expect(
       await nav.locator(".navigation-group-name").allTextContents(),
     ).toEqual(["文件夹"]);
+    // Neither the open papers nor the intake batches hang in the sidebar.
+    expect(await nav.getByRole("group", { name: "正在读" }).count()).toBe(0);
+    expect(await nav.getByRole("group", { name: "最近入库" }).count()).toBe(0);
+    // The library scrolls; the other pages are outside the scrolling part.
+    expect(
+      await nav.locator(".navigation-content .navigation-footer").count(),
+    ).toBe(0);
     for (const name of ["最近入库", "需处理", "浏览器", "资料", "运行"])
       expect(
         await nav.getByRole("button", { name, exact: true }).count(),
@@ -117,6 +125,7 @@ it("keeps the sidebar to one column with a folding “加工” remembered in th
       "全文检索",
       "任务",
       "加工",
+      "设置",
     ]);
     await page.keyboard.press("Escape");
     await readerDrawer.waitFor({ state: "detached" });
@@ -131,6 +140,7 @@ it("keeps the sidebar to one column with a folding “加工” remembered in th
       "全文检索",
       "任务",
       "加工",
+      "设置",
     ]);
     expect(
       await drawer

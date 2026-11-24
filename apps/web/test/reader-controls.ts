@@ -159,8 +159,19 @@ export async function readerNavigation(page: Page) {
   await page.getByRole("button", { name: "打开导航", exact: true }).click();
   return page.getByRole("dialog", { name: "导航" });
 }
-/** Leaves the reader for the library through the navigation drawer. */
+/**
+ * Goes to the library through the navigation: the drawer on the reader page,
+ * the docked sidebar on any other.
+ */
 export async function readerToLibrary(page: Page) {
+  const docked = page.getByRole("complementary", { name: "主导航" });
+  if (await docked.count()) {
+    await docked
+      .getByRole("button", { name: /^文献库/ })
+      .first()
+      .click();
+    return;
+  }
   await page.getByRole("button", { name: "打开导航", exact: true }).click();
   await page
     .getByRole("dialog", { name: "导航" })
@@ -169,17 +180,17 @@ export async function readerToLibrary(page: Page) {
     .click();
 }
 /**
- * Goes back to a paper open in the reader from another page, through the
- * sidebar's “正在读” (plan 25 block 30: the pages have no paper tabs).
+ * Goes back to a paper open in the reader from another page, through its tab
+ * in the top bar (page specs “顶栏”).
  */
 export async function reopenPaper(page: Page, title: string) {
-  await readingNow(page)
+  await paperTabs(page)
     .getByRole("button", { name: title, exact: true })
     .click();
 }
-/** The sidebar's “正在读”: the papers open in the reader. */
-export function readingNow(page: Page) {
-  return page.getByRole("group", { name: "正在读", exact: true });
+/** The top bar's tabs: the papers open in the reader, on every page. */
+export function paperTabs(page: Page) {
+  return page.getByRole("navigation", { name: "阅读标签", exact: true });
 }
 /**
  * Opens the side panel (reading-experience 1.4: closed by default) unless

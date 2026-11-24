@@ -23,7 +23,6 @@ import {
   IconButton,
   Menu,
   PageHeader,
-  PageHeaderLead,
   Select,
   SplitPane,
   ToastProvider,
@@ -64,11 +63,7 @@ import {
 } from "../data/library.js";
 import { recordReadingOpen } from "../data/folders.js";
 import { runningTaskCount, taskCountText } from "../data/tasks.js";
-import {
-  IntakeBatches,
-  LibraryFolders,
-  withoutScope,
-} from "../features/library/Folders.js";
+import { LibraryFolders, withoutScope } from "../features/library/Folders.js";
 import { taskTabs } from "../features/tasks/TaskPage.js";
 import { useIssueCount } from "../data/archive.js";
 import { pacedInterval } from "../data/polling.js";
@@ -104,7 +99,21 @@ import { sectionLabels, errorMessage } from "../strings.js";
 import { warmInterfaceFonts } from "../styles/warm-fonts.js";
 
 const PROCESSING_KEY = "sciretriever:navigation:processing:v1";
+const NAVIGATION_KEY = "sciretriever:panel:navigation-open:v1";
 const processingLabel = "加工";
+/** At this width or less the sidebar is a drawer on every page (page specs “开合”). */
+const NARROW = "(max-width: 720px)";
+function useNarrow() {
+  const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW).matches);
+  useEffect(() => {
+    const media = window.matchMedia(NARROW);
+    const change = () => setNarrow(media.matches);
+    change();
+    media.addEventListener("change", change);
+    return () => media.removeEventListener("change", change);
+  }, []);
+  return narrow;
+}
 
 /**
  * Route chunks load on first visit; once the shell is idle the rest are fetched
@@ -296,14 +305,19 @@ function Workspace({ api }: { api: ApiClient }) {
     [tabs, setTabs] = useState<PaperTab[]>(loadTabs),
     [closed, setClosed] = useState<ClosedTabs[]>([]),
     [tabMenu, setTabMenu] = useState<ContextMenuRequest | null>(null),
-    [mobileNav, setMobileNav] = useState(false),
+    // The sidebar docked beside the page, as the person left it (page specs
+    // “开合”); on the reader page and on narrow screens it is a drawer instead.
+    [navigationOpen, setNavigationOpen] = useState(
+      () => preferences.read(NAVIGATION_KEY) !== "closed",
+    ),
+    [drawer, setDrawer] = useState(false),
+    narrow = useNarrow(),
     // The folding “加工” group, closed unless the person opened it.
     [processingOpen, setProcessingOpen] = useState(
       () => preferences.read(PROCESSING_KEY) === "open",
     ),
     [search, setSearch] = useState(false),
-    // Spec 1.3: the reader page's top bar, its slot for the reader's controls and its width.
-    [readerNav, setReaderNav] = useState(false),
+    // Spec 1.3: the top bar's slot for the reader's controls, and its width.
     [readerBar, setReaderBar] = useState<HTMLElement | null>(null),
     [readerBarWidth, setReaderBarWidth] = useState(0),
     [readerFocus, setReaderFocus] = useState(false),
@@ -456,7 +470,7 @@ function Workspace({ api }: { api: ApiClient }) {
       { view: section, literature: null, results: null },
       { clearSource: true },
     );
-    setMobileNav(false);
+    setDrawer(false);
   };
   // The library entry leaves a folder or "recently read" scope, keeping filters.
   const openLibrary = () => {
@@ -481,14 +495,12 @@ function Workspace({ api }: { api: ApiClient }) {
       },
       { clearSource: true },
     );
-    setMobileNav(false);
+    setDrawer(false);
   };
   const available = (section: Section) =>
     api.kind === "workspace" ||
     ["lib", "ins", "ask", "syn", "ext"].includes(section);
-  const mainSections = (["lib", "disc", "ask", "task"] as const).filter(
-      available,
-    ),
+  const placeSections = (["disc", "ask", "task"] as const).filter(available),
     processingSections = (["ext", "snapshots", "tags", "ins"] as const).filter(
       available,
     );
@@ -541,72 +553,59 @@ function Workspace({ api }: { api: ApiClient }) {
       ) : null}
     </Button>
   );
+  const closeDrawer = () => setDrawer(false);
   const navigation = (
     <>
-      <div className="brand">
-        <span className="brand-mark">S</span>
-        <span>SciRetriever</span>
-      </div>
+      {/* The library and its folders scroll; the other pages stay at the
+          bottom whatever the folders' number (page specs “侧栏”). */}
       <div className="navigation-content">
-        <Button
-          variant="text"
-          icon={<Icon name="search" />}
-          onPress={() => setSearch(true)}
-        >
-          搜索 <kbd>⌘K</kbd>
-        </Button>
-        {/* One column on the main line, with “加工” as the one folding
-            group (page specs “整体信息架构”). */}
-        <div className="navigation-group">
-          {mainSections.map((section) => (
-            <Fragment key={section}>
-              {sectionButton(section)}
-              {section === "lib" && api.kind === "workspace" ? (
-                <LibraryFolders onNavigate={() => setMobileNav(false)} />
-              ) : null}
-              {section === "disc" ? (
-                <IntakeBatches onNavigate={() => setMobileNav(false)} />
-              ) : null}
-            </Fragment>
-          ))}
-          {processingSections.length ? (
-            <div
-              className="navigation-fold"
-              role="group"
-              aria-label={processingLabel}
-            >
-              <Button
-                variant="text"
-                className="navigation-fold-toggle"
-                aria-expanded={processingOpen}
-                data-open={processingOpen || undefined}
-                icon={<ComponentIcon name="chevron" />}
-                onPress={() => toggleProcessing(!processingOpen)}
-              >
-                {processingLabel}
-              </Button>
-              {processingOpen ? (
-                <div className="navigation-fold-items">
-                  {processingSections.map((section) => (
-                    <Fragment key={section}>{sectionButton(section)}</Fragment>
-                  ))}
-                </div>
-              ) : null}
-            </div>
+        <div className="navigation-group navigation-library">
+          {available("lib") ? sectionButton("lib") : null}
+          {api.kind === "workspace" ? (
+            <LibraryFolders onNavigate={closeDrawer} />
           ) : null}
         </div>
       </div>
-      {api.kind !== "query" ? (
-        <div className="navigation-footer">
+      <div className="navigation-footer navigation-group">
+        {placeSections.map((section) => (
+          <Fragment key={section}>{sectionButton(section)}</Fragment>
+        ))}
+        {processingSections.length ? (
+          <div
+            className="navigation-fold"
+            role="group"
+            aria-label={processingLabel}
+          >
+            <Button
+              variant="text"
+              className="navigation-fold-toggle"
+              aria-expanded={processingOpen}
+              data-open={processingOpen || undefined}
+              icon={<ComponentIcon name="chevron" />}
+              onPress={() => toggleProcessing(!processingOpen)}
+            >
+              {processingLabel}
+            </Button>
+            {processingOpen ? (
+              <div className="navigation-fold-items">
+                {processingSections.map((section) => (
+                  <Fragment key={section}>{sectionButton(section)}</Fragment>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {api.kind !== "query" ? (
           <Button
             variant="text"
+            aria-current={isCurrent("set") ? "page" : false}
             icon={<Icon name="set" />}
             onPress={() => go("set")}
           >
             {api.kind === "maintenance" ? "高级维护" : "设置"}
           </Button>
-        </div>
-      ) : null}
+        ) : null}
+      </div>
     </>
   );
   const page =
@@ -657,11 +656,11 @@ function Workspace({ api }: { api: ApiClient }) {
     ) : (
       <Insights />
     );
-  // Navigating closes the reader's navigation drawer.
+  // Navigating closes the navigation drawer.
   useEffect(() => {
-    setReaderNav(false);
+    setDrawer(false);
   }, [route.section, route.literature]);
-  // The reader page shows no site sidebar: one top bar, and navigation in a drawer.
+  // The reader page docks no sidebar: the top bar, and navigation in a drawer.
   const readerPage =
     !route.error &&
     !!route.literature &&
@@ -918,31 +917,55 @@ function Workspace({ api }: { api: ApiClient }) {
     noTabs = barLayout.tabs === "none";
   useLayoutEffect(() => {
     const bar = topBar.current;
-    if (!readerPage || !bar) return;
+    if (!bar) return;
     const measure = () => setReaderBarWidth(bar.clientWidth);
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(bar);
     return () => observer.disconnect();
-  }, [readerPage]);
-  const mobileNavigationButton = (
-    <IconButton
-      aria-label="打开导航"
-      icon={<Icon name="menu" />}
-      onPress={() => setMobileNav(true)}
-    />
-  );
-  const readerTopBar = (
+  }, []);
+  // The sidebar docks beside every page but the reader's, unless the window is narrow.
+  const docked = navigationOpen && !readerPage && !narrow;
+  const toggleNavigation = () => {
+    if (readerPage || narrow) return setDrawer(true);
+    setNavigationOpen(!navigationOpen);
+    preferences.write(NAVIGATION_KEY, navigationOpen ? "closed" : "open");
+  };
+  /** The page outside the reader, named in the top bar's first tab (page specs “顶栏”). */
+  const workspaceName = taskTabs.includes(route.section)
+    ? sectionLabels.task
+    : (processingSections as readonly Section[]).includes(route.section)
+      ? processingLabel
+      : route.section === "set"
+        ? api.kind === "maintenance"
+          ? "高级维护"
+          : "设置"
+        : sectionLabels[route.section];
+  const topBarElement = (
     <header
-      className="workspace-header reader-topbar"
+      className={`workspace-header top-bar${readerPage ? " reader-topbar" : ""}`}
       ref={topBar}
       data-tabs={allTabs ? "all" : noTabs ? "none" : "current"}
     >
+      <span className="brand-mark" title="SciRetriever" aria-hidden="true">
+        S
+      </span>
       <IconButton
-        aria-label="打开导航"
-        icon={<Icon name="menu" />}
-        onPress={() => setReaderNav(true)}
+        aria-label={docked ? "收起导航" : "打开导航"}
+        aria-expanded={docked}
+        icon={<Icon name="sidebar" />}
+        onPress={toggleNavigation}
       />
+      <div className="workspace-tab" data-selected={!readerPage || undefined}>
+        <Button
+          variant="text"
+          aria-current={readerPage ? false : "page"}
+          // From a paper: back to the page it was opened from, as it was left.
+          onPress={() => (readerPage ? showAfterClose(null) : undefined)}
+        >
+          {workspaceName}
+        </Button>
+      </div>
       {noTabs ? null : (
         <div
           className="workspace-tabs reader-topbar-tabs"
@@ -952,7 +975,11 @@ function Workspace({ api }: { api: ApiClient }) {
           {allTabs ? tabs.map(paperTab) : current ? paperTab(current) : null}
           {!allTabs && others.length ? (
             <Menu
-              label={`另 ${others.length} 篇`}
+              label={
+                current
+                  ? `另 ${others.length} 篇`
+                  : `打开的 ${others.length} 篇`
+              }
               variant="text"
               className="reader-topbar-others"
               items={[
@@ -1033,23 +1060,20 @@ function Workspace({ api }: { api: ApiClient }) {
         },
       }}
     >
-      {readerPage ? (
-        <div
-          className="application-shell"
-          data-reader-page=""
-          data-focus={readerFocus || undefined}
-          data-peek={(readerFocus && peek) || undefined}
-        >
-          <div className="workspace-main">
-            {readerTopBar}
-            {content_}
-          </div>
-        </div>
-      ) : (
-        <div className="application-shell">
+      <div
+        className="application-shell"
+        data-reader-page={readerPage ? "" : undefined}
+        data-focus={(readerPage && readerFocus) || undefined}
+        data-peek={(readerPage && readerFocus && peek) || undefined}
+      >
+        {topBarElement}
+        <div className="workspace-body">
+          {/* One tree whether the sidebar is docked or not, so opening and
+              closing it never remounts the page. */}
           <SplitPane
             label="导航栏宽度"
             width={width}
+            collapsed={!docked}
             onWidthChange={(value) => {
               setWidth(value);
               preferences.write(
@@ -1061,31 +1085,24 @@ function Workspace({ api }: { api: ApiClient }) {
             max={420}
             defaultWidth={244}
             side={
-              <aside className="navigation" aria-label="主导航">
-                {navigation}
-              </aside>
+              docked ? (
+                <aside className="navigation" aria-label="主导航">
+                  {navigation}
+                </aside>
+              ) : null
             }
           >
-            <div className="workspace-main">
-              {/* No bar above the page (design core “页头”): on narrow
-                  screens the navigation button joins each page's title. */}
-              <PageHeaderLead.Provider value={mobileNavigationButton}>
-                {content_}
-              </PageHeaderLead.Provider>
-            </div>
+            <div className="workspace-main">{content_}</div>
           </SplitPane>
         </div>
-      )}
+      </div>
       <Drawer
         title="导航"
         side="start"
         className="reader-navigation"
-        isOpen={readerPage && readerNav}
-        onOpenChange={setReaderNav}
+        isOpen={drawer && !docked}
+        onOpenChange={setDrawer}
       >
-        {navigation}
-      </Drawer>
-      <Drawer title="导航" isOpen={mobileNav} onOpenChange={setMobileNav}>
         {navigation}
       </Drawer>
       <CommandPalette isOpen={search} onOpenChange={setSearch} />

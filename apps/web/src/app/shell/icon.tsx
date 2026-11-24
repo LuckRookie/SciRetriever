@@ -16,6 +16,7 @@ const paths: Record<string, string> = {
   set: "M4 7h4m6 0h6M4 17h10m6 0h0M14 7a3 3 0 1 1-6 0 3 3 0 0 1 6 0M20 17a3 3 0 1 1-6 0 3 3 0 0 1 6 0",
   close: "m6 6 12 12M6 18 18 6",
   menu: "M4 6h16M4 12h16M4 18h16",
+  sidebar: "M3 5h18v14H3zM9 5v14",
   activity: "M3 12h4l3-8 4 16 3-8h4",
   file: "M14 3H5v18h14V8zm0 0v5h5M9 12h6M9 16h6",
   refresh: "M20 8a8 8 0 0 0-14-2L3 9m0-5v5h5M4 16a8 8 0 0 0 14 2l3-3m0 5v-5h-5",

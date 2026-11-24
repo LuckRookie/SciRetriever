@@ -667,57 +667,51 @@ it("draws a 4 px spine without a frame, prints a repeated title once and keeps a
   }
 }, 90000);
 
-it("lists the open papers under 文献库 as “正在读”, five at most, and goes back to one (block 30 · 2a)", async () => {
+it("keeps the open papers as tabs in the top bar of every page; the first tab names the page and goes back to it (page specs “顶栏”)", async () => {
   const w = await nextWorkspace({ ready: "body" });
   try {
     const page = w.page,
       id = w.env.parseRequest.literature_id;
     await page.setViewportSize({ width: 1440, height: 900 });
-    await page.goto(`${w.origin}/?view=lib`);
-    const reading = page.getByRole("group", { name: "正在读" });
-    await page.getByRole("group", { name: "文献文件夹" }).waitFor();
-    // Nothing open: no group.
-    expect(await reading.count()).toBe(0);
-    await page.goto(`${w.origin}/?literature=${id}&reader=doc`);
+    await page.goto(`${w.origin}/?view=task`);
+    const tabs = page.getByRole("navigation", { name: "阅读标签" });
+    const workspace = page.locator(".workspace-tab").getByRole("button");
+    await page.getByRole("heading", { level: 1, name: "任务" }).waitFor();
+    // Nothing open: no paper tab, and the sidebar lists no open papers.
+    expect(await tabs.locator(".paper-tab").count()).toBe(0);
+    expect(await page.getByRole("group", { name: "正在读" }).count()).toBe(0);
+    expect(await workspace.textContent()).toBe("任务");
+    expect(await workspace.getAttribute("aria-current")).toBe("page");
+    await page.goto(`${w.origin}/?view=task&literature=${id}&reader=doc`);
     await page.locator('.react-reader[data-reading-ready="true"]').waitFor();
-    await readerToLibrary(page);
-    await reading.waitFor();
-    const paper = reading.getByRole("button", {
+    // On the paper: its tab is the current one, the sidebar is put away, and
+    // the first tab still names the page it was opened from.
+    expect(
+      await page.getByRole("complementary", { name: "主导航" }).count(),
+    ).toBe(0);
+    expect(await workspace.textContent()).toBe("任务");
+    expect(await workspace.getAttribute("aria-current")).toBe("false");
+    await workspace.click();
+    await page.getByRole("heading", { level: 1, name: "任务" }).waitFor();
+    expect(new URL(page.url()).searchParams.get("literature")).toBeNull();
+    expect(await workspace.getAttribute("aria-current")).toBe("page");
+    // The paper stays open as a tab on the task page, and its tab goes back.
+    const paper = tabs.getByRole("button", {
       name: "Synthetic literature workbench",
+      exact: true,
     });
     await paper.click();
     await expect
       .poll(() => new URL(page.url()).searchParams.get("literature"))
       .toBe(id);
-    // Past five, “另外 n 篇”.
-    await page.evaluate((current) => {
-      const tabs = [
-        { id: current, title: "Synthetic literature workbench", source: {} },
-        ...Array.from({ length: 6 }, (_, n) => ({
-          id: `00000000-0000-0000-0000-00000000600${n}`,
-          title: `Open paper ${n} with a title long enough to be cut on one line`,
-          source: {},
-        })),
-      ];
-      sessionStorage.setItem(
-        "sciretriever:reader:tabs:v1",
-        JSON.stringify(tabs),
-      );
-    }, id);
-    await page.goto(`${w.origin}/?view=lib`);
-    await reading.waitFor();
-    expect(await reading.locator(".reading-now-paper").count()).toBe(5);
-    const more = reading.getByRole("button", {
-      name: "另外 2 篇",
-      exact: true,
-    });
-    await more.waitFor();
-    expect(
-      await reading
-        .locator(".reading-now-paper .folder-name")
-        .first()
-        .evaluate((el) => getComputedStyle(el).whiteSpace),
-    ).toBe("nowrap");
+    // The reader's drawer closes by itself once a place is chosen.
+    await readerToLibrary(page);
+    await page
+      .getByRole("dialog", { name: "导航" })
+      .waitFor({ state: "detached" });
+    await page.getByRole("complementary", { name: "主导航" }).waitFor();
+    expect(await workspace.textContent()).toBe("文献库");
+    expect(await tabs.locator(".paper-tab").count()).toBe(1);
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();

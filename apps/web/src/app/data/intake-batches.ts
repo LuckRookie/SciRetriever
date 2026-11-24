@@ -81,15 +81,6 @@ export async function previewAcquisition(
   return parseAcquirePdfCounts(value.result);
 }
 
-/** The newest batches, for the sidebar. */
-export function useRecentBatches(limit = 5) {
-  const api = useApi();
-  return useQuery({
-    queryKey: [...batchKey, "recent", limit],
-    queryFn: ({ signal }) => listIntakeBatches(api, limit, null, signal),
-    enabled: api.kind === "workspace" && api.workspace.readiness === "ready",
-  });
-}
 /**
  * Every batch, newest first, a page at a time; refreshed every 3 s while one
  * is collecting, awaiting confirmation or running, or a submission is open.
