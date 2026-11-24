@@ -26,6 +26,16 @@ const { libraryPagingSchema }: typeof import("./library-paging-schema.js") =
     ).href
   );
 
+const { DEFAULT_DOCUMENT_LEFT_JOIN }: typeof import("./document-defaults.js") =
+  await import(
+    new URL(
+      import.meta.url.endsWith(".ts")
+        ? "./document-defaults.ts"
+        : "./document-defaults.js",
+      import.meta.url,
+    ).href
+  );
+
 // One current catalog layout. This is not a migration ladder or a list of supported historic layouts.
 export const SCHEMA_VERSION = 19 as const;
 // Inputs read by archiveStates/deriveCurrentState, including view dependencies.
@@ -1084,9 +1094,15 @@ export const SCHEMA_FINGERPRINT_V19_COMBINED = createHash("sha256")
   .digest("hex");
 
 export const CATALOG_BASE_SCHEMA = [
-  ...SCHEMA_MANIFEST_V19.map((sql) =>
-    sql.startsWith("CREATE TRIGGER ") ? nameCatalogInsertColumns(sql) : sql,
-  ),
+  ...SCHEMA_MANIFEST_V19.map((sql) => {
+    if (sql.startsWith("CREATE TRIGGER ")) return nameCatalogInsertColumns(sql);
+    if (sql.startsWith("CREATE VIEW archive_current_parts "))
+      return sql.replace(
+        "LEFT JOIN (document_defaults dd JOIN document_versions d ON d.document_version_id=dd.document_version_id) ON d.literature_id=la.literature_id AND d.source_asset_id=a.asset_id AND d.source_sha256=a.sha256",
+        DEFAULT_DOCUMENT_LEFT_JOIN.trim(),
+      );
+    return sql;
+  }),
   CATALOG_ADDITIONS_DDL,
 ] as const;
 export const SCHEMA_FINGERPRINT = createHash("sha256")

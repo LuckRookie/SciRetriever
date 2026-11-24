@@ -112,10 +112,8 @@ export async function migrateLiteratureSearchSchema(path: string) {
           return [objectKey(object), sql];
         }),
       );
-      // This release is the documented offline exception. Table and index DDL
-      // is kept verbatim. Only the trigger definitions that gain column lists
-      // change. Preserve SQLite's current firing order on each affected table
-      // by recreating the later triggers in their original creation order.
+      // This release is the documented offline exception. Preserve SQLite's
+      // current firing order when adding explicit trigger column lists.
       const triggerTables = new Set<string>();
       const triggers = db
         .prepare(
@@ -136,7 +134,12 @@ export async function migrateLiteratureSearchSchema(path: string) {
         const object = manifestObject(sql);
         const before = existing.get(objectKey(object));
         if (!before) db.exec(sql);
-        else if (before.sql !== sql && before.type !== "trigger") refuse();
+        else if (before.sql !== sql && before.type !== "trigger") {
+          if (before.type !== "view" || before.name !== "archive_current_parts")
+            refuse();
+          db.exec("DROP VIEW archive_current_parts");
+          db.exec(sql);
+        }
       }
       if (manifest.length < SCHEMA_MANIFEST_V19_RETRIEVAL_CHANGES.length)
         db.exec(

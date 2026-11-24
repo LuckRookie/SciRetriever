@@ -75,7 +75,7 @@ it.each([
   [SCHEMA_MANIFEST_V19_STORED_STATES, SCHEMA_FINGERPRINT_V19_STORED_STATES],
   [SCHEMA_MANIFEST_V19_COUNTS, SCHEMA_FINGERPRINT_V19_COUNTS],
 ] as const)(
-  "adds only the agreed search objects and preserves existing FTS rows and maintenance",
+  "installs the agreed search objects and archive view while preserving FTS rows and maintenance",
   async (manifest, previous) => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-fts-migration-"));
     const path = join(home, "catalog.sqlite");
@@ -92,6 +92,14 @@ it.each([
           "SELECT rowid,literature_id,title,bm25(literature_search_fts) AS score FROM literature_search_fts WHERE literature_search_fts MATCH 'same' ORDER BY score,rowid",
         )
         .all();
+    const archivePlan = () =>
+      db
+        .prepare(
+          "EXPLAIN QUERY PLAN SELECT * FROM archive_current_parts WHERE literature_id=?",
+        )
+        .all("a")
+        .map((row) => row.detail)
+        .join("\n");
     try {
       for (const sql of manifest) db.exec(sql);
       db.prepare(
@@ -125,6 +133,7 @@ it.each([
           .prepare("SELECT rowid,* FROM literature_search_fts ORDER BY rowid")
           .all();
       expect(found).toHaveLength(2);
+      expect(archivePlan()).toContain("SCAN dd");
       await expect(inspectCatalogSchema(path)).rejects.toMatchObject({
         reason: "catalog-layout-not-current",
       });
@@ -138,12 +147,21 @@ it.each([
       const oldNames = new Set(before.map((row) => row.name));
       const after = schema();
       expect(after.filter((row) => oldNames.has(row.name))).toEqual(
-        before.map((row) =>
-          row.type === "trigger"
-            ? { ...row, sql: nameCatalogInsertColumns(String(row.sql)) }
-            : row,
-        ),
+        before.map((row) => {
+          if (row.type === "trigger")
+            return { ...row, sql: nameCatalogInsertColumns(String(row.sql)) };
+          if (row.name === "archive_current_parts")
+            return {
+              ...row,
+              sql: SCHEMA_MANIFEST.find((sql) =>
+                sql.startsWith("CREATE VIEW archive_current_parts "),
+              ),
+            };
+          return row;
+        }),
       );
+      expect(archivePlan()).toContain("archive_document_material_lookup");
+      expect(archivePlan()).not.toContain("SCAN dd");
       const added = after.filter((row) => !oldNames.has(row.name));
       expect(added.map((row) => row.sql).sort()).toEqual(
         SCHEMA_MANIFEST.filter(
