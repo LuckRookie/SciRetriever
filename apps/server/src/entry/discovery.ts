@@ -547,6 +547,8 @@ export class CitationDiscoveryService {
             error.code === "write-admission-cancelled")));
     const tail = await request.source_run?.latestCheckpoint();
     const latest = tail ? parseCitationCheckpoint(tail.payload) : undefined;
+    if (latest?.legacy_recovery?.verified === false)
+      throw new Error("legacy citation recovery has not been verified");
     const resume =
       latest?.closed === "FAILED" &&
       !latest.providers.some((state) => state.cooldown?.until === null)

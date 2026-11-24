@@ -1436,7 +1436,8 @@ export class SqliteWorker {
   ) {
     if (
       typeof path !== "string" ||
-      (!path.startsWith("/") && path !== ":memory:")
+      (!path.startsWith("/") && path !== ":memory:") ||
+      (options.immutableReadOnly && (!options.readOnly || path === ":memory:"))
     )
       throw new SqliteWorkerError();
     this.readOnly = options.readOnly ?? false;
@@ -1465,6 +1466,7 @@ export class SqliteWorker {
       workerData: {
         path,
         read_only: this.readOnly,
+        immutable_read_only: options.immutableReadOnly === true,
         long_read_lane: options.longReadWorker === true,
         task_detail_cache_directory: options.taskDetailCacheDirectory ?? null,
         max_tags: options.maxTags ?? 6,
@@ -4021,6 +4023,8 @@ export class SqliteWorker {
 
 interface SqliteWorkerOptions {
   readonly readOnly?: boolean;
+  /** A stopped, checkpointed catalog opened without any SQLite sidecar writes. */
+  readonly immutableReadOnly?: boolean;
   readonly maxTags?: number | undefined;
   readonly archiveProfile?: "pipeline" | "vlm-engine" | undefined;
   readonly readLane?: SqliteReadLane;

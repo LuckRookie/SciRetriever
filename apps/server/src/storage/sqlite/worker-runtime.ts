@@ -16,6 +16,7 @@ import {
 } from "@sciretriever/contracts";
 import { existsSync, statSync } from "node:fs";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import { parentPort, workerData } from "node:worker_threads";
 import type {
   IdleWalCheckpointResult,
@@ -28,6 +29,7 @@ type Dynamic = ReturnType<typeof JSON.parse>;
 interface WorkerRuntimeData {
   readonly path: string;
   readonly read_only: boolean;
+  readonly immutable_read_only: boolean;
   readonly long_read_lane: boolean;
   readonly task_detail_cache_directory: string | null;
   readonly max_tags: number;
@@ -459,8 +461,12 @@ function initializeConnection(): Dynamic {
   // Reconnecting after another connection's commit keeps the proof; the
   // identity below still changes on DDL or a different catalog file.
   metadataStatements.clear();
+  const location = data.immutable_read_only
+    ? pathToFileURL(data.path)
+    : data.path;
+  if (location instanceof URL) location.searchParams.set("immutable", "1");
   db = data.read_only
-    ? new DatabaseSync(data.path, { readOnly: true })
+    ? new DatabaseSync(location, { readOnly: true })
     : new DatabaseSync(data.path);
   openedCatalogIdentity = catalogIdentity();
   db.function("sr_normalize", { deterministic: true }, (value: Dynamic) =>

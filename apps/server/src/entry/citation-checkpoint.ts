@@ -92,6 +92,11 @@ export interface CitationCheckpoint {
   readonly results_published?: true;
   readonly providers: readonly CitationProviderState[];
   readonly deferred?: CitationDeferredChanges<CitationDeferredWork>;
+  /** Offline import of recorded raw items, before deferred work and any replay. */
+  readonly legacy_recovery?: {
+    readonly raw_item_count_before_resume: number;
+    readonly verified: boolean;
+  };
   readonly closed: "COMPLETED" | "PARTIAL" | "FAILED" | null;
 }
 
@@ -152,6 +157,10 @@ export function parseCitationCheckpoint(input: unknown): CitationCheckpoint {
     ) ||
     !Array.isArray(row.causes) ||
     (row.results_published !== undefined && row.results_published !== true) ||
+    (row.legacy_recovery !== undefined &&
+      (!row.legacy_recovery ||
+        !nonnegative(row.legacy_recovery.raw_item_count_before_resume) ||
+        typeof row.legacy_recovery.verified !== "boolean")) ||
     !Array.isArray(row.providers) ||
     row.raw_provider >= row.providers.length ||
     ![null, "COMPLETED", "PARTIAL", "FAILED"].includes(row.closed)

@@ -32,6 +32,7 @@
 - [migrate-draft-text-v17.mjs](migrate-draft-text-v17.mjs)：构建 server 后，对显式绝对路径的离线 schema 16 库执行 16→17；重建文档版本父表，增加初稿当前指针、版本事实和“找不到”引用投影。保持全部旧表行数、校订稿字段、内容版本事件、加工结果过时状态和索引不变；完整布局/完整性/外键核验后提交。不读取个人配置、不访问 artifact、不形成初稿；失败保留原始异常并回滚，可重跑。正式执行须另行授权。
 - [migrate-user-organization-v18.mjs](migrate-user-organization-v18.mjs)：构建 server 后对显式绝对路径的离线精确 schema 17 库执行 17→18，增加保存筛选与批注定位缓存两表；核对旧表行数、布局、完整性和外键，不访问资产或个人配置，失败保留原始异常并回滚。正式执行须另行授权。
 - [cleanup-openalex-top-concepts.mjs](cleanup-openalex-top-concepts.mjs)：构建 server 后对绝对路径的离线当前 schema 库清理旧 OpenAlex 顶层大类，单事务重排观测 ordinal、按篇重投影并同步 Library FTS；可重复运行，无 schema 变更。正式执行须先停服和完整备份，先在独立副本演练；全量检索索引由既有增量刷新追赶，不在此脚本重建。
+- [recover-suzuki-citation-checkpoint.mjs](recover-suzuki-citation-checkpoint.mjs) 在停写且 WAL 已清空的 catalog 核对并恢复 `processing-2b51707b3af941d8f870ac66dcef06f6` 的引用检查点，默认只读试算，`--apply` 分段写入后复核回放。
 
 ## 放置边界
 
