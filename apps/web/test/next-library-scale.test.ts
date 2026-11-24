@@ -74,55 +74,39 @@ async function rewrite(
   );
 }
 
-it("shows the band only over the collected papers, counts the collected in the sidebar and searches the whole library from it", async () => {
+it("tops the library with one search box and no band, counts the collected in the sidebar and searches the whole library from it", async () => {
   const w = await nextWorkspace({ setup: withDiscovered });
   try {
     const page = w.page;
     await page
       .getByRole("heading", { level: 1, name: "收进来的文献" })
       .waitFor();
-    const band = page.getByRole("region", { name: "整个文献库" });
-    const totals = band.locator(".library-band-totals");
-    await totals.waitFor();
-    const [, all, collected, discovered] =
-      /^全库 (\d+) 篇：收进来的 (\d+) 篇，只被发现的 (\d+) 篇（来自引用扩展与主题搜索）$/u.exec(
-        (await totals.textContent()) ?? "",
-      )!;
-    expect(Number(collected) + Number(discovered)).toBe(Number(all));
-    expect(Number(discovered)).toBeGreaterThanOrEqual(2);
-    // The sidebar counts the collected papers, not the whole library.
-    await expect.poll(() => sidebarCount(page).textContent()).toBe(collected);
-    // The page's own total is the collected one, once.
+    // No band and no whole-library totals over the list (page specs “搜索框”).
+    expect(await page.getByRole("region", { name: "整个文献库" }).count()).toBe(
+      0,
+    );
+    expect(await page.getByText(/^全库 \d+ 篇/u).count()).toBe(0);
+    // The sidebar counts the collected papers, and the page's own total is
+    // the same, once.
+    const collected = await sidebarCount(page).textContent();
+    await expect
+      .poll(() => page.locator(".ui-page-header .ui-page-count").textContent())
+      .toBe(`共 ${collected} 篇`);
+    // One search box, at the top of the page, above the title.
+    const box = page.getByRole("searchbox", { name: "搜索文献" });
     expect(
-      await page.locator(".ui-page-header .ui-page-count").textContent(),
-    ).toBe(`共 ${collected} 篇`);
-    // The working sets with something in them; the folder is one.
-    expect(
-      await band
-        .getByRole("button", { name: "文件夹 · 1", exact: true })
-        .count(),
+      await page.locator(".library-controls").getByRole("searchbox").count(),
     ).toBe(1);
-    // The collected papers are searched from the band only.
-    expect(
-      await page.locator(".library-toolbar").getByRole("searchbox").count(),
-    ).toBe(0);
-    expect(
-      await page
-        .locator(".library-band")
-        .getByRole("searchbox", { name: "搜索整个文献库" })
-        .count(),
-    ).toBe(1);
+    expect((await box.boundingBox())!.y).toBeLessThan(
+      (await page.getByRole("heading", { level: 1 }).boundingBox())!.y,
+    );
 
-    // Enter searches the whole library: no band, the scope and relevance.
-    const box = band.getByRole("searchbox", { name: "搜索整个文献库" });
+    // Enter searches the whole library: the scope and relevance.
     await box.fill("Discovered sulfide");
     await box.press("Enter");
     await page
       .getByRole("heading", { level: 1, name: "搜索“Discovered sulfide”" })
       .waitFor();
-    expect(await page.getByRole("region", { name: "整个文献库" }).count()).toBe(
-      0,
-    );
     expect(sort(page)).toBeNull();
     expect(
       await page
@@ -152,9 +136,6 @@ it("shows the band only over the collected papers, counts the collected in the s
       .first()
       .click();
     await page.getByRole("heading", { level: 1, name: "样例文件夹" }).waitFor();
-    expect(await page.getByRole("region", { name: "整个文献库" }).count()).toBe(
-      0,
-    );
     const inFolder = page.getByRole("searchbox", {
       name: "在「样例文件夹」里搜索",
     });

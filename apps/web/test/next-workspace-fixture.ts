@@ -188,15 +188,32 @@ export async function openMoreConditions(page: Page) {
   if ((await more.getAttribute("aria-expanded")) !== "true") await more.click();
 }
 /**
- * Searches as a person does (page specs “文献库”): from the band over the
- * collected papers, or in the search page's own box; Enter opens the results.
+ * Selects every loaded row (page specs “勾选框”): in the list “全选已加载” joins
+ * once a selection has begun, so the first row is ticked first.
+ */
+export async function selectAllLoaded(page: Page) {
+  const all = page.getByRole("checkbox", { name: "全选已加载", exact: true });
+  if (!(await all.count())) {
+    const first = page.locator(".paper-row").first().getByRole("checkbox");
+    await first.focus();
+    await first.press("Space");
+    await all.waitFor();
+  }
+  if (!(await all.isChecked())) {
+    await all.focus();
+    await all.press("Space");
+  }
+}
+/**
+ * Searches as a person does (page specs “搜索框”): from the box that tops the
+ * library, or the search page's own; Enter opens the results.
  */
 export async function searchLibrary(
   page: Pick<Page, "getByRole">,
   words: string,
 ) {
   const box = page
-    .getByRole("searchbox", { name: "搜索整个文献库", exact: true })
+    .getByRole("searchbox", { name: "搜索文献", exact: true })
     .first();
   await box.fill(words);
   await box.press("Enter");

@@ -1,4 +1,7 @@
-import { showAllLibraryStatuses } from "./next-workspace-fixture.js";
+import {
+  selectAllLoaded,
+  showAllLibraryStatuses,
+} from "./next-workspace-fixture.js";
 import {
   workbenchTestAccess,
   loginWorkbenchPage,
@@ -128,11 +131,7 @@ describe("durable task workbench", () => {
           .getByRole("button", { name: /文献库/ })
           .click();
         await showAllLibraryStatuses(page);
-        const selectAll = page.getByRole("checkbox", {
-          name: "全选已加载",
-          exact: true,
-        });
-        if (!(await selectAll.isChecked())) await selectAll.press("Space");
+        await selectAllLoaded(page);
         await page
           .getByRole("region", { name: "文献选择" })
           .getByRole("button", { name: /^获取 PDF \d+$/ })

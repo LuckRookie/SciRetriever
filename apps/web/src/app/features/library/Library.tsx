@@ -87,7 +87,6 @@ import {
 import { useIntakeBatch } from "../../data/intake-batches.js";
 import { AcquireDialog, type AcquireScope } from "./AcquireDialog.js";
 import { ScopeTerms } from "./ScopeTerms.js";
-import { LibraryBand } from "./LibraryBand.js";
 import { useShell } from "../../shell/context.js";
 import { archiveQuery, useArchiveAction, rows } from "../../data/archive.js";
 import { record } from "../../data/wire.js";
@@ -156,6 +155,37 @@ interface ScrollPosition {
   readonly margin: number;
 }
 const scrollPositions = new WeakMap<ApiClient, Map<string, ScrollPosition>>();
+/** The row the right column showed in each view, found again on coming back from a paper. */
+const currentRows = new WeakMap<ApiClient, Map<string, string>>();
+/** The right column (page specs “右栏”): open or put away, remembered in this browser. */
+const PREVIEW_KEY = "sciretriever:library:preview:v1";
+/** Wider than this the right column stands beside the list; narrower, the preview is a layer. */
+const WIDE = "(min-width: 1101px)";
+function useWide() {
+  const [wide, setWide] = useState(() => window.matchMedia(WIDE).matches);
+  useEffect(() => {
+    const media = window.matchMedia(WIDE);
+    const change = () => setWide(media.matches);
+    change();
+    media.addEventListener("change", change);
+    return () => media.removeEventListener("change", change);
+  }, []);
+  return wide;
+}
+/** Searching from the library view covers the whole library (page specs “搜索框”). */
+function searchWholeLibrary(text: string) {
+  const words = text.trim();
+  if (!words) return;
+  navigate(
+    {
+      view: "lib",
+      literature: null,
+      query: JSON.stringify({ ...emptyQuery(), text: words }),
+      sort: null,
+    },
+    { clearSource: true },
+  );
+}
 const rowMeasurements = new WeakMap<ApiClient, Map<string, VirtualItem[]>>();
 /** The draft-difference filter in words (page specs “界面用词”). */
 const DIFFERS_LABEL = "全文和 PDF 自带的文字不一样";
@@ -214,6 +244,8 @@ export default function Library() {
   const scrollKey = `${scopeKey}:${display}:${windowCursor ?? ""}`;
   if (!scrollPositions.has(api)) scrollPositions.set(api, new Map());
   if (!rowMeasurements.has(api)) rowMeasurements.set(api, new Map());
+  if (!currentRows.has(api)) currentRows.set(api, new Map());
+  const currents = currentRows.get(api)!;
   const positions = scrollPositions.get(api)!;
   const measurements = rowMeasurements.get(api)!;
   const batchId =
@@ -405,7 +437,25 @@ export default function Library() {
       shell.notify(errorMessage(error));
     }
   };
-  const [peek, setPeek] = useState<string | null>(null);
+  // The right column's paper. Wide, the column stands beside the list and
+  // always shows the current row; narrow, a preview opens over it on request.
+  const [peek, setPeekState] = useState<string | null>(null);
+  const wide = useWide();
+  const [previewOpen, setPreviewOpen] = useState(
+    () => preferences.read(PREVIEW_KEY) !== "closed",
+  );
+  const docked = wide && previewOpen;
+  const togglePreview = (open: boolean) => {
+    setPreviewOpen(open);
+    preferences.write(PREVIEW_KEY, open ? "open" : "closed");
+  };
+  const setPeek = useCallback(
+    (id: string | null) => {
+      setPeekState(id);
+      if (id) currents.set(scopeKey, id);
+    },
+    [currents, scopeKey],
+  );
   const [operation, setOperation] = useState<{
     ids: string[];
     kind: string;
@@ -454,6 +504,19 @@ export default function Library() {
     ],
     [next.data],
   );
+  // What the right column shows: the row chosen here, else the one left for
+  // the reader, else the first; never a paper that is not among the rows.
+  const shownPeek = useMemo(() => {
+    if (!docked) return peek;
+    const has = (id: string | null | undefined) =>
+      !!id && items.some((item) => item.literature.literature_id === id);
+    const remembered = currents.get(scopeKey);
+    return has(peek)
+      ? peek
+      : has(remembered)
+        ? remembered!
+        : (items[0]?.literature.literature_id ?? null);
+  }, [docked, peek, items, currents, scopeKey]);
   const firstPage = next.data?.pages[0];
   const total = firstPage?.total ?? 0,
     truncated = firstPage?.truncated ?? false;
@@ -1247,6 +1310,15 @@ export default function Library() {
       {mutable && total > 0 ? (
         <Menu label="批量操作" indicator variant="text" items={batchItems} />
       ) : null}
+      {wide && !previewOpen ? (
+        <IconButton
+          className="library-preview-toggle"
+          variant="text"
+          aria-label="显示右栏"
+          icon={<Icon name="panel" />}
+          onPress={() => togglePreview(true)}
+        />
+      ) : null}
     </>
   );
   // The table's column heads stick under the toolbar, whatever its height.
@@ -1297,7 +1369,7 @@ export default function Library() {
       ? `在「${pageName}」里搜索`
       : route.query.collection_scope === "collected"
         ? "在收进来的文献里搜索"
-        : "搜索整个文献库";
+        : "搜索文献";
   /** Totals at the title, once (page specs “文献库”, “超过一万篇”). */
   const headerCount = (() => {
     // Nothing in a window is said below the list, not as “0 篇”.
@@ -1391,18 +1463,41 @@ export default function Library() {
   return (
     <section
       className="library-page"
-      data-preview={peek !== null || undefined}
+      data-preview={shownPeek !== null || undefined}
+      data-preview-docked={docked || undefined}
       data-display={display}
     >
-      {/* Only over the collected papers (page specs “全库带”). */}
-      {view === "collected" ? (
-        <LibraryBand counts={libraryTotals.data} />
-      ) : null}
-      <PageHeader
-        title={view === "search" ? `搜索“${route.query.text}”` : pageName}
-        count={headerCount}
-      />
       <div className="library-controls" ref={controls}>
+        {/* The search box tops every view: from the library it covers the
+            whole library, from another view that view (page specs “搜索框”). */}
+        <div className="library-toolbar">
+          <SearchField
+            label={view === "collected" ? "搜索文献" : searchLabel}
+            value={text}
+            onChange={setText}
+            onSubmit={(value) =>
+              view === "collected"
+                ? searchWholeLibrary(value)
+                : updateQuery({ ...route.query, text: value.trim() || null })
+            }
+            placeholder={view === "collected" ? "搜索文献" : searchLabel}
+          />
+        </div>
+        <PageHeader
+          title={view === "search" ? `搜索“${route.query.text}”` : pageName}
+          count={headerCount}
+          action={
+            <>
+              <div className="library-toolbar-actions">{toolbarActions}</div>
+              <Button
+                className="library-more"
+                onPress={() => setMobileTools(true)}
+              >
+                更多操作
+              </Button>
+            </>
+          }
+        />
         {view === "search" ? (
           <SearchScope
             query={route.query}
@@ -1443,25 +1538,6 @@ export default function Library() {
             onChange={updateQuery}
           />
         ) : null}
-        <div className="library-toolbar">
-          {/* The collected papers are searched from the band; the other
-              views search in themselves (page specs “工具条”). */}
-          {view !== "collected" ? (
-            <SearchField
-              label={searchLabel}
-              value={text}
-              onChange={setText}
-              onSubmit={(value) =>
-                updateQuery({ ...route.query, text: value.trim() || null })
-              }
-              placeholder={searchLabel}
-            />
-          ) : null}
-          <div className="library-toolbar-actions">{toolbarActions}</div>
-          <Button className="library-more" onPress={() => setMobileTools(true)}>
-            更多操作
-          </Button>
-        </div>
         {(next.data?.pages[0]?.backfillPending ?? 0) > 0 ? (
           <p role="status" className="library-notice">
             此标签还有 {next.data!.pages[0]!.backfillPending} 篇待回溯。
@@ -1546,6 +1622,19 @@ export default function Library() {
               </span>
             ) : null}
           </div>
+          {/* “全选已加载” joins this line once a selection has begun, so the
+              rows below never move (page specs “勾选框”). */}
+          {(display === "list" &&
+            items.length > 0 &&
+            shell.selected.size > 0) ||
+          selectWhole ? (
+            <div className="library-select-all">
+              {display === "list" && items.length > 0 && shell.selected.size > 0
+                ? selectAll(true)
+                : null}
+              {selectWhole}
+            </div>
+          ) : null}
           {folder ? (
             <Switch
               isSelected={!folder.include_descendants}
@@ -1611,12 +1700,6 @@ export default function Library() {
             </AnimatedPanel>
           )}
         </Presence>
-        {(display === "list" && items.length > 0) || selectWhole ? (
-          <div className="library-list-heading">
-            {display === "list" && items.length > 0 ? selectAll(true) : null}
-            {selectWhole}
-          </div>
-        ) : null}
         {next.isPending ? (
           <p role="status" className="library-loading">
             正在读取文献…
@@ -1752,9 +1835,12 @@ export default function Library() {
           onOpen={(...args) => {
             if (text.trim() !== (route.query.text ?? ""))
               updateQuery({ ...route.query, text: text.trim() || null });
+            // Coming back, the right column shows the paper that was read.
+            currents.set(scopeKey, args[0]);
             shell.openPaper(...args);
           }}
-          peek={peek}
+          peek={shownPeek}
+          rowPreview={docked}
           onPreview={setPeek}
           onFile={onFile}
           onRowAction={onRowAction}
@@ -1975,12 +2061,19 @@ export default function Library() {
       >
         <div className="library-mobile-tools">{toolbarActions}</div>
       </Drawer>
-      {peek !== null ? (
+      {shownPeek !== null ? (
         <LibraryPreview
-          id={peek}
+          id={shownPeek}
+          docked={docked}
           mutable={mutable}
           onClose={() => {
-            const id = peek;
+            // Docked, the column is put away; the row it showed is
+            // remembered for when it comes back.
+            if (docked) {
+              setPeekState(null);
+              return togglePreview(false);
+            }
+            const id = shownPeek;
             setPeek(null);
             // Focus goes back to the row the preview showed.
             requestAnimationFrame(() =>
@@ -1992,7 +2085,8 @@ export default function Library() {
             );
           }}
           onOpen={(id, title) => {
-            setPeek(null);
+            if (!docked) setPeek(null);
+            currents.set(scopeKey, id);
             shell.openPaper(id, undefined, undefined, title);
           }}
           onAcquire={(id, title) =>
@@ -2099,12 +2193,15 @@ function rowMenuItems(
  */
 function LibraryPreview({
   id,
+  docked,
   mutable,
   onClose,
   onOpen,
   onAcquire,
 }: {
   id: string;
+  /** Standing beside the list (wide) rather than opened over it. */
+  docked: boolean;
   mutable: boolean;
   onClose: () => void;
   onOpen: (id: string, title: string) => void;
@@ -2120,6 +2217,9 @@ function LibraryPreview({
   const close = useRef(onClose);
   close.current = onClose;
   useEffect(() => {
+    // Beside the list it is part of the page: it takes no focus and Esc
+    // leaves it where it is.
+    if (docked) return;
     panel.current?.focus();
     const key = (event: KeyboardEvent) => {
       if (
@@ -2134,7 +2234,7 @@ function LibraryPreview({
     };
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
-  }, []);
+  }, [docked]);
   const item = preview.data;
   const title = item ? paperTitle(item) : "";
   return (
@@ -2142,16 +2242,17 @@ function LibraryPreview({
       ref={panel}
       tabIndex={-1}
       className="library-preview"
+      data-docked={docked || undefined}
       role="region"
       aria-label="文献预览"
       aria-busy={preview.isFetching}
     >
       <div className="library-preview-header">
-        <span>↑ ↓ 上一篇、下一篇</span>
+        {docked ? <span /> : <span>↑ ↓ 上一篇、下一篇</span>}
         <IconButton
-          aria-label="关闭预览"
+          aria-label={docked ? "收起右栏" : "关闭预览"}
           variant="text"
-          icon={<Icon name="close" />}
+          icon={<Icon name={docked ? "panel" : "close"} />}
           onPress={onClose}
         />
       </div>
@@ -2191,10 +2292,6 @@ function LibraryPreview({
       ) : null}
     </aside>
   );
-}
-function rowTerms(item: LiteratureSearchItem) {
-  const m = item.literature.metadata;
-  return (m.keywords.length ? m.keywords : m.subject_terms).slice(0, ROW_TAGS);
 }
 /** Keys a list row or the preview leaves to the field or menu that has them. */
 const KEEPS_KEYS =
@@ -2303,6 +2400,7 @@ const LibraryList = memo(function LibraryList({
   selectingRange,
   onOpen,
   peek,
+  rowPreview,
   onPreview,
   onFile,
   onRowAction,
@@ -2343,6 +2441,8 @@ const LibraryList = memo(function LibraryList({
   selectingRange: () => boolean;
   onOpen: ReturnType<typeof useShell>["openPaper"];
   peek: string | null;
+  /** A press on a row makes it the current one, shown in the right column. */
+  rowPreview: boolean;
   onPreview: (id: string) => void;
   onFile: (id: string, file: File) => void;
   onRowAction: (id: string, title: string, kind: RowAction) => void;
@@ -2568,6 +2668,7 @@ const LibraryList = memo(function LibraryList({
             onCollect={onCollect}
             selected={selected.has(items[row.index]!.literature.literature_id)}
             previewed={peek === items[row.index]!.literature.literature_id}
+            rowPreview={rowPreview}
             mutable={mutable}
             measure={virtual.measureElement}
             onToggle={onToggle}
@@ -2593,7 +2694,7 @@ const LibraryList = memo(function LibraryList({
     </div>
   );
 });
-const estimateRowSize = () => 78;
+const estimateRowSize = () => 62;
 /** Table rows are one line, 32 px (page specs “文献库”). */
 const estimateTableRowSize = () => 32;
 type CheckPointerDown = (
@@ -2602,8 +2703,6 @@ type CheckPointerDown = (
 ) => void;
 type RowAction = "run" | "folder" | "acquire" | "archive" | "export" | "cite";
 type RowMenu = (id: string, x: number, y: number, keyboard: boolean) => void;
-/** A row shows at most three tags; the rest collapse into “+N”. */
-const ROW_TAGS = 3;
 /** Rows list three authors at most, the way a reference list does. */
 function rowAuthors(item: LiteratureSearchItem) {
   const authors = item.literature.metadata.authors;
@@ -2631,6 +2730,7 @@ const LibraryRow = memo(function LibraryRow({
   onCollect,
   selected,
   previewed,
+  rowPreview,
   mutable,
   measure,
   onToggle,
@@ -2658,6 +2758,7 @@ const LibraryRow = memo(function LibraryRow({
   onCollect: ((ids: readonly string[]) => Promise<unknown>) | undefined;
   selected: boolean;
   previewed: boolean;
+  rowPreview: boolean;
   mutable: boolean;
   measure: (element: HTMLElement | null) => void;
   onToggle: (id: string) => void;
@@ -2780,6 +2881,18 @@ const LibraryRow = memo(function LibraryRow({
     onPointerDown: (event: ReactPointerEvent<HTMLElement>) =>
       onRowPointerDown(row.index, event),
     onClickCapture: onCheckClickCapture,
+    // Beside the right column, a press anywhere but the title or a control
+    // makes this the current row (page specs “当前行”).
+    onClick: (event: ReactMouseEvent<HTMLElement>) => {
+      if (
+        !rowPreview ||
+        (event.target as Element).closest?.(
+          "button, a, input, label, .paper-check, .paper-tools",
+        )
+      )
+        return;
+      onPreview(id);
+    },
     onDragStart: (event: ReactDragEvent<HTMLElement>) => {
       // A press on the checkbox column selects a run; it never drags the
       // row. Anywhere else, the title included, picks the row up.
@@ -2859,55 +2972,17 @@ const LibraryRow = memo(function LibraryRow({
       ) : null}
     </span>
   );
-  const rowTermsLine = item.tags?.length ? (
-    <span className="paper-tags">
-      {item.tags.slice(0, ROW_TAGS).map((t) => (
-        <span
-          key={t.tag_id}
-          className={t.rank === 1 ? "paper-tag primary" : "paper-tag"}
-        >
-          {t.name}
-        </span>
-      ))}
-      {item.tags.length > ROW_TAGS ? (
-        <span
-          className="paper-tag-more"
-          title={item.tags
-            .slice(ROW_TAGS)
-            .map((t) => t.name)
-            .join("、")}
-        >
-          +{item.tags.length - ROW_TAGS}
-        </span>
-      ) : null}
-    </span>
-  ) : rowTerms(item).length ? (
-    // Without tags, the paper's own keywords (or the source's subjects) say what it is about.
-    <span className="paper-terms">{rowTerms(item).join(" · ")}</span>
-  ) : null;
   return (
     <article {...shared} data-unranked-start={unrankedStart || undefined}>
       {unrankedStart ? (
         <p className="paper-unranked">以下未按相关度排序</p>
       ) : null}
       {check}
-      {origin ? (
-        // The origin is a button of its own, so it stays outside the
-        // button that opens the paper.
-        <div className="paper-main">
-          {open(paperTitleText)}
-          {citation}
-          {rowTermsLine}
-        </div>
-      ) : (
-        open(
-          <>
-            {paperTitleText}
-            {citation}
-            {rowTermsLine}
-          </>,
-        )
-      )}
+      {/* The title opens the paper; the rest of the row makes it current. */}
+      <div className="paper-main">
+        {open(paperTitleText)}
+        {citation}
+      </div>
       {/* One column on the right: the status, then the row's actions,
           side by side (page specs “搜索结果”). */}
       <span className="paper-side">

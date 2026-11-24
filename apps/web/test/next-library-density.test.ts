@@ -86,7 +86,8 @@ it("keeps the toolbar on one line and leaves the search words out of the filter 
   const w = await nextWorkspace();
   try {
     const page = w.page;
-    const toolbar = page.locator(".library-toolbar");
+    // The tools sit at the right of the title's line (page specs “工具条”).
+    const toolbar = page.locator(".library-toolbar-actions");
     const filter = toolbar.getByRole("button", { name: /^筛选/u });
     expect(await filter.textContent()).toBe("筛选");
     // “排序：最近收进来”, “显示：列表 / 表格”, 批量操作.
@@ -110,24 +111,22 @@ it("keeps the toolbar on one line and leaves the search words out of the filter 
     expect(await colour(batch)).toBe(await colour(filter));
     const tops = await toolbar
       .locator(
-        ".ui-search, .library-filter-toggle, .ui-select, .library-display, .library-toolbar-actions > .ui-button:last-child",
+        ".library-filter-toggle, .ui-select, .library-display, .ui-button:last-child",
       )
       .evaluateAll((items) =>
         items.map((item) => Math.round(item.getBoundingClientRect().top)),
       );
     expect(new Set(tops).size).toBe(1);
     // Searching: the words stay in the box, no chip, no count on 筛选.
-    // The collected papers are searched from the band (page specs “全库带”).
+    // The library is searched from the box at its top (page specs “搜索框”).
     const count = page.locator(".ui-page-header .ui-page-count");
     await expect.poll(() => count.textContent()).toBe("共 2 篇");
-    const band = page.getByRole("searchbox", { name: "搜索整个文献库" });
+    const band = page.getByRole("searchbox", { name: "搜索文献" });
     await band.fill("Unparsed");
     await band.press("Enter");
     await expect.poll(() => count.textContent()).toBe("1 篇符合");
     expect(
-      await page
-        .getByRole("searchbox", { name: "搜索整个文献库" })
-        .inputValue(),
+      await page.getByRole("searchbox", { name: "搜索文献" }).inputValue(),
     ).toBe("Unparsed");
     expect(query(page)).toMatchObject({ text: "Unparsed" });
     expect(await page.locator(".library-applied").count()).toBe(0);
@@ -162,9 +161,11 @@ it("opens the conditions at one press: author, journal, years and tag first, the
   const w = await nextWorkspace();
   try {
     const page = w.page;
-    const filter = page.locator(".library-toolbar").getByRole("button", {
-      name: /^筛选/u,
-    });
+    const filter = page
+      .locator(".library-toolbar-actions")
+      .getByRole("button", {
+        name: /^筛选/u,
+      });
     expect(await filter.getAttribute("aria-expanded")).toBe("false");
     await filter.click();
     // No menu in between: the panel itself.
@@ -386,16 +387,16 @@ it("shows a table display that selects, sorts by its heads and is remembered in 
   }
 }, 90000);
 
-it("previews a paper beside the list without a veil, steps with ↑ ↓ and shows its bibliography (plan 25 block 29)", async () => {
+it("shows the current row in the right column without a veil, steps with ↑ ↓, shows its bibliography and folds away (page specs “右栏”)", async () => {
   const w = await nextWorkspace();
   try {
     const page = w.page;
-    await page
-      .getByRole("button", { name: "预览", exact: true })
-      .first()
-      .click();
+    // Wide, the column is there from the start, on the first row.
     const preview = page.getByRole("region", { name: "文献预览", exact: true });
     await preview.waitFor();
+    expect(
+      await page.getByRole("button", { name: "预览", exact: true }).count(),
+    ).toBe(0);
     // No veil, no modal: the rows stay pressable.
     expect(await page.getByRole("dialog").count()).toBe(0);
     expect(await page.locator(".ui-overlay, .ui-drawer").count()).toBe(0);
@@ -424,10 +425,10 @@ it("previews a paper beside the list without a veil, steps with ↑ ↓ and show
     ).toBe(second);
     await page.keyboard.press("ArrowUp");
     await preview.getByRole("heading", { name: first!, exact: true }).waitFor();
-    // Another row's preview is one press away.
+    // A press on a row, off its title, makes it the current one.
     const other = page.getByRole("article", { name: second!, exact: true });
-    await other.hover();
-    await other.getByRole("button", { name: "预览", exact: true }).click();
+    await other.locator(".paper-citation").click();
+    expect(new URL(page.url()).searchParams.has("literature")).toBe(false);
     await preview
       .getByRole("heading", { name: second!, exact: true })
       .waitFor();
@@ -447,15 +448,37 @@ it("previews a paper beside the list without a veil, steps with ↑ ↓ and show
         .count(),
     ).toBe(unparsed ? 1 : 0);
     expect(text).toContain(unparsed ? "只有书目" : "有全文");
-    // Esc closes it and focus returns to the row.
+    // Esc leaves it; its own button folds it away, the list takes the width,
+    // and the toolbar's last button brings it back on the same row.
     await page.keyboard.press("Escape");
+    expect(await preview.count()).toBe(1);
+    const before = (await page.locator(".library-scroll").boundingBox())!.width;
+    await preview
+      .getByRole("button", { name: "收起右栏", exact: true })
+      .click();
     await preview.waitFor({ state: "detached" });
+    expect(
+      (await page.locator(".library-scroll").boundingBox())!.width,
+    ).toBeGreaterThan(before);
+    await page.reload();
+    await page.locator(".paper-row").first().waitFor();
+    expect(await preview.count()).toBe(0);
+    await page.getByRole("button", { name: "显示右栏", exact: true }).click();
+    await preview.waitFor();
+    // The title opens the paper; back from it, the column shows that paper.
+    await other.locator(".paper-open").click();
     await expect
-      .poll(() =>
-        page.evaluate(() => document.activeElement?.getAttribute("aria-label")),
-      )
-      .toBe(second);
-    expect(new URL(page.url()).searchParams.has("literature")).toBe(false);
+      .poll(() => new URL(page.url()).searchParams.has("literature"))
+      .toBe(true);
+    await page.locator(".workspace-tab").getByRole("button").click();
+    await preview
+      .getByRole("heading", { name: second!, exact: true })
+      .waitFor();
+    expect(
+      await page
+        .locator(".paper-row[data-previewed]")
+        .getAttribute("aria-label"),
+    ).toBe(second);
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();

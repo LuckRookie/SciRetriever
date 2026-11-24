@@ -15,7 +15,7 @@ import {
 } from "@sciretriever/contracts";
 import { expect, it } from "vitest";
 import type { Page } from "playwright";
-import { nextWorkspace } from "./next-workspace-fixture.js";
+import { nextWorkspace, selectAllLoaded } from "./next-workspace-fixture.js";
 import { missingId } from "./processor-workspace-fixture.js";
 import { draftPdf, formDraft } from "./draft-fixture.js";
 import { workbenchPdf } from "../../server/src/workbench/synthetic-fixture.js";
@@ -53,23 +53,16 @@ it("opens keyboard search and the task page without starting work, and preserves
     ).toMatchObject({ statuses: ["UNREVIEWED"], needs_manual_pdf: false });
     await select(page, "排序", "标题：Z–A");
     expect(new URL(page.url()).searchParams.get("sort")).toBe("title-desc");
-    await page.getByRole("button", { name: "预览", exact: true }).click();
-    // The preview lies beside the list, without a veil (page specs “文献库”).
+    // The right column shows the current row, without a veil (page specs “右栏”).
     const preview = page.getByRole("region", { name: "文献预览", exact: true });
     await preview
       .getByRole("heading", { name: "Unparsed source", exact: true })
       .waitFor();
-    expect(await page.getByRole("dialog").count()).toBe(0);
+    // The sort's list has closed; nothing else lies over the page.
+    await expect.poll(() => page.getByRole("dialog").count()).toBe(0);
     expect(new URL(page.url()).searchParams.has("literature")).toBe(false);
     expect(w.env.modelCalls).toBe(0);
-    await page.keyboard.press("Escape");
-    await preview.waitFor({ state: "detached" });
-    const checked = page.getByRole("checkbox", {
-      name: "全选已加载",
-      exact: true,
-    });
-    await checked.focus();
-    await page.keyboard.press("Space");
+    await selectAllLoaded(page);
     expect(
       await page.getByRole("region", { name: "文献选择" }).textContent(),
     ).toContain("已选 1 篇");
@@ -269,7 +262,10 @@ it("keeps saved filters in the catalog: the menu applies, saves and deletes thro
       expect(exported.filters.map((f) => f.name)).toEqual(
         (await list()).map((f) => f.name),
       );
-      expect(sent).toEqual(["POST /api/v1/query/filters"]);
+      // The shell's own five-second look at the tasks is not the export's.
+      expect(sent.filter((request) => request !== "GET /api/tasks")).toEqual([
+        "POST /api/v1/query/filters",
+      ]);
       expect(JSON.stringify(await list())).toBe(saved);
       expect(committed()).toBe(version);
     } finally {

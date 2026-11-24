@@ -2,7 +2,7 @@ import { parseLiterature } from "@sciretriever/contracts";
 import { expect, it } from "vitest";
 import type { Page } from "playwright";
 import { FIXTURE_LITERATURE } from "../../server/src/workbench/synthetic-fixture.js";
-import { nextWorkspace } from "./next-workspace-fixture.js";
+import { nextWorkspace, selectAllLoaded } from "./next-workspace-fixture.js";
 import { missingId } from "./processor-workspace-fixture.js";
 
 const salt = "00000000-0000-0000-0000-000000005201";
@@ -223,10 +223,7 @@ it("hands the library's selection or one paper to citation expansion as seeds, k
     await page.goBack();
     await expect.poll(() => page.locator(".paper-row").count()).toBe(9);
     // The whole loaded list: five shown, the rest behind “另外 n 篇”.
-    await page
-      .getByRole("checkbox", { name: "全选已加载", exact: true })
-      .focus();
-    await page.keyboard.press("Space");
+    await selectAllLoaded(page);
     await bar.getByText("已选 9 篇").waitFor();
     await bar.getByRole("button", { name: "更多", exact: true }).click();
     await page

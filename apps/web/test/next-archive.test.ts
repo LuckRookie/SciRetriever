@@ -13,6 +13,7 @@ import {
   nextWorkspace,
   openProcessingEntry,
   runFromSnapshot,
+  selectAllLoaded,
 } from "./next-workspace-fixture.js";
 import { missingId } from "./processor-workspace-fixture.js";
 import { workbenchPdf } from "../../server/src/workbench/synthetic-fixture.js";
@@ -90,8 +91,7 @@ it("archives a paper straight from its PDF, then exposes ready state and metadat
   try {
     const p = w.page;
     await libraryStatus(p, "有 PDF");
-    await p.getByRole("checkbox", { name: "全选已加载", exact: true }).focus();
-    await p.keyboard.press("Space");
+    await selectAllLoaded(p);
     const initial = w.env.parseCalls;
     // There is no separate parsing button; archiving parses first.
     expect(
@@ -706,7 +706,10 @@ it("shows all states and styled ranked tags on a cold library entry", async () =
     const p = w.page;
     // No archive, vocabulary or reader route has been loaded in this browser.
     await expect.poll(() => p.locator(".paper-row").count()).toBe(2);
-    await p.getByText("Unparsed source", { exact: true }).waitFor();
+    await p
+      .locator(".paper-row")
+      .getByText("Unparsed source", { exact: true })
+      .waitFor();
     // “有 PDF” no longer carries “待建档” (page specs “界面用词”); the status
     // badge itself shows the page styles arrived on a cold entry.
     const status = p.locator(".paper-status", { hasText: "有 PDF" }).first();
@@ -715,7 +718,14 @@ it("shows all states and styled ranked tags on a cold library entry", async () =
     expect(await status.evaluate((el) => getComputedStyle(el).display)).toMatch(
       /flex$/u,
     );
-    const tags = p.locator(".paper-tags").first();
+    // The tags are in the right column, with the current row (page specs
+    // “文献行”, “右栏”): ranked, the first one told apart.
+    await libraryStatus(p, "有全文");
+    await expect.poll(() => p.locator(".paper-row").count()).toBe(1);
+    expect(await p.locator(".paper-row .paper-tag").count()).toBe(0);
+    const tags = p
+      .getByRole("region", { name: "文献预览", exact: true })
+      .locator(".bibliography-tags");
     await tags.waitFor();
     expect(await tags.evaluate((el) => getComputedStyle(el).display)).toBe(
       "flex",
@@ -731,8 +741,6 @@ it("shows all states and styled ranked tags on a cold library entry", async () =
     expect(
       await primary.evaluate((el) => getComputedStyle(el).backgroundColor),
     ).not.toBe("rgba(0, 0, 0, 0)");
-    await libraryStatus(p, "有全文");
-    await expect.poll(() => p.locator(".paper-row").count()).toBe(1);
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();

@@ -538,20 +538,40 @@
     display: flex;
     flex-direction: column;
     width: 100%;
-    max-width: 1200px;
     min-height: 100%;
-    margin-inline: auto;
-    padding: var(--space-6) var(--space-7) var(--space-5);
+    padding: 0 var(--space-6) var(--space-5);
+    /* The right column takes about a quarter of a wide window. */
+    --library-preview-width: clamp(360px, 28vw, 432px);
   }
-  .library-page > .ui-page-header {
-    margin-bottom: var(--space-3);
-  }
+  /* The search box, the title with its tools, the material classes and the
+     conditions stay at the top; the rows scroll under them. */
   .library-controls {
     position: sticky;
     top: 0;
     z-index: 5;
     background: var(--bg);
-    padding-top: var(--space-3);
+    padding-top: var(--space-4);
+  }
+  /* The title with its count on the left, the tools on the right; where
+     the two no longer fit, the tools take the next line. */
+  .library-controls > .ui-page-header {
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-4);
+    margin: var(--space-4) 0 var(--space-1);
+  }
+  .library-controls > .ui-page-header > .library-toolbar-actions {
+    flex: none;
+    margin-inline-start: auto;
+    white-space: nowrap;
+  }
+  .library-toolbar-actions .ui-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
   .library-toolbar .ui-label {
     position: absolute;
@@ -640,26 +660,22 @@
     gap: var(--space-1);
     padding-block: var(--space-2);
   }
-  .library-list-heading {
+  /* “全选已加载” and “选择全部 N 篇”, at the end of the material classes' line. */
+  .library-select-all {
     display: flex;
     align-items: center;
     gap: var(--space-3);
-    padding: var(--space-2) var(--space-2);
-    border-bottom: 1px solid var(--line);
+    margin-inline-start: auto;
     font-size: var(--text-caption);
     color: var(--fg3);
   }
-  .library-list-heading .ui-choice {
+  .library-select-all .ui-choice {
     min-height: var(--control-small-height);
     font-size: var(--text-caption);
     color: var(--fg3);
   }
   .library-results-region {
     display: block;
-  }
-  /* “选择全部 N 篇” follows the box at the far end. */
-  .library-list-heading > :last-child:not(:first-child) {
-    margin-left: auto;
   }
   .library-scroll {
     position: relative;
@@ -673,9 +689,12 @@
     padding-block: var(--space-7);
     text-align: center;
   }
-  /* The row the preview shows carries a pen line at its start. */
+  /* The current row, the one the right column shows: a pen line at its start. */
   .paper-row[data-previewed] {
     box-shadow: inset 2px 0 0 var(--blue);
+  }
+  .library-page[data-preview-docked] .paper-row[data-previewed]:not(:hover) {
+    background: var(--hover-soft);
   }
   /* The table: one line a paper, 32 px, columns as in the head. */
   .library-table-head,
@@ -768,6 +787,20 @@
     box-shadow: var(--shadow-pop);
     outline: none;
   }
+  /* Under the top bar, whichever form it takes. */
+  .library-preview {
+    top: 48px;
+  }
+  /* Wide: the right column, part of the page — a hairline, no shadow. */
+  .library-preview[data-docked] {
+    width: var(--library-preview-width);
+    background: var(--bg);
+    border-left: 1px solid var(--line);
+    box-shadow: none;
+  }
+  .library-page[data-preview-docked] .paper-preview {
+    display: none;
+  }
   .library-preview-header {
     display: flex;
     align-items: center;
@@ -785,6 +818,21 @@
     .library-page[data-preview] {
       padding-inline-end: calc(560px + var(--space-5));
     }
+    .library-page[data-preview-docked] {
+      padding-inline-end: calc(var(--library-preview-width) + var(--space-5));
+    }
+    /* Beside the right column a row keeps only its menu, so the material
+       mark stands near the row's end. */
+    .library-page[data-preview-docked] .paper-side > .paper-tools {
+      width: auto;
+      min-width: 30px;
+    }
+    .library-page[data-preview-docked] .selection-bar {
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: var(--space-2);
+      max-width: calc(100% - 16px);
+    }
   }
   .virtual-list {
     position: relative;
@@ -796,7 +844,7 @@
     left: 0;
     width: 100%;
     display: grid;
-    grid-template-columns: 26px minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
     column-gap: var(--space-3);
     min-height: 56px;
@@ -839,6 +887,15 @@
     display: flex;
     align-items: center;
     align-self: stretch;
+  }
+  /* In the list the box stands in the page's margin, before the row, so the
+     titles keep the page's left edge (page specs “勾选框”). */
+  .paper-row:not([data-display="table"]) > .paper-check {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -24px;
+    width: 24px;
   }
   .library-range-selecting,
   .library-range-selecting * {
@@ -1008,11 +1065,15 @@
     justify-content: flex-end;
     grid-column: 1/-1;
   }
+  /* Centred in the list's column and as wide as its content: placed from
+     both edges, so it may use the column's whole width before it wraps. */
   .selection-bar {
     position: absolute;
     bottom: 0;
-    left: 50%;
-    transform: translateX(-50%);
+    right: 0;
+    left: 0;
+    width: fit-content;
+    margin-inline: auto;
     display: flex;
     align-items: center;
     gap: var(--space-3);
@@ -1122,7 +1183,12 @@
       height: 100%;
     }
     .library-page {
-      padding: var(--space-5) var(--space-4) var(--space-7);
+      padding: 0 var(--space-4) var(--space-7);
+    }
+    /* No margin wide enough for the box here: it keeps its own column. */
+    .paper-row:not([data-display="table"]) > .paper-check {
+      position: static;
+      width: auto;
     }
     .library-toolbar {
       flex-wrap: nowrap;
@@ -1147,7 +1213,7 @@
     .library-more {
       display: inline-flex;
     }
-    .library-list-heading {
+    .library-select-all {
       flex-wrap: wrap;
     }
     .paper-row {
@@ -1262,42 +1328,6 @@
     color: var(--fg3);
     font-size: var(--text-caption);
     white-space: nowrap;
-  }
-  /* The band over the collected papers: a quiet sunken block that scrolls
-     away with the content (page specs “全库带”). */
-  .library-band {
-    display: grid;
-    gap: var(--space-2);
-    margin-bottom: var(--space-5);
-    padding: var(--space-4);
-    border-radius: var(--radius-md);
-    background: var(--surface-sunken);
-    --field-fill: var(--surface);
-  }
-  .library-band .ui-label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-  .library-band-totals {
-    margin: 0;
-    color: var(--fg2);
-    font-size: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
-  }
-  .library-band-sets {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--space-1) var(--space-2);
-    margin-inline-start: calc(-1 * var(--space-2));
-  }
-  .library-band-sets .ui-button {
-    color: var(--fg2);
-    font-variant-numeric: tabular-nums;
   }
   /* A search's scope, and the relevance cap at the far end. */
   .library-search-scope {

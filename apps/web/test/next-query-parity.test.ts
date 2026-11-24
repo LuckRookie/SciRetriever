@@ -145,8 +145,11 @@ it("reads, searches, follows references and downloads through the query-only pag
     page.on("request", (request) => requests.push(new URL(request.url())));
 
     await page.goto(`${workbench.origin}/`);
+    // The total beside the title: it waits for the library's counts.
     await expect
-      .poll(() => page.locator(".library-page").textContent())
+      .poll(() => page.locator(".library-page").textContent(), {
+        timeout: 20_000,
+      })
       .toContain("篇");
     await page.goto(`${workbench.origin}/?view=ext&tools=delivery`);
     await page.getByLabel("规范 JSON", { exact: true }).fill(

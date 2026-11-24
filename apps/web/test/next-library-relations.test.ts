@@ -195,7 +195,7 @@ it("restores search and detail history and reads more than 25 references with th
       .toBe(false);
     expect(
       await page
-        .getByRole("searchbox", { name: "搜索整个文献库", exact: true })
+        .getByRole("searchbox", { name: "搜索文献", exact: true })
         .inputValue(),
     ).toBe(title);
     await page.goForward();

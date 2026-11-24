@@ -106,7 +106,7 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
     // The total is written once, beside the title (page specs “文献库”).
     const count = p.locator(".ui-page-header .ui-page-count");
     await expect.poll(() => count.textContent()).toBe("共 30,002 篇");
-    expect(await p.locator(".library-list-heading").textContent()).not.toMatch(
+    expect(await p.locator(".library-quick").textContent()).not.toMatch(
       /已显示|共/u,
     );
     // Loaded rows, from the list's measurement attributes.
@@ -293,7 +293,7 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
     expect(
       await p.getByRole("button", { name: /^筛选/ }).first().textContent(),
     ).toBe("筛选");
-    await p.getByRole("searchbox", { name: "搜索整个文献库" }).fill("");
+    await p.getByRole("searchbox", { name: "搜索文献" }).fill("");
     await expect.poll(() => count.textContent()).toBe("共 30,002 篇");
 
     // The table pages and bounds the DOM the same way (page specs “文献库”).
