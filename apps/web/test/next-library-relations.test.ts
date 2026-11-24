@@ -134,7 +134,7 @@ it("restores search and detail history and reads more than 25 references with th
     await page
       .getByRole("article", { name: title, exact: true })
       .locator(".paper-open")
-      .click();
+      .dblclick();
     // The side panel starts closed (spec 1.4).
     await readerPanel(page);
     expect(new URL(page.url()).searchParams.get("literature")).toBe(id);

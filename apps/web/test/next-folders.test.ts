@@ -216,7 +216,7 @@ it("organizes papers into nested folders by dialog and drag, scopes the library,
     await p
       .getByRole("heading", { name: "表面界面 / 碳链", exact: true })
       .waitFor();
-    await rows.first().locator(".paper-open").click();
+    await rows.first().locator(".paper-open").dblclick();
     await readerPanel(p);
     // The reader page's navigation is in its drawer (reading-experience 1.3).
     await readerNavigation(p);

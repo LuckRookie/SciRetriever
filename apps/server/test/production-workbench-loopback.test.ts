@@ -475,7 +475,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         .locator(
           `[data-literature-id="${FIXTURE_LITERATURE.literature_id}"] .paper-open`,
         )
-        .click();
+        .dblclick();
       await expect
         .poll(() => ui.url())
         .toContain(`literature=${FIXTURE_LITERATURE.literature_id}`);
@@ -491,7 +491,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         .locator(
           `[data-literature-id="${SECOND_LITERATURE.literature_id}"] .paper-open`,
         )
-        .click();
+        .dblclick();
       await readerPanel(ui);
       await ui.locator(".reader-information .reader-fields").first().waitFor();
       await (await readerNavigation(ui))

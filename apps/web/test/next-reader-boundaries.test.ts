@@ -328,7 +328,7 @@ it("keeps the latest outline target, text settings and reading position across a
         exact: true,
       })
       .locator(".paper-open")
-      .click();
+      .dblclick();
     await expect
       .poll(() => w.page.locator(".reading-article").textContent(), {
         timeout: 20_000,

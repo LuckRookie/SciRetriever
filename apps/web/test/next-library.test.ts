@@ -164,7 +164,7 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
     // gain an entry meanwhile (“最近读过 · 1”), so the offset is not compared.
     const at = () => row.evaluate((el) => el.getBoundingClientRect().top);
     const before = await at();
-    await row.locator(".paper-open").click();
+    await row.locator(".paper-open").dblclick();
     await p.locator(".reader-workspace").waitFor();
     await p.goBack();
     await list.waitFor();
@@ -378,7 +378,9 @@ it("opens a paper from its row in the view it has: remembered, else full text, P
     await w.page
       .getByRole("article", { name: title, exact: true })
       .locator(".paper-open")
-      .click();
+      .dblclick();
+    // The right column shows the same bibliography; wait for the reader's.
+    await w.page.locator(".reader-workspace").waitFor();
   };
   const view = () => new URL(w.page.url()).searchParams.get("reader");
   try {
@@ -443,7 +445,7 @@ it("opens a PDF without text in the PDF view, and its full text says what is mis
     await w.page
       .getByRole("article", { name: "Unparsed source", exact: true })
       .locator(".paper-open")
-      .click();
+      .dblclick();
     await w.page
       .locator('.reading-pdf-page[data-rendered="true"]')
       .first()

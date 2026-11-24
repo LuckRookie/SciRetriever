@@ -574,7 +574,7 @@ it("keeps a 100-page PDF bounded over ten React reader switches and releases its
         await w.page
           .getByRole("article", { name: title, exact: true })
           .locator(".paper-open")
-          .click()
+          .dblclick()
           .catch(async (cause: unknown) => {
             throw new Error(
               `${String(cause)}\n${w.page.url()}\n${await w.page.locator("body").innerText()}\n${JSON.stringify(await w.page.locator(".library-list,.paper-row").evaluateAll((elements) => elements.map((el) => ({ tag: el.tagName, class: el.className, height: el.clientHeight, scroll: el.scrollTop, rect: el.getBoundingClientRect().toJSON() }))))}`,

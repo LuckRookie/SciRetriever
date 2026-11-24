@@ -98,7 +98,7 @@ it.each(["no-preference", "reduce"] as const)(
         .locator(
           `.paper-row[data-literature-id="${w.env.parseRequest.literature_id}"] .paper-open`,
         )
-        .click();
+        .dblclick();
       // A paper with text opens its full text (spec 6.4); this check reads the PDF.
       await w.page.getByRole("tab", { name: "PDF", exact: true }).click();
       await w.page

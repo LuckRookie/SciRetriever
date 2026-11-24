@@ -445,6 +445,8 @@ export default function Library() {
     () => preferences.read(PREVIEW_KEY) !== "closed",
   );
   const docked = wide && previewOpen;
+  // Without the column, a row's “预览” opens the current row over the list.
+  const [overlay, setOverlay] = useState(false);
   const togglePreview = (open: boolean) => {
     setPreviewOpen(open);
     preferences.write(PREVIEW_KEY, open ? "open" : "closed");
@@ -504,10 +506,10 @@ export default function Library() {
     ],
     [next.data],
   );
-  // What the right column shows: the row chosen here, else the one left for
-  // the reader, else the first; never a paper that is not among the rows.
-  const shownPeek = useMemo(() => {
-    if (!docked) return peek;
+  // The current row: the one chosen here, else the one left for the reader;
+  // beside the right column, else the first. Never a paper that is not
+  // among the rows.
+  const current = useMemo(() => {
     const has = (id: string | null | undefined) =>
       !!id && items.some((item) => item.literature.literature_id === id);
     const remembered = currents.get(scopeKey);
@@ -515,8 +517,13 @@ export default function Library() {
       ? peek
       : has(remembered)
         ? remembered!
-        : (items[0]?.literature.literature_id ?? null);
+        : docked
+          ? (items[0]?.literature.literature_id ?? null)
+          : null;
   }, [docked, peek, items, currents, scopeKey]);
+  // The paper shown beside or over the list: the current row, in the right
+  // column or in the preview a row's “预览” opened.
+  const shownPeek = docked || overlay ? current : null;
   const firstPage = next.data?.pages[0];
   const total = firstPage?.total ?? 0,
     truncated = firstPage?.truncated ?? false;
@@ -1839,9 +1846,12 @@ export default function Library() {
             currents.set(scopeKey, args[0]);
             shell.openPaper(...args);
           }}
-          peek={shownPeek}
-          rowPreview={docked}
+          peek={current}
           onPreview={setPeek}
+          onPeek={(id) => {
+            setPeek(id);
+            setOverlay(true);
+          }}
           onFile={onFile}
           onRowAction={onRowAction}
           onRowMenu={mutable ? onRowMenu : undefined}
@@ -2067,14 +2077,10 @@ export default function Library() {
           docked={docked}
           mutable={mutable}
           onClose={() => {
-            // Docked, the column is put away; the row it showed is
-            // remembered for when it comes back.
-            if (docked) {
-              setPeekState(null);
-              return togglePreview(false);
-            }
+            // Either way the current row stays the current row.
+            if (docked) return togglePreview(false);
             const id = shownPeek;
-            setPeek(null);
+            setOverlay(false);
             // Focus goes back to the row the preview showed.
             requestAnimationFrame(() =>
               document
@@ -2085,7 +2091,7 @@ export default function Library() {
             );
           }}
           onOpen={(id, title) => {
-            if (!docked) setPeek(null);
+            setOverlay(false);
             currents.set(scopeKey, id);
             shell.openPaper(id, undefined, undefined, title);
           }}
@@ -2400,8 +2406,8 @@ const LibraryList = memo(function LibraryList({
   selectingRange,
   onOpen,
   peek,
-  rowPreview,
   onPreview,
+  onPeek,
   onFile,
   onRowAction,
   onRowMenu,
@@ -2441,8 +2447,8 @@ const LibraryList = memo(function LibraryList({
   selectingRange: () => boolean;
   onOpen: ReturnType<typeof useShell>["openPaper"];
   peek: string | null;
-  /** A press on a row makes it the current one, shown in the right column. */
-  rowPreview: boolean;
+  /** Opens the preview on a row, where no right column shows it. */
+  onPeek: (id: string) => void;
   onPreview: (id: string) => void;
   onFile: (id: string, file: File) => void;
   onRowAction: (id: string, title: string, kind: RowAction) => void;
@@ -2668,7 +2674,6 @@ const LibraryList = memo(function LibraryList({
             onCollect={onCollect}
             selected={selected.has(items[row.index]!.literature.literature_id)}
             previewed={peek === items[row.index]!.literature.literature_id}
-            rowPreview={rowPreview}
             mutable={mutable}
             measure={virtual.measureElement}
             onToggle={onToggle}
@@ -2678,6 +2683,7 @@ const LibraryList = memo(function LibraryList({
             selectingRange={selectingRange}
             onOpen={onOpen}
             onPreview={onPreview}
+            onPeek={onPeek}
             onFile={onFile}
             onRowAction={onRowAction}
             onRowMenu={onRowMenu}
@@ -2730,7 +2736,6 @@ const LibraryRow = memo(function LibraryRow({
   onCollect,
   selected,
   previewed,
-  rowPreview,
   mutable,
   measure,
   onToggle,
@@ -2740,6 +2745,7 @@ const LibraryRow = memo(function LibraryRow({
   selectingRange,
   onOpen,
   onPreview,
+  onPeek,
   onFile,
   onRowAction,
   onRowMenu,
@@ -2758,7 +2764,6 @@ const LibraryRow = memo(function LibraryRow({
   onCollect: ((ids: readonly string[]) => Promise<unknown>) | undefined;
   selected: boolean;
   previewed: boolean;
-  rowPreview: boolean;
   mutable: boolean;
   measure: (element: HTMLElement | null) => void;
   onToggle: (id: string) => void;
@@ -2768,6 +2773,7 @@ const LibraryRow = memo(function LibraryRow({
   selectingRange: () => boolean;
   onOpen: ReturnType<typeof useShell>["openPaper"];
   onPreview: (id: string) => void;
+  onPeek: (id: string) => void;
   onFile: (id: string, file: File) => void;
   onRowAction: (id: string, title: string, kind: RowAction) => void;
   onRowMenu: RowMenu | undefined;
@@ -2821,7 +2827,7 @@ const LibraryRow = memo(function LibraryRow({
         variant="text"
         aria-label="预览"
         icon={<Icon name="eye" />}
-        onPress={() => onPreview(id)}
+        onPress={() => onPeek(id)}
       />
       {mutable ? (
         <Menu
@@ -2835,7 +2841,8 @@ const LibraryRow = memo(function LibraryRow({
   const open = (children: ReactNode) => (
     <button
       className="paper-open"
-      onClick={() => onOpen(id, undefined, undefined, title)}
+      // One press chooses the row, here as anywhere on it; two open the paper.
+      onClick={() => onPreview(id)}
     >
       {children}
     </button>
@@ -2881,17 +2888,25 @@ const LibraryRow = memo(function LibraryRow({
     onPointerDown: (event: ReactPointerEvent<HTMLElement>) =>
       onRowPointerDown(row.index, event),
     onClickCapture: onCheckClickCapture,
-    // Beside the right column, a press anywhere but the title or a control
-    // makes this the current row (page specs “当前行”).
+    // One press on the row makes it the current one; a double press opens
+    // the paper. The same on every screen (page specs “当前行”).
     onClick: (event: ReactMouseEvent<HTMLElement>) => {
       if (
-        !rowPreview ||
         (event.target as Element).closest?.(
           "button, a, input, label, .paper-check, .paper-tools",
         )
       )
         return;
       onPreview(id);
+    },
+    onDoubleClick: (event: ReactMouseEvent<HTMLElement>) => {
+      if (
+        (event.target as Element).closest?.(
+          "button:not(.paper-open), a, input, label, .paper-check, .paper-tools",
+        )
+      )
+        return;
+      onOpen(id, undefined, undefined, title);
     },
     onDragStart: (event: ReactDragEvent<HTMLElement>) => {
       // A press on the checkbox column selects a run; it never drags the
@@ -2978,7 +2993,7 @@ const LibraryRow = memo(function LibraryRow({
         <p className="paper-unranked">以下未按相关度排序</p>
       ) : null}
       {check}
-      {/* The title opens the paper; the rest of the row makes it current. */}
+      {/* The title is the row's name and its keyboard target. */}
       <div className="paper-main">
         {open(paperTitleText)}
         {citation}

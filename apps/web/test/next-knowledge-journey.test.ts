@@ -106,7 +106,7 @@ it("keeps parsing separate from document publication and reads existing verified
     await loginWorkbenchPage(page, server.origin);
     await page.goto(server.origin + "/");
     await showAllLibraryStatuses(page);
-    await page.locator(".paper-row .paper-open").click();
+    await page.locator(".paper-row .paper-open").dblclick();
     // A paper with text opens its full text (spec 6.4); this check reads the PDF.
     await page.getByRole("tab", { name: "PDF", exact: true }).click();
     await page

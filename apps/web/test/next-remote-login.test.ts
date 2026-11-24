@@ -249,7 +249,7 @@ describe("IP-address HTTP login and workspace", () => {
       await page
         .locator(".paper-row", { hasText: FIXTURE_LITERATURE.metadata.title! })
         .locator(".paper-open")
-        .click();
+        .dblclick();
       // A paper with text opens its full text (spec 6.4); this check reads the PDF.
       await page.getByRole("tab", { name: "PDF", exact: true }).click();
       await page

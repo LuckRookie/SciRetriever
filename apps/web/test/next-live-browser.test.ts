@@ -409,7 +409,7 @@ describe("live workbench on the installed Cloak runtime", () => {
             exact: true,
           })
           .locator(".paper-open")
-          .click();
+          .dblclick();
         await expect
           .poll(() => desktop.locator(".paper-tab[data-selected]").innerText())
           .toContain("<img src=x onerror=alert(1)>");
@@ -427,7 +427,7 @@ describe("live workbench on the installed Cloak runtime", () => {
         await desktop
           .getByRole("article", { name: FIXTURE_TITLE, exact: true })
           .locator(".paper-open")
-          .click();
+          .dblclick();
         // A paper with text opens its full text (spec 6.4); this check reads the PDF.
         await desktop.getByRole("tab", { name: "PDF", exact: true }).click();
         await desktop
@@ -464,7 +464,7 @@ describe("live workbench on the installed Cloak runtime", () => {
           .waitFor({ state: "hidden" });
         await searchLibrary(mobile, "Synthetic literature");
         await expect.poll(() => mobile.locator(".paper-row").count()).toBe(1);
-        await mobile.locator(".paper-open").click();
+        await mobile.locator(".paper-open").dblclick();
         await mobile.getByRole("tab", { name: "PDF", exact: true }).click();
         await mobile
           .locator('.reading-pdf-page[data-rendered="true"]')

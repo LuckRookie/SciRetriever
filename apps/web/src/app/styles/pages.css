@@ -693,7 +693,7 @@
   .paper-row[data-previewed] {
     box-shadow: inset 2px 0 0 var(--blue);
   }
-  .library-page[data-preview-docked] .paper-row[data-previewed]:not(:hover) {
+  .paper-row[data-previewed]:not(:hover) {
     background: var(--hover-soft);
   }
   /* The table: one line a paper, 32 px, columns as in the head. */

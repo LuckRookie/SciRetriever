@@ -374,7 +374,7 @@ it("shows a table display that selects, sorts by its heads and is remembered in 
     await table
       .getByRole("row", { name: ready, exact: true })
       .locator(".paper-open")
-      .click();
+      .dblclick();
     await page.locator(".reader-workspace").waitFor();
     await page.goBack();
     await table.waitFor();
@@ -425,8 +425,19 @@ it("shows the current row in the right column without a veil, steps with ↑ ↓
     ).toBe(second);
     await page.keyboard.press("ArrowUp");
     await preview.getByRole("heading", { name: first!, exact: true }).waitFor();
-    // A press on a row, off its title, makes it the current one.
+    // One press on a row makes it the current one, on its title too; it
+    // does not open the paper (page specs “当前行”).
     const other = page.getByRole("article", { name: second!, exact: true });
+    await other.locator(".paper-open").click();
+    await preview
+      .getByRole("heading", { name: second!, exact: true })
+      .waitFor();
+    expect(new URL(page.url()).searchParams.has("literature")).toBe(false);
+    await page
+      .getByRole("article", { name: first!, exact: true })
+      .locator(".paper-citation")
+      .click();
+    await preview.getByRole("heading", { name: first!, exact: true }).waitFor();
     await other.locator(".paper-citation").click();
     expect(new URL(page.url()).searchParams.has("literature")).toBe(false);
     await preview
@@ -465,8 +476,8 @@ it("shows the current row in the right column without a veil, steps with ↑ ↓
     expect(await preview.count()).toBe(0);
     await page.getByRole("button", { name: "显示右栏", exact: true }).click();
     await preview.waitFor();
-    // The title opens the paper; back from it, the column shows that paper.
-    await other.locator(".paper-open").click();
+    // Two presses open the paper; back from it, the column shows that paper.
+    await other.locator(".paper-open").dblclick();
     await expect
       .poll(() => new URL(page.url()).searchParams.has("literature"))
       .toBe(true);

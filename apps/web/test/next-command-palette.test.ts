@@ -13,7 +13,8 @@ it(
       // Opening a paper puts it in "recently read", which an empty palette lists.
       const first = page.locator(".paper-row .paper-title").first();
       const recent = (await first.textContent())!;
-      await first.click();
+      // One press chooses the row; two open the paper (page specs “当前行”).
+      await first.dblclick();
       await expect
         .poll(() => new URL(page.url()).searchParams.get("literature"))
         .not.toBeNull();

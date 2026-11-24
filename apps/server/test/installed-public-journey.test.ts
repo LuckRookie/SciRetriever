@@ -555,7 +555,7 @@ async function installedBrowserJourney(
     expect(await allStatuses.getAttribute("aria-pressed")).toBe("true");
     await ui
       .locator(`[data-literature-id="${literatureId}"] .paper-open`)
-      .click();
+      .dblclick();
     await ui.waitForURL(
       (url) =>
         url.searchParams.get("literature") === literatureId &&

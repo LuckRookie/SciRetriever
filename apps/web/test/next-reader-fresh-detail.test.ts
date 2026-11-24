@@ -14,7 +14,7 @@ it("opens the PDF of a paper whose details were cached before its PDF was publis
     const open = () =>
       page
         .locator(`.paper-row[data-literature-id="${missingId}"] .paper-open`)
-        .click();
+        .dblclick();
     // First open: no PDF yet, so the bibliography page; its details are
     // now cached in this page.
     await open();

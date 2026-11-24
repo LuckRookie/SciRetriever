@@ -51,7 +51,7 @@ it(
       await libraryStatus(page, "有全文");
       await page.locator(`[data-literature-id="${id}"]`).waitFor();
       await capture("library-filter");
-      await page.locator(`[data-literature-id="${id}"] .paper-open`).click();
+      await page.locator(`[data-literature-id="${id}"] .paper-open`).dblclick();
       // A paper with text opens its full text (reading-experience 6.4); the
       // views are the top bar's 原文 and PDF, the rest are in “更多” (1.3).
       await page.locator(".reading-article").waitFor();

@@ -378,7 +378,7 @@ it("reads, searches, follows references and downloads through the query-only pag
       name: "Synthetic literature workbench",
       exact: true,
     });
-    await sourceResult.locator(".paper-open").click();
+    await sourceResult.locator(".paper-open").dblclick();
     // It opens in the view it has (spec 6.4); either way the reader is ready.
     await page.locator('.react-reader[data-reading-ready="true"]').waitFor();
     expect(new URL(page.url()).searchParams.get("literature")).toBe(lit);
@@ -470,7 +470,7 @@ it("reads, searches, follows references and downloads through the query-only pag
     await page
       .getByRole("article", { name: "Query reader without a PDF", exact: true })
       .locator(".paper-open")
-      .click();
+      .dblclick();
     // Opened from its row: no PDF and no text, so the bibliography page
     // (spec 6.4, 9.0); the query-only entry offers no way to fetch or take in one.
     const fullText = page
