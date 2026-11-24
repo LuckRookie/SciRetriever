@@ -174,7 +174,7 @@ it(
             }).query,
           })
         ).name,
-      ).toBe("最近阅读 · 1 篇");
+      ).toBe("最近读过 · 1 篇");
     } finally {
       await q?.close();
       await client.close();
@@ -204,7 +204,7 @@ it("labels entry identities without exposing machine ids or changing scientific 
 it.each([
   ["implicit", {}, "全部文献"],
   ["all", { collection_scope: "all" }, "全部文献"],
-  ["collected", { collection_scope: "collected" }, "收进来的文献"],
+  ["collected", { collection_scope: "collected" }, "文献库"],
 ] as const)(
   "uses the %s scope for unfiltered snapshot labels and keeps filter labels",
   (_scope, query, scopeName) => {

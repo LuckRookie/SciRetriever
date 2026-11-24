@@ -40,7 +40,7 @@ it(
       // 入库 is in the sidebar (page specs “整体信息架构”).
       await page
         .getByRole("complementary", { name: "主导航" })
-        .getByRole("button", { name: "入库", exact: true })
+        .getByRole("button", { name: "找文献", exact: true })
         .click();
       await page.locator(".intake-form").waitFor();
       await capture("intake");
@@ -214,7 +214,7 @@ it(
         .getByRole("menuitem", { name: "生成快照", exact: true })
         .click();
       await page
-        .getByRole("heading", { name: "收进来的文献 · 1 篇", exact: true })
+        .getByRole("heading", { name: "文献库 · 1 篇", exact: true })
         .waitFor();
       const snapshot = new URL(page.url()).searchParams.get("snapshot")!;
       const original = await w.env.app.snapshots.all(snapshot);
@@ -243,7 +243,7 @@ it(
         .getByRole("button", { name: "恢复默认名称", exact: true })
         .click();
       await page
-        .getByRole("heading", { name: "收进来的文献 · 1 篇", exact: true })
+        .getByRole("heading", { name: "文献库 · 1 篇", exact: true })
         .waitFor();
       expect(w.errors).toEqual([]);
       console.info(`Round-two release screenshots: ${evidence}`);

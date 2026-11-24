@@ -441,9 +441,9 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     name: "搜索 · 最近一批命中里没有",
     route: route("lib", `&query=${query({ text: "Synthetic" })}`),
     interaction:
-      "整库搜索，最近写入索引的一批命中里没有结果（扫描窗口与零结果均为模拟）",
+      "搜索文献，文献库里有命中，候选在最近写入索引的一批命中里没有（扫描窗口与零结果均为模拟）",
     prepare: (p) => scanWindows(p, true),
-    ready: '.library-empty .ui-button:has-text("在更早的命中里继续找")',
+    ready: '.library-window-end .ui-button:has-text("在更早的命中里继续找")',
   },
   {
     id: "search-window-second",

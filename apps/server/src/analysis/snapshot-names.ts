@@ -12,7 +12,7 @@ export function generatedSnapshotName(
     parts: string[] = [];
   if (q.folder)
     parts.push(folderName ? `文件夹 ${folderName}` : "文件夹（已删除）");
-  if (q.recently_opened) parts.push("最近阅读");
+  if (q.recently_opened) parts.push("最近读过");
   if (q.text) parts.push(`检索 ${q.text}`);
   if (q.title) parts.push(`标题 ${q.title}`);
   if (q.author) parts.push(`作者 ${q.author}`);
@@ -33,7 +33,7 @@ export function generatedSnapshotName(
           value !== false &&
           value !== "",
     );
-    const scopeName = scope === "collected" ? "收进来的文献" : "全部文献";
+    const scopeName = scope === "collected" ? "文献库" : "全部文献";
     parts.push(filtered ? "筛选文献" : scopeName);
   }
   return [

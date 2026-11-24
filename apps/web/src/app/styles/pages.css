@@ -1409,6 +1409,20 @@
   .paper-row[data-display="table"][data-section-start] > .paper-section-head {
     margin: 0 calc(-1 * var(--space-2)) var(--space-1);
   }
+  /* Where the candidates would begin when this window holds none. */
+  .library-candidates-none {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    margin: 0;
+    padding: var(--space-5) var(--space-2) var(--space-2);
+    color: var(--fg2);
+    font-size: var(--text-secondary);
+  }
+  .library-candidates-none > b {
+    color: var(--fg);
+    font-weight: 600;
+  }
   .library-window-end {
     margin: 0;
     padding: var(--space-3) var(--space-2);

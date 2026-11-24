@@ -22,7 +22,7 @@ function withdrawalLog(page: Page) {
 }
 const more = (page: Page) =>
   page
-    .getByRole("region", { name: "批次" })
+    .getByRole("region", { name: "批次", exact: true })
     .getByRole("button", { name: "更多", exact: true })
     .click();
 
@@ -168,7 +168,7 @@ it("offers withdrawal only once a batch has ended, and says so when a task or th
       buffer: Buffer.from(record("w", "Halide electrolyte three")),
     });
     await page.getByRole("button", { name: "继续", exact: true }).click();
-    const view = page.getByRole("region", { name: "批次" });
+    const view = page.getByRole("region", { name: "批次", exact: true });
     await view.getByRole("heading", { name: "waiting.bib" }).waitFor();
     await more(page);
     const entry = page.getByRole("menuitem", { name: /^撤回这一批/u });

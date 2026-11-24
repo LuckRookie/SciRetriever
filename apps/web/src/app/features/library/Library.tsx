@@ -1892,6 +1892,18 @@ export default function Library() {
                   条；加条件或换个检索词可以看到其余的
                 </p>
               ) : null}
+              {/* The library has hits and this window of the index has no
+                  candidate: said where the candidates would begin, above the
+                  way on to the earlier hits. */}
+              {candidatesFrom !== null &&
+              items.length === candidatesFrom &&
+              scanIncomplete &&
+              windowPhrase ? (
+                <p className="library-candidates-none" role="status">
+                  <b>候选</b>
+                  {windowPhrase}里没有，更早的还没查
+                </p>
+              ) : null}
               {/* At the end of a window, the way on to the earlier hits. */}
               {continueWindow ? (
                 <p className="library-window-end">
@@ -2362,9 +2374,9 @@ function LibraryPreview({
             item={item}
             actions={
               <>
-                <Button variant="primary" onPress={() => onOpen(id, title)}>
-                  打开阅读
-                </Button>
+                {/* Not the page's primary: the selection bar and the
+                    dialogs have theirs (design core, one primary a page). */}
+                <Button onPress={() => onOpen(id, title)}>打开阅读</Button>
                 {mutable && item.literature.status === "UNREVIEWED" ? (
                   <Button
                     disabledReason={

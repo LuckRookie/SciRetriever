@@ -20,4 +20,4 @@
 `processor-planning.ts` 供执行和只读预估共用规范、读取范围与模型复用键；`processor-usage.ts` 保存结果生成用量摘要；`usage-estimate.ts` 用历史中位数至 P90 预估显式范围，不加载凭据、不调用模型、不写事实。
 
 - [processor-chunking.ts](processor-chunking.ts)：保守估算输入预算，按标题层级与段落分块，保留表格、图注、脚注、续表及公式整体；预算与规则进入方法身份。
-- [snapshot-names.ts](snapshot-names.ts) 按筛选条件生成快照显示名。只有范围时，显示“收进来的文献”或“全部文献”。人工名由独立标签表保存，快照内容身份由定义和成员决定。
+- [snapshot-names.ts](snapshot-names.ts) 按筛选条件生成快照显示名。只有范围时，显示“文献库”或“全部文献”。人工名由独立标签表保存，快照内容身份由定义和成员决定。

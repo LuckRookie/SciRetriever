@@ -18,7 +18,7 @@ async function exportBatch(page: Page) {
     ),
   });
   await page.getByRole("button", { name: "继续", exact: true }).click();
-  const view = page.getByRole("region", { name: "批次" });
+  const view = page.getByRole("region", { name: "批次", exact: true });
   await view.getByRole("heading", { name: "library.bib" }).waitFor();
   return {
     view,

@@ -130,7 +130,7 @@ it("shows an Agent's intake batch as an intake record, confirms it on its page, 
       .getByRole("button", { name: `打开批次：${batch.label}`, exact: true })
       .click();
 
-    const view = page.getByRole("region", { name: "批次" });
+    const view = page.getByRole("region", { name: "批次", exact: true });
     await view
       .getByText("预览（估计，确认时按当时的文献库重新判定）")
       .waitFor();
@@ -205,7 +205,7 @@ it("forms a batch from PDFs alone, each a file-only item, and opens it without w
         buffer: Buffer.from(workbenchPdf("10.5555/drop-two")),
       },
     ]);
-    const view = page.getByRole("region", { name: "批次" });
+    const view = page.getByRole("region", { name: "批次", exact: true });
     await view.getByRole("heading", { level: 2 }).waitFor();
     const create = sent.find((r) => r.path === "/api/v1/intake/batches")!;
     expect(create.body).toMatchObject({
@@ -257,7 +257,7 @@ it("sends an export alone as the batch's data, its format recognized and changea
     await page.getByRole("button", { name: "格式" }).click();
     await page.getByRole("option", { name: "BibTeX", exact: true }).click();
     await page.getByRole("button", { name: "继续", exact: true }).click();
-    const view = page.getByRole("region", { name: "批次" });
+    const view = page.getByRole("region", { name: "批次", exact: true });
     await view.getByRole("heading", { name: "library.bib" }).waitFor();
     expect(sent.slice(0, 2).map((r) => [r.path, r.body])).toEqual([
       [
@@ -306,7 +306,7 @@ it("pairs an export with the PDFs of the folder put in with it by the path it gi
     await page.getByLabel("选择文件夹", { exact: true }).setInputFiles(folder);
     await page.getByText(/一同放入 1 个 PDF，按导出里写的路径配对/u).waitFor();
     await page.getByRole("button", { name: "继续", exact: true }).click();
-    const view = page.getByRole("region", { name: "批次" });
+    const view = page.getByRole("region", { name: "批次", exact: true });
     await view.getByRole("heading", { name: "My Library.bib" }).waitFor();
     const items = sent.filter((r) => r.path.endsWith("/file-items"));
     expect(items.map((r) => [r.name, r.relative])).toEqual([
