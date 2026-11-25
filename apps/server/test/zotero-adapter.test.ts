@@ -354,3 +354,60 @@ it("pairs two standalone PDFs of the same file name by their attachment IDs", as
     await rm(home, { recursive: true, force: true });
   }
 }, 60000);
+
+it("leaves out a membership in a collection the batch never received", async () => {
+  const home = await mkdtemp(join(tmpdir(), "sciretriever-zotero-scope-"));
+  const app = await createApplication(home, {
+    indexRefreshIntervalMs: null,
+    metadata: { lookup_ports: [], topic_search_ports: [] },
+  });
+  expect(app.metadata.lookup_selection).toEqual([]);
+  expect(app.metadata.topic_selection).toEqual([]);
+  const actor = { kind: "local" as const, origin: "web" as const };
+  try {
+    const { links, ...bare } = A;
+    void links;
+    const batch = await app.importSessions.create(
+      {
+        format: "zotero-api",
+        source: {
+          system: "zotero",
+          library_id: `users/${USER}`,
+          identity: "global",
+          name: "synthetic-user",
+        },
+        scope: "One collection",
+      },
+      actor,
+    );
+    // A is in COLL0002 (sent, with its parent) and COLL0003 (not sent).
+    await app.importSessions.putData(batch.batch_id, 0, {
+      collections: COLLECTIONS.filter((c) => c.key !== "COLL0003"),
+      items: [bare],
+    });
+    await app.importSessions.confirm(batch.batch_id);
+    const report = await app.importSessions.report(batch.batch_id, null, 200);
+    expect(report.batch.state).toBe("finished");
+    expect(report.items).toMatchObject([
+      { external_id: "AAAA0001", disposition: "created" },
+    ]);
+    const folders = (
+      (await app.folders.query({ operation: "list", request: {} })) as {
+        items: unknown[];
+      }
+    ).items.map(parseFolderNode);
+    expect(folders.map((f) => f.name).sort()).toEqual(
+      [
+        "Energetic materials",
+        "Tetrazoles",
+        "synthetic-user",
+        "标签",
+        "tetrazole",
+      ].sort(),
+    );
+    expect(folders.find((f) => f.name === "Tetrazoles")!.own_count).toBe(1);
+  } finally {
+    await app.close();
+    await rm(home, { recursive: true, force: true });
+  }
+}, 60000);

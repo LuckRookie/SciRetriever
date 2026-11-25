@@ -139,7 +139,14 @@ class Zotero:
 
             def file(self, key):
                 target = zotero.files_dir / (key + ".pdf")
-                if zotero.file_mode == "redirect":
+                if zotero.file_mode == "redirect-other":
+                    other = zotero.files_dir / (key + ".txt")
+                    other.write_bytes(b"not a pdf")
+                    self.send_response(302)
+                    self.send_header("Location", other.as_uri())
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                elif zotero.file_mode == "redirect":
                     target.write_bytes(PDF + key.encode())
                     self.send_response(302)
                     self.send_header("Location", target.as_uri())
@@ -349,14 +356,15 @@ class ZoteroImportTests(unittest.TestCase):
         self.assertEqual(len(self.library.file_items), 2)
         self.assertTrue(all(method == "GET" for method, _ in self.zotero.requests))
 
-    def test_import_of_chosen_collections_sends_them_with_ancestors_and_other_memberships(self):
+    def test_import_of_chosen_collections_sends_them_with_ancestors_only(self):
         code, text = self.main("import", "--library", "user", "--collection", "COLL0002",
                                "--data-dir", str(self.data))
         self.assertEqual(code, 0, text)
         sent = {i["key"] for part in self.library.parts.values() for i in part.get("items", [])}
         self.assertEqual(sent, {"AAAA0001", "PDFA0001", "PDFA0002", "NOTEA003", "ANNO0001"})
+        # AAAA0001 is also in COLL0003, which was not chosen and is not sent.
         self.assertEqual(sorted(c["key"] for c in self.library.parts[0]["collections"]),
-                         ["COLL0001", "COLL0002", "COLL0003"])
+                         ["COLL0001", "COLL0002"])
 
     def test_files_follow_the_api_then_the_data_folder_and_count_reasons(self):
         self.main("import", "--library", "user", "--data-dir", str(self.data))
@@ -386,6 +394,16 @@ class ZoteroImportTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(len(self.library.uploads), 2)  # PDFA0001 (only PDF) and DDDD0004 (by name)
         self.assertIn("未交（按原因）：storage-ambiguous 1，storage-folder-missing 1", text)
+
+    def test_a_file_url_that_is_not_a_pdf_falls_back_to_the_data_folder(self):
+        self.main("import", "--library", "user", "--data-dir", str(self.data))
+        self.library.confirm([("PDFA0001", "Lin 2024 synthetic.pdf")])
+        self.store("PDFA0001", "Lin 2024 synthetic.pdf")
+        self.zotero.file_mode = "redirect-other"
+        code, text = self.main("files")
+        self.assertEqual(code, 0, text)
+        self.assertEqual([v[0] for v in self.library.uploads.values()], [PDF + b"PDFA0001"])
+        self.assertTrue(any(path.endswith("/PDFA0001/file") for _, path in self.zotero.requests))
 
     def test_two_hundred_files_resume_after_an_interruption_without_repeats(self):
         many = [item(f"P{n:07d}", {"itemType": "attachment", "linkMode": "imported_file",

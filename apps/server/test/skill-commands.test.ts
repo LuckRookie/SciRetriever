@@ -146,7 +146,7 @@ it("executes every skill command against a synthetic production HTTP library and
       code: "ENOENT",
     });
     const intake = await commands("import.md");
-    expect(intake).toHaveLength(5);
+    expect(intake).toHaveLength(6);
     const helper = intake[0]!.split("post /batches ")[0]!;
     const request = (name: string, value: unknown) =>
       writeFile(
@@ -177,7 +177,7 @@ it("executes every skill command against a synthetic production HTTP library and
       lastBatch = created.batch_id;
       const setup = helper + `\nBID='${lastBatch}'\n`;
       await shell(setup + intake[1]!);
-      await shell(setup + intake[2]!);
+      await shell(setup + intake[3]!);
       await vi.waitFor(
         async () =>
           expect(
@@ -186,11 +186,11 @@ it("executes every skill command against a synthetic production HTTP library and
         { timeout: 20_000 },
       );
       if (!metadataOnly) {
-        const output = await shell(setup + intake[3]!, 1);
+        const output = await shell(setup + intake[4]!, 1);
         expect(output).toContain("本次成功 1 个");
         expect(output).toContain("file-not-found");
       }
-      const output = await shell(setup + intake[4]!);
+      const output = await shell(setup + intake[5]!);
       expect(output).toContain('"state":"finished"');
       const report = await app.importSessions.report(lastBatch);
       expect(report.batch.result).toBe(metadataOnly ? "completed" : "partial");
@@ -207,6 +207,11 @@ it("executes every skill command against a synthetic production HTTP library and
         ).toEqual([]);
       }
     }
+    // Only PDFs: the packaged program sends them, waits for recognition and stops.
+    const pdfs = await shell(intake[2]!);
+    expect(pdfs).toContain("本次交了 1 个文件");
+    expect(pdfs).toContain("?view=disc");
+    expect(pdfs.includes(FILES_DIR)).toBe(false);
     const transport = new StreamableHTTPClientTransport(
       new URL("/mcp", server.origin),
       { requestInit: { headers: { Authorization: `Bearer ${secret}` } } },

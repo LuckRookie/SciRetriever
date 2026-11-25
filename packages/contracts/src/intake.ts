@@ -797,6 +797,11 @@ export interface IntakeAdapterResult {
   readonly items: readonly IntakeAdapterItem[];
   readonly groups: readonly IntakeGroup[];
   readonly excluded: readonly IntakeExcluded[];
+  /**
+   * An item may name a group the batch never received: that membership is
+   * dropped instead of failing with intake-group-missing (Zotero, 6.4.9).
+   */
+  readonly optional_group_references?: true;
 }
 /** Pure conversion only. No I/O, randomness, clock, database or network. */
 export interface IntakeAdapter {
@@ -1563,4 +1568,6 @@ export interface IntakeBatchItem {
   readonly decided_at: string | null;
   /** Items of a `lookup` batch while it is not finished; absent otherwise. */
   readonly lookup?: IntakeLookupItem;
+  /** A file item refused on receipt: pdf-invalid, encrypted-pdf or non-pdf-file. */
+  readonly reason?: string;
 }

@@ -21,8 +21,8 @@ import { uniqueIdentifiers } from "./import-clues.js";
  * the objects exactly as a Zotero API returned them (`/items` with
  * `include=data,csljson`, `/collections`), pages concatenated. A parent item and
  * all its children (attachments, notes, annotations) travel in the same segment;
- * collections may travel in any segment of the batch, and every collection an
- * item names must be sent.
+ * collections may travel in any segment of the batch. A membership in a
+ * collection the batch never received is dropped (`optional_group_references`).
  *
  * The shapes follow the Web API v3 as probed on 2026-11-10. The local API is
  * assumed to share them; the few places that read a link, a size or an ID are
@@ -455,6 +455,7 @@ export const zoteroAdapter: ImportAdapter = {
       }
     }
     return {
+      optional_group_references: true,
       groups,
       excluded: [...excluded].map(([kind, n]) => ({ kind, count: n })),
       items: result.sort((a, b) => a.record_index - b.record_index),

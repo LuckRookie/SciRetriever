@@ -53,7 +53,11 @@ export function publicIntakeItem(item: StoredIntakeItem): IntakeBatchItem {
   void work;
   void retain_until;
   const lookup = lookupView(item);
-  return lookup ? { ...value, lookup } : value;
+  const refused =
+    item.origin === "file" && item.disposition === "rejected" && work?.reason
+      ? { reason: work.reason }
+      : {};
+  return lookup ? { ...value, ...refused, lookup } : { ...value, ...refused };
 }
 function suffix(a: string, b: string) {
   const left = a.replace(/\\/gu, "/").toLowerCase().split("/"),

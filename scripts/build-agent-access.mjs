@@ -64,7 +64,7 @@ export async function buildAgentAccess(source = skill, target = output) {
     );
   const instructions = [
     ...pages,
-    "完整的 skill（含 `scripts/upload_files.py`）可以从 `GET <地址>/api/v1/intake/skill` 下载，请求头同上。",
+    "完整的 skill（含 `scripts/` 下的上传与导入程序）可以从 `GET <地址>/api/v1/intake/skill` 下载，请求头同上。",
   ].join("\n\n---\n\n");
   await mkdir(target, { recursive: true });
   await writeFile(join(target, "agent-guide.md"), `${instructions}\n`);

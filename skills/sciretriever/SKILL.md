@@ -9,16 +9,17 @@ description: 代使用者入库、使用文献库。用户要求连接自己的 
 
 ## 先读哪篇
 
-| 要做的事                   | 读                                   |
-| -------------------------- | ------------------------------------ |
-| 第一次连接，或令牌失效     | [connect.md](connect.md)             |
-| 代使用者把书目与 PDF 入库  | [import.md](import.md)               |
-| 数据在 Zotero 里           | [source-zotero.md](source-zotero.md) |
-| 检索、阅读                 | [use.md](use.md)                     |
-| 主题搜索、引用扩展         | [use.md](use.md#搜索与扩展)          |
-| 加入、移出、删除、识别书目 | [use.md](use.md#整理文献库)          |
-| 获取 PDF、解析全文         | [use.md](use.md#获取-pdf-与解析全文) |
-| 请求失败、中断后继续       | [recovery.md](recovery.md)           |
+| 要做的事                   | 读                                          |
+| -------------------------- | ------------------------------------------- |
+| 第一次连接，或令牌失效     | [connect.md](connect.md)                    |
+| 代使用者把书目与 PDF 入库  | [import.md](import.md)                      |
+| 只有 PDF，没有书目文件     | [import.md](import.md#只有-pdf没有书目文件) |
+| 数据在 Zotero 里           | [source-zotero.md](source-zotero.md)        |
+| 检索、阅读                 | [use.md](use.md)                            |
+| 主题搜索、引用扩展         | [use.md](use.md#搜索与扩展)                 |
+| 加入、移出、删除、识别书目 | [use.md](use.md#整理文献库)                 |
+| 获取 PDF、解析全文         | [use.md](use.md#获取-pdf-与解析全文)        |
+| 请求失败、中断后继续       | [recovery.md](recovery.md)                  |
 
 接口的请求、结果、格式、上限与错误码以连接后的 `GET <地址>/api/v1/intake/instructions` 为准。这里讲执行顺序与判断。单篇网页收藏使用浏览器扩展，不由 Agent 模拟扩展操作。从 Zotero 导入用固定的导入程序，见 [source-zotero.md](source-zotero.md)。
 

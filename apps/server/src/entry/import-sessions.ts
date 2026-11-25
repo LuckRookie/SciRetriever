@@ -752,7 +752,7 @@ export class ImportSessionService extends ImportSessionReadService {
         if (item.record) {
           const record = item.record,
             primary = s.metadata_only ? null : selected(record);
-          if (s.source.identity !== "adhoc")
+          if (s.source.identity !== "adhoc" && !data.optional_group_references)
             for (const id of record.groups) references.add(id);
           if (s.metadata_only) {
             if (record.files.length)
@@ -817,6 +817,23 @@ export class ImportSessionService extends ImportSessionReadService {
     };
     for (const id of groups.keys()) visit(id);
     for (const id of references) visit(id);
+    // Memberships in groups never sent are left out where the format allows it.
+    for (const [sequence, data] of decoded)
+      if (data.optional_group_references)
+        decoded.set(sequence, {
+          ...data,
+          items: data.items.map((item) =>
+            item.record?.groups.some((g) => !groups.has(g))
+              ? {
+                  ...item,
+                  record: {
+                    ...item.record,
+                    groups: item.record.groups.filter((g) => groups.has(g)),
+                  },
+                }
+              : item,
+          ),
+        });
     const fileItems = await this.fileItems.prepare(s, decoded);
     // A file-only record either became its delivered file item or is missing.
     for (const [sequence, data] of decoded)

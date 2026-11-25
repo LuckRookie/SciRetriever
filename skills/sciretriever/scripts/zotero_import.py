@@ -164,7 +164,9 @@ class ZoteroLocal:
             parsed = urllib.parse.urlsplit(location)
             if parsed.scheme == "file":
                 path = urllib.request.url2pathname(parsed.path)
-                if os.path.isfile(path) and not os.path.islink(path):
+                # Only a plain .pdf file; anything else is no file from the API.
+                if (path.lower().endswith(".pdf") and os.path.isfile(path)
+                        and not os.path.islink(path)):
                     return path
         return None
 
@@ -216,11 +218,12 @@ def _key(item):
 
 
 def select(items, collections, chosen):
-    """The items to send and every collection they need (6.4.9).
+    """The items to send and the collections to send with them (6.4.9).
 
     With chosen collections: the top-level items in them or their
-    subcollections, with all descendants; the collections sent are those,
-    every collection a sent item names, and all their ancestors.
+    subcollections, with all descendants; the collections sent are only those
+    and their ancestors. Memberships in other collections are left out by the
+    library.
     """
     by_key = {_key(c): c for c in collections}
     parent_of = {k: _data(c).get("parentCollection") or None for k, c in by_key.items()}
@@ -248,8 +251,6 @@ def select(items, collections, chosen):
                 grew = True
     sent = [i for i in items if _key(i) in kept]
     needed = set(scope)
-    for item in sent:
-        needed.update(c for c in (_data(item).get("collections") or []) if c in by_key)
     for key in list(needed):
         parent = parent_of.get(key)
         while parent and parent in by_key and parent not in needed:

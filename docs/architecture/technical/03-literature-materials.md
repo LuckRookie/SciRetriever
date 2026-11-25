@@ -1493,7 +1493,7 @@ Application 的 writes 为 FileStore 与 SQLite 提供同一短写入准入。�
   - `collections` 是分类接口返回的对象；
   - 各页的结果直接拼接，对象不改动。每段不超过数据分段的上限（产品接口 2.4.2）。
 - 父条目与它的全部子条目（附件、笔记、批注）放在同一段。
-- 分类可以在任何一段交来。条目引用了没有交来的分类时，这一处归属略去，不报错：使用者只选了几个分类时，条目在其他分类里的归属不带过来。（目标，尚未实现：现在缺了的分类使整批按 `intake-group-missing` 失败，导入程序因此把条目引用到的其他分类也一并交来。）
+- 分类可以在任何一段交来。条目引用了没有交来的分类时，这一处归属略去，不报错：使用者只选了几个分类时，条目在其他分类里的归属不带过来。
 - 一个父条目连同子条目超过一段的上限时，载体不交这个条目，在摘要里计数。
 - 来源库编号：群组库用 `groups/<编号>`，`identity` 为 `global`；个人库暂用 `users/local`，`identity` 为 `local`。个人库因此按设备连接区分，换一个连接或改用扩展再导同一个库，按书目查重，不按来源编号对应。待探测：本地接口能否给出个人库的真实编号；能的话改为 `global`。
 - 待探测：本地接口是否给出 `csljson`。不给时走下面的字段映射，交法不变。
@@ -1575,6 +1575,7 @@ IntakeBatchItem                       # /items 与 /items/:item_id/status 的一
   needs_decision: bool
   decision: IntakeDecision | None
   disposition: IntakeDisposition | None   # 确认后才有
+  reason: "pdf-invalid" | "encrypted-pdf" | "non-pdf-file"   # 只在交来时就被拒绝的文件条目上有（6.4.3）
 
 IntakeLookup                          # 指定文献的条目才有（6.4.12）；批次结束前给出
   line: int                           # 原文里的行号，从 1 起，空行也计数
