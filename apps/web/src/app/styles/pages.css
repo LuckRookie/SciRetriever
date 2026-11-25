@@ -254,6 +254,8 @@
   .folder-row:focus-within .folder-menu,
   .folder-heading:hover .folder-menu,
   .folder-heading:focus-within .folder-menu,
+  /* The open folder keeps its menu in view, so its actions can be found. */
+  .folder-row[data-current] .folder-menu,
   .folder-menu[aria-expanded="true"] {
     opacity: 1;
   }

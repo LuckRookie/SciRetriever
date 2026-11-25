@@ -16,7 +16,12 @@ import {
   Select,
   TextField,
   useToast,
+  type MenuOption,
 } from "../../components/index.js";
+import {
+  ContextMenu,
+  type ContextMenuRequest,
+} from "../reader/input/ContextMenu.js";
 import { useApi } from "../../data/query.js";
 import { navigate, useUrlState } from "../../data/url.js";
 import { preferences } from "../../data/preferences.js";
@@ -166,6 +171,7 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
   } | null>(null);
   const [name, setName] = useState("");
   const [removing, setRemoving] = useState<FolderNode | null>(null);
+  const [rowMenu, setRowMenu] = useState<ContextMenuRequest | null>(null);
   const [target, setTarget] = useState<string | null | undefined>(undefined);
   const [landed, setLanded] = useState<string | null>(null);
   const toast = useToast();
@@ -292,9 +298,70 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
       if (id) toggle(id, true);
     }
   };
+  // One folder's actions: the same list behind the row's “⋯” button and
+  // behind a right-click on the row.
+  const folderItems = (node: FolderNode): MenuOption[] => {
+    const siblings = tree.get(node.parent_id) ?? [],
+      index = siblings.findIndex((item) => item.folder_id === node.folder_id);
+    return [
+      {
+        id: "create",
+        label: "新建子文件夹…",
+        onAction: () => {
+          setName("");
+          setEditing({ parent: node.folder_id });
+        },
+      },
+      {
+        id: "rename",
+        label: "重命名…",
+        onAction: () => {
+          setName(node.name);
+          setEditing({ parent: node.parent_id, folder: node });
+        },
+      },
+      {
+        id: "up",
+        label: "上移",
+        disabled: index <= 0,
+        onAction: () => move(node.folder_id, node.parent_id, index - 1),
+      },
+      {
+        id: "down",
+        label: "下移",
+        disabled: index === siblings.length - 1,
+        onAction: () => move(node.folder_id, node.parent_id, index + 1),
+      },
+      {
+        id: "top",
+        label: "移到顶层",
+        disabled: node.parent_id === null,
+        onAction: () => move(node.folder_id, null, tree.get(null)?.length ?? 0),
+      },
+      {
+        id: "delete",
+        label: "删除文件夹…",
+        divider: true,
+        onAction: () => setRemoving(node),
+      },
+    ];
+  };
+  const openRowMenu = (
+    node: FolderNode,
+    x: number,
+    y: number,
+    keyboard: boolean,
+  ) =>
+    setRowMenu({
+      x,
+      y,
+      keyboard,
+      label: `文件夹操作：${node.name}`,
+      items: folderItems(node),
+    });
   const level = (parent: string | null, depth: number) => (
     <ul className="folder-tree">
-      {(tree.get(parent) ?? []).map((node, index, siblings) => {
+      {(tree.get(parent) ?? []).map((node) => {
         const nested = (tree.get(node.folder_id) ?? []).length > 0,
           isOpen = expanded.has(node.folder_id);
         return (
@@ -304,9 +371,26 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
               style={{
                 paddingInlineStart: `calc(var(--space-2) + ${depth * 14}px)`,
               }}
+              data-folder-id={node.folder_id}
               data-current={current === node.folder_id || undefined}
               data-drop={target === node.folder_id || undefined}
               data-landed={landed === node.folder_id || undefined}
+              // Right-click opens the folder's menu; Shift keeps the browser's own.
+              onContextMenu={(event) => {
+                if (event.shiftKey) return;
+                event.preventDefault();
+                openRowMenu(node, event.clientX, event.clientY, false);
+              }}
+              onKeyDown={(event) => {
+                if (
+                  event.key !== "ContextMenu" &&
+                  !(event.shiftKey && event.key === "F10")
+                )
+                  return;
+                event.preventDefault();
+                const box = event.currentTarget.getBoundingClientRect();
+                openRowMenu(node, box.left + 8, box.bottom + 4, true);
+              }}
               draggable
               onDragStart={(event) => {
                 event.dataTransfer.setData(FOLDER_DRAG, node.folder_id);
@@ -345,50 +429,7 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
                 iconOnly
                 className="folder-menu"
                 label={`文件夹操作：${node.name}`}
-                items={[
-                  {
-                    id: "create",
-                    label: "新建子文件夹…",
-                    onAction: () => {
-                      setName("");
-                      setEditing({ parent: node.folder_id });
-                    },
-                  },
-                  {
-                    id: "rename",
-                    label: "重命名…",
-                    onAction: () => {
-                      setName(node.name);
-                      setEditing({ parent: node.parent_id, folder: node });
-                    },
-                  },
-                  {
-                    id: "up",
-                    label: "上移",
-                    disabled: index === 0,
-                    onAction: () =>
-                      move(node.folder_id, node.parent_id, index - 1),
-                  },
-                  {
-                    id: "down",
-                    label: "下移",
-                    disabled: index === siblings.length - 1,
-                    onAction: () =>
-                      move(node.folder_id, node.parent_id, index + 1),
-                  },
-                  {
-                    id: "top",
-                    label: "移到顶层",
-                    disabled: node.parent_id === null,
-                    onAction: () =>
-                      move(node.folder_id, null, tree.get(null)?.length ?? 0),
-                  },
-                  {
-                    id: "delete",
-                    label: "删除…",
-                    onAction: () => setRemoving(node),
-                  },
-                ]}
+                items={folderItems(node)}
               />
             </div>
             {nested && isOpen ? level(node.folder_id, depth + 1) : null}
@@ -521,6 +562,18 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
         ) : null}
         <TextField label="文件夹名称" value={name} onChange={setName} />
       </Dialog>
+      <ContextMenu
+        request={rowMenu}
+        onClose={() => setRowMenu(null)}
+        onRetarget={(event, element) => {
+          const id = element?.closest<HTMLElement>(
+              ".folder-row[data-folder-id]",
+            )?.dataset.folderId,
+            node = items.find((item) => item.folder_id === id);
+          if (node) openRowMenu(node, event.clientX, event.clientY, false);
+          else setRowMenu(null);
+        }}
+      />
       <ConfirmDialog
         title="删除文件夹"
         isOpen={removing !== null}

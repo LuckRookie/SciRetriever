@@ -236,10 +236,9 @@ it("organizes papers into nested folders by dialog and drag, scopes the library,
     ).toBe("排序：最近读过");
 
     // Deleting a folder previews the impact and only removes memberships.
-    await folderRow(p, "表面界面")
-      .getByRole("button", { name: "文件夹操作：表面界面", exact: true })
-      .click();
-    await p.getByRole("menuitem", { name: "删除…", exact: true }).click();
+    // A right-click on the row opens the same menu as its “⋯” button.
+    await folderRow(p, "表面界面").click({ button: "right" });
+    await p.getByRole("menuitem", { name: "删除文件夹…", exact: true }).click();
     const remove = p.getByRole("dialog", { name: "删除文件夹", exact: true });
     await expect
       .poll(() => remove.textContent())
