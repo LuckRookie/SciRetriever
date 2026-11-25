@@ -516,6 +516,7 @@ export type SqliteCommand =
         | "publish"
         | "active"
         | "state"
+        | "ruleStatus"
         | "search"
         | "documentCoverage"
         | "metadataSource"

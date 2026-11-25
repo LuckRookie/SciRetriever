@@ -76,6 +76,13 @@ export class RetrievalStorageClient {
   active(): Promise<RetrievalGeneration | null> {
     return this.call("active");
   }
+  ruleStatus(): Promise<
+    ReturnType<
+      import("./retrieval-engine.js").RetrievalStorageEngine["ruleStatus"]
+    >
+  > {
+    return this.call("ruleStatus");
+  }
   state(): Promise<import("./retrieval-engine.js").RetrievalIndexState> {
     return this.call("state");
   }

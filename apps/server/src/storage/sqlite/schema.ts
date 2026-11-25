@@ -1202,8 +1202,13 @@ const DOCUMENT_TRANSLATION_RETRIEVAL = [
     true,
   ),
 ];
+/** A table as the layout before this addition creates it. */
 const baseTable = (name: string) =>
-  CATALOG_BASE_SCHEMA.find((sql) => sql.startsWith(`CREATE TABLE ${name}(`))!;
+  manifestWithAdditions(CATALOG_BASE_SCHEMA, [
+    LIBRARY_SCALE_ADDITION,
+    ARCHIVE_ISSUES_ADDITION,
+    LIBRARY_TRASH_ADDITION,
+  ]).find((sql) => sql.startsWith(`CREATE TABLE ${name}(`))!;
 /** SQLite writes an added column before the table constraints. */
 const withColumns = (sql: string, before: string, columns: string[]) => {
   if (!sql.includes(before)) throw new Error("catalog column anchor missing");
@@ -1235,11 +1240,25 @@ const DOCUMENT_TRANSLATION_RETRIEVAL_COLUMNS = [
     "retrieval_generations",
     "ALTER TABLE retrieval_generations ADD COLUMN translation_language TEXT",
   ],
+  [
+    "retrieval_change_state",
+    "ALTER TABLE retrieval_change_state ADD COLUMN library_search_rule TEXT",
+  ],
 ] as const;
 export const RETRIEVAL_ENTRIES_TRANSLATION_SQL = withColumns(
   baseTable("retrieval_entries"),
   ",CHECK((kind='metadata'",
   ["translation_language TEXT", "translation_sha256 TEXT"],
+);
+/**
+ * The text rule the library search rows were last rewritten with: empty in
+ * a library from before the rule (read as old), set by
+ * `maintenance rebuild-library-search` and by a new catalog.
+ */
+export const RETRIEVAL_CHANGE_STATE_RULE_SQL = withColumns(
+  baseTable("retrieval_change_state"),
+  ") STRICT",
+  ["library_search_rule TEXT"],
 );
 export const RETRIEVAL_GENERATIONS_RULE_SQL = withColumns(
   baseTable("retrieval_generations"),
@@ -1270,6 +1289,7 @@ export const DOCUMENT_TRANSLATIONS_ADDITION = defineCatalogAddition(
     ...DOCUMENT_TRANSLATION_RETRIEVAL,
     RETRIEVAL_ENTRIES_TRANSLATION_SQL,
     RETRIEVAL_GENERATIONS_RULE_SQL,
+    RETRIEVAL_CHANGE_STATE_RULE_SQL,
   ],
   ["archive_steps"],
 );

@@ -4663,6 +4663,11 @@ function reprojectLibrarySearch(after: string | null, limit: number) {
       .all(after, after, limit)
       .map((row: Dynamic) => String(row.literature_id));
     for (const id of ids) indexMetadata(id, getLiterature(id, true).metadata);
+    // The last page records that every row now follows the current rule.
+    if (ids.length < limit)
+      db.prepare(
+        "UPDATE retrieval_change_state SET library_search_rule=? WHERE singleton=1",
+      ).run(queryTextModule.FTS_TEXT_RULE);
     commitCatalogWrite(db);
     return {
       count: ids.length,
@@ -5307,6 +5312,7 @@ port.on("message", (message: WorkerMessage) => {
           "publish",
           "active",
           "state",
+          "ruleStatus",
           "search",
           "documentCoverage",
           "metadataSource",

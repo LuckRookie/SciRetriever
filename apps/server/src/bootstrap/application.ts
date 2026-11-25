@@ -308,6 +308,8 @@ export interface Application {
     readonly scheduleIndexRebuild?: IndexRefreshService["scheduleRebuild"];
     readonly verifyIndex: RetrievalIndexService["verify"];
     readonly verifyCatalog: RetrievalStorageClient["verifyCatalog"];
+    /** Rewrite library search rows with the current text rule (spec 9.7). */
+    readonly rebuildLibrarySearch: SqliteWorker["reprojectLibrarySearch"];
     readonly extraction: ExtractionDeliveryService;
   } | null;
   readonly documentProcessing: DocumentProcessingService;
@@ -1781,6 +1783,7 @@ async function createApplicationOwned(
             interval_ms: options.indexRefreshIntervalMs ?? 5000,
           },
       () => refreshState.active(),
+      () => refreshState.ruleStatus(),
     );
     await indexRefresh.start();
     // One process-wide acquisition port, built here and shared by every caller: the
@@ -2301,6 +2304,8 @@ async function createApplicationOwned(
                 new RetrievalStorageClient(indexDatabase!).verifyCatalog(
                   signal,
                 ),
+              rebuildLibrarySearch:
+                database.reprojectLibrarySearch.bind(database),
               extraction: extractionDelivery,
             },
             [
@@ -2313,6 +2318,7 @@ async function createApplicationOwned(
               "scheduleIndexRebuild",
               "verifyIndex",
               "verifyCatalog",
+              "rebuildLibrarySearch",
             ],
             admission,
           )
@@ -2784,8 +2790,10 @@ export async function createQueryApplication(
       context,
       knowledgeContext,
       indexRefreshStatus: () =>
-        readIndexRefreshStatus(`${catalogPath}.index-refresh.json`, () =>
-          retrievalStorage.active(),
+        readIndexRefreshStatus(
+          `${catalogPath}.index-refresh.json`,
+          () => retrievalStorage.active(),
+          () => retrievalStorage.ruleStatus(),
         ),
 
       close,

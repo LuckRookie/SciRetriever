@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import type { MaterialContextBundle } from "@sciretriever/contracts";
 import { createQueryApplication } from "../src/bootstrap/application.js";
+import { executeMaintenance } from "../src/entry/maintenance-operations.js";
+import { executeQuery } from "../src/entry/query-operations.js";
 import { runCli } from "../src/cli/main.js";
 import { ftsMatchQuery } from "../src/literature/query.js";
 import {
@@ -164,20 +166,52 @@ it("reads an index built by an older text rule as stale until an explicit rebuil
     await e.submit("search-rule");
     await e.app.maintenance!.refreshIndex!();
     expect((await search(e, "研究")).coverage).toBe("complete");
+    // The index status reads the same, through the shared query contract.
+    const status = async () => {
+      const q = await createQueryApplication(e.home);
+      try {
+        return {
+          app: await e.app.indexRefreshStatus!(),
+          query: (await executeQuery(q, "index-status", {})) as Record<
+            string,
+            unknown
+          >,
+        };
+      } finally {
+        await q.close();
+      }
+    };
+    const current = { rule_current: true, rule_reason: null };
+    expect(await status()).toMatchObject({ app: current, query: current });
     const db = new DatabaseSync(join(e.home, "catalog.sqlite"));
     try {
-      // A generation from before this rule carries no text rule.
-      db.exec("UPDATE retrieval_generations SET text_rule=NULL");
+      db.exec("UPDATE retrieval_generations SET translation_language='en'");
     } finally {
       db.close();
     }
+    expect((await status()).app).toMatchObject({
+      rule_current: false,
+      rule_reason: "translation-language",
+    });
+    const older = new DatabaseSync(join(e.home, "catalog.sqlite"));
+    try {
+      // A generation from before this rule carries neither field.
+      older.exec(
+        "UPDATE retrieval_generations SET text_rule=NULL,translation_language=NULL",
+      );
+    } finally {
+      older.close();
+    }
     const stale = await search(e, "研究");
     expect(stale.coverage).toBe("index-stale");
+    const old = { rule_current: false, rule_reason: "text-rule" };
+    expect(await status()).toMatchObject({ app: old, query: old });
     // An incremental refresh does not make it current; a rebuild does.
     await e.app.maintenance!.refreshIndex!();
     expect((await search(e, "研究")).coverage).toBe("index-stale");
     await e.app.maintenance!.rebuildIndex();
     expect((await search(e, "研究")).coverage).toBe("complete");
+    expect(await status()).toMatchObject({ app: current, query: current });
   } finally {
     await e.close();
   }
@@ -199,16 +233,39 @@ it("rewrites library search rows to the new rule with the explicit rebuild comma
     expect(await find("论文")).toBe(1);
     expect(await find("文的")).toBe(1);
     expect(await find("检文")).toBe(0);
-    // Rows written by the old rule kept a run of Han characters as one word.
+    // A new catalog starts with the current rule.
+    expect(await e.app.indexRefreshStatus!()).toMatchObject({
+      library_search_rule_current: true,
+    });
+    // An upgraded library's rows kept a run of Han characters as one word,
+    // and its marker is empty until the rows are rewritten.
     const db = new DatabaseSync(join(e.home, "catalog.sqlite"));
     try {
       db.prepare(
         "UPDATE literature_search_fts SET title=? WHERE literature_id=?",
       ).run("中文论文的检索", e.id);
+      db.exec("UPDATE retrieval_change_state SET library_search_rule=NULL");
     } finally {
       db.close();
     }
     expect(await find("论文")).toBe(0);
+    expect(await e.app.indexRefreshStatus!()).toMatchObject({
+      library_search_rule_current: false,
+    });
+    // The maintenance operation behind HTTP and MCP does the same as the CLI.
+    expect(
+      await executeMaintenance(e.app, "rebuild-library-search", {}),
+    ).toEqual({ literatures: 1 });
+    expect(await find("论文")).toBe(1);
+    expect(await e.app.indexRefreshStatus!()).toMatchObject({
+      library_search_rule_current: true,
+    });
+    const again = new DatabaseSync(join(e.home, "catalog.sqlite"));
+    try {
+      again.exec("UPDATE retrieval_change_state SET library_search_rule=NULL");
+    } finally {
+      again.close();
+    }
     let out = "";
     const cli = await runCli(["maintenance", "rebuild-library-search"], {
       home: e.home,
@@ -219,6 +276,9 @@ it("rewrites library search rows to the new rule with the explicit rebuild comma
     expect(cli.code).toBe(0);
     expect(JSON.parse(out)).toMatchObject({ literatures: 1 });
     expect(await find("论文")).toBe(1);
+    expect(await e.app.indexRefreshStatus!()).toMatchObject({
+      library_search_rule_current: true,
+    });
   } finally {
     await e.close();
   }

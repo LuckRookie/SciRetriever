@@ -1444,6 +1444,12 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
     false,
   ),
   tool(
+    "rebuild_library_search",
+    "Rewrite every literature's library search row (titles, authors, keywords) with the current text rule, a page per short write transaction; waits and returns {literatures}. index_status reports library_search_rule_current. Does not download, parse or call models.",
+    object({}),
+    false,
+  ),
+  tool(
     "verify_index",
     "Explicitly verify all indexed source text, SQLite structure, FTS postings and whole-generation hashes. Does not rebuild, download or parse. Rebuild if verification reports corruption.",
     object({}),

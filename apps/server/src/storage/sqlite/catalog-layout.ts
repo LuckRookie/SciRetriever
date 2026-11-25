@@ -85,7 +85,7 @@ export function initializeCurrentCatalog(
       EXECUTION_RUNTIME_SCHEMA_FINGERPRINT,
     );
     db.exec(
-      "INSERT INTO retrieval_source_revision(singleton,revision) VALUES(1,0); INSERT INTO retrieval_change_state(singleton,processed_position) VALUES(1,0); INSERT INTO vocabulary_state(singleton,version,consolidated_version) VALUES(1,0,0)",
+      "INSERT INTO retrieval_source_revision(singleton,revision) VALUES(1,0); INSERT INTO retrieval_change_state(singleton,processed_position,library_search_rule) VALUES(1,0,'cjk-char-v1'); INSERT INTO vocabulary_state(singleton,version,consolidated_version) VALUES(1,0,0)",
     );
     for (const addition of CATALOG_ADDITIONS)
       registerCatalogAddition(db, addition, createdAt, true);

@@ -969,7 +969,7 @@ HTTP 使用 `protocol_version: 1` 封套与现有维护认证；任务进度与�
 - 一份译文是一个不可变的文件，放进 ArtifactStore，与校订稿的做法相同（[存储 2.3](07-versioned-storage.md#23-sqlite-责任)）；库里只登记它的身份。
 - 文件内容：`schema_version`、文献与主 PDF 的编号、文档版本与结构注释的编号、所依据的校订稿内容版本、`target_language`、`status`，以及按文中顺序排列的单元。每个单元记 `unit_id`、`segment_ids`（它包含的原文片段）、`source_sha256`、`translation`（缺译为 null）、`model`、`prompt_version`。
 - 登记表 `document_translations`：一行对应文献、主 PDF、校订稿内容版本与语言的一个组合，记文件的 sha256 与大小、单元总数、已翻数、状态（`complete`、`partial`、`same-language`）与时间。同一组合再次发布时登记换成新的一份；旧文件与其他被替换的不可变文件一样留在 ArtifactStore。
-- 库结构：增补集 `document-translations` 新建登记表；重建 `archive_steps`，把步骤名的取值列表换成格式检查，以后加步骤不再改表；给全文索引的条目与代各加两列（译文的语言与文件、建索引时的规则与译文语言），并加上 9.7 所说的触发器。重建表属于[存储 4.4](07-versioned-storage.md#44-只加的结构变化不停服)的例外：要停服执行，执行之后旧版本不能打开这个库。
+- 库结构：增补集 `document-translations` 新建登记表；重建 `archive_steps`，把步骤名的取值列表换成格式检查，以后加步骤不再改表；给全文索引的条目与代各加两列（译文的语言与文件、建索引时的规则与译文语言），给检索的状态行加一列记书目检索所用的规则，并加上 9.7 所说的触发器。重建表属于[存储 4.4](07-versioned-storage.md#44-只加的结构变化不停服)的例外：要停服执行，执行之后旧版本不能打开这个库。
 - ADR 0051 的全文译文缓存文件（程序缓存目录下的 `fulltext/`）不再读写，新版本首次启动时删除这个目录。
 
 ### 9.5 全文改动之后
@@ -1002,7 +1002,8 @@ HTTP 使用 `protocol_version: 1` 封套与现有维护认证；任务进度与�
 - 同一单元的原文与译文都命中时，只算一条，按原文命中显示。合并段的译文只与它第一个叶块的原文命中归并，后面几个叶块的原文命中仍各自出现。
 - 中文、日文、韩文的索引与查询按字切分（规则 `cjk-char-v1`）：每个汉字、假名、谚文各成一个词；查询里连续的这类字按相邻的短语匹配，短语不跨标点、不跨单元。拉丁等其他文字不变。文献库的书目检索用同一规则。
 - 索引的每一代记下建它时的切分规则与译文语言。与当前不一致时，检索结果的 `coverage` 为 `index-stale`，照常返回结果；增量刷新不消除它，要显式重建（`maintenance rebuild-index`）。启动不自动重建。改了 `[translation].target_language` 同样要重建一次。
-- 书目检索的旧行按旧规则写成，中文的部分词查不到；`sciretriever maintenance rebuild-library-search` 按当前规则重写全部行，元数据有改动的文献会自动按新规则重写。
+- 书目检索的旧行按旧规则写成，中文的部分词查不到；`rebuild-library-search`（CLI `maintenance rebuild-library-search`，HTTP 维护路由与 MCP `rebuild_library_search`，权限同重建索引）按当前规则重写全部行，元数据有改动的文献会自动按新规则重写。
+- 索引状态多三项可选字段：`rule_current`（这一代是否按当前规则与译文语言建成）、`rule_reason`（`text-rule` 或 `translation-language`，一致时为 null）、`library_search_rule_current`（书目检索的行是否都已按当前规则重写）。
 
 ### 9.8 验证
 

@@ -1712,6 +1712,45 @@ export class RetrievalStorageEngine {
       source_count: row.source_count,
     };
   }
+  /**
+   * Which rules the active generation and the library search rows were
+   * written with (document spec 9.7). Two scalar reads; never scans entries.
+   */
+  ruleStatus(): {
+    readonly generation: {
+      readonly rule_current: boolean;
+      readonly rule_reason: "text-rule" | "translation-language" | null;
+    } | null;
+    readonly library_search_rule_current: boolean;
+  } {
+    this.refreshReader();
+    const rule = this.db
+      .prepare(
+        "SELECT g.text_rule,g.translation_language FROM retrieval_active_generation a JOIN retrieval_generations g ON g.generation_id=a.generation_id WHERE a.singleton=1",
+      )
+      .get() as
+      | { text_rule: string | null; translation_language: string | null }
+      | undefined;
+    const library = this.db
+      .prepare(
+        "SELECT library_search_rule FROM retrieval_change_state WHERE singleton=1",
+      )
+      .get() as { library_search_rule: string | null } | undefined;
+    const reason = !rule
+      ? null
+      : rule.text_rule !== RETRIEVAL_TEXT_RULE
+        ? ("text-rule" as const)
+        : rule.translation_language !== this.translationLanguage
+          ? ("translation-language" as const)
+          : null;
+    return {
+      generation: rule
+        ? { rule_current: reason === null, rule_reason: reason }
+        : null,
+      library_search_rule_current:
+        library?.library_search_rule === RETRIEVAL_TEXT_RULE,
+    };
+  }
   /** Fixed-size snapshot; never scans entries, FTS or source fingerprints. */
   state(): RetrievalIndexState {
     this.refreshReader();

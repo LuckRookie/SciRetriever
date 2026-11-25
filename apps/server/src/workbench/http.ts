@@ -2673,6 +2673,7 @@ export interface QueryOnlyHttpOptions {
     readonly scheduleIndexRebuild?: () => Promise<unknown>;
     readonly verifyIndex?: (signal?: AbortSignal) => Promise<unknown>;
     readonly verifyCatalog?: (signal?: AbortSignal) => Promise<unknown>;
+    readonly rebuildLibrarySearch?: (signal?: AbortSignal) => Promise<unknown>;
     readonly extraction?: ExtractionDeliveryService;
   };
   readonly assets?: ReadonlyMap<string, WorkbenchStaticAsset>;
@@ -2833,6 +2834,7 @@ function createQueryHttpHandler(
       url.pathname === "/api/v1/maintenance/index-refresh" ||
       url.pathname === "/api/v1/maintenance/verify-index" ||
       url.pathname === "/api/v1/maintenance/verify-catalog" ||
+      url.pathname === "/api/v1/maintenance/rebuild-library-search" ||
       url.pathname === "/api/v1/maintenance/processor-submit" ||
       extractionPaths.has(url.pathname) ||
       ARCHIVE_HTTP_WRITES.some(
@@ -3013,6 +3015,40 @@ function createQueryHttpHandler(
           selection.asset_sha256,
         );
         json(response, 200, { protocol_version: 1, default: current });
+        return;
+      }
+      if (url.pathname === "/api/v1/maintenance/rebuild-library-search") {
+        // Same admission as rebuild-index; request {kind:"rebuild"}.
+        const command = object(await body(request), [
+          "protocol_version",
+          "request",
+        ]);
+        if (
+          command.protocol_version !== 1 ||
+          object(command.request, ["kind"]).kind !== "rebuild"
+        )
+          invalidInput();
+        const rebuild = options.maintenance.rebuildLibrarySearch;
+        if (!rebuild) {
+          json(response, 503, {
+            protocol_version: 1,
+            code: "maintenance-unavailable",
+          });
+          return;
+        }
+        const stop = new AbortController();
+        const abort = () => stop.abort();
+        response.once("close", abort);
+        streams.add(response);
+        try {
+          json(response, 200, {
+            protocol_version: 1,
+            result: await rebuild(stop.signal),
+          });
+        } finally {
+          streams.delete(response);
+          response.off("close", abort);
+        }
         return;
       }
       if (
@@ -3696,6 +3732,9 @@ function createQueryHttpHandler(
           request.url?.startsWith("/api/v1/maintenance/index-refresh") ||
           request.url?.startsWith("/api/v1/maintenance/verify-index") ||
           request.url?.startsWith("/api/v1/maintenance/verify-catalog") ||
+          request.url?.startsWith(
+            "/api/v1/maintenance/rebuild-library-search",
+          ) ||
           request.url?.startsWith("/api/v1/maintenance/extraction-")
         ) {
           const failure = maintenanceError(error);

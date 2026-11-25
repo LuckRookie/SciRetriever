@@ -19,9 +19,18 @@ function code(error: unknown): string {
     : "index-refresh-failed";
 }
 /** Live active-state probe is deliberately separate from the durable queue. */
+/** Rules the projections were written with; see RetrievalStorageEngine.ruleStatus. */
+export type IndexRuleProbe = () => Promise<{
+  readonly generation: {
+    readonly rule_current: boolean;
+    readonly rule_reason: "text-rule" | "translation-language" | null;
+  } | null;
+  readonly library_search_rule_current: boolean;
+}>;
 export async function readIndexRefreshStatus(
   path: string,
   active?: () => Promise<unknown | null>,
+  rules?: IndexRuleProbe,
 ): Promise<IndexRefreshStatus> {
   const value = await IndexRefreshStateStore.status(path);
   let index_state: IndexRefreshStatus["index_state"];
@@ -34,11 +43,16 @@ export async function readIndexRefreshStatus(
       index_state = "corrupt";
     }
   }
+  const rule = rules ? await rules() : null;
   return {
     ...value,
     operation: value.operation ?? null,
     progress: value.progress ?? null,
     ...(index_state ? { index_state } : {}),
+    ...(rule?.generation ? rule.generation : {}),
+    ...(rule
+      ? { library_search_rule_current: rule.library_search_rule_current }
+      : {}),
   };
 }
 /** Durable latest-request slot; one builder across processes, never held by publication. */
@@ -75,6 +89,7 @@ export class IndexRefreshService {
       interval_ms?: number;
     },
     private readonly activeIndex?: () => Promise<unknown | null>,
+    private readonly rules?: IndexRuleProbe,
   ) {
     if (
       monitor &&
@@ -94,6 +109,7 @@ export class IndexRefreshService {
     const value = await readIndexRefreshStatus(
       this.store.path,
       this.activeIndex,
+      this.rules,
     );
     return this.failure
       ? {

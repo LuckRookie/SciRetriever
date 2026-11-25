@@ -296,6 +296,7 @@ export function createMcpServer(options: McpOptions = {}) {
       refresh_index: "index-refresh",
       verify_index: "verify-index",
       verify_catalog: "verify-catalog",
+      rebuild_library_search: "rebuild-library-search",
       create_extraction: "extraction-operation",
       read_extraction: "extraction-operation-read",
       submit_extraction: "extraction-submit",

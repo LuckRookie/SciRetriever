@@ -137,6 +137,7 @@ export const MAINTENANCE_OPERATIONS = [
   "index-refresh",
   "verify-index",
   "verify-catalog",
+  "rebuild-library-search",
   ...EXTRACTION_OPERATIONS.map((name) => `extraction-${name}` as const),
 ] as const;
 export type MaintenanceOperation = (typeof MAINTENANCE_OPERATIONS)[number];
@@ -449,6 +450,12 @@ async function performMaintenance(
       const refresh = app.maintenance?.scheduleIndexRefresh;
       if (!refresh) throw new ProductOperationError("maintenance-unavailable");
       return refresh();
+    }
+    case "rebuild-library-search": {
+      operationRecord(input, []);
+      const rebuild = app.maintenance?.rebuildLibrarySearch;
+      if (!rebuild) throw new ProductOperationError("maintenance-unavailable");
+      return rebuild(signal);
     }
     case "verify-index": {
       operationRecord(input, []);

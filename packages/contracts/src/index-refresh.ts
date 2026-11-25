@@ -60,6 +60,16 @@ export interface IndexRefreshStatus {
   readonly index_state?: "ready" | "missing" | "corrupt";
   readonly operation?: "refresh" | "rebuild" | null;
   readonly progress?: { readonly done: number; readonly total: number } | null;
+  /**
+   * The active generation was built with the current text rule and the
+   * configured translation language (document spec 9.7). Absent without an
+   * active generation; an older generation records neither and reads as
+   * not current with reason `text-rule`.
+   */
+  readonly rule_current?: boolean;
+  readonly rule_reason?: "text-rule" | "translation-language" | null;
+  /** The library search rows were all written with the current text rule. */
+  readonly library_search_rule_current?: boolean;
 }
 export function parseIndexRefreshStatus(value: unknown): IndexRefreshStatus {
   const fail = (): never => {
@@ -83,9 +93,14 @@ export function parseIndexRefreshStatus(value: unknown): IndexRefreshStatus {
           ? ["pending_literatures"]
           : []),
         ...(Object.hasOwn(r, "last_refresh_ms") ? ["last_refresh_ms"] : []),
-        ...["index_state", "operation", "progress"].filter((key) =>
-          Object.hasOwn(r, key),
-        ),
+        ...[
+          "index_state",
+          "operation",
+          "progress",
+          "rule_current",
+          "rule_reason",
+          "library_search_rule_current",
+        ].filter((key) => Object.hasOwn(r, key)),
       ]
         .sort()
         .join() ||
@@ -125,6 +140,19 @@ export function parseIndexRefreshStatus(value: unknown): IndexRefreshStatus {
   if (
     Object.hasOwn(r, "index_state") &&
     !["ready", "missing", "corrupt"].includes(String(r.index_state))
+  )
+    fail();
+  if (
+    Object.hasOwn(r, "rule_current") !== Object.hasOwn(r, "rule_reason") ||
+    (Object.hasOwn(r, "rule_current") &&
+      (typeof r.rule_current !== "boolean" ||
+        (r.rule_current
+          ? r.rule_reason !== null
+          : !["text-rule", "translation-language"].includes(
+              String(r.rule_reason),
+            )))) ||
+    (Object.hasOwn(r, "library_search_rule_current") &&
+      typeof r.library_search_rule_current !== "boolean")
   )
     fail();
   if (

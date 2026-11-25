@@ -40,6 +40,7 @@ export function withoutDocumentTranslations(db: DatabaseSync) {
     ["retrieval_entries", "translation_language"],
     ["retrieval_generations", "translation_language"],
     ["retrieval_generations", "text_rule"],
+    ["retrieval_change_state", "library_search_rule"],
   ])
     db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
   db.exec("DROP TABLE document_translations");
