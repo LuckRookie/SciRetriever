@@ -8,4 +8,10 @@
 
 相关说明：[验证与协作规则](../../HARNESS.md)。
 
-[上级目录](../README.md) · [项目 README](../../README.md)
+## 放置边界
+
+本地开发命令由根 `package.json` 定义；一次性测试脚本与真实连接记录放在本机 `sandbox/`。
+
+上一级的 `.github/` 不放 `README.md`：GitHub 会优先把它显示成仓库首页，盖住根目录的 README。它的说明在[仓库目录地图](../../docs/development/repository-map.md)。
+
+[仓库目录地图](../../docs/development/repository-map.md) · [项目 README](../../README.md)

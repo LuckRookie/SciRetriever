@@ -23,7 +23,7 @@
 | [release/](../../release/README.md)                               | 构建工具使用的发布运行清单                                                                |
 | [example/](../../example/README.md)                               | 可共享的配置示例                                                                          |
 | [migration/](../../migration/README.md)                           | 迁移兼容清单、固定 oracle 与历史证据；部分清单仍由测试消费                                |
-| [.github/](../../.github/README.md)                               | GitHub CI 工作流                                                                          |
+| [.github/](../../.github/workflows/README.md)                     | GitHub CI 工作流；本目录不放 README，否则 GitHub 会把它显示成仓库首页                     |
 
 ## 要做什么，去哪里
 
