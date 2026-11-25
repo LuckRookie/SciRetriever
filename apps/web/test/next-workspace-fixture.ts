@@ -75,6 +75,8 @@ export async function nextWorkspace(
     >["configuration"];
     /** Serve reader translation; false for a deployment without it. */
     translation?: boolean;
+    /** Options of the application fixture, such as fake metadata sources. */
+    core?: NonNullable<Parameters<typeof workspace>[2]>["core"];
   } = {},
 ) {
   return workspace(options.analysisModel ?? true, options.setup, {
@@ -83,6 +85,7 @@ export async function nextWorkspace(
     ready: options.ready ?? '[aria-label="文献列表"] .paper-row:first-child',
     ...(options.configuration ? { configuration: options.configuration } : {}),
     ...(options.translation === false ? { translation: false } : {}),
+    ...(options.core ? { core: options.core } : {}),
   });
 }
 afterAll(async () => {

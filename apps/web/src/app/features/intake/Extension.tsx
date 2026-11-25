@@ -72,20 +72,21 @@ function ConnectSteps() {
   );
 }
 
-/** “Zotero”: the libraries and groups are chosen in the extension. */
+/**
+ * “Zotero”: importing straight from Zotero is not open yet, so the line says
+ * how to go through an export meanwhile (page specs “找文献 · Zotero”).
+ */
 export function ZoteroIntake() {
   const devices = useDevices();
   const list = devices.data ?? (devices.isError ? [] : null);
   return (
     <div className="intake-extension">
       <ConnectionLine devices={list} />
-      {list === null ? null : linkedExtensions(list).length ? (
-        <p>
-          在扩展里选择要导入的库和分组。导入开始后，这里的批次记录会出现这一批。
-        </p>
-      ) : (
-        <ConnectSteps />
-      )}
+      <p>
+        从 Zotero 直接导入还没有开放。现在可以在 Zotero 里导出 BibTeX 或
+        RIS，再从“文件”导入。
+      </p>
+      {list === null || linkedExtensions(list).length ? null : <ConnectSteps />}
     </div>
   );
 }

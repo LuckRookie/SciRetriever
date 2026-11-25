@@ -40,11 +40,13 @@ export async function workspace(
     ) => NonNullable<WorkbenchHttpOptions["configuration"]>;
     /** Reader translation is served (its models from the fixture's configuration); default true. */
     translation?: boolean;
+    /** Options of the application fixture, such as fake metadata sources. */
+    core?: Parameters<typeof coreProcessingFixture>[0];
   },
 ) {
   if (!options?.assets)
     throw new Error("Workspace fixture requires production React assets");
-  const env = await coreProcessingFixture();
+  const env = await coreProcessingFixture(options.core);
   const dispose: (() => Promise<void>)[] = [() => env.close()];
   const close = async () => {
     for (const action of dispose.reverse()) await action();

@@ -8,10 +8,11 @@ import { BatchPage } from "./Batch.js";
 import { Discovery } from "./Discovery.js";
 import { Dropzone } from "./Dropzone.js";
 import { WebIntake, ZoteroIntake } from "./Extension.js";
+import { Lookup } from "./Lookup.js";
 
 /**
- * The intake page (page specs “入库”): four ways papers come in — 检索,
- * 文件, Zotero and 网页 — above every batch they formed. A batch opens on
+ * The intake page (page specs “找文献”): five ways papers come in — 检索,
+ * 指定文献, 文件, Zotero and 网页 — above every batch they formed. A batch opens on
  * this page, its id in the address.
  */
 export default function Intake() {
@@ -45,6 +46,7 @@ export default function Intake() {
             }}
             items={[
               { id: "search", label: "检索" },
+              { id: "lookup", label: "指定文献" },
               { id: "files", label: "文件" },
               { id: "zotero", label: "Zotero" },
               { id: "web", label: "网页" },
@@ -59,6 +61,8 @@ export default function Intake() {
                   }))
                 }
               />
+            ) : tab === "lookup" ? (
+              <Lookup />
             ) : tab === "files" ? (
               <Dropzone />
             ) : tab === "zotero" ? (

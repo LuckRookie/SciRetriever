@@ -11,13 +11,13 @@ it("keeps discovery and import explicit and uploads a selected PDF without hidde
   });
   try {
     await captureFeature(w.page, "react-intake");
-    // Four ways in, by where papers come from (page specs “入库”).
+    // Five ways in, by where papers come from (page specs “找文献”).
     expect(
       await w.page
         .getByRole("tablist", { name: "找文献的方式" })
         .getByRole("tab")
         .allTextContents(),
-    ).toEqual(["检索", "文件", "Zotero", "网页"]);
+    ).toEqual(["检索", "指定文献", "文件", "Zotero", "网页"]);
     const discoveries: unknown[] = [];
     let release!: () => void;
     const held = new Promise<void>((resolve) => {
@@ -268,9 +268,10 @@ it("says how to connect the extension until one is connected, then where Zotero 
     await page.reload();
     await page.getByRole("tab", { name: "Zotero", exact: true }).click();
     await panel.getByText("已连接扩展 · Chrome 扩展").waitFor();
+    // Importing straight from Zotero is not open yet (plan 28 · 07, 16).
     await panel
       .getByText(
-        "在扩展里选择要导入的库和分组。导入开始后，这里的批次记录会出现这一批。",
+        "从 Zotero 直接导入还没有开放。现在可以在 Zotero 里导出 BibTeX 或 RIS，再从“文件”导入。",
       )
       .waitFor();
     expect(await steps.count()).toBe(0);

@@ -48,6 +48,7 @@ import {
   readIntakeBatch,
   renameIntakeBatch,
 } from "../../data/intake-batches.js";
+import { lookupItems, lookupParts } from "../../data/intake-lookup.js";
 import { emptyQuery } from "../../data/library.js";
 import { openBatch } from "../library/Folders.js";
 import { AcquireDialog } from "../library/AcquireDialog.js";
@@ -57,6 +58,12 @@ import { BatchBadge, Counts, PartsBar } from "./batch-parts.js";
 import { unrecognized } from "./Dropzone.js";
 import { ParseDialog } from "./ParseDialog.js";
 import {
+  LookupCounts,
+  LookupDecisions,
+  LookupLines,
+  LookupReport,
+} from "./LookupBatch.js";
+import {
   WithdrawalReport,
   WithdrawDialog,
   Withdrawn,
@@ -64,6 +71,14 @@ import {
 } from "./Withdrawal.js";
 
 const batchKey = (id: string) => ["library", "intake-batches", "page", id];
+/**
+ * Whether recognition is still under way. Named lines are read until it is
+ * done, since a line already in the library is only known then.
+ */
+const recognitionOpen = (state: string | undefined, named: boolean) =>
+  named
+    ? !!state && state !== "done" && state !== "cancelled"
+    : state === "running";
 /** PDF folders chosen on this page, kept until the page is reloaded. */
 const folders = new Map<string, File[]>();
 
@@ -381,6 +396,8 @@ export function BatchPage({ id }: { id: string }) {
   });
   const batch = status.data;
   const imported = batch?.kind === "import";
+  // Named lines (page specs “找文献 · 指定文献”) show line by line.
+  const named = imported && batch?.request.format === "lookup";
   const awaiting = batch?.state === "awaiting-confirmation";
   const preview = useQuery({
     queryKey: [...batchKey(id), "preview"],
@@ -393,10 +410,13 @@ export function BatchPage({ id }: { id: string }) {
     },
     enabled: imported && awaiting,
     // The preview carries recognition on; it is read again until it is done.
+    // Named lines are only known to be in the library once it is.
     refetchInterval: (query) =>
       pacedInterval(
         query,
-        query.state.data?.recognition?.state === "running" ? 3000 : false,
+        recognitionOpen(query.state.data?.recognition?.state, named)
+          ? 3000
+          : false,
       ),
   });
   const ended =
@@ -428,6 +448,7 @@ export function BatchPage({ id }: { id: string }) {
   // Decisions: while awaiting confirmation, and later only those still pending.
   const deciding =
     imported &&
+    !named &&
     !!batch &&
     (awaiting ||
       ((batch.state === "running" || batch.state === "finished") &&
@@ -444,6 +465,13 @@ export function BatchPage({ id }: { id: string }) {
         query,
         preview.data?.recognition?.state === "running" ? 3000 : false,
       ),
+  });
+  // Every line of a lookup batch, read after each preview like the items.
+  const lines = useQuery({
+    queryKey: [...batchKey(id), "lines", preview.dataUpdatedAt],
+    queryFn: ({ signal }) => lookupItems(api, id, signal),
+    enabled: named && awaiting && !!preview.data,
+    placeholderData: keepPreviousData,
   });
   const refresh = () =>
     void queries.invalidateQueries({ queryKey: batchKey(id) });
@@ -513,7 +541,7 @@ export function BatchPage({ id }: { id: string }) {
     );
   const state = batch.state;
   const withdrawn = state === "withdrawn";
-  const recognizing = preview.data?.recognition?.state === "running";
+  const recognizing = recognitionOpen(preview.data?.recognition?.state, named);
   const recognition = preview.data?.recognition;
   const summary = awaiting ? preview.data?.summary : report.data?.summary;
   const actual = !awaiting && state !== "collecting";
@@ -530,6 +558,8 @@ export function BatchPage({ id }: { id: string }) {
       rows: decidable.filter((entry) => entry.kind === kind),
     }))
     .filter((group) => group.rows.length);
+  const parts =
+    named && awaiting && lines.data ? lookupParts(lines.data) : null;
   const problems = (report.data?.items ?? []).filter(
     (item) =>
       item.disposition === "conflict" ||
@@ -544,6 +574,9 @@ export function BatchPage({ id }: { id: string }) {
   const followUp =
     state === "running" || state === "finished" || state === "cancelled";
   const left = unrecognized.get(id) ?? [];
+  const waitText = named
+    ? "正在识别，完成后才能确认"
+    : "正在识别文件，完成后才能确认";
   // A withdrawal or restoration done on this page shows its report.
   const known = withdrawalReports.get(id);
   return (
@@ -671,6 +704,11 @@ export function BatchPage({ id }: { id: string }) {
           <p>还没有交来条目。</p>
         ) : !imported || withdrawn ? (
           <Counts items={batchItems(batch.counts)} label="书目计数" />
+        ) : named && summary ? (
+          <LookupCounts
+            summary={summary}
+            records={awaiting ? null : recordItems(summary)}
+          />
         ) : summary ? (
           <Definitions>
             <Definition term="书目">
@@ -742,6 +780,20 @@ export function BatchPage({ id }: { id: string }) {
         )}
       </section>
 
+      {parts ? (
+        <LookupDecisions
+          parts={parts}
+          disabled={decide.isPending}
+          decide={(target, decision) =>
+            decide.mutate({ item: target, decision })
+          }
+          error={
+            decide.isError ? (
+              <ErrorNotice message={errorMessage(decide.error)} />
+            ) : null
+          }
+        />
+      ) : null}
       {groups.length ? (
         <section className="intake-batch-part" aria-labelledby="batch-decide">
           <h3 id="batch-decide">需要决定（{decidable.length}）</h3>
@@ -781,8 +833,10 @@ export function BatchPage({ id }: { id: string }) {
           <h3 id="batch-progress">进度</h3>
           {recognizing && recognition ? (
             <p className="intake-batch-line" role="status">
-              正在识别文件 {recognition.recognized.toLocaleString()} /{" "}
+              {named ? "正在识别" : "正在识别文件"}{" "}
+              {recognition.recognized.toLocaleString()} /{" "}
               {recognition.total.toLocaleString()}
+              {named ? " 行" : ""}
               <Button
                 size="compact"
                 isDisabled={action.isPending}
@@ -880,11 +934,15 @@ export function BatchPage({ id }: { id: string }) {
         </section>
       ) : null}
 
+      {parts ? <LookupLines parts={parts} /> : null}
+
       {actual && !withdrawn ? (
         <section className="intake-batch-part" aria-labelledby="batch-report">
           <h3 id="batch-report">报告</h3>
           <p className="intake-batch-line">{fullTextLine(batch.full_text)}</p>
-          {problems.length ? (
+          {named ? (
+            <LookupReport items={report.data?.items ?? []} />
+          ) : problems.length ? (
             <DataTable
               label="冲突、未接纳与待决定"
               rows={problems}
@@ -1008,9 +1066,7 @@ export function BatchPage({ id }: { id: string }) {
             <Button
               variant="primary"
               isDisabled={action.isPending || !preview.data}
-              disabledReason={
-                recognizing ? "正在识别文件，完成后才能确认" : undefined
-              }
+              disabledReason={recognizing ? waitText : undefined}
               confirm={{
                 title: "确认入库",
                 description:
@@ -1026,7 +1082,7 @@ export function BatchPage({ id }: { id: string }) {
             </Button>
             {recognizing ? (
               <span className="ui-description intake-batch-wait">
-                正在识别文件，完成后才能确认
+                {waitText}
               </span>
             ) : null}
           </>

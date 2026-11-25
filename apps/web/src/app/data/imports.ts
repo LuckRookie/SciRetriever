@@ -8,6 +8,8 @@ import {
   type IntakeBatchState,
   type IntakeFileStatus,
   type IntakeItemResult,
+  type IntakeLookupItem,
+  type IntakeLookupSummary,
   type IntakeSummary,
 } from "@sciretriever/contracts";
 import { record, type JsonRecord } from "./wire.js";
@@ -65,6 +67,8 @@ export interface BatchSummary {
   files: IntakeSummary["files"];
   annotations: { supported: number; unsupported: number; deferred: number };
   excluded: { kind: string; count: number }[];
+  /** A `lookup` batch's line counts (literature materials 6.4.10); null otherwise. */
+  lookup: IntakeLookupSummary | null;
 }
 export interface BatchFile {
   file_id: string;
@@ -81,6 +85,8 @@ export interface BatchItemResult {
   disposition: IntakeDisposition;
   literature_id: string | null;
   reason: string | null;
+  /** A `lookup` batch's line: its number and text as submitted. */
+  line: { number: number; text: string } | null;
 }
 
 const text = (value: unknown) => (typeof value === "string" ? value : "");
@@ -93,6 +99,17 @@ const counts = <K extends string>(value: unknown, keys: readonly K[]) => {
   };
 };
 
+const LOOKUP_COUNTS = [
+  "lines",
+  "recognized",
+  "existing",
+  "candidates",
+  "unrecognized",
+  "included",
+  "rejected",
+  "duplicates",
+  "pending",
+] as const;
 export function readSummary(value: unknown): BatchSummary {
   const item = record(value, "intake summary");
   const unread =
@@ -149,6 +166,10 @@ export function readSummary(value: unknown): BatchSummary {
         return { kind: text(excluded.kind), count: count(excluded.count) };
       },
     ),
+    lookup:
+      item.lookup && typeof item.lookup === "object"
+        ? counts(item.lookup, LOOKUP_COUNTS)
+        : null,
   };
 }
 const FILE_STATUS = ["pending", "uploaded", "existing", "conflict"] as const;
@@ -177,6 +198,13 @@ export function readResult(value: unknown): BatchItemResult {
     literature_id:
       typeof item.literature_id === "string" ? item.literature_id : null,
     reason: typeof item.reason === "string" ? item.reason : null,
+    line:
+      item.line && typeof item.line === "object"
+        ? {
+            number: count((item.line as JsonRecord).number),
+            text: text((item.line as JsonRecord).text),
+          }
+        : null,
   };
 }
 
@@ -394,6 +422,50 @@ export function readItem(value: unknown): IntakeBatchItem {
       : null,
     decided_by: nullable(item.decided_by),
     decided_at: nullable(item.decided_at),
+    ...(item.lookup && typeof item.lookup === "object"
+      ? { lookup: readLookup(item.lookup as JsonRecord) }
+      : {}),
+  };
+}
+const LOOKUP_KINDS = ["doi", "arxiv", "pmid", "title"] as const;
+const LOOKUP_OUTCOMES = [
+  "pending",
+  "recognized",
+  "existing",
+  "candidates",
+  "unrecognized",
+  "rejected",
+  "duplicate",
+] as const;
+const LOOKUP_REFUSALS = [
+  "lookup-unsupported-url",
+  "lookup-too-short",
+  "lookup-too-long",
+  "duplicate-line",
+] as const;
+const oneOf = <T extends string>(values: readonly T[], value: unknown) =>
+  (values as readonly unknown[]).includes(value) ? (value as T) : null;
+/** One submitted line of a `lookup` batch (literature materials 6.4.10). */
+function readLookup(value: JsonRecord): IntakeLookupItem {
+  const found =
+    value.found && typeof value.found === "object"
+      ? (value.found as JsonRecord)
+      : null;
+  return {
+    line: count(value.line),
+    text: text(value.text),
+    kind: oneOf(LOOKUP_KINDS, value.kind),
+    reason: oneOf(LOOKUP_REFUSALS, value.reason),
+    outcome: oneOf(LOOKUP_OUTCOMES, value.outcome) ?? "pending",
+    included: value.included === true,
+    found: found
+      ? {
+          title: nullable(found.title),
+          first_author: nullable(found.first_author),
+          publication_year: year(found.publication_year),
+          identifiers: list(found.identifiers) as never,
+        }
+      : null,
   };
 }
 /** The three kinds of item a person decides (page specs “批次页” 3). */

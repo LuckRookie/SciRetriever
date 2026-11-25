@@ -231,6 +231,24 @@ export function probeReason(code: string): string {
   return probeReasons[code] ?? `没有通过（${code}）。`;
 }
 
+/**
+ * Why a line of a `lookup` batch did not go in (literature materials 6.4.12),
+ * said to the reader; an unknown reason falls back to the service's message.
+ */
+const lookupReasons: Readonly<Record<string, string>> = {
+  "lookup-unsupported-url":
+    "不支持这个网址：网址里要有 DOI，或者是 arXiv、PubMed 的文献页",
+  "lookup-too-short": "标题太短，不足 10 个字符",
+  "lookup-too-long": "太长，超过 500 个字符，不像一个标题",
+  "duplicate-line": "与前面的一行是同一篇",
+  "lookup-candidates": "有几篇可能是它，没有挑选",
+  "lookup-unrecognized": "没有认出，没有选择仍然入库",
+  excluded: "决定不入库",
+};
+export function lookupReason(code: string): string {
+  return lookupReasons[code] ?? serviceMessage(code);
+}
+
 /** Transport diagnostics are codes, never copy for a human-facing notification. */
 export function serviceMessage(code: string): string {
   return (
@@ -294,6 +312,11 @@ export function serviceMessage(code: string): string {
         "intake-batch-limit":
           "超出一个批次的记录或数据上限，请拆分后分别导入。",
         "intake-metadata-pending": "书目还没入库完，稍后再结束。",
+        "intake-lookup-too-many":
+          "一次最多 200 行（空行不算），请分成几批分别查找。",
+        "intake-recognition-pending": "还在识别，完成后才能确认。",
+        "intake-decision-invalid":
+          "这个决定已不适用于这一条，请刷新批次后重新决定。",
         "intake-file-hash-required":
           "这篇文献已有 PDF，只需核对文件，不需上传。",
         "intake-input-invalid": "入库内容无效，请检查后重试。",
