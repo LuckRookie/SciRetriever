@@ -418,7 +418,9 @@
     box-sizing: border-box;
     height: 48px;
     min-height: 48px;
-    padding-block: 0;
+    /* The row sits 2 px under the bar's centre: the tabs stand on the lower
+       line, and a row on the exact centre reads as too high beside them. */
+    padding-block: 4px 0;
     border-bottom: 0;
     background: var(--side);
     box-shadow: inset 0 -1px 0 var(--line2);
@@ -436,15 +438,15 @@
     align-items: flex-end;
     gap: 0;
   }
-  /* A tab stands on the bar's lower line, 6 px short of its top, yet its
-     words sit on the bar's own centre line with the mark and the buttons:
-     the room it keeps under them makes up for the gap above it. */
+  /* A tab stands on the bar's lower line, 6 px short of its top; the room
+     it keeps under its words puts them on the row's line with the mark and
+     the buttons. */
   .workspace-tab,
   .top-bar .paper-tab {
     box-sizing: border-box;
     align-self: flex-end;
     height: 42px;
-    padding-bottom: 7px;
+    padding-bottom: 3px;
     border: 1px solid transparent;
     border-bottom: 0;
     border-radius: var(--radius-md) var(--radius-md) 0 0;
