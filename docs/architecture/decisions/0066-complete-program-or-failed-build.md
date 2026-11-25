@@ -2,7 +2,7 @@
 
 类型：决策（ADR）
 负责：安装与构建的完整性：主线功能需要的本机部件有哪些、由谁取得、取不到时怎么办；启动时的把关；本机部件与外部服务的界线
-状态：Proposed（2026-11-25，Owner 已决定第 1 节的原则与第 2 节里“Xvfb 等浏览器相关的部件也随程序到位”；第 3 节各部件的取得办法、第 4 节的启动把关与第 5 节的过渡顺序待 Owner 审阅；MinerU 见“还没有决定的事”）
+状态：Accepted（2026-11-25，Owner 决定）；MinerU 作为可选包尚未决定，见“还没有决定的事”
 
 - Date: 2026-11-25
 - 依据：Owner 2026-11-25 的原话：
@@ -10,6 +10,8 @@
   > 我们在项目在安装的时候没有把这些必须安装的组建给安装上吗？这用户用的岂不是残破不全的程序？
 
   > 我认为应该构筑我们的程序的时候自动把所有相关的包都一起打包。不需要提示，要么就直接失败，要么就给安装好，包括Xvfb等浏览器相关的包。minerU我也在考虑可以作为可选包，因为minerU比较大，我们虽然接受外部服务，但是我们也可以安装到自己的程序里面
+
+  > 接受（2026-11-25，对本 ADR 全文，含各部件的取得办法、启动把关与过渡顺序）
 
 - 部分取代：[ADR 0016](0016-cloakbrowser-fixed-identity-runtime.md)“后果”里的“安装包保持可安装且不携带 vendor binary”：改为第 2、3 节。ADR 0016 的其余内容（唯一生产 runtime、固定身份、Binary 版本与 Profile 迁移显式受控、Network guard）继续有效。
 - Related：[ADR 0003](0003-operator-managed-mineru-service.md) MinerU 由 operator 独立部署；[ADR 0025](0025-typescript-entry-and-runtime-contract.md) 运行合同；[ADR 0063](0063-unified-intake.md) 第 11 节认出是哪一篇；[安装指南](../../guides/installation.md)。

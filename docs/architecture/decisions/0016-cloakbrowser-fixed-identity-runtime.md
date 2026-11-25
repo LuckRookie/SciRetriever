@@ -2,7 +2,7 @@
 
 类型：决策（ADR）
 负责：CloakBrowser 固定身份 Browser runtime 与验证页资源边界
-状态：Accepted；第 4 节“使用服务器原始网络出口”被 [ADR 0056](0056-outbound-proxy-by-requester.md) 取代，浏览器改用 Owner 选择的出口，其余 Network guard 不变
+状态：Accepted；第 4 节“使用服务器原始网络出口”被 [ADR 0056](0056-outbound-proxy-by-requester.md) 取代，浏览器改用 Owner 选择的出口，其余 Network guard 不变；“后果”里的“安装包保持可安装且不携带 vendor binary”被 [ADR 0066](0066-complete-program-or-failed-build.md) 取代
 
 - Date: 2026-08-21
 - Last amended: 2026-09-04
