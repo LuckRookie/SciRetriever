@@ -11,6 +11,8 @@
 - [read-lanes.ts](read-lanes.ts) 列出读取的分道与耗时上限。工作台的查询与应用对象共用一个只读长请求线程。许可内的读取继续随原写入处理。短读排队及执行合计超过 5 秒时记录 `sqlite-short-read-slow`。
 - [intake-engine.ts](intake-engine.ts) 先按批次顺序索引取一页，再在同一只读快照中统计本页各批次的成员与状态。摘要列表沿用完整列表的顺序和游标，省去按论文统计全文与操作预估。摘要、完整列表、单批次详情和导入批次详情均走长读道。
 - [archive-engine.ts](archive-engine.ts) 的问题计数走短读道，经 `archive-unresolved-issues` 增补集的部分索引核对未解决问题和当前 PDF 关系。全库问题列表走长读道，列表与计数共用当前材料条件。增补只建索引，创建时一次填完。
+- [document-translation-engine.ts](document-translation-engine.ts)：全文译文的登记（ADR 0068），由 archive 存储动作 `translation`、`translation-latest`（只读）与 `translation-publish` 调用。`document_translations` 每个“文献、主 PDF、校订稿内容版本、语言”一行，只记不可变文件的引用、sha256、大小、单元数、已译数与状态，译文正文只在文件里；发布在同一事务登记 artifact 对象并替换该组合的行，旧文件仍登记。表与 `archive_steps` 接受 `translate` 的取值约束来自增补集 `document-translations`。
+- [catalog-ddl.ts](catalog-ddl.ts) 的增补集可以声明 `rebuilds`：所列已有表由新的 CREATE 语句替换，`catalog-additions.ts` 在同一事务里先删去它的索引与触发器，把全部行复制到临时表、重建表、原样复制回去，再按原文重建索引与触发器，并核对行数；规格 4.4 把这类变化登记为例外（停服、经 Owner 同意），应用之后不认识它的旧版本不再能打开这个库。目前只有 `document-translations` 重建 `archive_steps`。
 - [literature-bibliographies.ts](literature-bibliographies.ts)：文献公开批量书目读取的存储适配，只取当前标识、题名与年份；与文件夹导出共享同一快照，不读取正文或状态。
 - [worker-runtime.ts](worker-runtime.ts)：SQLite worker 运行实现。
 - [citation-progress.ts](citation-progress.ts) 将引用扩展的待查队列、原因去重、待补查队列和未完成查询的回放键放入临时 SQLite。持久来源为与发现结果同一事务提交的 `citation-write-checkpoint`。恢复按事件序号每页取 32 条，执行按索引取各队列的最早待查项。旧检查点中尚未发布的原因按段补写。

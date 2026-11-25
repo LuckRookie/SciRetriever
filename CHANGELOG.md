@@ -25,6 +25,8 @@
 - 配对按来源编号：文件引用是来源里的编号（如 Zotero 附件编号）时，按“编号/文件名”与交来文件的相对路径比较，同名的独立 PDF 也能各自配上。
 - 入库接口新增格式 `zotero-api`：扩展或导入程序把 Zotero 接口返回的条目与分类原样交来，文献库转换书目（优先用 Zotero 给的 CSL JSON）、Extra 里的 DOI、arXiv 号与 PMID、分类（成为文件夹）、自动标签（作者关键词）与手动标签（“标签”文件夹）、首选 PDF；独立 PDF 成为只有文件的条目；笔记、批注、其他 PDF、非 PDF 附件、链接附件与回收站里的条目按种类计数，进预览与报告。扩展与导入程序另行发布。
 - MCP `archive_manage` 与 `create_task` 中建档的说明改正：`full` 模式下没有原始解析的部分会先经解析服务（MinerU）解析，`legacy-vlm-markdown` 才要求已有原始解析。行为本身没变。
+- 解析全文多一步“翻译”：校订好的全文逐段译成 `[translation].target_language`（默认简体中文），存进文献库。已经是这种语言的不翻译；跨页、跨栏接起来的段落整段翻；公式原样保留，公式被改了的段算没翻好。翻译失败不影响全文：文献照常就绪，问题进“需处理”，再解析全文时只补没翻好的段。已有全文、还没有译文的文献，再解析全文一次就只跑这一步。用量估算多出“翻译”一项，按页估。
+- 读取全文可以取译文：`describe` 多 `translation`（译文语言、状态、段数、已译数）；新读取 `translation` 按段返回译文；`slice` 可带 `text: translation` 或 `bilingual`（原文一段、译文一段），结果标明 `machine_translation`，不能用来解析证据。HTTP 为 `/api/v1/query/document-translation`，CLI 为 `document translation`，MCP 为 `document_read` 的 `translation`。网页阅读页的新读法另行发布。
 - 只列候选：文献查询的 `collection_scope` 可以取 `candidates`，列出不在文献库里的文献，可与搜索、批次、状态等条件组合，也能用来整批加入文献库。CLI 为 `literature search --collection-scope candidates`，MCP 为 `search_library`。
 
 **行为变化**
@@ -32,6 +34,7 @@
 - 下载回来的 PDF 改由随程序带上的 MuPDF 验收，不再需要系统的 `pdfinfo`、`pdftotext`（poppler-utils），`sciretriever doctor` 也不再检查它们。验收规则不变，只多一条：交叉引用表损坏、要修复才能打开的 PDF（多是没下载完的）不再通过验收。
 - 导入 PDF 时，首页文字因字体没有字符映射而读成乱码的一类旧 PDF（字形名写成字母加字符码），现在能读出标题与 DOI。
 - 带大段 XMP 元数据的 PDF 读标题与 DOI 时不再因内存不足而失败。
+- PDF 视图的对照翻译改读文献库里的译文，不再现场请求模型；没有译文的文献（包括只有初稿的）这里不显示译文，“重新翻译”不再重翻。旧版按页保存在 `~/.sciretriever/cache/fulltext/` 的译文不再使用，启动时删除。划词翻译不变，它的缓存上限从 1,000 条提高到 20,000 条（解析全文的翻译也先存在这里，中断后不用重翻）。
 - 打开阅读一篇候选不再把它加入文献库；“最近读过”里会出现打开过的候选。已经因为打开而进入文献库的不变。
 - 主题搜索与引用扩展再次找到一篇已删除的文献时不再恢复它，它留在“最近删除”里；再次导入或收藏时照旧恢复。
 - 文献库页往下滚动时，顶部只留标题这一行，搜索框、材料分类和条件随列表滚走；工具最右的图钉可以把整块固定回去，选择记在浏览器里。右下角新增“回到顶部”。
@@ -47,6 +50,14 @@ pnpm sciretriever storage schema-apply --catalog ~/.sciretriever/catalog.sqlite 
 ```
 
 不改已有数据；在 35 万篇的库副本上用时约 0.1 秒。换回旧版本能照常读写，但旧版本看不到最近删除。说明见[初始化与恢复](docs/guides/upgrade.md#结构追加)。
+
+这一版还给库结构加了全文译文的登记表，并让建档步骤表接受“翻译”一步。启动前停掉服务，执行一次：
+
+```bash
+pnpm sciretriever storage schema-apply --catalog ~/.sciretriever/catalog.sqlite --addition document-translations
+```
+
+已有数据不变，但建档步骤表要整张重建：用时与已解析全文的文献数成正比，实测每 1 万篇约 2.5 秒（每篇六步、每步约 3 KB 的回执），重建期间需要约两倍于这张表的空余磁盘。与其他追加不同，执行之后旧版本不能再打开这个库，换回旧版本要先恢复执行前的备份。
 
 ## 0.1.0（2026-11-25）
 

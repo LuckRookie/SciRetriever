@@ -92,6 +92,7 @@ parsing
 providers
 models
 analyze
+translation
 execution
 library
 browser
@@ -375,6 +376,19 @@ model = "openai/operator-selected-model"
 旧配置中的 `metadata_max_output_tokens`、`content_max_output_tokens`、`reference_max_output_tokens`、`max_input_bytes`、`max_chunk_bytes`、`max_chunk_count`、`max_total_llm_requests`、`max_total_output_tokens` 仍可读取，作为弃用字段保留，内容总结不执行它们。`Analyze → Setup` 只选择模型，不再生成或展示这些预算。`reference_max_output_tokens` 同为历史保留字段，当前不用于固定输入正文加工。
 
 调用使用模型实际能力及正常网络/协议边界，保留取消、失败原因和真实 usage；有可读结果时不以历史预算拒绝发布。Browser 探索、Provider 速率、检索上下文与调用方 Extraction 规范仍各按所属合同运行。
+
+### `[translation]`
+
+| 字段              | 类型 | 默认值      | 约束                                                                                                   |
+| ----------------- | ---- | ----------- | ------------------------------------------------------------------------------------------------------ |
+| `target_language` | 文本 | `"zh-Hans"` | 取 `zh-Hans`、`zh-Hant`、`en`、`ja`、`ko`、`de`、`fr`、`es`、`ru` 之一；解析全文时把全文译成这种语言。 |
+
+解析全文的“翻译”一步把校订好的全文逐段译成 `target_language`，存进文献库（ADR 0068）。已经是这种语言的文献不翻译：先看书目的语言字段，没有时看正文的文字。翻译用的模型就是 `[analyze].model`，不另设；同时发出的请求数取 `[proofread].max_concurrent_pages`，与其他步骤共用模型名额。改了 `target_language` 只影响以后的解析全文，已有的译文保留；读取时按当时的设置取这种语言的译文，没有就是“没有译文”。此项只在配置文件提供，按启动时配置生效。
+
+```toml
+[translation]
+target_language = "zh-Hans"
+```
 
 ### `[execution]`
 
