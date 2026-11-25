@@ -92,6 +92,55 @@ export function taskCountText(running: number, issues: number): string {
     .filter(Boolean)
     .join(" · ");
 }
+const RECOGNITION_OUTCOMES = [
+  ["recognized", "认出并补全了书目"],
+  ["title_replaced", "没认出，标题换成了 PDF 里的标题"],
+  ["candidates", "只有相近的候选，没有采用"],
+  ["conflicts", "认出了，但库里已有同一篇"],
+  ["unrecognized", "没认出"],
+] as const;
+const RECOGNITION_UNREAD: Readonly<Record<string, string>> = {
+  "reader-unavailable": "服务器读不了 PDF",
+  "reader-timeout": "读取超时",
+  "reader-failed": "读取失败",
+  "encrypted-pdf": "加密",
+  "invalid-pdf": "不是有效的 PDF",
+  "image-only": "扫描件",
+};
+const RECOGNITION_SKIPPED: Readonly<Record<string, string>> = {
+  "not-marked": "书目已经完整",
+  "no-pdf": "没有 PDF",
+  trashed: "已删除",
+  withdrawn: "已撤回",
+  missing: "已不存在",
+};
+function recognitionCounts(value: Record<string, unknown>) {
+  const number = (v: unknown) =>
+    typeof v === "number" && Number.isFinite(v) ? v : 0;
+  const reasons = (
+    group: unknown,
+    labels: Readonly<Record<string, string>>,
+  ) => {
+    const by =
+      group && typeof group === "object"
+        ? ((group as Record<string, unknown>).by_reason as
+            | Record<string, unknown>
+            | undefined)
+        : undefined;
+    return Object.entries(labels)
+      .map(([key, label]) => [label, number(by?.[key])] as const)
+      .filter(([, n]) => n > 0);
+  };
+  return {
+    total: number(value.total),
+    processed: number(value.processed),
+    outcomes: RECOGNITION_OUTCOMES.map(
+      ([key, label]) => [label, number(value[key])] as const,
+    ).filter(([, n]) => n > 0),
+    unread: reasons(value.unread, RECOGNITION_UNREAD),
+    skipped: reasons(value.skipped, RECOGNITION_SKIPPED),
+  };
+}
 export const operationLabels: Readonly<Record<string, string>> = {
   "acquire-metadata": "获取元数据",
   "parse-documents": "解析 PDF",
@@ -100,6 +149,7 @@ export const operationLabels: Readonly<Record<string, string>> = {
   "run-processor": "知识处理",
   "build-archive": "生成全文",
   "backfill-tags": "标签回溯",
+  "recognize-literature": "识别书目",
 };
 
 /** The range a scoped PDF task fixed at creation: on the job in lists, inside its selector in detail. */
@@ -246,6 +296,14 @@ export interface TaskDetail {
   readonly acquisition_traces_truncated?: boolean;
   /** Per-source counts; absent on older servers, "unrecorded" on tasks from before them. */
   readonly source_results?: TaskSourceResults;
+  /** A “识别书目” task's counts (technical 03 8.4), in the words the page shows. */
+  readonly literature_recognition?: {
+    readonly total: number;
+    readonly processed: number;
+    readonly outcomes: readonly (readonly [string, number])[];
+    readonly unread: readonly (readonly [string, number])[];
+    readonly skipped: readonly (readonly [string, number])[];
+  };
   readonly job: Json;
   /** Someone asked the task to start (31.1); false on servers and tasks from before it. */
   readonly start_requested: boolean;
@@ -285,6 +343,14 @@ export function parseTaskDetail(value: unknown): TaskDetail {
     ...(task.source_results == null
       ? {}
       : { source_results: parseTaskSourceResults(task.source_results) }),
+    ...(task.literature_recognition &&
+    typeof task.literature_recognition === "object"
+      ? {
+          literature_recognition: recognitionCounts(
+            task.literature_recognition as Record<string, unknown>,
+          ),
+        }
+      : {}),
     job,
     start_requested: task.start_requested === true,
     targets: list("targets"),

@@ -45,8 +45,23 @@ export const isActive = (batch: IntakeBatchSummary) =>
 
 export type IntakeDisposition = IntakeItemResult["disposition"];
 export type IntakeFileState = IntakeFileStatus["status"];
+/** Why a PDF's own words could not be read (technical 03 6.4.10), as said to a reader. */
+const UNREAD_REASONS: Readonly<Record<string, string>> = {
+  "reader-unavailable": "服务器读不了 PDF",
+  "reader-timeout": "读取超时",
+  "reader-failed": "读取失败",
+  "encrypted-pdf": "加密",
+  "invalid-pdf": "不是有效的 PDF",
+  "image-only": "扫描件",
+};
 export interface BatchSummary {
   records: IntakeSummary["records"];
+  /**
+   * PDFs whose contents were not read: they enter under their file names.
+   * The reasons that occurred, with their counts; empty for a batch saved
+   * before the count existed.
+   */
+  unread: { total: number; reasons: (readonly [string, number])[] };
   files: IntakeSummary["files"];
   annotations: { supported: number; unsupported: number; deferred: number };
   excluded: { kind: string; count: number }[];
@@ -80,7 +95,29 @@ const counts = <K extends string>(value: unknown, keys: readonly K[]) => {
 
 export function readSummary(value: unknown): BatchSummary {
   const item = record(value, "intake summary");
+  const unread =
+    item.records && typeof item.records === "object"
+      ? (item.records as JsonRecord).clues_unread
+      : undefined;
+  const byReason =
+    unread && typeof unread === "object"
+      ? (unread as JsonRecord).by_reason
+      : undefined;
+  const reasons = Object.entries(UNREAD_REASONS)
+    .map(
+      ([reason, label]) =>
+        [
+          label,
+          count(
+            byReason && typeof byReason === "object"
+              ? (byReason as JsonRecord)[reason]
+              : 0,
+          ),
+        ] as const,
+    )
+    .filter(([, n]) => n > 0);
   return {
+    unread: { total: reasons.reduce((sum, [, n]) => sum + n, 0), reasons },
     records: counts(item.records, [
       "created",
       "enriched",

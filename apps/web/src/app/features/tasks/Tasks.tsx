@@ -618,6 +618,37 @@ export function TaskDetails({ id }: { id: string }) {
           <SourceResults value={task.source_results} />
         )
       ) : null}
+      {task.literature_recognition ? (
+        <Card title="识别结果">
+          <p>
+            已处理 {task.literature_recognition.processed.toLocaleString()} /{" "}
+            {task.literature_recognition.total.toLocaleString()} 篇
+          </p>
+          <ul className="task-recognition">
+            {task.literature_recognition.outcomes.map(([label, n]) => (
+              <li key={label}>
+                {label} <b>{n.toLocaleString()}</b>
+              </li>
+            ))}
+            {task.literature_recognition.unread.length ? (
+              <li>
+                PDF 的内容没读出来：
+                {task.literature_recognition.unread
+                  .map(([label, n]) => `${label} ${n.toLocaleString()}`)
+                  .join("、")}
+              </li>
+            ) : null}
+            {task.literature_recognition.skipped.length ? (
+              <li>
+                跳过：
+                {task.literature_recognition.skipped
+                  .map(([label, n]) => `${label} ${n.toLocaleString()}`)
+                  .join("、")}
+              </li>
+            ) : null}
+          </ul>
+        </Card>
+      ) : null}
       <TaskSessions id={id} />
       {processor &&
       collection &&

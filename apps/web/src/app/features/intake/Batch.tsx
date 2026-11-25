@@ -708,6 +708,19 @@ export function BatchPage({ id }: { id: string }) {
                 ]}
               />
             </Definition>
+            {summary.unread.total ? (
+              <Definition term="没读出内容的 PDF">
+                <Counts
+                  label="没读出内容的 PDF 计数"
+                  items={summary.unread.reasons}
+                />
+                <p className="intake-unread-note">
+                  这些文件{awaiting ? "会" : "已"}按文件名入库，标为“书目不全”。
+                  入库后在文献库里选中它们，用“更多 → 识别书目”可以再认一次；
+                  扫描件要先生成全文。
+                </p>
+              </Definition>
+            ) : null}
             {summary.excluded.length ? (
               <Definition term="不导入的内容">
                 <Counts

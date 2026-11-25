@@ -17,6 +17,7 @@ import {
 import {
   keepPreviousData,
   useInfiniteQuery,
+  useMutation,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
@@ -35,6 +36,7 @@ import {
 import {
   Button,
   Checkbox,
+  ConfirmDialog,
   Dialog,
   Drawer,
   EmptyState,
@@ -90,7 +92,12 @@ import { useIntakeBatch } from "../../data/intake-batches.js";
 import { AcquireDialog, type AcquireScope } from "./AcquireDialog.js";
 import { ScopeTerms } from "./ScopeTerms.js";
 import { useShell } from "../../shell/context.js";
-import { archiveQuery, useArchiveAction, rows } from "../../data/archive.js";
+import {
+  archiveQuery,
+  archiveWrite,
+  useArchiveAction,
+  rows,
+} from "../../data/archive.js";
 import { record } from "../../data/wire.js";
 import { archiveReason, errorMessage, statusLabels } from "../../strings.js";
 import { OperationDialog, download } from "./OperationDialog.js";
@@ -1117,12 +1124,32 @@ export default function Library() {
   /** The selection's own menu, rebuilt each render and read when it opens. */
   const selectionItemsRef = useRef<(on: string) => MenuOption[]>(() => []);
   const deletion = useDeletion();
+  // “识别书目”: papers marked 书目不全 that have a PDF are read again and
+  // looked up in the metadata sources, as a task (technical 03 8.4).
+  const [recognizing, setRecognizing] = useState<readonly string[] | null>(
+    null,
+  );
+  const recognize = useMutation({
+    mutationFn: (ids: readonly string[]) =>
+      archiveWrite(api, "literature-recognize", {
+        selector: { kind: "literatures", literature_ids: ids },
+      }),
+    onSuccess: (_job, ids) => {
+      setRecognizing(null);
+      shell.setSelected(new Set());
+      void queries.invalidateQueries({ queryKey: ["tasks"] });
+      shell.notify(
+        `已开始识别 ${ids.length.toLocaleString()} 篇的书目，进度在“任务”里`,
+      );
+    },
+  });
   const deleteRef = useRef(deletion.request);
   deleteRef.current = deletion.request;
   const onRowAction = useCallback(
     (id: string, title: string, kind: RowAction) => {
       if (kind === "open") shell.openPaper(id, undefined, undefined, title);
       else if (kind === "remove-folder") removeFromFolderRef.current([id]);
+      else if (kind === "recognize") setRecognizing([id]);
       else if (kind === "delete" || kind === "delete-key") {
         // The Delete key on a row of the selection takes the whole selection.
         const chosen = selectedRef.current;
@@ -1228,6 +1255,33 @@ export default function Library() {
     ),
     runReason = batchReason("ready", "所选文献都还没有全文");
   const primary = selectionPrimary(acquireReason, archivingReason);
+  // Of the selection, the papers marked 书目不全, and those of them with a PDF.
+  const incomplete = [...shell.selected].filter(
+    (id) => known.get(id)?.needs_metadata,
+  );
+  const recognizable = incomplete.filter(
+    (id) => known.get(id)?.literature.status !== "UNREVIEWED",
+  );
+  const recognizeItem: MenuOption[] = incomplete.length
+    ? [
+        {
+          id: "recognize",
+          label: `识别书目 ${recognizable.length.toLocaleString()}…`,
+          ...(recognizable.length === 0
+            ? {
+                disabled: true,
+                description: "所选的书目不全的文献都还没有 PDF",
+              }
+            : recognizable.length > 1000
+              ? {
+                  disabled: true,
+                  description: "最多一次识别 1,000 篇，请减少选择。",
+                }
+              : {}),
+          onAction: () => setRecognizing(recognizable),
+        },
+      ]
+    : [];
   const acquireSelected = () =>
     setAcquire(
       wholeScope?.key === scopeKey && wholeScope.size === shell.selected.size
@@ -1303,10 +1357,11 @@ export default function Library() {
             label: `已选的 ${count} 篇文献`,
           }),
       },
+      ...recognizeItem.map((item) => ({ ...item, divider: true })),
       {
         id: "acquire",
         label: `获取 PDF ${groups["no-pdf"].length.toLocaleString()}`,
-        divider: true,
+        ...(recognizeItem.length ? {} : { divider: true }),
         ...unless(acquireReason),
         onAction: acquireSelected,
       },
@@ -2313,10 +2368,14 @@ export default function Library() {
                             label: `已选的 ${shell.selected.size.toLocaleString()} 篇文献`,
                           }),
                       },
+                      ...recognizeItem.map((item) => ({
+                        ...item,
+                        divider: true,
+                      })),
                       {
                         id: "cite",
                         label: "扩展引用…",
-                        divider: true,
+                        ...(recognizeItem.length ? {} : { divider: true }),
                         ...(shell.selected.size > CITATION_SEED_LIMIT
                           ? {
                               disabled: true,
@@ -2492,6 +2551,38 @@ export default function Library() {
         }}
       />
       {deletion.dialog}
+      <ConfirmDialog
+        title="识别书目"
+        isOpen={recognizing !== null}
+        onOpenChange={(open) => {
+          if (open) return;
+          setRecognizing(null);
+          // A failure shown here belongs to this attempt only.
+          recognize.reset();
+        }}
+        confirmLabel="开始识别"
+        isPending={recognize.isPending}
+        {...(recognize.isError
+          ? { errorMessage: errorMessage(recognize.error) }
+          : {})}
+        scope={`书目不全并且有 PDF 的 ${(recognizing?.length ?? 0).toLocaleString()} 篇`}
+        service="已启用的元数据来源（如 Crossref、OpenAlex）"
+        description={
+          <>
+            <p>
+              重新读这些文献的 PDF，按其中的 DOI
+              和标题到元数据来源查它们是哪一篇。
+            </p>
+            <p>
+              认出的补全作者、期刊、年份等书目；没认出但 PDF
+              里有标题的，把现在的文件名换成这个标题。不调用模型。
+            </p>
+          </>
+        }
+        onConfirm={() => {
+          if (recognizing) recognize.mutate(recognizing);
+        }}
+      />
       {operation && (
         <OperationDialog {...operation} onClose={() => setOperation(null)} />
       )}
@@ -2520,6 +2611,17 @@ function rowMenuItems(
   const unless = (reason: string | null) =>
     reason ? { disabled: true, description: reason } : {};
   const material: MenuOption[] = [
+    // Only a paper marked 书目不全 needs it; it reads the paper's own PDF.
+    ...(item.needs_metadata
+      ? [
+          {
+            id: "recognize",
+            label: "识别书目…",
+            ...unless(status === "UNREVIEWED" ? "需要先有 PDF" : null),
+            onAction: () => act("recognize"),
+          },
+        ]
+      : []),
     ...(status === "UNREVIEWED"
       ? [
           {
@@ -3153,6 +3255,7 @@ type RowAction =
   | "export"
   | "delete"
   | "delete-key"
+  | "recognize"
   | "acquire"
   | "archive"
   | "cite"

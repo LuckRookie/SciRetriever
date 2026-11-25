@@ -2405,3 +2405,26 @@
     gap: 2px;
   }
 }
+
+@layer pages {
+  /* A “识别书目” task's counts, one outcome to a line. */
+  .task-recognition {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    margin: var(--space-2) 0 0;
+    padding: 0;
+    list-style: none;
+    color: var(--fg2);
+  }
+  .task-recognition b {
+    color: var(--fg);
+    font-variant-numeric: tabular-nums;
+  }
+  .intake-unread-note {
+    margin: var(--space-1) 0 0;
+    color: var(--fg2);
+    font-size: var(--text-caption);
+    line-height: var(--lh-caption);
+  }
+}

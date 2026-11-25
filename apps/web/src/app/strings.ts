@@ -278,6 +278,12 @@ export function serviceMessage(code: string): string {
         "intake-batch-state": "批次状态已变化，请刷新后再操作。",
         "intake-batch-busy":
           "这一批有文献正在被任务处理，请等任务结束或取消后再撤回。",
+        "pdf-reader-missing":
+          "这台服务器读不了 PDF（缺少 MuPDF），不能识别书目。请管理员在程序目录执行 pnpm build 后重启服务。",
+        "recognize-selection-too-large":
+          "书目不全的文献超过 10,000 篇，请分批选择后再识别。",
+        "recognize-selection-empty":
+          "没有可以识别的文献：要书目不全并且有 PDF。",
         "library-trash-busy":
           "其中有文献正在被任务处理，请等任务结束或取消后再删除。",
         "intake-data-changed": "批次数据在确认前有变化，请重新预览后确认。",
