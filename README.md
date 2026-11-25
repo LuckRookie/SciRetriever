@@ -74,4 +74,6 @@ pnpm sciretriever web --port 4174
 
 仓库的目录分工和“要改什么去哪里”见[仓库目录地图](docs/development/repository-map.md)。开发、构建、预览和打包命令见[TypeScript 开发入口](docs/development/typescript-foundation.md)；协作约束见 [AGENTS.md](AGENTS.md)，工程与验收规则见 [HARNESS.md](HARNESS.md)。长期设计从[架构导航](docs/architecture/README.md)进入，文档的分类与归属见[文档导航](docs/README.md)。
 
+反馈问题和提交改动的办法见[参与贡献](CONTRIBUTING.md)，安全问题见[安全说明](SECURITY.md)，各版本的变化见[更新记录](CHANGELOG.md)。
+
 以 [MIT 协议](LICENSE)发布；随包分发的第三方程序的许可见 [NOTICE](NOTICE)。

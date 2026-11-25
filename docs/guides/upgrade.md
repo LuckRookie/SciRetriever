@@ -81,6 +81,16 @@ node scripts/migrate-citation-limits-v19.mjs /absolute/path/to/offline-copy.sqli
 
 17 → 18 加入保存的筛选、批注的重新定位与设备连接的类型；18 → 19 让引用扩展的结果上限与扫描上限可以不填，已有上限原样保留。布局见[存储技术合同](../architecture/technical/07-versioned-storage.md#41-当前-schema-与显式转换)。
 
+## 结构追加
+
+新版本有时只给当前结构追加索引或表，不改已有数据。这类变化不走整库转换，而是一条显式命令。库里缺少新版本需要的追加时，启动和 `storage schema-inspect` 会以 `catalog-addition-required` 拒绝，并写出缺的那一项的名字。处理办法：停掉 Web 服务和其他写入，然后执行
+
+```bash
+sciretriever storage schema-apply --catalog /absolute/data/catalog.sqlite --addition <名字>
+```
+
+命令只做追加，在一个事务里完成，重复执行同一项不会改动已追加的内容。追加之后旧版本仍能照常读写这个库，所以换回旧构建不需要撤销。每个版本要追加哪一项，见[更新记录](../../CHANGELOG.md)。
+
 ## Web 守护的首次切换与程序升级
 
 “应用配置”只重建当前程序的运行时，不构建程序、不替换文件、不迁移数据库。升级程序仍需正常停止旧服务、保全一致性备份、核对副本与资源后再启动；不要运行中覆盖父子程序文件。
