@@ -11,6 +11,8 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  type CSSProperties,
+  type RefObject,
 } from "react";
 import {
   keepPreviousData,
@@ -165,6 +167,86 @@ const LIBRARY_HITS_SHOWN = 5;
 const PREVIEW_KEY = "sciretriever:library:preview:v1";
 /** Wider than this the right column stands beside the list; narrower, the preview is a layer. */
 const WIDE = "(min-width: 1101px)";
+const PREVIEW_WIDTH_KEY = "sciretriever:library:preview-width:v1";
+const PREVIEW_MIN_WIDTH = 320;
+/** The widest the right column goes: the list keeps at least two fifths. */
+const previewMaxWidth = () =>
+  Math.max(
+    PREVIEW_MIN_WIDTH,
+    Math.min(800, Math.round(document.documentElement.clientWidth * 0.6)),
+  );
+const clampPreviewWidth = (width: number) =>
+  Math.round(Math.min(previewMaxWidth(), Math.max(PREVIEW_MIN_WIDTH, width)));
+function storedPreviewWidth(): number | null {
+  const width = Number(preferences.read(PREVIEW_WIDTH_KEY));
+  return Number.isFinite(width) && width >= PREVIEW_MIN_WIDTH ? width : null;
+}
+/**
+ * The right column's left edge, to drag: the width follows the pointer
+ * without drawing the list again, and is kept when the pointer lets go.
+ * ← → move it by the keyboard; a double press returns the default width.
+ */
+function PreviewResizer({
+  page,
+  width,
+  onCommit,
+}: {
+  page: RefObject<HTMLElement | null>;
+  width: number | null;
+  onCommit: (width: number | null) => void;
+}) {
+  const dragging = useRef(false);
+  const shown = () =>
+    page.current?.querySelector<HTMLElement>(".library-preview")?.offsetWidth ??
+    width ??
+    400;
+  const follow = (clientX: number) => {
+    const next = clampPreviewWidth(
+      document.documentElement.clientWidth - clientX,
+    );
+    page.current?.style.setProperty("--library-preview-width", `${next}px`);
+    return next;
+  };
+  const end = (event: ReactPointerEvent<HTMLElement>) => {
+    if (!dragging.current) return;
+    dragging.current = false;
+    document.documentElement.classList.remove("library-resizing");
+    onCommit(follow(event.clientX));
+  };
+  return (
+    <div
+      className="library-preview-resizer"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="调整右栏宽度"
+      aria-valuemin={PREVIEW_MIN_WIDTH}
+      aria-valuemax={previewMaxWidth()}
+      {...(width === null ? {} : { "aria-valuenow": width })}
+      tabIndex={0}
+      title="拖动调整右栏宽度，双击恢复默认"
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        dragging.current = true;
+        document.documentElement.classList.add("library-resizing");
+      }}
+      onPointerMove={(event) => {
+        if (dragging.current) follow(event.clientX);
+      }}
+      onPointerUp={end}
+      onPointerCancel={end}
+      onDoubleClick={() => onCommit(null)}
+      onKeyDown={(event) => {
+        const step =
+          event.key === "ArrowLeft" ? 16 : event.key === "ArrowRight" ? -16 : 0;
+        if (!step) return;
+        event.preventDefault();
+        onCommit(clampPreviewWidth(shown() + step));
+      }}
+    />
+  );
+}
 function useWide() {
   const [wide, setWide] = useState(() => window.matchMedia(WIDE).matches);
   useEffect(() => {
@@ -449,6 +531,15 @@ export default function Library() {
     () => preferences.read(PREVIEW_KEY) !== "closed",
   );
   const docked = wide && previewOpen;
+  // The right column's width is the reader's own choice, kept in this browser.
+  const page = useRef<HTMLElement>(null);
+  const [previewWidth, setPreviewWidthState] = useState(storedPreviewWidth);
+  const setPreviewWidth = (width: number | null) => {
+    setPreviewWidthState(width);
+    preferences.write(PREVIEW_WIDTH_KEY, width === null ? "" : String(width));
+    if (width === null)
+      page.current?.style.removeProperty("--library-preview-width");
+  };
   // Without the column, a row's “预览” opens the current row over the list.
   const [overlay, setOverlay] = useState(false);
   const togglePreview = (open: boolean) => {
@@ -1514,15 +1605,6 @@ export default function Library() {
       {mutable && total > 0 ? (
         <Menu label="批量操作" indicator variant="text" items={batchItems} />
       ) : null}
-      {wide && !previewOpen ? (
-        <IconButton
-          className="library-preview-toggle"
-          variant="text"
-          aria-label="显示右栏"
-          icon={<Icon name="panel" />}
-          onPress={() => togglePreview(true)}
-        />
-      ) : null}
     </>
   );
   // The table's column heads stick under the toolbar, whatever its height.
@@ -1666,10 +1748,20 @@ export default function Library() {
     ) : null;
   return (
     <section
+      ref={page}
       className="library-page"
+      data-wide={wide || undefined}
       data-preview={shownPeek !== null || undefined}
       data-preview-docked={docked || undefined}
       data-display={display}
+      {...(previewWidth === null
+        ? {}
+        : {
+            style: {
+              // Never so wide that the list is squeezed out of a small window.
+              "--library-preview-width": `min(${previewWidth}px, 60vw)`,
+            } as CSSProperties,
+          })}
       // A click on empty space lets the selection go: not on a row, a
       // control, the selection bar, the preview, or anything laid over the
       // page, and not the click that ends a drawn selection.
@@ -2336,6 +2428,25 @@ export default function Library() {
       >
         <div className="library-mobile-tools">{toolbarActions}</div>
       </Drawer>
+      {/* One button in one place, the page's top right corner, whether the
+          right column is open or not (page specs “文献库”). */}
+      {wide ? (
+        <IconButton
+          className="library-preview-toggle"
+          variant="text"
+          aria-label={previewOpen ? "收起右栏" : "显示右栏"}
+          aria-pressed={previewOpen}
+          icon={<Icon name="panel" />}
+          onPress={() => togglePreview(!previewOpen)}
+        />
+      ) : null}
+      {docked ? (
+        <PreviewResizer
+          page={page}
+          width={previewWidth}
+          onCommit={setPreviewWidth}
+        />
+      ) : null}
       {shownPeek !== null ? (
         <LibraryPreview
           id={shownPeek}
@@ -2548,14 +2659,20 @@ function LibraryPreview({
       aria-label="文献预览"
       aria-busy={preview.isFetching}
     >
+      {/* Docked, the page's own button closes the column from this corner;
+          the header only keeps its room. */}
       <div className="library-preview-header">
-        {docked ? <span /> : <span>↑ ↓ 上一篇、下一篇</span>}
-        <IconButton
-          aria-label={docked ? "收起右栏" : "关闭预览"}
-          variant="text"
-          icon={<Icon name={docked ? "panel" : "close"} />}
-          onPress={onClose}
-        />
+        {docked ? null : (
+          <>
+            <span>↑ ↓ 上一篇、下一篇</span>
+            <IconButton
+              aria-label="关闭预览"
+              variant="text"
+              icon={<Icon name="close" />}
+              onPress={onClose}
+            />
+          </>
+        )}
       </div>
       {preview.isPending ? (
         <p role="status">正在读取…</p>

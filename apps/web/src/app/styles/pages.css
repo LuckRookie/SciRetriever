@@ -838,6 +838,44 @@
     color: var(--fg3);
     font-size: var(--text-caption);
   }
+  /* Docked, the column's header is only room for the page's own button. */
+  .library-preview[data-docked] .library-preview-header {
+    min-height: 40px;
+  }
+  /* The right column's button: one place at the page's top right corner,
+     beside the search box when the column is closed, in the column's corner
+     when it is open. */
+  .library-preview-toggle {
+    position: fixed;
+    top: calc(48px + var(--space-4) + 2px);
+    right: var(--page-gutter, var(--space-5));
+    z-index: 21;
+  }
+  .library-page[data-wide]:not([data-preview-docked]) .library-toolbar {
+    padding-inline-end: 44px;
+  }
+  /* The column's left edge, to drag. */
+  .library-preview-resizer {
+    position: fixed;
+    top: 48px;
+    bottom: 0;
+    right: calc(var(--library-preview-width) - 4px);
+    z-index: 21;
+    width: 8px;
+    cursor: col-resize;
+    touch-action: none;
+    outline: none;
+  }
+  .library-preview-resizer:hover,
+  .library-preview-resizer:focus-visible,
+  .library-resizing .library-preview-resizer {
+    background: var(--sel);
+  }
+  .library-resizing,
+  .library-resizing * {
+    cursor: col-resize !important;
+    user-select: none !important;
+  }
   /* “技术详情” is the last thing in the column, set apart from the paper. */
   .library-preview > .ui-disclosure {
     margin-top: var(--space-4);

@@ -460,23 +460,55 @@ it("shows the current row in the right column without a veil, steps with ↑ ↓
         .count(),
     ).toBe(unparsed ? 1 : 0);
     expect(text).toContain(unparsed ? "只有书目" : "有全文");
-    // Esc leaves it; its own button folds it away, the list takes the width,
-    // and the toolbar's last button brings it back on the same row.
+    // Esc leaves it. Its edge drags to any width between the limits, kept
+    // in this browser; a double press returns the default.
     await page.keyboard.press("Escape");
     expect(await preview.count()).toBe(1);
+    const width = async () => (await preview.boundingBox())!.width;
+    const edge = page.getByRole("separator", { name: "调整右栏宽度" });
+    const initial = await width();
+    const viewport = page.viewportSize()!.width;
+    const grip = (await edge.boundingBox())!;
+    await page.mouse.move(grip.x + grip.width / 2, 300);
+    await page.mouse.down();
+    await page.mouse.move(viewport - 600, 300, { steps: 6 });
+    await page.mouse.up();
+    await expect.poll(width).toBe(600);
+    await edge.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(width).toBe(584);
+    await page.mouse.move(viewport - 584, 300);
+    await page.mouse.down();
+    await page.mouse.move(viewport - 40, 300, { steps: 6 });
+    await page.mouse.up();
+    await expect.poll(width).toBe(320);
+    // One button in one place folds it away and brings it back: the list
+    // takes the width, and the button has not moved.
+    const toggle = page.locator(".library-preview-toggle");
+    const place = await toggle.boundingBox();
     const before = (await page.locator(".library-scroll").boundingBox())!.width;
-    await preview
-      .getByRole("button", { name: "收起右栏", exact: true })
-      .click();
+    await page.getByRole("button", { name: "收起右栏", exact: true }).click();
     await preview.waitFor({ state: "detached" });
     expect(
       (await page.locator(".library-scroll").boundingBox())!.width,
     ).toBeGreaterThan(before);
+    expect(await toggle.boundingBox()).toEqual(place);
+    // It clears the search box beside it.
+    const search = (await page
+      .locator(".library-toolbar > :first-child")
+      .boundingBox())!;
+    expect(search.x + search.width).toBeLessThanOrEqual(place!.x);
     await page.reload();
     await page.locator(".paper-row").first().waitFor();
     expect(await preview.count()).toBe(0);
+    expect(await toggle.boundingBox()).toEqual(place);
     await page.getByRole("button", { name: "显示右栏", exact: true }).click();
     await preview.waitFor();
+    expect(await toggle.boundingBox()).toEqual(place);
+    // The chosen width came back with the column; a double press resets it.
+    expect(await width()).toBe(320);
+    await edge.dblclick();
+    await expect.poll(width).toBe(initial);
     // Two presses open the paper; back from it, the column shows that paper.
     await other.locator(".paper-open").dblclick();
     await expect
