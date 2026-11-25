@@ -122,9 +122,14 @@
     color: var(--disabled-fg);
     box-shadow: none;
   }
+  /* The label is cut where it is too long, never where a letter hangs
+     below the line: the box that clips it reaches past g, y and p without
+     taking any more room. */
   .ui-button-label {
     overflow: hidden;
     text-overflow: ellipsis;
+    padding-block: 0.25em;
+    margin-block: -0.25em;
   }
   /* A trailing menu chevron sits on the text's optical centre, not its baseline. */
   .ui-button-label > svg:last-child {
