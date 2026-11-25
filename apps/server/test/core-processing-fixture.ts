@@ -282,7 +282,11 @@ export async function coreProcessingFixture(
             choices: [
               {
                 index: 0,
-                finish_reason: "stop",
+                // A translation reply of {truncated: true} is an answer cut off at the output limit.
+                finish_reason:
+                  (value as { truncated?: unknown } | null)?.truncated === true
+                    ? "length"
+                    : "stop",
                 message: { role: "assistant", content: JSON.stringify(value) },
               },
             ],

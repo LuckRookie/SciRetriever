@@ -25,7 +25,7 @@
 - 配对按来源编号：文件引用是来源里的编号（如 Zotero 附件编号）时，按“编号/文件名”与交来文件的相对路径比较，同名的独立 PDF 也能各自配上。
 - 入库接口新增格式 `zotero-api`：扩展或导入程序把 Zotero 接口返回的条目与分类原样交来，文献库转换书目（优先用 Zotero 给的 CSL JSON）、Extra 里的 DOI、arXiv 号与 PMID、分类（成为文件夹）、自动标签（作者关键词）与手动标签（“标签”文件夹）、首选 PDF；独立 PDF 成为只有文件的条目；笔记、批注、其他 PDF、非 PDF 附件、链接附件与回收站里的条目按种类计数，进预览与报告。扩展与导入程序另行发布。
 - MCP `archive_manage` 与 `create_task` 中建档的说明改正：`full` 模式下没有原始解析的部分会先经解析服务（MinerU）解析，`legacy-vlm-markdown` 才要求已有原始解析。行为本身没变。
-- 解析全文多一步“翻译”：校订好的全文逐段译成 `[translation].target_language`（默认简体中文），存进文献库。已经是这种语言的不翻译；跨页、跨栏接起来的段落整段翻；公式原样保留，公式被改了的段算没翻好。翻译失败不影响全文：文献照常就绪，问题进“需处理”，再解析全文时只补没翻好的段。已有全文、还没有译文的文献，再解析全文一次就只跑这一步。用量估算多出“翻译”一项，按页估。
+- 解析全文多一步“翻译”：校订好的全文逐段译成 `[translation].target_language`（默认简体中文），存进文献库。已经是这种语言的不翻译；跨页、跨栏接起来的段落整段翻；公式原样保留，公式被改了的段算没翻好；一批译文太长被截断时自动拆成更小的批重翻。翻译失败不影响全文：文献照常就绪，问题进“需处理”，再解析全文时只补没翻好的段。已有全文、还没有译文的文献，再解析全文一次就只跑这一步。用量估算多出“翻译”一项，按页估。
 - 读取全文可以取译文：`describe` 多 `translation`（译文语言、状态、段数、已译数）；新读取 `translation` 按段返回译文；`slice` 可带 `text: translation` 或 `bilingual`（原文一段、译文一段），结果标明 `machine_translation`，不能用来解析证据。HTTP 为 `/api/v1/query/document-translation`，CLI 为 `document translation`，MCP 为 `document_read` 的 `translation`。网页阅读页的新读法另行发布。
 - 只列候选：文献查询的 `collection_scope` 可以取 `candidates`，列出不在文献库里的文献，可与搜索、批次、状态等条件组合，也能用来整批加入文献库。CLI 为 `literature search --collection-scope candidates`，MCP 为 `search_library`。
 

@@ -518,6 +518,7 @@ export class DocumentTranslationService {
         reused: number;
         requested: number;
         batches: number;
+        truncated: number;
         usage: UnitTranslationUsage;
         sha256: string | null;
       },
@@ -536,6 +537,7 @@ export class DocumentTranslationService {
           reused: extra.reused,
           requested: extra.requested,
           batches: extra.batches,
+          truncated: extra.truncated,
           sha256: extra.sha256,
         },
         usage: {
@@ -554,6 +556,7 @@ export class DocumentTranslationService {
           requested_units: extra.requested,
           batches: extra.batches,
           unmatched_units: unmatched,
+          truncated_units: extra.truncated,
           same_language: status === "same-language",
         },
       };
@@ -582,6 +585,7 @@ export class DocumentTranslationService {
         reused: 0,
         requested: 0,
         batches: 0,
+        truncated: 0,
         usage: none,
         sha256: row.sha256,
       });
@@ -644,6 +648,7 @@ export class DocumentTranslationService {
       inputTokens: number | null = 0,
       outputTokens: number | null = 0,
       unavailable: unknown = null,
+      truncated = 0,
       next = 0;
     const work = async () => {
       while (next < batches.length && unavailable === null) {
@@ -684,6 +689,7 @@ export class DocumentTranslationService {
           throw error;
         }
         calls += result.usage.calls;
+        truncated += result.truncated.length;
         inputTokens =
           inputTokens === null || result.usage.input_tokens === null
             ? null
@@ -744,6 +750,7 @@ export class DocumentTranslationService {
       reused,
       requested: wanted.length,
       batches: batches.length,
+      truncated,
       usage: {
         calls,
         input_tokens: inputTokens,

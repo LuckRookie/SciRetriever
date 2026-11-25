@@ -281,6 +281,72 @@ it("counts a unit whose formula came back changed as not translated", async () =
   }
 }, 0);
 
+it("halves a batch whose answer was cut off until every unit is translated", async () => {
+  const e = await fixture();
+  try {
+    // Any request of more than two units comes back truncated.
+    e.setTranslation((input) => {
+      e.requests.push(input.units.map((u) => u.text));
+      return input.units.length > 2 ? { truncated: true } : reply(input.units);
+    });
+    await e.submit("translate-halving");
+    const receipt = (await step(e))!;
+    expect(receipt).toMatchObject({ status: "done", reason: null });
+    // Six units: 6 cut off, 3 and 3 cut off, then 2 + 1 and 2 + 1.
+    expect(e.requests.map((r) => r.length)).toEqual([6, 3, 2, 1, 3, 2, 1]);
+    expect(receipt.calls).toBe(7);
+    expect(receipt.output.translation).toMatchObject({
+      status: "complete",
+      missing: 0,
+      truncated: 0,
+    });
+    // Truncated calls report no usage: the step's token count is unknown.
+    expect(receipt.output.usage).toMatchObject({
+      calls: 7,
+      usage_complete: false,
+    });
+  } finally {
+    await e.close();
+  }
+}, 0);
+
+it("leaves a unit missing when it is cut off even alone, without asking it again", async () => {
+  const e = await fixture();
+  try {
+    e.setTranslation((input) => {
+      e.requests.push(input.units.map((u) => u.text));
+      return input.units.some((u) => u.text.includes("complete synthetic"))
+        ? { truncated: true }
+        : reply(input.units);
+    });
+    await e.submit("translate-truncated-unit");
+    expect((await e.app.archive.status(e.id)).status).toBe("READY");
+    const receipt = (await step(e))!;
+    expect(receipt).toMatchObject({
+      status: "failed",
+      reason: "translation-incomplete",
+    });
+    expect(receipt.output.translation).toMatchObject({
+      status: "partial",
+      missing: 1,
+      truncated: 1,
+    });
+    expect(receipt.output.stats).toMatchObject({ truncated_units: 1 });
+    // Alone, it was asked exactly once.
+    expect(
+      e.requests.filter(
+        (r) => r.length === 1 && r[0] === "A complete synthetic study.",
+      ),
+    ).toHaveLength(1);
+    const read = await whole(e, (await main(e)).document_version_id!);
+    expect(read.units.units.filter((u) => u.translation === null)).toEqual([
+      expect.objectContaining({ translation: null }),
+    ]);
+  } finally {
+    await e.close();
+  }
+}, 0);
+
 it("reads stale after the text changes, then translates only the changed unit", async () => {
   const e = await fixture();
   try {

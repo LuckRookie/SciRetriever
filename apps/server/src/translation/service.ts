@@ -176,8 +176,10 @@ export class TranslationService {
   /**
    * Translate one batch of a paper's units (spec 9.3). Cached units are not
    * sent; a unit missing from the answer, or whose formulas differ from its
-   * source, is asked once more; one still missing is left out. Every accepted
-   * unit is cached at once, so an interrupted step resumes from the cache.
+   * source, is asked once more; one still missing is left out. A truncated
+   * answer is never asked again as it was: the group is halved instead, and a
+   * single unit still truncated is left out. Every accepted unit is cached at
+   * once, so an interrupted step resumes from the cache.
    */
   async translateUnits(
     batch: {
@@ -190,6 +192,8 @@ export class TranslationService {
   ): Promise<{
     translations: Map<string, { translation: string; model: string }>;
     usage: UnitTranslationUsage;
+    /** Units whose answer was cut off even when asked alone. */
+    truncated: string[];
   }> {
     const translations = new Map<
         string,
@@ -201,7 +205,7 @@ export class TranslationService {
       input: number | null = 0,
       output: number | null = 0;
     const usage = () => ({ calls, input_tokens: input, output_tokens: output });
-    let wanted: { id: string; text: string }[] = [];
+    const wanted: { id: string; text: string }[] = [];
     for (const unit of batch.units) {
       const text = normalizeUnitText(unit.text),
         key = documentUnitKey(text, language);
@@ -215,17 +219,27 @@ export class TranslationService {
         });
       else if (text) wanted.push({ id: unit.id, text });
     }
-    if (!wanted.length) return { translations, usage: usage() };
+    if (!wanted.length) return { translations, usage: usage(), truncated: [] };
     const { model, runtime } = this.ready(null);
-    for (let attempt = 0; attempt < 2 && wanted.length; attempt++) {
-      const short = new Map(wanted.map((w, i) => [`u${i + 1}`, w.id]));
+    const truncated: string[] = [];
+    /**
+     * One request for a group. A truncated answer splits the group in two
+     * halves asked separately, down to one unit, which is then left missing
+     * (spec 9.3, plan 28 8.3). Any other failure, a missing unit or a changed
+     * formula keeps the single "ask once more" of the group it happened in.
+     */
+    const ask = async (
+      group: readonly { id: string; text: string }[],
+      retry: boolean,
+    ): Promise<void> => {
+      const short = new Map(group.map((w, i) => [`u${i + 1}`, w.id]));
       let rows: unknown = undefined;
       calls++;
       try {
         const body = {
           title: batch.title,
           sections: batch.sections,
-          units: wanted.map((w, i) => ({ id: `u${i + 1}`, text: w.text })),
+          units: group.map((w, i) => ({ id: `u${i + 1}`, text: w.text })),
         };
         const result = await runtime.execute(
           {
@@ -277,8 +291,18 @@ export class TranslationService {
             new TranslationError("translation-cancelled", { cause: error }),
             { usage: usage() },
           );
-        if (attempt === 1) break;
-        continue;
+        if (error instanceof AgentFailure && error.code === "agent-truncated") {
+          if (group.length === 1) {
+            truncated.push(group[0]!.id);
+            return;
+          }
+          const half = Math.ceil(group.length / 2);
+          await ask(group.slice(0, half), retry);
+          await ask(group.slice(half), retry);
+          return;
+        }
+        if (retry) await ask(group, false);
+        return;
       }
       const seen = new Set<string>();
       for (const row of Array.isArray(rows) ? rows : []) {
@@ -306,9 +330,11 @@ export class TranslationService {
           model,
         });
       }
-      wanted = wanted.filter((w) => !translations.has(w.id));
-    }
-    return { translations, usage: usage() };
+      const missing = group.filter((w) => !translations.has(w.id));
+      if (missing.length && retry) await ask(missing, false);
+    };
+    await ask(wanted, true);
+    return { translations, usage: usage(), truncated };
   }
   async translate(
     value: unknown,
