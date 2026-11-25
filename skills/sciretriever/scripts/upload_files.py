@@ -88,12 +88,12 @@ class Client:
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
         self.sleep = sleep
 
-    def post(self, path, body, content_type="application/json", length=None):
+    def post(self, path, body, content_type="application/json", length=None, extra=None):
         waited = 0
         for attempt in range(MAX_RETRIES + 1):
             if hasattr(body, "seek"):
                 body.seek(0)
-            headers = {**self.headers, "Content-Type": content_type}
+            headers = {**self.headers, **(extra or {}), "Content-Type": content_type}
             if length is not None:
                 headers["Content-Length"] = str(length)
             request = urllib.request.Request(self.address + path, data=body, headers=headers, method="POST")
@@ -195,14 +195,19 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def run(client, batch, folders, *, output=sys.stdout, sleep=time.sleep):
+def run(client, batch, folders, *, output=sys.stdout, sleep=time.sleep, locate=None, failures=None):
+    """locate(item) -> (path, reason) replaces the folder search; failures, when
+    given, collects {file_id: (file_name, reason)} for the caller."""
     base = "/api/v1/intake/batches/" + batch
-    failures, tried, successful = {}, set(), 0
+    failures = {} if failures is None else failures
+    tried, successful = set(), 0
     state = "unknown"
     stopped = None
     pending = None
     try:
-        indexed = index(folders)
+        if locate is None:
+            indexed = index(folders)
+            locate = lambda item: find(item, indexed)  # noqa: E731
         while True:
             current = client.call(base + "/status", {})["batch"]
             state = current["state"]
@@ -225,7 +230,7 @@ def run(client, batch, folders, *, output=sys.stdout, sleep=time.sleep):
                     try:
                         if state == "finished":
                             raise RequestFailure("intake-batch-finished")
-                        path, reason = find(item, indexed)
+                        path, reason = locate(item)
                         if reason is None:
                             route = base + "/files/" + urllib.parse.quote(key, safe="")
                             if item.get("expected_sha256") and sha256(path) != item["expected_sha256"]:

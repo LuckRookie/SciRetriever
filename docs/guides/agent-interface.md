@@ -114,7 +114,7 @@ PDF 上传按以下顺序调用，仅在 `--maintenance` 下提供：
 
 1. 在 Web“设置 → 设备连接 → 连接 Agent”勾选用途（导入、读取，必要时操作），生成连接码，把“复制给 Agent 的话”整段交给 Agent。
 2. Agent 用连接码换得令牌，存在只有本人可读的文件里，之后下载文献库自带的使用说明（`GET /api/v1/intake/agent-guide`）或完整 skill（`GET /api/v1/intake/skill`，源文件在仓库 [`skills/sciretriever/`](../../skills/sciretriever/SKILL.md)）。
-3. 导入经入库批次的 HTTP 接口完成：建批次、交数据、预览、确认、交文件、结束。接口说明由文献库在 `GET /api/v1/intake/instructions` 给出；批次在 Web“找文献”页的批次记录里实时可见，用户可以在那里确认或取消。
+3. 导入经入库批次的 HTTP 接口完成：建批次、交数据、预览、确认、交文件、结束。数据在 Zotero 里时，Agent 在装 Zotero 的电脑上运行 skill 自带的 `scripts/zotero_import.py`（`probe`、`libraries`、`import`、`files`），由它读 Zotero 的本地接口并交给批次，见 skill 的 `source-zotero.md`。接口说明由文献库在 `GET /api/v1/intake/instructions` 给出；批次在 Web“找文献”页的批次记录里实时可见，用户可以在那里确认或取消。
 4. 检索、阅读与发起任务经同一地址的 HTTP 版 MCP（`/mcp`，Streamable HTTP，请求头带令牌）；工具按连接的用途给出，与 stdio 版同一套。
 
 设备令牌不能登录 Web，不能读写配置与凭据，也不能管理设备连接；撤销后立即失效。下面“连接正在运行的 Web 服务”是在服务器上用 CLI 与 stdio 版 MCP 的方式，两者并存。

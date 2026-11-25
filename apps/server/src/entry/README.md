@@ -54,7 +54,7 @@ library-facets 返回全部命中的标签、作者关键词、主题词，以�
 
 [intake-lookup-items.ts](intake-lookup-items.ts) 组织 `lookup` 格式逐行条目：暂存分段的每一行（换掉的或去掉的行在确认前丢弃其工作状态），预览阶段逐条认篇，进度、取消与只有文件的条目相同；带标识的行先用导入预览的只读身份判定在库里找（最近删除与撤回的也算），找到即“已在库”、不查来源，确认时只记为批次成员，成员写入恢复删除或撤回的文献；批次各分段合计最多 200 个非空行；`candidate`、`unrecognized`、`include`、`exclude` 四种决定；确认时把认出的书目或给出的标识、标题换进条目，没认出又没决定加入的记为 excluded（`lookup-unrecognized`、`lookup-candidates`）。`lookupView` 给出条目的 `lookup` 投影，`lookupSummary` 给出预览与报告的逐行计数。`addLiteratures` 是 CLI 与 stdio MCP 的同步包装：建批次、交文本、等认篇、确认，结果逐行列出加入与没加入的行。
 
-`file_only` 的书目条目（Zotero 的独立 PDF）与预览前交来的文件照常配对；配上时文件留作只有文件的条目、默认入库并认篇，书目条目不再单独入库；没配上时记为 excluded（`standalone-file-missing`）。
+文件引用是来源里的编号而不是路径时（一段、不是文件名、不含 `:`），按“编号/文件名”与交来文件的相对路径逐段比较，只有比到编号那一段才算路径匹配，其余照旧走文件名配对。`file_only` 的书目条目（Zotero 的独立 PDF）与预览前交来的文件照常配对；配上时文件留作只有文件的条目、默认入库并认篇，书目条目不再单独入库；没配上时记为 excluded（`standalone-file-missing`）。
 
 [intake-file-items.ts](intake-file-items.ts) 组织预览前的 PDF 暂存、安全相对路径配对、认篇进度与取消、条目决定及终态清理。书目确认后复用文件通道和 metadata CAS 接纳保留的字节；按 sha256 对应主 PDF 或补充材料，保留冲突。认篇结果存于条目，确认不再查询来源。
 

@@ -1,1 +1,36 @@
-从 Zotero 直接导入条目、PDF 和批注还没有开放。现在请使用者在 Zotero 里把要的条目导出成 BibTeX 或 RIS（连同文件），再按 [import.md](import.md) 把导出文件和附件目录作为一个批次入库；批注带不过来。
+# 从 Zotero 导入
+
+在装了 Zotero 的那台电脑上运行 `scripts/zotero_import.py`。它只读 Zotero 的本地接口，不写 Zotero、不改它的设置，把条目、分类、附件原样交给文献库的一个批次，再把 PDF 传上去。搬运全部由程序完成；你负责启动它、回答它的问题、把批次页交给使用者。批次本身的预览、确认与报告见 [import.md](import.md)。
+
+程序只用 Python 标准库。连接文件沿用 [connect.md](connect.md) 的 `CONFIG_DIR`，令牌不出现在命令行与输出里。Zotero 的地址默认 `http://localhost:23119`，用 `--zotero` 改；不要自己去试别的地址。
+
+## 先停下来问
+
+- **读他的 Zotero 之前**，先问使用者是否同意，以及要导哪个库、哪些分类。整库还是几个分类不清楚时，不要替他决定。
+- 程序报告连不上 Zotero 时，把它给出的打开办法原样转告使用者（Zotero 设置 → 高级 → 允许此计算机上的其他应用程序与 Zotero 通讯），等他打开后再运行。
+- 数据文件夹不在默认位置（`~/Zotero`）、程序报告大量 `storage-folder-missing` 时，问使用者 Zotero 的数据文件夹在哪里（Zotero 设置 → 高级 → 文件和文件夹），用 `--data-dir` 指定。
+- 批次里有需要决定的条目（可能重复、没认出的独立 PDF），交给使用者在批次页上决定，不要替他决定。
+
+## 步骤
+
+```bash
+SCRIPT="$SKILL_DIR/scripts/zotero_import.py"
+```
+
+1. **只在第一次或出错时探测**：`python3 "$SCRIPT" --config-dir "$CONFIG_DIR" probe`。输出一份 JSON，只有字段名、类型、计数与枚举值，没有标题、作者、文件名或路径，可以原样交给使用者或维护者。`checks` 里每一项为 `confirmed`、`differs` 或 `unknown`；有 `differs` 时把这份输出交给使用者，先不要导入。
+2. **列出库**：`python3 "$SCRIPT" --config-dir "$CONFIG_DIR" libraries`，每行是库的代号（`user` 或 `group:<编号>`）、名称与条目数。要按分类导入时，再列出分类：`libraries --library <代号>`，每行是分类编号与它的完整路径。把名称给使用者选，用代号与编号运行。
+3. **交数据**：`python3 "$SCRIPT" --config-dir "$CONFIG_DIR" import --library <代号> [--collection <分类编号> ...] [--data-dir <数据文件夹>]`。选了分类时包括它的子分类。程序建批次、分段交条目与分类、把独立 PDF 交上去、触发预览，然后停下，打印批次编号与“找文献”页的地址。
+4. **把地址交给使用者**，请他在“找文献”的批次记录里打开这个批次，看预览、做决定、确认。**等他说确认了再继续。**
+5. **传文件**：`python3 "$SCRIPT" --config-dir "$CONFIG_DIR" files [--data-dir <数据文件夹>]`。只上传文献库待交清单里的文件：先用 Zotero 接口给出的文件，再找数据文件夹里的 `storage/<附件编号>/`；找不到就计为未交并按原因汇总，不猜。
+6. **报告**：把程序的摘要（成功数、未交数及原因）告诉使用者；结果以批次报告为准（[import.md](import.md)“结束与报告”）。还有未交的文件时，由使用者决定是补齐后重跑 `files`，还是在网页上结束批次。
+
+中断后重新运行同一条命令即可：`import` 会接着用同一个未确认的批次，已交的独立 PDF 不重传；`files` 从文献库当前的待交清单继续，已接纳的文件不重传。程序在 `CONFIG_DIR` 里只记批次编号、所选的库和数据文件夹位置（`zotero-import.json`）。
+
+## 带不过来的内容
+
+- 批注现在只计数，带不过来；笔记、网页快照等非 PDF 附件、链接附件、同一条目的其他 PDF、回收站里的条目也只计数。这些计数在预览与报告的“不导入的内容”里。
+- 链接附件（文件在 Zotero 存储之外）不会上传。
+
+## 没有 Agent 时
+
+使用者可以自己运行同一个程序：先在文献库“设置 → 设备连接”按 [connect.md](connect.md) 保存连接文件，再依次运行 `libraries`、`import`，在网页上确认后运行 `files`。

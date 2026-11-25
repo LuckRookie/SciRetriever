@@ -288,3 +288,69 @@ it("imports a Zotero library through the intake batch: folders, tags, files and 
     await rm(home, { recursive: true, force: true });
   }
 }, 60000);
+
+it("pairs two standalone PDFs of the same file name by their attachment IDs", async () => {
+  const home = await mkdtemp(join(tmpdir(), "sciretriever-zotero-pair-"));
+  const app = await createApplication(home, {
+    indexRefreshIntervalMs: null,
+    metadata: { lookup_ports: [], topic_search_ports: [] },
+  });
+  expect(app.metadata.lookup_selection).toEqual([]);
+  expect(app.metadata.topic_selection).toEqual([]);
+  const actor = { kind: "local" as const, origin: "web" as const };
+  const twin = {
+    ...STANDALONE,
+    key: "SOLO0002",
+    data: { ...STANDALONE.data, key: "SOLO0002" },
+  };
+  async function* bytes(value: Uint8Array) {
+    yield value;
+  }
+  try {
+    const batch = await app.importSessions.create(
+      {
+        format: "zotero-api",
+        source: {
+          system: "zotero",
+          library_id: `users/${USER}`,
+          identity: "global",
+          name: "synthetic-user",
+        },
+        scope: "Two scans",
+      },
+      actor,
+    );
+    const id = batch.batch_id;
+    await app.importSessions.putData(id, 0, { items: [STANDALONE, twin] });
+    for (const [key, title] of [
+      ["SOLO0002", "Second synthetic scan about salts"],
+      ["SOLO0001", "First synthetic scan about furazans"],
+    ] as const)
+      await app.importSessions.receiveFileItem(
+        id,
+        "untitled scan.pdf",
+        `storage/${key}/untitled scan.pdf`,
+        bytes(recognitionPdf({ info: { title } })),
+      );
+    await vi.waitFor(
+      async () =>
+        expect((await app.importSessions.preview(id)).recognition.state).toBe(
+          "done",
+        ),
+      { timeout: 20000, interval: 30 },
+    );
+    const preview = await app.importSessions.preview(id);
+    expect(preview.summary.files.unpaired).toBe(0);
+    expect(preview.summary.records.created).toBe(2);
+    const items = (await app.importSessions.items(id)).items;
+    expect(
+      items.filter((i) => i.origin === "file" && !i.unpaired),
+    ).toHaveLength(2);
+    expect(
+      items.some((i) => i.external_id === "SOLO0001" && i.origin === "data"),
+    ).toBe(false);
+  } finally {
+    await app.close();
+    await rm(home, { recursive: true, force: true });
+  }
+}, 60000);

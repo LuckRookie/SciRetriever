@@ -19,6 +19,8 @@
 - 对已经入库、书目待补、有 PDF 的文献重新识别书目：后台任务用保存的 PDF 重新读标题与 DOI 去认，认出的补全书目，认不出但 PDF 里有标题的换掉文件名标题。CLI 为 `literature recognize`，MCP 为 `recognize_literatures`。
 - 移出文献库：文献库里的文献可以移出，回到候选，同时离开所有文件夹；书目、PDF、全文、批注、标签和阅读记录都保留，以后再加入时文件夹归属不恢复。CLI 为 `literature uncollect`，MCP 为 `uncollect_literatures`。
 - 指定文献：逐行给出 DOI（裸写、`doi:`、doi.org 或出版社地址）、arXiv 号、PMID 或标题，一个批次最多 200 行，文献库认出各是哪一篇并取回书目，确认后放进文献库。只给标题而对上几篇或只是相近时列出候选让人挑；没认出的默认不加入，可以逐行决定按给出的标识或标题加入（标为书目待补）；库里已有（包括最近删除与撤回的）的标识直接认作已在库，不再向来源查询，删除或撤回的随之恢复。其他网址、太短或太长的行与重复的行在预览里写明原因。入库格式为 `lookup`；CLI 为 `import lookup`，stdio 版 MCP 为 `add_literatures`，两者同步完成，结果逐行列出没加入的行及原因与候选。页面入口另行发布。
+- Zotero 导入程序：skill 带 `scripts/zotero_import.py`，在装 Zotero 的电脑上由 Agent 或使用者自己运行。它只读 Zotero 的本地接口，列出库与分类，把选定的库或分类交给文献库的一个批次并触发预览；使用者在网页上确认后，它按待交清单上传 PDF（先用 Zotero 接口给出的文件，再找数据文件夹里的 `storage/<附件编号>/`），中断后重跑即续传。`probe` 只输出结构与计数，用来核对本地接口。批注仍只计数。
+- 配对按来源编号：文件引用是来源里的编号（如 Zotero 附件编号）时，按“编号/文件名”与交来文件的相对路径比较，同名的独立 PDF 也能各自配上。
 - 入库接口新增格式 `zotero-api`：扩展或导入程序把 Zotero 接口返回的条目与分类原样交来，文献库转换书目（优先用 Zotero 给的 CSL JSON）、Extra 里的 DOI、arXiv 号与 PMID、分类（成为文件夹）、自动标签（作者关键词）与手动标签（“标签”文件夹）、首选 PDF；独立 PDF 成为只有文件的条目；笔记、批注、其他 PDF、非 PDF 附件、链接附件与回收站里的条目按种类计数，进预览与报告。扩展与导入程序另行发布。
 - MCP `archive_manage` 与 `create_task` 中建档的说明改正：`full` 模式下没有原始解析的部分会先经解析服务（MinerU）解析，`legacy-vlm-markdown` 才要求已有原始解析。行为本身没变。
 - 只列候选：文献查询的 `collection_scope` 可以取 `candidates`，列出不在文献库里的文献，可与搜索、批次、状态等条件组合，也能用来整批加入文献库。CLI 为 `literature search --collection-scope candidates`，MCP 为 `search_library`。

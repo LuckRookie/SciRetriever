@@ -20,7 +20,7 @@ description: 代使用者入库、使用文献库。用户要求连接自己的 
 | 获取 PDF、解析全文         | [use.md](use.md#获取-pdf-与解析全文) |
 | 请求失败、中断后继续       | [recovery.md](recovery.md)           |
 
-接口的请求、结果、格式、上限与错误码以连接后的 `GET <地址>/api/v1/intake/instructions` 为准。这里讲执行顺序与判断。单篇网页收藏使用浏览器扩展，不由 Agent 模拟扩展操作。从 Zotero 直接导入还没有开放，见 [source-zotero.md](source-zotero.md)。
+接口的请求、结果、格式、上限与错误码以连接后的 `GET <地址>/api/v1/intake/instructions` 为准。这里讲执行顺序与判断。单篇网页收藏使用浏览器扩展，不由 Agent 模拟扩展操作。从 Zotero 导入用固定的导入程序，见 [source-zotero.md](source-zotero.md)。
 
 ## 始终遵守
 

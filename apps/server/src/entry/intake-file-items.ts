@@ -66,19 +66,33 @@ function suffix(a: string, b: string) {
     count++;
   return count;
 }
+/**
+ * A reference named by the source's own ID rather than a path (one segment,
+ * not the file name, no scheme such as `local-file:`) compares as
+ * `<ID>/<file name>`, and only a match that reaches the ID counts as a path
+ * match (literature materials 6.4.3, step 1). Path references are unchanged.
+ */
+function referencePath(reference: ImportFile): { path: string; least: number } {
+  const id = reference.external_id;
+  return /[/\\:]/u.test(id) ||
+    id.toLowerCase() === reference.file_name.toLowerCase()
+    ? { path: id, least: 1 }
+    : { path: `${id}/${reference.file_name}`, least: 2 };
+}
 export function pairIntakeFile(
   reference: ImportFile,
   items: readonly StoredIntakeItem[],
   sizes: ReadonlyMap<string, number>,
 ) {
+  const { path, least } = referencePath(reference);
   const paths = items
     .filter((i) => i.work?.relative_path)
     .map((i) => ({
       item: i,
-      count: suffix(reference.external_id, i.work!.relative_path!),
+      count: suffix(path, i.work!.relative_path!),
     }));
   const best = Math.max(0, ...paths.map((p) => p.count));
-  const found = paths.filter((p) => p.count === best && best > 0);
+  const found = paths.filter((p) => p.count === best && best >= least);
   if (found.length === 1) return found[0]!.item;
   const names = items.filter(
     (i) => i.file_name?.toLowerCase() === reference.file_name.toLowerCase(),
