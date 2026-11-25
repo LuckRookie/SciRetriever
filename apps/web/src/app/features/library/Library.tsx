@@ -173,8 +173,13 @@ const currentRows = new WeakMap<ApiClient, Map<string, string>>();
 const LIBRARY_HITS_SHOWN = 5;
 /** The right column (page specs “右栏”): open or put away, remembered in this browser. */
 const PREVIEW_KEY = "sciretriever:library:preview:v1";
-/** “范围内的词”: held at the top, or scrolling with the rows (the default). */
-const TERMS_PINNED_KEY = "sciretriever:library:terms-pinned:v1";
+/**
+ * What stays at the top while the rows scroll: the title row alone (the
+ * default), or the search box, the classes and the conditions with it.
+ */
+const CONTROLS_PINNED_KEY = "sciretriever:library:controls-pinned:v1";
+/** Past this much scrolling, “回到顶部” is offered. */
+const BACK_TO_TOP_AFTER = 600;
 /** Wider than this the right column stands beside the list; narrower, the preview is a layer. */
 const WIDE = "(min-width: 1101px)";
 const PREVIEW_WIDTH_KEY = "sciretriever:library:preview-width:v1";
@@ -376,6 +381,7 @@ export default function Library() {
       key === "text" ||
       key === "folder" ||
       key === "recently_opened" ||
+      key === "collection_scope" ||
       value === null ||
       (value === false &&
         key !== "has_draft_differences" &&
@@ -541,12 +547,12 @@ export default function Library() {
     () => preferences.read(PREVIEW_KEY) !== "closed",
   );
   const docked = wide && previewOpen;
-  const [termsPinned, setTermsPinnedState] = useState(
-    () => preferences.read(TERMS_PINNED_KEY) === "pinned",
+  const [controlsPinned, setControlsPinnedState] = useState(
+    () => preferences.read(CONTROLS_PINNED_KEY) === "pinned",
   );
-  const setTermsPinned = (pinned: boolean) => {
-    setTermsPinnedState(pinned);
-    preferences.write(TERMS_PINNED_KEY, pinned ? "pinned" : "free");
+  const setControlsPinned = (pinned: boolean) => {
+    setControlsPinnedState(pinned);
+    preferences.write(CONTROLS_PINNED_KEY, pinned ? "pinned" : "free");
   };
   // The right column's width is the reader's own choice, kept in this browser.
   const page = useRef<HTMLElement>(null);
@@ -820,6 +826,7 @@ export default function Library() {
     () =>
       pageQuery({
         ...scopeQuery(route.query),
+        ...candidatesScope(route.query),
         ...(view === "batch"
           ? {
               intake_batch_ids: route.query.intake_batch_ids,
@@ -913,6 +920,7 @@ export default function Library() {
     if (all) setText("");
     updateQuery({
       ...scopeQuery(route.query),
+      ...candidatesScope(route.query),
       ...(all
         ? {}
         : {
@@ -1742,38 +1750,79 @@ export default function Library() {
       {mutable && total > 0 ? (
         <Menu label="批量操作" indicator variant="text" items={batchItems} />
       ) : null}
+      <IconButton
+        className="library-pin"
+        variant="text"
+        aria-label={controlsPinned ? "取消固定" : "滚动时固定搜索与筛选"}
+        aria-pressed={controlsPinned}
+        icon={<Icon name="pin" />}
+        onPress={() => setControlsPinned(!controlsPinned)}
+      />
     </>
   );
-  // The commonest words of the results: with the tools at the top, or, the
-  // default, scrolling away with the rows so that the list keeps the screen.
-  const scopeTerms =
-    chips.length > 0 ? (
-      <ScopeTerms
-        query={effective}
-        windowCursor={windowCursor}
-        lowerBound={windowNumber === 1}
-        onWindowInvalid={windowCursor === null ? undefined : firstWindow}
-        pinned={termsPinned}
-        onPinnedChange={setTermsPinned}
-        onChange={(query) => updateQuery(withoutScopeFlag(query, route.query))}
-      />
-    ) : null;
-  // The table's column heads stick under the toolbar, whatever its height.
+  // The table's column heads stick under what stays of the top. Unpinned,
+  // the block slides up until the title row reaches the top: the search box
+  // goes with the page, the title and its tools stay.
   const controls = useRef<HTMLDivElement>(null);
+  const stick = useRef(0);
   useLayoutEffect(() => {
     const element = controls.current,
-      page = element?.parentElement;
-    if (!element || !page) return;
-    const measure = () =>
-      page.style.setProperty(
-        "--library-controls-height",
-        `${element.offsetHeight}px`,
+      section = element?.parentElement;
+    if (!element || !section) return;
+    const measure = () => {
+      const header = element.querySelector<HTMLElement>(
+        ":scope > .ui-page-header",
       );
+      stick.current =
+        controlsPinned || !header ? 0 : Math.max(0, header.offsetTop - 12);
+      section.style.setProperty(
+        "--library-controls-stick",
+        `${stick.current}px`,
+      );
+      section.style.setProperty(
+        "--library-controls-height",
+        `${element.offsetHeight - stick.current}px`,
+      );
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [api.workspace.readiness]);
+  }, [api.workspace.readiness, controlsPinned]);
+  // Whether the top has slid under, and whether the way back is worth a
+  // button: marked on the page itself, so scrolling draws nothing again.
+  useEffect(() => {
+    const section = page.current,
+      container = section?.closest<HTMLElement>(".workspace-content");
+    if (!section || !container) return;
+    const mark = () => {
+      section.toggleAttribute(
+        "data-stuck",
+        container.scrollTop > stick.current,
+      );
+      section.toggleAttribute(
+        "data-scrolled",
+        container.scrollTop > BACK_TO_TOP_AFTER,
+      );
+    };
+    mark();
+    container.addEventListener("scroll", mark, { passive: true });
+    return () => container.removeEventListener("scroll", mark);
+  }, [api.workspace.readiness, controlsPinned]);
+  // The filter panel opens under the title row: unpinned and scrolled away,
+  // the page returns to the top so that it is seen.
+  useEffect(() => {
+    const container = page.current?.closest<HTMLElement>(".workspace-content");
+    if (filters && !controlsPinned && container && container.scrollTop > 0)
+      container.scrollTo({ top: 0 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters]);
+  // At once: the list corrects its own offset as rows are measured, which
+  // stops a smooth scroll part of the way.
+  const backToTop = () =>
+    page.current
+      ?.closest<HTMLElement>(".workspace-content")
+      ?.scrollTo({ top: 0 });
   if (api.workspace.readiness !== "ready")
     return (
       <section className="library-page">
@@ -1905,6 +1954,211 @@ export default function Library() {
         选择全部 {libraryCount(total, truncated, "篇")}符合条件的文献
       </Button>
     ) : null;
+  // Under the title row: the search's scope, the notices, the material
+  // classes, the conditions with the words of the results, and the filter
+  // panel. They stay with the title only when the reader pins the top.
+  const controlsRest = (
+    <>
+      {view === "search" ? (
+        <SearchScope
+          query={route.query}
+          origin={
+            origin ??
+            (inView
+              ? {
+                  scope: {
+                    ...(route.query.folder
+                      ? { folder: route.query.folder }
+                      : {}),
+                    ...(route.query.recently_opened
+                      ? { recently_opened: true }
+                      : {}),
+                    ...(route.query.intake_batch_ids.length
+                      ? { intake_batch_ids: route.query.intake_batch_ids }
+                      : {}),
+                  },
+                  name: pageName,
+                }
+              : null)
+          }
+          relevanceLimit={
+            route.sort === "relevance" && !emptyWindow
+              ? (firstPage?.relevanceLimit ?? null)
+              : null
+          }
+          scoredNote={scoredNote}
+          continueLabel={continueLabel}
+          firstWindowLabel={firstWindowLabel}
+          windowPhrase={
+            (scanIncomplete || windowNumber > 1) && !emptyWindow
+              ? windowPhrase
+              : null
+          }
+          onFirstWindow={windowNumber > 1 ? firstWindow : null}
+          onContinue={emptyWindow ? null : continueWindow}
+          onChange={updateQuery}
+        />
+      ) : null}
+      {(next.data?.pages[0]?.backfillPending ?? 0) > 0 ? (
+        <p role="status" className="library-notice">
+          此标签还有 {next.data!.pages[0]!.backfillPending} 篇待回溯。
+          <Button
+            variant="text"
+            onPress={() =>
+              navigate({
+                view: "tags",
+                literature: null,
+                tag: route.query.tags?.ids[0] ?? null,
+              })
+            }
+          >
+            查看回溯
+          </Button>
+        </p>
+      ) : null}
+      {archiveAction.error ? (
+        <ErrorNotice message={errorMessage(archiveAction.error)} />
+      ) : null}
+      <div className="library-quick">
+        <div className="library-status-filters" aria-label="按材料状态筛选">
+          {[
+            { id: "" as const, label: "全部" },
+            ...MAIN_MATERIAL_STATES,
+            // A category from “更多状态” shows as a chip while selected.
+            ...MORE_MATERIAL_STATES.filter(
+              (filter) => statusFilter === filter.id,
+            ),
+          ]
+            .filter(
+              (filter) =>
+                filter.id === "" ||
+                statusFilter === filter.id ||
+                countFor(filter.id) !== 0,
+            )
+            .map((filter) => (
+              <FilterChip
+                key={filter.id}
+                isSelected={statusFilter === filter.id}
+                onChange={() => setStatusFilter(filter.id)}
+              >
+                {filter.label}
+                {countFor(filter.id) !== null && quickCount(filter.id)
+                  ? " "
+                  : null}
+                {countFor(filter.id) !== null && quickCount(filter.id) ? (
+                  <span className="filter-count">{quickCount(filter.id)}</span>
+                ) : null}
+              </FilterChip>
+            ))}
+          {MORE_MATERIAL_STATES.some(
+            (filter) => statusFilter !== filter.id && countFor(filter.id) !== 0,
+          ) ? (
+            <Menu
+              label="更多状态"
+              indicator
+              variant="text"
+              items={MORE_MATERIAL_STATES.filter(
+                (filter) =>
+                  statusFilter !== filter.id && countFor(filter.id) !== 0,
+              ).map((filter) => ({
+                id: filter.id,
+                label:
+                  countFor(filter.id) === null
+                    ? filter.label
+                    : [filter.label, quickCount(filter.id)]
+                        .filter(Boolean)
+                        .join(" "),
+                onAction: () => setStatusFilter(filter.id),
+              }))}
+            />
+          ) : null}
+          {/* Statuses recomputed in the background after a settings
+                change (page specs “超过一万篇”). */}
+          {counts.data?.status_updating || firstPage?.statusUpdating ? (
+            <span className="library-status-updating" role="status">
+              状态正在更新，数字可能不准
+            </span>
+          ) : null}
+        </div>
+        {/* “全选已加载” joins this line once a selection has begun, so the
+              rows below never move (page specs “勾选框”). */}
+        {(display === "list" && items.length > 0 && shell.selected.size > 0) ||
+        selectWhole ? (
+          <div className="library-select-all">
+            {display === "list" && items.length > 0 && shell.selected.size > 0
+              ? selectAll(true)
+              : null}
+            {selectWhole}
+          </div>
+        ) : null}
+        {folder ? (
+          <Switch
+            isSelected={!folder.include_descendants}
+            onChange={(only) =>
+              updateQuery({
+                ...route.query,
+                folder: { id: folder.id, include_descendants: !only },
+              })
+            }
+          >
+            只看本层
+          </Switch>
+        ) : null}
+      </div>
+      {chips.length > 0 && (
+        <div className="library-applied">
+          <ChipGroup label="当前筛选">
+            {chips.map((chip) => (
+              <FilterChip
+                key={chip.key}
+                isSelected
+                onChange={chip.clear}
+                onRemove={chip.clear}
+              >
+                {chip.label}
+              </FilterChip>
+            ))}
+          </ChipGroup>
+          {/* The one “清除” (page specs “文献库”): every condition goes, the
+                search and the page's scope stay. */}
+          <Button
+            variant="text"
+            size="compact"
+            onPress={() => clearConditions(false)}
+          >
+            清除
+          </Button>
+        </div>
+      )}
+      {chips.length > 0 ? (
+        <ScopeTerms
+          query={effective}
+          windowCursor={windowCursor}
+          lowerBound={windowNumber === 1}
+          onWindowInvalid={windowCursor === null ? undefined : firstWindow}
+          onChange={(query) =>
+            updateQuery(withoutScopeFlag(query, route.query))
+          }
+        />
+      ) : null}
+      <Presence>
+        {filters && (
+          <AnimatedPanel key="filters" preset="collapse">
+            <Filters
+              query={route.query}
+              menu={savedFilterMenu}
+              onApply={updateQuery}
+            />
+          </AnimatedPanel>
+        )}
+      </Presence>
+      {next.isPending ? (
+        <p role="status" className="library-loading">
+          正在读取文献…
+        </p>
+      ) : null}
+    </>
+  );
   return (
     <section
       ref={page}
@@ -1913,6 +2167,7 @@ export default function Library() {
       data-preview={shownPeek !== null || undefined}
       data-preview-docked={docked || undefined}
       data-display={display}
+      data-controls={controlsPinned ? "pinned" : "free"}
       {...(previewWidth === null
         ? {}
         : {
@@ -1995,201 +2250,11 @@ export default function Library() {
             </>
           }
         />
-        {view === "search" ? (
-          <SearchScope
-            query={route.query}
-            origin={
-              origin ??
-              (inView
-                ? {
-                    scope: {
-                      ...(route.query.folder
-                        ? { folder: route.query.folder }
-                        : {}),
-                      ...(route.query.recently_opened
-                        ? { recently_opened: true }
-                        : {}),
-                      ...(route.query.intake_batch_ids.length
-                        ? { intake_batch_ids: route.query.intake_batch_ids }
-                        : {}),
-                    },
-                    name: pageName,
-                  }
-                : null)
-            }
-            relevanceLimit={
-              route.sort === "relevance" && !emptyWindow
-                ? (firstPage?.relevanceLimit ?? null)
-                : null
-            }
-            scoredNote={scoredNote}
-            continueLabel={continueLabel}
-            firstWindowLabel={firstWindowLabel}
-            windowPhrase={
-              (scanIncomplete || windowNumber > 1) && !emptyWindow
-                ? windowPhrase
-                : null
-            }
-            onFirstWindow={windowNumber > 1 ? firstWindow : null}
-            onContinue={emptyWindow ? null : continueWindow}
-            onChange={updateQuery}
-          />
-        ) : null}
-        {(next.data?.pages[0]?.backfillPending ?? 0) > 0 ? (
-          <p role="status" className="library-notice">
-            此标签还有 {next.data!.pages[0]!.backfillPending} 篇待回溯。
-            <Button
-              variant="text"
-              onPress={() =>
-                navigate({
-                  view: "tags",
-                  literature: null,
-                  tag: route.query.tags?.ids[0] ?? null,
-                })
-              }
-            >
-              查看回溯
-            </Button>
-          </p>
-        ) : null}
-        {archiveAction.error ? (
-          <ErrorNotice message={errorMessage(archiveAction.error)} />
-        ) : null}
-        <div className="library-quick">
-          <div className="library-status-filters" aria-label="按材料状态筛选">
-            {[
-              { id: "" as const, label: "全部" },
-              ...MAIN_MATERIAL_STATES,
-              // A category from “更多状态” shows as a chip while selected.
-              ...MORE_MATERIAL_STATES.filter(
-                (filter) => statusFilter === filter.id,
-              ),
-            ]
-              .filter(
-                (filter) =>
-                  filter.id === "" ||
-                  statusFilter === filter.id ||
-                  countFor(filter.id) !== 0,
-              )
-              .map((filter) => (
-                <FilterChip
-                  key={filter.id}
-                  isSelected={statusFilter === filter.id}
-                  onChange={() => setStatusFilter(filter.id)}
-                >
-                  {filter.label}
-                  {countFor(filter.id) !== null && quickCount(filter.id)
-                    ? " "
-                    : null}
-                  {countFor(filter.id) !== null && quickCount(filter.id) ? (
-                    <span className="filter-count">
-                      {quickCount(filter.id)}
-                    </span>
-                  ) : null}
-                </FilterChip>
-              ))}
-            {MORE_MATERIAL_STATES.some(
-              (filter) =>
-                statusFilter !== filter.id && countFor(filter.id) !== 0,
-            ) ? (
-              <Menu
-                label="更多状态"
-                indicator
-                variant="text"
-                items={MORE_MATERIAL_STATES.filter(
-                  (filter) =>
-                    statusFilter !== filter.id && countFor(filter.id) !== 0,
-                ).map((filter) => ({
-                  id: filter.id,
-                  label:
-                    countFor(filter.id) === null
-                      ? filter.label
-                      : [filter.label, quickCount(filter.id)]
-                          .filter(Boolean)
-                          .join(" "),
-                  onAction: () => setStatusFilter(filter.id),
-                }))}
-              />
-            ) : null}
-            {/* Statuses recomputed in the background after a settings
-                change (page specs “超过一万篇”). */}
-            {counts.data?.status_updating || firstPage?.statusUpdating ? (
-              <span className="library-status-updating" role="status">
-                状态正在更新，数字可能不准
-              </span>
-            ) : null}
-          </div>
-          {/* “全选已加载” joins this line once a selection has begun, so the
-              rows below never move (page specs “勾选框”). */}
-          {(display === "list" &&
-            items.length > 0 &&
-            shell.selected.size > 0) ||
-          selectWhole ? (
-            <div className="library-select-all">
-              {display === "list" && items.length > 0 && shell.selected.size > 0
-                ? selectAll(true)
-                : null}
-              {selectWhole}
-            </div>
-          ) : null}
-          {folder ? (
-            <Switch
-              isSelected={!folder.include_descendants}
-              onChange={(only) =>
-                updateQuery({
-                  ...route.query,
-                  folder: { id: folder.id, include_descendants: !only },
-                })
-              }
-            >
-              只看本层
-            </Switch>
-          ) : null}
-        </div>
-        {chips.length > 0 && (
-          <div className="library-applied">
-            <ChipGroup label="当前筛选">
-              {chips.map((chip) => (
-                <FilterChip
-                  key={chip.key}
-                  isSelected
-                  onChange={chip.clear}
-                  onRemove={chip.clear}
-                >
-                  {chip.label}
-                </FilterChip>
-              ))}
-            </ChipGroup>
-            {/* The one “清除” (page specs “文献库”): every condition goes, the
-                search and the page's scope stay. */}
-            <Button
-              variant="text"
-              size="compact"
-              onPress={() => clearConditions(false)}
-            >
-              清除
-            </Button>
-          </div>
-        )}
-        {termsPinned ? scopeTerms : null}
-        <Presence>
-          {filters && (
-            <AnimatedPanel key="filters" preset="collapse">
-              <Filters
-                query={route.query}
-                menu={savedFilterMenu}
-                onApply={updateQuery}
-              />
-            </AnimatedPanel>
-          )}
-        </Presence>
-        {next.isPending ? (
-          <p role="status" className="library-loading">
-            正在读取文献…
-          </p>
-        ) : null}
+        {controlsPinned ? controlsRest : null}
       </div>
-      {termsPinned ? null : scopeTerms}
+      {controlsPinned ? null : (
+        <div className="library-controls-rest">{controlsRest}</div>
+      )}
       <LayoutGroup className="library-results-region">
         {next.isError && !sortRefused && !isWindowInvalid(next.error) && (
           <ErrorNotice
@@ -2667,6 +2732,14 @@ export default function Library() {
           else setRowMenu(null);
         }}
       />
+      <div className="library-top-wrap">
+        <IconButton
+          className="library-top"
+          aria-label="回到顶部"
+          icon={<Icon name="top" />}
+          onPress={backToTop}
+        />
+      </div>
       {deletion.dialog}
       {removal.dialog}
       <ConfirmDialog
@@ -4212,6 +4285,12 @@ interface SearchOrigin {
     >
   >;
   readonly name: string;
+}
+/** The candidates' page keeps its scope through every change of conditions. */
+function candidatesScope(query: LibraryQuery): Partial<LibraryQuery> {
+  return query.collection_scope === "candidates"
+    ? { collection_scope: "candidates" }
+    : {};
 }
 /** The page adds the collected scope itself; the address keeps without it. */
 function withoutScopeFlag(

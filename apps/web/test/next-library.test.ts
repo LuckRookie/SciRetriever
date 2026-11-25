@@ -352,6 +352,35 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
     expect(await tableRows.count()).toBeLessThan(60);
     await p.getByRole("tab", { name: "列表", exact: true }).click();
     await p.locator('.paper-row[data-display="list"]').first().waitFor();
+    // Scrolled, only the title row stays; the search box and the material
+    // classes go with the page, and “回到顶部” brings them back (page specs
+    // “文献库”). Pinned, the whole top stays, and the choice is kept.
+    const box = p.getByRole("searchbox", { name: "搜索文献", exact: true });
+    // Seen inside the scrolling page, under the application's own top bar.
+    const inView = (locator: typeof box) =>
+      locator.evaluate((node) => {
+        const r = node.getBoundingClientRect(),
+          top = node.closest(".workspace-content")!.getBoundingClientRect().top;
+        return r.bottom > top + 1 && r.top < innerHeight;
+      });
+    const pageTitle = p.getByRole("heading", { name: "文献库", exact: true });
+    const toTop = p.getByRole("button", { name: "回到顶部", exact: true });
+    expect(await toTop.isVisible()).toBe(false);
+    await list.evaluate((el) => (el.scrollTop = 2000));
+    await expect.poll(() => toTop.isVisible()).toBe(true);
+    expect(await inView(box)).toBe(false);
+    expect(await inView(pageTitle)).toBe(true);
+    await toTop.click();
+    await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBe(0);
+    await expect.poll(() => toTop.isVisible()).toBe(false);
+    await p
+      .getByRole("button", { name: "滚动时固定搜索与筛选", exact: true })
+      .click();
+    await list.evaluate((el) => (el.scrollTop = 2000));
+    await expect.poll(() => inView(box)).toBe(true);
+    await p.reload();
+    await p.locator(".paper-row").first().waitFor();
+    await p.getByRole("button", { name: "取消固定", exact: true }).waitFor();
     expect(w.errors).toEqual([]);
     expect(w.env.modelCalls).toBe(0);
   } finally {

@@ -588,10 +588,65 @@
      conditions stay at the top; the rows scroll under them. */
   .library-controls {
     position: sticky;
-    top: 0;
+    /* Unpinned, the block slides up until its title row is at the top. */
+    top: calc(-1 * var(--library-controls-stick, 0px));
     z-index: 5;
     background: var(--bg);
     padding-top: var(--space-4);
+  }
+  /* The title row alone over the rows: a hairline says where it ends. */
+  .library-page[data-controls="free"][data-stuck] .library-controls {
+    box-shadow: 0 1px 0 var(--line);
+  }
+  /* The pin holds the whole top; pressed, it carries the ink of a choice. */
+  .library-toolbar-actions .ui-button.library-pin {
+    /* As tall as the tools beside it, so the row keeps one line of tops. */
+    align-self: stretch;
+    height: auto;
+    color: var(--fg3);
+  }
+  .library-toolbar-actions .ui-button.library-pin[data-hovered] {
+    color: var(--fg);
+  }
+  .library-toolbar-actions .ui-button.library-pin[aria-pressed="true"] {
+    color: var(--blue);
+  }
+  /* “回到顶部”: a round button at the list's lower right once the page has
+     scrolled, above the selection bar when there is one. */
+  .library-top-wrap {
+    position: sticky;
+    bottom: var(--space-5);
+    z-index: 6;
+    display: flex;
+    justify-content: flex-end;
+    height: 0;
+    pointer-events: none;
+    visibility: hidden;
+    opacity: 0;
+    transition:
+      opacity var(--dur-2) var(--ease-out),
+      visibility var(--dur-2);
+  }
+  .library-page[data-scrolled] .library-top-wrap {
+    visibility: visible;
+    opacity: 1;
+  }
+  .library-page:has(.selection-bar) .library-top-wrap {
+    bottom: calc(var(--space-5) + 64px);
+  }
+  .library-top-wrap > .ui-button.library-top {
+    pointer-events: auto;
+    width: 40px;
+    height: 40px;
+    border: 1px solid var(--line);
+    border-radius: 50%;
+    background: var(--bg);
+    box-shadow: var(--shadow-pop);
+    color: var(--fg2);
+    transform: translateY(-100%);
+  }
+  .library-top-wrap > .ui-button.library-top[data-hovered] {
+    color: var(--fg);
   }
   /* The title with its count on the left, the tools on the right; where
      the two no longer fit, the tools take the next line. */
@@ -1819,24 +1874,10 @@
     color: inherit;
     opacity: 0.7;
   }
+  .scope-terms-more,
   .scope-terms-hint {
     justify-self: start;
     margin-left: calc(var(--scope-label) + var(--space-2));
-  }
-  /* “更多” under the words, the pin at the far end of the same line. */
-  .scope-terms-foot {
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-3);
-    padding-left: calc(var(--scope-label) + var(--space-2));
-  }
-  .scope-terms-foot > .scope-terms-pin {
-    margin-left: auto;
-    color: var(--fg3);
-  }
-  .scope-terms-foot > .scope-terms-pin[data-hovered],
-  .scope-terms-foot > .scope-terms-pin[aria-pressed="true"] {
-    color: var(--fg2);
   }
   .scope-terms-hint {
     display: flex;

@@ -59,19 +59,6 @@ it("lists tags first with each layer's coverage, folds subjects once most result
     expect(
       await rows.nth(0).locator(".scope-terms-coverage").textContent(),
     ).toBe("24 / 40 篇");
-    // The words scroll away with the rows unless the reader pins them, and
-    // the choice is kept in this browser (page specs “范围内的词”).
-    const pinnedTerms = page.locator(".library-controls .scope-terms");
-    expect(await pinnedTerms.count()).toBe(0);
-    await terms
-      .getByRole("button", { name: "固定在顶部", exact: true })
-      .click();
-    await pinnedTerms.waitFor();
-    await page.reload();
-    await pinnedTerms.waitFor();
-    await terms.getByRole("button", { name: "取消固定", exact: true }).click();
-    await expect.poll(() => pinnedTerms.count()).toBe(0);
-    await terms.waitFor();
     // Over half the results carry tags, so subjects wait behind “展开”.
     expect(
       await terms.getByRole("button", { name: /^主题词 Chemistry/ }).count(),

@@ -34,7 +34,9 @@ export type IconName =
   | "tag"
   | "outline"
   | "focus"
-  | "panel";
+  | "panel"
+  | "pin"
+  | "top";
 const paths: Record<IconName, string> = {
   search: "m16 16 5 5 M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0",
   close: "m6 6 12 12 M18 6 6 18",
@@ -74,6 +76,8 @@ const paths: Record<IconName, string> = {
   outline: "M9 6h11 M9 12h11 M9 18h11 M4.5 6h.01 M4.5 12h.01 M4.5 18h.01",
   focus: "M4 9V4h5 M15 4h5v5 M20 15v5h-5 M9 20H4v-5",
   panel: "M3 5h18v14H3z M15 5v14",
+  pin: "M9 4h6l-1 6 3 3H7l3-3z M12 13v7",
+  top: "M5 5h14 M12 20V9 M7 14l5-5 5 5",
 };
 export function Icon({
   name,

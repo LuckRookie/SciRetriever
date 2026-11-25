@@ -89,7 +89,8 @@ it("tops the library with one search box and no band, counts the collected in th
     const collected = await sidebarCount(page).textContent();
     await expect
       .poll(() => page.locator(".ui-page-header .ui-page-count").textContent())
-      .toBe(`共 ${collected} 篇`);
+      // The candidates' own count follows it, as a way to list them.
+      .toMatch(new RegExp(`^共 ${collected} 篇候选 \\d+ 篇$`, "u"));
     // One search box, at the top of the page, above the title.
     const box = page.getByRole("searchbox", { name: "搜索文献" });
     expect(
@@ -274,19 +275,15 @@ it("marks only-discovered rows with where they came from and collects one in pla
     await row(DISCOVERED[0][0]).focus();
     await page.keyboard.press("Space");
     const bar = page.getByRole("region", { name: "文献选择" });
-    await bar.getByRole("button", { name: "更多", exact: true }).click();
-    await page
-      .getByRole("menuitem", { name: "加入文献库 1", exact: true })
-      .click();
+    // With candidates chosen it is the bar's one primary button.
+    const add = bar.getByRole("button", { name: /^加入文献库/u });
+    expect(await add.textContent()).toBe("加入文献库 1");
+    await add.click();
     await row(DISCOVERED[0][0]).getByText("已加入", { exact: true }).waitFor();
     await expect
       .poll(() => sidebarCount(page).textContent())
       .toBe(String(collected + 2));
-    await bar.getByRole("button", { name: "更多", exact: true }).click();
-    expect(
-      await page.getByRole("menuitem", { name: /^加入文献库/u }).count(),
-    ).toBe(0);
-    await page.keyboard.press("Escape");
+    await expect.poll(() => add.count()).toBe(0);
 
     // The origin opens that task's discovery batch in the library.
     await page.goto(
@@ -379,7 +376,7 @@ it("says “1 万篇以上” beyond 10,000, works the exact number out on reque
     const count = page.locator(".ui-page-header .ui-page-count");
     await expect
       .poll(() => count.textContent())
-      .toMatch(/^符合 1 万篇以上 \/ 共 \d+ 篇算出准确数$/u);
+      .toMatch(/^符合 1 万篇以上 \/ 共 \d+ 篇算出准确数(候选 \d+ 篇)?$/u);
     // The quick filters were counted from the first 10,000 matches.
     const quick = page.locator(".library-status-filters");
     await expect
@@ -401,7 +398,9 @@ it("says “1 万篇以上” beyond 10,000, works the exact number out on reque
     release();
     await expect
       .poll(() => count.textContent())
-      .toMatch(/^符合 12,345 篇（截至 \d\d:\d\d） \/ 共 \d+ 篇$/u);
+      .toMatch(
+        /^符合 12,345 篇（截至 \d\d:\d\d） \/ 共 \d+ 篇(候选 \d+ 篇)?$/u,
+      );
     // Asked for exactly this query, the collected papers by an author.
     expect(exact).toEqual([
       expect.objectContaining({
@@ -419,7 +418,7 @@ it("says “1 万篇以上” beyond 10,000, works the exact number out on reque
       .click();
     await expect
       .poll(() => count.textContent())
-      .toMatch(/^符合 1 万篇以上 \/ 共 \d+ 篇算出准确数$/u);
+      .toMatch(/^符合 1 万篇以上 \/ 共 \d+ 篇算出准确数(候选 \d+ 篇)?$/u);
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();
