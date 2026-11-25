@@ -2003,9 +2003,14 @@ export class SqliteWorker {
     args: unknown,
     signal?: AbortSignal,
   ): Promise<T> {
-    const read = ["state", "issues", "events", "stats", "revision"].includes(
-      action,
-    );
+    const read = [
+      "state",
+      "issue-count",
+      "issues",
+      "events",
+      "stats",
+      "revision",
+    ].includes(action);
     if (this.readOnly && !read)
       throw new KnowledgeStorageError("archive-read-only");
     if (!read && !this.admission)

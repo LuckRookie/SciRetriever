@@ -2,6 +2,7 @@ import { parseInterventionResolution } from "../application/jobs/interventions.j
 import { randomUUID } from "node:crypto";
 import {
   parseArchiveBuildRequest,
+  parseArchiveIssueCount,
   parseLibraryQuery,
   parseLiteratureId,
   tagInteger,
@@ -45,6 +46,12 @@ export class ArchiveReader {
     if (r.operation === "stats") {
       tagRecord(r.request, []);
       return this.database.archive("stats", {}, signal);
+    }
+    if (r.operation === "issue-count") {
+      tagRecord(r.request, []);
+      return this.database
+        .archive("issue-count", {}, signal)
+        .then(parseArchiveIssueCount);
     }
     if (r.operation === "issues") {
       const q = r.request as Record<string, unknown>;

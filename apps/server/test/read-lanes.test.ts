@@ -198,6 +198,25 @@ it("reports one budget violation with its SQLite request and elapsed time", asyn
   }
 });
 
+it("routes the archive issue count to the short worker and its library list to the long worker", async () => {
+  const f = await fixture();
+  const { seen, spy } = trackWorkers();
+  try {
+    await f.worker.archive("issues", { limit: 1 });
+    const listWorker = seen.get("archive");
+    await f.worker.getExecutionJob(jobId);
+    await expect(f.worker.archive("issue-count", {})).resolves.toEqual({
+      total_count: 0,
+    });
+    expect(listWorker).toBeDefined();
+    expect(seen.get("archive")).not.toBe(listWorker);
+    expect(seen.get("archive")).toBe(seen.get("execution_get_job"));
+  } finally {
+    spy.mockRestore();
+    await f.close();
+  }
+});
+
 it("initializes on the writable worker before the first long read", async () => {
   const f = await fixture();
   const { seen, spy } = trackWorkers();

@@ -5,6 +5,7 @@ import {
   archiveProofreadHash,
   parseArrangementQueryV2,
   parseArrangementEditRequest,
+  parseArchiveIssueCount,
   parseArchiveUsageEstimateV2,
   parseArchiveTextBundleV2,
   parsePageProofreadRecord,
@@ -12,6 +13,22 @@ import {
 } from "../src/index.js";
 const id = "00000000-0000-0000-0000-000000000001",
   hash = archiveHash("a".repeat(64));
+it("accepts an exact nonnegative integer for the archive issue count", () => {
+  expect(parseArchiveIssueCount({ total_count: 0 })).toEqual({
+    total_count: 0,
+  });
+  expect(parseArchiveIssueCount({ total_count: 12 })).toEqual({
+    total_count: 12,
+  });
+  for (const invalid of [
+    {},
+    { total_count: -1 },
+    { total_count: 1.5 },
+    { total_count: "1" },
+    { total_count: 1, items: [] },
+  ])
+    expect(() => parseArchiveIssueCount(invalid)).toThrow();
+});
 it("bounds fixed-version arrangement queries and rejects old, unknown or overlarge requests", () => {
   const base = { schema_version: 2, asset_id: id, proofread_id: null };
   expect(parseArrangementQueryV2({ ...base, kind: "summary" })).toMatchObject(

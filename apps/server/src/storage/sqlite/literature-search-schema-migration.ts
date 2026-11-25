@@ -20,6 +20,7 @@ import { libraryPagingReady } from "./library-paging-state.js";
 import { RetrievalStorageEngine } from "./retrieval-engine.js";
 import { schemaTargetFile, schemaTargetPath } from "./schema-path.js";
 import {
+  CATALOG_ADDITIONS,
   SCHEMA_FINGERPRINT,
   SCHEMA_FINGERPRINT_V19,
   SCHEMA_FINGERPRINT_V19_COUNTS,
@@ -157,12 +158,14 @@ export async function migrateLiteratureSearchSchema(path: string) {
           )
           .get() &&
         libraryPagingReady(db);
-      registerCatalogAddition(
-        db,
-        LIBRARY_SCALE_ADDITION,
-        new Date().toISOString(),
-        backfilled,
-      );
+      const appliedAt = new Date().toISOString();
+      for (const addition of CATALOG_ADDITIONS)
+        registerCatalogAddition(
+          db,
+          addition,
+          appliedAt,
+          addition === LIBRARY_SCALE_ADDITION && backfilled,
+        );
       db.prepare(
         "UPDATE schema_identity SET schema_fingerprint=? WHERE singleton=1",
       ).run(SCHEMA_FINGERPRINT);

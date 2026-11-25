@@ -175,6 +175,24 @@ describe("machine interfaces over shared maintenance owners", () => {
       expect(
         await call("archive_query", { operation: "status", request: input }),
       ).toEqual({ protocol_version: 1, result: state.value });
+      e.insert("archive_issues", {
+        issue_id: "interface-parity-issue",
+        literature_id: b.lit,
+        asset_id: b.aid,
+        step: "references",
+        reason: "synthetic",
+        detail_json: "{}",
+        resolution: null,
+        updated_at: "2026-11-25T00:00:00Z",
+      });
+      const issueCount = { operation: "issue-count", request: {} };
+      const countCli = await runCli(["archive", "issue-count", "--json"], {
+        home: e.f.e.home,
+      });
+      expect(countCli).toMatchObject({ code: 0, value: { total_count: 1 } });
+      const expected = { protocol_version: 1, result: countCli.value };
+      expect(await post("archive", issueCount)).toEqual(expected);
+      expect(await call("archive_query", issueCount)).toEqual(expected);
     } finally {
       await client?.close();
       await host?.close();

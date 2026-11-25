@@ -29,6 +29,7 @@ import {
   type ArchiveState,
   type ArchiveStepReceipt,
   type ArchiveIssue,
+  type ArchiveIssueCount,
   type ArchiveVersionEvent,
 } from "@sciretriever/contracts";
 import type * as State from "../../literature/state.js";
@@ -58,6 +59,7 @@ const { deriveCurrentState }: typeof State = await import(
 );
 export type ArchiveStorageAction =
   | "state"
+  | "issue-count"
   | "issues"
   | "events"
   | "stats"
@@ -70,6 +72,7 @@ export type ArchiveStorageAction =
   | "parse";
 export const ARCHIVE_READ_ACTIONS: readonly ArchiveStorageAction[] = [
   "state",
+  "issue-count",
   "issues",
   "events",
   "stats",
@@ -86,6 +89,81 @@ const rows = (db: DatabaseSync, sql: string, ...args: SQLInputValue[]) =>
 function fail(code: string): never {
   throw Object.assign(new Error("archive storage refused"), { code });
 }
+
+function archiveIssueSource(includeResolved: boolean, scoped = false) {
+  // archiveStates starts at metadata and counts an issue once if its asset
+  // is still a PDF part. The default path only visits unresolved issue keys.
+  return `FROM archive_issues i${includeResolved ? "" : " INDEXED BY archive_issues_unresolved"}
+    WHERE ${includeResolved ? "" : "i.resolution IS NULL AND "}${scoped ? "i.literature_id=? AND " : ""}
+    EXISTS(SELECT 1 FROM literature_metadata m WHERE m.literature_id=i.literature_id)
+    AND EXISTS(SELECT 1 FROM literature_assets la JOIN assets a ON a.asset_id=la.asset_id
+      WHERE la.literature_id=i.literature_id AND la.asset_id=i.asset_id
+        AND la.role IN ('primary-pdf','supplementary-pdf') AND a.media_type='application/pdf')`;
+}
+
+function projectArchiveIssue(
+  row: Record<string, unknown>,
+  part: ArchiveIssue["part"],
+  arranged: boolean,
+): ArchiveIssue {
+  const step = row.step as ArchiveIssue["step"],
+    reason = String(row.reason);
+  return {
+    issue_id: String(row.issue_id),
+    literature_id: String(row.literature_id),
+    asset_id: String(row.asset_id),
+    part,
+    step,
+    reason,
+    detail: JSON.parse(String(row.detail_json)),
+    affects_readiness:
+      part === "main" &&
+      step !== "references" &&
+      reason !== "page-content-missing" &&
+      !(arranged && (step === "document" || step === "structure")),
+    resolution: row.resolution as ArchiveIssue["resolution"],
+  };
+}
+
+function readArchiveIssues(db: DatabaseSync, request: Record<string, unknown>) {
+  const scope =
+    typeof request.literature_id === "string" ? [request.literature_id] : [];
+  const offset = Number(request.offset ?? 0),
+    limit = Math.min(200, Number(request.limit ?? 50));
+  // Keep the archiveStates traversal order, including first occurrence for
+  // each reason. A PDF linked in both roles was classified as main.
+  const issues =
+    db.prepare(`SELECT i.issue_id,i.literature_id,i.asset_id,i.step,i.reason,i.detail_json,i.resolution,
+      CASE WHEN EXISTS(SELECT 1 FROM literature_assets la WHERE la.literature_id=i.literature_id
+        AND la.asset_id=i.asset_id AND la.role='primary-pdf') THEN 'main' ELSE 'supplementary' END AS part,
+      EXISTS(SELECT 1 FROM archive_steps s WHERE s.literature_id=i.literature_id
+        AND s.asset_id=i.asset_id AND s.step='arrange') AS arranged
+    ${archiveIssueSource(Boolean(request.include_resolved), scope.length > 0)}
+    ORDER BY i.literature_id,i.asset_id,i.step,i.rowid`);
+  const groups = new Map<string, number>();
+  const items: ArchiveIssue[] = [];
+  let total_count = 0;
+  for (const row of issues.iterate(...scope)) {
+    const reason = String(row.reason),
+      part = row.part as ArchiveIssue["part"];
+    groups.set(reason, (groups.get(reason) ?? 0) + 1);
+    if (
+      (request.reason && reason !== request.reason) ||
+      (request.part && part !== request.part)
+    )
+      continue;
+    if (total_count >= offset && items.length < limit)
+      items.push(projectArchiveIssue(row, part, row.arranged === 1));
+    total_count++;
+  }
+  return {
+    items,
+    groups: [...groups].map(([reason, count]) => ({ reason, count })),
+    total_count,
+    next_offset: offset + limit < total_count ? offset + limit : null,
+  };
+}
+
 /** Read the same parts as archive_current_parts starting with the requested
  *  literature's assets. Keep proofread and draft eligibility in the default
  *  version's ON clause so an ineligible version still leaves the PDF row.
@@ -332,25 +410,13 @@ export function archiveStates(
         const part = material.find((p) => p.asset_id === i.asset_id);
         return part
           ? [
-              {
-                issue_id: String(i.issue_id),
-                literature_id: key,
-                asset_id: String(i.asset_id),
-                part: part.part as "main" | "supplementary",
-                step: i.step as ArchiveIssue["step"],
-                reason: String(i.reason),
-                detail: JSON.parse(String(i.detail_json)),
-                affects_readiness:
-                  part.part === "main" &&
-                  i.step !== "references" &&
-                  i.reason !== "page-content-missing" &&
-                  !(
-                    stepRows.some(
-                      (s) => s.asset_id === i.asset_id && s.step === "arrange",
-                    ) && ["document", "structure"].includes(String(i.step))
-                  ),
-                resolution: i.resolution as ArchiveIssue["resolution"],
-              },
+              projectArchiveIssue(
+                i,
+                part.part as ArchiveIssue["part"],
+                stepRows.some(
+                  (s) => s.asset_id === i.asset_id && s.step === "arrange",
+                ),
+              ),
             ]
           : [];
       }),
@@ -456,38 +522,15 @@ export function runArchiveStorage(
             .get(),
         ),
       };
-    if (action === "issues") {
-      const all = [
-        ...archiveStates(
-          db,
-          typeof r.literature_id === "string"
-            ? r.literature_id
-            : rows(db, "SELECT DISTINCT literature_id FROM archive_issues").map(
-                (row) => String(row.literature_id),
-              ),
-        ).values(),
-      ].flatMap((s) => s.issues);
-      const grouped = all.filter(
-        (i) => r.include_resolved || i.resolution === null,
-      );
-      const filtered = grouped.filter(
-        (i) =>
-          (!r.reason || i.reason === r.reason) &&
-          (!r.part || i.part === r.part) &&
-          (r.include_resolved || i.resolution === null),
-      );
-      const offset = Number(r.offset ?? 0),
-        limit = Math.min(200, Number(r.limit ?? 50));
+    if (action === "issue-count") {
+      const count = db
+        .prepare(`SELECT count(*) AS total_count ${archiveIssueSource(false)}`)
+        .get()!;
       return {
-        items: filtered.slice(offset, offset + limit),
-        groups: [...new Set(grouped.map((i) => i.reason))].map((reason) => ({
-          reason,
-          count: grouped.filter((i) => i.reason === reason).length,
-        })),
-        total_count: filtered.length,
-        next_offset: offset + limit < filtered.length ? offset + limit : null,
-      };
+        total_count: Number(count.total_count),
+      } satisfies ArchiveIssueCount;
     }
+    if (action === "issues") return readArchiveIssues(db, r);
     if (action === "stats")
       return {
         parsing: rows(

@@ -241,21 +241,14 @@ it("writes “n 进行中 · m 需处理” beside 任务, leaving out a zero", 
           })
         : route.continue(),
     );
-    // Only the sidebar's count asks for one issue; the tab's list is left alone.
+    // Only the sidebar's count is answered here; the tab's list is left alone.
     await page.route("**/api/v1/query/archive*", async (route) => {
       const body = route.request().postDataJSON() as {
-        request?: { operation?: string; request?: { limit?: number } };
+        request?: { operation?: string };
       };
-      if (
-        body.request?.operation !== "issues" ||
-        body.request.request?.limit !== 1
-      )
-        return route.continue();
+      if (body.request?.operation !== "issue-count") return route.continue();
       await route.fulfill({
-        json: {
-          protocol_version: 1,
-          result: { items: [], groups: [], total_count: issues },
-        },
+        json: { protocol_version: 1, result: { total_count: issues } },
       });
     });
     await page.reload();

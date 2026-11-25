@@ -409,9 +409,11 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "archive_query",
-    "Read archive status, issues, stats or persisted version events without starting work. Requests: status {literature_id}; issues {reason?,part?,offset?,limit?}; stats {}; events {after,limit}.",
+    "Read archive status, issues, stats or persisted version events without starting work. Requests: status {literature_id}; issues {reason?,part?,offset?,limit?}; issue-count {} returns {total_count} for unresolved issues on current materials; stats {}; events {after,limit}.",
     object({
-      operation: { enum: ["status", "issues", "stats", "events"] },
+      operation: {
+        enum: ["status", "issues", "issue-count", "stats", "events"],
+      },
       request: { type: "object" },
     }),
   ),

@@ -100,10 +100,12 @@ export function useIssueCount() {
           await archiveQuery(
             api,
             "archive",
-            { operation: "issues", request: { offset: 0, limit: 1 } },
+            // The count alone, on the short read lane: it never waits
+            // behind a long read, and reads only the unresolved issues.
+            { operation: "issue-count", request: {} },
             signal,
           ),
-          "archive issues",
+          "archive issue count",
         ).total_count ?? 0,
       ),
     enabled: api.kind === "workspace" && api.workspace.readiness === "ready",

@@ -35,3 +35,4 @@ SHA-256 优先使用 Web Crypto；普通 HTTP 浏览器缺少 SubtleCrypto 时�
 - 相关度工作集搜索仅在部分命中未打分时带 `relevance_scored_count`。该非负整数表示实际打分数，可能为 0。已打分项先按相关度排列，其余命中按工作集顺序接在后面。`next_cursor` 继续这套排序，`relevance_limit` 仍表示相关度分页上限。计数与分面的回执沿用各自的字段。
 
 - `src/marks.ts`：`MarkOperation.place` 使用 PDF 或文档目标、相似度和方法版本；`ReadingMark.places` 保存当前方法的定位记录，JSON 导出与列表同形。
+- `src/archive.ts` 中的 `ArchiveIssueCount` 是 `archive` 查询 `{ operation: "issue-count", request: {} }` 的结果。`total_count` 为当前 PDF 材料上未解决问题的条数，等于默认 `issues` 的总数。

@@ -1137,7 +1137,17 @@ export const LIBRARY_SCALE_ADDITION = defineCatalogAddition(
   ["library-projections"],
 );
 
-export const CATALOG_ADDITIONS = [LIBRARY_SCALE_ADDITION] as const;
+export const ARCHIVE_ISSUES_ADDITION = defineCatalogAddition(
+  "archive-unresolved-issues",
+  [
+    "CREATE INDEX archive_issues_unresolved ON archive_issues(literature_id,asset_id,step) WHERE resolution IS NULL",
+  ],
+);
+
+export const CATALOG_ADDITIONS = [
+  LIBRARY_SCALE_ADDITION,
+  ARCHIVE_ISSUES_ADDITION,
+] as const;
 export const SCHEMA_MANIFEST = manifestWithAdditions(
   CATALOG_BASE_SCHEMA,
   CATALOG_ADDITIONS,

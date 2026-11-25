@@ -62,6 +62,7 @@ export const SQLITE_READ_LANES = {
       "marks.list",
       "marks.place.check",
       "archive.state",
+      "archive.issue-count",
       "archive.issues.literature",
       "archive.events",
       "archive.revision",

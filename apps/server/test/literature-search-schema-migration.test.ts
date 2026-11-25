@@ -26,6 +26,7 @@ import {
 } from "../src/storage/sqlite/literature-search-schema-migration.js";
 import { RetrievalStorageClient } from "../src/storage/sqlite/retrieval-client.js";
 import {
+  ARCHIVE_ISSUES_ADDITION,
   LIBRARY_SCALE_ADDITION,
   SCHEMA_FINGERPRINT,
   SCHEMA_FINGERPRINT_V19,
@@ -223,6 +224,12 @@ it.each([
         schema_fingerprint: SCHEMA_FINGERPRINT,
         additions: [
           {
+            name: ARCHIVE_ISSUES_ADDITION.name,
+            ddl_fingerprint: ARCHIVE_ISSUES_ADDITION.ddl_fingerprint,
+            backfill_step: 0,
+            backfill_cursor: null,
+          },
+          {
             name: LIBRARY_SCALE_ADDITION.name,
             ddl_fingerprint: LIBRARY_SCALE_ADDITION.ddl_fingerprint,
             backfill_step: 0,
@@ -303,6 +310,7 @@ it("registers a completed legacy combined catalog through schema-apply without r
       expect(snapshot()).toEqual(before);
       await expect(inspectCatalogSchema(path)).resolves.toMatchObject({
         additions: [
+          { name: ARCHIVE_ISSUES_ADDITION.name, backfill_step: 0 },
           {
             name: LIBRARY_SCALE_ADDITION.name,
             backfill_step: LIBRARY_SCALE_ADDITION.backfill_steps.length,

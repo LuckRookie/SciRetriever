@@ -16,7 +16,11 @@ import {
   defineCatalogAddition,
   registerCatalogAddition,
 } from "../src/storage/sqlite/catalog-ddl.js";
-import { initializeCurrentCatalog } from "../src/storage/sqlite/catalog-layout.js";
+import { readCatalogLayout } from "../src/storage/sqlite/catalog-identity.js";
+import {
+  catalogConfigFor,
+  initializeCurrentCatalog,
+} from "../src/storage/sqlite/catalog-layout.js";
 import { inspectCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
 import {
   beginCatalogWrite,
@@ -24,7 +28,9 @@ import {
 } from "../src/storage/sqlite/catalog-write.js";
 import { StoredLibraryState } from "../src/storage/sqlite/library-state.js";
 import {
+  ARCHIVE_ISSUES_ADDITION,
   LIBRARY_SCALE_ADDITION,
+  SCHEMA_FINGERPRINT,
   SCHEMA_MANIFEST,
 } from "../src/storage/sqlite/schema.js";
 import { SqliteWorker } from "../src/storage/sqlite/worker.js";
@@ -275,6 +281,61 @@ it("rechecks the required addition on an already open backfill connection", asyn
   });
 });
 
+it("installs the unresolved-issue index on the existing layout while old readers remain compatible", async () => {
+  await catalogFixture(async (home, path) => {
+    const db = new DatabaseSync(path);
+    try {
+      initializeCurrentCatalog(db, at);
+      db.exec("DROP INDEX archive_issues_unresolved");
+      db.prepare("DELETE FROM catalog_schema_additions WHERE name=?").run(
+        ARCHIVE_ISSUES_ADDITION.name,
+      );
+      const previous = catalogConfigFor([LIBRARY_SCALE_ADDITION]);
+      expect(readCatalogLayout(db, previous)?.extra_objects).toEqual([]);
+      await expect(inspectCatalogSchema(path)).rejects.toMatchObject({
+        reason: "catalog-addition-required",
+        addition: ARCHIVE_ISSUES_ADDITION.name,
+      });
+
+      const applied = await runCli(
+        [
+          "storage",
+          "schema-apply",
+          "--catalog",
+          path,
+          "--addition",
+          ARCHIVE_ISSUES_ADDITION.name,
+        ],
+        { home, stdout: () => {}, stderr: () => {} },
+      );
+      expect(applied).toMatchObject({
+        code: 0,
+        value: {
+          name: ARCHIVE_ISSUES_ADDITION.name,
+          ddl_fingerprint: ARCHIVE_ISSUES_ADDITION.ddl_fingerprint,
+        },
+      });
+      expect(readCatalogLayout(db, previous)?.extra_objects).toEqual([
+        { type: "index", name: "archive_issues_unresolved" },
+      ]);
+      await expect(inspectCatalogSchema(path)).resolves.toMatchObject({
+        status: "ready",
+        schema_fingerprint: SCHEMA_FINGERPRINT,
+        additions: [
+          {
+            name: ARCHIVE_ISSUES_ADDITION.name,
+            backfill_step: 0,
+            backfill_cursor: null,
+          },
+          { name: LIBRARY_SCALE_ADDITION.name },
+        ],
+      });
+    } finally {
+      db.close();
+    }
+  });
+});
+
 it("keeps known DDL exact and refuses an incompatible or non-additive application atomically", async () => {
   await catalogFixture(async (home, path) => {
     const db = new DatabaseSync(path);
@@ -310,8 +371,13 @@ it("keeps known DDL exact and refuses an incompatible or non-additive applicatio
           .all(),
       ).toEqual([]);
       expect(
-        db.prepare("SELECT name FROM catalog_schema_additions").all(),
-      ).toEqual([{ name: LIBRARY_SCALE_ADDITION.name }]);
+        db
+          .prepare("SELECT name FROM catalog_schema_additions ORDER BY name")
+          .all(),
+      ).toEqual([
+        { name: ARCHIVE_ISSUES_ADDITION.name },
+        { name: LIBRARY_SCALE_ADDITION.name },
+      ]);
 
       db.prepare(
         "UPDATE catalog_schema_additions SET ddl_fingerprint=? WHERE name=?",
@@ -551,9 +617,9 @@ it("commits only a completed slice at the deadline and resumes all projections",
       ).toEqual({ after_id: id(32) });
       const registry = first.db
         .prepare(
-          "SELECT backfill_step,backfill_cursor_json FROM catalog_schema_additions",
+          "SELECT backfill_step,backfill_cursor_json FROM catalog_schema_additions WHERE name=?",
         )
-        .get()!;
+        .get(LIBRARY_SCALE_ADDITION.name)!;
       expect(registry.backfill_step).toBe(0);
       expect(
         JSON.parse(String(registry.backfill_cursor_json)).state.after_id,
@@ -649,9 +715,9 @@ it("repairs named writes from a connection that has no application functions or 
       worker = new SqliteWorker(oldPath);
       const cursor = old
         .prepare(
-          "SELECT backfill_step,backfill_cursor_json FROM catalog_schema_additions",
+          "SELECT backfill_step,backfill_cursor_json FROM catalog_schema_additions WHERE name=?",
         )
-        .get()!;
+        .get(LIBRARY_SCALE_ADDITION.name)!;
       expect(cursor.backfill_step).toBe(0);
       expect(
         JSON.parse(String(cursor.backfill_cursor_json)).state.after_id,

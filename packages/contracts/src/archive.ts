@@ -5,6 +5,8 @@ import {
   ContractValidationError,
   parseLiteratureId,
   sha256,
+  tagInteger,
+  tagRecord,
 } from "./index.js";
 
 export const ARCHIVE_STEPS = [
@@ -91,6 +93,15 @@ export interface ArchiveIssue {
   readonly affects_readiness: boolean;
   readonly resolution: "continue" | "skip" | "cancel" | null;
 }
+export interface ArchiveIssueCount {
+  readonly total_count: number;
+}
+
+export function parseArchiveIssueCount(value: unknown): ArchiveIssueCount {
+  const r = tagRecord(value, ["total_count"]);
+  return { total_count: tagInteger(r.total_count) };
+}
+
 export interface ArchiveState {
   readonly draft_facts?: import("./draft-facts.js").DraftFacts | null;
   readonly text_level?: TextLevel | null;

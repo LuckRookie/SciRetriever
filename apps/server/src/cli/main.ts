@@ -202,7 +202,7 @@ function usage(options: CliOptions): CliResult {
     "  mcp [--maintenance] [--workbench-url http://127.0.0.1:PORT]\n" +
     "  browser session --workbench-url URL --request FILE|- [--maintenance] # NDJSON connection\n" +
     "  jobs runtime --workbench-url URL --request FILE|- [--maintenance] # operate in the Web owner\n" +
-    "  archive build IDS [--mode full|legacy-vlm-markdown] [--from-step STEP]; archive status|resume ID; archive issues|stats|events; archive resolve --request FILE\n" +
+    "  archive build IDS [--mode full|legacy-vlm-markdown] [--from-step STEP]; archive status|resume ID; archive issues|issue-count|stats|events; archive resolve --request FILE\n" +
     "  tags list|search|show|changes|consolidate|backfill; tags edit|undo --request FILE; literature tags ID / set|lock --request FILE\n" +
     "  filters list|export|create|rename|update|delete|import --request FILE  # export, save and manage library query conditions\n" +
     "  folders list|delete-preview|export|create|rename|move|delete|add|remove --request FILE  # export, list and manage folders and paper membership\n" +
@@ -902,7 +902,7 @@ async function execute(
               offset: integerOption(args, "--offset", 0),
               limit: integerOption(args, "--limit", 50),
             }
-          : command === "stats"
+          : command === "stats" || command === "issue-count"
             ? {}
             : command === "events"
               ? {
