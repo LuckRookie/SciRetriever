@@ -8,19 +8,20 @@
 
 ## 1. 安装并启动
 
-需要 Linux x64、Node 22.19.0 和 pnpm。系统里还要有 `flock`、`prlimit`、`pdfinfo`（poppler-utils）和 `Xvfb`，大多数发行版自带或一条命令可装。
+需要 Linux x64、Node 22.19.0 和 pnpm。系统里还要有 `flock`、`prlimit`、`pdfinfo`（poppler-utils）、`Xvfb`，以及编译用的 `gcc` 和 `make`，大多数发行版自带或一条命令可装。
 
 ```bash
 git clone https://github.com/LuckRookie/SciRetriever.git
 cd SciRetriever
 corepack enable
 pnpm install --frozen-lockfile
+pnpm vendor:mupdf
 pnpm build
 pnpm sciretriever web --port 4174
 ```
 
 - 想让 AI 替你做这些，用[给 AI 的配置提示词](setup-with-ai.md)。
-- 之后要“生成全文”，再执行一次 `pnpm vendor:mupdf`（需要 gcc 和 make），它编译校订时渲染 PDF 页面用的工具。只导入和阅读 PDF 可以先不做。
+- `pnpm vendor:mupdf` 不能省。它下载并编译读取 PDF 用的工具（需要联网、gcc 和 make，几分钟）。没有它，导入的 PDF 读不出标题、作者和 DOI，文献只能以文件名入库并标为“书目不全”，之后也不能生成全文。
 - 装好后可以运行 `pnpm sciretriever doctor --json` 检查系统依赖。其中 `cloakbrowser` 一项显示 blocked 是正常的，它只影响“用受控浏览器取 PDF”。
 - 服务在前台运行，关掉终端就停。要长期开着，放进 `tmux` 或 `screen`。
 
@@ -112,12 +113,12 @@ pnpm sciretriever web --port 4174
 
 | 功能                           | 需要先配什么                                                 | 在哪里配                  |
 | ------------------------------ | ------------------------------------------------------------ | ------------------------- |
-| 导入文件、看 PDF、文件夹、批注 | 不需要                                                       |                           |
+| 导入文件、看 PDF、文件夹、批注 | 不需要（导入 PDF 时识别书目要联网查 Crossref、OpenAlex）     |                           |
 | 网页收藏、从 Zotero 导入       | 装浏览器扩展并连接                                           | 设置 → 设备连接           |
 | 按主题找文献                   | 不需要（默认来源可用）；个别来源要密钥                       | 设置 → 获取 PDF           |
 | 沿引用扩展                     | 模型                                                         | 设置 → 模型服务           |
 | 获取 PDF                       | 不需要（只查开放来源）；更多来源要联系邮箱、密钥或受控浏览器 | 设置 → 获取 PDF           |
-| 生成全文                       | MinerU 解析服务和模型；本机执行过 `pnpm vendor:mupdf`        | 设置 → 生成全文、模型服务 |
+| 生成全文                       | MinerU 解析服务和模型                                        | 设置 → 生成全文、模型服务 |
 | 翻译、标签、加工、综合         | 模型                                                         | 设置 → 模型服务           |
 | 全文检索                       | 不需要，但只搜得到已经生成全文的文献                         |                           |
 
@@ -129,6 +130,7 @@ pnpm sciretriever web --port 4174
 - **换了机器或想搬库**：把 `~/.sciretriever/` 整个目录搬过去。数据库和文件目录必须是同一套。
 - **升级后启动被拒绝**：库结构变了。旧库不会被自动转换，按[初始化与恢复](upgrade.md)处理，先备份。
 - **搜不到刚生成全文的文献**：全文索引在后台更新，“全文检索”页的搜索框下方会写索引的状态和可做的操作。
+- **导入的 PDF 只有文件名，作者、期刊、年份都是“未提供”**：多半是安装时没有执行 `pnpm vendor:mupdf`，程序读不了 PDF 的内容。在仓库目录里执行它，再重启服务。服务器不能访问外网时也会这样，因为识别书目要查 Crossref 和 OpenAlex。
 - **取不到 PDF**：先看这篇的“任务”记录里各来源的结果；需要机构权限的文章，考虑启用受控浏览器或手动上传。
 
 [上级目录](README.md) · [项目 README](../../README.md)

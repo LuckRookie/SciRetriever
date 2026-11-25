@@ -62,12 +62,14 @@ B. 检查环境并报告结果：
      怎么装这个版本，例如用 nvm 或 fnm，不要替我改系统级的 Node）；
    - `corepack enable` 后 pnpm 是否可用；
    - `flock`、`prlimit`、`pdfinfo`、`Xvfb` 是否存在；
-   - 如果我要“生成全文”：`gcc`、`make` 是否存在。
+   - `gcc`、`make` 是否存在（编译读取 PDF 的工具要用）。
 
 C. 安装与构建（在仓库目录里）：
    - 没有仓库就克隆；
    - `pnpm install --frozen-lockfile`
-   - 如果我要“生成全文”：`pnpm vendor:mupdf`
+   - `pnpm vendor:mupdf`（必须做：它下载并编译读取 PDF 的工具，要联网；
+     没有它，导入的 PDF 认不出标题、作者和 DOI）。做完确认
+     build/vendor/mupdf/ 下有 bin/mutool。
    - `pnpm build`
    - `pnpm sciretriever doctor --json`，把结果解释给我。
      其中 cloakbrowser 为 blocked 是正常的，除非我要用受控浏览器取 PDF。

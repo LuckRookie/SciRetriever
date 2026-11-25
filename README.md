@@ -29,6 +29,7 @@ git clone https://github.com/LuckRookie/SciRetriever.git
 cd SciRetriever
 corepack enable
 pnpm install --frozen-lockfile
+pnpm vendor:mupdf
 pnpm build
 pnpm sciretriever web --port 4174
 ```
