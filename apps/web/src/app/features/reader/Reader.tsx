@@ -1,7 +1,11 @@
 import { PaperResults } from "./PaperResults.js";
 import { markdown } from "../../../reading/markdown.js";
 import type { DocumentReadResultMap } from "@sciretriever/contracts";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import {
   useEffect,
   useLayoutEffect,
@@ -50,12 +54,13 @@ import {
 } from "../../components/index.js";
 import { archiveQuery, rows } from "../../data/archive.js";
 import {
+  collectLiteratures,
   paperTitle,
   paperTitleParts,
   readLiterature,
 } from "../../data/library.js";
 import { preferences } from "../../data/preferences.js";
-import { useApi } from "../../data/query.js";
+import { invalidateMaterials, useApi } from "../../data/query.js";
 import {
   navigate,
   sourceParameterKeys,
@@ -69,6 +74,7 @@ import { ProofreadEditor } from "./ProofreadEditor.js";
 import { StructurePanel } from "../archive/StructurePanel.js";
 import { useReaderMarks } from "./marks/ReaderMarks.js";
 import { download, OperationDialog } from "../library/OperationDialog.js";
+import { useLibraryRemoval } from "../library/Uncollect.js";
 import { ReaderInformation, ReaderRelations } from "./ReaderInformation.js";
 import { RunOperatorDialog } from "../processing/RunOperator.js";
 import "./reading.css";
@@ -244,6 +250,10 @@ export default function Reader() {
     // task row, the Browser page) may predate its PDF or its full text.
     refetchOnMount: "always",
   });
+  // Opening a paper does not add it to the library (ADR 0067 section 4):
+  // “更多” says which side it is on and moves it across.
+  const queries = useQueryClient();
+  const removal = useLibraryRemoval();
   /**
    * Details that can decide the view (spec 6.4): this paper's own, read since
    * it was opened. Cached or placeholder details only hold the page.
@@ -1413,6 +1423,35 @@ export default function Reader() {
         ]
       : []),
     ...group("paper", "这篇文献", [
+      ...(maintenance && api.kind === "workspace"
+        ? detail.data.collected === false
+          ? [
+              {
+                id: "collect",
+                label: "加入文献库",
+                onAction: () =>
+                  void collectLiteratures(api, [id])
+                    .then(() => {
+                      invalidateMaterials(queries);
+                      shell.notify("已加入文献库");
+                    })
+                    .catch((error: unknown) =>
+                      shell.notify(errorMessage(error)),
+                    ),
+              },
+            ]
+          : [
+              {
+                id: "uncollect",
+                label: "移出文献库…",
+                onAction: () =>
+                  removal.request({
+                    ids: [id],
+                    label: `《${paperTitle(detail.data)}》`,
+                  }),
+              },
+            ]
+        : []),
       ...(maintenance && !hasPdf
         ? [
             {
@@ -2096,6 +2135,7 @@ export default function Reader() {
           onClose={() => setRunner(false)}
         />
       ) : null}
+      {removal.dialog}
       {operation && (
         <OperationDialog
           kind={operation}

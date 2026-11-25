@@ -346,7 +346,7 @@ export function viewSort(query: LibraryQuery): LibrarySort {
       return "intake-desc";
   }
 }
-/** Registers papers as collected (user organization 7); never undone. */
+/** Adds papers to the library (ADR 0067 section 4). */
 export async function collectLiteratures(
   api: ApiClient,
   ids: readonly string[],
@@ -366,6 +366,32 @@ export async function collectLiteratures(
     target_count: Number(result.target_count),
     newly_collected: Number(result.newly_collected),
   };
+}
+/**
+ * Takes papers out of the library (ADR 0067 section 5): they become
+ * candidates again and leave every folder; nothing else of theirs changes.
+ * Returns how many actually left.
+ */
+export async function uncollectLiteratures(
+  api: ApiClient,
+  ids: readonly string[],
+): Promise<number> {
+  let removed = 0;
+  for (let start = 0; start < ids.length; start += 1000) {
+    const result = record(
+      await archiveWrite(api, "library-uncollect", {
+        selector: {
+          kind: "literatures",
+          literature_ids: ids.slice(start, start + 1000),
+        },
+      }),
+      "uncollect result",
+    );
+    if (!Number.isSafeInteger(result.removed))
+      throw new Error("移出文献库的回执无效");
+    removed += Number(result.removed);
+  }
+  return removed;
 }
 /** The exact number of matches, counted in the background (technical 06 2.1.8). */
 export async function exactSearchTotal(

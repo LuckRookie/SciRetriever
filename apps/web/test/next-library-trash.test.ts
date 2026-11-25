@@ -1,6 +1,10 @@
 import { expect, it } from "vitest";
 import type { Page } from "playwright";
-import { libraryStatus, nextWorkspace } from "./next-workspace-fixture.js";
+import {
+  libraryStatus,
+  nextWorkspace,
+  searchLibrary,
+} from "./next-workspace-fixture.js";
 
 const trashEntry = (page: Page) =>
   page
@@ -96,10 +100,11 @@ it("opens every selected paper from the selection's menu and lets the selection 
     const second = (await rows.nth(1).getAttribute("data-literature-id"))!;
     await rows.nth(1).locator(".paper-citation").click({ button: "right" });
     const labels = await p.getByRole("menuitem").allTextContents();
-    expect(labels.slice(0, 4)).toEqual([
+    expect(labels.slice(0, 5)).toEqual([
       "打开阅读 2 篇",
       "移动…",
       "导出…",
+      "移出文献库 2…",
       "删除 2 篇…",
     ]);
     await p
@@ -108,6 +113,58 @@ it("opens every selected paper from the selection's menu and lets the selection 
     await expect.poll(() => p.locator(".paper-tab").count()).toBe(2);
     // The paper that was right-clicked is the one shown.
     expect(new URL(p.url()).searchParams.get("literature")).toBe(second);
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);
+
+it("takes a paper out of the library to the candidates and adds it back from a search (ADR 0067 sections 4, 5 and 7)", async () => {
+  const w = await nextWorkspace();
+  try {
+    const p = w.page;
+    await libraryStatus(p, "全部");
+    const rows = p.locator(".paper-row");
+    await expect.poll(() => rows.count()).toBeGreaterThan(1);
+    const total = await rows.count();
+    const candidates = p.locator(".library-candidates");
+    const before = (await candidates.count())
+      ? Number((await candidates.textContent())!.replace(/\D/g, ""))
+      : 0;
+
+    // It is confirmed, and the dialog says what stays and what does not.
+    const title = (await rows.first().getAttribute("aria-label"))!;
+    const id = (await rows.first().getAttribute("data-literature-id"))!;
+    await rows.first().locator(".paper-citation").click({ button: "right" });
+    await p.getByRole("menuitem", { name: "移出文献库…", exact: true }).click();
+    const confirm = p.getByRole("dialog", { name: "移出文献库", exact: true });
+    expect(await confirm.textContent()).toContain(`《${title}》`);
+    expect(await confirm.textContent()).toContain("回到候选");
+    expect(await confirm.textContent()).toContain("文件夹不会恢复");
+    await confirm.getByRole("button", { name: "移出", exact: true }).click();
+    await confirm.waitFor({ state: "detached" });
+    await expect
+      .poll(() => p.locator(".ui-toast").textContent())
+      .toContain("移出文献库");
+    await expect.poll(() => rows.count()).toBe(total - 1);
+    // The library says how many candidates stand behind it.
+    await expect
+      .poll(async () =>
+        (await candidates.count())
+          ? Number((await candidates.textContent())!.replace(/\D/g, ""))
+          : 0,
+      )
+      .toBe(before + 1);
+
+    // A search still finds it, as a candidate one press from the library.
+    await searchLibrary(p, title.split(/\s+/).slice(0, 3).join(" "));
+    const found = p.locator(`.paper-row[data-literature-id="${id}"]`);
+    await found.waitFor();
+    await found.hover();
+    await found
+      .getByRole("button", { name: "加入文献库", exact: true })
+      .click();
+    await expect.poll(() => found.textContent()).toContain("已加入");
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();

@@ -111,6 +111,7 @@ import {
   type ContextMenuRequest,
 } from "../reader/input/ContextMenu.js";
 import { useDeletion } from "./Trash.js";
+import { useLibraryRemoval } from "./Uncollect.js";
 import {
   MAIN_MATERIAL_STATES,
   MORE_MATERIAL_STATES,
@@ -1145,11 +1146,26 @@ export default function Library() {
   });
   const deleteRef = useRef(deletion.request);
   deleteRef.current = deletion.request;
+  const removal = useLibraryRemoval((ids) =>
+    setCollectedNow(
+      (current) => new Set([...current].filter((id) => !ids.includes(id))),
+    ),
+  );
+  const uncollectRef = useRef(removal.request);
+  uncollectRef.current = removal.request;
+  const collectRef = useRef(collect);
+  collectRef.current = collect;
   const onRowAction = useCallback(
     (id: string, title: string, kind: RowAction) => {
       if (kind === "open") shell.openPaper(id, undefined, undefined, title);
       else if (kind === "remove-folder") removeFromFolderRef.current([id]);
       else if (kind === "recognize") setRecognizing([id]);
+      else if (kind === "collect")
+        void collectRef
+          .current([id])
+          .catch((error: unknown) => shell.notify(errorMessage(error)));
+      else if (kind === "uncollect")
+        uncollectRef.current({ ids: [id], label: `《${title}》` });
       else if (kind === "delete" || kind === "delete-key") {
         // The Delete key on a row of the selection takes the whole selection.
         const chosen = selectedRef.current;
@@ -1241,6 +1257,35 @@ export default function Library() {
   const discovered = [...shell.selected].filter(
     (id) => known.get(id)?.collected === false && !collectedNow.has(id),
   );
+  // The rest are of the library; these can be taken out of it (ADR 0067).
+  const inLibrary = [...shell.selected].filter(
+    (id) => known.get(id)?.collected !== false || collectedNow.has(id),
+  );
+  const uncollectItem: MenuOption[] = inLibrary.length
+    ? [
+        {
+          id: "uncollect",
+          label: `移出文献库 ${inLibrary.length.toLocaleString()}…`,
+          onAction: () =>
+            removal.request({
+              ids: inLibrary,
+              label: `已选的 ${inLibrary.length.toLocaleString()} 篇文献`,
+            }),
+        },
+      ]
+    : [];
+  const collectItem: MenuOption[] = discovered.length
+    ? [
+        {
+          id: "collect",
+          label: `加入文献库 ${discovered.length.toLocaleString()}`,
+          onAction: () =>
+            void collect(discovered).catch((error: unknown) =>
+              shell.notify(errorMessage(error)),
+            ),
+        },
+      ]
+    : [];
   /** Each batch button counts only the papers it would actually act on. */
   const batchReason = (group: SelectionGroup, none: string) =>
     groups[group].length === 0
@@ -1327,6 +1372,7 @@ export default function Library() {
             on,
           ),
       },
+      ...collectItem,
       {
         id: "folder",
         label: "移动…",
@@ -1348,6 +1394,7 @@ export default function Library() {
         label: "导出…",
         onAction: () => void operate("export", true),
       },
+      ...uncollectItem,
       {
         id: "delete",
         label: `删除 ${count} 篇…`,
@@ -1760,6 +1807,12 @@ export default function Library() {
       />
     );
   })();
+  // The library says how many candidates stand behind it, and where they are:
+  // the batches of 找文献 (ADR 0067 section 7).
+  const candidateCount =
+    view === "collected"
+      ? (libraryTotals.data?.collection_counts?.discovered_only ?? 0)
+      : 0;
   const allLoaded =
     items.length > 0 &&
     items.every((item) => shell.selected.has(item.literature.literature_id));
@@ -1854,7 +1907,28 @@ export default function Library() {
         </div>
         <PageHeader
           title={view === "search" ? `搜索“${route.query.text}”` : pageName}
-          count={headerCount}
+          count={
+            candidateCount > 0 ? (
+              <>
+                {headerCount}
+                <Button
+                  variant="text"
+                  size="compact"
+                  className="library-candidates"
+                  onPress={() =>
+                    navigate(
+                      { view: "disc", literature: null },
+                      { clearSource: true },
+                    )
+                  }
+                >
+                  候选 {candidateCount.toLocaleString()} 篇
+                </Button>
+              </>
+            ) : (
+              headerCount
+            )
+          }
           action={
             <>
               <div className="library-toolbar-actions">{toolbarActions}</div>
@@ -2331,19 +2405,7 @@ export default function Library() {
                     label="更多"
                     indicator
                     items={[
-                      ...(discovered.length
-                        ? [
-                            {
-                              id: "collect",
-                              label: `加入文献库 ${discovered.length.toLocaleString()}`,
-                              onAction: () =>
-                                void collect(discovered).catch(
-                                  (error: unknown) =>
-                                    shell.notify(errorMessage(error)),
-                                ),
-                            },
-                          ]
-                        : []),
+                      ...collectItem,
                       ...(folder
                         ? [
                             {
@@ -2359,6 +2421,7 @@ export default function Library() {
                         label: "导出…",
                         onAction: () => void operate("export", true),
                       },
+                      ...uncollectItem,
                       {
                         id: "delete",
                         label: `删除 ${shell.selected.size.toLocaleString()} 篇…`,
@@ -2551,6 +2614,7 @@ export default function Library() {
         }}
       />
       {deletion.dialog}
+      {removal.dialog}
       <ConfirmDialog
         title="识别书目"
         isOpen={recognizing !== null}
@@ -2664,12 +2728,24 @@ function rowMenuItems(
       onAction: () => act("run"),
     },
   ];
+  // A candidate is one press from the library; a paper of the library can
+  // leave it again (ADR 0067 sections 4 and 5).
+  const candidate = item.collected === false;
   return [
     {
       id: "open",
       label: "打开阅读",
       onAction: () => act("open"),
     },
+    ...(candidate
+      ? [
+          {
+            id: "collect",
+            label: "加入文献库",
+            onAction: () => act("collect"),
+          },
+        ]
+      : []),
     {
       id: "folder",
       label: "移动…",
@@ -2689,6 +2765,15 @@ function rowMenuItems(
       label: "导出…",
       onAction: () => act("export"),
     },
+    ...(candidate
+      ? []
+      : [
+          {
+            id: "uncollect",
+            label: "移出文献库…",
+            onAction: () => act("uncollect"),
+          },
+        ]),
     {
       id: "delete",
       label: "删除",
@@ -3250,6 +3335,8 @@ type CheckPointerDown = (
 ) => void;
 type RowAction =
   | "open"
+  | "collect"
+  | "uncollect"
   | "folder"
   | "remove-folder"
   | "export"
