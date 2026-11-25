@@ -9,7 +9,11 @@ import {
   CLOAK_VERSION,
   verifyInstalledCloakRuntime,
 } from "../configuration/cloak-runtime.js";
-import { MUPDF_MISSING_HINT, resolveMupdfRuntime } from "../proofread/mupdf.js";
+import {
+  MUPDF_MISSING_HINT,
+  MUPDF_REMEDY,
+  resolveMupdfRuntime,
+} from "../proofread/mupdf.js";
 
 export interface DoctorCheck {
   readonly name: string;
@@ -43,6 +47,47 @@ async function executable(name: string): Promise<string | null> {
   return null;
 }
 
+/** A local part `sciretriever web` refuses to start without (ADR 0066 section 4). */
+export interface StartupPart {
+  readonly name: "mupdf" | "flock" | "prlimit";
+  readonly ready: boolean;
+  /** Where the part was found, or what is missing. */
+  readonly detail: string;
+  /** How to obtain it. */
+  readonly remedy: string;
+}
+const UTIL_LINUX_REMEDY = "安装系统的 util-linux";
+/**
+ * The parts checked both by `doctor` and before `sciretriever web` opens a
+ * catalog. Only parts the build already obtains, plus base-system commands.
+ */
+export async function startupParts(): Promise<readonly StartupPart[]> {
+  const [flock, prlimit, mupdf] = await Promise.all([
+    executable("flock"),
+    executable("prlimit"),
+    resolveMupdfRuntime(),
+  ]);
+  const command = (name: "flock" | "prlimit", path: string | null) =>
+    Object.freeze({
+      name,
+      ready: path !== null,
+      detail: path ?? `${name} is unavailable: ${UTIL_LINUX_REMEDY}`,
+      remedy: UTIL_LINUX_REMEDY,
+    });
+  return Object.freeze([
+    command("flock", flock),
+    command("prlimit", prlimit),
+    Object.freeze({
+      name: "mupdf" as const,
+      ready: mupdf !== undefined,
+      detail: mupdf
+        ? `${mupdf.version} (${mupdf.executable})`
+        : `MuPDF bundle is unavailable: ${MUPDF_MISSING_HINT}`,
+      remedy: MUPDF_REMEDY,
+    }),
+  ]);
+}
+
 function check(name: string, value: string | null): DoctorCheck {
   return Object.freeze({
     name,
@@ -69,27 +114,25 @@ export async function runDoctor(
       detail: `${process.platform}-${process.arch}`,
     }),
   );
-  const [flock, prlimit, pdfinfo, xvfb] = await Promise.all([
-    executable("flock"),
-    executable("prlimit"),
+  const [parts, pdfinfo, xvfb] = await Promise.all([
+    startupParts(),
     executable("pdfinfo"),
     executable("Xvfb"),
   ]);
+  const part = (name: StartupPart["name"]): DoctorCheck => {
+    const found = parts.find((item) => item.name === name)!;
+    return Object.freeze({
+      name,
+      status: found.ready ? ("ready" as const) : ("blocked" as const),
+      detail: found.detail,
+    });
+  };
   checks.push(
-    check("flock", flock),
-    check("prlimit", prlimit),
+    part("flock"),
+    part("prlimit"),
     check("pdfinfo", pdfinfo),
     check("Xvfb", xvfb),
-  );
-  const mupdf = await resolveMupdfRuntime();
-  checks.push(
-    Object.freeze({
-      name: "mupdf",
-      status: mupdf ? ("ready" as const) : ("blocked" as const),
-      detail: mupdf
-        ? `${mupdf.version} (${mupdf.executable})`
-        : `MuPDF bundle is unavailable: ${MUPDF_MISSING_HINT}`,
-    }),
+    part("mupdf"),
   );
   if (options.browser) {
     const capacity = effectiveBrowserConcurrency(options.browser);

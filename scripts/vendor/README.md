@@ -8,7 +8,8 @@
 
 ## 内容入口
 
-- [build-mupdf.mjs](build-mupdf.mjs)：`pnpm vendor:mupdf`。下载固定版本的 MuPDF 源码包（或用 `--source` 指定本地副本），校验 SHA-256 后只用其自带第三方库静态编译 `mutool`，输出 `bin/mutool`、AGPL 文本 `COPYING` 和记录源码地址、摘要、编译选项与可执行文件指纹的 `manifest.json`。输出目录已存在时拒绝覆盖。
+- [ensure-mupdf.mjs](ensure-mupdf.mjs)：`pnpm build` 的第一步。`build/vendor/mupdf/<platform>/` 已有按服务端同一规则（清单、版本、平台、可执行文件摘要）核对通过的 bundle 时跳过，不联网；没有时先检查 gcc（或 cc）、make、tar、objdump，再调用 `build-mupdf.mjs` 编译。取不到时以非零退出让构建失败，消息写明缺什么、原因（缺命令、不能联网、源码摘要不符、平台不支持、编译失败）和办法；目录存在但不合格时不删除，请使用者确认后删除。编译函数、命令查找与输出位置可注入，供测试使用。
+- [build-mupdf.mjs](build-mupdf.mjs)：`pnpm vendor:mupdf`，也导出 `buildMupdf` 供上一步调用。下载固定版本的 MuPDF 源码包（或用 `--source` 指定本地副本），校验 SHA-256 后只用其自带第三方库静态编译 `mutool`，输出 `bin/mutool`、AGPL 文本 `COPYING` 和记录源码地址、摘要、编译选项与可执行文件指纹的 `manifest.json`。输出目录已存在时拒绝覆盖。
 
 ## 放置边界
 

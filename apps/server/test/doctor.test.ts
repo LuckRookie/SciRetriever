@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseConfiguration } from "../src/configuration/index.js";
-import { runDoctor } from "../src/entry/doctor.js";
+import { runDoctor, startupParts } from "../src/entry/doctor.js";
 
 describe("installed runtime doctor", () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -42,8 +42,43 @@ describe("installed runtime doctor", () => {
         name: "mupdf",
         status: "blocked",
         detail:
-          "MuPDF bundle is unavailable: 导入的 PDF 读不出标题、作者和 DOI，也不能生成全文；在仓库目录执行 `pnpm vendor:mupdf`",
+          "MuPDF bundle is unavailable: 导入的 PDF 读不出标题、作者和 DOI，也不能生成全文；在仓库目录执行 `pnpm build`",
       });
+    } finally {
+      await rm(empty, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks on the same three parts the Web start refuses without", async () => {
+    const empty = await mkdtemp(join(tmpdir(), "sciretriever-no-parts-"));
+    try {
+      vi.stubEnv("SCIRETRIEVER_MUPDF", empty);
+      vi.stubEnv("PATH", empty);
+      const [report, parts] = await Promise.all([
+        runDoctor({ cloakBundle: null }),
+        startupParts(),
+      ]);
+      expect(report.status).toBe("blocked");
+      expect(parts.filter((part) => !part.ready)).toEqual([
+        expect.objectContaining({
+          name: "flock",
+          remedy: "安装系统的 util-linux",
+        }),
+        expect.objectContaining({
+          name: "prlimit",
+          remedy: "安装系统的 util-linux",
+        }),
+        expect.objectContaining({
+          name: "mupdf",
+          remedy: "在仓库目录执行 `pnpm build`",
+        }),
+      ]);
+      for (const part of parts)
+        expect(report.checks.find((item) => item.name === part.name)).toEqual({
+          name: part.name,
+          status: "blocked",
+          detail: part.detail,
+        });
     } finally {
       await rm(empty, { recursive: true, force: true });
     }

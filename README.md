@@ -22,14 +22,13 @@ SciRetriever 是通用的文献知识库。它把文献找来、把 PDF 取到�
 
 ## 快速开始
 
-需要 Linux x64、Node 22.19.0 和 pnpm（`corepack enable` 即可）。其他系统和 ARM 目前不支持，完整条件见[安装指南](docs/guides/installation.md)。
+需要 Linux x64、Node 22.19.0 和 pnpm（`corepack enable` 即可），以及 `gcc` 和 `make`：第一次构建会下载并编译读取 PDF 用的 MuPDF，要联网，几分钟。其他系统和 ARM 目前不支持，完整条件见[安装指南](docs/guides/installation.md)。
 
 ```bash
 git clone https://github.com/LuckRookie/SciRetriever.git
 cd SciRetriever
 corepack enable
 pnpm install --frozen-lockfile
-pnpm vendor:mupdf
 pnpm build
 pnpm sciretriever web --port 4174
 ```

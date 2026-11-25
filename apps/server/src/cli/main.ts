@@ -65,7 +65,7 @@ import {
   executeConfiguration,
   type ConfigurationOperation,
 } from "../entry/configuration-operations.js";
-import { runDoctor } from "../entry/doctor.js";
+import { runDoctor, startupParts } from "../entry/doctor.js";
 import {
   executeMaintenance,
   isMaintenanceFailure,
@@ -1274,12 +1274,23 @@ async function execute(
     if (options.signal?.aborted) return { code: 130 };
     const access = webAccessOptions(parsed.access);
     if (options.signal?.aborted) return { code: 130 };
+    // ADR 0066: no partial program. Checked before any configuration or
+    // catalog file is opened or created, so a refused start leaves nothing.
+    const missing = (await startupParts()).filter((part) => !part.ready);
+    if (missing.length) {
+      (options.stderr ?? ((text: string) => process.stderr.write(text)))(
+        [
+          "无法启动：缺少以下本机部件。",
+          ...missing.map(
+            (part) =>
+              `- ${part.name === "mupdf" ? "MuPDF" : part.name}：${part.remedy}`,
+          ),
+          "",
+        ].join("\n"),
+      );
+      return { code: 4 };
+    }
     const { startWebSupervisor } = await import("./web-supervisor.js");
-    const { resolveMupdfRuntime, MUPDF_MISSING_HINT } = await import(
-      "../proofread/mupdf.js"
-    );
-    // The supervised service reads PDFs from the same bundle; starting stays allowed.
-    const pdfReader = (await resolveMupdfRuntime()) !== undefined;
     let running: Awaited<ReturnType<typeof startWebSupervisor>>;
     try {
       running = await startWebSupervisor({
@@ -1287,12 +1298,8 @@ async function execute(
         port,
         access,
         ...(options.signal ? { signal: options.signal } : {}),
-        onReady: (ready) => {
-          if (!pdfReader)
-            (options.stderr ?? ((text: string) => process.stderr.write(text)))(
-              `警告：没有找到 MuPDF。${MUPDF_MISSING_HINT}。\n`,
-            );
-          return output(
+        onReady: (ready) =>
+          output(
             {
               mode: "web",
               listen: ready.listen,
@@ -1307,8 +1314,7 @@ async function execute(
                   : "Log in with api_key. This key changes when the service restarts.",
             },
             options,
-          );
-        },
+          ),
       });
     } catch (error) {
       if (options.signal?.aborted) return { code: 0 };

@@ -44,8 +44,7 @@ function option(name) {
 }
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
-async function source(work) {
-  const local = option("--source");
+async function source(work, local) {
   const bytes = local
     ? await readFile(resolve(local))
     : Buffer.from(
@@ -63,21 +62,27 @@ async function source(work) {
   return archive;
 }
 
-async function main() {
+/** The workspace bundle directory that `pnpm build` and the server use. */
+export function mupdfOutput() {
+  return join(
+    repository,
+    "build/vendor/mupdf",
+    `${process.platform}-${process.arch}`,
+  );
+}
+
+/** Downloads (or reads `source`), verifies and compiles into a new `output`. */
+export async function buildMupdf({
+  output = mupdfOutput(),
+  source: local,
+} = {}) {
   if (process.platform !== "linux" || process.arch !== "x64")
     throw new Error("MuPDF bundling is supported on linux-x64 only");
-  const output = resolve(
-    option("--output") ??
-      join(
-        repository,
-        "build/vendor/mupdf",
-        `${process.platform}-${process.arch}`,
-      ),
-  );
+  output = resolve(output);
   if (existsSync(output)) throw new Error(`${output} already exists`);
   const work = await mkdtemp(join(tmpdir(), "sciretriever-mupdf-"));
   try {
-    const archive = await source(work);
+    const archive = await source(work, local);
     execFileSync("tar", ["-xzf", archive, "-C", work]);
     const tree = join(work, `mupdf-${MUPDF.version}-source`);
     execFileSync(
@@ -118,10 +123,16 @@ async function main() {
     );
     await mkdir(dirname(output), { recursive: true });
     await rename(staging, output);
-    process.stdout.write(`${output}\n`);
+    return output;
   } finally {
     await rm(work, { recursive: true, force: true });
   }
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) await main();
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const output = await buildMupdf({
+    output: option("--output") ?? mupdfOutput(),
+    source: option("--source") && resolve(option("--source")),
+  });
+  process.stdout.write(`${output}\n`);
+}

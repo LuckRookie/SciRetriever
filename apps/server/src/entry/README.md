@@ -8,6 +8,7 @@
 - [task-read.ts](task-read.ts)、[task-operations.ts](task-operations.ts)：共享任务列表、详情、创建与控制投影；只读路径不恢复任务。
 - [metadata-operations.ts](metadata-operations.ts)：显式发现/引用扩展和书目导入适配。
 - [maintenance-operations.ts](maintenance-operations.ts)：受控维护与提取交付，复用既有业务 owner。
+- [doctor.ts](doctor.ts)：只读环境检查；`startupParts` 给出 Web 启动必须具备的 MuPDF、`flock`、`prlimit` 及各自取得办法，`doctor` 的这三项用同一结果。
 - [literature-recognition.ts](literature-recognition.ts)：`literature-recognize` 的提交：校验请求，缺 MuPDF 时以 `pdf-reader-missing` 拒绝，固定成员后在共用加工任务上每篇排一个 `recognize-literature` 目标并启动。
 - [configuration-operations.ts](configuration-operations.ts)：非交互配置预览、CAS 发布、凭据设置/移除和显式 probe；不初始化 catalog。
 

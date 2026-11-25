@@ -232,7 +232,7 @@ async function main() {
       `${process.platform}-${process.arch}`,
     );
     if (!existsSync(join(mupdf, "manifest.json")))
-      throw new Error("MuPDF bundle missing; run pnpm vendor:mupdf first");
+      throw new Error("MuPDF bundle missing; run pnpm build first");
     await cp(mupdf, join(staging, "runtime", "mupdf"), {
       recursive: true,
       dereference: false,
