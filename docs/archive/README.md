@@ -14,6 +14,7 @@
 
 ## 历史材料
 
+- [Web 整体重新设计（计划 27）](2026-11-24-web-redesign/README.md)：Owner 2026-11-24 定下的骨架，顶栏与侧栏、文献库三栏、搜索结果两段、界面用词、其余页面对齐；五块与留给后端的四项于 2026-11-25 全部部署。之后在使用中改的（文件夹右键、最近删除、文献库与候选、候选列表、顶部收起）不在这份计划里，见 Git 历史与 [ADR 0067](../architecture/decisions/0067-library-and-candidates.md)。
 - 2026-11-16 合成[计划 25](../plans/2026-11-16-before-processing/README.md) 时归档的七个计划，未完成的部分已搬进计划 25，知识加工的部分进了[知识加工提案](../proposals/2026-11-16-knowledge-processing/README.md)：
   - [阅读页（计划 24）](2026-11-13-reader/README.md)：阅读器常驻、阅读位置、PDF 缩放与滚动、打开与加载（第一次交付，R1 通过）；案头、纸页、页眉与顶栏（08）。
   - [万篇规模的收集与验收（计划 23）](2026-11-13-scale-collection/README.md)：只完成了补规格（01）。
