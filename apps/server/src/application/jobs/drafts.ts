@@ -13,7 +13,7 @@ import {
   type FormDraftsScope,
   type FormDraftsPartResult,
 } from "@sciretriever/contracts";
-import { queryTerms } from "../../literature/query.js";
+import { ftsMatchQuery, queryTerms } from "../../literature/query.js";
 import { currentDraftMethodHash } from "../../document/draft-builder.js";
 import type { DraftPublicationService } from "../../document/draft-publication.js";
 import type {
@@ -72,7 +72,9 @@ export class DraftBackfillSelection {
         : await this.database.draftBackfillCandidates(
             selector,
             this.profile,
-            terms === null ? null : terms.map((t) => `"${t}"`).join(" AND "),
+            terms === null || selector.kind !== "query" || !selector.query.text
+              ? null
+              : ftsMatchQuery(selector.query.text),
             signal,
           );
     const counts = {

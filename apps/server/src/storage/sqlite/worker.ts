@@ -537,6 +537,8 @@ export type SqliteCommand =
         | "verifyCatalog"
         | "recordVerification";
       readonly args: readonly unknown[];
+      /** `[translation].target_language` of the caller (document spec 9.7). */
+      readonly translation_language?: string | null;
     }
   | {
       readonly kind: "extraction";
@@ -821,6 +823,11 @@ export type SqliteCommand =
       readonly metaLiteratureIds: readonly string[];
       readonly tags?: import("@sciretriever/contracts").LibraryQuery["tags"];
       readonly scope?: LibraryPageQuery["query"];
+    }
+  | {
+      readonly kind: "library_search_reproject";
+      readonly after: string | null;
+      readonly limit: number;
     }
   | {
       readonly kind: "put_literature";
@@ -1811,6 +1818,7 @@ export class SqliteWorker {
     operation: Extract<SqliteCommand, { kind: "retrieval" }>["operation"],
     args: readonly unknown[] = [],
     signal?: AbortSignal,
+    translationLanguage: string | null = null,
   ): Promise<T> {
     const write = [
       "beginGeneration",
@@ -1836,6 +1844,7 @@ export class SqliteWorker {
         kind: "retrieval",
         operation,
         args,
+        translation_language: translationLanguage,
       });
       if (!reply.ok && reply.code === "catalog-corrupt")
         throw new CatalogCorruptionError(null);
@@ -3797,6 +3806,27 @@ export class SqliteWorker {
         discovery_run_ids: Object.freeze(row.discovery_run_ids as string[]),
       });
     });
+  }
+  /**
+   * Rewrite every literature's library search row with the current FTS text
+   * rule, a page per write transaction (explicit maintenance, spec 9.7).
+   */
+  async reprojectLibrarySearch(
+    signal?: AbortSignal,
+    page = 500,
+  ): Promise<{ readonly literatures: number }> {
+    let after: string | null = null,
+      literatures = 0;
+    do {
+      signal?.throwIfAborted();
+      const result: { count: number; next: string | null } = await this.run(
+        { kind: "library_search_reproject", after, limit: page },
+        signal,
+      );
+      literatures += result.count;
+      after = result.next;
+    } while (after !== null);
+    return { literatures };
   }
   async putLiterature(literature: Literature): Promise<boolean> {
     const parsed = parseLiterature(literature);

@@ -10,6 +10,9 @@ import {
   type MaterialContextItem,
   type MaterialContextRequest,
   type Sha256,
+  type DocumentTranslationFile,
+  type TranslationLanguage,
+  isTranslationLanguage,
 } from "@sciretriever/contracts";
 import {
   DocumentReadError,
@@ -17,7 +20,7 @@ import {
   type VerifiedDocumentStructure,
 } from "../document/read.js";
 import type { LiteratureQueryService } from "../literature/query.js";
-import { queryTerms } from "../literature/query.js";
+import { ftsMatchQuery, queryTerms } from "../literature/query.js";
 import { type RetrievalHit } from "./storage.js";
 import { RetrievalStorageError, RETRIEVAL_SCORE_RULE } from "./model.js";
 import { RetrievalStorageClient } from "../storage/sqlite/retrieval-client.js";
@@ -229,6 +232,17 @@ export class MaterialContextService {
     private readonly storage: RetrievalStorageClient | null,
     private readonly documents: DocumentReadService | null,
     private readonly literature: LiteratureQueryService,
+    /** The stored translation shown for a hit on a translated unit (spec 9.7). */
+    private readonly translations:
+      | ((
+          document: DocumentRef,
+          language: TranslationLanguage,
+          signal?: AbortSignal,
+        ) => Promise<{
+          readonly row: { readonly sha256: string };
+          readonly file: DocumentTranslationFile;
+        } | null>)
+      | null = null,
   ) {}
   close(): Promise<void> {
     this.stopped = true;
@@ -270,7 +284,8 @@ export class MaterialContextService {
           state_token: state.state_token,
           coverage: !state.generation
             ? "index-unavailable"
-            : state.source_revision !== state.generation.source_revision
+            : state.source_revision !== state.generation.source_revision ||
+                !state.rule_current
               ? "index-stale"
               : "complete",
         };
@@ -347,7 +362,7 @@ export class MaterialContextService {
           : request.versions.documents.map((d) => d.document_version_id);
       const rank = () =>
         this.storage!.search(
-          terms.map((term) => `"${term}"`).join(" AND "),
+          ftsMatchQuery(request.query),
           terms,
           generation.generation_id,
           scope,
@@ -458,6 +473,41 @@ export class MaterialContextService {
           if (digest(bytes) !== hit.unit_sha256)
             throw new MaterialContextError("context-source-integrity");
           const evidence = documentEvidence(version, structure, markdown, hit);
+          // A translated unit shows its stored translation; the reference and
+          // evidence stay the original unit's (spec 9.7).
+          let translation: {
+            text: string;
+            language: TranslationLanguage;
+          } | null = null;
+          if (hit.translation_sha256) {
+            const language = hit.translation_language;
+            const found =
+              this.translations && isTranslationLanguage(language)
+                ? await this.translations(version, language, signal)
+                : null;
+            const first = structure.segments.find(
+              (segment) => segment.start_utf8 === hit.unit_start_utf8,
+            );
+            const unit = found?.file.units.find(
+              (u) => u.unit_id === first?.segment_id,
+            );
+            if (
+              !found ||
+              found.row.sha256 !== hit.translation_sha256 ||
+              !unit?.translation ||
+              !isTranslationLanguage(language)
+            )
+              return {
+                item: null,
+                gaps: [
+                  {
+                    code: "index-stale" as const,
+                    literature_id: hit.literature_id,
+                  },
+                ],
+              };
+            translation = { text: unit.translation, language };
+          }
           const titles = new Map(
             structure.sections.map((section) => [
               section.section_id,
@@ -483,11 +533,17 @@ export class MaterialContextService {
               hit.section_id === null
                 ? null
                 : (titles.get(hit.section_id) ?? null),
-            text: evidence ? decoder.decode(bytes) : "",
+            text: evidence ? (translation?.text ?? decoder.decode(bytes)) : "",
             evidence: evidence ?? [],
             rank: 0,
             score: hit.score,
             gap: evidence ? null : "evidence-limit",
+            ...(translation
+              ? {
+                  matched: "translation" as const,
+                  language: translation.language,
+                }
+              : {}),
           };
           return {
             item,
@@ -844,6 +900,7 @@ export class MaterialContextService {
     revision = latest.source_revision;
     const stale =
       revision !== generation.source_revision ||
+      !latest.rule_current ||
       gaps.some((g) => g.code === "index-stale");
     return finish({
       ...base(

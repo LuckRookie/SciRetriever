@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import type { LiteratureMetadata } from "@sciretriever/contracts";
+import type { DocumentRef, LiteratureMetadata } from "@sciretriever/contracts";
 import type {
   DocumentReadService,
   VerifiedDocumentStructure,
@@ -23,6 +23,12 @@ import {
 } from "./storage.js";
 import { RetrievalStorageError } from "./model.js";
 import { RetrievalStorageClient } from "../storage/sqlite/retrieval-client.js";
+import type { SqliteAnnotationStorage } from "../storage/structure-annotations.js";
+import {
+  currentDocumentTranslation,
+  unitSpan,
+  type DocumentTranslationStore,
+} from "../translation/document.js";
 import type {
   RetrievalCheckpoint,
   RetrievalLiteratureUpdate,
@@ -180,6 +186,11 @@ export class RetrievalIndexService {
     private readonly documents: DocumentReadService,
     private readonly literature: LiteratureQueryService,
     admission: CatalogWriteAdmission,
+    /** Stored translations indexed with the original (document spec 9.7). */
+    private readonly translations: {
+      readonly store: DocumentTranslationStore;
+      readonly annotations: Pick<SqliteAnnotationStorage, "current">;
+    } | null = null,
   ) {
     // Serialize builders across processes without occupying the business write
     // queue. This names a lock sidecar, not another catalog. Lock order is
@@ -488,9 +499,9 @@ export class RetrievalIndexService {
           if (version.representation_sha256 !== s.representation_sha256)
             throw new RetrievalIndexError("index-source-invalid");
           let bytes = 0;
-          for await (const entry of this.documentEntries(
+          for await (const entry of this.versionEntries(
             s,
-            version.representation_sha256,
+            version,
             markdown,
             structure,
             signal,
@@ -542,6 +553,8 @@ export class RetrievalIndexService {
         "is_default",
         "title",
         "body",
+        "translation_language",
+        "translation_sha256",
       ];
       const canonical = (entries: readonly RetrievalEntry[]) =>
         entries.map((e) => JSON.stringify(keys.map((key) => e[key]))).sort();
@@ -732,9 +745,9 @@ export class RetrievalIndexService {
                   async (version, markdown, structure) => {
                     try {
                       await collect(
-                        this.documentEntries(
+                        this.versionEntries(
                           source,
-                          version.representation_sha256,
+                          version,
                           markdown,
                           structure,
                           signal,
@@ -854,6 +867,110 @@ export class RetrievalIndexService {
     return pending;
   }
 
+  /** A version's original units, then its stored translation's units. */
+  private async *versionEntries(
+    source: RetrievalSource,
+    version: DocumentRef,
+    markdown: Uint8Array,
+    structure: VerifiedDocumentStructure,
+    signal?: AbortSignal,
+  ): AsyncGenerator<RetrievalEntry> {
+    yield* this.documentEntries(
+      source,
+      version.representation_sha256,
+      markdown,
+      structure,
+      signal,
+    );
+    yield* this.translationEntries(
+      source,
+      version,
+      markdown,
+      structure,
+      signal,
+    );
+  }
+  /**
+   * One entry (in chunks) per translated unit of the primary PDF's default
+   * version, in the configured language: the original unit's range, section
+   * and ordinal, so a hit leads back to the original (spec 9.7). Exactly the
+   * versions the catalog's translation stamps name.
+   */
+  private async *translationEntries(
+    source: RetrievalSource,
+    version: DocumentRef,
+    markdown: Uint8Array,
+    structure: VerifiedDocumentStructure,
+    signal?: AbortSignal,
+  ): AsyncGenerator<RetrievalEntry> {
+    if (
+      !this.translations ||
+      source.is_default !== 1 ||
+      version.schema_version !== 2 ||
+      version.source_material_ref.asset_id !== source.primary_asset_id
+    )
+      return;
+    const found = await currentDocumentTranslation(
+      this.translations.store,
+      this.translations.annotations,
+      version,
+      this.translations.store.language,
+      signal,
+    ).catch((error: unknown) => {
+      throw new RetrievalIndexError("index-source-invalid", { cause: error });
+    });
+    if (!found || found.row.translated_count === 0) return;
+    const segments = new Map(
+      structure.segments.map((segment, ordinal) => [
+        segment.segment_id,
+        { segment, ordinal },
+      ]),
+    );
+    const sectionTitle = new Map(
+      structure.sections.map((s) => [s.section_id, s.title]),
+    );
+    for (const unit of found.file.units) {
+      check(signal);
+      if (unit.translation === null) continue;
+      const parts = unit.segment_ids.map((id) => segments.get(id));
+      if (parts.some((p) => !p))
+        throw new RetrievalIndexError("index-source-invalid");
+      const first = parts[0]!;
+      const span = unitSpan(
+        markdown,
+        parts.map((p) => p!.segment),
+        unit.source_sha256,
+      );
+      if (!span) throw new RetrievalIndexError("index-source-invalid");
+      const section = first.segment.section_id ?? null;
+      const title = section
+        ? ftsIndexText(sectionTitle.get(section) ?? "")
+        : "";
+      const unitSha256 = digest(markdown.subarray(span.start, span.end));
+      for await (const chunk of chunks(unit.translation, signal))
+        yield {
+          kind: "document",
+          literature_id: source.literature_id,
+          meta_literature_id: source.meta_literature_id,
+          metadata_revision: source.metadata_revision,
+          metadata_sha256: source.metadata_sha256,
+          document_version_id: source.document_version_id!,
+          representation_sha256: version.representation_sha256,
+          source_asset_id: source.source_asset_id!,
+          source_asset_sha256: source.source_asset_sha256!,
+          unit_start_utf8: span.start,
+          unit_end_utf8: span.end,
+          unit_sha256: unitSha256,
+          section_id: section,
+          unit_ordinal: first.ordinal,
+          is_default: 1,
+          title,
+          body: ftsIndexText(chunk),
+          translation_language: found.row.target_language,
+          translation_sha256: found.row.sha256,
+        };
+    }
+  }
   private async *documentEntries(
     source: RetrievalSource,
     representation: string,

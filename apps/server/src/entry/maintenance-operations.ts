@@ -40,7 +40,7 @@ import { operationRecord, ProductOperationError } from "./query-operations.js";
 import { manageTags } from "./tag-operations.js";
 import { createTaskOperations } from "./task-operations.js";
 import { submitLiteratureRecognition } from "./literature-recognition.js";
-import { LiteratureNotFoundError, queryTerms } from "../literature/query.js";
+import { LiteratureNotFoundError, ftsMatchQuery } from "../literature/query.js";
 import { WriteAdmissionError } from "../storage/write-admission.js";
 
 export const EXTRACTION_OPERATIONS = [
@@ -222,9 +222,7 @@ async function performMaintenance(
     const { selector } = selection;
     const ftsQuery =
       selector.kind === "query" && selector.query.text !== null
-        ? queryTerms(selector.query.text)
-            .map((term) => `"${term}"`)
-            .join(" AND ")
+        ? ftsMatchQuery(selector.query.text)
         : null;
     try {
       const result =

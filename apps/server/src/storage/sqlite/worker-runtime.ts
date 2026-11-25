@@ -4648,6 +4648,31 @@ function referenceQuerySnapshot(selection: Dynamic): Dynamic {
     throw error;
   }
 }
+/**
+ * Rewrite the library search rows of a page of literatures with the current
+ * FTS text rule (explicit maintenance after the rule changes; spec 9.7). One
+ * short write transaction per page; withdrawn papers keep their rows.
+ */
+function reprojectLibrarySearch(after: string | null, limit: number) {
+  beginCatalogWrite(db);
+  try {
+    const ids = db
+      .prepare(
+        "SELECT literature_id FROM literature_metadata WHERE (? IS NULL OR literature_id>?) ORDER BY literature_id LIMIT ?",
+      )
+      .all(after, after, limit)
+      .map((row: Dynamic) => String(row.literature_id));
+    for (const id of ids) indexMetadata(id, getLiterature(id, true).metadata);
+    commitCatalogWrite(db);
+    return {
+      count: ids.length,
+      next: ids.length === limit ? ids.at(-1)! : null,
+    };
+  } catch (error) {
+    if (db.isTransaction) db.exec("ROLLBACK");
+    throw error;
+  }
+}
 function literatureDetailSnapshot(
   id: Dynamic,
   nested: Dynamic = false,
@@ -5304,6 +5329,11 @@ port.on("message", (message: WorkerMessage) => {
           "markCorrupt",
         ];
         if (!allowed.includes(operation) || !Array.isArray(args)) fail();
+        // Translations are indexed in the caller's configured language only.
+        engine.translationLanguage =
+          typeof message.command.translation_language === "string"
+            ? message.command.translation_language
+            : null;
         value = {
           ok: true,
           value: Reflect.apply(engine[operation], engine, args),
@@ -6261,6 +6291,12 @@ port.on("message", (message: WorkerMessage) => {
         break;
       case "literature_detail_snapshot":
         value = literatureDetailSnapshot(message.command.literatureId);
+        break;
+      case "library_search_reproject":
+        value = reprojectLibrarySearch(
+          message.command.after,
+          message.command.limit,
+        );
         break;
       case "locate_artifact":
         value = locateArtifact(message.command.value);

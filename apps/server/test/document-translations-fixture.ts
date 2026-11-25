@@ -28,6 +28,20 @@ export function withoutDocumentTranslations(db: DatabaseSync) {
   db.exec("INSERT INTO archive_steps SELECT * FROM temp.older_steps");
   db.exec("DROP TABLE temp.older_steps");
   for (const object of dependents) db.exec(object.sql);
+  for (const trigger of db
+    .prepare(
+      "SELECT name FROM sqlite_schema WHERE type='trigger' AND (name GLOB 'retrieval_change_document_translations_*' OR name GLOB 'retrieval_change_structure_annotation_current_*')",
+    )
+    .all())
+    db.exec(`DROP TRIGGER ${String(trigger.name)}`);
+  // Dropping the added columns restores the earlier CREATE text exactly.
+  for (const [table, column] of [
+    ["retrieval_entries", "translation_sha256"],
+    ["retrieval_entries", "translation_language"],
+    ["retrieval_generations", "translation_language"],
+    ["retrieval_generations", "text_rule"],
+  ])
+    db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
   db.exec("DROP TABLE document_translations");
   db.prepare("DELETE FROM catalog_schema_additions WHERE name=?").run(
     DOCUMENT_TRANSLATIONS_ADDITION.name,

@@ -1607,12 +1607,84 @@ function queryText(value: string): string {
 export function ftsIndexText(value: string): string {
   return normalizeCached(value, normalizedTextCache?.fts, ftsText);
 }
+/**
+ * Text rule of every FTS projection (document spec 9.7): words of letters and
+ * numbers, case-folded; a Han character, kana or Hangul syllable is a word of
+ * its own, so two characters match as a phrase of two adjacent words.
+ */
+export const FTS_TEXT_RULE = "cjk-char-v1";
+/**
+ * A private-use word (FTS5 unicode61 counts Co as a token character) written
+ * between two runs of those characters that punctuation separates, so a
+ * phrase never joins the end of one sentence to the start of the next. No
+ * query can contain it: queries keep letters and numbers only.
+ */
+export const FTS_CJK_BREAK = "\uE000";
+const CJK =
+  /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+const WORD = /[\p{L}\p{N}][\p{L}\p{N}\p{M}]*/gu;
+const OPERATORS = new Set(["and", "near", "not", "or"]);
+interface FtsWord {
+  readonly terms: readonly string[];
+  readonly cjk: boolean;
+  /** Only white space separates it from the word before. */
+  readonly spaced: boolean;
+}
+/** Words in order; a CJK run splits into words of one character each. */
+function ftsWords(value: string): FtsWord[] {
+  const text = caseFold(value.normalize("NFC")),
+    words: FtsWord[] = [];
+  let end = 0;
+  for (const match of text.matchAll(WORD)) {
+    let spaced = !text.slice(end, match.index).trim();
+    end = match.index + match[0].length;
+    let other = "",
+      run: string[] = [];
+    const flush = () => {
+      if (run.length) words.push({ terms: run, cjk: true, spaced });
+      if (other && !OPERATORS.has(other))
+        words.push({ terms: [other], cjk: false, spaced });
+      if (run.length || other) spaced = true;
+      run = [];
+      other = "";
+    };
+    for (const character of match[0]) {
+      if (CJK.test(character)) {
+        if (other) flush();
+        run.push(character);
+      } else if (/\p{M}/u.test(character) && run.length)
+        run[run.length - 1] += character;
+      else {
+        if (run.length) flush();
+        other += character;
+      }
+    }
+    flush();
+  }
+  return words;
+}
 function ftsText(value: string): string {
-  return (
-    caseFold(value.normalize("NFC")).match(
-      /[\p{L}\p{N}][\p{L}\p{N}\p{M}]*/gu,
-    ) ?? []
-  )
-    .filter((term) => !["and", "near", "not", "or"].includes(term))
-    .join(" ");
+  const out: string[] = [];
+  let previous: FtsWord | null = null;
+  for (const word of ftsWords(value)) {
+    if (previous?.cjk && word.cjk && !word.spaced) out.push(FTS_CJK_BREAK);
+    out.push(...word.terms);
+    previous = word;
+  }
+  return out.join(" ");
+}
+/**
+ * The phrases of a query: a run of CJK characters is one phrase of adjacent
+ * one-character words; every other word is a phrase of one word.
+ */
+export function ftsQueryPhrases(value: string): readonly (readonly string[])[] {
+  const seen = new Set<string>(),
+    phrases: string[][] = [];
+  for (const word of ftsWords(value)) {
+    const key = word.terms.join(" ");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    phrases.push([...word.terms]);
+  }
+  return phrases;
 }

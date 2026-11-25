@@ -1,3 +1,7 @@
+import {
+  isTranslationLanguage,
+  type TranslationLanguage,
+} from "./translation.js";
 import { parseTextLevel, type TextLevel } from "./draft-document.js";
 import {
   ContractValidationError,
@@ -249,6 +253,13 @@ export interface MaterialContextItem {
   /** Weighted lexical term frequency v1; lower ranks first, not confidence. */
   readonly score: number;
   readonly gap: "context-too-large" | "evidence-limit" | null;
+  /**
+   * Present when the stored translation of the unit matched, not its original
+   * (document spec 9.7): `text` is the translation, while `reference` and
+   * `evidence` stay the original unit's range and segments.
+   */
+  readonly matched?: "translation";
+  readonly language?: TranslationLanguage;
 }
 export interface MaterialContextBundle {
   readonly maintenance_hint?: "rebuild-index";
@@ -364,8 +375,19 @@ export function parseMaterialContextBundle(
       "rank",
       "score",
       "gap",
+      ...(raw && typeof raw === "object" && Object.hasOwn(raw, "matched")
+        ? ["matched", "language"]
+        : []),
     ]);
     if (item.kind !== "metadata" && item.kind !== "source-text") fail();
+    const translated = Object.hasOwn(item, "matched");
+    if (
+      translated &&
+      (item.kind !== "source-text" ||
+        item.matched !== "translation" ||
+        !isTranslationLanguage(item.language))
+    )
+      fail();
     if (item.kind === "metadata" && Object.hasOwn(item, "text_level")) fail();
     const literature_id = String(parseLiteratureId(item.literature_id));
     const meta_literature_id = String(
@@ -444,8 +466,10 @@ export function parseMaterialContextBundle(
     )
       fail();
     if (reference.kind === "document") {
+      // A translation is shown in place of the original unit's bytes.
       if (
         item.gap === null &&
+        !translated &&
         utf8.encode(item.text).length !==
           reference.end_utf8 - reference.start_utf8
       )
@@ -485,6 +509,12 @@ export function parseMaterialContextBundle(
       rank: integer(item.rank, 1, request.budget.max_items),
       score: item.score as number,
       gap: item.gap,
+      ...(translated
+        ? {
+            matched: "translation" as const,
+            language: item.language as TranslationLanguage,
+          }
+        : {}),
     } as MaterialContextItem;
   });
   if (items.some((item, index) => item.rank !== index + 1)) fail();

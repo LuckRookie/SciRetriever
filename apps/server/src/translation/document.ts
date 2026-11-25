@@ -409,6 +409,31 @@ export class DocumentTranslationStore {
   }
 }
 
+/** The stored translation of a fixed version's current content in a language, with its file. */
+export async function currentDocumentTranslation(
+  store: DocumentTranslationStore,
+  annotations: Pick<SqliteAnnotationStorage, "current">,
+  document: DocumentRef,
+  language: TranslationLanguage = store.language,
+  signal?: AbortSignal,
+): Promise<{
+  readonly row: DocumentTranslationRow;
+  readonly file: DocumentTranslationFile;
+} | null> {
+  const annotation =
+    document.schema_version === 2
+      ? await annotations.current(document.document_version_id, signal)
+      : null;
+  const found = await store.lookup(
+    document,
+    annotation?.annotation_id ?? null,
+    signal,
+    language,
+  );
+  return found.row
+    ? { row: found.row, file: await store.load(found.row, signal) }
+    : null;
+}
 export interface TranslateStepInput {
   readonly literature_id: string;
   readonly asset_id: string;

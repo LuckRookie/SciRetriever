@@ -119,10 +119,20 @@ export function retrievalHashes(
     `retrieval-content-v1:${generationId}\n`,
   );
   const rows = db.prepare(
-    "SELECT e.entry_id,e.kind,e.literature_id,e.meta_literature_id,e.metadata_revision,e.metadata_sha256,e.document_version_id,e.representation_sha256,e.source_asset_id,e.source_asset_sha256,e.unit_start_utf8,e.unit_end_utf8,e.unit_sha256,e.section_id,e.unit_ordinal,e.is_default,f.title,f.body FROM retrieval_entries e JOIN retrieval_fts f ON f.rowid=e.entry_id WHERE e.generation_id=? ORDER BY e.entry_id",
+    "SELECT e.entry_id,e.kind,e.literature_id,e.meta_literature_id,e.metadata_revision,e.metadata_sha256,e.document_version_id,e.representation_sha256,e.source_asset_id,e.source_asset_sha256,e.unit_start_utf8,e.unit_end_utf8,e.unit_sha256,e.section_id,e.unit_ordinal,e.is_default,f.title,f.body,e.translation_language,e.translation_sha256 FROM retrieval_entries e JOIN retrieval_fts f ON f.rowid=e.entry_id WHERE e.generation_id=? ORDER BY e.entry_id",
   );
-  for (const row of rows.iterate(generationId))
-    content.update(`${JSON.stringify(Object.values(row))}\n`);
+  for (const row of rows.iterate(generationId)) {
+    // A translation entry adds its two fields; other entries hash as before.
+    const { translation_language, translation_sha256, ...rest } = row;
+    content.update(
+      `${JSON.stringify([
+        ...Object.values(rest),
+        ...(translation_sha256 === null || translation_sha256 === undefined
+          ? []
+          : [translation_language, translation_sha256]),
+      ])}\n`,
+    );
+  }
   const posting = createHash("sha256").update(
     `retrieval-posting-v1:${generationId}\n`,
   );
@@ -408,6 +418,8 @@ function inspectCatalogSnapshot(
   };
 }
 export const RETRIEVAL_SCORE_RULE = "weighted-term-frequency-v1" as const;
+/** Text rule written on a generation; an older or missing one reads as stale. */
+export const RETRIEVAL_TEXT_RULE = "cjk-char-v1" as const;
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
@@ -463,6 +475,9 @@ export interface RetrievalEntry {
   readonly is_default: number;
   readonly title: string;
   readonly body: string;
+  /** A stored translation of the original unit at the same range (spec 9.7). */
+  readonly translation_language?: string | null;
+  readonly translation_sha256?: string | null;
 }
 export interface RetrievalHit extends Omit<RetrievalEntry, "title" | "body"> {
   readonly entry_id: number;
@@ -479,6 +494,11 @@ export interface RetrievalIndexState {
   readonly generation: RetrievalGeneration | null;
   readonly source_revision: number;
   readonly state_token: string | null;
+  /**
+   * The active generation was built with the current text rule and the
+   * caller's translation language; false reads as stale until a rebuild.
+   */
+  readonly rule_current: boolean;
 }
 type SourceStamp = readonly [
   string,
@@ -560,6 +580,8 @@ export class RetrievalStorageEngine {
     hashes: ReturnType<typeof retrievalHashes>;
   } | null = null;
   readonly readOnly: boolean;
+  /** Set for each worker command from the caller's configuration. */
+  translationLanguage: string | null = null;
   private readonly config: RetrievalSchemaConfig;
   private layoutProof: string | undefined;
   private fileIdentity: string;
@@ -693,10 +715,21 @@ export class RetrievalStorageEngine {
       UNION ALL
       SELECT v.literature_id,l.meta_literature_id,m.metadata_revision,m.metadata_sha256,'document',v.document_version_id,v.representation_sha256,v.source_asset_id,v.source_sha256,CASE WHEN d.document_version_id=v.document_version_id AND EXISTS(SELECT 1 FROM literature_assets p WHERE p.literature_id=v.literature_id AND p.asset_id=v.source_asset_id AND p.role IN ('primary-pdf','supplementary-pdf')) THEN 1 ELSE 0 END
       FROM document_versions v JOIN literatures l USING(literature_id) JOIN literature_metadata m USING(literature_id) LEFT JOIN document_defaults d ON d.document_id=v.document_id WHERE ${visibleLiteratureSql("v.literature_id")} ${literature === undefined ? "" : "AND v.literature_id=?"}
+      UNION ALL
+      SELECT v.literature_id,l.meta_literature_id,m.metadata_revision,m.metadata_sha256,'translation',v.document_version_id,t.sha256,v.source_asset_id,v.source_sha256,1
+      FROM document_translations t JOIN document_versions v ON v.document_version_id=t.document_version_id AND v.literature_id=t.literature_id AND v.source_asset_id=t.asset_id
+      JOIN literatures l ON l.literature_id=v.literature_id JOIN literature_metadata m ON m.literature_id=v.literature_id
+      JOIN document_defaults d ON d.document_id=v.document_id AND d.document_version_id=v.document_version_id
+      JOIN structure_annotation_current c ON c.document_version_id=v.document_version_id AND c.annotation_id=t.annotation_id
+      WHERE t.target_language=? AND t.translated_count>0 AND EXISTS(SELECT 1 FROM literature_assets p WHERE p.literature_id=v.literature_id AND p.asset_id=v.source_asset_id AND p.role='primary-pdf') AND ${visibleLiteratureSql("v.literature_id")} ${literature === undefined ? "" : "AND v.literature_id=?"}
       ORDER BY literature_id,kind,document_version_id
     `,
       )
-      .iterate(...(literature === undefined ? [] : [literature, literature]));
+      .iterate(
+        ...(literature === undefined
+          ? [this.translationLanguage]
+          : [literature, literature, this.translationLanguage, literature]),
+      );
     for (const row of rows) yield Object.values(row) as unknown as SourceStamp;
   }
   private *indexedStamps(
@@ -705,10 +738,17 @@ export class RetrievalStorageEngine {
   ): Generator<SourceStamp> {
     const rows = this.db
       .prepare(
-        `SELECT DISTINCT literature_id,meta_literature_id,metadata_revision,metadata_sha256,kind,document_version_id,representation_sha256,source_asset_id,source_asset_sha256,is_default FROM retrieval_entries WHERE generation_id=? ${literature === undefined ? "" : "AND kind IN ('metadata','document') AND literature_id=?"} ORDER BY literature_id,kind,document_version_id`,
+        `SELECT DISTINCT literature_id,meta_literature_id,metadata_revision,metadata_sha256,CASE WHEN translation_sha256 IS NULL THEN kind ELSE 'translation' END AS stamp_kind,document_version_id,COALESCE(translation_sha256,representation_sha256) AS stamp_sha256,source_asset_id,source_asset_sha256,is_default FROM retrieval_entries WHERE generation_id=? ${literature === undefined ? "" : "AND kind IN ('metadata','document') AND literature_id=?"} ORDER BY literature_id,stamp_kind,document_version_id`,
       )
       .iterate(generation, ...(literature === undefined ? [] : [literature]));
     for (const row of rows) yield Object.values(row) as unknown as SourceStamp;
+  }
+  /** Sources are metadata and document versions; a translation is not one. */
+  private indexedSources(generation: string, literature: string): number {
+    let n = 0;
+    for (const stamp of this.indexedStamps(generation, literature))
+      if (stamp[4] !== ("translation" as string)) n++;
+    return n;
   }
   private *changedLiteratures(generation: RetrievalGeneration | null) {
     const current = groupStamps(this.sourceStamps()),
@@ -913,13 +953,15 @@ export class RetrievalStorageEngine {
     try {
       this.db
         .prepare(
-          "INSERT INTO retrieval_generations(generation_id,index_schema_version,unit_rule,source_revision,status,entry_count,fts_count,source_count,content_sha256,posting_sha256,created_at) VALUES(?,1,'markdown-context-v1',0,'ready',0,0,0,?,?,?)",
+          "INSERT INTO retrieval_generations(generation_id,index_schema_version,unit_rule,source_revision,status,entry_count,fts_count,source_count,content_sha256,posting_sha256,created_at,text_rule,translation_language) VALUES(?,1,'markdown-context-v1',0,'ready',0,0,0,?,?,?,?,?)",
         )
         .run(
           id,
           RETRIEVAL_UNVERIFIED,
           RETRIEVAL_UNVERIFIED,
           new Date().toISOString(),
+          RETRIEVAL_TEXT_RULE,
+          this.translationLanguage,
         );
       this.db
         .prepare(
@@ -1074,8 +1116,8 @@ export class RetrievalStorageEngine {
         this.db.exec("ROLLBACK");
         return false;
       }
-      const oldSources = [...this.indexedStamps(active, literature)].length;
-      const newSources = [...this.indexedStamps(staged, literature)].length;
+      const oldSources = this.indexedSources(active, literature);
+      const newSources = this.indexedSources(staged, literature);
       const oldCount = Number(
         this.db
           .prepare(
@@ -1183,7 +1225,7 @@ export class RetrievalStorageEngine {
         changed = true;
         sourceDelta +=
           Number(entries.length > 0) -
-          [...this.indexedStamps(generation, literature_id)].length;
+          this.indexedSources(generation, literature_id);
         dropFts.run(generation, literature_id);
         entryDelta +=
           entries.length - Number(drop.run(generation, literature_id).changes);
@@ -1281,7 +1323,7 @@ export class RetrievalStorageEngine {
     this.refreshReader();
     return this.db
       .prepare(
-        "SELECT e.kind,e.literature_id,e.meta_literature_id,e.metadata_revision,e.metadata_sha256,e.document_version_id,e.representation_sha256,e.source_asset_id,e.source_asset_sha256,e.unit_start_utf8,e.unit_end_utf8,e.unit_sha256,e.section_id,e.unit_ordinal,e.is_default,f.title,f.body FROM retrieval_entries e LEFT JOIN retrieval_fts f ON f.rowid=e.entry_id WHERE e.generation_id=? AND e.kind IN ('metadata','document') AND e.literature_id=? ORDER BY e.kind,e.document_version_id,e.unit_ordinal,e.entry_id",
+        "SELECT e.kind,e.literature_id,e.meta_literature_id,e.metadata_revision,e.metadata_sha256,e.document_version_id,e.representation_sha256,e.source_asset_id,e.source_asset_sha256,e.unit_start_utf8,e.unit_end_utf8,e.unit_sha256,e.section_id,e.unit_ordinal,e.is_default,f.title,f.body,e.translation_language,e.translation_sha256 FROM retrieval_entries e LEFT JOIN retrieval_fts f ON f.rowid=e.entry_id WHERE e.generation_id=? AND e.kind IN ('metadata','document') AND e.literature_id=? ORDER BY e.kind,e.document_version_id,e.unit_ordinal,e.entry_id",
       )
       .all(generation, id) as unknown as RetrievalEntry[];
   }
@@ -1429,9 +1471,15 @@ export class RetrievalStorageEngine {
         throw new RetrievalStorageError("index-stale");
       this.db
         .prepare(
-          "INSERT INTO retrieval_generations(generation_id,index_schema_version,unit_rule,source_revision,status,entry_count,fts_count,source_count,created_at) VALUES(?,1,'markdown-context-v1',?,'building',0,0,0,?)",
+          "INSERT INTO retrieval_generations(generation_id,index_schema_version,unit_rule,source_revision,status,entry_count,fts_count,source_count,created_at,text_rule,translation_language) VALUES(?,1,'markdown-context-v1',?,'building',0,0,0,?,?,?)",
         )
-        .run(id, sourceRevision, new Date().toISOString());
+        .run(
+          id,
+          sourceRevision,
+          new Date().toISOString(),
+          RETRIEVAL_TEXT_RULE,
+          this.translationLanguage,
+        );
       this.db.exec("COMMIT");
     } catch (error) {
       if (transaction && this.db.isTransaction) this.db.exec("ROLLBACK");
@@ -1445,7 +1493,7 @@ export class RetrievalStorageEngine {
   }
   private entryWriter() {
     const insert = this.db.prepare(
-      "INSERT INTO retrieval_entries(generation_id,kind,literature_id,meta_literature_id,metadata_revision,metadata_sha256,document_version_id,representation_sha256,source_asset_id,source_asset_sha256,unit_start_utf8,unit_end_utf8,unit_sha256,section_id,unit_ordinal,is_default) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      "INSERT INTO retrieval_entries(generation_id,kind,literature_id,meta_literature_id,metadata_revision,metadata_sha256,document_version_id,representation_sha256,source_asset_id,source_asset_sha256,unit_start_utf8,unit_end_utf8,unit_sha256,section_id,unit_ordinal,is_default,translation_language,translation_sha256) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
     );
     const fts = this.db.prepare(
       "INSERT INTO retrieval_fts(rowid,title,body) VALUES(?,?,?)",
@@ -1468,6 +1516,8 @@ export class RetrievalStorageEngine {
         e.section_id,
         e.unit_ordinal,
         e.is_default,
+        e.translation_language ?? null,
+        e.translation_sha256 ?? null,
       );
       target.run(lastInsertRowid, e.title, e.body);
       return lastInsertRowid;
@@ -1682,7 +1732,20 @@ export class RetrievalStorageEngine {
             .digest("hex")
         : null;
       this.db.exec("RELEASE retrieval_state");
-      return { generation, source_revision, state_token };
+      const rule = generation
+        ? (this.db
+            .prepare(
+              "SELECT text_rule,translation_language FROM retrieval_generations WHERE generation_id=?",
+            )
+            .get(generation.generation_id) as
+            | { text_rule: string | null; translation_language: string | null }
+            | undefined)
+        : undefined;
+      const rule_current =
+        !!rule &&
+        rule.text_rule === RETRIEVAL_TEXT_RULE &&
+        rule.translation_language === this.translationLanguage;
+      return { generation, source_revision, state_token, rule_current };
     } catch (error) {
       this.db.exec("ROLLBACK TO retrieval_state; RELEASE retrieval_state");
       throw error;
@@ -1721,7 +1784,7 @@ export class RetrievalStorageEngine {
       const join = scope.length === 0 ? "CROSS JOIN" : "JOIN";
       const rows = this.db
         .prepare(
-          `SELECT e.entry_id,e.generation_id,e.kind,e.literature_id,e.meta_literature_id,e.metadata_revision,e.metadata_sha256,e.document_version_id,e.representation_sha256,e.source_asset_id,e.source_asset_sha256,e.unit_start_utf8,e.unit_end_utf8,e.unit_sha256,e.section_id,e.unit_ordinal,e.is_default,retrieval_fts.title,retrieval_fts.body,(SELECT asset_id FROM literature_assets p WHERE p.literature_id=e.literature_id AND p.role='primary-pdf') AS primary_asset_id FROM retrieval_fts ${join} retrieval_entries e ON e.entry_id=retrieval_fts.rowid WHERE retrieval_fts MATCH ? AND ${visibleLiteratureSql("e.literature_id")} AND e.generation_id=? AND e.kind IN (SELECT value FROM json_each(?)) AND (json_array_length(?)=0 OR e.literature_id IN (SELECT value FROM json_each(?))) AND (e.kind='metadata' OR (?=0 AND e.is_default=1) OR (?=1 AND e.document_version_id IN (SELECT value FROM json_each(?)))) ORDER BY retrieval_fts.rowid LIMIT 4098`,
+          `SELECT e.entry_id,e.generation_id,e.kind,e.literature_id,e.meta_literature_id,e.metadata_revision,e.metadata_sha256,e.document_version_id,e.representation_sha256,e.source_asset_id,e.source_asset_sha256,e.unit_start_utf8,e.unit_end_utf8,e.unit_sha256,e.section_id,e.unit_ordinal,e.is_default,e.translation_language,e.translation_sha256,retrieval_fts.title,retrieval_fts.body,(SELECT asset_id FROM literature_assets p WHERE p.literature_id=e.literature_id AND p.role='primary-pdf') AS primary_asset_id FROM retrieval_fts ${join} retrieval_entries e ON e.entry_id=retrieval_fts.rowid WHERE retrieval_fts MATCH ? AND ${visibleLiteratureSql("e.literature_id")} AND e.generation_id=? AND e.kind IN (SELECT value FROM json_each(?)) AND (json_array_length(?)=0 OR e.literature_id IN (SELECT value FROM json_each(?))) AND (e.kind='metadata' OR (?=0 AND e.is_default=1) OR (?=1 AND e.document_version_id IN (SELECT value FROM json_each(?)))) ORDER BY retrieval_fts.rowid LIMIT 4098`,
         )
         .all(
           ftsQuery,
@@ -1750,7 +1813,16 @@ export class RetrievalStorageEngine {
           hit.unit_ordinal,
         ]);
         const previous = groups.get(key);
-        if (
+        // The original and the translation of one unit are one hit, shown
+        // as the original (spec 9.7), ranked by the better of the two.
+        const translated = (h: RetrievalHit) => !!h.translation_sha256;
+        if (previous && translated(previous) !== translated(hit)) {
+          const original = translated(hit) ? previous : hit;
+          groups.set(key, {
+            ...original,
+            score: Math.min(previous.score, hit.score),
+          });
+        } else if (
           !previous ||
           hit.score < previous.score ||
           (hit.score === previous.score && hit.entry_id < previous.entry_id)

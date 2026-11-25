@@ -46,7 +46,7 @@ import {
   libraryWorksetTimeSort,
   type LibraryMemberPosition,
 } from "./library-workset-order.js";
-import { ftsIndexText, normalizeQueryText } from "./unicode-casefold.js";
+import { ftsQueryPhrases, normalizeQueryText } from "./unicode-casefold.js";
 
 export interface SearchSnapshotRow {
   readonly item: LiteratureSearchItem;
@@ -184,15 +184,21 @@ function compareText(a: string, b: string): number {
 }
 const unique = (values: readonly string[]) =>
   [...new Set(values)].sort(compareText);
+/** The distinct words of a query, as the index writes them (scoring, emptiness). */
 export function queryTerms(value: string): readonly string[] {
-  return [...new Set(ftsIndexText(value).split(" ").filter(Boolean))];
+  return [...new Set(ftsQueryPhrases(value).flat())];
+}
+/**
+ * The FTS5 MATCH of a query: every phrase is required; a run of CJK
+ * characters is one phrase of adjacent one-character words (spec 9.7).
+ */
+export function ftsMatchQuery(value: string): string {
+  return ftsQueryPhrases(value)
+    .map((phrase) => `"${phrase.join(" ")}"`)
+    .join(" AND ");
 }
 function libraryFtsMatch(text: string | null): string | null {
-  return text === null
-    ? null
-    : queryTerms(text)
-        .map((term) => `"${term}"`)
-        .join(" AND ");
+  return text === null ? null : ftsMatchQuery(text);
 }
 function browseQuery(q: LibraryQuery): LibraryQuery {
   const listing =
@@ -1103,9 +1109,7 @@ export class LiteratureQueryService {
     const ftsQuery =
       selector.kind !== "query" || selector.query.text === null
         ? null
-        : queryTerms(selector.query.text)
-            .map((t) => `"${t}"`)
-            .join(" AND ");
+        : ftsMatchQuery(selector.query.text);
     return this.repository.acquirePdfSelection({ selector, ftsQuery }, signal);
   }
   parseSelection(value: unknown, signal?: AbortSignal) {
@@ -1131,7 +1135,9 @@ export class LiteratureQueryService {
       {
         selector,
         ftsQuery:
-          terms === null ? null : terms.map((t) => `"${t}"`).join(" AND "),
+          selector.kind === "query" && selector.query.text !== null
+            ? ftsMatchQuery(selector.query.text)
+            : null,
       },
       signal,
     );
@@ -1270,12 +1276,7 @@ export class LiteratureQueryService {
       request.kind === "search-total"
         ? browseQuery(request.query)
         : request.query;
-    const ftsQuery =
-      query.text === null
-        ? null
-        : queryTerms(query.text)
-            .map((term) => `"${term}"`)
-            .join(" AND ");
+    const ftsQuery = query.text === null ? null : ftsMatchQuery(query.text);
     return this.repository.libraryExactCount(
       { ...request, query },
       ftsQuery,
@@ -1413,7 +1414,7 @@ export class LiteratureQueryService {
         members: Object.freeze([]),
       });
     const rows = await this.repository.librarySnapshot(
-      terms === null ? null : terms.map((term) => `"${term}"`).join(" AND "),
+      query.text === null ? null : ftsMatchQuery(query.text),
       query.discovery_run_ids,
       true,
       [],

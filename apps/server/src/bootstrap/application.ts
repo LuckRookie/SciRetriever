@@ -63,6 +63,7 @@ import {
 import {
   DocumentTranslationService,
   DocumentTranslationStore,
+  currentDocumentTranslation,
 } from "../translation/document.js";
 import { fullTextSource } from "../translation/source.js";
 import { OpenAIChatAdapter, OpenAIResponsesAdapter } from "../agents/openai.js";
@@ -1756,12 +1757,19 @@ async function createApplicationOwned(
       walTimer.unref();
     }
     retrievalIndex = new RetrievalIndexService(
-      new RetrievalStorageClient(indexDatabase),
+      new RetrievalStorageClient(
+        indexDatabase,
+        configuration.translation.target_language,
+      ),
       documentRead,
       library,
       writes,
+      { store: translationStore, annotations: translationAnnotations },
     );
-    const refreshState = new RetrievalStorageClient(database);
+    const refreshState = new RetrievalStorageClient(
+      database,
+      configuration.translation.target_language,
+    );
     indexRefresh = new IndexRefreshService(
       catalogPath,
       retrievalIndex,
@@ -2573,15 +2581,17 @@ export async function createQueryApplication(
   }
   try {
     files = new FileStore(artifactRoot);
+    const queryTranslations = new DocumentTranslationStore(
+      database,
+      files,
+      configuration.translation.target_language,
+    );
+    const queryAnnotations = new SqliteAnnotationStorage(database, files);
     documentRead = new DocumentReadService(
       database,
       new SqliteDocumentStorage(database, files),
       new SqliteAnnotationStorage(database, files),
-      new DocumentTranslationStore(
-        database,
-        files,
-        configuration.translation.target_language,
-      ),
+      queryTranslations,
     );
     const literature = new LiteratureQueryService(database);
     rawParseRead = new SqliteRawParseStorage(database, files);
@@ -2631,11 +2641,20 @@ export async function createQueryApplication(
         undefined,
         readOptions,
       )),
+      configuration.translation.target_language,
     );
     context = new MaterialContextService(
       retrievalStorage,
       documentRead,
       literature,
+      (document, language, signal) =>
+        currentDocumentTranslation(
+          queryTranslations,
+          queryAnnotations,
+          document,
+          language,
+          signal,
+        ),
     );
     processorRead = new SqliteProcessorStorage(database, files, documentRead);
     knowledgeContext = new KnowledgeContextService(context, processorRead);

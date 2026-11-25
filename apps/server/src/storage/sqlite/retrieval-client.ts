@@ -13,30 +13,46 @@ import type { SqliteWorker } from "./worker.js";
 
 /** Async retrieval port. All SQL and inspection run in the catalog worker. */
 export class RetrievalStorageClient {
-  constructor(private readonly worker: SqliteWorker) {}
+  constructor(
+    private readonly worker: SqliteWorker,
+    /** Translations in this language are indexed and current (document spec 9.7). */
+    private readonly translationLanguage: string | null = null,
+  ) {}
+  private call<T>(
+    operation: Parameters<SqliteWorker["retrieval"]>[0],
+    args: readonly unknown[] = [],
+    signal?: AbortSignal,
+  ): Promise<T> {
+    return this.worker.retrieval<T>(
+      operation,
+      args,
+      signal,
+      this.translationLanguage,
+    );
+  }
   close(): void {
     // The application owns the shared worker lifetime.
   }
   revision(): Promise<number> {
-    return this.worker.retrieval("revision");
+    return this.call("revision");
   }
   sourceCount(): Promise<number> {
-    return this.worker.retrieval("sourceCount");
+    return this.call("sourceCount");
   }
   metadataPage(
     after: string | null,
     limit: number,
   ): Promise<readonly RetrievalSource[]> {
-    return this.worker.retrieval("metadataPage", [after, limit]);
+    return this.call("metadataPage", [after, limit]);
   }
   documentPage(
     after: string | null,
     limit: number,
   ): Promise<readonly RetrievalSource[]> {
-    return this.worker.retrieval("documentPage", [after, limit]);
+    return this.call("documentPage", [after, limit]);
   }
   beginGeneration(revision: number, signal?: AbortSignal): Promise<string> {
-    return this.worker.retrieval("beginGeneration", [revision], signal);
+    return this.call("beginGeneration", [revision], signal);
   }
   insertEntries(
     generation: string,
@@ -44,7 +60,7 @@ export class RetrievalStorageClient {
     sourceCount: number,
     signal?: AbortSignal,
   ): Promise<void> {
-    return this.worker.retrieval(
+    return this.call(
       "insertEntries",
       [generation, entries, sourceCount],
       signal,
@@ -55,37 +71,37 @@ export class RetrievalStorageClient {
     revision: number,
     signal?: AbortSignal,
   ): Promise<RetrievalGeneration> {
-    return this.worker.retrieval("publish", [generation, revision], signal);
+    return this.call("publish", [generation, revision], signal);
   }
   active(): Promise<RetrievalGeneration | null> {
-    return this.worker.retrieval("active");
+    return this.call("active");
   }
   state(): Promise<import("./retrieval-engine.js").RetrievalIndexState> {
-    return this.worker.retrieval("state");
+    return this.call("state");
   }
   verifyCatalog(
     signal?: AbortSignal,
   ): Promise<import("./retrieval-engine.js").RetrievalCatalogInspection> {
-    return this.worker.retrieval("verifyCatalog", [], signal);
+    return this.call("verifyCatalog", [], signal);
   }
   markCorrupt(generation: string, revision: number): Promise<void> {
-    return this.worker.retrieval("markCorrupt", [generation, revision]);
+    return this.call("markCorrupt", [generation, revision]);
   }
   scanChanges(): Promise<RetrievalChangeScan> {
-    return this.worker.retrieval("scanChanges");
+    return this.call("scanChanges");
   }
   changesSnapshot(): Promise<RetrievalChangeSnapshot> {
-    return this.worker.retrieval("changesSnapshot");
+    return this.call("changesSnapshot");
   }
   changePage(
     after: number,
     tail: number,
     limit: number,
   ): Promise<RetrievalChange[]> {
-    return this.worker.retrieval("changePage", [after, tail, limit]);
+    return this.call("changePage", [after, tail, limit]);
   }
   pruneChangeBatch(signal?: AbortSignal): Promise<boolean> {
-    return this.worker.retrieval("pruneChangeBatch", [], signal);
+    return this.call("pruneChangeBatch", [], signal);
   }
   pruneGenerationBatch(
     target: string | null = null,
@@ -95,7 +111,7 @@ export class RetrievalStorageClient {
     generations_deleted: number;
     done: boolean;
   }> {
-    return this.worker.retrieval("pruneGenerationBatch", [target], signal);
+    return this.call("pruneGenerationBatch", [target], signal);
   }
   literatureSources(
     id: string,
@@ -106,13 +122,13 @@ export class RetrievalStorageClient {
     documents: readonly RetrievalSource[];
     indexed: boolean;
   }> {
-    return this.worker.retrieval("literatureSources", [id, generation]);
+    return this.call("literatureSources", [id, generation]);
   }
   ensureActive(signal?: AbortSignal): Promise<RetrievalGeneration> {
-    return this.worker.retrieval("ensureActive", [], signal);
+    return this.call("ensureActive", [], signal);
   }
   beginLiteratureUpdate(signal?: AbortSignal): Promise<string> {
-    return this.worker.retrieval("beginLiteratureUpdate", [], signal);
+    return this.call("beginLiteratureUpdate", [], signal);
   }
   async discardLiteratureUpdate(id: string): Promise<void> {
     while (!(await this.pruneGenerationBatch(id)).done) {
@@ -127,7 +143,7 @@ export class RetrievalStorageClient {
     checkpoint: RetrievalCheckpoint,
     signal?: AbortSignal,
   ): Promise<boolean> {
-    return this.worker.retrieval(
+    return this.call(
       "commitLiteratureUpdate",
       [active, staged, id, fingerprint, checkpoint],
       signal,
@@ -139,7 +155,7 @@ export class RetrievalStorageClient {
     checkpoint: RetrievalCheckpoint,
     signal?: AbortSignal,
   ): Promise<boolean> {
-    return this.worker.retrieval(
+    return this.call(
       "commitLiteratureBatch",
       [id, updates, checkpoint],
       signal,
@@ -150,19 +166,19 @@ export class RetrievalStorageClient {
     checkpoint: RetrievalCheckpoint,
     signal?: AbortSignal,
   ): Promise<RetrievalGeneration> {
-    return this.worker.retrieval("finishIncremental", [id, checkpoint], signal);
+    return this.call("finishIncremental", [id, checkpoint], signal);
   }
   verificationEntries(
     generation: string,
     id: string,
   ): Promise<readonly RetrievalEntry[]> {
-    return this.worker.retrieval("verificationEntries", [generation, id]);
+    return this.call("verificationEntries", [generation, id]);
   }
   verify(): Promise<{
     inspection: import("./retrieval-engine.js").RetrievalCatalogInspection;
     proof: string;
   }> {
-    return this.worker.retrieval("verify");
+    return this.call("verify");
   }
   recordVerification(
     generation: string,
@@ -170,7 +186,7 @@ export class RetrievalStorageClient {
     proof: string,
     signal?: AbortSignal,
   ): Promise<RetrievalGeneration> {
-    return this.worker.retrieval(
+    return this.call(
       "recordVerification",
       [generation, revision, proof],
       signal,
@@ -196,7 +212,7 @@ export class RetrievalStorageClient {
     readonly candidateLimit: boolean;
     readonly relevanceLimited: boolean;
   }> {
-    return this.worker.retrieval("search", [
+    return this.call("search", [
       ftsQuery,
       terms,
       generationId,
@@ -223,13 +239,9 @@ export class RetrievalStorageClient {
       literature_id: string | null;
     }[]
   > {
-    return this.worker.retrieval("documentCoverage", [
-      scope,
-      explicit,
-      includeGaps,
-    ]);
+    return this.call("documentCoverage", [scope, explicit, includeGaps]);
   }
   hasDefault(literatureId: string, assetId: string): Promise<boolean> {
-    return this.worker.retrieval("hasDefault", [literatureId, assetId]);
+    return this.call("hasDefault", [literatureId, assetId]);
   }
 }

@@ -776,7 +776,7 @@ Context 是临时读取结果，不持久化成 KnowledgeArtifact。若用户要
 
 `retrieval-context.ts` 定义 `MaterialContextRequest/MaterialContextBundle`，固定查询、范围、类型、版本、字节预算与续读位置。当前无 tokenizer；请求与使用方式见[读取指南](../../guides/library-query.md#上下文检索)。
 
-材料投影使用当前 schema 的 `retrieval_*` 表，保留元数据和全部已接纳固定文档版本，默认文档与显式历史版本仍分别筛选。没有新增表、schema 版本或自动迁移。索引是可重建投影，不成为正文或元数据的事实来源。初稿进入索引、命中带 `text_level` 见 [2.1.7](#217-文本等级与选择校订范围的事实)。
+材料投影使用当前 schema 的 `retrieval_*` 表，保留元数据和全部已接纳固定文档版本，默认文档与显式历史版本仍分别筛选。增补集 `document-translations` 给条目与代各加了两列并加了译文的触发器（[文档与证据 9.7](04-document-evidence.md#97-检索)），此外没有新增表、schema 版本或自动迁移。索引是可重建投影，不成为正文或元数据的事实来源。初稿进入索引、命中带 `text_level` 见 [2.1.7](#217-文本等级与选择校订范围的事实)。
 
 **读取**：`active()` 只读单例指针和 ready generation 的标量计数；不逐项重数 entries/FTS。冷连接和外部 `data_version` 变化后的重连只核对 schema identity、固定数量的 retrieval DDL 与触发器、active 是否存在且 ready、已知损坏标记和 source revision。查询不运行 PRAGMA integrity_check/foreign_key_check、FTS integrity-check、整份哈希或来源指纹扫描。普通打开、Web 初始化探针、显式目录库核验与真实损坏错误的规则归[存储技术篇](07-versioned-storage.md#5-存储完整性验证)。显式 `storage retrieval-inspect` 仍保留完整检查，不由搜索触发。
 

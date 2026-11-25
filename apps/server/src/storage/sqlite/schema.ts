@@ -1176,6 +1176,76 @@ export const ARCHIVE_STEPS_TRANSLATE_SQL = ARCHIVE_STEPS_BASE.replace(
 );
 if (ARCHIVE_STEPS_TRANSLATE_SQL === ARCHIVE_STEPS_BASE)
   throw new Error("archive_steps step check not found");
+const DOCUMENT_TRANSLATIONS_TABLE_SQL =
+  "CREATE TABLE document_translations(literature_id TEXT NOT NULL,asset_id TEXT NOT NULL,content_version TEXT NOT NULL CHECK(length(content_version)=64 AND content_version NOT GLOB '*[^0-9a-f]*'),target_language TEXT NOT NULL CHECK(length(trim(target_language))>0),document_version_id TEXT NOT NULL,annotation_id TEXT NOT NULL CHECK(length(annotation_id)=64),artifact_reference TEXT NOT NULL,sha256 TEXT NOT NULL,byte_size INTEGER NOT NULL,media_type TEXT NOT NULL CHECK(media_type='application/json'),unit_count INTEGER NOT NULL CHECK(unit_count>=0),translated_count INTEGER NOT NULL CHECK(translated_count>=0 AND translated_count<=unit_count),status TEXT NOT NULL CHECK(status IN ('complete','partial','same-language')),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(literature_id,asset_id,content_version,target_language),FOREIGN KEY(literature_id) REFERENCES literatures(literature_id),FOREIGN KEY(asset_id) REFERENCES assets(asset_id),FOREIGN KEY(document_version_id) REFERENCES document_versions(document_version_id) ON DELETE RESTRICT,FOREIGN KEY(artifact_reference,sha256,byte_size,media_type) REFERENCES artifact_objects(relative_path,sha256,byte_size,media_type) ON DELETE RESTRICT) STRICT, WITHOUT ROWID";
+const DOCUMENT_TRANSLATIONS_INDEX_SQL = [
+  "CREATE INDEX document_translations_version ON document_translations(document_version_id,target_language)",
+  "CREATE INDEX document_translations_latest ON document_translations(literature_id,target_language,updated_at)",
+] as const;
+/**
+ * Full-text search covers stored translations (document spec 9.7). Every
+ * writer of a translation, and a change of the current annotation that
+ * changes which translation is current, records the paper in the change
+ * journal by trigger, so the incremental refresh needs no application code
+ * in the writing transaction.
+ */
+const DOCUMENT_TRANSLATION_RETRIEVAL = [
+  ...retrievalChangeTriggers(
+    "document_translations",
+    (row) => `SELECT ${row}.literature_id`,
+    true,
+  ),
+  ...retrievalChangeTriggers(
+    "structure_annotation_current",
+    (row) =>
+      `SELECT literature_id FROM document_versions WHERE document_version_id=${row}.document_version_id`,
+    true,
+  ),
+];
+const baseTable = (name: string) =>
+  CATALOG_BASE_SCHEMA.find((sql) => sql.startsWith(`CREATE TABLE ${name}(`))!;
+/** SQLite writes an added column before the table constraints. */
+const withColumns = (sql: string, before: string, columns: string[]) => {
+  if (!sql.includes(before)) throw new Error("catalog column anchor missing");
+  return sql.replace(
+    before,
+    `${columns.map((c) => `, ${c}`).join("")}${before}`,
+  );
+};
+/**
+ * A translation entry is a `document` entry with the original unit's range
+ * and the language and file of the translation; a generation records the
+ * text rule and translation language it was built with, so an index older
+ * than either reads as stale until an explicit rebuild.
+ */
+const DOCUMENT_TRANSLATION_RETRIEVAL_COLUMNS = [
+  [
+    "retrieval_entries",
+    "ALTER TABLE retrieval_entries ADD COLUMN translation_language TEXT",
+  ],
+  [
+    "retrieval_entries",
+    "ALTER TABLE retrieval_entries ADD COLUMN translation_sha256 TEXT",
+  ],
+  [
+    "retrieval_generations",
+    "ALTER TABLE retrieval_generations ADD COLUMN text_rule TEXT",
+  ],
+  [
+    "retrieval_generations",
+    "ALTER TABLE retrieval_generations ADD COLUMN translation_language TEXT",
+  ],
+] as const;
+export const RETRIEVAL_ENTRIES_TRANSLATION_SQL = withColumns(
+  baseTable("retrieval_entries"),
+  ",CHECK((kind='metadata'",
+  ["translation_language TEXT", "translation_sha256 TEXT"],
+);
+export const RETRIEVAL_GENERATIONS_RULE_SQL = withColumns(
+  baseTable("retrieval_generations"),
+  ",CHECK(status='building'",
+  ["text_rule TEXT", "translation_language TEXT"],
+);
 /**
  * Stored full-text translations (ADR 0068, document spec 9.4). One row per
  * literature, primary PDF, proofread content version and language registers
@@ -1186,12 +1256,21 @@ export const DOCUMENT_TRANSLATIONS_ADDITION = defineCatalogAddition(
   "document-translations",
   [
     ARCHIVE_STEPS_TRANSLATE_SQL,
-    "CREATE TABLE document_translations(literature_id TEXT NOT NULL,asset_id TEXT NOT NULL,content_version TEXT NOT NULL CHECK(length(content_version)=64 AND content_version NOT GLOB '*[^0-9a-f]*'),target_language TEXT NOT NULL CHECK(length(trim(target_language))>0),document_version_id TEXT NOT NULL,annotation_id TEXT NOT NULL CHECK(length(annotation_id)=64),artifact_reference TEXT NOT NULL,sha256 TEXT NOT NULL,byte_size INTEGER NOT NULL,media_type TEXT NOT NULL CHECK(media_type='application/json'),unit_count INTEGER NOT NULL CHECK(unit_count>=0),translated_count INTEGER NOT NULL CHECK(translated_count>=0 AND translated_count<=unit_count),status TEXT NOT NULL CHECK(status IN ('complete','partial','same-language')),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(literature_id,asset_id,content_version,target_language),FOREIGN KEY(literature_id) REFERENCES literatures(literature_id),FOREIGN KEY(asset_id) REFERENCES assets(asset_id),FOREIGN KEY(document_version_id) REFERENCES document_versions(document_version_id) ON DELETE RESTRICT,FOREIGN KEY(artifact_reference,sha256,byte_size,media_type) REFERENCES artifact_objects(relative_path,sha256,byte_size,media_type) ON DELETE RESTRICT) STRICT, WITHOUT ROWID",
-    "CREATE INDEX document_translations_version ON document_translations(document_version_id,target_language)",
-    "CREATE INDEX document_translations_latest ON document_translations(literature_id,target_language,updated_at)",
+    DOCUMENT_TRANSLATIONS_TABLE_SQL,
+    ...DOCUMENT_TRANSLATIONS_INDEX_SQL,
+    ...DOCUMENT_TRANSLATION_RETRIEVAL,
+    ...DOCUMENT_TRANSLATION_RETRIEVAL_COLUMNS.map(([, sql]) => sql),
   ],
   [],
-  undefined,
+  [
+    ARCHIVE_STEPS_TRANSLATE_SQL,
+    DOCUMENT_TRANSLATIONS_TABLE_SQL,
+    DOCUMENT_TRANSLATIONS_INDEX_SQL[0],
+    DOCUMENT_TRANSLATIONS_INDEX_SQL[1],
+    ...DOCUMENT_TRANSLATION_RETRIEVAL,
+    RETRIEVAL_ENTRIES_TRANSLATION_SQL,
+    RETRIEVAL_GENERATIONS_RULE_SQL,
+  ],
   ["archive_steps"],
 );
 

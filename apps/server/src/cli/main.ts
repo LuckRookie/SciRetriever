@@ -218,6 +218,7 @@ function usage(options: CliOptions): CliResult {
     "  maintenance refresh-index\n" +
     "  maintenance verify-index\n" +
     "  maintenance verify-catalog\n" +
+    "  maintenance rebuild-library-search  # rewrite library search rows with the current text rule\n" +
     "  maintenance index-status\n" +
     "  maintenance publisher-names (--all | --literature-id ID... | --query TEXT) [--ai] [--scan-limit N] [--cursor CURSOR] [--max-ai-requests N] [--output PATH]\n" +
     "  maintenance publisher-names-accept --report FILE|- --name NAME [--name NAME...]\n";
@@ -1571,6 +1572,15 @@ async function execute(
       value.status === "failed"
       ? { ...result, code: 3 }
       : result;
+  }
+  if (group === "maintenance" && command === "rebuild-library-search") {
+    if (args.length !== 2) invalidInput();
+    return output(
+      await withApplication(options, (app) =>
+        app.database.reprojectLibrarySearch(options.signal),
+      ),
+      options,
+    );
   }
   if (group === "doctor" && command === undefined) {
     const owner = new TypeScriptConfigurationOwner(configurationHome(options));
