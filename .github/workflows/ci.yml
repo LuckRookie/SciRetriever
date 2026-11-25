@@ -12,7 +12,8 @@ jobs:
   quick:
     if: github.event_name == 'push' && github.ref != 'refs/heads/master'
     name: TypeScript quick
-    runs-on: ubuntu-latest
+    # Pinned: Playwright 1.55.0 cannot install Chromium on the Ubuntu 26.04 that ubuntu-latest now resolves to.
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
@@ -35,7 +36,8 @@ jobs:
   full:
     if: github.event_name != 'push' || github.ref == 'refs/heads/master'
     name: TypeScript full
-    runs-on: ubuntu-latest
+    # Pinned: Playwright 1.55.0 cannot install Chromium on the Ubuntu 26.04 that ubuntu-latest now resolves to.
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
