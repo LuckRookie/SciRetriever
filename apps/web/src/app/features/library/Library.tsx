@@ -173,6 +173,8 @@ const currentRows = new WeakMap<ApiClient, Map<string, string>>();
 const LIBRARY_HITS_SHOWN = 5;
 /** The right column (page specs “右栏”): open or put away, remembered in this browser. */
 const PREVIEW_KEY = "sciretriever:library:preview:v1";
+/** “范围内的词”: held at the top, or scrolling with the rows (the default). */
+const TERMS_PINNED_KEY = "sciretriever:library:terms-pinned:v1";
 /** Wider than this the right column stands beside the list; narrower, the preview is a layer. */
 const WIDE = "(min-width: 1101px)";
 const PREVIEW_WIDTH_KEY = "sciretriever:library:preview-width:v1";
@@ -539,6 +541,13 @@ export default function Library() {
     () => preferences.read(PREVIEW_KEY) !== "closed",
   );
   const docked = wide && previewOpen;
+  const [termsPinned, setTermsPinnedState] = useState(
+    () => preferences.read(TERMS_PINNED_KEY) === "pinned",
+  );
+  const setTermsPinned = (pinned: boolean) => {
+    setTermsPinnedState(pinned);
+    preferences.write(TERMS_PINNED_KEY, pinned ? "pinned" : "free");
+  };
   // The right column's width is the reader's own choice, kept in this browser.
   const page = useRef<HTMLElement>(null);
   const [previewWidth, setPreviewWidthState] = useState(storedPreviewWidth);
@@ -622,7 +631,7 @@ export default function Library() {
     !route.query.folder &&
     !route.query.recently_opened &&
     route.query.intake_batch_ids.length === 0 &&
-    route.query.collection_scope !== "collected";
+    route.query.collection_scope === undefined;
   const libraryScope = useMemo(
     () => inScope(effective, "collected"),
     [effective],
@@ -929,6 +938,8 @@ export default function Library() {
       setOrigin({ scope: { folder: q.folder }, name: folderName ?? "文件夹" });
     else if (q.recently_opened)
       setOrigin({ scope: { recently_opened: true }, name: "最近读过" });
+    else if (q.collection_scope === "candidates")
+      setOrigin({ scope: { collection_scope: "candidates" }, name: "候选" });
     else if (q.intake_batch_ids.length)
       setOrigin({
         scope: { intake_batch_ids: q.intake_batch_ids },
@@ -1698,7 +1709,9 @@ export default function Library() {
             value === route.sort ||
             (value === "relevance"
               ? view === "search"
-              : value !== "collected-desc" || view !== "search"),
+              : value !== "collected-desc" ||
+                (view !== "search" &&
+                  route.query.collection_scope !== "candidates")),
         ).map((value) => ({
           value,
           label: SORT_LABELS[value],
@@ -1731,6 +1744,20 @@ export default function Library() {
       ) : null}
     </>
   );
+  // The commonest words of the results: with the tools at the top, or, the
+  // default, scrolling away with the rows so that the list keeps the screen.
+  const scopeTerms =
+    chips.length > 0 ? (
+      <ScopeTerms
+        query={effective}
+        windowCursor={windowCursor}
+        lowerBound={windowNumber === 1}
+        onWindowInvalid={windowCursor === null ? undefined : firstWindow}
+        pinned={termsPinned}
+        onPinnedChange={setTermsPinned}
+        onChange={(query) => updateQuery(withoutScopeFlag(query, route.query))}
+      />
+    ) : null;
   // The table's column heads stick under the toolbar, whatever its height.
   const controls = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -1769,11 +1796,14 @@ export default function Library() {
       ? "最近读过"
       : view === "batch"
         ? (batch.data?.label ?? "批次")
-        : "文献库");
+        : route.query.collection_scope === "candidates"
+          ? "候选"
+          : "文献库");
   const inView =
     !!route.query.folder ||
     !!route.query.recently_opened ||
-    route.query.intake_batch_ids.length > 0;
+    route.query.intake_batch_ids.length > 0 ||
+    route.query.collection_scope === "candidates";
   const searchLabel =
     view !== "search" || inView
       ? `在「${pageName}」里搜索`
@@ -1829,8 +1859,7 @@ export default function Library() {
       />
     );
   })();
-  // The library says how many candidates stand behind it, and where they are:
-  // the batches of 找文献 (ADR 0067 section 7).
+  // The library says how many candidates stand behind it; a press lists them.
   const candidateCount =
     view === "collected"
       ? (libraryTotals.data?.collection_counts?.discovered_only ?? 0)
@@ -1938,10 +1967,13 @@ export default function Library() {
                   size="compact"
                   className="library-candidates"
                   onPress={() =>
-                    navigate(
-                      { view: "disc", literature: null },
-                      { clearSource: true },
-                    )
+                    navigate({
+                      query: JSON.stringify({
+                        ...emptyQuery(),
+                        collection_scope: "candidates",
+                      }),
+                      sort: null,
+                    })
                   }
                 >
                   候选 {candidateCount.toLocaleString()} 篇
@@ -2139,17 +2171,7 @@ export default function Library() {
             </Button>
           </div>
         )}
-        {chips.length > 0 ? (
-          <ScopeTerms
-            query={effective}
-            windowCursor={windowCursor}
-            lowerBound={windowNumber === 1}
-            onWindowInvalid={windowCursor === null ? undefined : firstWindow}
-            onChange={(query) =>
-              updateQuery(withoutScopeFlag(query, route.query))
-            }
-          />
-        ) : null}
+        {termsPinned ? scopeTerms : null}
         <Presence>
           {filters && (
             <AnimatedPanel key="filters" preset="collapse">
@@ -2167,6 +2189,7 @@ export default function Library() {
           </p>
         ) : null}
       </div>
+      {termsPinned ? null : scopeTerms}
       <LayoutGroup className="library-results-region">
         {next.isError && !sortRefused && !isWindowInvalid(next.error) && (
           <ErrorNotice
@@ -2184,6 +2207,7 @@ export default function Library() {
           sortDisabled={sortLimited ? SORT_LIMIT_REASON : undefined}
           unrankedFrom={sectioned ? null : relevanceScored}
           candidatesFrom={candidatesFrom}
+          candidatesOnly={route.query.collection_scope === "candidates"}
           libraryHead={
             sectioned && libraryHits.data && libraryHits.data.items.length ? (
               <>
@@ -3015,6 +3039,7 @@ const LibraryList = memo(function LibraryList({
   sortDisabled,
   unrankedFrom,
   candidatesFrom,
+  candidatesOnly,
   libraryHead,
   candidatesHead,
   selectAll,
@@ -3060,6 +3085,8 @@ const LibraryList = memo(function LibraryList({
   unrankedFrom: number | null;
   /** In a whole-library search, the row the candidates begin at. */
   candidatesFrom: number | null;
+  /** The page lists candidates only: its rows need not each say so. */
+  candidatesOnly: boolean;
   libraryHead: ReactNode;
   candidatesHead: ReactNode;
   selectAll: ReactNode;
@@ -3326,7 +3353,8 @@ const LibraryList = memo(function LibraryList({
             }
             // Under “候选” the rows need not each say so again.
             underCandidates={
-              candidatesFrom !== null && row.index >= candidatesFrom
+              candidatesOnly ||
+              (candidatesFrom !== null && row.index >= candidatesFrom)
             }
             onCollect={onCollect}
             selected={selected.has(items[row.index]!.literature.literature_id)}
@@ -4178,7 +4206,10 @@ const ORIGIN_LABELS = {
 /** The working set a search began in. */
 interface SearchOrigin {
   readonly scope: Partial<
-    Pick<LibraryQuery, "folder" | "recently_opened" | "intake_batch_ids">
+    Pick<
+      LibraryQuery,
+      "folder" | "recently_opened" | "intake_batch_ids" | "collection_scope"
+    >
   >;
   readonly name: string;
 }
@@ -4334,7 +4365,8 @@ function SearchScope({
   const inView =
     !!query.folder ||
     !!query.recently_opened ||
-    query.intake_batch_ids.length > 0;
+    query.intake_batch_ids.length > 0 ||
+    query.collection_scope === "candidates";
   const value = inView
     ? "view"
     : query.collection_scope === "collected"

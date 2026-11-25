@@ -311,6 +311,7 @@ export type LibraryView =
   | "folder"
   | "recent"
   | "batch"
+  | "candidates"
   | "search";
 export function libraryView(query: LibraryQuery): LibraryView {
   if (query.text) return "search";
@@ -318,6 +319,8 @@ export function libraryView(query: LibraryQuery): LibraryView {
   if (query.recently_opened) return "recent";
   if (query.intake_batch_ids.length || query.discovery_run_ids.length)
     return "batch";
+  // Every candidate, reached from the count beside the library's (ADR 0067).
+  if (query.collection_scope === "candidates") return "candidates";
   return "collected";
 }
 /**

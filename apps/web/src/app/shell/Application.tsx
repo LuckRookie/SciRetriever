@@ -540,7 +540,8 @@ function Workspace({ api }: { api: ApiClient }) {
           section === "lib" &&
           (route.query.folder ||
             route.query.recently_opened ||
-            route.query.intake_batch_ids.length)
+            route.query.intake_batch_ids.length ||
+            route.query.collection_scope === "candidates")
         );
   const sectionButton = (section: Section) => (
     <Button

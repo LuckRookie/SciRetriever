@@ -39,6 +39,8 @@ export function ScopeTerms({
   windowCursor = null,
   lowerBound = false,
   onWindowInvalid,
+  pinned,
+  onPinnedChange,
   onChange,
 }: {
   query: LibraryQuery;
@@ -48,6 +50,9 @@ export function ScopeTerms({
   lowerBound?: boolean;
   /** The service no longer knows the window's cursor. */
   onWindowInvalid?: (() => void) | undefined;
+  /** Held at the top with the tools, or scrolling away with the rows. */
+  pinned: boolean;
+  onPinnedChange: (pinned: boolean) => void;
   onChange: (query: LibraryQuery) => void;
 }) {
   const api = useApi();
@@ -177,16 +182,28 @@ export function ScopeTerms({
           )}
         </Row>
       ) : null}
-      {longer ? (
+      <div className="scope-terms-foot">
+        {longer ? (
+          <Button
+            variant="text"
+            size="compact"
+            className="scope-terms-more"
+            onPress={() => setMore(!more)}
+          >
+            {more ? "收起" : "更多"}
+          </Button>
+        ) : null}
+        {/* The reader's own choice, kept in this browser (page specs “筛选”). */}
         <Button
           variant="text"
           size="compact"
-          className="scope-terms-more"
-          onPress={() => setMore(!more)}
+          className="scope-terms-pin"
+          aria-pressed={pinned}
+          onPress={() => onPinnedChange(!pinned)}
         >
-          {more ? "收起" : "更多"}
+          {pinned ? "取消固定" : "固定在顶部"}
         </Button>
-      ) : null}
+      </div>
       {swaps.map((k) => (
         <p key={k.value} className="scope-terms-hint">
           “{k.value}”对应标签“{k.tag!.name}”

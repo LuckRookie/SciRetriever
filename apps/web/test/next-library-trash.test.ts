@@ -156,6 +156,19 @@ it("takes a paper out of the library to the candidates and adds it back from a s
       )
       .toBe(before + 1);
 
+    // A press on the count lists every candidate, the one just removed
+    // among them; the search box there searches the candidates.
+    await candidates.click();
+    await p.getByRole("heading", { name: "候选", exact: true }).waitFor();
+    await p.locator(`.paper-row[data-literature-id="${id}"]`).waitFor();
+    expect(
+      await p
+        .getByRole("searchbox", { name: "在「候选」里搜索", exact: true })
+        .count(),
+    ).toBe(1);
+    await p.goBack();
+    await p.getByRole("heading", { name: "文献库", exact: true }).waitFor();
+
     // A search still finds it, as a candidate one press from the library.
     await searchLibrary(p, title.split(/\s+/).slice(0, 3).join(" "));
     const found = p.locator(`.paper-row[data-literature-id="${id}"]`);
