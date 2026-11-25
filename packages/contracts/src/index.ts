@@ -265,7 +265,8 @@ export const MISSING_STEPS = [
 ] as const;
 export type MissingStep = (typeof MISSING_STEPS)[number];
 export interface LibraryQuery {
-  readonly collection_scope?: "collected" | "all";
+  /** `candidates`: visible papers that are not in the library. */
+  readonly collection_scope?: "collected" | "all" | "candidates";
   readonly has_primary_pdf?: boolean | null;
   readonly needs_metadata?: boolean;
   readonly text_levels?: readonly TextLevel[];
@@ -613,6 +614,9 @@ export function parseLibrarySearchRequest(
     [],
   );
   if (sort === "relevance" && query.text === null) fail();
+  // Candidates have no library entry time to order by.
+  if (sort === "collected-desc" && query.collection_scope === "candidates")
+    fail(["sort"]);
   if (r.cursor !== null && (typeof r.cursor !== "string" || !r.cursor.trim()))
     fail();
   const window = parseOptionalLibraryWindowCursor(r, query);
@@ -1443,7 +1447,7 @@ export function parseLibraryQuery(value: unknown): LibraryQuery {
       ? {
           collection_scope: enumeration(
             record.collection_scope,
-            ["collected", "all"] as const,
+            ["collected", "all", "candidates"] as const,
             ["collection_scope"],
           ),
         }

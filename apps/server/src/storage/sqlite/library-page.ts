@@ -193,6 +193,30 @@ export function intakeAt(db: DatabaseSync, id: string): string | null {
     .get(id)?.intake_at ?? null) as string | null;
 }
 
+type CountScope = NonNullable<ReturnType<typeof globalLibraryCountScope>>;
+/** Candidates are all versions minus the library's, column by column; both
+ * rows are kept by the write-time counters, so this stays constant-time. */
+function scopeTotals(db: DatabaseSync, scope: CountScope) {
+  const store = storedLibraryState(db).counts;
+  if (scope !== "candidates") return store.read(scope);
+  const all = store.read("all"),
+    collected = store.read("collected");
+  return Object.fromEntries(
+    Object.entries(all).map(([key, value]: [string, unknown]) => [
+      key,
+      typeof value === "number"
+        ? value - Number(collected[key as keyof typeof collected])
+        : value,
+    ]),
+  ) as typeof all;
+}
+/** A candidate is a shown paper without a library row. During the first
+ * collection backfill, historical selection still counts as being in it. */
+const notCollectedSql = (id: string, ready: boolean) =>
+  `NOT EXISTS(SELECT 1 FROM library_collected c WHERE c.literature_id=${id})${
+    ready ? "" : ` AND NOT ${historicalCollectionSql(id)}`
+  }`;
+
 type Workset = { kind: WorksetKind; ids: readonly string[] };
 function orderedWorkset(q: LibraryQuery): Workset | undefined {
   if (q.folder)
@@ -314,6 +338,10 @@ function libraryFilter(
       "EXISTS(SELECT 1 FROM intake_batch_members b WHERE b.literature_id=l.literature_id AND b.batch_id IN (SELECT value FROM json_each(?)))",
       JSON.stringify(q.intake_batch_ids),
     );
+  // Browsing candidates walks intake order and skips library rows by primary
+  // key: a page costs at most the library's size beyond its own rows.
+  if (q.collection_scope === "candidates")
+    add(notCollectedSql("l.literature_id", state.collectionReady));
   if (collecting && !collectedJoin)
     add(
       `(EXISTS(SELECT 1 FROM library_collected WHERE literature_id=l.literature_id) OR ${historicalCollectionSql("l.literature_id")})`,
@@ -1071,11 +1099,11 @@ export function libraryCollectionTargets(
 
 function countsFromTotals(
   db: DatabaseSync,
-  scope: "all" | "collected",
+  scope: CountScope,
   cutoff: string,
 ): LibraryCounts {
   const store = storedLibraryState(db).counts;
-  const row = store.read(scope);
+  const row = scopeTotals(db, scope);
   const recentlyOpened = db
     .prepare(
       `SELECT count(*) AS n FROM (
@@ -1084,6 +1112,7 @@ function countsFromTotals(
       AND ${visibleLiteratureSql("h.literature_id")}
       AND EXISTS(SELECT 1 FROM literature_metadata m WHERE m.literature_id=h.literature_id)
       ${scope === "collected" ? "AND EXISTS(SELECT 1 FROM library_collected c WHERE c.literature_id=h.literature_id)" : ""}
+      ${scope === "candidates" ? `AND ${notCollectedSql("h.literature_id", true)}` : ""}
       ORDER BY h.last_opened_at DESC LIMIT 100
     )`,
     )
@@ -1259,7 +1288,7 @@ export function librarySearchTotal(
     libraryFilter(db, query, ftsQuery, { recentCutoff: recentCutoffAt(at) });
   const flags = countReadFlags(state, matches.updating);
   if (scope && state.countsReady())
-    return { total_count: state.counts.read(scope).versions, ...flags };
+    return { total_count: scopeTotals(db, scope).versions, ...flags };
   const bounded = !exact && scope === null;
   const { from, where, args } = matches;
   const counts = db
@@ -2037,7 +2066,7 @@ export function libraryFacets(
   const windowTotal = Number(result.window_total);
   const truncated = !exact && windowTotal > LIBRARY_COUNT_LIMIT;
   let total = truncated ? LIBRARY_COUNT_LIMIT : windowTotal;
-  if (scope && state.countsReady()) total = state.counts.read(scope).versions;
+  if (scope && state.countsReady()) total = scopeTotals(db, scope).versions;
   else if (scope && truncated)
     total = librarySearchTotal(db, query, ftsQuery, true, filter).total_count;
   return {

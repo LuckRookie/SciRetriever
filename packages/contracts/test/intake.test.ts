@@ -316,6 +316,20 @@ it("decodes historic metadata and queries with empty new fields and preserves ne
     expect(() => parseAcquirePdfSelector(v)).toThrow();
 });
 
+it("accepts the candidates scope in intake order and refuses the library's entry time for it", () => {
+  const query = { collection_scope: "candidates" };
+  expect(parseLibrarySearchRequest({ query })).toMatchObject({
+    query: { collection_scope: "candidates" },
+    sort: "intake-desc",
+  });
+  expect(() =>
+    parseLibrarySearchRequest({ query, sort: "collected-desc" }),
+  ).toThrow();
+  expect(() =>
+    parseLibrarySearchRequest({ query: { collection_scope: "others" } }),
+  ).toThrow();
+});
+
 it("shares the collected sort between search and persisted PDF selectors", () => {
   const sort: LibrarySort = "collected-desc";
   const query = { collection_scope: "collected" };

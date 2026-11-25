@@ -3641,6 +3641,7 @@ export class SqliteWorker {
           request.query.intake_batch_ids.length ||
           request.query.discovery_run_ids.length ||
           request.query.collection_scope === "collected" ||
+          request.query.collection_scope === "candidates" ||
           (!request.after?.total &&
             globalLibraryCountScope(request.query) !== null)) &&
         !request.fullRelevance &&

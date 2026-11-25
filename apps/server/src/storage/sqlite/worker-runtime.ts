@@ -1412,7 +1412,8 @@ function librarySearchPage(
             request.query.missing_steps.length ||
             request.query.needs_manual_pdf === true)) ||
         (!plan.collectionReady &&
-          request.query.collection_scope === "collected") ||
+          (request.query.collection_scope === "collected" ||
+            request.query.collection_scope === "candidates")) ||
         (!pagingReady &&
           (request.sort === "collected-desc" ||
             request.query.folder ||

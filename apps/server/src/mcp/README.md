@@ -32,6 +32,6 @@ HTTP `/mcp` 每次请求重新验证设备连接，协议 session ID 绑定 conn
 
 `filters_query` 只读列出或导出保存的筛选，`filters_manage` 管理与导入筛选；HTTP MCP 分别要求 `read`、`operate`，不登记直接 HTTP 设备查询或维护路由。`folders_query` 的 `export` 按 `{cursor, limit}` 读取树与成员，第一页带完整树，成员按文件夹和文献 ID 排序，每页最多 1,000 项；同样要求 `read`。
 
-`collect_literatures` 在 maintenance 模式接受 `{selector}`，返回 `target_count` 和 `newly_collected`，HTTP MCP 要求 `operate`。`uncollect_literatures` 接受同样的 `{selector}`，把文献移出文献库并去掉它们的文件夹成员关系，返回 `target_count`、`removed` 和 `folder_members_removed`；权限同 `collect_literatures`，库还在回填时返回 `library-collection-pending`。`library_trash_manage` 在 maintenance 模式接受 `{operation, selector}`，HTTP MCP 要求 `operate`；`library_trash_query` 接受 `{operation: list|count, request}`，要求 `read`。`search_library` 在候选上返回 `discovery_origin`；最近读过的列表未给 `collection_scope` 时包含打开过的候选。
+`collect_literatures` 在 maintenance 模式接受 `{selector}`，返回 `target_count` 和 `newly_collected`，HTTP MCP 要求 `operate`。`uncollect_literatures` 接受同样的 `{selector}`，把文献移出文献库并去掉它们的文件夹成员关系，返回 `target_count`、`removed` 和 `folder_members_removed`；权限同 `collect_literatures`，库还在回填时返回 `library-collection-pending`。`library_trash_manage` 在 maintenance 模式接受 `{operation, selector}`，HTTP MCP 要求 `operate`；`library_trash_query` 接受 `{operation: list|count, request}`，要求 `read`。`search_library` 接受 `query.collection_scope: "candidates"` 只列候选，在候选上返回 `discovery_origin`；最近读过的列表未给 `collection_scope` 时包含打开过的候选。
 
 `marks_manage` 的 `place` 记录同部分材料上的位置（`target`、`similarity`、`method`），HTTP MCP 要求 `operate`；`marks_query` 的列表和 JSON 导出包含当前方法的 `places`。原锚点和 Markdown 导出保持。

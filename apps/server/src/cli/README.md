@@ -26,7 +26,7 @@
 
 `literature search --request FILE|-` 接受完整 LibraryQuery 及排序，包括主 PDF 默认初稿的事实筛选和四种降序；查询范围可以直接交给显式任务。`literature read` 的 PDF 资产带默认文本版本与事实，`archive status` 按部分返回同样的事实；读取不启动校订。
 
-`literature search --sort collected-desc` 按加入文献库的时间列文献，`--sort intake-desc` 按入库时间列文献。超过一万篇时，文献库范围用 `collected-desc`，文件夹与批次等范围用 `intake-desc`，文本搜索用 `relevance`。超出范围的排序返回 `library-sort-scope-limit`。
+`literature search --sort collected-desc` 按加入文献库的时间列文献，`--sort intake-desc` 按入库时间列文献。`--collection-scope candidates` 只列候选，默认按入库时间，不接受 `collected-desc`。超过一万篇时，文献库范围用 `collected-desc`，文件夹与批次等范围用 `intake-desc`，文本搜索用 `relevance`。超出范围的排序返回 `library-sort-scope-limit`。
 
 文本搜索带 `scan_incomplete` 时，`scan_side` 表明窗口按原始命中（`hits`）或工作集成员（`members`）划定。保留同一检索词，用 `--window-cursor` 或 JSON 的 `window_cursor` 传入 `next_window_cursor` 可查更早一窗。成员窗须保留同一工作集。同一窗口可调整筛选，JSON 计数和分面也接受该窗口游标。`next_cursor` 用于当前窗口内翻页。
 

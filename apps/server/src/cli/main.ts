@@ -174,7 +174,7 @@ function usage(options: CliOptions): CliResult {
     "  discover topic QUERY | discover citations --seed-literature-id ID\n" +
     "  metadata lookup ID[,ID] | sources statistics --request FILE|-\n" +
     "  complete pdf|parser [--literature-id ID] [--transfers ID,...]\n" +
-    "  literature search [query options] [--collection-scope collected|all] [--window-cursor CURSOR] | show ID | references ID | cited-by ID\n" +
+    "  literature search [query options] [--collection-scope collected|all|candidates] [--window-cursor CURSOR] | show ID | references ID | cited-by ID\n" +
     "  literature counts --request FILE|-  # full_text counts papers (MetaLiterature); statuses and with_primary_pdf count versions; read-only\n" +
     "  literature exact-count --request FILE|-  # kind=counts|facets|search-total, query, limit for facets; one read snapshot\n" +
     "    --needs-metadata | --no-needs-metadata filters the independent bibliographic recognition mark\n" +

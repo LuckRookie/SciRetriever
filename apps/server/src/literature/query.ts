@@ -260,8 +260,9 @@ export function queryFingerprint(query: LibraryQuery): string {
     author: contains(query.author),
     author_orcids: unique(query.author_orcids),
     discovery_run_ids: unique(query.discovery_run_ids),
-    ...(query.collection_scope === "collected"
-      ? { collection_scope: "collected" }
+    ...(query.collection_scope === "collected" ||
+    query.collection_scope === "candidates"
+      ? { collection_scope: query.collection_scope }
       : {}),
     ...(query.intake_batch_ids?.length
       ? { intake_batch_ids: unique(query.intake_batch_ids) }
@@ -1420,6 +1421,7 @@ export class LiteratureQueryService {
       query.tags,
       query.folder ||
         query.collection_scope === "collected" ||
+        query.collection_scope === "candidates" ||
         query.recently_opened ||
         query.intake_batch_ids?.length ||
         typeof query.has_primary_pdf === "boolean"
