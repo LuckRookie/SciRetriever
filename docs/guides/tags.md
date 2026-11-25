@@ -39,7 +39,9 @@ pnpm sciretriever tags backfill TAG_ID --execute
 
 文献设置请求为 `{literature_id, items, expected_revision, expected_version, reason, model:null}`；每个 item 提供标签 ID、顺序、理由和校订稿片段证据。人工设置标记为 `manual` 并锁定。单项锁定请求为 `{literature_id, tag_id, locked, expected_revision}`。排序从 1 连续编号。模型不能删除或移动锁定项。
 
-MCP 的 `tags_query` 和 `tags_manage` 与上述 CLI 共用应用边界，均接受 `{operation, request}`。只读工具支持 `list/search/show/state/changes/assignment/backfill-preview`；维护工具支持 `change/assign/lock/build/consolidate/backfill`，需要维护权限。`build` 提供 `{literature_id, document_version_id, annotation_id}`，只接受当前正文校订稿，不隐式解析。
+MCP 的 `tags_query` 和 `tags_manage` 与上述 CLI 共用应用边界，均接受 `{operation, request}`。只读工具支持 `list/search/show/state/changes/assignment/assignment-detail/backfill-preview`；维护工具支持 `change/assign/lock/build/consolidate/backfill`，需要维护权限。`build` 提供 `{literature_id, document_version_id, annotation_id}`，只接受当前正文校订稿，不隐式解析。
+
+`assignment-detail {literature_id}` 返回一篇文献当前每个标签的理由、依据（全文版本与片段编号）、来历与是否锁定；依据所指的全文已不是当前版本时带过期标记。来历有三种：`auto`（模型按全文标注）、`backfill`（模型按题名、摘要与关键词补标）、`manual`（人加的，或人在编辑、锁定时保存下来的，两者不区分）。文献库页右栏的“依据”读的就是它；文献条目里的每个标签只带来历、是否锁定与依据条数。
 
 模型与数量字段统一见[配置手册](configuration.md#标签模型与数量)。
 

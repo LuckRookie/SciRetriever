@@ -78,6 +78,7 @@ SciRetriever 是通用的文献知识库，服务人和 Agent 两类对象，定
 
 - [architecture/](architecture/README.md)：需求、决策与规格。
 - [guides/](guides/README.md)：用户指南。
+- [assets/](assets/README.md)：文档配图，取自合成的样例库。
 - [plans/](plans/README.md)：活动计划。
 - [proposals/](proposals/README.md)：活动提案。
 - [notes/](notes/README.md)：外部事实。

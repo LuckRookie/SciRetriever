@@ -14,6 +14,12 @@ SciRetriever 是通用的文献知识库。它把文献找来、把 PDF 取到�
 - **检索与加工**：全文检索；用可配置的算子做总结、问答标注、记录提取和多篇综合，结果都带证据。
 - **给 Agent 用**：Web、CLI 和 MCP 共用一个文献库，桌面上的 Agent 可以直接检索、阅读和发起任务。
 
+![文献库页：左边是文件夹，中间是列表，右边是当前这一篇](docs/assets/library.png)
+
+![阅读页：分章节、可与 PDF 对照的全文](docs/assets/reader.png)
+
+图中是合成的样例数据。
+
 ## 快速开始
 
 需要 Linux x64、Node 22.19.0 和 pnpm（`corepack enable` 即可）。其他系统和 ARM 目前不支持，完整条件见[安装指南](docs/guides/installation.md)。
