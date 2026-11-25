@@ -74,3 +74,19 @@ Playwright 不能保证 `context.route()` 观察到被 Service Worker 接管的�
 Chromium 的 `plugins.always_open_pdf_externally=true` 会影响 PDF plugin 展示，并将顶层 PDF 交给原生下载事件。
 
 CloakBrowser 降低自动化表面，但不保证 Cloudflare 自动完成，也不改变文章 entitlement。
+
+## 8. 依赖风险与可能更换
+
+Owner 2026-11-25：之后可能要把 CloakBrowser 换掉。尚未决定换不换、换成什么、何时换；这一节记录原因，供做决定时用。
+
+依赖它带来三项风险：
+
+- **不能随程序分发。** 第 2 节的条款禁止重分发与 bundle。[ADR 0066](../architecture/decisions/0066-complete-program-or-failed-build.md) 要求必需部件随程序到位，所以 binary 只能由每台机器在安装时从 vendor 的官方来源下载。
+- **安装受第三方牵制。** ADR 0066 把受控浏览器的 runtime 列为必需部件，取不到即安装失败。vendor 撤下 v146 的下载或改变它的条件时，新安装会失败，包括不使用受控浏览器这一级的使用者。v146 的下载能否长期可用没有确认过。
+- **升级可能要付费。** 当前固定在 v146，属于 vendor 的 older-free release。第 2 节记录的条款把最新 major 与付费订阅联系；2026-11-25 检索到的二手摘要（PyPI 页面、文档镜像）进一步写成“v148 起下载需要有效的订阅”，这一点没有对照许可原文核对。浏览器长期不升级，被出版社网站识别为自动程序的可能会上升。
+
+做决定前要先查清：
+
+1. 对照 `BINARY-LICENSE.md` 的当前版本，确认各版本的使用与下载条件；
+2. v146 的官方 archive 是否长期保留；
+3. 换掉它要重做什么：[ADR 0016](../architecture/decisions/0016-cloakbrowser-fixed-identity-runtime.md) 把它定为唯一的生产 runtime，固定身份、Profile 迁移、Xvfb 有头窗口栈都围绕它设计，更换需要新的 ADR。
