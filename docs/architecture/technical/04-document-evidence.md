@@ -436,7 +436,7 @@ EvidenceRef 固定材料或文档表示和片段 hash；定位必须在固定版
 
 ### 6.5 生产编排、发布与历史读取
 
-新建档固定执行 `arrange → proofread → render → metadata → references → tags`（译文一步 `translate` 排在 render 之后，尚未实现，见[第 9 节](#9-全文的译文)）。整理和逐页校订都绑定 `proofreading` 角色。`archive/text-pipeline.ts` 组装 source、整理、逐页校订与接纳清单；检查点和页缓存继续使用现有不可变 artifact、校订版本和 raw pin，不另建业务库。新的写入请求为 schema 2；旧步骤与旧写请求返回 `archive-contract-obsolete`，不把 document/structure 当作新步骤别名。
+新建档固定执行 `arrange → proofread → render → translate → metadata → references → tags`；`translate` 只在主 PDF 上执行，规则见[第 9 节](#9-全文的译文)。整理和逐页校订都绑定 `proofreading` 角色。`archive/text-pipeline.ts` 组装 source、整理、逐页校订与接纳清单；检查点和页缓存继续使用现有不可变 artifact、校订版本和 raw pin，不另建业务库。新的写入请求为 schema 2；旧步骤与旧写请求返回 `archive-contract-obsolete`，不把 document/structure 当作新步骤别名。
 
 render 从保留叶块及已记录 correct 确定性生成普通 Markdown、DocumentStructureV2 和叶块 UTF-8 source map。新建档及显式重新发布采用 `source-order-leaves-v4`：公式叶块有非空 LaTeX 时只输出 LaTeX，不再同时输出该叶块截图或将未使用截图加入资源闭包；LaTeX 为空时保留截图兜底。历史 `source-order-leaves-v3` 保留公式图片与文字并列的原行为，`arranged-leaves-v2` 保留原骨架渲染算法；固定旧版本读取与 hash 校验按记录的 builder 逐字节重建。同一 proofread 的派生 Markdown 按 builder 与内容 hash 分别登记，文档发布核对实际资源 hash/path，不覆盖旧排版资源。保留 payload 恰好出现一次，标题标记、公式分隔符、合并接缝、资源语法和段落分隔单独记录；不插自定义指令、HTML 注释或固定角色标题。原文顺序决定章节顺序，同角色可分多段，原文没有标题的章节 title=null。
 
@@ -468,11 +468,11 @@ render 从保留叶块及已记录 correct 确定性生成普通 Markdown、Docu
 
 ### 6.7 Schema 与预计消耗
 
-建档沿用 schema 12 引入的 archive_steps.step CHECK：接纳 arrange/render，并保留历史 document/structure。当前 catalog 的状态投影结构与版本见[存储合同](07-versioned-storage.md#41-当前-schema-与显式转换)，离线转换入口和顺序见[初始化与恢复](../../guides/upgrade.md#状态投影-schema-13)；打开旧库不自动迁移，转换不执行获取或模型工作。
+`archive_steps.step` 自增补集 `document-translations` 起只做格式检查（小写字母与连字符），合法的步骤名由代码把关；历史的 document/structure 照旧读出。当前 catalog 的状态投影结构与版本见[存储合同](07-versioned-storage.md#41-当前-schema-与显式转换)，离线转换入口和顺序见[初始化与恢复](../../guides/upgrade.md#状态投影-schema-13)；打开旧库不自动迁移，转换不执行获取或模型工作。
 
 `[proofread].max_calls_per_document` 不再生效；识别到字段名时不校验、使用或回显旧值，配置状态返回 configuration-option-removed、路径与固定删除说明，其它未知键仍严格拒绝。运行时停止条件见 6.4；协议大小限制继续有效。
 
-usage-estimate 的建档分支为 ArchiveUsageEstimateV2，给出页数、复用篇数、六步的 calls/input/output 中位数和 P90、样本数与未知原因。只使用新流程、相同方法/模型绑定且 usage 完整的成功历史；不混用旧校订/结构分类数据。无历史返回 null，不以旧预算充当预计，也不阻止显式提交。render 和当前确定性参考文献步骤为零模型调用；组件分位数相加仅作展示，不承诺总成本分布。
+usage-estimate 的建档分支为 ArchiveUsageEstimateV2，给出页数、复用篇数、七步的 calls/input/output 中位数和 P90、样本数与未知原因。只使用新流程、相同方法/模型绑定且 usage 完整的成功历史；不混用旧校订/结构分类数据。无历史返回 null，不以旧预算充当预计，也不阻止显式提交。render 和当前确定性参考文献步骤为零模型调用；组件分位数相加仅作展示，不承诺总成本分布。
 
 完整复用与部分文本复用分别计算。原稿、方法、模型及人工决定均匹配时，已有整理的调用单元为零，已接纳或免校订页不计入预计待校订页，page_basis 为 accepted-arrangement；没有可复用整理时按全部 PDF 页保守估计。模型工作完成后缓存或发布失败，失败步骤仍保留本次实际 usage；成功页缓存的历史用量不重复计入新尝试。
 
@@ -847,20 +847,20 @@ interface DraftDifference {
 
 现有读取方默认只接受校订稿（8.3）。下表逐项写明遇到初稿时接受还是返回缺口：
 
-| 读取方                                                                                  | 遇到初稿                                                                                                                                                                                                                                                |
-| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 文档读取（describe、outline、segments、slice、resources、resource、资源字节、evidence） | 接受，结果带 `text_level`（8.4）                                                                                                                                                                                                                        |
-| 全文索引与查找（06 §4.9）                                                               | 接受。索引收入全部已接纳的固定文档版本，两级相同；命中带 `text_level`                                                                                                                                                                                   |
-| 解析后的文章身份核验（第 7 节）                                                         | 接受。它比较的是文章自身的题名、署名和标识符，不依赖文本等级。判断照旧绑定具体 DocumentVersion；当前标签对齐的是该部分当前的默认文本，不论哪一级                                                                                                        |
-| 全文翻译                                                                                | 接受，初稿是阅读辅助。来源取主 PDF 的默认文本：是初稿时取初稿的叶块，按解析类型选块（`text`、`title`、`caption`、`list`、`footnote`），`reference` 类型不翻译；初稿没有角色，作者行照常翻译。主 PDF 没有默认文本时返回现有的 `translation-not-archived` |
-| 外部提取（第 5 节例子）                                                                 | 接受。提取准备固定默认文本，不论等级；每次读取（准备的清单、片段读取、证据解析）都返回 `text_level`，初稿片段另返回 `basis`                                                                                                                             |
-| 知识加工                                                                                | 接受，规则见 8.6                                                                                                                                                                                                                                        |
-| 批注锚点校验                                                                            | 接受，规则见[用户整理 5.4](09-user-organization.md#54-文本变化时)                                                                                                                                                                                       |
-| 标签、元数据、参考文献                                                                  | 不接受。它们是建档步骤，只读校订稿（6.5）；初稿不提供，不返回缺口也不改读初稿                                                                                                                                                                           |
-| 整理与人工保存（6.6）                                                                   | 不接受。请求绑定 proofread ID，初稿没有，无从提交；初稿不接受人工改字（8.3）                                                                                                                                                                            |
-| 校订对照（`corrections`）                                                               | 不接受，返回 `document-unsupported`；初稿的差异用 8.3 的 `draft-differences` 读取                                                                                                                                                                       |
-| 结构注释（`document annotate`）                                                         | 不接受，返回 `document-unsupported`；初稿没有结构注释                                                                                                                                                                                                   |
-| READY 判定（6.5）                                                                       | 不变：默认文本是初稿时不成立 READY                                                                                                                                                                                                                      |
+| 读取方                                                                                  | 遇到初稿                                                                                                                                         |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 文档读取（describe、outline、segments、slice、resources、resource、资源字节、evidence） | 接受，结果带 `text_level`（8.4）                                                                                                                 |
+| 全文索引与查找（06 §4.9）                                                               | 接受。索引收入全部已接纳的固定文档版本，两级相同；命中带 `text_level`                                                                            |
+| 解析后的文章身份核验（第 7 节）                                                         | 接受。它比较的是文章自身的题名、署名和标识符，不依赖文本等级。判断照旧绑定具体 DocumentVersion；当前标签对齐的是该部分当前的默认文本，不论哪一级 |
+| 全文的译文                                                                              | 不接受。译文只为校订稿产生（9.1）；初稿读到的译文状态恒为 `none`，对照翻译不再现场翻译                                                           |
+| 外部提取（第 5 节例子）                                                                 | 接受。提取准备固定默认文本，不论等级；每次读取（准备的清单、片段读取、证据解析）都返回 `text_level`，初稿片段另返回 `basis`                      |
+| 知识加工                                                                                | 接受，规则见 8.6                                                                                                                                 |
+| 批注锚点校验                                                                            | 接受，规则见[用户整理 5.4](09-user-organization.md#54-文本变化时)                                                                                |
+| 标签、元数据、参考文献                                                                  | 不接受。它们是建档步骤，只读校订稿（6.5）；初稿不提供，不返回缺口也不改读初稿                                                                    |
+| 整理与人工保存（6.6）                                                                   | 不接受。请求绑定 proofread ID，初稿没有，无从提交；初稿不接受人工改字（8.3）                                                                     |
+| 校订对照（`corrections`）                                                               | 不接受，返回 `document-unsupported`；初稿的差异用 8.3 的 `draft-differences` 读取                                                                |
+| 结构注释（`document annotate`）                                                         | 不接受，返回 `document-unsupported`；初稿没有结构注释                                                                                            |
+| READY 判定（6.5）                                                                       | 不变：默认文本是初稿时不成立 READY                                                                                                               |
 
 ### 8.11 补形成初稿的维护操作
 
@@ -928,7 +928,7 @@ HTTP 使用 `protocol_version: 1` 封套与现有维护认证；任务进度与�
 
 ## 9. 全文的译文
 
-目标，尚未实现（计划 28 的 08 块）。依据 [ADR 0068](../decisions/0068-stored-full-text-translation.md)；决定的理由见该 ADR。阅读页的三种读法见[阅读体验](../web/reading-experience.md)。划词翻译与它的缓存不在本节，规则不变。
+依据 [ADR 0068](../decisions/0068-stored-full-text-translation.md)；决定的理由见该 ADR。9.1–9.6 已实现（计划 28 的 8.3、8.4），只用假模型验证过，真实文献上的质量与花费见计划 28 的 8.8；9.7 检索是目标，尚未实现。阅读页的三种读法见[阅读体验](../web/reading-experience.md)。划词翻译与它的缓存不在本节，规则不变。
 
 ### 9.1 范围
 
@@ -940,34 +940,35 @@ HTTP 使用 `protocol_version: 1` 封套与现有维护认证；任务进度与�
 
 - 翻译的单元是校订稿渲染出的一段：通常是一个叶块；整理把跨页、跨栏续接的叶块并成一段时（6.2 的合并段），整段是一个单元。单元的编号取它第一个叶块的编号，单元的原文是各叶块的文字按渲染时的 joiner 接起来的文字。
 - 一个单元对一段译文，不合并、不拆分；单元的顺序与章节归属不变。
-- 翻译的单元：叶块类型为 `text`、`title`、`caption`、`list`、`footnote`，并且章节角色不是作者信息或参考文献。
-- 不翻译、读取时原样给出的：公式、表格、图片、参考文献条目、作者与机构、页眉页脚。表格首版不翻译，它的标题是图注，照常翻译。
+- 翻译的单元：叶块类型为 `text`、`title`、`caption`、`list`、`footnote`，并且不属于下一条。
+- 不翻译、读取时原样给出的：公式、表格、图片、参考文献、作者行（`authors` 角色），以及首页的文章信息（`layout.article_info`：单位、通讯作者与作者注释、收稿与发表日期）。表格首版不翻译，它的标题是图注，照常翻译。
+- 文末信息（致谢、资助、作者信息）照常翻译：机构在校订稿里归文末信息而不归作者行，文末的作者信息块因此会被翻译。
 - 单元的原文摘要 `source_sha256` 是单元原文（UTF-8，不做规范化）的 sha256。译文靠它对上原文：全文改动、重新整理或重新解析之后，文字没变的单元沿用原来的译文，不看叶块编号是否变了。
 
 ### 9.3 作为建档的一步
 
 - 建档的步骤为 `arrange → proofread → render → translate → metadata → references → tags`。`translate` 只在主 PDF 上执行。
-- **输入**：这篇文献当前的校订稿内容版本与译文语言。上次完成时两者都相同，这一步跳过；`from_step` 可以取 `translate`，强制重翻全部单元。提示词版本和模型的变化不触发重翻。
+- **输入**：这篇文献当前的校订稿内容版本与译文语言。上次完成时两者都相同，这一步跳过。`from_step` 取 `translate` 时强制重翻全部单元，不沿用旧译文也不读翻译缓存；取更早的步骤时照常沿用。提示词版本和模型的变化不触发重翻。
 - **已经是译文语言的不翻译**，这一步直接完成，结果记 `same-language`。判断顺序：
-  1. 书目的语言字段有值时，比较语言（只比主语言，`zh`、`zh-CN`、`zh-Hans`、`zh-Hant` 算同一种）。
-  2. 没有值时看文字：统计可译单元里各文字系统的字符数，定出占多数的文字系统。它与译文语言所用的文字不同，就翻译；相同，就不翻译。同一种文字的不同语言（如德文资料、译文语言是英文）因此不会被翻译，补上书目的语言字段再建档即可。
+  1. 书目的语言字段有值并且认得出时，比较语言（只比主语言，`zh`、`zh-CN`、`zh-Hans`、`zh-Hant` 算同一种；`English`、`eng` 这类写法按别名表认）。认不出的当作没有值。
+  2. 没有值时看文字：统计可译单元里各文字系统的字符数，定出占多数的文字系统。它与译文语言所用的文字不同，就翻译；相同，就不翻译。汉字与假名并存时，假名不少于两者合计的一成算日文。同一种文字的不同语言（如德文资料、译文语言是英文）因此不会被翻译，补上书目的语言字段再建档即可。
 - **沿用**：先取这篇文献这种语言最近一份译文，原文摘要相同的单元直接沿用；只把剩下的单元交给模型。
 - **分批**：按文中顺序把相邻的单元分批，一批不超过 6,000 个码点、60 个单元（初值，计划 28 的 8.8 实测后调整），不按页切。每个请求附带文献的标题和这批单元所在章节的标题，作为不翻译的上下文。
-- **公式**：单元里的行内公式（`$…$`）原样送出，要求原样返回。返回的译文里公式的个数或内容与原文不一致的，这个单元算没翻好。
+- **公式**：单元里的公式（`$…$` 与 `$$…$$`）原样送出，不做字符规范化，要求原样返回。返回的译文里公式与原文不是同一组（比较内容与个数，不比先后）的，这个单元算没翻好。
 - **重试**：一批里没翻好或缺失的单元再请求一次；仍然没有的记为缺译。
-- **并发与用量**：这一步同时发出的请求数取 `[proofread].max_concurrent_pages`，与其他步骤共用全进程的模型名额，不另加名额。每次请求的调用数与 token 记入这一步的尝试记录；用量估算按页给出这一步的历史中位数与 P90，与其他步骤一并列出。
+- **并发与用量**：这一步同时发出的请求数取 `[proofread].max_concurrent_pages`，与其他步骤共用全进程的模型名额，不另加名额。每次请求的调用数与 token 记入这一步的尝试记录；用量估算按页给出这一步的历史中位数与 P90，与其他步骤一并列出；历史样本只取向模型请求过单元的那些次，所以对已经是译文语言或全部沿用的文献估得偏高。
 - **结果**：
   - 全部单元都有译文，或不需要翻译：`done`。
   - 有缺译，或模型不可用：`failed`，原因 `translation-incomplete`（带已翻与缺译的单元数）或 `translation-unavailable`。已经翻好的单元照常发布（9.4），可以读取。
 - **失败不挡全文**：这一步失败不中断后面的步骤，产生的问题不影响文献是否就绪，与参考文献一步的处理相同。问题进入需处理；恢复建档时只补缺译的单元。
-- **中断**：翻好的单元先进翻译缓存（缓存上限提高到能容纳同时建档的几篇文献）；进程中断后重新执行这一步，已翻的单元从缓存取回，不重新请求模型。
+- **中断**：翻好的单元先进翻译缓存（上限 20,000 条，与划词翻译共用）；进程中断后重新执行这一步，已翻的单元从缓存取回，不重新请求模型。
 
 ### 9.4 译文的存放
 
 - 一份译文是一个不可变的文件，放进 ArtifactStore，与校订稿的做法相同（[存储 2.3](07-versioned-storage.md#23-sqlite-责任)）；库里只登记它的身份。
-- 文件内容：`schema_version`、文献与主 PDF 的编号、所依据的校订稿内容版本、`target_language`，以及按文中顺序排列的单元。每个单元记 `unit_id`、`source_sha256`、`translation`（缺译为 null）、`model`、`prompt_version`。
-- 登记表 `document_translations`（一次库结构追加）：一行对应文献、主 PDF、校订稿内容版本与语言的一个组合，记文件的 sha256 与大小、单元总数、已翻数、状态（`complete`、`partial`、`same-language`）与时间。同一组合再次发布时换成新的一份，旧文件按现有的回收规则处理。
-- 步骤名加入 `translate` 之后，`archive_steps` 的取值约束要放宽，这也是库结构改动。两处改动在正式库上执行前须经 Owner 同意。
+- 文件内容：`schema_version`、文献与主 PDF 的编号、文档版本与结构注释的编号、所依据的校订稿内容版本、`target_language`、`status`，以及按文中顺序排列的单元。每个单元记 `unit_id`、`segment_ids`（它包含的原文片段）、`source_sha256`、`translation`（缺译为 null）、`model`、`prompt_version`。
+- 登记表 `document_translations`：一行对应文献、主 PDF、校订稿内容版本与语言的一个组合，记文件的 sha256 与大小、单元总数、已翻数、状态（`complete`、`partial`、`same-language`）与时间。同一组合再次发布时登记换成新的一份；旧文件与其他被替换的不可变文件一样留在 ArtifactStore。
+- 库结构：增补集 `document-translations` 新建登记表，并重建 `archive_steps`，把步骤名的取值列表换成格式检查，以后加步骤不再改表。重建表属于[存储 4.4](07-versioned-storage.md#44-只加的结构变化不停服)的例外：要停服执行，执行之后旧版本不能打开这个库。
 - ADR 0051 的全文译文缓存文件（程序缓存目录下的 `fulltext/`）不再读写，新版本首次启动时删除这个目录。
 
 ### 9.5 全文改动之后
@@ -980,15 +981,17 @@ HTTP 使用 `protocol_version: 1` 封套与现有维护认证；任务进度与�
 
 读取合同在 HTTP、CLI 与 MCP 上相同。
 
-- `describe` 的结果多一项 `translation`：`{target_language, state, units, translated}`。`state` 取 `none`（没有译文）、`complete`、`partial`、`same-language`、`stale`（只有旧内容版本的译文）。初稿恒为 `none`。
-- 新增操作 `translation`：请求给文档版本与一段范围（与 `segments` 的范围写法相同），返回范围内各单元的 `{unit_id, segment_ids, translation}`，没有译文的单元 `translation` 为 null。阅读页的对照与 PDF 视图用它。
+- `describe` 的结果多一项 `translation`：`{target_language, state, units, translated}`。`state` 取 `none`（没有译文）、`complete`、`partial`、`same-language`、`stale`。`stale` 指这一版内容没有译文，而这篇文献在这种语言下有别的内容版本的译文。初稿恒为 `none`。
+- 新增操作 `translation`（HTTP `/api/v1/query/document-translation`，CLI `document translation`，MCP `document_read` 的 `translation`）：请求 `{document_version_id, section_id, limit, cursor}`，`limit` 最多 200，一页的译文合计不超过 64 KiB；返回各单元的 `{unit_id, segment_ids, translation}` 与 `state`、`target_language`、`total`、`next_cursor`，没有译文的单元 `translation` 为 null。阅读页的对照与 PDF 视图用它。
 - `slice` 多一个可选项 `text`，取 `original`（默认）、`translation`、`bilingual`：
   - 范围仍用原文的字节位置；返回的 Markdown 由范围内的片段重新排出，结构标记（标题层级、列表符号、图注位置）与原文相同。
   - `translation`：可译单元换成译文；不翻译的内容与缺译的单元保持原文。
-  - `bilingual`：每个可译单元先原文、后译文，各成一段；不翻译的内容只出现一次。
-  - 结果带 `machine_translation: true`、`target_language` 与范围内缺译的单元数。这两种文本不能用来解析证据：证据定位只接受原文的位置。
-- 没有译文（`none`、`stale`）时，`translation` 操作返回空，`slice` 的后两种取值返回 `translation-unavailable`，不退回原文冒充。
-- PDF 视图的对照翻译读同一份译文，不再请求模型。一个单元跨几个页面区域时，译文按各区域原文的字数比例、在最近的标点处分开，依次放进这些区域。
+  - `bilingual`：每个可译单元先原文、后译文，各成一段；不翻译的内容只出现一次。标题保持原文的标题行，它的译文是紧随其后的一段普通文字，不另成标题。
+  - 单元整个落在范围内才换成译文，跨范围边界的保持原文。一段译文不拆开，放不进 `max_bytes` 时返回 `document-budget`。
+  - 结果带 `machine_translation: true`、`target_language` 与范围内缺译的单元数 `untranslated_units`，`evidence` 为空。这两种文本不能用来解析证据：证据定位只接受原文的位置。
+- 全文已经是译文语言（`same-language`）时，`slice` 的后两种取值返回原文并标 `machine_translation: false`；`translation` 操作列出单元，译文为 null。
+- 没有译文（`none`、`stale`）时，`translation` 操作的各单元译文为 null，`slice` 的后两种取值返回 `translation-unavailable`（HTTP 409），不退回原文冒充。
+- PDF 视图的对照翻译读同一份译文，不再请求模型。一个单元跨几个页面区域时，译文按各区域原文的字数比例、在最近的标点处分开（比例位置前后各半段平均长度内找标点，找不到就按比例切），依次放进这些区域。原有的两个接口 `/api/translation/fulltext` 与 `/fulltext/page` 字段不变，多一项 `state`；`force` 照收，不再触发翻译。
 
 ### 9.7 检索
 

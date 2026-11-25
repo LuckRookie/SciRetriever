@@ -89,7 +89,7 @@ node scripts/migrate-citation-limits-v19.mjs /absolute/path/to/offline-copy.sqli
 sciretriever storage schema-apply --catalog /absolute/data/catalog.sqlite --addition <名字>
 ```
 
-命令只做追加，在一个事务里完成。已经追加过的一项再执行会以 `catalog-addition-already-applied` 拒绝，库不受影响。追加之后旧版本仍能照常读写这个库，所以换回旧构建不需要撤销。每个版本要追加哪一项，见[更新记录](../../CHANGELOG.md)。
+命令只做追加，在一个事务里完成。已经追加过的一项再执行会以 `catalog-addition-already-applied` 拒绝，库不受影响。追加之后旧版本仍能照常读写这个库，所以换回旧构建不需要撤销；例外是 `document-translations`，它重建了一张表，要先停服再执行，执行之后旧版本不能打开这个库，换回旧构建要先恢复执行前的备份。每个版本要追加哪一项，见[更新记录](../../CHANGELOG.md)。
 
 缺几项时，按 `catalog-addition-required` 报出的名字逐项执行，每次一项。`library-trash` 加入文献的“最近删除”（一张空表、一个索引和九个触发器，见[存储 7](../architecture/technical/07-versioned-storage.md#7-运行审查存储)）：
 

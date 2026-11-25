@@ -67,7 +67,7 @@ Owner 同日提出五点，并同意按下面的顺序做（原话：“可以�
 | [05](05-parse-throughput.md)      | 解析全文的耗时：量出瓶颈，定并发的默认值与入口                     | 总设计师、后端       | G-parse                                  | In progress               |
 | [06](06-bibliography-formats.md)  | 书目文件的格式：EndNote、NoteExpress、知网的导出                   | 后端                 | 顺序待 Owner 定                          | Pending                   |
 | [07](07-zotero-import-program.md) | Zotero 导入程序与 Skill：Agent 这条路，先做                        | 后端、总设计师       | G-zotero（真实试用）                     | 离线完成，等 G-zotero     |
-| [08](08-stored-translation.md)    | 全文的译文：解析时翻好，存进文献库；阅读页“全文”的原文、译文、对照 | 后端、前端、总设计师 | G-parse（实测）；库结构追加须 Owner 同意 | In progress（规格完成）   |
+| [08](08-stored-translation.md)    | 全文的译文：解析时翻好，存进文献库；阅读页“全文”的原文、译文、对照 | 后端、前端、总设计师 | G-parse（实测）；库结构追加须 Owner 同意 | 后端合入，未部署          |
 | [09](09-layered-reading.md)       | 分层阅读：一篇文献读成几层，层与层之间连续切换；先设计与决定       | 总设计师；实现另派   | 08 的视图改名；ADR 待写                  | Pending                   |
 | [14](14-zotero-probe.md)          | Zotero 接口探测                                                    | 总设计师、Owner      | 14.2 由 07 取得；14.3 等 G-probe         | In progress               |
 | [15](15-zotero-adapter.md)        | Zotero 适配器：两条路共用                                          | 后端                 | 14                                       | Done（假设待 07 确认）    |
