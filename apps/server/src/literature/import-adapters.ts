@@ -13,6 +13,7 @@ import {
 import { bibliographyAttachments } from "./bibliography-attachments.js";
 import { webPageAdapter } from "./web-page-adapter.js";
 import { lookupAdapter } from "./lookup-adapter.js";
+import { zoteroAdapter } from "./zotero-adapter.js";
 export { FileClueReader, type FileClues } from "./file-clues.js";
 
 export const nativeImportAdapter: ImportAdapter = {
@@ -102,6 +103,7 @@ export function importAdapters(
     ),
     webPageAdapter,
     lookupAdapter,
+    zoteroAdapter,
     ...additional,
   ];
   const result = new Map<string, ImportAdapter>();

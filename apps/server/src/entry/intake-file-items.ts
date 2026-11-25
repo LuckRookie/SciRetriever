@@ -265,7 +265,10 @@ export class IntakeFileItems {
         if (c) sizes.set(item.item_id, c.size_bytes);
       }
     const paired = new Map<string, StoredIntakeItem>(),
-      assignments = new Map<string, string>();
+      assignments = new Map<string, string>(),
+      // A file-only record (a source's standalone PDF) gives its delivered
+      // file the record's place: the file stays a file-only item, included.
+      released = new Map<string, string>();
     if (!s.metadata_only)
       for (const data of decoded.values())
         for (const value of data.items)
@@ -283,13 +286,17 @@ export class IntakeFileItems {
             );
             if (item) {
               assignments.set(item.item_id, value.record.external_id);
-              paired.set(value.record.external_id, item);
+              if (value.record.file_only)
+                released.set(value.record.external_id, item.item_id);
+              else paired.set(value.record.external_id, item);
             }
           }
+    const releasedItems = new Set(released.values());
     for (const item of items)
       if (item.work) {
-        const paired_to = assignments.get(item.item_id) ?? null,
-          unpaired = !paired_to && s.format !== "file";
+        const own = releasedItems.has(item.item_id),
+          paired_to = own ? null : (assignments.get(item.item_id) ?? null),
+          unpaired = !own && !paired_to && s.format !== "file";
         if (item.work.paired_to !== paired_to || item.unpaired !== unpaired)
           await this.writes.run(() =>
             this.write({
@@ -356,7 +363,7 @@ export class IntakeFileItems {
           };
         }),
       });
-    return { items, paired, standalone };
+    return { items, paired, standalone, released };
   }
   progress(items: readonly StoredIntakeItem[]) {
     const eligible = items.filter(

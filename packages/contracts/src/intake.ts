@@ -749,6 +749,8 @@ export interface IntakeFile {
   readonly preferred: boolean;
   readonly size_bytes: number | null;
   readonly sha256: string | null;
+  /** MD5 the source declares for the file (Zotero); only to help a carrier find it. */
+  readonly md5?: string | null;
 }
 export interface IntakeAnnotation {
   readonly external_id: string;
@@ -769,6 +771,12 @@ export interface IntakeItem {
   readonly user_tags: readonly string[];
   readonly files: readonly IntakeFile[];
   readonly annotations: readonly IntakeAnnotation[];
+  /**
+   * The item is only its one file (a standalone PDF of a source library): it
+   * becomes a file-only item when that file was sent to /file-items before
+   * preview, and is otherwise excluded as standalone-file-missing.
+   */
+  readonly file_only?: true;
 }
 export interface IntakeExcluded {
   readonly kind: string;

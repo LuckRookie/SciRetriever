@@ -70,7 +70,7 @@ Owner 同日提出五点，并同意按下面的顺序做（原话：“可以�
 | [08](08-stored-translation.md)    | 全文的译文：解析时翻好，存进文献库；阅读页“全文”的原文、译文、对照 | 后端、前端、总设计师 | G-parse（实测）；库结构追加须 Owner 同意 | Pending                   |
 | [09](09-layered-reading.md)       | 分层阅读：一篇文献读成几层，层与层之间连续切换；先设计与决定       | 总设计师；实现另派   | 08 的视图改名；ADR 待写                  | Pending                   |
 | [14](14-zotero-probe.md)          | Zotero 接口探测                                                    | 总设计师、Owner      | 14.2 由 07 取得；14.3 等 G-probe         | In progress               |
-| [15](15-zotero-adapter.md)        | Zotero 适配器：两条路共用                                          | 后端                 | 14                                       | Pending                   |
+| [15](15-zotero-adapter.md)        | Zotero 适配器：两条路共用                                          | 后端                 | 14                                       | Done（假设待 07 确认）    |
 | [16](16-extension.md)             | 扩展：从 Zotero 导入，Zotero 的地址可改                            | 前端                 | 14.3、15；排在 07 之后                   | Partial                   |
 | [17](17-zotero-annotations.md)    | Zotero 批注导入                                                    | 后端                 | 15                                       | Pending                   |
 | [21](21-real-run.md)              | 真实获取运行                                                       | 执行者、Owner        | G-lib 等                                 | Pending                   |

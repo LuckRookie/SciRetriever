@@ -86,6 +86,11 @@ import {
 } from "../literature/possible-duplicates.js";
 const intakeId = (value: unknown) => hash(value, "uuid");
 type Mutable<T extends readonly unknown[]> = T[number][];
+/** Reasons a record is reported as excluded rather than rejected. */
+const NOT_ADMITTED = new Set([
+  ...LOOKUP_NOT_ADMITTED,
+  "standalone-file-missing",
+]);
 
 export type ImportActor =
   | { readonly kind: "device"; readonly connection_id: string }
@@ -508,6 +513,9 @@ export class ImportSessionService extends ImportSessionReadService {
     // Named lines are not records of a source library.
     if (r.format === "lookup" && r.source !== null)
       throw new ImportSessionError("intake-input-invalid");
+    // Zotero data is always one Zotero library (literature materials 6.4.9).
+    if (r.format === "zotero-api" && r.source?.system !== "zotero")
+      throw new ImportSessionError("intake-input-invalid");
     const adhoc = r.source === null;
     const source = r.source ?? {
       system: "file",
@@ -810,6 +818,28 @@ export class ImportSessionService extends ImportSessionReadService {
     for (const id of groups.keys()) visit(id);
     for (const id of references) visit(id);
     const fileItems = await this.fileItems.prepare(s, decoded);
+    // A file-only record either became its delivered file item or is missing.
+    for (const [sequence, data] of decoded)
+      if (
+        sequence !== IMPORT_LIMITS.parts &&
+        data.items.some((item) => item.record?.file_only)
+      )
+        decoded.set(sequence, {
+          ...data,
+          items: data.items.flatMap((item) =>
+            !item.record?.file_only
+              ? [item]
+              : fileItems.released.has(item.record.external_id)
+                ? []
+                : [
+                    {
+                      ...item,
+                      record: null,
+                      reason: "standalone-file-missing",
+                    },
+                  ],
+          ),
+        });
     const dataItems: StoredIntakeItem[] = [];
     const lookup =
       s.format === "lookup"
@@ -1138,7 +1168,7 @@ export class ImportSessionService extends ImportSessionReadService {
                 .pending_decision++;
             else if (
               item.reason !== "excluded" &&
-              !LOOKUP_NOT_ADMITTED.has(item.reason ?? "")
+              !NOT_ADMITTED.has(item.reason ?? "")
             )
               (summary.records as { rejected: number }).rejected++;
             continue;
@@ -1478,6 +1508,7 @@ export class ImportSessionService extends ImportSessionReadService {
                   : [],
               ),
               standalone: [],
+              released: new Map<string, string>(),
             },
           };
           const recordItem = {
@@ -1846,8 +1877,7 @@ export class ImportSessionService extends ImportSessionReadService {
         disposition:
           item.reason === "unpaired-file"
             ? "excluded"
-            : item.reason === "excluded" ||
-                LOOKUP_NOT_ADMITTED.has(item.reason ?? "")
+            : item.reason === "excluded" || NOT_ADMITTED.has(item.reason ?? "")
               ? "excluded"
               : "rejected",
         literature_id: null,
