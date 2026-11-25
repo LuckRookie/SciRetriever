@@ -221,6 +221,12 @@
     width: 16px;
     height: 16px;
   }
+  /* 最近读过 and 最近删除 are entries like the pages': the same 18 px icon
+     box, so their words start where the other entries' do. */
+  .navigation .folder-navigation > .ui-button > svg {
+    width: 18px;
+    height: 18px;
+  }
   .folder-toggle {
     flex: none;
     display: inline-grid;
@@ -412,12 +418,19 @@
     box-sizing: border-box;
     height: 48px;
     min-height: 48px;
-    padding-block: 0;
+    /* The tabs stand 38 px tall on the bar's lower line; everything else
+       in the bar centres in the same 38 px, so the mark, the buttons and
+       the tabs' words sit on one line. */
+    padding-block: 10px 0;
     border-bottom: 0;
     background: var(--side);
     box-shadow: inset 0 -1px 0 var(--line2);
     position: relative;
     z-index: 20;
+  }
+  /* A tab's top border puts its words half a pixel lower; the rest follows. */
+  .top-bar > :not(.workspace-tab, .workspace-tabs) {
+    margin-top: 1px;
   }
   .top-bar > .brand-mark {
     margin-inline: var(--space-1) 0;

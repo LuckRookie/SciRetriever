@@ -586,6 +586,13 @@
     max-width: 100%;
     overflow-x: auto;
   }
+  /* A row of tabs starts at its container's left edge with its first word,
+     not with the first tab's padding: the word lines up with the title or
+     the text above it. */
+  .ui-tabs[data-orientation="horizontal"] > .ui-tab-list {
+    margin-inline-start: calc(-1 * var(--space-3));
+    max-width: calc(100% + var(--space-3));
+  }
   .ui-tab {
     position: relative;
     display: grid;
