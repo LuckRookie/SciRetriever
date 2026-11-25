@@ -530,7 +530,7 @@ export function ReaderInformation({
           <p className="reader-quiet">
             {detail.literature.status === "READY"
               ? "元数据里没有摘要，可在“编辑元数据”中补上。"
-              : "元数据里没有摘要，生成全文时会从全文补上。"}
+              : "元数据里没有摘要，解析全文时会从全文补上。"}
           </p>
         )}
       </section>
@@ -653,10 +653,10 @@ export function ReaderInformation({
               {
                 READY: statusLabels.READY!,
                 ARCHIVING: statusLabels.ARCHIVING!,
-                ARCHIVE_FAILED: "全文生成失败，可以重新生成",
+                ARCHIVE_FAILED: "全文解析失败，可以重新生成",
               } as Record<string, string>
             )[detail.literature.status] ??
-              (next && !unparsed ? "已解析，还没有生成全文" : "还没有生成全文")}
+              (next && !unparsed ? "已解析 PDF，还没有全文" : "还没有全文")}
             {detail.literature.status === "READY" && detail.long_document ? (
               <p className="ui-description">
                 长文档（{detail.long_document.pages} 页）·
@@ -671,7 +671,7 @@ export function ReaderInformation({
             ))}
             {levels.some(([, level]) => level === "draft") ? (
               <p className="ui-description">
-                未校对的全文不接受改字，生成全文并校对后再修改
+                未校对的全文不接受改字，解析全文并校对后再修改
               </p>
             ) : null}
           </Step>
@@ -766,8 +766,8 @@ export function ReaderInformation({
             <p>
               {/* Reading-experience 3.4: what archiving adds to a draft. */}
               {detail.text_level === "draft"
-                ? "已有未校对的全文，可以阅读和翻译；生成全文后得到已校对的全文，可以改字和运行算子。"
-                : "生成全文后可以读全文、翻译和运行算子。"}
+                ? "已有未校对的全文，可以阅读和翻译；解析全文后得到已校对的全文，可以改字和运行算子。"
+                : "解析全文后可以读全文、翻译和运行算子。"}
               {unparsed
                 ? "会先用 MinerU 解析版面，再调用模型校订全文、补全元数据。"
                 : "会调用模型校订全文、补全元数据。"}
@@ -781,7 +781,7 @@ export function ReaderInformation({
                 variant={archivePrimaryElsewhere ? "text" : "primary"}
                 onPress={() => setOperation(next)}
               >
-                生成全文
+                解析全文
               </Button>
             ) : null}
             <StepActions id={id} />

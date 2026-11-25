@@ -377,8 +377,8 @@ function ArchiveSteps({ value }: { value: Record<string, unknown> }) {
           className="task-step-list archive-run-steps"
           aria-label={
             assets.length > 1
-              ? `材料 ${index + 1} 生成全文的步骤`
-              : "生成全文的步骤"
+              ? `材料 ${index + 1} 解析全文的步骤`
+              : "解析全文的步骤"
           }
         >
           {ARCHIVE_ORDER.map((step) => {
@@ -458,7 +458,7 @@ function StopReason({ stop }: { stop: Record<string, unknown> }) {
         : progress
           ? `。连续 ${Number(progress.consecutive_calls)} 次调用没有进展，达到 ${Number(progress.threshold)} 次即停。`
           : "。"}
-      {stop.retryable ? "可以继续生成全文。" : ""}
+      {stop.retryable ? "可以继续解析全文。" : ""}
     </p>
   );
 }

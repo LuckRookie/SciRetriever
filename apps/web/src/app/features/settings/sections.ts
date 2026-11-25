@@ -6,7 +6,7 @@ export const SETTINGS_SECTIONS = [
   { id: "appearance", label: "外观" },
   { id: "models", label: "模型服务" },
   { id: "acquire", label: "获取 PDF" },
-  { id: "fulltext", label: "生成全文" },
+  { id: "fulltext", label: "解析全文" },
   { id: "devices", label: "设备连接" },
   { id: "network", label: "网络" },
   { id: "paths", label: "文献库文件" },
@@ -17,7 +17,7 @@ export type SettingsSection = (typeof SETTINGS_SECTIONS)[number]["id"];
 
 /**
  * Where an address of an earlier section lands: the source directory moved
- * into “获取 PDF”, parsing and the archive parameters into “生成全文”, and
+ * into “获取 PDF”, parsing and the archive parameters into “解析全文”, and
  * the credentials next to the services they belong to.
  */
 const FORMER: Readonly<Record<string, SettingsSection>> = {

@@ -823,7 +823,7 @@ it("reads a draft as the default text: its level, its note, no editing, its doub
     const information = w.page.locator(".reader-information");
     await expect.poll(() => information.innerText()).toContain("全文：未校对");
     expect(await information.innerText()).toContain(
-      "未校对的全文不接受改字，生成全文并校对后再修改",
+      "未校对的全文不接受改字，解析全文并校对后再修改",
     );
     await w.page.getByRole("button", { name: "更多", exact: true }).click();
     expect(

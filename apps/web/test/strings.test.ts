@@ -80,8 +80,8 @@ it("gives one meaning one word on screen (page specs “界面用词”)", async
     UNREVIEWED: "只有书目",
     ASSET_READY: "有 PDF",
     READY: "有全文",
-    ARCHIVING: "正在生成全文",
-    ARCHIVE_FAILED: "全文生成失败",
+    ARCHIVING: "正在解析全文",
+    ARCHIVE_FAILED: "全文解析失败",
     UNAVAILABLE: "没找到 PDF",
     EXCLUDED: "已排除",
   });

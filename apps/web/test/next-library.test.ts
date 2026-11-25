@@ -459,7 +459,7 @@ it("opens a PDF without text in the PDF view, and its full text says what is mis
     // A secondary button: one primary per screen at most.
     expect(
       await empty
-        .getByRole("button", { name: "生成全文", exact: true })
+        .getByRole("button", { name: "解析全文", exact: true })
         .getAttribute("data-variant"),
     ).not.toBe("primary");
     expect(w.errors).toEqual([]);

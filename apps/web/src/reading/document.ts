@@ -148,7 +148,7 @@ export async function renderDocument(
     note.textContent =
       level === "draft"
         ? "全文 · 未校对：文字可能含解析错误；以 PDF 为准"
-        : `长文档：按简化流程生成全文，未逐页校对，文字可能含解析错误；以 PDF 为准（${described.long_document!.pages} 页）`;
+        : `长文档：按简化流程解析全文，未逐页校对，文字可能含解析错误；以 PDF 为准（${described.long_document!.pages} 页）`;
     article.append(note);
   }
   layer.append(article);

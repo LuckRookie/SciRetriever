@@ -181,8 +181,8 @@ it("counts “材料状态” in the library's quick-filter categories, with the
       "有全文",
       "有 PDF",
       "只有书目",
-      "正在生成全文",
-      "全文生成失败",
+      "正在解析全文",
+      "全文解析失败",
       "没找到 PDF",
       "已排除",
     ];

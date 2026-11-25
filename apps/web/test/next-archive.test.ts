@@ -40,10 +40,10 @@ it("offers archiving for an unparsed paper, and archiving parses it first", asyn
     // The side panel starts closed (spec 1.4).
     await readerPanel(p);
     const info = p.locator(".reader-info-archive");
-    await expect.poll(() => info.innerText()).toContain("还没有生成全文");
+    await expect.poll(() => info.innerText()).toContain("还没有全文");
     await expect
       .poll(() =>
-        info.getByRole("button", { name: "生成全文", exact: true }).count(),
+        info.getByRole("button", { name: "解析全文", exact: true }).count(),
       )
       .toBe(1);
     expect(
@@ -102,10 +102,10 @@ it("archives a paper straight from its PDF, then exposes ready state and metadat
     ).toBe(0);
     await p
       .getByRole("region", { name: "文献选择" })
-      .getByRole("button", { name: /^生成全文 \d+$/ })
+      .getByRole("button", { name: /^解析全文 \d+$/ })
       .click();
-    const build = p.getByRole("dialog", { name: "生成全文", exact: true });
-    await build.getByRole("button", { name: /^生成全文 \d+ 篇$/u }).click();
+    const build = p.getByRole("dialog", { name: "解析全文", exact: true });
+    await build.getByRole("button", { name: /^解析全文 \d+ 篇$/u }).click();
     await build.getByRole("button", { name: "关闭", exact: true }).click();
     await expect
       .poll(async () => (await w.env.app.archive.status(missingId)).status, {
@@ -507,7 +507,7 @@ it("recovers archive issues and parses a new supplement in the same run, readabl
       .waitFor();
     await issue.getByRole("button", { name: "其他操作", exact: true }).click();
     await p
-      .getByRole("menuitem", { name: "继续生成全文", exact: true })
+      .getByRole("menuitem", { name: "继续解析全文", exact: true })
       .click();
     await expect
       .poll(async () => (await e.app.archive.status(id)).status, {

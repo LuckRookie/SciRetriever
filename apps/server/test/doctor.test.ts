@@ -42,7 +42,7 @@ describe("installed runtime doctor", () => {
         name: "mupdf",
         status: "blocked",
         detail:
-          "MuPDF bundle is unavailable: 导入的 PDF 读不出标题、作者和 DOI，也不能生成全文；在仓库目录执行 `pnpm build`",
+          "MuPDF bundle is unavailable: 导入的 PDF 读不出标题、作者和 DOI，也不能解析全文；在仓库目录执行 `pnpm build`",
       });
     } finally {
       await rm(empty, { recursive: true, force: true });

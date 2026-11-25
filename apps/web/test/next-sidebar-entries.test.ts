@@ -276,7 +276,7 @@ it("writes “n 进行中 · m 需处理” beside 任务, leaving out a zero", 
   }
 }, 60000);
 
-it("makes the first usable of 获取 PDF and 生成全文 the selection bar's primary, none when both are 0, and ends every menu with “加工”", async () => {
+it("makes the first usable of 获取 PDF and 解析全文 the selection bar's primary, none when both are 0, and ends every menu with “加工”", async () => {
   const w = await nextWorkspace();
   try {
     const page = w.page;
@@ -305,7 +305,7 @@ it("makes the first usable of 获取 PDF and 生成全文 the selection bar's pr
     await bar.waitFor();
     expect((await actions()).filter((text) => text !== "取消选择")).toEqual([
       "获取 PDF 1",
-      "生成全文 0",
+      "解析全文 0",
       "移动…",
       "更多",
     ]);
@@ -329,7 +329,7 @@ it("makes the first usable of 获取 PDF and 生成全文 the selection bar's pr
     await page.keyboard.press("Space");
     await bar.waitFor();
     expect(await bar.textContent()).toContain("获取 PDF 0");
-    expect(await bar.textContent()).toContain("生成全文 0");
+    expect(await bar.textContent()).toContain("解析全文 0");
     expect(await primary()).toEqual([]);
     await page.getByRole("button", { name: "取消选择", exact: true }).click();
     await bar.waitFor({ state: "detached" });
@@ -345,7 +345,7 @@ it("makes the first usable of 获取 PDF and 生成全文 the selection bar's pr
       "导出…",
       "删除",
       "获取 PDF",
-      "生成全文",
+      "解析全文",
       "扩展引用…",
       "运行算子…",
     ]);

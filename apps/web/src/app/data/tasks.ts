@@ -147,7 +147,7 @@ export const operationLabels: Readonly<Record<string, string>> = {
   "assess-article-identity": "核验材料身份",
   synthesize: "集合综合",
   "run-processor": "知识处理",
-  "build-archive": "生成全文",
+  "build-archive": "解析全文",
   "backfill-tags": "标签回溯",
   "recognize-literature": "识别书目",
 };
@@ -261,7 +261,7 @@ export function taskPaperId(job: Json): string | null {
   return typeof subject === "string" ? null : subject.paper;
 }
 /**
- * “生成全文 · 文献标题” for one paper, “获取 PDF · 10 篇” for several; until
+ * “解析全文 · 文献标题” for one paper, “获取 PDF · 10 篇” for several; until
  * the one paper's title is read, “1 篇”.
  */
 export function taskTitle(job: Json, paperTitle?: string | null): string {

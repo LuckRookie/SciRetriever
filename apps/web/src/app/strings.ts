@@ -30,8 +30,8 @@ export const statusLabels: Readonly<Record<string, string>> = {
   UNREVIEWED: "只有书目",
   ASSET_READY: "有 PDF",
   READY: "有全文",
-  ARCHIVING: "正在生成全文",
-  ARCHIVE_FAILED: "全文生成失败",
+  ARCHIVING: "正在解析全文",
+  ARCHIVE_FAILED: "全文解析失败",
   EXCLUDED: "已排除",
   UNAVAILABLE: "没找到 PDF",
   queued: "排队中",
@@ -72,12 +72,12 @@ export const archiveStrings = {
   },
   title: "需处理",
   description:
-    "按需处理影响阅读与加工的问题。解析、生成全文和总结都由你分别启动。",
+    "按需处理影响阅读与加工的问题。解析 PDF、解析全文和总结都由你分别启动。",
   metadata: "字段与来源",
-  continue: "继续生成全文",
-  retry: "重新生成全文",
+  continue: "继续解析全文",
+  retry: "重新解析全文",
   empty: "没有需要处理的问题",
-  stats: "生成全文的用量",
+  stats: "解析全文的用量",
   snapshot: "快照",
   createSnapshot: "从当前筛选生成快照",
   vocabulary: "标签词表",
@@ -114,10 +114,10 @@ export const dropReasons: Readonly<Record<string, string>> = {
 
 /** Why a processing task left a paper untouched, with what to do next. */
 export const skipReasons: Readonly<Record<string, string>> = {
-  "needs-parse": "还没有解析 PDF。点“生成全文”会先解析，再接着生成全文。",
+  "needs-parse": "还没有解析 PDF。点“解析全文”会先解析 PDF，再校订成全文。",
   "needs-pdf": "还没有 PDF。先获取或补充 PDF。",
   blocked: "所需的前一步还没有完成，这一项暂时不能处理。",
-  excluded: "文章性质为观点、评论、勘误或社论，不生成全文。",
+  excluded: "文章性质为观点、评论、勘误或社论，不解析全文。",
 };
 /**
  * A problem as a short phrase (“解析服务连不上”), for group titles and the
@@ -312,7 +312,7 @@ export function serviceMessage(code: string): string {
         "model-unavailable": "模型尚不可用，请检查模型配置。",
         "proofread-manual-stale":
           "全文已被其他操作修改。当前草稿仍保留，请对照最新版本后再保存。",
-        "proofread-missing": "此材料还没有全文，请先生成全文。",
+        "proofread-missing": "此材料还没有全文，请先解析全文。",
         "proofread-manual-input-conflict":
           "原始解析已变化，现有人工修订不会被自动覆盖，请先核对原稿。",
         "proofread-edit-pages-invalid":
@@ -333,7 +333,7 @@ export function serviceMessage(code: string): string {
           "本机或局域网上的服务始终直连，不能选择走代理。",
         "network-target-unresolved":
           "无法解析所选服务的域名，暂时不能确认它不在局域网内，请稍后再试。",
-        "archive-tagging": "生成全文时自动生成标签",
+        "archive-tagging": "解析全文时自动生成标签",
         "correction-failed": "本次矫正未完成",
         "correction-edit-conflict": "矫正与当前文字存在冲突，请重新核对",
         "page-content-missing": "页面正文尚未完整确认",
@@ -434,7 +434,7 @@ export function estimateStageName(kind: string) {
         consolidate: "词表整理",
         "parse-documents": "解析（不调用语言模型）",
         "assess-article-identity": "文章身份核验",
-        "build-archive": "按指定步骤生成全文",
+        "build-archive": "按指定步骤解析全文",
       } as Record<string, string>
     )[kind] ?? "处理"
   );

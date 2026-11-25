@@ -727,7 +727,7 @@ export default function Reader() {
                   ...(canArchive
                     ? {
                         action: {
-                          label: "生成全文",
+                          label: "解析全文",
                           run: () => setOperation("archive"),
                         },
                       }
@@ -2071,7 +2071,7 @@ export default function Reader() {
                     ? {
                         action: (
                           <Button onPress={() => setOperation("archive")}>
-                            生成全文
+                            解析全文
                           </Button>
                         ),
                       }

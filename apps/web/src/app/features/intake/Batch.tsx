@@ -717,7 +717,7 @@ export function BatchPage({ id }: { id: string }) {
                 <p className="intake-unread-note">
                   这些文件{awaiting ? "会" : "已"}按文件名入库，标为“书目不全”。
                   入库后在文献库里选中它们，用“更多 → 识别书目”可以再认一次；
-                  扫描件要先生成全文。
+                  扫描件要先解析全文。
                 </p>
               </Definition>
             ) : null}

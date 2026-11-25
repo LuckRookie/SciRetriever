@@ -236,7 +236,7 @@ export function ProofreadEditor({
       });
       setPendingPages([]);
       setMessage(
-        "已提交生成全文的任务：只重新校订待处理的页，其余页复用。进度见任务。",
+        "已提交解析全文的任务：只重新校订待处理的页，其余页复用。进度见任务。",
       );
       invalidateMaterials(queries);
     } catch (error) {
@@ -288,8 +288,8 @@ export function ProofreadEditor({
         </div>
         <p className="ui-description">
           {draft?.format === "legacy-v1"
-            ? "这份全文来自旧的流程，只能阅读。重新生成全文后可以在这里修改。"
-            : "只能改已有段落里的文字。保存后，读取这篇的算子结果会标为过时；保存与重新生成全文不调用模型。"}
+            ? "这份全文来自旧的流程，只能阅读。重新解析全文后可以在这里修改。"
+            : "只能改已有段落里的文字。保存后，读取这篇的算子结果会标为过时；保存与重新解析全文不调用模型。"}
         </p>
         {message ? <p role="status">{message}</p> : null}
         {pendingPages.length ? (

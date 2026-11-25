@@ -209,7 +209,7 @@ it("opens the PDF of a paper without full text, saying so under the page header 
         return colour;
       }),
     );
-    await line.getByRole("button", { name: "生成全文", exact: true }).click();
+    await line.getByRole("button", { name: "解析全文", exact: true }).click();
     await w.page.getByRole("dialog").waitFor();
     await w.page.keyboard.press("Escape");
     // Even where the full text was last left, the PDF opens.

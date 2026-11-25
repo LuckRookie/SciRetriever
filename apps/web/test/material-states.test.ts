@@ -34,8 +34,8 @@ it("splits the library into categories that do not overlap and add up to the tot
     "只有书目",
   ]);
   expect(MORE_MATERIAL_STATES.map((state) => state.label)).toEqual([
-    "正在生成全文",
-    "全文生成失败",
+    "正在解析全文",
+    "全文解析失败",
     "没找到 PDF",
     "已排除",
   ]);
@@ -48,8 +48,8 @@ it("splits the library into categories that do not overlap and add up to the tot
     ["有全文", 18],
     ["有 PDF", 15],
     ["只有书目", 53],
-    ["正在生成全文", 3],
-    ["全文生成失败", 2],
+    ["正在解析全文", 3],
+    ["全文解析失败", 2],
     ["没找到 PDF", 7],
     ["已排除", 2],
   ]);

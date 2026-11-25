@@ -60,7 +60,7 @@ it("orders settings by task, lands old addresses, keeps keys beside their servic
       "外观",
       "模型服务",
       "获取 PDF",
-      "生成全文",
+      "解析全文",
       "设备连接",
       "网络",
       "文献库文件",
@@ -95,8 +95,8 @@ it("orders settings by task, lands old addresses, keeps keys beside their servic
     // Addresses of the earlier sections land on their new homes.
     for (const [old, label] of [
       ["sources", "获取 PDF"],
-      ["parser", "生成全文"],
-      ["archive", "生成全文"],
+      ["parser", "解析全文"],
+      ["archive", "解析全文"],
       ["cred", "模型服务"],
       ["paths", "文献库文件"],
     ] as const) {
@@ -195,7 +195,7 @@ it("orders settings by task, lands old addresses, keeps keys beside their servic
 
     // A parameter block: one sentence per parameter, the note beside the save.
     await navigation
-      .getByRole("tab", { name: "生成全文", exact: true })
+      .getByRole("tab", { name: "解析全文", exact: true })
       .click();
     const parameters = page.locator(".ui-section").filter({
       has: page.getByRole("heading", { name: "参数", exact: true }),
@@ -225,7 +225,7 @@ it("orders settings by task, lands old addresses, keeps keys beside their servic
     expect(term!.width).toBeLessThanOrEqual(240);
     expect(control!.x - (term!.x + term!.width)).toBeLessThanOrEqual(32);
     await parameters
-      .getByRole("button", { name: "保存生成全文的设置", exact: true })
+      .getByRole("button", { name: "保存解析全文的设置", exact: true })
       .click();
     await expect
       .poll(

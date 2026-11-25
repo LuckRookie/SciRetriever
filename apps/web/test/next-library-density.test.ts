@@ -253,7 +253,7 @@ it("lists only what a paper can use in its menu, by what it has, and the same on
       "移出文献库…",
       "删除",
       "获取 PDF",
-      "生成全文（停用）",
+      "解析全文（停用）",
       "扩展引用…",
       "运行算子…（停用）",
     ]);
@@ -272,7 +272,7 @@ it("lists only what a paper can use in its menu, by what it has, and the same on
       "移出文献库…",
       "删除",
       "获取 PDF",
-      "生成全文（停用）",
+      "解析全文（停用）",
       "扩展引用…",
       "运行算子…（停用）",
     ]);

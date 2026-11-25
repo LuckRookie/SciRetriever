@@ -160,11 +160,30 @@ it("takes a paper out of the library to the candidates and adds it back from a s
     await searchLibrary(p, title.split(/\s+/).slice(0, 3).join(" "));
     const found = p.locator(`.paper-row[data-literature-id="${id}"]`);
     await found.waitFor();
-    await found.hover();
-    await found
-      .getByRole("button", { name: "加入文献库", exact: true })
-      .click();
+    // A candidate is not moved into a folder: its menu adds it, and has no 移动.
+    await found.locator(".paper-citation").click({ button: "right" });
+    const labels = await p.getByRole("menuitem").allTextContents();
+    expect(labels.slice(0, 2)).toEqual(["打开阅读", "加入文献库"]);
+    expect(labels).not.toContain("移动…");
+    await p.keyboard.press("Escape");
+    // Chosen, the bar's one primary button adds it, and 移动 says why not.
+    await found.focus();
+    await p.keyboard.press("Space");
+    const bar = p.getByRole("region", { name: "文献选择" });
+    const add = bar.getByRole("button", { name: /^加入文献库/ });
+    expect(await add.getAttribute("data-variant")).toBe("primary");
+    expect(
+      await bar.locator('.ui-button[data-variant="primary"]').count(),
+    ).toBe(1);
+    const move = bar.getByRole("button", { name: /^移动/ });
+    expect(
+      await move.evaluate((node) =>
+        node.matches(":disabled,[aria-disabled=true],[data-disabled=true]"),
+      ),
+    ).toBe(true);
+    await add.click();
     await expect.poll(() => found.textContent()).toContain("已加入");
+    await expect.poll(() => add.count()).toBe(0);
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();

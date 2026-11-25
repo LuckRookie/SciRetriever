@@ -1083,7 +1083,7 @@ export default function Settings() {
                   <>
                     <Section
                       title="解析服务"
-                      description="MinerU 把 PDF 读成版面与文字，是生成全文的第一步。"
+                      description="MinerU 把 PDF 读成版面与文字，是解析全文的第一步。"
                       footer={groupFooter("parser", "保存解析服务")}
                     >
                       <Definitions>
@@ -1152,7 +1152,7 @@ export default function Settings() {
                     </Section>
                     <Section
                       title="参数"
-                      footer={groupFooter("params", "保存生成全文的设置")}
+                      footer={groupFooter("params", "保存解析全文的设置")}
                     >
                       {readiness.data?.diagnostics?.some(
                         (d) => d.code === "configuration-option-removed",

@@ -819,7 +819,7 @@ function ResultLink({
     <div>
       {parse && Array.isArray(saved.profiles) ? (
         <div>
-          <p>各种解析方式的结果如下。生成全文需要另行发起。</p>
+          <p>各种解析方式的结果如下。解析全文需要另行发起。</p>
           <ul>
             {saved.profiles.map((item, i) => {
               const p = record(item, "parsing profile");

@@ -1238,17 +1238,30 @@ export default function Library() {
   // Dragging a selected row carries the whole selection to a folder.
   const selectedRef = useRef(shell.selected);
   selectedRef.current = shell.selected;
+  const notifyRef = useRef(shell.notify);
+  notifyRef.current = shell.notify;
+  const candidateRef = useRef<(id: string) => boolean>(() => false);
+  candidateRef.current = (id) =>
+    known.get(id)?.collected === false && !collectedNow.has(id);
   const onDragRow = useCallback(
     (id: string, data: DataTransfer, title: string) => {
-      const ids = selectedRef.current.has(id)
-        ? [...selectedRef.current].slice(0, 1000)
-        : [id];
+      // Only papers of the library go into a folder; candidates stay behind.
+      const ids = (
+        selectedRef.current.has(id) ? [...selectedRef.current] : [id]
+      )
+        .filter((each) => !candidateRef.current(each))
+        .slice(0, 1000);
+      if (!ids.length) {
+        notifyRef.current("候选要先加入文献库，才能放进文件夹");
+        return false;
+      }
       // A press on the title or its text would otherwise drag that text.
       data.clearData();
       data.setData(LITERATURE_DRAG, JSON.stringify(ids));
       data.setData("text/plain", `${ids.length} 篇文献`);
       data.effectAllowed = "copy";
       data.setDragImage(dragGhost(ids.length, title), 14, 14);
+      return true;
     },
     [],
   );
@@ -1296,10 +1309,19 @@ export default function Library() {
   const acquireReason = batchReason("no-pdf", "所选文献都已有 PDF"),
     archivingReason = batchReason(
       "unarchived",
-      "所选文献没有要生成全文的；生成全文需要先有 PDF",
+      "所选文献没有要解析全文的；解析全文需要先有 PDF",
     ),
     runReason = batchReason("ready", "所选文献都还没有全文");
-  const primary = selectionPrimary(acquireReason, archivingReason);
+  // Candidates join the library before they go into a folder.
+  const moveReason = discovered.length
+    ? `所选里有 ${discovered.length.toLocaleString()} 篇候选，先加入文献库再移动。`
+    : shell.selected.size > 1000
+      ? "最多一次移动 1,000 篇，请减少选择。"
+      : undefined;
+  // With candidates chosen, adding them is the bar's one primary action.
+  const primary = discovered.length
+    ? null
+    : selectionPrimary(acquireReason, archivingReason);
   // Of the selection, the papers marked 书目不全, and those of them with a PDF.
   const incomplete = [...shell.selected].filter(
     (id) => known.get(id)?.needs_metadata,
@@ -1376,7 +1398,7 @@ export default function Library() {
       {
         id: "folder",
         label: "移动…",
-        ...unless(size > 1000 && "最多一次移动 1,000 篇，请减少选择。"),
+        ...unless(moveReason),
         onAction: () => setAdding([...shell.selected]),
       },
       ...(folder
@@ -1414,7 +1436,7 @@ export default function Library() {
       },
       {
         id: "archive",
-        label: `生成全文 ${groups.unarchived.length.toLocaleString()}`,
+        label: `解析全文 ${groups.unarchived.length.toLocaleString()}`,
         ...unless(archivingReason),
         onAction: () =>
           setOperation({ ids: groups.unarchived, kind: "archive" }),
@@ -1491,11 +1513,11 @@ export default function Library() {
       ? [
           {
             id: "archive",
-            label: "生成全文…",
+            label: "解析全文…",
             ...(withPdf === 0
               ? {
                   disabled: true,
-                  description: "这些文献还没有 PDF；生成全文需要先有 PDF",
+                  description: "这些文献还没有 PDF；解析全文需要先有 PDF",
                 }
               : overLimit),
             onAction: () => {
@@ -2374,6 +2396,19 @@ export default function Library() {
               </span>
               {mutable ? (
                 <>
+                  {discovered.length ? (
+                    <Button
+                      variant="primary"
+                      icon={<Icon name="plus" />}
+                      onPress={() =>
+                        void collect(discovered).catch((error: unknown) =>
+                          shell.notify(errorMessage(error)),
+                        )
+                      }
+                    >
+                      加入文献库 <span>{discovered.length}</span>
+                    </Button>
+                  ) : null}
                   <Button
                     variant={primary === "acquire" ? "primary" : "secondary"}
                     disabledReason={acquireReason}
@@ -2388,15 +2423,11 @@ export default function Library() {
                       setOperation({ ids: groups.unarchived, kind: "archive" })
                     }
                   >
-                    生成全文 <span>{groups.unarchived.length}</span>
+                    解析全文 <span>{groups.unarchived.length}</span>
                   </Button>
                   <Button
                     icon={<Icon name="folder" />}
-                    disabledReason={
-                      shell.selected.size > 1000
-                        ? "最多一次移动 1,000 篇，请减少选择。"
-                        : undefined
-                    }
+                    disabledReason={moveReason}
                     onPress={() => setAdding([...shell.selected])}
                   >
                     移动…
@@ -2405,7 +2436,6 @@ export default function Library() {
                     label="更多"
                     indicator
                     items={[
-                      ...collectItem,
                       ...(folder
                         ? [
                             {
@@ -2661,9 +2691,9 @@ const OPEN_TOGETHER_LIMIT = 20;
 /**
  * A paper's menu (page specs “文献库”), in two groups. Above the hairline,
  * what one does with any paper: 打开阅读, 移动到文件夹, 移出 the folder being
- * shown, 导出, 删除 (to 最近删除, from where it comes back). Below it, what makes or uses its material: 获取 PDF, 生成全文,
+ * shown, 导出, 删除 (to 最近删除, from where it comes back). Below it, what makes or uses its material: 获取 PDF, 解析全文,
  * 扩展引用, 运行算子. What a paper never needs is left out — 获取 PDF once it
- * has one, 生成全文 once it has its full text; what it cannot do yet stays,
+ * has one, 解析全文 once it has its full text; what it cannot do yet stays,
  * disabled, saying why (rule 12).
  */
 function rowMenuItems(
@@ -2705,12 +2735,12 @@ function rowMenuItems(
       : [
           {
             id: "archive",
-            label: "生成全文",
+            label: "解析全文",
             ...unless(
               status === "UNREVIEWED"
                 ? "需要先有 PDF"
                 : status === "ARCHIVING"
-                  ? "正在生成全文"
+                  ? "正在解析全文"
                   : null,
             ),
             onAction: () => act("archive"),
@@ -2745,12 +2775,14 @@ function rowMenuItems(
             onAction: () => act("collect"),
           },
         ]
-      : []),
-    {
-      id: "folder",
-      label: "移动…",
-      onAction: () => act("folder"),
-    },
+      : [
+          // Folders hold papers of the library only (ADR 0067 section 5).
+          {
+            id: "folder",
+            label: "移动…",
+            onAction: () => act("folder"),
+          },
+        ]),
     ...(folder
       ? [
           {
@@ -3064,7 +3096,7 @@ const LibraryList = memo(function LibraryList({
   /** The folder being shown, when there is one: rows can leave it. */
   rowFolder: string | null;
   onRowMenu: RowMenu | undefined;
-  onDragRow: (id: string, data: DataTransfer, title: string) => void;
+  onDragRow: (id: string, data: DataTransfer, title: string) => boolean;
 }) {
   const table = display === "table";
   const list = useRef<HTMLDivElement>(null);
@@ -3426,7 +3458,7 @@ const LibraryRow = memo(function LibraryRow({
   rowFolder: string | null;
   onRowMenu: RowMenu | undefined;
   onMove: (index: number) => void;
-  onDragRow: (id: string, data: DataTransfer, title: string) => void;
+  onDragRow: (id: string, data: DataTransfer, title: string) => boolean;
 }) {
   const id = item.literature.literature_id,
     title = paperTitle(item),
@@ -3572,7 +3604,8 @@ const LibraryRow = memo(function LibraryRow({
         (event.target as Element).closest?.(".paper-check, .paper-tools")
       )
         event.preventDefault();
-      else onDragRow(id, event.dataTransfer, title);
+      else if (!onDragRow(id, event.dataTransfer, title))
+        event.preventDefault();
     },
     onDragOver: (event: ReactDragEvent<HTMLElement>) => {
       // Only a dropped file belongs to the row; folder drags go to the sidebar.
@@ -3694,7 +3727,7 @@ const LibraryRow = memo(function LibraryRow({
             {item.literature.status === "READY" && item.long_document ? (
               <small
                 className="paper-status-note"
-                title="按简化流程生成全文，未逐页校对；以 PDF 为准"
+                title="按简化流程解析全文，未逐页校对；以 PDF 为准"
               >
                 长文档
               </small>

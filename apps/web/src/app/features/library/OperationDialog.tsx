@@ -30,7 +30,7 @@ import { download } from "../../data/download.js";
 export { download };
 const labels: Record<string, string> = {
   analyze: "生成总结",
-  archive: "生成全文",
+  archive: "解析全文",
   identity: "核验文章身份",
   export: "导出书目",
   upload: "补充 PDF",
@@ -152,7 +152,7 @@ function MaterialDialog({ ids, kind, file, onClose }: OperationProps) {
           },
           controller.current.signal,
         );
-        return "生成全文的任务已提交；不会重新调用解析服务。";
+        return "解析全文的任务已提交；不会重新调用解析服务。";
       }
       if (kind === "analyze") {
         const response = await api.submitProcessor(

@@ -529,10 +529,10 @@ it("marks draft rows, filters and sorts by the draft facts, and hands the result
     const chips = await page.locator(".library-applied").innerText();
     expect(chips).toContain("文本等级：未校对");
     expect(chips).toContain("全文和 PDF 自带的文字不一样：没有");
-    // “批量操作 → 生成全文…” opens the archiving scope with its count.
+    // “批量操作 → 解析全文…” opens the archiving scope with its count.
     await page.getByRole("button", { name: "批量操作", exact: true }).click();
     await page
-      .getByRole("menuitem", { name: "生成全文…", exact: true })
+      .getByRole("menuitem", { name: "解析全文…", exact: true })
       .click();
     const dialog = page.getByRole("dialog");
     await dialog.getByText("范围已固定：1 篇文献。", { exact: true }).waitFor();

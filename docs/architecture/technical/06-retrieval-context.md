@@ -129,7 +129,7 @@ CONTENT_READY
 
 **被撤回的文献**：任何 `LibraryQuery` 的结果、`total_count`、计数（2.1.8）、词频、引用关系的两端、发现原因与 `QuerySelector` 的展开都排除被撤回的文献，详情按不存在处理；字段不变，调用方不能选择包含它们。撤回的规则见[文献与材料 6.4.11](03-literature-materials.md#6411-撤回)。
 
-`collection_scope` 只接受 `collected | all`，区分文献库里的文献与候选（[ADR 0067](../decisions/0067-library-and-candidates.md)）。省略时：浏览列表（查询里没有 text、title、author、venue、publisher、identifiers、author_orcids、discovery_run_ids、intake_batch_ids，也不是 `recently_opened`）按 `collected` 处理；最近读过（`recently_opened: true`）与其余查询（搜索、按发现或入库批次查看）覆盖全部，最近读过因此包含打开过的候选；`QuerySelector` 只按显式给出的值展开。每个 `LiteratureSearchItem` 带 `collected`。一篇被导入（`kind='import'` 的批次）、浏览时收藏、手动加标签、放进文件夹或快照、提供或要求 PDF、要求生成全文或发起加工时，在同一事务里加入文献库；登记打开阅读（`reading-open`）只写阅读记录，不加入。移出文献库删去这个标记，之后再有上述任一种使用或“加入文献库”时重新加入。“加入文献库”与“移出文献库”操作见[用户组织 7](09-user-organization.md#7-三个入口)。
+`collection_scope` 只接受 `collected | all`，区分文献库里的文献与候选（[ADR 0067](../decisions/0067-library-and-candidates.md)）。省略时：浏览列表（查询里没有 text、title、author、venue、publisher、identifiers、author_orcids、discovery_run_ids、intake_batch_ids，也不是 `recently_opened`）按 `collected` 处理；最近读过（`recently_opened: true`）与其余查询（搜索、按发现或入库批次查看）覆盖全部，最近读过因此包含打开过的候选；`QuerySelector` 只按显式给出的值展开。每个 `LiteratureSearchItem` 带 `collected`。一篇被导入（`kind='import'` 的批次）、浏览时收藏、手动加标签、放进文件夹或快照、提供或要求 PDF、要求解析全文或发起加工时，在同一事务里加入文献库；登记打开阅读（`reading-open`）只写阅读记录，不加入。移出文献库删去这个标记，之后再有上述任一种使用或“加入文献库”时重新加入。“加入文献库”与“移出文献库”操作见[用户组织 7](09-user-organization.md#7-三个入口)。
 
 候选（`collected=false`）带 `discovery_origin`：发现过它的主题搜索或引用扩展的入库批次里，`created_at` 最晚的一个（相同时按批次 ID），`kind` 是该批次的发现类型，界面用 `intake_batch_id` 打开那次的发现批次。没有任何发现批次的（例如“早期入库”里缺选用证据的历史文献）为 `null`，不推测来历。文献库里的项不带这个字段。取值在同一读快照里按页批量查，耗时与本页项数和每篇被发现的次数有关，与总篇数无关；不另建投影。
 

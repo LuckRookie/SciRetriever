@@ -91,7 +91,7 @@ export function StructurePanel({
       <p className="ui-description">
         {a.schema_version === 2
           ? "章节归属来自整理结果，不调用模型。要调整某段内容的归属，请在全文里恢复或改动它。"
-          : "这是旧流程判定的章节角色，只能查看。重新生成全文后按新的章节归属显示。"}
+          : "这是旧流程判定的章节角色，只能查看。重新解析全文后按新的章节归属显示。"}
       </p>
       <dl className="structure-roles">
         {a.sections.map((section, index) => (

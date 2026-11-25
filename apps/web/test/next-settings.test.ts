@@ -64,7 +64,7 @@ it("preserves drafts across section publications and conflicts, explains restart
   });
   try {
     const page = w.page;
-    await page.getByRole("tab", { name: "生成全文", exact: true }).click();
+    await page.getByRole("tab", { name: "解析全文", exact: true }).click();
     const profile = page.locator(".ui-definition", { hasText: "解析方式" });
     await profile.waitFor();
     expect(await profile.textContent()).toContain("vlm-engine");
@@ -78,7 +78,7 @@ it("preserves drafts across section publications and conflicts, explains restart
         new URL(response.url()).pathname === "/api/configuration/publish-json",
     );
     await page
-      .getByRole("button", { name: "保存生成全文的设置", exact: true })
+      .getByRole("button", { name: "保存解析全文的设置", exact: true })
       .click();
     expect((await publication).status()).toBe(200);
     await expect

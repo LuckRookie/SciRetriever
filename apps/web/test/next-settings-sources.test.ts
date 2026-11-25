@@ -167,7 +167,7 @@ it("preserves source parameters and runtime sections, rejects incomplete setting
       .getByRole("textbox", { name: "浏览器个人资料", exact: true })
       .fill("web-fixture");
     await save("保存浏览器设置");
-    await tab("生成全文");
+    await tab("解析全文");
     await page
       .getByRole("textbox", { name: "MinerU 服务地址", exact: true })
       .fill("http://127.0.0.1:8000");
@@ -226,10 +226,10 @@ it("preserves source parameters and runtime sections, rejects incomplete setting
       });
     });
     const beforeProbe = (await owner!.read()).revision;
-    // The parser is tested under 生成全文, the browser model under 获取 PDF.
+    // The parser is tested under 解析全文, the browser model under 获取 PDF.
     const results: string[] = [];
     for (const [section, name] of [
-      ["生成全文", "测试 解析服务"],
+      ["解析全文", "测试 解析服务"],
       ["获取 PDF", "测试 浏览器模型"],
     ] as const) {
       await tab(section);

@@ -357,7 +357,7 @@ export function SummaryView({
       {!saved ? (
         <EmptyState
           title="尚无已保存总结"
-          description="生成全文后可以手动生成总结；阅读不会触发模型调用。"
+          description="解析全文后可以手动生成总结；阅读不会触发模型调用。"
         />
       ) : null}
       {saved?.freshness.state === "stale" ? (

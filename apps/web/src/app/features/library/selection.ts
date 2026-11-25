@@ -17,7 +17,7 @@ export const SELECTION_GROUPS: readonly {
   label: string;
 }[] = [
   { group: "no-pdf", label: "只有书目" },
-  { group: "unarchived", label: "待生成全文" },
+  { group: "unarchived", label: "有 PDF" },
   { group: "ready", label: "有全文" },
   { group: "other", label: "其他" },
 ];
@@ -52,7 +52,7 @@ export function groupSelection(
 
 /**
  * The selection bar's one primary action (page specs “连续选择与选择栏”): the
- * first of 获取 PDF and 生成全文 that can act, each given as the reason it is
+ * first of 获取 PDF and 解析全文 that can act, each given as the reason it is
  * disabled, if it is; a disabled button is never the primary, and with both
  * disabled the bar has none.
  */

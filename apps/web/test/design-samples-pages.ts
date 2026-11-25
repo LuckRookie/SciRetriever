@@ -326,13 +326,13 @@ export const designSamplePages: readonly DesignSamplePage[] = [
   },
   {
     id: "archive-estimate",
-    name: "生成全文 · 发起前预计消耗",
+    name: "解析全文 · 发起前预计消耗",
     // Only failed archives can be archived again here; the fixture still archives samples 15 and 16.
     route: route(
       "lib",
       `&sort=title-asc&query=${query({ statuses: ["ARCHIVE_FAILED"] })}`,
     ),
-    interaction: "在全文生成失败的文献里勾选两篇，点“生成全文”，展开技术详情",
+    interaction: "在全文解析失败的文献里勾选两篇，点“解析全文”，展开技术详情",
     prepare: async (p) => {
       const rows = p.locator(".paper-row");
       await rows.nth(1).waitFor();
@@ -343,7 +343,7 @@ export const designSamplePages: readonly DesignSamplePage[] = [
       }
       await p
         .getByRole("region", { name: "文献选择" })
-        .getByRole("button", { name: "生成全文 2", exact: true })
+        .getByRole("button", { name: "解析全文 2", exact: true })
         .click();
       // Calls and tokens sit in the dialog's technical details (rule 8).
       await p
@@ -790,7 +790,7 @@ export const designSamplePages: readonly DesignSamplePage[] = [
   {
     id: "reader-pdf-default",
     name: "阅读 · 有 PDF 没有全文（默认 PDF）",
-    // Opened without a view: the PDF, and “还没有全文 · 生成全文” under the page header (plan 25 block 30).
+    // Opened without a view: the PDF, and “还没有全文 · 解析全文” under the page header (plan 25 block 30).
     route: (ids) => `/?literature=${ids.pdfOnly}`,
     ready: '.reader-page-header-line:has-text("还没有全文")',
   },
@@ -1042,9 +1042,9 @@ export const designSamplePages: readonly DesignSamplePage[] = [
   },
   {
     id: "task-detail-archive",
-    name: "任务 · 生成全文的步骤",
+    name: "任务 · 解析全文的步骤",
     route: (ids) => `/?view=task&task=${ids.archiveTask}`,
-    interaction: "滚到生成全文的步骤",
+    interaction: "滚到解析全文的步骤",
     prepare: async (p) => {
       await p.locator(".archive-run-steps").scrollIntoViewIfNeeded();
     },
@@ -1255,7 +1255,7 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     "外观",
     "模型服务",
     "获取 PDF",
-    "生成全文",
+    "解析全文",
     "设备连接",
     "网络",
     "文献库文件",
@@ -1294,9 +1294,9 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     id: "settings-dirty",
     name: "设置 · 未保存改动",
     route: route("set"),
-    interaction: "在生成全文分区输入一个新数值，不离开输入框",
+    interaction: "在解析全文分区输入一个新数值，不离开输入框",
     prepare: async (p) => {
-      await openSettings(p, "生成全文");
+      await openSettings(p, "解析全文");
       const field = p.getByRole("textbox", { name: "每篇标签上限" });
       await field.fill("12");
     },

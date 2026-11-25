@@ -288,7 +288,7 @@ export default function Archive() {
             ))}
           </>
         ) : (
-          <Skeleton label="正在读取生成全文的统计" />
+          <Skeleton label="正在读取解析全文的统计" />
         )}
       </Disclosure>
       {retryParse ? (
@@ -362,7 +362,7 @@ function IssueRow({
         };
   const actions = [
     ...(parseReason(reason)
-      ? [{ id: "parse", label: "重新生成全文", run: onRetryParse }]
+      ? [{ id: "parse", label: "重新解析全文", run: onRetryParse }]
       : []),
     ...(step === "metadata" || step === "tags"
       ? [{ id: "edit", ...edit }]
