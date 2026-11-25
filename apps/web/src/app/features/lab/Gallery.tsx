@@ -125,7 +125,7 @@ const typeScale = [
     name: "控件",
     spec: "无衬线 14 / 400",
     className: "lab-type-control",
-    sample: "运行算子 · 加入文件夹",
+    sample: "运行算子 · 移动到文件夹",
   },
   {
     name: "辅助",

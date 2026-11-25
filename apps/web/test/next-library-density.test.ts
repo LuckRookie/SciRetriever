@@ -231,10 +231,11 @@ it("lists only what a paper can use in its menu, by what it has, and the same on
       .getByRole("button", { name: "文献操作", exact: true })
       .click();
     expect(await menuContent(page)).toEqual([
-      "加入文件夹…",
-      "导出书目",
+      "打开阅读",
+      "移动到文件夹…",
+      "导出…",
+      "删除",
       "扩展引用…",
-      "[加工]",
       "运行算子…",
     ]);
     await page.keyboard.press("Escape");
@@ -245,32 +246,34 @@ it("lists only what a paper can use in its menu, by what it has, and the same on
       .getByRole("button", { name: "文献操作", exact: true })
       .click();
     expect(await menuContent(page)).toEqual([
+      "打开阅读",
+      "移动到文件夹…",
+      "导出…",
+      "删除",
       "获取 PDF",
       "生成全文（停用）",
-      "加入文件夹…",
-      "导出书目",
       "扩展引用…",
-      "[加工]",
       "运行算子…（停用）",
     ]);
     const menu = page.getByRole("menu");
     expect(await menu.innerText()).toContain("需要先有 PDF");
     expect(await menu.innerText()).toContain("需要先有全文");
     await page.keyboard.press("Escape");
-    // Right-click opens the same menu at the pointer; “导出书目” acts on the row.
+    // Right-click opens the same menu at the pointer; “导出…” acts on the row.
     await row("Unparsed source")
       .locator(".paper-citation")
       .click({ button: "right" });
     expect(await menuContent(page)).toEqual([
+      "打开阅读",
+      "移动到文件夹…",
+      "导出…",
+      "删除",
       "获取 PDF",
       "生成全文（停用）",
-      "加入文件夹…",
-      "导出书目",
       "扩展引用…",
-      "[加工]",
       "运行算子…（停用）",
     ]);
-    await page.getByRole("menuitem", { name: "导出书目", exact: true }).click();
+    await page.getByRole("menuitem", { name: "导出…", exact: true }).click();
     const dialog = page.getByRole("dialog");
     await dialog.waitFor();
     expect(await dialog.innerText()).toContain("范围已固定：1 篇文献。");

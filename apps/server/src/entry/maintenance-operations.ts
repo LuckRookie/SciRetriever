@@ -110,6 +110,7 @@ export const MAINTENANCE_OPERATIONS = [
   "marks",
   "reading-open",
   "library-collect",
+  "library-trash",
   "archive",
   "archive-arrangement-edit",
   "tags",
@@ -225,6 +226,21 @@ async function performMaintenance(
       if (result === null) throw new LiteratureNotFoundError();
       return result;
     } catch (cause) {
+      if (
+        (cause instanceof Error && cause.name === "AbortError") ||
+        (cause instanceof WriteAdmissionError &&
+          cause.code === "write-admission-cancelled")
+      )
+        throw new ProductOperationError("operation-cancelled", { cause });
+      throw cause;
+    }
+  }
+  if (operation === "library-trash") {
+    try {
+      return await app.trash.manage(input, signal);
+    } catch (cause) {
+      if (cause instanceof ContractValidationError)
+        throw new ProductOperationError("invalid-request", { cause });
       if (
         (cause instanceof Error && cause.name === "AbortError") ||
         (cause instanceof WriteAdmissionError &&

@@ -71,6 +71,7 @@ import { createProcessorRegistry } from "../analysis/processor-registry.js";
 import { ProcessorService } from "../analysis/processor.js";
 import { FilterService } from "../literature/filters.js";
 import { FolderService } from "../literature/folders.js";
+import { LiteratureTrashService } from "../literature/trash.js";
 import { MarkService } from "../literature/marks.js";
 import { SnapshotService } from "../analysis/snapshots.js";
 import { InterventionService } from "../application/jobs/interventions.js";
@@ -253,6 +254,7 @@ export interface Application {
   readonly archiveText: ArchiveTextPipeline | null;
   readonly snapshots: SnapshotService;
   readonly folders: FolderService;
+  readonly trash: LiteratureTrashService;
   readonly filters: FilterService;
   readonly marks: MarkService;
   /** Reader translation (ADR 0049); its cache lives outside the catalog. */
@@ -406,6 +408,7 @@ export interface QueryApplication {
   ) => Promise<unknown>;
   readonly archiveProfile?: "pipeline" | "vlm-engine";
   readonly folders?: Pick<FolderService, "query" | "withExportFile">;
+  readonly trash?: Pick<LiteratureTrashService, "query">;
   readonly filters?: Pick<FilterService, "query">;
   readonly marks?: Pick<MarkService, "query">;
   readonly snapshots?: Pick<
@@ -2116,6 +2119,7 @@ async function createApplicationOwned(
       ),
       restartAdmission: admission,
       folders,
+      trash: new LiteratureTrashService(database),
       filters,
       importSessions: guardRuntimeMethods(
         importSessions,
@@ -2642,6 +2646,7 @@ export async function createQueryApplication(
         new SqliteAnnotationStorage(database, files),
       ),
       folders: new FolderService(database),
+      trash: new LiteratureTrashService(database),
       filters: new FilterService(database),
       marks: new MarkService(database, (id) => literature.detail(id), null),
       snapshots: new SnapshotService(database, literature),

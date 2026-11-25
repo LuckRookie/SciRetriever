@@ -182,7 +182,7 @@ export function readIntakeItem(db: DatabaseSync, r: IntakeItemRead): unknown {
   if (r.kind === "duplicate-candidates")
     return db
       .prepare(
-        "SELECT m.literature_id,m.title,m.publication_year,m.publication_form,(SELECT json_group_array(json_object('kind',kind,'display_name',display_name,'given_name',given_name,'family_name',family_name,'orcid',orcid,'affiliations',json('[]'))) FROM (SELECT literature_id,ordinal,kind,display_name,given_name,family_name,orcid FROM literature_metadata_authors a WHERE a.literature_id=m.literature_id ORDER BY ordinal)) AS authors_json FROM literature_metadata m WHERE m.title IS NOT NULL AND NOT EXISTS(SELECT 1 FROM intake_withdrawn_objects w WHERE w.object_kind='literature' AND w.object_id=m.literature_id) ORDER BY m.literature_id",
+        "SELECT m.literature_id,m.title,m.publication_year,m.publication_form,(SELECT json_group_array(json_object('kind',kind,'display_name',display_name,'given_name',given_name,'family_name',family_name,'orcid',orcid,'affiliations',json('[]'))) FROM (SELECT literature_id,ordinal,kind,display_name,given_name,family_name,orcid FROM literature_metadata_authors a WHERE a.literature_id=m.literature_id ORDER BY ordinal)) AS authors_json FROM literature_metadata m WHERE m.title IS NOT NULL AND NOT EXISTS(SELECT 1 FROM intake_withdrawn_objects w WHERE w.object_kind='literature' AND w.object_id=m.literature_id) AND NOT EXISTS(SELECT 1 FROM library_trash t WHERE t.literature_id=m.literature_id) ORDER BY m.literature_id",
       )
       .all()
       .map((row) => {
@@ -219,7 +219,7 @@ export function readIntakeItem(db: DatabaseSync, r: IntakeItemRead): unknown {
     return (
       db
         .prepare(
-          "SELECT l.literature_id,a.asset_id,a.role,l.meta_literature_id,(SELECT count(DISTINCT owners.literature_id)>1 FROM literature_assets owners WHERE owners.asset_id=a.asset_id) AS ambiguous,EXISTS(SELECT 1 FROM intake_withdrawn_objects w WHERE w.object_kind='literature' AND w.object_id=l.literature_id) AS withdrawn FROM literature_assets a JOIN assets s USING(asset_id) JOIN literatures l USING(literature_id) WHERE s.sha256=? ORDER BY (a.role='primary-pdf') DESC,l.literature_id LIMIT 1",
+          "SELECT l.literature_id,a.asset_id,a.role,l.meta_literature_id,(SELECT count(DISTINCT owners.literature_id)>1 FROM literature_assets owners WHERE owners.asset_id=a.asset_id) AS ambiguous,(EXISTS(SELECT 1 FROM intake_withdrawn_objects w WHERE w.object_kind='literature' AND w.object_id=l.literature_id) OR EXISTS(SELECT 1 FROM library_trash t WHERE t.literature_id=l.literature_id)) AS withdrawn FROM literature_assets a JOIN assets s USING(asset_id) JOIN literatures l USING(literature_id) WHERE s.sha256=? ORDER BY (a.role='primary-pdf') DESC,l.literature_id LIMIT 1",
         )
         .get(r.sha256) ?? null
     );

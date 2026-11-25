@@ -101,6 +101,7 @@ import {
   ContextMenu,
   type ContextMenuRequest,
 } from "../reader/input/ContextMenu.js";
+import { useDeletion } from "./Trash.js";
 import {
   MAIN_MATERIAL_STATES,
   MORE_MATERIAL_STATES,
@@ -119,7 +120,7 @@ import {
   type SelectionGroup,
 } from "./selection.js";
 import {
-  AddToFolderDialog,
+  MoveToFolderDialog,
   LITERATURE_DRAG,
   folderPaths,
   openBatch,
@@ -1017,9 +1018,28 @@ export default function Library() {
       }),
     [known],
   );
+  // The row's own actions reach the folder through a ref: the callback stays
+  // the same between renders, so the rows are not drawn again for it.
+  const removeFromFolderRef = useRef<(ids: readonly string[]) => void>(
+    () => {},
+  );
+  const deletion = useDeletion();
+  const deleteRef = useRef(deletion.request);
+  deleteRef.current = deletion.request;
   const onRowAction = useCallback(
     (id: string, title: string, kind: RowAction) => {
-      if (kind === "cite") expandCitations(seedsOf([id]));
+      if (kind === "open") shell.openPaper(id, undefined, undefined, title);
+      else if (kind === "remove-folder") removeFromFolderRef.current([id]);
+      else if (kind === "delete") {
+        // On a row of the selection, the whole selection goes with it.
+        const chosen = selectedRef.current;
+        if (chosen.has(id) && chosen.size > 1)
+          deleteRef.current({
+            ids: [...chosen],
+            label: `已选的 ${chosen.size.toLocaleString()} 篇文献`,
+          });
+        else deleteRef.current({ ids: [id], label: `《${title}》` });
+      } else if (kind === "cite") expandCitations(seedsOf([id]));
       else if (kind === "run")
         setRunner({
           scope: { kind: "literatures", ids: [id] },
@@ -1030,7 +1050,7 @@ export default function Library() {
         setAcquire({ kind: "literatures", ids: [id], label: `《${title}》` });
       else setOperation({ ids: [id], kind });
     },
-    [expandCitations, seedsOf],
+    [expandCitations, seedsOf, shell],
   );
   const mutable = api.kind === "workspace";
   /** Right-click or the keyboard's menu key on a row opens its menu there. */
@@ -1044,17 +1064,23 @@ export default function Library() {
         y,
         keyboard,
         label: "文献操作",
-        items: rowMenuItems(item, (kind) => onRowAction(id, title, kind)),
+        items: rowMenuItems(
+          item,
+          (kind) => onRowAction(id, title, kind),
+          folder ? (folderLabel ?? "文件夹") : null,
+        ),
       });
     },
-    [known, onRowAction],
+    [known, onRowAction, folder, folderLabel],
   );
-  const removeFromFolder = async () => {
+  const removeFromFolder = async (
+    ids: readonly string[] = [...shell.selected],
+  ) => {
     if (!folder) return;
     try {
       const result = await manageFolder(api, {
         operation: "remove",
-        request: { folder_id: folder.id, literature_ids: [...shell.selected] },
+        request: { folder_id: folder.id, literature_ids: ids },
       });
       shell.setSelected(new Set());
       shell.notify(
@@ -1066,6 +1092,7 @@ export default function Library() {
       shell.notify(errorMessage(error));
     }
   };
+  removeFromFolderRef.current = (ids) => void removeFromFolder(ids);
   // Dragging a selected row carries the whole selection to a folder.
   const selectedRef = useRef(shell.selected);
   selectedRef.current = shell.selected;
@@ -1169,7 +1196,7 @@ export default function Library() {
       : []),
     {
       id: "folder",
-      label: "加入文件夹…",
+      label: "移动到文件夹…",
       ...overLimit,
       onAction: () => {
         setMobileTools(false);
@@ -1178,7 +1205,7 @@ export default function Library() {
     },
     {
       id: "export",
-      label: "导出书目",
+      label: "导出…",
       ...overLimit,
       onAction: () => void operate("export", false),
     },
@@ -1958,6 +1985,7 @@ export default function Library() {
           }}
           onFile={onFile}
           onRowAction={onRowAction}
+          rowFolder={folder ? (folderLabel ?? "文件夹") : null}
           onRowMenu={mutable ? onRowMenu : undefined}
           onDragRow={onDragRow}
         />
@@ -2028,12 +2056,12 @@ export default function Library() {
                     icon={<Icon name="folder" />}
                     disabledReason={
                       shell.selected.size > 1000
-                        ? "最多一次加入 1,000 篇，请减少选择。"
+                        ? "最多一次移动 1,000 篇，请减少选择。"
                         : undefined
                     }
                     onPress={() => setAdding([...shell.selected])}
                   >
-                    加入文件夹…
+                    移动到文件夹…
                   </Button>
                   <Menu
                     label="更多"
@@ -2064,12 +2092,22 @@ export default function Library() {
                         : []),
                       {
                         id: "export",
-                        label: "导出书目",
+                        label: "导出…",
                         onAction: () => void operate("export", true),
+                      },
+                      {
+                        id: "delete",
+                        label: `删除 ${shell.selected.size.toLocaleString()} 篇…`,
+                        onAction: () =>
+                          deletion.request({
+                            ids: [...shell.selected],
+                            label: `已选的 ${shell.selected.size.toLocaleString()} 篇文献`,
+                          }),
                       },
                       {
                         id: "cite",
                         label: "扩展引用…",
+                        divider: true,
                         ...(shell.selected.size > CITATION_SEED_LIMIT
                           ? {
                               disabled: true,
@@ -2111,7 +2149,7 @@ export default function Library() {
                 </>
               ) : (
                 <Button onPress={() => void operate("export", true)}>
-                  导出书目
+                  导出…
                 </Button>
               )}
               <Button
@@ -2166,7 +2204,13 @@ export default function Library() {
         <RunOperatorDialog fixed={runner} onClose={() => setRunner(null)} />
       ) : null}
       {adding ? (
-        <AddToFolderDialog ids={adding} onClose={() => setAdding(null)} />
+        <MoveToFolderDialog
+          ids={adding}
+          from={
+            folder ? { id: folder.id, label: folderLabel ?? "文件夹" } : null
+          }
+          onClose={() => setAdding(null)}
+        />
       ) : null}
       <Drawer
         title="文献库操作"
@@ -2219,6 +2263,7 @@ export default function Library() {
           else setRowMenu(null);
         }}
       />
+      {deletion.dialog}
       {operation && (
         <OperationDialog {...operation} onClose={() => setOperation(null)} />
       )}
@@ -2229,19 +2274,22 @@ export default function Library() {
   );
 }
 /**
- * A paper's menu (page specs “文献库”): only what this paper can use, in the
- * order 获取 PDF, 生成全文, 加入文件夹, 导出书目, 扩展引用, then “加工”. What it never
- * needs is left out — 获取 PDF once it has one, 生成全文 once it has its full
- * text; what it cannot do yet stays, disabled, saying why (rule 12).
+ * A paper's menu (page specs “文献库”), in two groups. Above the hairline,
+ * what one does with any paper: 打开阅读, 移动到文件夹, 移出 the folder being
+ * shown, 导出, 删除 (to 最近删除, from where it comes back). Below it, what makes or uses its material: 获取 PDF, 生成全文,
+ * 扩展引用, 运行算子. What a paper never needs is left out — 获取 PDF once it
+ * has one, 生成全文 once it has its full text; what it cannot do yet stays,
+ * disabled, saying why (rule 12).
  */
 function rowMenuItems(
   item: LiteratureSearchItem,
   act: (kind: RowAction) => void,
+  folder: string | null,
 ): MenuOption[] {
   const status = item.literature.status;
   const unless = (reason: string | null) =>
     reason ? { disabled: true, description: reason } : {};
-  return [
+  const material: MenuOption[] = [
     ...(status === "UNREVIEWED"
       ? [
           {
@@ -2273,27 +2321,51 @@ function rowMenuItems(
           },
         ]),
     {
-      id: "folder",
-      label: "加入文件夹…",
-      onAction: () => act("folder"),
-    },
-    {
-      id: "export",
-      label: "导出书目",
-      onAction: () => act("export"),
-    },
-    {
       id: "cite",
       label: "扩展引用…",
       onAction: () => act("cite"),
     },
-    processingHeading,
     {
       id: "run",
       label: "运行算子…",
       ...unless(status === "READY" ? null : "需要先有全文"),
       onAction: () => act("run"),
     },
+  ];
+  return [
+    {
+      id: "open",
+      label: "打开阅读",
+      onAction: () => act("open"),
+    },
+    {
+      id: "folder",
+      label: "移动到文件夹…",
+      onAction: () => act("folder"),
+    },
+    ...(folder
+      ? [
+          {
+            id: "remove-folder",
+            label: `移出「${folder}」`,
+            onAction: () => act("remove-folder"),
+          },
+        ]
+      : []),
+    {
+      id: "export",
+      label: "导出…",
+      onAction: () => act("export"),
+    },
+    {
+      id: "delete",
+      label: "删除",
+      shortcut: "Del",
+      onAction: () => act("delete"),
+    },
+    ...material.map((option, index) =>
+      index === 0 ? { ...option, divider: true } : option,
+    ),
   ];
 }
 /**
@@ -2519,6 +2591,7 @@ const LibraryList = memo(function LibraryList({
   onPeek,
   onFile,
   onRowAction,
+  rowFolder,
   onRowMenu,
   onDragRow,
 }: {
@@ -2565,6 +2638,8 @@ const LibraryList = memo(function LibraryList({
   onPreview: (id: string) => void;
   onFile: (id: string, file: File) => void;
   onRowAction: (id: string, title: string, kind: RowAction) => void;
+  /** The folder being shown, when there is one: rows can leave it. */
+  rowFolder: string | null;
   onRowMenu: RowMenu | undefined;
   onDragRow: (id: string, data: DataTransfer, title: string) => void;
 }) {
@@ -2813,6 +2888,7 @@ const LibraryList = memo(function LibraryList({
             onPeek={onPeek}
             onFile={onFile}
             onRowAction={onRowAction}
+            rowFolder={rowFolder}
             onRowMenu={onRowMenu}
             onMove={onMove}
             onDragRow={onDragRow}
@@ -2834,7 +2910,16 @@ type CheckPointerDown = (
   index: number,
   event: ReactPointerEvent<HTMLElement>,
 ) => void;
-type RowAction = "run" | "folder" | "acquire" | "archive" | "export" | "cite";
+type RowAction =
+  | "open"
+  | "folder"
+  | "remove-folder"
+  | "export"
+  | "delete"
+  | "acquire"
+  | "archive"
+  | "cite"
+  | "run";
 type RowMenu = (id: string, x: number, y: number, keyboard: boolean) => void;
 /** Rows list three authors at most, the way a reference list does. */
 function rowAuthors(item: LiteratureSearchItem) {
@@ -2877,6 +2962,7 @@ const LibraryRow = memo(function LibraryRow({
   onPeek,
   onFile,
   onRowAction,
+  rowFolder,
   onRowMenu,
   onMove,
   onDragRow,
@@ -2909,6 +2995,8 @@ const LibraryRow = memo(function LibraryRow({
   onPeek: (id: string) => void;
   onFile: (id: string, file: File) => void;
   onRowAction: (id: string, title: string, kind: RowAction) => void;
+  /** The folder being shown, when there is one: rows can leave it. */
+  rowFolder: string | null;
   onRowMenu: RowMenu | undefined;
   onMove: (index: number) => void;
   onDragRow: (id: string, data: DataTransfer, title: string) => void;
@@ -2966,7 +3054,11 @@ const LibraryRow = memo(function LibraryRow({
         <Menu
           label="文献操作"
           iconOnly
-          items={rowMenuItems(item, (kind) => onRowAction(id, title, kind))}
+          items={rowMenuItems(
+            item,
+            (kind) => onRowAction(id, title, kind),
+            rowFolder,
+          )}
         />
       ) : null}
     </span>
@@ -3001,6 +3093,9 @@ const LibraryRow = memo(function LibraryRow({
       else if (["ArrowDown", "ArrowUp"].includes(event.key)) {
         event.preventDefault();
         onMove(row.index + (event.key === "ArrowDown" ? 1 : -1));
+      } else if (event.key === "Delete" && onRowMenu) {
+        event.preventDefault();
+        onRowAction(id, title, "delete");
       } else if (
         onRowMenu &&
         (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))

@@ -144,6 +144,14 @@ const folderModule = await import(
     import.meta.url,
   ).href
 );
+const libraryTrashModule = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./library-trash-engine.ts"
+      : "./library-trash-engine.js",
+    import.meta.url,
+  ).href
+);
 const filterModule = await import(
   new URL(
     import.meta.url.endsWith(".ts")
@@ -685,7 +693,8 @@ function writeMetadataAtRevision(
   indexMetadata(literatureId, m);
 }
 function indexMetadata(literatureId: Dynamic, m: Dynamic): Dynamic {
-  if (visibilityModule.literatureWithdrawn(db, literatureId)) return;
+  // Deleted papers keep their search rows; reads exclude them.
+  if (visibilityModule.intakeWithdrawnLiterature(db, literatureId)) return;
   const rowIds = literatureSearchRows.literatureSearchRowIds(db, literatureId);
   const first = rowIds[0];
   const contentBody =
@@ -5510,6 +5519,27 @@ port.on("message", (message: WorkerMessage) => {
                 ? error.code
                 : "folder-storage-failed",
           };
+        }
+        break;
+      case "library_trash":
+        try {
+          value = {
+            ok: true,
+            value: libraryTrashModule.runLibraryTrashStorage(
+              db,
+              message.command.command,
+            ),
+          };
+        } catch (error) {
+          throwCatalogCorruption(error);
+          if (
+            error &&
+            typeof error === "object" &&
+            "code" in error &&
+            error.code === "library-trash-busy"
+          )
+            value = { ok: false, code: error.code };
+          else throw error;
         }
         break;
       case "filters":

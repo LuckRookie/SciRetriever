@@ -14,6 +14,7 @@ import { applyCatalogAddition } from "../src/storage/sqlite/catalog-additions.js
 import { runCatalogBackfillBatch } from "../src/storage/sqlite/catalog-backfill.js";
 import {
   defineCatalogAddition,
+  manifestObject,
   registerCatalogAddition,
 } from "../src/storage/sqlite/catalog-ddl.js";
 import { readCatalogLayout } from "../src/storage/sqlite/catalog-identity.js";
@@ -30,6 +31,7 @@ import { StoredLibraryState } from "../src/storage/sqlite/library-state.js";
 import {
   ARCHIVE_ISSUES_ADDITION,
   LIBRARY_SCALE_ADDITION,
+  LIBRARY_TRASH_ADDITION,
   SCHEMA_FINGERPRINT,
   SCHEMA_MANIFEST,
 } from "../src/storage/sqlite/schema.js";
@@ -286,10 +288,15 @@ it("installs the unresolved-issue index on the existing layout while old readers
     const db = new DatabaseSync(path);
     try {
       initializeCurrentCatalog(db, at);
+      // Start from the layout before both later additions.
+      for (const sql of [...LIBRARY_TRASH_ADDITION.statements].reverse()) {
+        const object = manifestObject(sql);
+        db.exec(`DROP ${object.type.toUpperCase()} ${object.name}`);
+      }
       db.exec("DROP INDEX archive_issues_unresolved");
-      db.prepare("DELETE FROM catalog_schema_additions WHERE name=?").run(
-        ARCHIVE_ISSUES_ADDITION.name,
-      );
+      db.prepare(
+        "DELETE FROM catalog_schema_additions WHERE name IN (?,?)",
+      ).run(ARCHIVE_ISSUES_ADDITION.name, LIBRARY_TRASH_ADDITION.name);
       const previous = catalogConfigFor([LIBRARY_SCALE_ADDITION]);
       expect(readCatalogLayout(db, previous)?.extra_objects).toEqual([]);
       await expect(inspectCatalogSchema(path)).rejects.toMatchObject({
@@ -318,6 +325,26 @@ it("installs the unresolved-issue index on the existing layout while old readers
       expect(readCatalogLayout(db, previous)?.extra_objects).toEqual([
         { type: "index", name: "archive_issues_unresolved" },
       ]);
+      await expect(inspectCatalogSchema(path)).rejects.toMatchObject({
+        reason: "catalog-addition-required",
+        addition: LIBRARY_TRASH_ADDITION.name,
+      });
+      expect(
+        await runCli(
+          [
+            "storage",
+            "schema-apply",
+            "--catalog",
+            path,
+            "--addition",
+            LIBRARY_TRASH_ADDITION.name,
+          ],
+          { home, stdout: () => {}, stderr: () => {} },
+        ),
+      ).toMatchObject({
+        code: 0,
+        value: { name: LIBRARY_TRASH_ADDITION.name },
+      });
       await expect(inspectCatalogSchema(path)).resolves.toMatchObject({
         status: "ready",
         schema_fingerprint: SCHEMA_FINGERPRINT,
@@ -328,6 +355,11 @@ it("installs the unresolved-issue index on the existing layout while old readers
             backfill_cursor: null,
           },
           { name: LIBRARY_SCALE_ADDITION.name },
+          {
+            name: LIBRARY_TRASH_ADDITION.name,
+            backfill_step: 0,
+            backfill_cursor: null,
+          },
         ],
       });
     } finally {
@@ -377,6 +409,7 @@ it("keeps known DDL exact and refuses an incompatible or non-additive applicatio
       ).toEqual([
         { name: ARCHIVE_ISSUES_ADDITION.name },
         { name: LIBRARY_SCALE_ADDITION.name },
+        { name: LIBRARY_TRASH_ADDITION.name },
       ]);
 
       db.prepare(

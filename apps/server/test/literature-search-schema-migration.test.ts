@@ -28,6 +28,7 @@ import { RetrievalStorageClient } from "../src/storage/sqlite/retrieval-client.j
 import {
   ARCHIVE_ISSUES_ADDITION,
   LIBRARY_SCALE_ADDITION,
+  LIBRARY_TRASH_ADDITION,
   SCHEMA_FINGERPRINT,
   SCHEMA_FINGERPRINT_V19,
   SCHEMA_FINGERPRINT_V19_COUNTS,
@@ -235,6 +236,12 @@ it.each([
             backfill_step: 0,
             backfill_cursor: null,
           },
+          {
+            name: LIBRARY_TRASH_ADDITION.name,
+            ddl_fingerprint: LIBRARY_TRASH_ADDITION.ddl_fingerprint,
+            backfill_step: 0,
+            backfill_cursor: null,
+          },
         ],
       });
       await expect(migrateLiteratureSearchSchema(path)).rejects.toMatchObject({
@@ -316,6 +323,7 @@ it("registers a completed legacy combined catalog through schema-apply without r
             backfill_step: LIBRARY_SCALE_ADDITION.backfill_steps.length,
             backfill_cursor: null,
           },
+          { name: LIBRARY_TRASH_ADDITION.name, backfill_step: 0 },
         ],
       });
     } finally {

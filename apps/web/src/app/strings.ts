@@ -278,6 +278,8 @@ export function serviceMessage(code: string): string {
         "intake-batch-state": "批次状态已变化，请刷新后再操作。",
         "intake-batch-busy":
           "这一批有文献正在被任务处理，请等任务结束或取消后再撤回。",
+        "library-trash-busy":
+          "其中有文献正在被任务处理，请等任务结束或取消后再删除。",
         "intake-data-changed": "批次数据在确认前有变化，请重新预览后确认。",
         "intake-request-too-large":
           "导出文件太大，请拆成几个小于 7 MiB 的文件分别导入。",

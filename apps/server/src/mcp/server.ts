@@ -272,6 +272,7 @@ export function createMcpServer(options: McpOptions = {}) {
       marks_manage: "marks",
       reading_open: "reading-open",
       collect_literatures: "library-collect",
+      library_trash_manage: "library-trash",
       archive_manage: "archive",
       archive_arrangement_edit: "archive-arrangement-edit",
       tags_manage: "tags",
@@ -418,6 +419,8 @@ export function createMcpServer(options: McpOptions = {}) {
       return executeQuery(q, "filters", args, signal);
     if (name === "folders_query")
       return executeQuery(q, "folders", args, signal);
+    if (name === "library_trash_query")
+      return executeQuery(q, "library-trash", args, signal);
     if (name === "marks_query") return executeQuery(q, "marks", args, signal);
     if (name === "library_counts")
       return executeQuery(q, "library-counts", args, signal);

@@ -9,11 +9,18 @@ const active = (kind: string, id: string) =>
   id +
   ")";
 const alive = (id: string) => active("literature", id);
+type Visible = (id: string) => string;
+/** A paper is shown when neither withdrawn nor in recently deleted (addition library-trash). */
+const shown: Visible = (id) =>
+  alive(id) +
+  " AND NOT EXISTS(SELECT 1 FROM library_trash t WHERE t.literature_id=" +
+  id +
+  ")";
 const topic = "topic_discovery_causes";
 const citation = "citation_discovery_causes";
 const results = "discovery_results";
 
-export function refreshFolderMembers(owners: string) {
+export function refreshFolderMembers(owners: string, visible: Visible = alive) {
   return [
     "DELETE FROM library_ordered_members WHERE kind IN ('folder','folder-tree') AND literature_id IN (" +
       owners +
@@ -24,7 +31,7 @@ export function refreshFolderMembers(owners: string) {
       owners +
       ") keys CROSS JOIN folder_members m ON m.literature_id=keys.literature_id " +
       "JOIN folders f USING(folder_id) WHERE " +
-      alive("m.literature_id") +
+      visible("m.literature_id") +
       " AND " +
       active("folder", "m.folder_id") +
       " AND " +
@@ -41,6 +48,7 @@ function refreshMembers(
   kind: "intake" | "discovery",
   keys: string,
   match: string,
+  visible: Visible,
 ) {
   return [
     // Include kind in the tuple so SQLite seeks the full key even for compound
@@ -55,7 +63,7 @@ function refreshMembers(
       ") k " +
       "LEFT JOIN literature_intake i ON i.literature_id=k.literature_id " +
       "WHERE " +
-      alive("k.literature_id") +
+      visible("k.literature_id") +
       " AND (" +
       match +
       ") " +
@@ -77,13 +85,17 @@ function insertVisibleMember(
     WHERE intake_at IS NOT excluded.intake_at`;
 }
 
-export const refreshIntakeMembers = (keys: string) =>
+export const refreshIntakeMembers = (keys: string, visible: Visible = alive) =>
   refreshMembers(
     "intake",
     keys,
     "EXISTS(SELECT 1 FROM intake_batch_members m WHERE m.batch_id=k.scope_id AND m.literature_id=k.literature_id)",
+    visible,
   );
-export const refreshDiscoveryMembers = (keys: string) =>
+export const refreshDiscoveryMembers = (
+  keys: string,
+  visible: Visible = alive,
+) =>
   refreshMembers(
     "discovery",
     keys,
@@ -93,10 +105,11 @@ export const refreshDiscoveryMembers = (keys: string) =>
       "EXISTS(SELECT 1 FROM " +
       citation +
       " c WHERE c.discovery_run_id=k.scope_id AND c.actual_literature_id=k.literature_id AND " +
-      alive("c.source_literature_id") +
+      visible("c.source_literature_id") +
       " AND " +
-      alive("c.target_literature_id") +
+      visible("c.target_literature_id") +
       ")",
+    visible,
   );
 
 const kindSql = (id: string) =>
@@ -521,3 +534,33 @@ export const libraryPagingSchema = (historicalTime: string) =>
       },
     ),
   ] as const;
+
+/** Addition library-trash: the same member refresh as a withdrawal, also hiding
+ * recently deleted papers. Members written by older triggers may still name a
+ * deleted paper; every read filters them through visibleLiteratureSql. */
+export const libraryTrashPagingTriggers = () =>
+  sides.map((event) => {
+    const owners =
+      event === "INSERT"
+        ? lit("new")
+        : event === "DELETE"
+          ? lit("old")
+          : lit("old") + " UNION " + lit("new");
+    return trigger(
+      "trash_" + event.toLowerCase(),
+      (event === "UPDATE" ? "UPDATE OF literature_id" : event) +
+        " ON library_trash",
+      [
+        ...refreshFolderMembers(owners, shown),
+        ...refreshIntakeMembers(keysForIntake(owners), shown),
+        ...refreshDiscoveryMembers(
+          findDiscovery(owners, discoveryMemberFields),
+          shown,
+        ),
+      ],
+      "AFTER",
+      event === "UPDATE"
+        ? " WHEN old.literature_id IS NOT new.literature_id"
+        : "",
+    );
+  });

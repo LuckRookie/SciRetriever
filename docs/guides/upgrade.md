@@ -91,6 +91,14 @@ sciretriever storage schema-apply --catalog /absolute/data/catalog.sqlite --addi
 
 命令只做追加，在一个事务里完成。已经追加过的一项再执行会以 `catalog-addition-already-applied` 拒绝，库不受影响。追加之后旧版本仍能照常读写这个库，所以换回旧构建不需要撤销。每个版本要追加哪一项，见[更新记录](../../CHANGELOG.md)。
 
+缺几项时，按 `catalog-addition-required` 报出的名字逐项执行，每次一项。`library-trash` 加入文献的“最近删除”（一张空表、一个索引和九个触发器，见[存储 7](../architecture/technical/07-versioned-storage.md#7-运行审查存储)）：
+
+```bash
+sciretriever storage schema-apply --catalog /absolute/data/catalog.sqlite --addition library-trash
+```
+
+旧构建不认识最近删除：换回旧构建时库照常可读写，但已删除的文献会在旧构建里照常显示，它重算过的计数也可能把它们算进去。
+
 ## Web 守护的首次切换与程序升级
 
 “应用配置”只重建当前程序的运行时，不构建程序、不替换文件、不迁移数据库。升级程序仍需正常停止旧服务、保全一致性备份、核对副本与资源后再启动；不要运行中覆盖父子程序文件。

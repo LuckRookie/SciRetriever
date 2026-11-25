@@ -16,15 +16,17 @@ const {
   ).href
 );
 
-const { libraryPagingSchema }: typeof import("./library-paging-schema.js") =
-  await import(
-    new URL(
-      import.meta.url.endsWith(".ts")
-        ? "./library-paging-schema.ts"
-        : "./library-paging-schema.js",
-      import.meta.url,
-    ).href
-  );
+const {
+  libraryPagingSchema,
+  libraryTrashPagingTriggers,
+}: typeof import("./library-paging-schema.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./library-paging-schema.ts"
+      : "./library-paging-schema.js",
+    import.meta.url,
+  ).href
+);
 
 const { DEFAULT_DOCUMENT_LEFT_JOIN }: typeof import("./document-defaults.js") =
   await import(
@@ -1144,9 +1146,26 @@ export const ARCHIVE_ISSUES_ADDITION = defineCatalogAddition(
   ],
 );
 
+/** Recently deleted papers (09 user organization). Hidden like a withdrawal:
+ * counts, ordered members and the retrieval change log follow the table. */
+export const LIBRARY_TRASH_ADDITION = defineCatalogAddition("library-trash", [
+  "CREATE TABLE library_trash(literature_id TEXT PRIMARY KEY,deleted_at TEXT NOT NULL,deleted_by TEXT NOT NULL,FOREIGN KEY(literature_id) REFERENCES literatures(literature_id) ON DELETE CASCADE ON UPDATE CASCADE) STRICT, WITHOUT ROWID",
+  "CREATE INDEX library_trash_order ON library_trash(deleted_at DESC,literature_id)",
+  ...countDirtyTriggers("library_trash", ["literature_id"], (row) =>
+    countOwner(`${row}.literature_id`),
+  ),
+  ...retrievalChangeTriggers(
+    "library_trash",
+    (row) => `SELECT ${row}.literature_id`,
+    true,
+  ),
+  ...libraryTrashPagingTriggers(),
+]);
+
 export const CATALOG_ADDITIONS = [
   LIBRARY_SCALE_ADDITION,
   ARCHIVE_ISSUES_ADDITION,
+  LIBRARY_TRASH_ADDITION,
 ] as const;
 export const SCHEMA_MANIFEST = manifestWithAdditions(
   CATALOG_BASE_SCHEMA,

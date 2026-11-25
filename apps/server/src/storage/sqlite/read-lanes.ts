@@ -56,6 +56,8 @@ export const SQLITE_READ_LANES = {
       "import_read.items-read.resolution-file",
       "import_read.items-read.raw-owners",
       "folders.list",
+      "library_trash.count",
+      "library_trash.list",
       "filters.list",
       "marks.list",
       "marks.place.check",
@@ -238,6 +240,8 @@ function readOperation(c: SqliteCommand): string {
       return `${c.kind}.${c.command.kind}`;
     case "intake_withdrawal_read":
       return `${c.kind}.${c.command.operation}`;
+    case "library_trash":
+      return `${c.kind}.${c.command.kind}`;
     case "folders":
     case "filters":
     case "marks": {

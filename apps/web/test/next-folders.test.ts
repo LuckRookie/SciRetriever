@@ -62,15 +62,15 @@ it("organizes papers into nested folders by dialog and drag, scopes the library,
     await p.keyboard.press("Space");
     await p
       .getByRole("region", { name: "文献选择" })
-      .getByRole("button", { name: "加入文件夹…", exact: true })
+      .getByRole("button", { name: "移动到文件夹…", exact: true })
       .click();
-    const add = p.getByRole("dialog", { name: "加入文件夹", exact: true });
+    const add = p.getByRole("dialog", { name: "移动到文件夹", exact: true });
     await add
       .getByRole("button", { name: /文件夹/ })
       .and(p.locator('[aria-haspopup="listbox"]'))
       .click();
     await p.getByRole("option", { name: "表面界面", exact: true }).click();
-    await add.getByRole("button", { name: "加入", exact: true }).click();
+    await add.getByRole("button", { name: "移动", exact: true }).click();
     await add.waitFor({ state: "detached" });
     await p
       .getByRole("region", { name: "文献选择" })
@@ -109,7 +109,7 @@ it("organizes papers into nested folders by dialog and drag, scopes the library,
     await expect.poll(() => folderRow(p, "碳链").textContent()).toContain("1");
     await expect
       .poll(() => toast.textContent())
-      .toContain("已加入「碳链」：新增 1 篇");
+      .toContain("已放入「碳链」：新增 1 篇");
     // Undo removes exactly what the drop added; then drop it again.
     await toast.getByRole("button", { name: "撤销" }).click();
     await expect.poll(() => folderRow(p, "碳链").textContent()).toBe("碳链0");

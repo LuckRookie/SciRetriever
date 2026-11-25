@@ -581,6 +581,14 @@ export const QUERY_TOOLS: readonly Tool[] = [
     }),
   ),
   tool(
+    "library_trash_query",
+    "Read recently deleted papers. list request {limit:1..100, cursor:null for first page} returns items {literature:{literature_id,identifiers,title,year},deleted_at,deleted_by}, newest deletion first, ties by literature_id; follow next_cursor until null. count request {} returns {total_count}. Deleted papers are hidden from every other read. Does not write.",
+    object({
+      operation: { enum: ["list", "count"] },
+      request: { type: "object" },
+    }),
+  ),
+  tool(
     "marks_query",
     "Read one paper's reading marks (highlights, region captures and notes) in reading order, or export them. operation list request {literature_id}; export request {literature_id, format: markdown|json}. Does not write.",
     object({
@@ -943,6 +951,24 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
     object({
       operation: { enum: ["create", "update", "delete", "restore", "place"] },
       request: { type: "object" },
+    }),
+    false,
+  ),
+  tool(
+    "library_trash_manage",
+    "Move papers to recently deleted or restore them. selector {kind:'literatures', literature_ids: 1..1000 distinct IDs}. delete hides each paper from all reads but keeps its bibliography, files, full text, folder membership, reading history and marks; restore makes them visible again. Missing, withdrawn or already deleted papers (for restore: papers not in recently deleted) are not changes. A paper targeted by a queued or running task refuses the whole request with library-trash-busy. Reports {operation,target_count,changed}. There is no permanent deletion.",
+    object({
+      operation: { enum: ["delete", "restore"] },
+      selector: object({
+        kind: { const: "literatures" },
+        literature_ids: {
+          type: "array",
+          minItems: 1,
+          maxItems: 1000,
+          uniqueItems: true,
+          items: id,
+        },
+      }),
     }),
     false,
   ),

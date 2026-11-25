@@ -2,6 +2,7 @@ import { ArchiveContractObsoleteError } from "@sciretriever/contracts";
 import { ArchiveTextError } from "../archive/text-source.js";
 import { FilterError } from "../literature/filters.js";
 import { FolderError } from "../literature/folders.js";
+import { LiteratureTrashError } from "../literature/trash.js";
 import { presentActors } from "../logging/actor-label.js";
 import {
   ContractValidationError,
@@ -93,6 +94,7 @@ export const QUERY_OPERATIONS = [
   "library-counts",
   "library-exact-count",
   "folders",
+  "library-trash",
   "filters",
   "marks",
   "literature-read",
@@ -209,6 +211,16 @@ async function readQuery(
   if (operation === "marks") {
     if (!q.marks) unavailable();
     return q.marks.query(value, signal);
+  }
+  if (operation === "library-trash") {
+    if (!q.trash) unavailable();
+    try {
+      return await q.trash.query(value, signal);
+    } catch (cause) {
+      if (cause instanceof ContractValidationError)
+        throw new ProductOperationError("invalid-request", { cause });
+      throw cause;
+    }
   }
   if (operation === "snapshots") {
     if (!q.snapshots) unavailable();
@@ -698,6 +710,7 @@ export function isQueryFailure(
     error instanceof ProductOperationError ||
     error instanceof SnapshotError ||
     error instanceof FolderError ||
+    error instanceof LiteratureTrashError ||
     error instanceof FilterError ||
     error instanceof ArchiveError ||
     error instanceof ArchiveTextError ||

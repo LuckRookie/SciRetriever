@@ -306,14 +306,15 @@ it("makes the first usable of 获取 PDF and 生成全文 the selection bar's pr
     expect((await actions()).filter((text) => text !== "取消选择")).toEqual([
       "获取 PDF 1",
       "生成全文 0",
-      "加入文件夹…",
+      "移动到文件夹…",
       "更多",
     ]);
     expect(await primary()).toEqual(["获取 PDF 1"]);
-    // “更多”: 导出书目, 扩展引用…, 核验文章身份, then the “加工” group.
+    // “更多”: 导出…, 删除, then 扩展引用…, 核验文章身份 and the “加工” group.
     await bar.getByRole("button", { name: "更多", exact: true }).click();
     expect(await menuContent(page)).toEqual([
-      "导出书目",
+      "导出…",
+      "删除 1 篇…",
       "扩展引用…",
       "核验文章身份",
       "[加工]",
@@ -332,19 +333,20 @@ it("makes the first usable of 获取 PDF and 生成全文 the selection bar's pr
     expect(await primary()).toEqual([]);
     await page.getByRole("button", { name: "取消选择", exact: true }).click();
     await bar.waitFor({ state: "detached" });
-    // The row's menu: 获取 PDF, 生成全文, 加入文件夹, 导出书目, 扩展引用…,
-    // then “加工”.
+    // The row's menu: what one does with any paper, then what makes or
+    // uses its material.
     await missing.hover();
     await missing
       .getByRole("button", { name: "文献操作", exact: true })
       .click();
     expect(await menuContent(page)).toEqual([
+      "打开阅读",
+      "移动到文件夹…",
+      "导出…",
+      "删除",
       "获取 PDF",
       "生成全文",
-      "加入文件夹…",
-      "导出书目",
       "扩展引用…",
-      "[加工]",
       "运行算子…",
     ]);
     await closeMenu(page);

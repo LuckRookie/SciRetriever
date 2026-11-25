@@ -201,9 +201,11 @@ it("hands the library's selection or one paper to citation expansion as seeds, k
     const bar = page.getByRole("region", { name: "文献选择" });
     await bar.getByText("已选 2 篇").waitFor();
     await bar.getByRole("button", { name: "更多", exact: true }).click();
-    // After 导出书目 (page specs “连续选择与选择栏”).
+    // Below the hairline, after the everyday actions (page specs “连续选择与选择栏”).
     const labels = await page.getByRole("menuitem").allTextContents();
-    expect(labels.indexOf("扩展引用…")).toBe(labels.indexOf("导出书目") + 1);
+    expect(labels.indexOf("扩展引用…")).toBeGreaterThan(
+      labels.indexOf("导出…"),
+    );
     await page
       .getByRole("menuitem", { name: "扩展引用…", exact: true })
       .click();
@@ -241,7 +243,7 @@ it("hands the library's selection or one paper to citation expansion as seeds, k
         .nth(5)
         .getAttribute("aria-label"),
     ).toBe(await focused(page));
-    // One paper from its row menu, after 导出书目.
+    // One paper from its row menu, below the hairline.
     await page.goBack();
     await expect.poll(() => page.locator(".paper-row").count()).toBe(9);
     await bar.getByRole("button", { name: "取消选择", exact: true }).click();
@@ -249,8 +251,8 @@ it("hands the library's selection or one paper to citation expansion as seeds, k
     await row.hover();
     await row.getByRole("button", { name: "文献操作" }).click();
     const rowLabels = await page.getByRole("menuitem").allTextContents();
-    expect(rowLabels.indexOf("扩展引用…")).toBe(
-      rowLabels.indexOf("导出书目") + 1,
+    expect(rowLabels.indexOf("扩展引用…")).toBeGreaterThan(
+      rowLabels.indexOf("导出…"),
     );
     await page
       .getByRole("menuitem", { name: "扩展引用…", exact: true })

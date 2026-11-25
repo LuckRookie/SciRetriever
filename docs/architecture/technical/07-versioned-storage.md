@@ -520,6 +520,16 @@ Analysis 的 `processor_result_summaries` 保存已发布结果用量/覆盖摘�
 
 两表都只由离线迁移加入，启动不自动加表；它们不推进文献状态或检索 source revision。
 
+**最近删除。** 按[用户整理 6.5](09-user-organization.md#65-文献的删除与恢复)，结构追加 `library-trash` 增加：
+
+| 对象                  | 字段、约束与作用                                                                                                                                                                                                                                                                                    |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `library_trash`       | literature_id TEXT PK，FK→literatures ON DELETE CASCADE ON UPDATE CASCADE；deleted_at（TEXT NOT NULL，服务写入的 UTC ISO 8601 时间）；deleted_by（TEXT NOT NULL，发起写入的实际身份）。`STRICT, WITHOUT ROWID`。行存在即该文献在最近删除里，恢复即删除行；`visibleLiteratureSql` 据此与撤回一起排除 |
+| `library_trash_order` | `(deleted_at DESC, literature_id)`，供最近删除的列表分页与计数                                                                                                                                                                                                                                      |
+| 触发器（9 个）        | 增删改时：把所属论文记入 `library_count_dirty`（计数在同一事务里更新）；把文献记入 `retrieval_changes` 并推进检索 source revision（一次请求合计推进一次）；按与撤回相同的方式刷新文件夹、入库批次与发现的有序成员（`library_ordered_members`），排除已删除的文献                                    |
+
+它不进入 `LIBRARY_STATE_INPUT_TABLES`，删除与恢复不改变存储的文献状态。追加只建空表、索引和触发器，创建时没有回填。旧版本照 [4.4](#44-只加的结构变化不停服) 打开时把这些对象列为额外对象；旧版本不认识这张表，会照常显示已删除的文献。
+
 ## 8. 设备认证存储
 
 按 ADR 0058，Web transport 认证 owner 提交设备连接事实，Storage 仅保存派生值与生命周期。单一 schema 16 在原 15 上增加：

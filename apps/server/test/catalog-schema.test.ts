@@ -22,6 +22,7 @@ import {
   CATALOG_BASE_SCHEMA,
   LIBRARY_SCALE_ADDITION,
   ARCHIVE_ISSUES_ADDITION,
+  LIBRARY_TRASH_ADDITION,
   SCHEMA_FINGERPRINT,
   SCHEMA_MANIFEST,
   SCHEMA_MANIFEST_V16,
@@ -125,6 +126,9 @@ it("pins the frozen 16–19 manifests, current additive layout and version-speci
   ).toBe(LIBRARY_SCALE_ADDITION.ddl_fingerprint);
   expect(ARCHIVE_ISSUES_ADDITION.ddl_fingerprint).toBe(
     "979c4fef462150975fd66fdb107d585bf86574846ad3754d3e98969d23a9e919",
+  );
+  expect(LIBRARY_TRASH_ADDITION.ddl_fingerprint).toBe(
+    "1e4e381ccec8e0eaafb5532f41fbf0286b32ec3fedf4e61c73fd57459d832366",
   );
   for (const name of ["saved_filters", "reading_mark_places"]) {
     expect(LIBRARY_STATE_INPUT_TABLES as readonly string[]).not.toContain(name);

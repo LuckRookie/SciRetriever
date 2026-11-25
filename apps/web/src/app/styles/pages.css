@@ -285,6 +285,48 @@
     font-size: var(--text-caption);
     line-height: var(--lh-caption);
   }
+  /* 最近删除 sits apart from the folders it is not one of. */
+  .folder-trash {
+    margin-top: var(--space-2);
+    color: var(--fg2);
+  }
+  /* Its list: the title takes the room, the time and “恢复” keep theirs. */
+  .trash-list {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .trash-list > li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) 0;
+    border-top: 1px solid var(--line);
+  }
+  .trash-list > li:first-child {
+    border-top: 0;
+  }
+  .trash-list time {
+    color: var(--fg3);
+    font-size: var(--text-caption);
+    white-space: nowrap;
+  }
+  @media (max-width: 520px) {
+    .trash-list > li {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+    .trash-list time {
+      grid-column: 1;
+      grid-row: 2;
+    }
+    .trash-list > li > .ui-button {
+      grid-column: 2;
+      grid-row: 1 / span 2;
+    }
+  }
   .filter-count {
     margin-left: 2px;
     color: var(--fg3);

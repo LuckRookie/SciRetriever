@@ -4079,3 +4079,4 @@ export * from "./draft-document.js";
 export * from "./intake-page.js";
 
 export * from "./literature-summary.js";
+export * from "./library-trash.js";

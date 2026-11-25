@@ -26,7 +26,7 @@ const { ftsIndexText }: typeof import("../../literature/unicode-casefold.js") =
       import.meta.url,
     ).href
   );
-const { literatureWithdrawn }: typeof import("./intake-visibility.js") =
+const { intakeWithdrawnLiterature }: typeof import("./intake-visibility.js") =
   await import(
     new URL(
       import.meta.url.endsWith(".ts")
@@ -177,7 +177,7 @@ function plan(
     .filter((id) => !reasons.has(id));
   const doomed = new Set(removed),
     objects: ObjectRef[] = removed
-      .filter((id) => !literatureWithdrawn(db, id))
+      .filter((id) => !intakeWithdrawnLiterature(db, id))
       .map((id) => ({ kind: "literature", id }));
   // Relationships of each withdrawn paper, including shared immutable assets.
   for (const row of db
@@ -304,19 +304,23 @@ function restoreFts(db: DatabaseSync, id: string) {
     "",
   );
 }
-/** In the intake owner's transaction. Keep the original withdrawal/report intact. */
+/** In the intake owner's transaction. Keep the original withdrawal/report intact.
+ * A new intake of a paper in recently deleted also takes it out of there. */
 export function restoreWithdrawnLiterature(
   db: DatabaseSync,
   id: string,
 ): boolean {
   if (!db.isTransaction)
     throw new Error("intake restoration requires a transaction");
+  const deleted =
+    db.prepare("DELETE FROM library_trash WHERE literature_id=?").run(id)
+      .changes > 0;
   const owner = db
     .prepare(
       "SELECT batch_id FROM intake_withdrawn_objects WHERE object_kind='literature' AND object_id=?",
     )
     .get(id);
-  if (!owner) return false;
+  if (!owner) return deleted;
   db.prepare(
     "DELETE FROM intake_withdrawn_objects WHERE batch_id=? AND ((object_kind='literature' AND object_id=?) OR (object_kind='literature-asset' AND object_id IN (SELECT literature_asset_id FROM literature_assets WHERE literature_id=?)) OR (object_kind='folder-member' AND json_extract(object_id,'$[1]')=?) OR (object_kind='mark' AND object_id IN (SELECT mark_id FROM reading_marks WHERE literature_id=?)))",
   ).run(owner.batch_id!, id, id, id, id);

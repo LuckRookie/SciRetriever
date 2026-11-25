@@ -8,6 +8,7 @@ import {
 import type { FolderNode, LibraryQuery } from "@sciretriever/contracts";
 import {
   Button,
+  Checkbox,
   ConfirmDialog,
   Dialog,
   Icon,
@@ -35,6 +36,7 @@ import {
 import { download } from "../../data/download.js";
 import { useShell } from "../../shell/context.js";
 import { errorMessage } from "../../strings.js";
+import { TrashEntry } from "./Trash.js";
 
 /** Drag payloads between library rows and the folder tree. */
 export const LITERATURE_DRAG = "application/x-sciretriever-literature";
@@ -272,7 +274,7 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
                 return;
               }
               toast({
-                message: `已加入「${label}」：新增 ${added.length.toLocaleString()} 篇`,
+                message: `已放入「${label}」：新增 ${added.length.toLocaleString()} 篇`,
                 action: {
                   label: "撤销",
                   onPress: () =>
@@ -511,6 +513,7 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
       ) : (
         level(null, 0)
       )}
+      <TrashEntry />
       <Dialog
         title={editing?.folder ? "重命名文件夹" : "新建文件夹"}
         isOpen={editing !== null}
@@ -619,12 +622,18 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
   );
 }
 
-/** Pick or create a folder, then add the given papers to it. */
-export function AddToFolderDialog({
+/**
+ * Pick or create a folder, then put the given papers in it. Opened from a
+ * folder (`from`), it moves them: they leave that folder unless the reader
+ * keeps them there. A paper never leaves the library this way.
+ */
+export function MoveToFolderDialog({
   ids,
+  from,
   onClose,
 }: {
   ids: readonly string[];
+  from?: { id: string; label: string } | null;
   onClose: () => void;
 }) {
   const api = useApi(),
@@ -634,7 +643,9 @@ export function AddToFolderDialog({
   const paths = folderPaths(folders.data?.items ?? []);
   const [chosen, setChosen] = useState("");
   const [created, setCreated] = useState("");
-  const add = useMutation({
+  const [keep, setKeep] = useState(false);
+  const same = !!from && chosen === from.id && !created.trim();
+  const move = useMutation({
     mutationFn: async () => {
       let id = chosen;
       if (created.trim()) {
@@ -652,24 +663,39 @@ export function AddToFolderDialog({
         operation: "add",
         request: { folder_id: id, literature_ids: ids },
       });
+      const leaves = !!from && !keep && id !== from.id;
+      if (leaves)
+        await manageFolder(api, {
+          operation: "remove",
+          request: { folder_id: from.id, literature_ids: ids },
+        });
       return {
         name:
           created.trim() ||
           paths.find((path) => path.id === id)?.label ||
           "文件夹",
         changed: "changed" in result ? result.changed : 0,
+        leaves,
       };
     },
-    onSuccess: ({ name, changed }) => {
+    // Even a failure may have changed one of the two folders.
+    onSettled: () => {
       void queries.invalidateQueries({ queryKey: ["folders"] });
       void queries.invalidateQueries({ queryKey: ["library"] });
-      shell.notify(`已加入「${name}」：新增 ${changed} 篇`);
+    },
+    onSuccess: ({ name, changed, leaves }) => {
+      if (leaves) shell.setSelected(new Set());
+      shell.notify(
+        leaves
+          ? `已把 ${ids.length.toLocaleString()} 篇移动到「${name}」`
+          : `已放入「${name}」：新增 ${changed.toLocaleString()} 篇`,
+      );
       onClose();
     },
   });
   return (
     <Dialog
-      title="加入文件夹"
+      title="移动到文件夹"
       isOpen
       onOpenChange={(value) => {
         if (!value) onClose();
@@ -677,17 +703,25 @@ export function AddToFolderDialog({
       footer={
         <Button
           variant="primary"
-          isPending={add.isPending}
+          isPending={move.isPending}
           disabledReason={
-            chosen || created.trim() ? undefined : "请选择或新建一个文件夹。"
+            same
+              ? "这些文献已经在这个文件夹里。"
+              : chosen || created.trim()
+                ? undefined
+                : "请选择或新建一个文件夹。"
           }
-          onPress={() => add.mutate()}
+          onPress={() => move.mutate()}
         >
-          加入
+          移动
         </Button>
       }
     >
-      <p>将已选的 {ids.length.toLocaleString()} 篇文献加入文件夹。</p>
+      <p>
+        {from
+          ? `把已选的 ${ids.length.toLocaleString()} 篇文献从「${from.label}」移动到另一个文件夹。`
+          : `把已选的 ${ids.length.toLocaleString()} 篇文献放进文件夹。它们仍在文献库里。`}
+      </p>
       <Select
         label="文件夹"
         value={chosen}
@@ -700,9 +734,14 @@ export function AddToFolderDialog({
         value={created}
         onChange={setCreated}
       />
-      {add.isError ? (
+      {from ? (
+        <Checkbox isSelected={keep} onChange={setKeep}>
+          同时保留在「{from.label}」里
+        </Checkbox>
+      ) : null}
+      {move.isError ? (
         <p className="ui-error-text" role="alert">
-          {errorMessage(add.error)}
+          {errorMessage(move.error)}
         </p>
       ) : null}
     </Dialog>

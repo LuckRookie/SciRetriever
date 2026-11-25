@@ -1,5 +1,6 @@
 import { FilterError } from "../../literature/filters.js";
 import { FolderError } from "../../literature/folders.js";
+import { LiteratureTrashError } from "../../literature/trash.js";
 import { MarkError } from "../../literature/marks.js";
 import { IntakeWithdrawalError } from "../../literature/intake-withdrawal.js";
 import { CatalogSchemaError } from "./schema-path.js";
@@ -441,6 +442,10 @@ export type SqliteCommand =
       readonly request: import("../../literature/query.js").PdfSelectionRequest;
     }
   | { readonly kind: "folders"; readonly value: unknown }
+  | {
+      readonly kind: "library_trash";
+      readonly command: import("./library-trash-engine.js").LibraryTrashStorageCommand;
+    }
   | { readonly kind: "filters"; readonly value: unknown }
   | { readonly kind: "marks"; readonly value: unknown }
   | {
@@ -1931,6 +1936,31 @@ export class SqliteWorker {
         return reply.value;
       };
     return read ? send() : this.admission!.run(send, signal);
+  }
+  /** Recently deleted papers; the write takes business admission like folders. */
+  async libraryTrash(
+    command: import("./library-trash-engine.js").LibraryTrashStorageCommand,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    const write = command.kind === "write";
+    if (write && (this.readOnly || !this.admission))
+      throw new LiteratureTrashError("library-trash-write-unavailable");
+    const copy = structuredClone(command),
+      send = async () => {
+        if (signal?.aborted)
+          throw new LiteratureTrashError("operation-cancelled");
+        const reply = await this.send<{
+          ok: boolean;
+          value?: unknown;
+          code?: string;
+        }>({ kind: "library_trash", command: copy });
+        if (!reply.ok)
+          throw new LiteratureTrashError(
+            reply.code ?? "library-trash-storage-failed",
+          );
+        return reply.value;
+      };
+    return write ? this.admission!.run(send, signal) : send();
   }
   async filters(
     value: {

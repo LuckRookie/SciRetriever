@@ -207,6 +207,7 @@ function usage(options: CliOptions): CliResult {
     "  filters list|export|create|rename|update|delete|import --request FILE  # export, save and manage library query conditions\n" +
     "  folders list|delete-preview|export|create|rename|move|delete|add|remove --request FILE  # export, list and manage folders and paper membership\n" +
     "  literature open ID  # record a paper's latest opening time\n" +
+    "  literature trash list|delete|restore --request FILE; literature trash count  # recently deleted papers; restore brings them back\n" +
     "  marks list|export|create|update|delete|restore|place --request FILE  # reading highlights, regions and notes of one paper\n" +
     "  storage schema-inspect|schema-init --catalog PATH\n" +
     "  storage schema-apply --catalog PATH --addition NAME\n" +
@@ -794,6 +795,63 @@ async function execute(
       ),
       options,
     );
+  }
+  if (group === "literature" && command === "trash") {
+    // Reads: list {limit,cursor}, count. Writes: delete|restore {selector}.
+    const operation = args[2];
+    if (
+      !["list", "count", "delete", "restore"].includes(operation ?? "") ||
+      (operation === "count"
+        ? args.length !== 3
+        : args.length !== 5 || args[3] !== "--request")
+    )
+      invalidInput();
+    let request: unknown = {};
+    if (operation !== "count")
+      try {
+        const bytes = await inputBytes(args[4]!, options, 1024 * 1024 + 4096);
+        if (bytes.byteLength > 1024 * 1024 + 4096) invalidInput();
+        request = parseStrictJsonValue(bytes);
+      } catch (cause) {
+        if (options.signal?.aborted)
+          throw new ProductOperationError("operation-cancelled", { cause });
+        if (
+          cause instanceof ContractValidationError ||
+          cause instanceof CliInputError
+        )
+          throw new ProductOperationError("invalid-request", { cause });
+        throw cause;
+      }
+    if (operation === "list" || operation === "count") {
+      const q = await applicationBootstrap.createQueryApplication(
+        configurationHome(options),
+      );
+      const result = await runAndClose(
+        () =>
+          executeQuery(
+            q,
+            "library-trash",
+            { operation, request },
+            options.signal,
+          ),
+        () => q.close(),
+        "query cleanup failed",
+      );
+      return output({ protocol_version: 1, result }, options);
+    }
+    // The file holds {selector}; anything else fails the contract's exact keys.
+    const body =
+      request &&
+      typeof request === "object" &&
+      !Array.isArray(request) &&
+      !Object.hasOwn(request, "operation")
+        ? request
+        : { request };
+    const write = { operation, ...body };
+    const result = await withApplication(options, (app) =>
+      executeMaintenance(app, "library-trash", write, options.signal),
+    );
+    return output({ protocol_version: 1, result }, options);
   }
   if (group === "literature" && command === "open") {
     return output(

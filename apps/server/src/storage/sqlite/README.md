@@ -31,6 +31,7 @@
 - [intake-schema-migration.ts](intake-schema-migration.ts)：显式离线 14 → 15，旧运行回填、早期批次、主题词映射及确定性元数据/索引投影；[intake-metadata-migration.ts](intake-metadata-migration.ts) 复用元数据裁决与读取。
 - [openalex-top-concepts-cleanup.ts](openalex-top-concepts-cleanup.ts)：显式离线删除旧 OpenAlex 观测中 19 个顶层大类，并复用关键词层重投影，仅更新受影响文献与 Library FTS；不改 schema，不由启动或查询调用。检索 source revision 正常推进，后续刷新追赶。
 - [library-page.ts](library-page.ts)：LibraryQuery 的只读 SQL 筛选、计数和游标分页，完整文献只装载当前页；has_primary_pdf 与 with_primary_pdf 按版本，full_text 复用 [full-text-counts.ts](full-text-counts.ts) 在同一快照按论文聚合，并检查全部可见兄弟版本。计数忽略 statuses、needs_manual_pdf，其余筛选保留；不修改业务事实或 catalog schema。
+- [library-trash-engine.ts](library-trash-engine.ts)：最近删除的计数、按 `library_trash_order` 分页的列表，以及删除与恢复的单事务写入；有排队或运行中的任务以其中文献为目标时整体拒绝。表与触发器来自 `library-trash` 增补集。
 - [filter-engine.ts](filter-engine.ts)：保存筛选的只读列表、导出与原子写入；不改文献状态或检索 revision。`folder-engine.ts` 的导出只读目录与成员 ID，按复合主键分页，不直接读取书目表。
 - [draft-facts.ts](draft-facts.ts)：在查询的只读快照中按页批量读取各 PDF 的默认版本及初稿事实；引用数与“找不到”计数沿固定版本索引聚合，只排除内容过时的结果，不打开结果文件。列表筛选与排序仅使用主 PDF，补充部分只在详情和建档状态返回。
 - [retrieval-engine.ts](retrieval-engine.ts)：材料检索持久化。
@@ -113,4 +114,4 @@ metadata_only 仅存 intake_batches.request_json，不增加列；import-engine 
 
 [intake-objects.ts](intake-objects.ts) 在文献、文件夹、成员、资产关系与批注的创建事务中登记批次归属；文献登记与 created 成员在同一事务完成，保留条目的延迟决定沿用原保留校验进入身份发布事务。[intake-withdrawal-engine.ts](intake-withdrawal-engine.ts) 在单个事务中重判八种保留原因、检查忙碌任务、撤回或恢复并保存报告。撤回记录读回与恢复预估复用已有记录和剩余标记；与批次状态在同一个只读快照返回，恢复执行重新读取剩余标记。旧批次没有登记时，有任何文件夹成员或批注都保留；不推断历史归属。共享文件字节与来源事实保留。
 
-[intake-visibility.ts](intake-visibility.ts) 为文献库、词频、全文检索与 Context、引用两端、发现原因、任务范围、文件夹与批注提供读取排除条件；MetaLiterature 代表只在读投影中重选。身份、sha256 和外部对应读取完整事实，命中后在成员写入事务恢复原文献及其原撤回关系，分类 restored，原批次报告保持不变。撤回服务只接网页登录的五条入库 HTTP 路由，无设备用途、CLI 或 MCP 操作。
+[intake-visibility.ts](intake-visibility.ts) 为文献库、词频、全文检索与 Context、引用两端、发现原因、任务范围、文件夹与批注提供读取排除条件，同时排除被撤回与在最近删除里的文献；MetaLiterature 代表只在读投影中重选。身份、sha256 和外部对应读取完整事实，命中后在成员写入事务恢复原文献及其原撤回关系（在最近删除里的也一并移出），分类 restored，原批次报告保持不变。撤回服务只接网页登录的五条入库 HTTP 路由，无设备用途、CLI 或 MCP 操作。

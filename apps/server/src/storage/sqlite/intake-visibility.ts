@@ -1,11 +1,17 @@
 import type { DatabaseSync } from "node:sqlite";
 
-/** Only static expressions from adapters belong here, never request SQL. */
+/** Only static expressions from adapters belong here, never request SQL. A
+ * paper is hidden from every read while withdrawn with its intake batch or
+ * while in recently deleted (`library_trash`). The trash column is renamed in
+ * a subquery so that an unqualified `literature_id` still names the caller's
+ * row; SQLite flattens it into a primary-key search. */
 export function visibleLiteratureSql(expression: string): string {
   return (
-    "NOT EXISTS(SELECT 1 FROM intake_withdrawn_objects withdrawn WHERE withdrawn.object_kind='literature' AND withdrawn.object_id=" +
+    "(NOT EXISTS(SELECT 1 FROM intake_withdrawn_objects withdrawn WHERE withdrawn.object_kind='literature' AND withdrawn.object_id=" +
     expression +
-    ")"
+    ") AND NOT EXISTS(SELECT 1 FROM (SELECT literature_id AS trashed_id FROM library_trash) WHERE trashed_id=" +
+    expression +
+    "))"
   );
 }
 export function visibleObjectSql(
@@ -20,7 +26,19 @@ export function visibleObjectSql(
     ")"
   );
 }
+/** Withdrawn or deleted: the paper reads as absent. Identity matching ignores this. */
 export function literatureWithdrawn(db: DatabaseSync, id: string): boolean {
+  return !!db
+    .prepare(
+      "SELECT 1 FROM intake_withdrawn_objects WHERE object_kind='literature' AND object_id=? UNION ALL SELECT 1 FROM library_trash WHERE literature_id=?",
+    )
+    .get(id, id);
+}
+/** Only the intake withdrawal itself: its marks and search rows, not deletion. */
+export function intakeWithdrawnLiterature(
+  db: DatabaseSync,
+  id: string,
+): boolean {
   return !!db
     .prepare(
       "SELECT 1 FROM intake_withdrawn_objects WHERE object_kind='literature' AND object_id=?",
