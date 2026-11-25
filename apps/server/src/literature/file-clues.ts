@@ -68,13 +68,11 @@ interface PdfClueOutput {
   bounds: number[];
 }
 function parseToolOutput(value: unknown): PdfClueOutput {
-  const r = importObject(value, [
-      "info",
-      "xmp",
-      "pages",
-      "first_page_lines",
-      "bounds",
-    ]),
+  const r = importObject(
+      value,
+      ["info", "xmp", "pages", "first_page_lines", "bounds"],
+      ["restore_passes"],
+    ),
     info = importObject(r.info, ["title", "subject", "keywords"]);
   const string = (value: unknown, limit: number) => {
     if (typeof value !== "string" || value.length > limit)
@@ -130,24 +128,65 @@ function parseToolOutput(value: unknown): PdfClueOutput {
 
 // Only the supplied read-only descriptor is passed to MuPDF. No PDF, page image
 // or whole-file buffer crosses IPC; the child has bounded CPU, memory and output.
+// XMP bytes are joined in 64-byte pieces: one string per byte made MuJS hold
+// hundreds of MiB for a 44 KB packet. 64 keeps `apply` within MuJS's stack.
+// A first page with characters MuPDF cannot name (U+FFFD) is read twice more:
+// simple fonts whose /Differences glyph names are a letter or two and the
+// character code (C68, G3A) get the character back; see restoreFirstPage.
 const SCRIPT = String.raw`var doc=Document.openDocument(scriptArgs[0]);doc.disableJS();
 function bounded(s,n){s=String(s||'').slice(0,n);var c=s.charCodeAt(s.length-1);return c>=55296&&c<=56319?s.slice(0,-1):s;}
 var info={title:bounded(doc.getMetaData('info:Title'),20000)||null,subject:bounded(doc.getMetaData('info:Subject'),20000)||null,keywords:bounded(doc.getMetaData('info:Keywords'),20000)||null};
-function streamText(m){var b=m.readStream(),s='';for(var i=0;i<Math.min(b.length,262144);i++)s+=String.fromCharCode(b[i]);return s;}
+function streamText(m){var b=m.readStream(),n=Math.min(b.length,262144),parts=[];for(var i=0;i<n;i+=64){var c=[];for(var k=i;k<Math.min(n,i+64);k++)c.push(b[k]);parts.push(String.fromCharCode.apply(null,c));}return parts.join('');}
 var metadata=doc.getTrailer().get('Root').get('Metadata'),xmp=metadata&&metadata.isStream()?streamText(metadata):'';
-var pages=[],lines=[],bounds=null;
+var pages=[],lines=[],bounds=null,restorePasses=0;
 function count(s){s=s.replace(/\s+/g,' ').replace(/^\s+|\s+$/g,'');return s.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g,'x').length;}
+var cp1252={128:8364,130:8218,131:402,132:8222,133:8230,134:8224,135:8225,136:710,137:8240,138:352,139:8249,140:338,142:381,145:8216,146:8217,147:8220,148:8221,149:8226,150:8211,151:8212,152:732,153:8482,154:353,155:8250,156:339,158:382,159:376};
+function glyphChar(name){if(!name)return null;name=name.replace(/[._].*$/,'');var m=/^[A-Za-z]{1,2}([0-9]{2,3})$/.exec(name),v=m?parseInt(m[1],10):null;
+  if(v===null){m=/^[A-Za-z]{1,2}([0-9A-Fa-f]{2})$/.exec(name);v=m?parseInt(m[1],16):null;}
+  if(v===null||v<32||v>255)return null;return String.fromCharCode(cp1252[v]||v);}
+function differences(page){var names={};
+  function collect(res,depth){if(!res||depth>3)return;var fonts=res.get('Font');
+    if(fonts&&fonts.isDictionary())fonts.forEach(function(f){if(!f.isDictionary())return;var e=f.get('Encoding');if(!e||!e.isDictionary())return;var d=e.get('Differences');if(!d||!d.isArray())return;
+      var base=String(f.get('BaseFont')).replace(/^\//,''),map=names[base]||{},code=0;
+      for(var i=0;i<d.length;i++){var v=d.get(i);if(v.isNumber())code=v.valueOf();else if(v.isName()){map[code]=String(v).replace(/^\//,'');code++;}}names[base]=map;});
+    var xo=res.get('XObject');if(xo&&xo.isDictionary())xo.forEach(function(x){if(x.isStream()&&String(x.get('Subtype'))==='/Form')collect(x.get('Resources'),depth+1);});}
+  collect(page.getObject().get('Resources'),0);return names;}
+// MuPDF marks an unnamed character with flag 128 and gives its CID, which is the
+// character code for a simple font. Its inserted word spaces carry the same flag,
+// so a pass without inserted spaces tells them apart by origin.
+function restoreFirstPage(page){var names=differences(page),A=[],B=[];
+  page.toStructuredText('use-cid-for-unknown-unicode,preserve-whitespace,inhibit-spaces').walk({onChar:function(c,o){A.push([c.charCodeAt(0),o[0],o[1]]);}});
+  page.toStructuredText('use-cid-for-unknown-unicode,preserve-whitespace').walk({beginTextBlock:function(){B.push(1);},beginLine:function(bbox){B.push([2,bbox]);},onChar:function(c,o,font,size,q,argb,flags){B.push([c,o[0],o[1],flags&128,font.getName(),size]);},endLine:function(){B.push(3);}});
+  restorePasses+=2;
+  function same(a,b){return a&&b&&typeof b==='object'&&b.length===6&&a[0]===b[0].charCodeAt(0)&&Math.abs(a[1]-b[1])<0.01&&Math.abs(a[2]-b[2])<0.01;}
+  var text='',out=[],line=null,block=0,ai=0,restored=0;
+  for(var j=0;j<B.length;j++){var b=B[j];
+    if(b===1){block++;continue;}
+    if(b===3){if(text.length<40000)text+='\n';if(line&&out.length<2000)out.push(line);line=null;continue;}
+    if(b.length===2){line={text:'',font_size:0,bbox:b[1],block:block};continue;}
+    var c=b[0];
+    if(c===' '&&(!same(A[ai],b)||same(A[ai],B[j+1])))c=' ';
+    else{if(!same(A[ai],b)){for(var k=1;k<=5&&ai+k<A.length;k++)if(same(A[ai+k],b)){ai+=k;break;}}ai++;
+      if(b[3]){var map=names[b[4]],r=map?glyphChar(map[c.charCodeAt(0)]):null;if(r){c=r;restored++;}else c='\uFFFD';}
+      else if(/^[\u0009\u00A0\u1680\u180E\u2000-\u200A\u202F\u205F\u3000]$/.test(c))c=' ';}
+    if(text.length<40000)text+=c;
+    if(line&&line.text.length<1000){line.text+=c;line.font_size=Math.max(line.font_size,b[5]);}}
+  return {text:text,lines:out,restored:restored};}
 for(var n=0;n<Math.min(2,doc.countPages());n++){
   if(n===1&&count(pages[0].text)>=200)break;
-  var page=doc.loadPage(n),text='',line=null,block=0;
+  var page=doc.loadPage(n),text='',line=null,block=0,unknown=0;
   if(n===0)bounds=page.getBounds();
   page.toStructuredText().walk({beginTextBlock:function(){block++;},beginLine:function(bbox){line={text:'',font_size:0,bbox:bbox,block:block};},onChar:function(c,origin,font,size){
+    if(c==='\uFFFD')unknown++;
     if(text.length<40000)text+=c;
     if(n===0&&line&&line.text.length<1000){line.text+=c;line.font_size=Math.max(line.font_size,size);}
   },endLine:function(){if(text.length<40000)text+='\n';if(n===0&&line&&lines.length<2000)lines.push(line);line=null;}});
+  if(n===0&&unknown>0){var restored=restoreFirstPage(page);if(restored.restored>0){text=restored.text;lines=restored.lines;}}
   pages.push({page_index:n,text:bounded(text,40000)});
 }
-print(JSON.stringify({info:info,xmp:xmp,pages:pages,first_page_lines:lines,bounds:bounds}));`;
+print(JSON.stringify({info:info,xmp:xmp,pages:pages,first_page_lines:lines,bounds:bounds,restore_passes:restorePasses}));`;
+/** The clue script, exported so tests can run it directly and see its passes. */
+export const FILE_CLUE_SCRIPT = SCRIPT;
 
 function xmlText(value: string): string {
   let plain = "",

@@ -163,7 +163,7 @@ it("builds a Python-free portable runtime and executes its bundled Node CLI", as
       platform: "linux",
       architecture: "x64",
       checks: expect.arrayContaining([
-        expect.objectContaining({ name: "pdfinfo", status: "ready" }),
+        expect.objectContaining({ name: "mupdf", status: "ready" }),
         expect.objectContaining({ name: "cloakbrowser", status: "blocked" }),
       ]),
     });

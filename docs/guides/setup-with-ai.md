@@ -61,7 +61,7 @@ B. 检查环境并报告结果：
    - 系统是否 Linux x64；`node --version` 是否 22.19.0（不是的话告诉我
      怎么装这个版本，例如用 nvm 或 fnm，不要替我改系统级的 Node）；
    - `corepack enable` 后 pnpm 是否可用；
-   - `flock`、`prlimit`、`pdfinfo`、`Xvfb` 是否存在；
+   - `flock`、`prlimit`、`Xvfb` 是否存在；
    - `gcc`、`make` 是否存在（编译读取 PDF 的工具要用）。
 
 C. 安装与构建（在仓库目录里）：

@@ -1,10 +1,12 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { FileStore } from "../src/storage/files/store.js";
 import {
   cluesUnreadReason,
+  FILE_CLUE_SCRIPT,
   FileClueReader,
 } from "../src/literature/file-clues.js";
 import {
@@ -255,3 +257,157 @@ it("bounds the complete clue read by ten seconds and keeps a missing reader dist
   expect(performance.now() - start).toBeGreaterThanOrEqual(9900);
   expect(performance.now() - start).toBeLessThan(15_000);
 }, 20_000);
+
+/** Runs the clue script itself under the reader's limits, for what FileClues does not expose. */
+async function runClueScript(bytes: Uint8Array) {
+  const found = await runtime(),
+    directory = await mkdtemp(join(tmpdir(), "sciretriever-clue-script-"));
+  try {
+    await writeFile(join(directory, "read.js"), FILE_CLUE_SCRIPT);
+    await writeFile(join(directory, "input.pdf"), bytes);
+    const result = spawnSync(
+      "prlimit",
+      [
+        "--as=536870912",
+        "--cpu=10",
+        "--",
+        found.executable,
+        "run",
+        join(directory, "read.js"),
+        join(directory, "input.pdf"),
+      ],
+      { encoding: "latin1", timeout: 20_000, maxBuffer: 4 * 1024 * 1024 },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const json = Buffer.from(
+      result.stdout.trim().split("\n").at(-1)!,
+      "latin1",
+    ).toString("utf8");
+    return JSON.parse(json) as {
+      xmp: string;
+      pages: { text: string }[];
+      restore_passes: number;
+    };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+/**
+ * A first page whose simple font has a custom encoding, no ToUnicode map and
+ * glyph names of a letter and the decimal character code (C84 for "T"), as
+ * some typesetting systems wrote them. Codes start at 1, so tab, line feed and
+ * carriage return codes occur too; words are placed apart, so MuPDF inserts
+ * the spaces between them.
+ */
+function glyphNamePdf(
+  lines: readonly { text: string; size: number; y: number }[],
+) {
+  const codes = new Map<string, number>();
+  for (const { text } of lines)
+    for (const c of text.replace(/ /gu, ""))
+      if (!codes.has(c)) codes.set(c, codes.size + 1);
+  const hex = (word: string) =>
+    [...word].map((c) => codes.get(c)!.toString(16).padStart(2, "0")).join("");
+  const content = lines
+    .flatMap(({ text, size, y }) => {
+      let x = 40;
+      return text.split(" ").map((word) => {
+        const op = `BT /F1 ${size} Tf ${x} ${y} Td <${hex(word)}> Tj ET`;
+        x += (word.length * 0.5 + 0.6) * size;
+        return op;
+      });
+    })
+    .join("\n");
+  const differences = [...codes.keys()]
+    .map((c) => `/C${c.charCodeAt(0)}`)
+    .join(" ");
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
+    `<< /Type /Font /Subtype /Type1 /BaseFont /SYNTHE+GlyphNameSerif /FirstChar 1 /LastChar ${codes.size} /Widths [${Array(codes.size).fill(500).join(" ")}] /Encoding << /Type /Encoding /Differences [1 ${differences}] >> >>`,
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>",
+    `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`,
+  ];
+  let body = "%PDF-1.4\n";
+  const offsets: number[] = [];
+  for (const [i, obj] of objects.entries()) {
+    offsets.push(Buffer.byteLength(body));
+    body += `${i + 1} 0 obj\n${obj}\nendobj\n`;
+  }
+  const xref = Buffer.byteLength(body);
+  body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets
+    .map((v) => `${String(v).padStart(10, "0")} 00000 n `)
+    .join(
+      "\n",
+    )}\ntrailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(body);
+}
+
+it("restores first-page characters from glyph names of a letter and the character code, and only then reads the page again", async () => {
+  const title = "Synthetic Restored Glyph Title";
+  const bytes = glyphNamePdf([
+    { text: title, size: 20, y: 720 },
+    { text: "Journal of Synthetic Encodings 12 (2001) 34-56", size: 9, y: 690 },
+    { text: "doi 10.5555/restored.1", size: 9, y: 670 },
+  ]);
+  const found = await runtime(),
+    directory = await mkdtemp(join(tmpdir(), "sciretriever-glyph-plain-"));
+  try {
+    await writeFile(
+      join(directory, "plain.js"),
+      "print(Document.openDocument(scriptArgs[0]).loadPage(0).toStructuredText().asText());",
+    );
+    await writeFile(join(directory, "input.pdf"), bytes);
+    const plain = spawnSync(
+      found.executable,
+      ["run", join(directory, "plain.js"), join(directory, "input.pdf")],
+      { encoding: "utf8", timeout: 20_000 },
+    ).stdout.replace(/\s+/gu, "");
+    // Without the restoration MuPDF names none of these characters.
+    expect(plain.length).toBeGreaterThan(40);
+    expect([...plain].every((c) => c === "�")).toBe(true);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+  const clues = await read(bytes);
+  expect(clues).toMatchObject({
+    status: "read",
+    identifiers: [{ namespace: "doi", value: "10.5555/restored.1" }],
+  });
+  expect(clues.prominent_titles[0]).toBe(title);
+  expect(clues.pages[0]!.text).toContain(title);
+  expect(clues.pages[0]!.text).toContain("(2001) 34-56");
+  expect(clues.pages[0]!.text).not.toContain("�");
+  expect((await runClueScript(bytes)).restore_passes).toBe(2);
+  // An ordinary first page is read once.
+  const ordinary = await runClueScript(
+    recognitionPdf({
+      pages: [[{ text: "An ordinary synthetic title", size: 20 }]],
+    }),
+  );
+  expect(ordinary.restore_passes).toBe(0);
+  expect(ordinary.pages[0]!.text).toContain("An ordinary synthetic title");
+});
+
+it("reads a 300 KB XMP packet within 512 MiB and returns its first 262144 bytes unchanged", async () => {
+  const head =
+    '<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:prism="http://prismstandard.org/namespaces/basic/2.0/"><dc:title><rdf:Alt><rdf:li xml:lang="x-default">Large XMP título</rdf:li></rdf:Alt></dc:title><prism:doi>10.5555/LARGE</prism:doi>';
+  const filler = Array.from(
+    { length: 6000 },
+    (_, i) =>
+      `<!-- padding ${String(i).padStart(5, "0")} çé ${"x".repeat(30)} -->\n`,
+  ).join("");
+  const xmp = `${head}${filler}</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>`;
+  expect(Buffer.byteLength(xmp)).toBeGreaterThan(300_000);
+  const bytes = recognitionPdf({ xmp });
+  const output = await runClueScript(bytes);
+  expect(output.xmp).toBe(
+    Buffer.from(xmp, "utf8").subarray(0, 262144).toString("latin1"),
+  );
+  expect(await read(bytes)).toMatchObject({
+    status: "read",
+    xmp: { title: "Large XMP título", dois: ["10.5555/LARGE"] },
+    identifiers: [{ namespace: "doi", value: "10.5555/large" }],
+  });
+});

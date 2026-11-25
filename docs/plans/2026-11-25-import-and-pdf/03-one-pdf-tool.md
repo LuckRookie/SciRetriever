@@ -2,7 +2,7 @@
 
 类型：计划（结果块）
 负责：下载验收改用 MuPDF，去掉对 pdfinfo 与 pdftotext 的依赖
-状态：In progress（3.1、3.2 完成；3.3、3.4 待派工）
+状态：Done（2026-11-26 实现并提交；未部署）
 
 ## Outcome
 
@@ -21,8 +21,8 @@
 
 - [x] 3.1 比对（后端，只读）：对正式库已有的全部 PDF，分别用两套工具取：能否打开、页数、是否加密、取出的文字。逐项记录不一致的篇数与样例；另加几份构造的坏文件（截断、加密、不是 PDF）。结果写成表放在本块。
 - [x] 3.2 决定（总设计师）：不一致之处逐类判断哪一个对、换了之后验收结论会不会变；会变的列出来，有影响使用者已有文献的问 Owner。
-- [ ] 3.3 后端：`pdf-acceptance.ts` 改用 MuPDF；超时、输出上限、隔离照现有做法。`doctor`、启动把关、运行清单（`release/manifests/runtime-support.json`）去掉 `pdfinfo`、`pdftotext`。
-- [ ] 3.4 文档：[安装指南](../../guides/installation.md)与 README 的前提条件同步。
+- [x] 3.3 后端：`pdf-acceptance.ts` 改用 MuPDF；超时、输出上限、隔离照现有做法。`doctor`、启动把关、运行清单（`release/manifests/runtime-support.json`）去掉 `pdfinfo`、`pdftotext`。
+- [x] 3.4 文档：[安装指南](../../guides/installation.md)与 README 的前提条件同步。
 
 ## 3.1 的结果（2026-11-25，正式库 954 篇主 PDF，只读）
 
@@ -54,6 +54,15 @@
 - 保留开头的 `%PDF-` 与 `/Encrypt` 字节检查；另外要求 MuPDF 报告的格式是 PDF、不需要密码、没有加密、页数不少于 1。
 - **MuPDF 报告“做过修复”的文件判 `pdf-invalid`。** 理由：下载到一半的文件正是这种情形，现在会被拒，换工具后不能变成接受；954 篇真实 PDF 里没有一篇需要修复，所以这条不会误拒现有的文件。代价是 xref 损坏但内容完整的文件由收变拒，比现在严。
 - 乱码的 57 篇不挡本块：验收不用文字。它在 02 里处理，先查 MuPDF 一侧能不能读对；查清之前不为它保留 poppler。
+
+## 实现记录（2026-11-26）
+
+- 验收改用 MuPDF：字节检查保留；格式不是 PDF、做过修复、页数不足 1 的判 `pdf-invalid`，要密码或加密的判 `encrypted-pdf`；结果的种类与原因码不变。`pdftotext` 与只为它存在的代码删去。
+- `doctor`、运行清单、CI 里去掉这两个命令；CI 改为在测试前取得 MuPDF。安装指南、入门、让 AI 帮你安装的说明与开发基线同步。
+- 验证：`pdf-acceptance`、`file-clues`、`doctor`、`candidate-acceptance` 共 32 条通过；整体的格式、lint、类型检查通过；`PATH` 里没有 poppler 时验收与 `doctor` 通过。
+- 正式库只读复核：954 篇验收全部通过，页数全部一致，没有一篇因“修复”被拒。验收耗时中位数 82 毫秒。
+- 没有跑的两条改过的测试：关机流程（要启动带浏览器的应用）与便携包（要打整包）。
+- 行为变化：xref 损坏而内容完整的 PDF 现在验收不通过，比原来严。
 
 ## 集成与影响
 

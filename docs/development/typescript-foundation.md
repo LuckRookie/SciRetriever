@@ -79,7 +79,7 @@ Core/MinerU secret 使用分离的 namespace；Model/Core 的 `CredentialGrant` 
 
 `configuration-typescript-owner.test.ts`、`configuration-boundary.test.ts`、`configuration-probe-journey.test.ts` 和 `cli-main.test.ts` 覆盖非 TTY command、取消、退出码和无网络 status。显式 test 只连接 synthetic/loopback fixture；status 永不自动联网。
 
-PDF 文件验证及 catalog 写入准入需要 `prlimit`、`flock` 和 `pdfinfo`（Linux 的 util-linux/poppler-utils）。下载阶段不提取正文，`pdftotext` 不再是运行时 doctor 的必需项；开发中的 PDF 工具输出上限测试仍使用它。目标 Cloak/实时
+PDF 文件验证及 catalog 写入准入需要 `prlimit`、`flock`（Linux 的 util-linux）与随程序到位的 MuPDF；不再需要 `pdfinfo` 与 `pdftotext`（poppler-utils）。目标 Cloak/实时
 工作台测试通过 `SCIRETRIEVER_CLOAK_BUNDLE` 显式选择已校验 bundle；无该变量时其目标 runtime 用例报告
 skipped，不得据此声称目标 Cloak 已验收。参见[运行依赖证据](../../migration/evidence/baseline/runtime-dependencies.md)。
 

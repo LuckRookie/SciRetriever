@@ -6,7 +6,7 @@
   "playwright": "1.55.0",
   "cloakbrowser_wrapper": "0.5.8",
   "cloakbrowser_binary": "146.0.7680.177.5",
-  "system_commands": ["flock", "prlimit", "pdfinfo", "pdftotext", "Xvfb"],
+  "system_commands": ["flock", "prlimit", "Xvfb"],
   "browser_runtime": {
     "management": "operator-installed",
     "environment": "SCIRETRIEVER_CLOAK_BUNDLE",

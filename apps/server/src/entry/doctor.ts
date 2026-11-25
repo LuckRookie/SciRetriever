@@ -114,11 +114,7 @@ export async function runDoctor(
       detail: `${process.platform}-${process.arch}`,
     }),
   );
-  const [parts, pdfinfo, xvfb] = await Promise.all([
-    startupParts(),
-    executable("pdfinfo"),
-    executable("Xvfb"),
-  ]);
+  const [parts, xvfb] = await Promise.all([startupParts(), executable("Xvfb")]);
   const part = (name: StartupPart["name"]): DoctorCheck => {
     const found = parts.find((item) => item.name === name)!;
     return Object.freeze({
@@ -130,7 +126,6 @@ export async function runDoctor(
   checks.push(
     part("flock"),
     part("prlimit"),
-    check("pdfinfo", pdfinfo),
     check("Xvfb", xvfb),
     part("mupdf"),
   );

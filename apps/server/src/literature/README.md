@@ -25,7 +25,7 @@
 - [import-adapters.ts](import-adapters.ts)：中性记录、书目格式和网页原始标签的纯适配器登记；decode 只转换输入，不访问时钟、随机数、网络、文件或数据库。[bibliography-attachments.ts](bibliography-attachments.ts) 读取 BibTeX/BibLaTeX file 与 RIS L1，形成首选 PDF 的中性引用、脱敏本机路径并统计未导入附件；CSL JSON 不推断附件。
 - [lookup-adapter.ts](lookup-adapter.ts)：`lookup` 格式的纯适配器：按行切分，依次判断 DOI、arXiv 号、PMID、不支持的网址与标题，太短、太长（规范化后超过 500 个码点）与重复的行给出原因，一段超过 200 个非空行整段拒绝（批次合计的上限由入库批次检查）；每个非空行成为一条，`record_index` 为行号减一，`external_id` 为整理后的原文，条目只带给出的一个标识或标题。
 - [web-page-adapter.ts](web-page-adapter.ts)：按标签与 JSON-LD 优先序产生中性书目、PDF 地址和无效 JSON 计数；单篇收藏接收原始 `WebPageData`，PDF 页面由文件流程处理，不据页面地址猜书目。
-- [file-clues.ts](file-clues.ts)：单个受控 PDF 的只读线索端口，由适配器入口导出；复用基本验收，再用受限 MuPDF 读取文档信息、XMP、首页/必要的第二页和醒目标题，全部操作受 10 秒总时限约束，不查库、不联网、不调用模型。读不出文字时 `unread` 给出六种原因之一（工具不可用、超时、运行失败、加密、非法 PDF、扫描件），`cluesUnreadReason` 也为没有这一字段的已存读取给出原因。文件条目上传与确认的组装不在此端口中。[import-clues.ts](import-clues.ts) 共用字符串及标识规范化。
+- [file-clues.ts](file-clues.ts)：单个受控 PDF 的只读线索端口，由适配器入口导出；复用基本验收，再用受限 MuPDF 读取文档信息、XMP（分块拼接，大包也不超内存上限）、首页/必要的第二页和醒目标题；首页有叫不出名字的字符时，按字体编码表里“字母加字符码”的字形名还原，只在这时多读两遍，全部操作受 10 秒总时限约束，不查库、不联网、不调用模型。读不出文字时 `unread` 给出六种原因之一（工具不可用、超时、运行失败、加密、非法 PDF、扫描件），`cluesUnreadReason` 也为没有这一字段的已存读取给出原因。文件条目上传与确认的组装不在此端口中。[import-clues.ts](import-clues.ts) 共用字符串及标识规范化。
 
 书目适配器只收原始文本；bibliography-import 的 bibliographyText 共用 UTF-8/带 BOM UTF-16 的严格字节解码，供本地入口转换文本。只导书目的文件策略由 Entry 的批次选项处理，纯适配器仍返回同样的文件引用与排除计数。
 

@@ -15,7 +15,7 @@ export const PAGE_IMAGE_METHOD = `mupdf-${MUPDF_VERSION}:margin8:scale2:pixels20
 /** How a missing bundle is obtained: the build fetches and compiles it. */
 export const MUPDF_REMEDY = "在仓库目录执行 `pnpm build`";
 /** What a missing reader costs and how to restore it (doctor, `sciretriever web`). */
-export const MUPDF_MISSING_HINT = `导入的 PDF 读不出标题、作者和 DOI，也不能解析全文；${MUPDF_REMEDY}`;
+export const MUPDF_MISSING_HINT = `下载的 PDF 不能验收，导入的 PDF 读不出标题、作者和 DOI，也不能解析全文；${MUPDF_REMEDY}`;
 
 export interface MupdfRuntime {
   readonly executable: string;

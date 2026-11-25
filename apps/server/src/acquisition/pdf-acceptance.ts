@@ -1,4 +1,8 @@
 import { spawn } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { resolveMupdfRuntime, type MupdfRuntime } from "../proofread/mupdf.js";
 import type { ScopedFileReader } from "../storage/files/reader.js";
 
 export interface PdfAcceptance {
@@ -38,100 +42,152 @@ function cancelled(): PdfAcceptanceError {
   return new PdfAcceptanceError(new PdfReaderFailure("pdf-reader-cancelled"));
 }
 
-/** The two installed PDF readers have bounded input/output, address space, CPU and lifetime. */
-export async function readPdfTool(
-  bytes: Uint8Array,
-  tool: "pdfinfo" | "pdftotext",
-  timeoutMs = 10000,
-  signal?: AbortSignal,
-): Promise<string> {
-  if (signal?.aborted) throw cancelled();
-  if (
-    !(bytes instanceof Uint8Array) ||
-    bytes.byteLength === 0 ||
-    !Number.isSafeInteger(timeoutMs) ||
-    timeoutMs < 1 ||
-    timeoutMs > 120000 ||
-    !["pdfinfo", "pdftotext"].includes(tool)
-  )
-    throw new PdfAcceptanceError();
-  return runPdfTool(bytes, tool, timeoutMs, signal);
-}
+/**
+ * Runs inside `mutool run`. MuPDF opens the path itself (the scoped descriptor,
+ * or a private copy of in-memory bytes), so the document size is not bounded by
+ * an IPC message. Lazy object loading can repair the file, so `wasRepaired` is
+ * read after the page count.
+ */
+const SCRIPT = String.raw`var doc=Document.openDocument(scriptArgs[0]);
+if(typeof doc.disableJS==='function')doc.disableJS();
+var r={format:String(doc.getMetaData('format')||''),needs_password:!!doc.needsPassword(),encryption:String(doc.getMetaData('encryption')||'')};
+if(!r.needs_password)r.pages=doc.countPages();
+r.repaired=typeof doc.wasRepaired==='function'?!!doc.wasRepaired():false;
+print(JSON.stringify(r));`;
+/** The script's file name; tests that stand in for the reader recognise it. */
+export const PDF_ACCEPTANCE_SCRIPT = "pdf-accept.js";
+const OUTPUT_LIMIT = 4096;
 
-async function runPdfTool(
-  input: Uint8Array | number,
-  tool: "pdfinfo" | "pdftotext",
-  timeoutMs: number,
-  signal?: AbortSignal,
-): Promise<string> {
-  if (signal?.aborted) throw cancelled();
-  const source = typeof input === "number" ? "/proc/self/fd/3" : "-";
-  const args =
-    tool === "pdfinfo"
-      ? [source]
-      : ["-f", "1", "-l", "1", "-enc", "UTF-8", source, "-"];
-  const limit = tool === "pdfinfo" ? 65536 : 131072;
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      "prlimit",
-      [
-        "--as=536870912",
-        `--cpu=${Math.max(1, Math.ceil(timeoutMs / 1000))}`,
-        "--",
-        tool,
-        ...args,
-      ],
-      {
-        stdio:
-          typeof input === "number"
-            ? ["ignore", "pipe", "pipe", input]
-            : ["pipe", "pipe", "pipe"],
-        env: { PATH: process.env.PATH ?? "/usr/bin:/bin", LANG: "C.UTF-8" },
-      },
-    );
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let failure: PdfReaderFailure | undefined;
-    const stop = (code: PdfReaderFailureCode, cause?: unknown) => {
-      failure ??= new PdfReaderFailure(code, cause);
-      child.kill("SIGKILL");
-    };
-    const cancel = () => stop("pdf-reader-cancelled");
-    const timer = setTimeout(() => stop("pdf-reader-timeout"), timeoutMs);
-    signal?.addEventListener("abort", cancel, { once: true });
-    if (signal?.aborted) cancel();
-    child.stdout!.on("data", (chunk: Buffer) => {
-      total += chunk.length;
-      if (total > limit) stop("pdf-reader-output-limit");
-      else chunks.push(chunk);
-    });
-    child.stderr!.resume();
-    child.stdin?.on("error", (cause: NodeJS.ErrnoException) => {
-      if (cause.code !== "EPIPE") stop("pdf-reader-io-failed", cause);
-    });
-    child.on("error", (cause) => {
-      failure ??= new PdfReaderFailure("pdf-reader-unavailable", cause);
-    });
-    child.on("close", (code, terminationSignal) => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", cancel);
-      if (!failure && code === 127)
-        failure = new PdfReaderFailure("pdf-reader-unavailable");
-      if (!failure && ["SIGXCPU", "SIGKILL"].includes(terminationSignal ?? ""))
-        failure = new PdfReaderFailure("pdf-reader-resource-limit");
-      if (failure || code !== 0) reject(new PdfAcceptanceError(failure));
-      else resolve(Buffer.concat(chunks).toString("utf8"));
-    });
-    if (input instanceof Uint8Array) child.stdin!.end(input);
+let runtimeLookup: Promise<MupdfRuntime | undefined> | undefined;
+/** The verified bundle is found once per process; a missing one is looked up again next time. */
+function mupdf(): Promise<MupdfRuntime | undefined> {
+  const lookup = (runtimeLookup ??= resolveMupdfRuntime());
+  void lookup.then((found) => {
+    if (!found && runtimeLookup === lookup) runtimeLookup = undefined;
   });
+  return lookup;
 }
 
+/** MuPDF in a separate process with bounded output, address space, CPU and lifetime. */
+async function readPdf(
+  input: Uint8Array | number,
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+  path: string | undefined,
+): Promise<string> {
+  if (signal?.aborted) throw cancelled();
+  const runtime = await mupdf();
+  if (signal?.aborted) throw cancelled();
+  if (!runtime)
+    throw new PdfAcceptanceError(
+      new PdfReaderFailure("pdf-reader-unavailable"),
+    );
+  let directory: string | undefined;
+  try {
+    const script = join(
+        (directory = await mkdtemp(join(tmpdir(), "sciretriever-pdf-accept-"))),
+        PDF_ACCEPTANCE_SCRIPT,
+      ),
+      // In-memory bytes go to a private file: MuPDF needs a seekable input.
+      copy = join(directory, "input.pdf");
+    try {
+      await writeFile(script, SCRIPT, { mode: 0o600 });
+      if (typeof input !== "number")
+        await writeFile(copy, input, { mode: 0o600 });
+    } catch (cause) {
+      throw new PdfAcceptanceError(
+        new PdfReaderFailure("pdf-reader-io-failed", cause),
+      );
+    }
+    if (signal?.aborted) throw cancelled();
+    return await new Promise((resolve, reject) => {
+      const child = spawn(
+        "prlimit",
+        [
+          "--as=536870912",
+          `--cpu=${Math.max(1, Math.ceil(timeoutMs / 1000))}`,
+          "--",
+          runtime.executable,
+          "run",
+          script,
+          typeof input === "number" ? "/proc/self/fd/3" : copy,
+        ],
+        {
+          stdio:
+            typeof input === "number"
+              ? ["ignore", "pipe", "pipe", input]
+              : ["ignore", "pipe", "pipe"],
+          env: { PATH: path ?? "/usr/bin:/bin", LANG: "C.UTF-8" },
+        },
+      );
+      const chunks: Buffer[] = [];
+      let total = 0;
+      let failure: PdfReaderFailure | undefined;
+      const stop = (code: PdfReaderFailureCode, cause?: unknown) => {
+        failure ??= new PdfReaderFailure(code, cause);
+        child.kill("SIGKILL");
+      };
+      const cancel = () => stop("pdf-reader-cancelled");
+      const timer = setTimeout(() => stop("pdf-reader-timeout"), timeoutMs);
+      signal?.addEventListener("abort", cancel, { once: true });
+      if (signal?.aborted) cancel();
+      child.stdout!.on("data", (chunk: Buffer) => {
+        total += chunk.length;
+        if (total > OUTPUT_LIMIT) stop("pdf-reader-output-limit");
+        else chunks.push(chunk);
+      });
+      child.stderr!.resume();
+      child.on("error", (cause) => {
+        failure ??= new PdfReaderFailure("pdf-reader-unavailable", cause);
+      });
+      child.on("close", (code, terminationSignal) => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", cancel);
+        if (!failure && code === 127)
+          failure = new PdfReaderFailure("pdf-reader-unavailable");
+        if (
+          !failure &&
+          ["SIGXCPU", "SIGKILL"].includes(terminationSignal ?? "")
+        )
+          failure = new PdfReaderFailure("pdf-reader-resource-limit");
+        if (failure || code !== 0) reject(new PdfAcceptanceError(failure));
+        else resolve(Buffer.concat(chunks).toString("utf8"));
+      });
+    });
+  } catch (error) {
+    if (error instanceof PdfAcceptanceError) throw error;
+    throw new PdfAcceptanceError(
+      new PdfReaderFailure("pdf-reader-io-failed", error),
+    );
+  } finally {
+    if (directory) await rm(directory, { recursive: true, force: true });
+  }
+}
+
+/** The rules of acceptance: a PDF, no password, no encryption, not repaired, at least one page. */
 function acceptedReport(report: string): PdfAcceptance {
-  if (/^Encrypted:\s+yes\b/mu.test(report))
+  let facts: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(report.trim().split("\n").at(-1) ?? "");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      throw new Error("pdf-reader-output");
+    facts = parsed as Record<string, unknown>;
+  } catch {
+    throw new PdfAcceptanceError();
+  }
+  // The byte check already found `%PDF-`; another format is an unusable PDF.
+  if (typeof facts.format !== "string" || !/^PDF\b/u.test(facts.format))
+    throw new PdfAcceptanceError();
+  if (
+    facts.needs_password !== false ||
+    (facts.encryption !== "None" && facts.encryption !== "")
+  )
     throw new PdfAcceptanceError(undefined, "encrypted-pdf");
-  const pages = /^Pages:\s+(\d+)$/mu.exec(report);
-  const count = Number(pages?.[1]);
-  if (!Number.isSafeInteger(count) || count < 1) throw new PdfAcceptanceError();
+  // A repaired cross-reference is what an interrupted download looks like.
+  if (facts.repaired !== false) throw new PdfAcceptanceError();
+  const count = facts.pages;
+  if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 1)
+    throw new PdfAcceptanceError();
   return Object.freeze({ accepted: true, page_count: count });
 }
 
@@ -142,6 +198,7 @@ export async function acceptPdfFile(
   signal?: AbortSignal,
 ): Promise<PdfAcceptance> {
   if (signal?.aborted) throw cancelled();
+  const path = process.env.PATH;
   if (
     !Number.isSafeInteger(timeoutMs) ||
     timeoutMs < 1 ||
@@ -159,7 +216,7 @@ export async function acceptPdfFile(
   if (/\/Encrypt\b/u.test(prefix) || /\/Encrypt\b/u.test(tail))
     throw new PdfAcceptanceError(undefined, "encrypted-pdf");
   const report = await file.withDescriptor((fd) =>
-    runPdfTool(fd, "pdfinfo", timeoutMs, signal),
+    readPdf(fd, timeoutMs, signal, path),
   );
   return acceptedReport(report);
 }
@@ -169,11 +226,14 @@ export async function acceptPdf(
   timeoutMs = 10000,
   signal?: AbortSignal,
 ): Promise<PdfAcceptance> {
+  const path = process.env.PATH;
   if (
     !(bytes instanceof Uint8Array) ||
     !new TextDecoder().decode(bytes.slice(0, 8)).startsWith("%PDF-")
   )
     throw new PdfAcceptanceError(undefined, "non-pdf-file");
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000)
+    throw new PdfAcceptanceError();
   // An encrypted document must never reach the identity extractor. The
   // encryption dictionary is normally in the trailer, so inspect both the
   // header and a bounded tail without decoding the full input as text.
@@ -185,6 +245,6 @@ export async function acceptPdf(
   const tail = decoder.decode(bytes.slice(tailStart));
   if (/\/Encrypt\b/u.test(prefix) || /\/Encrypt\b/u.test(tail))
     throw new PdfAcceptanceError(undefined, "encrypted-pdf");
-  const report = await readPdfTool(bytes, "pdfinfo", timeoutMs, signal);
+  const report = await readPdf(bytes, timeoutMs, signal, path);
   return acceptedReport(report);
 }

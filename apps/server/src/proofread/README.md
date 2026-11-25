@@ -5,7 +5,7 @@
 - `contract.ts`、`draft.ts`、`markdown-draft.ts`：单一初稿、稳定区块地址、固定初稿 hash；旧 Markdown 必须有唯一且顺序一致的页归属。
 - `clean.ts`、`normalize.ts`、`suspects.ts`：记录规则移除内容，比较词和数字的多重集，识别缺失、多出、数值/单位差异与页归属疑点。
 - `pdf-pages.ts`：核验 PDF 字节，用 [页面工具](../browser/pdf-region.ts) 做页面分类与可见文字提取（PDF.js 按块读取文件），用 [mupdf.ts](mupdf.ts) 渲染页面图和局部放大，并缓存固定图像。
-- `mupdf.ts`：定位并核对随包的 MuPDF `mutool`（`doctor`、`sciretriever web` 的启动核对与工作区能力 `pdf_reader` 都用它判断；取得办法在 `MUPDF_REMEDY`，缺少时的后果与办法在 `MUPDF_MISSING_HINT`），在独立进程中按留边 8、最多 2 倍、200 万像素渲染 PNG；PDF 写入私有临时目录后由 MuPDF 直接读取，大小不受进程间消息上限约束。
+- `mupdf.ts`：定位并核对随包的 MuPDF `mutool`（下载 PDF 的验收、导入时读线索、`doctor`、`sciretriever web` 的启动核对与工作区能力 `pdf_reader` 都用它判断；取得办法在 `MUPDF_REMEDY`，缺少时的后果与办法在 `MUPDF_MISSING_HINT`），在独立进程中按留边 8、最多 2 倍、200 万像素渲染 PNG；PDF 写入私有临时目录后由 MuPDF 直接读取，大小不受进程间消息上限约束。
 - `correction.ts`、`engine.ts`：历史整篇校订格式的构造与回放工具；生产建档不组装旧 corrector 或调用旧 engine，旧调用上限不进入新的页会话。
 - `apply.ts`、`render.ts`：验证编辑范围与冲突，确定性生成区块、Markdown、UTF-8 区间和资源闭包。表格编辑必须提供 HTML 表格结构；保留已登记的原表图以支持化学结构等非文字内容核对。格式校验不代表科学内容正确。
 - `manual-document.ts`：整份 Markdown 人工保存的区块匹配、拆合历史与锁定快照；未改内容保留身份和来源，页归属显式绑定，原始输入变化拒绝覆盖。

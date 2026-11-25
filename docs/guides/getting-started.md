@@ -8,7 +8,7 @@
 
 ## 1. 安装并启动
 
-需要 Linux x64、Node 22.19.0 和 pnpm。系统里还要有 `flock`、`prlimit`、`pdfinfo`（poppler-utils）、`Xvfb`，以及编译用的 `gcc` 和 `make`，大多数发行版自带或一条命令可装。
+需要 Linux x64、Node 22.19.0 和 pnpm。系统里还要有 `flock`、`prlimit`、`Xvfb`，以及编译用的 `gcc` 和 `make`，大多数发行版自带或一条命令可装。
 
 ```bash
 git clone https://github.com/LuckRookie/SciRetriever.git

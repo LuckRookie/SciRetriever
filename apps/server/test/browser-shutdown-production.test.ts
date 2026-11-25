@@ -78,7 +78,8 @@ vi.mock("node:child_process", async (importOriginal) => {
       if (
         !readerFixture.enabled ||
         command !== "prlimit" ||
-        !args.includes("pdfinfo")
+        // PDF_ACCEPTANCE_SCRIPT, the acceptance reader's MuPDF script.
+        !args.some((arg) => arg.endsWith("/pdf-accept.js"))
       )
         return actual.spawn(command, args, options);
       const child = actual.spawn(

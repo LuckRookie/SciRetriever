@@ -1353,6 +1353,7 @@ Application 的 writes 为 FileStore 与 SQLite 提供同一短写入准入。�
 | 最醒目的行 | 首页上半部分字号最大的文字块；相邻、同字号的行合并为一块；长度 10–300 个字符；按字号从大到小取前 3 个候选 |
 
 - 读取一个文件的总超时为 10 秒，超时按没有线索处理，并在条目上注明 `clues-timeout`。
+- 首页有读 PDF 的工具叫不出名字的字符时，按页面上字体的编码表还原：字形名是一两个字母加字符码（如 `C68`、`G3A`，十进制或十六进制；128–159 按 Windows-1252）的，还原成该字符；还原不了的照旧。没有这类字符的文件不多读。
 - 没有文字层的扫描件，没有首页文字与最醒目的行。如果其他线索也认不出，以文件名作为暂时的标题，标为书目待补（[8.4](#84-书目待补)）。
 - 加密 PDF 按 ADR 0029 不接纳，计为 `encrypted-pdf`。
 - 非 PDF 首版不接纳，计为 `non-pdf-file`。
@@ -1567,7 +1568,7 @@ IntakeDisposition = "created" | "enriched" | "matched" | "restored" | "conflict"
   - `lookup: {lines, recognized, existing, candidates, unrecognized, included, rejected, duplicates, pending}`：只在指定文献的批次里有（6.4.12）。`lines` 是非空行数；`pending` 是还没认完的行数，认篇结束后为 0；`included` 是没认出而决定入库的行数。预览与报告都给出。
   - `records.restored`（恢复被撤回的文献，[6.4.11](#6411-撤回)）、`records.possible_duplicates`、`records.pending_decision`、`records.needs_metadata`（书目待补）；
   - `records.clues_unread: {total, by_reason}`：内容没读出来的文件数，即 6.4.4 的线索读取没有得到文字的文件。`by_reason` 总是列出六种原因，`total` 是它们的和：
-    - `reader-unavailable`：读 PDF 的工具不可用（没有找到合格的 MuPDF，或系统缺 `pdfinfo`）；
+    - `reader-unavailable`：读 PDF 的工具不可用（没有找到合格的 MuPDF）；
     - `reader-timeout`：读取超过 10 秒；
     - `reader-failed`：工具运行失败；
     - `encrypted-pdf`：加密的 PDF；
