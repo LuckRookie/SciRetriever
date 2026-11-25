@@ -58,25 +58,25 @@ Owner 同日提出五点，并同意按下面的顺序做（原话：“可以�
 
 ## 结果块
 
-| 块                                | 结果                                                               | 实施                 | 依赖                             | 状态        |
-| --------------------------------- | ------------------------------------------------------------------ | -------------------- | -------------------------------- | ----------- |
-| [01](01-add-by-identifier.md)     | 按 DOI 或标题添加文献：页面、MCP 与 CLI、Skill                     | 后端、前端           | 真实核对等 G-provider            | Pending     |
-| [02](02-pdf-only-metadata.md)     | 只导入 PDF 时的书目：认出率实测，多用 PDF 自带的字段               | 总设计师、后端       | G-provider、G-sample             | In progress |
-| [03](03-one-pdf-tool.md)          | PDF 工具合一：下载验收改用 MuPDF，去掉 `pdfinfo`、`pdftotext`      | 后端                 | —                                | In progress |
-| [04](04-agent-entries.md)         | Agent 的入口：通读 MCP 与 Skill，补上缺口                          | 总设计师、后端       | 01 的接口                        | In progress |
-| [05](05-parse-throughput.md)      | 解析全文的耗时：量出瓶颈，定并发的默认值与入口                     | 总设计师、后端       | G-parse                          | In progress |
-| [06](06-bibliography-formats.md)  | 书目文件的格式：EndNote、NoteExpress、知网的导出                   | 后端                 | 顺序待 Owner 定                  | Pending     |
-| [07](07-zotero-import-program.md) | Zotero 导入程序与 Skill：Agent 这条路，先做                        | 后端、总设计师       | G-zotero（真实试用）             | Pending     |
-| [08](08-stored-translation.md)    | 全文的译文：解析时翻好，存进文献库；阅读页“全文”的原文、译文、对照 | 后端、前端、总设计师 | ADR 0068 审定；G-parse（实测）   | Pending     |
-| [09](09-layered-reading.md)       | 分层阅读：一篇文献读成几层，层与层之间连续切换；先设计与决定       | 总设计师；实现另派   | 08 的视图改名；ADR 待写          | Pending     |
-| [14](14-zotero-probe.md)          | Zotero 接口探测                                                    | 总设计师、Owner      | 14.2 由 07 取得；14.3 等 G-probe | In progress |
-| [15](15-zotero-adapter.md)        | Zotero 适配器：两条路共用                                          | 后端                 | 14                               | Pending     |
-| [16](16-extension.md)             | 扩展：从 Zotero 导入，Zotero 的地址可改                            | 前端                 | 14.3、15；排在 07 之后           | Partial     |
-| [17](17-zotero-annotations.md)    | Zotero 批注导入                                                    | 后端                 | 15                               | Pending     |
-| [21](21-real-run.md)              | 真实获取运行                                                       | 执行者、Owner        | G-lib 等                         | Pending     |
-| [22](22-scale-follow-up.md)       | 从数字到后续                                                       | 总设计师、Owner      | 21                               | Pending     |
-| [23](23-real-checks.md)           | 真实文件、真实文献库上的核对与试用；23.3 并入 02                   | 各方                 | 各项单独授权                     | Pending     |
-| [24](24-closing.md)               | 计划 25 留下的收尾：规格、指南、Zotero 的部署点、浏览器导入、全量  | 总设计师、后端       | 各块                             | Pending     |
+| 块                                | 结果                                                               | 实施                 | 依赖                                     | 状态        |
+| --------------------------------- | ------------------------------------------------------------------ | -------------------- | ---------------------------------------- | ----------- |
+| [01](01-add-by-identifier.md)     | 按 DOI 或标题添加文献：页面、MCP 与 CLI、Skill                     | 后端、前端           | 真实核对等 G-provider                    | Pending     |
+| [02](02-pdf-only-metadata.md)     | 只导入 PDF 时的书目：认出率实测，多用 PDF 自带的字段               | 总设计师、后端       | G-provider、G-sample                     | In progress |
+| [03](03-one-pdf-tool.md)          | PDF 工具合一：下载验收改用 MuPDF，去掉 `pdfinfo`、`pdftotext`      | 后端                 | —                                        | In progress |
+| [04](04-agent-entries.md)         | Agent 的入口：通读 MCP 与 Skill，补上缺口                          | 总设计师、后端       | 01 的接口                                | In progress |
+| [05](05-parse-throughput.md)      | 解析全文的耗时：量出瓶颈，定并发的默认值与入口                     | 总设计师、后端       | G-parse                                  | In progress |
+| [06](06-bibliography-formats.md)  | 书目文件的格式：EndNote、NoteExpress、知网的导出                   | 后端                 | 顺序待 Owner 定                          | Pending     |
+| [07](07-zotero-import-program.md) | Zotero 导入程序与 Skill：Agent 这条路，先做                        | 后端、总设计师       | G-zotero（真实试用）                     | Pending     |
+| [08](08-stored-translation.md)    | 全文的译文：解析时翻好，存进文献库；阅读页“全文”的原文、译文、对照 | 后端、前端、总设计师 | G-parse（实测）；库结构追加须 Owner 同意 | Pending     |
+| [09](09-layered-reading.md)       | 分层阅读：一篇文献读成几层，层与层之间连续切换；先设计与决定       | 总设计师；实现另派   | 08 的视图改名；ADR 待写                  | Pending     |
+| [14](14-zotero-probe.md)          | Zotero 接口探测                                                    | 总设计师、Owner      | 14.2 由 07 取得；14.3 等 G-probe         | In progress |
+| [15](15-zotero-adapter.md)        | Zotero 适配器：两条路共用                                          | 后端                 | 14                                       | Pending     |
+| [16](16-extension.md)             | 扩展：从 Zotero 导入，Zotero 的地址可改                            | 前端                 | 14.3、15；排在 07 之后                   | Partial     |
+| [17](17-zotero-annotations.md)    | Zotero 批注导入                                                    | 后端                 | 15                                       | Pending     |
+| [21](21-real-run.md)              | 真实获取运行                                                       | 执行者、Owner        | G-lib 等                                 | Pending     |
+| [22](22-scale-follow-up.md)       | 从数字到后续                                                       | 总设计师、Owner      | 21                                       | Pending     |
+| [23](23-real-checks.md)           | 真实文件、真实文献库上的核对与试用；23.3 并入 02                   | 各方                 | 各项单独授权                             | Pending     |
+| [24](24-closing.md)               | 计划 25 留下的收尾：规格、指南、Zotero 的部署点、浏览器导入、全量  | 总设计师、后端       | 各块                                     | Pending     |
 
 ## 先后顺序
 
@@ -95,8 +95,7 @@ Zotero：07 → 14.2、14.4 → 15 → 17；16.4 起排在 07 之后，另等 14
 ## 等 Owner 的事项
 
 - 你说还要补充的计划内容。
-- 审定 [ADR 0068](../../architecture/decisions/0068-stored-full-text-translation.md)（全文的译文）。
-- 分层阅读（09）：看过样稿后定有几层、各层写什么、是否在解析全文时直接产生；“按问题阅读”算不算在内。
+- 分层阅读（09）：试过样稿后定层数、手势与导图的位置。
 - G-provider、G-sample：块 01、02 的真实核对用哪些来源、哪批 PDF。
 - G-zotero：在装了 Zotero 的电脑上运行导入程序的探测模式（07 的 7.2、7.7）；扩展这条路另要运行探测扩展（14.3）。
 - 06 要不要纳入、排在哪。
@@ -130,6 +129,7 @@ Zotero：07 → 14.2、14.4 → 15 → 17；16.4 起排在 07 之后，另等 14
 - 2026-11-25：建立。
 - 2026-11-25：并入计划 25 的 14–17、21–24；新增 07（Zotero 导入程序与 Skill）。
 - 2026-11-25：新增 08（全文的译文）。
+- 2026-11-25：Owner 接受 ADR 0068，并澄清分层阅读：不照抄五层，动画与特色可以借鉴，要的是思维导图而不是知识图谱，其余依总设计师的想法。08 可以开工；09 的设计写进块里，可试的样稿已派出。
 - 2026-11-25：新增 09（分层阅读），从暂缓的知识加工提案接手属于阅读的部分（Owner：“textfold的内容不属于知识加工，这些都是阅读类的”）。
 
 [上级目录](../README.md) · [项目 README](../../../README.md)

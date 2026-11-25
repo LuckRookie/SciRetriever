@@ -2,7 +2,7 @@
 
 类型：计划（结果块）
 负责：把全文翻译做成解析全文的一步并存进文献库；阅读页“全文”的原文、译文、对照三种读法；译文的导出、检索与 Agent 读取
-状态：Pending（等 Owner 审定 ADR 0068）
+状态：Pending（ADR 0068 已接受，可以开工；先写 8.2 的规格）
 
 ## Outcome
 
@@ -10,7 +10,7 @@
 
 ## 进入条件
 
-- [ADR 0068](../../architecture/decisions/0068-stored-full-text-translation.md)：Proposed，等 Owner 审定；8.2 起以它为准。
+- [ADR 0068](../../architecture/decisions/0068-stored-full-text-translation.md)：Accepted，8.2 起以它为准。
 - 现状：`apps/server/src/translation/` 已有逐页分块翻译（`fulltext.ts`）与译文缓存；块的编号、类型与章节角色由 document 模块给出。阅读页视图切换现在写“原文 · PDF”。
 - 库结构要加表：部署时在正式库上执行须经 Owner 同意（他 2026-11-25 说“库结构改就改呗”，执行前仍确认一次）。
 - 真实的质量与花费实测等 G-parse。
@@ -22,7 +22,7 @@
 
 ## Tasks
 
-- [ ] 8.1 审定：Owner 审定 ADR 0068。
+- [x] 8.1 审定：Owner 2026-11-25 接受 ADR 0068（“其他的都依你的想法即可”）。
 - [ ] 8.2 规格（总设计师）：
   - 文档与证据、存储两篇技术篇：译文怎样按文献、全文版本、块与语言记录；全文改动后哪些块重翻；“译文语言”设置；怎样判断全文已经是译文语言；表格怎样处理。
   - 任务协调：翻译作为解析全文的一步，进度、失败与重试，用量估算。
