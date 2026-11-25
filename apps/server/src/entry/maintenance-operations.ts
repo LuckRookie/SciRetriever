@@ -129,6 +129,7 @@ export const MAINTENANCE_OPERATIONS = [
   "proofread-revoke",
   "discover",
   "import-bibliography",
+  "import-lookup",
   "task-create",
   "form-drafts",
   "resolve-intervention",
@@ -404,6 +405,8 @@ async function performMaintenance(
       return createMetadataOperations(app).discovery(input, signal);
     case "import-bibliography":
       return createMetadataOperations(app).importBibliography(input);
+    case "import-lookup":
+      return createMetadataOperations(app).importLookup(input);
     case "task-create": {
       const tasks = createTaskOperations(app);
       if (!tasks) throw new ProductOperationError("processing-unavailable");

@@ -200,6 +200,7 @@ function usage(options: CliOptions): CliResult {
     "  extraction create|read|submit|receipt|close|cancel|cleanup --request FILE|-\n" +
     "  config read; config preview|publish|credential|probe --request FILE|-\n" +
     "  import bibliography --request FILE|-; discover request --request FILE|-\n" +
+    "  import lookup --request FILE|-  # {text} or {lines:[...]}: one DOI, arXiv ID, PMID or title per line, at most 200; recognized lines are added, the rest listed with reasons and candidates\n" +
     "  mcp [--maintenance] [--workbench-url http://127.0.0.1:PORT]\n" +
     "  browser session --workbench-url URL --request FILE|- [--maintenance] # NDJSON connection\n" +
     "  jobs runtime --workbench-url URL --request FILE|- [--maintenance] # operate in the Web owner\n" +
@@ -1218,6 +1219,7 @@ async function execute(
     "document annotate": "document-annotate",
     "document role": "document-role",
     "import bibliography": "import-bibliography",
+    "import lookup": "import-lookup",
     "discover request": "discover",
     "jobs create-request": "task-create",
     "jobs resolve": "resolve-intervention",

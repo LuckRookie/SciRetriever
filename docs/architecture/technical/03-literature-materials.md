@@ -1176,7 +1176,7 @@ Application 的 writes 为 FileStore 与 SQLite 提供同一短写入准入。�
 
 ### 6.4 入库
 
-本节按 [ADR 0063](../decisions/0063-unified-intake.md) 规定一种条目、一个过程，以及从各种线索认出是哪一篇。除 6.4.9（从 Zotero 导入）与 6.4.12（指定文献）是目标、尚未实现（[计划 28](../../plans/2026-11-25-import-and-pdf/README.md)）外都已实现。
+本节按 [ADR 0063](../decisions/0063-unified-intake.md) 规定一种条目、一个过程，以及从各种线索认出是哪一篇。除 6.4.9（从 Zotero 导入）是目标、尚未实现（[计划 28](../../plans/2026-11-25-import-and-pdf/README.md)）外都已实现。
 
 - 接口的路径、封套与错误码见[产品接口 2.4.2](01-product-interface.md#242-入库-http)。
 - 批次的字段见[查询 2.1.6](06-retrieval-context.md#216-入库批次范围词频与-pdf-获取范围)。
@@ -1525,11 +1525,22 @@ IntakeBatchItem                       # /items 与 /items/:item_id/status 的一
   title: str | None                   # 读出或认出的标题
   file_name: str | None
   recognition: IntakeRecognition | None
+  lookup: IntakeLookup | None         # 只有指定文献的条目有
   possible_duplicates: tuple[{literature_id, title, first_author, publication_year, similarity}, ...]   # 最多 3 个
   unpaired: bool                      # 未配对的文件
   needs_decision: bool
   decision: IntakeDecision | None
   disposition: IntakeDisposition | None   # 确认后才有
+
+IntakeLookup                          # 指定文献的条目才有（6.4.12）；批次结束前给出
+  line: int                           # 原文里的行号，从 1 起，空行也计数
+  text: str                           # 这一行的原文，去掉首尾空白
+  kind: "doi" | "arxiv" | "pmid" | "title" | None   # 被拒绝或重复的行为 null
+  reason: "lookup-unsupported-url" | "lookup-too-short" | "lookup-too-long" | "duplicate-line"
+        | "lookup-candidates" | "lookup-unrecognized" | None
+  outcome: "pending" | "recognized" | "existing" | "candidates" | "unrecognized" | "rejected" | "duplicate"
+  included: bool                      # 没认出而决定入库
+  found: {title, first_author, publication_year, identifiers} | None   # 认出或已在库时
 
 IntakeRecognition
   state: "pending" | "recognized" | "candidates" | "unrecognized" | "cancelled"
@@ -1553,6 +1564,7 @@ IntakeDisposition = "created" | "enriched" | "matched" | "restored" | "conflict"
 - 确认之前可以改变决定；批次结束后，只能对 `pending-decision` 的条目作出决定。
 - `IntakeFileStatus`、`IntakeItemResult` 沿用 `ImportFileStatus`、`ImportRecordResult` 的字段，`disposition` 改用 `IntakeDisposition`。
 - `IntakeSummary` 在 `ImportSummary` 上增加以下字段：
+  - `lookup: {lines, recognized, existing, candidates, unrecognized, included, rejected, duplicates, pending}`：只在指定文献的批次里有（6.4.12）。`lines` 是非空行数；`pending` 是还没认完的行数，认篇结束后为 0；`included` 是没认出而决定入库的行数。预览与报告都给出。
   - `records.restored`（恢复被撤回的文献，[6.4.11](#6411-撤回)）、`records.possible_duplicates`、`records.pending_decision`、`records.needs_metadata`（书目待补）；
   - `records.clues_unread: {total, by_reason}`：内容没读出来的文件数，即 6.4.4 的线索读取没有得到文字的文件。`by_reason` 总是列出六种原因，`total` 是它们的和：
     - `reader-unavailable`：读 PDF 的工具不可用（没有找到合格的 MuPDF，或系统缺 `pdfinfo`）；
@@ -1672,7 +1684,7 @@ IntakeRestorePreview               # 整批恢复之前，不写库
 
 #### 6.4.12 指定文献：逐行给出标识或标题
 
-目标，尚未实现（[计划 28 的 01 块](../../plans/2026-11-25-import-and-pdf/01-add-by-identifier.md)）。使用者知道自己要哪几篇时，贴入若干行，每行一篇，由文献库认出并取回书目。这些文献是使用者点名要的，确认后进入文献库（[ADR 0067](../decisions/0067-library-and-candidates.md) 第 3 节）。
+使用者知道自己要哪几篇时，贴入若干行，每行一篇，由文献库认出并取回书目。这些文献是使用者点名要的，确认后进入文献库（[ADR 0067](../decisions/0067-library-and-candidates.md) 第 3 节）。
 
 **格式。** 格式名 `lookup`，经数据分段交来，`data` 是整份文本。适配器是纯函数：文本进，条目与“不导入的内容”计数出，不联网。
 
@@ -1682,20 +1694,21 @@ IntakeRestorePreview               # 整批恢复之前，不写库
   2. **arXiv 号**：`arXiv:` 前缀或 arxiv.org 地址后的新式或旧式编号，写法同 [6.4.6](#646-认出是哪一篇)。
   3. **PMID**：`PMID` 前缀后的数字，或 pubmed.ncbi.nlm.nih.gov 地址里的数字。
   4. **其他网址**（以 `http://` 或 `https://` 开头而不属于上面三种）：不处理，按行计为 rejected，原因 `lookup-unsupported-url`。
-  5. **标题**：其余的行整行作为标题。规范化后不足 10 个码点的，按行计为 rejected，原因 `lookup-too-short`。
+  5. **标题**：其余的行整行作为标题。规范化后不足 10 个码点的，按行计为 rejected，原因 `lookup-too-short`；超过 500 个码点的，按行计为 rejected，原因 `lookup-too-long`，不发给来源。
 - 得到的条目只有一个标识，或只有一个标题，并记下原来的行号与原文。
-- 同一个标识、或规范化后相同的标题出现多次时，只留第一次，其余计入“不导入的内容”（`duplicate-line`）。
-- 一次最多 200 行（忽略空行之后）。超过时整个分段拒绝，错误码 `intake-lookup-too-many`，不截断。
+- 同一个标识、或规范化后相同的标题出现多次时，只留第一次，其余计入“不导入的内容”（`duplicate-line`），并在报告里留一条，写出行号。
+- 一个批次最多 200 行（忽略空行之后，各分段合计）。超过时这个分段整个拒绝，错误码 `intake-lookup-too-many`，不截断，已经接受的分段不受影响。
 
 **认篇。** 在预览阶段进行，来源、次序与出网设置同 6.4.6，不调用模型。与 6.4.6 不同的只有三处：
 
-- 有标识的条目：直接用标识取书目，不作“取回的标题要能在线索里找到”的核对，因为标识是使用者自己给的，也没有别的线索。来源里都取不到的，是没有认出。
+- 有标识的条目：先按身份规则在库里按标识精确匹配，库里已有这一篇时算已在库，不向来源查询。库里没有时，直接用标识取书目，不作“取回的标题要能在线索里找到”的核对，因为标识是使用者自己给的，也没有别的线索。来源里都取不到的，是没有认出。
 - 只有标题的条目：向 Crossref 与 OpenAlex 按标题查询，各取前 5 条。
   - 恰好有一个作品的标题与给出的标题一致（两个来源一致的结果指向同一个作品时算一个）：采纳。
   - 有两个以上不同的作品标题一致：都不采纳，列为“可能是这一篇”。
   - 只是标题相近的：列为“可能是这一篇”。
   - “可能是这一篇”最多 3 项，排序与决定（`candidate` 采用其中一项，`unrecognized` 都不是）同 6.4.6。
-- 没有认出的条目（包括决定为都不是、以及没有决定的）：**默认不入库**。使用者可以逐条决定 `include`，以给出的标识或标题入库并标为书目待补（[8.4](#84-书目待补)）；没有决定的按 `exclude` 处理，写进报告。
+- 没有认出的条目（包括决定为都不是的）：**默认不入库**。使用者可以逐条决定 `include`，以给出的标识或标题入库并标为书目待补（[8.4](#84-书目待补)）；只有 arXiv 号或 PMID 的，以原文作暂时的标题。没有决定的按 `exclude` 处理，写进报告，原因 `lookup-unrecognized`。
+- 有“可能是这一篇”而使用者没有挑的条目：不入库，写进报告，原因 `lookup-candidates`。它不进入 6.4.2 的待决定状态，批次结束后不能再补决定；需要时重新指定这一篇。
 
 **其余照旧。** 认出之后按现有规则查重：库里已有这一篇时计为已在库（它不在文献库里时，随这个批次进入文献库）；可能重复、冲突、撤回后恢复都按本节其他小节处理。批次的类型是导入。
 

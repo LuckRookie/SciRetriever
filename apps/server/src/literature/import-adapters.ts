@@ -12,6 +12,7 @@ import {
 } from "./bibliography-import.js";
 import { bibliographyAttachments } from "./bibliography-attachments.js";
 import { webPageAdapter } from "./web-page-adapter.js";
+import { lookupAdapter } from "./lookup-adapter.js";
 export { FileClueReader, type FileClues } from "./file-clues.js";
 
 export const nativeImportAdapter: ImportAdapter = {
@@ -100,6 +101,7 @@ export function importAdapters(
       bibliographyAdapter,
     ),
     webPageAdapter,
+    lookupAdapter,
     ...additional,
   ];
   const result = new Map<string, ImportAdapter>();

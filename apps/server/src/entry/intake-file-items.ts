@@ -36,6 +36,7 @@ import {
   intakeResourceFailure,
 } from "./import-files.js";
 import { createLogger } from "../logging/index.js";
+import { lookupView } from "./intake-lookup-items.js";
 
 export function publicIntakeItem(item: StoredIntakeItem): IntakeBatchItem {
   const {
@@ -51,7 +52,8 @@ export function publicIntakeItem(item: StoredIntakeItem): IntakeBatchItem {
   void literature_id;
   void work;
   void retain_until;
-  return value;
+  const lookup = lookupView(item);
+  return lookup ? { ...value, lookup } : value;
 }
 function suffix(a: string, b: string) {
   const left = a.replace(/\\/gu, "/").toLowerCase().split("/"),

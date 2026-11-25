@@ -732,6 +732,10 @@ export const INTAKE_LIMITS = {
   page_items: 200,
   disk_reserve_bytes: 256 * 1024 * 1024,
   expiry_ms: 7 * 24 * 60 * 60 * 1000,
+  /** Non-empty lines of a `lookup` batch, all segments together. */
+  lookup_lines: 200,
+  /** Code points of a `lookup` title after normalization. */
+  lookup_title_codepoints: 500,
 } as const;
 export interface IntakeGroup {
   readonly external_id: string;
@@ -807,6 +811,100 @@ export interface IntakeItemResult {
   readonly literature_id: string | null;
   readonly meta_literature_id: string | null;
   readonly reason: string | null;
+  /** `lookup` batches only: the submitted line (1-based number, trimmed text). */
+  readonly line?: IntakeLookupLine;
+}
+export interface IntakeLookupLine {
+  readonly number: number;
+  readonly text: string;
+}
+export type IntakeLookupKind = "doi" | "arxiv" | "pmid" | "title";
+/** Why a submitted line was not looked up, or why a looked-up line was not added. */
+export const INTAKE_LOOKUP_REASONS = [
+  "lookup-unsupported-url",
+  "lookup-too-short",
+  "lookup-too-long",
+  "duplicate-line",
+  "lookup-candidates",
+  "lookup-unrecognized",
+] as const;
+export type IntakeLookupReason = (typeof INTAKE_LOOKUP_REASONS)[number];
+/** One `lookup` line of a batch item, while the batch is not finished. */
+export interface IntakeLookupItem {
+  readonly line: number;
+  readonly text: string;
+  /** null for a refused or repeated line. */
+  readonly kind: IntakeLookupKind | null;
+  readonly reason: Extract<
+    IntakeLookupReason,
+    | "lookup-unsupported-url"
+    | "lookup-too-short"
+    | "lookup-too-long"
+    | "duplicate-line"
+  > | null;
+  readonly outcome:
+    | "pending"
+    | "recognized"
+    | "existing"
+    | "candidates"
+    | "unrecognized"
+    | "rejected"
+    | "duplicate";
+  /** An unrecognized line the user decided to add as given (needs metadata). */
+  readonly included: boolean;
+  /** The recognized work; null unless outcome is recognized or existing. */
+  readonly found: {
+    readonly title: string | null;
+    readonly first_author: string | null;
+    readonly publication_year: number | null;
+    readonly identifiers: LiteratureMetadata["identifiers"];
+  } | null;
+}
+/** Line counts of a `lookup` batch; the four outcomes are mutually exclusive. */
+export interface IntakeLookupSummary {
+  /** Every non-empty line, including refused and repeated ones. */
+  readonly lines: number;
+  /** Recognized and new to this library. */
+  readonly recognized: number;
+  /** Recognized and already in this library (report: matched, enriched or restored). */
+  readonly existing: number;
+  /** Several possible works and no choice yet; not added. */
+  readonly candidates: number;
+  /** Not recognized (or decided none of the candidates). */
+  readonly unrecognized: number;
+  /** Of the unrecognized, how many the user decided to add as given. */
+  readonly included: number;
+  readonly rejected: number;
+  readonly duplicates: number;
+  /** Recognition not finished yet; always 0 in a report. */
+  readonly pending: number;
+}
+/** Result of the local synchronous lookup entries (CLI `import lookup`, stdio MCP `add_literatures`). */
+export interface IntakeLookupResult {
+  readonly intake_batch_id: IntakeBatchId;
+  readonly summary: IntakeLookupSummary;
+  /** Lines admitted to the library, in line order. */
+  readonly added: readonly {
+    readonly line: number;
+    readonly text: string;
+    readonly disposition: "created" | "enriched" | "matched" | "restored";
+    readonly literature_id: string;
+    readonly title: string | null;
+  }[];
+  /** Lines not admitted, in line order; retry them with a more exact identifier. */
+  readonly not_added: readonly {
+    readonly line: number;
+    readonly text: string;
+    readonly disposition: IntakeItemResult["disposition"];
+    readonly reason: string | null;
+    /** Only for reason lookup-candidates: the possible works, at most three. */
+    readonly candidates: readonly {
+      readonly title: string | null;
+      readonly first_author: string | null;
+      readonly publication_year: number | null;
+      readonly identifiers: LiteratureMetadata["identifiers"];
+    }[];
+  }[];
 }
 export interface IntakeFileStatus {
   readonly file_id: string;
@@ -893,6 +991,8 @@ export interface IntakeSummary {
     readonly deferred: number;
   };
   readonly excluded: readonly IntakeExcluded[];
+  /** `lookup` batches only. */
+  readonly lookup?: IntakeLookupSummary;
 }
 export interface IntakePreview {
   readonly batch: IntakeBatch;
@@ -1377,6 +1477,7 @@ export const INTAKE_ERROR_STATUSES = {
   "intake-batch-busy": 409,
   "intake-request-too-large": 413,
   "intake-batch-limit": 413,
+  "intake-lookup-too-many": 413,
   "intake-pdf-invalid": 422,
   "intake-disk-space": 507,
   "intake-disk-unavailable": 503,
@@ -1452,4 +1553,6 @@ export interface IntakeBatchItem {
   readonly disposition: IntakeDisposition | null;
   readonly decided_by: string | null;
   readonly decided_at: string | null;
+  /** Items of a `lookup` batch while it is not finished; absent otherwise. */
+  readonly lookup?: IntakeLookupItem;
 }

@@ -288,6 +288,7 @@ export function createMcpServer(options: McpOptions = {}) {
       proofread_decide: "proofread-decide",
       proofread_revoke: "proofread-revoke",
       import_bibliography: "import-bibliography",
+      add_literatures: "import-lookup",
       discover_citations: "discover",
       create_task: "task-create",
       resolve_intervention: "resolve-intervention",

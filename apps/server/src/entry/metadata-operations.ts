@@ -2,12 +2,17 @@ import { guardRuntimeMethods } from "../application/restart-admission.js";
 import type { Application } from "../bootstrap/application.js";
 import {
   ContractValidationError,
+  IMPORT_LIMITS,
   parseLiteratureId,
 } from "@sciretriever/contracts";
 import { ProcessingTaskError } from "../application/jobs/processing.js";
 import type { BibliographyInputFormat } from "../literature/bibliography-import.js";
 import { intakeOrigin } from "../literature/intake.js";
-import { operationRecord as inputRecord } from "./query-operations.js";
+import {
+  operationRecord as inputRecord,
+  ProductOperationError,
+} from "./query-operations.js";
+import { ImportSessionError } from "./import-files.js";
 import { runMetadataTask } from "./metadata-task.js";
 export function createMetadataOperations(app: Application) {
   const operations = {
@@ -125,11 +130,42 @@ export function createMetadataOperations(app: Application) {
         intakeOrigin(),
       );
     },
+    /** {text} or {lines}: one DOI, address or title per line (6.4.12). */
+    importLookup: async (value: unknown) => {
+      const r = inputRecord(value, [], ["text", "lines"]);
+      if (Object.hasOwn(r, "text") === Object.hasOwn(r, "lines"))
+        throw new ContractValidationError();
+      let text: string;
+      if (Object.hasOwn(r, "text")) {
+        if (typeof r.text !== "string") throw new ContractValidationError();
+        text = r.text;
+      } else {
+        if (
+          !Array.isArray(r.lines) ||
+          r.lines.some((l) => typeof l !== "string" || /[\r\n]/u.test(l))
+        )
+          throw new ContractValidationError();
+        text = (r.lines as string[]).join("\n");
+      }
+      if (
+        !text.trim() ||
+        new TextEncoder().encode(text).byteLength > IMPORT_LIMITS.request_bytes
+      )
+        throw new ContractValidationError();
+      try {
+        return await app.importSessions.addLiteratures(text, intakeOrigin());
+      } catch (error) {
+        // Intake codes such as intake-lookup-too-many reach the caller as is.
+        if (error instanceof ImportSessionError)
+          throw new ProductOperationError(error.code, { cause: error });
+        throw error;
+      }
+    },
   };
   return app.restartAdmission
     ? guardRuntimeMethods(
         operations,
-        ["discovery", "importBibliography"],
+        ["discovery", "importBibliography", "importLookup"],
         app.restartAdmission,
       )
     : operations;

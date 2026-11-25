@@ -93,18 +93,137 @@ function identity(metadata: LiteratureMetadata) {
           .sort(),
       );
 }
+function candidateId(observation: MetadataObservation) {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        observation.provenance.source_name,
+        observation.metadata,
+      ]),
+    )
+    .digest("hex");
+}
+/** At most three, by similarity, then Crossref first, then candidate ID. */
+function withCandidates(
+  fallback: RecognitionResult,
+  candidates: RecognizedCandidate[],
+): RecognitionResult {
+  const ordered = candidates
+    .sort(
+      (a, b) =>
+        b.similarity - a.similarity ||
+        Number(b.observation.provenance.source_name === "crossref") -
+          Number(a.observation.provenance.source_name === "crossref") ||
+        a.candidate_id.localeCompare(b.candidate_id),
+    )
+    .slice(0, 3);
+  return !ordered.length
+    ? fallback
+    : {
+        ...fallback,
+        candidates: ordered,
+        recognition: {
+          ...fallback.recognition,
+          state: "candidates",
+          step: 3,
+          candidates: ordered.map((c) => ({
+            candidate_id: c.candidate_id,
+            title: c.observation.metadata.title,
+            authors: c.observation.metadata.authors,
+            publication_year: c.observation.metadata.publication_year,
+            identifiers: c.observation.metadata.identifiers,
+            source_name: c.observation.provenance.source_name,
+            similarity: c.similarity,
+          })),
+        },
+      };
+}
 export class IntakeRecognitionService {
   constructor(private readonly sources: RecognitionSources) {}
   fallback(
     clues: RecognitionClues,
     state: "unrecognized" | "cancelled" = "unrecognized",
   ): RecognitionResult {
+    return this.unrecognized(
+      { ...EMPTY_METADATA, title: clues.fallback || "document" },
+      state,
+    );
+  }
+  /** Step 4 with the given bibliography (the clue title or the named line). */
+  unrecognized(
+    metadata: LiteratureMetadata,
+    state: "unrecognized" | "cancelled" = "unrecognized",
+  ): RecognitionResult {
     return {
       recognition: { state, step: 4, literature_id: null, candidates: [] },
-      metadata: { ...EMPTY_METADATA, title: clues.fallback || "document" },
+      metadata,
       observation: null,
       candidates: [],
     };
+  }
+  /**
+   * A paper the user named by one identifier or one title (literature
+   * materials 6.4.12). Same sources and order as recognize(); an identifier is
+   * not checked against a title, and a title is adopted only when exactly one
+   * work matches it. `fallback` is the bibliography kept when nothing is
+   * adopted.
+   */
+  async recognizeNamed(
+    named: { readonly identifier: Identifier } | { readonly title: string },
+    fallback: LiteratureMetadata,
+    signal: AbortSignal,
+  ): Promise<RecognitionResult> {
+    const check = () => signal.throwIfAborted();
+    check();
+    if ("identifier" in named) {
+      const wanted = named.identifier;
+      let observations: readonly MetadataObservation[] = [];
+      try {
+        observations = await this.sources.lookup([wanted], signal);
+      } catch {
+        check();
+      }
+      check();
+      const found = observations.find(
+        (o) =>
+          !!o.metadata.title &&
+          o.metadata.identifiers.some(
+            (i) => i.namespace === wanted.namespace && i.value === wanted.value,
+          ),
+      );
+      return found ? this.accept(found, 2) : this.unrecognized(fallback);
+    }
+    let found: readonly MetadataObservation[] = [];
+    try {
+      found = await this.sources.search(named.title, signal);
+    } catch {
+      check();
+    }
+    check();
+    const candidates: RecognizedCandidate[] = [],
+      matching: RecognizedCandidate[] = [];
+    for (const observation of found) {
+      const m = observation.metadata;
+      if (!m.title) continue;
+      const similarity = recognitionSimilarity(named.title, m.title);
+      if (similarity < 0.85) continue;
+      const candidate = {
+        candidate_id: candidateId(observation),
+        observation,
+        similarity,
+      };
+      if (candidates.some((c) => c.candidate_id === candidate.candidate_id))
+        continue;
+      candidates.push(candidate);
+      if (sameTitle(named.title, m.title) && m.identifiers.length)
+        matching.push(candidate);
+    }
+    if (
+      matching.length &&
+      new Set(matching.map((c) => identity(c.observation.metadata))).size === 1
+    )
+      return this.accept(matching[0]!.observation, 3);
+    return withCandidates(this.unrecognized(fallback), candidates);
   }
   async recognize(
     clues: RecognitionClues,
@@ -157,9 +276,7 @@ export class IntakeRecognitionService {
           ...clues.titles.map((t) => recognitionSimilarity(t, m.title!)),
         );
         if (similarity < 0.85) continue;
-        const candidate_id = createHash("sha256")
-          .update(JSON.stringify([observation.provenance.source_name, m]))
-          .digest("hex");
+        const candidate_id = candidateId(observation);
         const candidate = { candidate_id, observation, similarity };
         if (!candidates.some((c) => c.candidate_id === candidate_id))
           candidates.push(candidate);
@@ -193,36 +310,7 @@ export class IntakeRecognitionService {
       new Set(accepted.map((c) => identity(c.observation.metadata))).size === 1
     )
       return this.accept(accepted[0]!.observation, 3);
-    const ordered = candidates
-      .sort(
-        (a, b) =>
-          b.similarity - a.similarity ||
-          Number(b.observation.provenance.source_name === "crossref") -
-            Number(a.observation.provenance.source_name === "crossref") ||
-          a.candidate_id.localeCompare(b.candidate_id),
-      )
-      .slice(0, 3);
-    const fallback = this.fallback(clues);
-    return !ordered.length
-      ? fallback
-      : {
-          ...fallback,
-          candidates: ordered,
-          recognition: {
-            ...fallback.recognition,
-            state: "candidates",
-            step: 3,
-            candidates: ordered.map((c) => ({
-              candidate_id: c.candidate_id,
-              title: c.observation.metadata.title,
-              authors: c.observation.metadata.authors,
-              publication_year: c.observation.metadata.publication_year,
-              identifiers: c.observation.metadata.identifiers,
-              source_name: c.observation.provenance.source_name,
-              similarity: c.similarity,
-            })),
-          },
-        };
+    return withCandidates(this.fallback(clues), candidates);
   }
   private accept(
     observation: MetadataObservation,

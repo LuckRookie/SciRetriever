@@ -10,7 +10,7 @@
 - [tools.ts](tools.ts)：唯一工具声明、封闭请求 schema 与 HTTP 用途映射；列出和调用共用同一规则。
 - [pdf-upload.ts](pdf-upload.ts)：当前连接的 PDF 磁盘暂存，按块增量 hash，无整文件内存分配或 16 MiB 上限；最多四个在途句柄、每块 192 KiB、十分钟过期，关闭/丢弃/提交后回收自身暂存。
 
-查询、任务投影、书目导入、提取交付与配置操作复用 `entry/*-operations.ts`。普通配置状态/预览可只读调用；配置发布、凭据变更、probe 与维护工具要求 `--maintenance`。PDF 提交以受控流交给入库公共文件通道，结果保留 receipt 格式；它归入 MCP 当天的补充文件批次。文件读取使用固定 hash 与有界块；`--workbench-url` 显式连接活 Web owner，提供 Browser 协作与服务任务调用。stdio 的书目导入同步完成，不启动其它批次的恢复/过期维护。
+查询、任务投影、书目导入、提取交付与配置操作复用 `entry/*-operations.ts`。普通配置状态/预览可只读调用；配置发布、凭据变更、probe 与维护工具要求 `--maintenance`。PDF 提交以受控流交给入库公共文件通道，结果保留 receipt 格式；它归入 MCP 当天的补充文件批次。文件读取使用固定 hash 与有界块；`--workbench-url` 显式连接活 Web owner，提供 Browser 协作与服务任务调用。stdio 的书目导入与指定文献（`add_literatures`）同步完成，不启动其它批次的恢复/过期维护；两者都不在 HTTP 版提供。
 
 `search_library` 接受完整的 LibraryQuery，包括主 PDF 默认文本的等级和初稿事实筛选、四种事实降序及分页；`read_literature` 返回主 PDF 事实与各 PDF 的 `default_text`，`archive_query` 在各部分返回同一默认版本的事实。读取这些计数只查 catalog，不形成初稿或启动校订。
 

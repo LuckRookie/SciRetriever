@@ -108,7 +108,7 @@ metadata_only 仅存 intake_batches.request_json，不增加列；import-engine 
 
 该模块的 `duplicate-candidates` 只读投影按一次 SQL 快照返回标题、有序作者、年份与出版形式，排除已撤回文献；它不读取正文、来源记录或资产字节，不形成身份或合并决定。
 
-`intake-items.ts` 还保存首次预览物化的数据条目、可能重复候选、决定审计与三十天保留期限。普通条目和批次成员写入仍检查原状态；结束后的决定与文件结算走专用受限操作。`import-engine.ts` 在同一事务里替换待决定回执并更新原批次成员与结果，过期清理保留 `decision-expired` 报告原因，不重开批次、不改变身份规则或表结构。
+`intake-items.ts` 还保存首次预览物化的数据条目、可能重复候选、决定审计与三十天保留期限。`lookup-stage` 在确认之前暂存 `lookup` 分段的每一行：行号、原文或原因变了的行与不再出现的行删去重建，其余保留认篇结果与决定；确认后不再改动。普通条目和批次成员写入仍检查原状态；结束后的决定与文件结算走专用受限操作。`import-engine.ts` 在同一事务里替换待决定回执并更新原批次成员与结果，过期清理保留 `decision-expired` 报告原因，不重开批次、不改变身份规则或表结构。
 
 `marks-engine.ts` 在 `reading_mark_places` 按批注与目标替换位置，读取仅给当前定位方法，随批注物理清除级联；定位不改 `reading_marks` 原锚点或文献状态。`place` 的 PDF 校验先只读检查，再带页数进入写事务重判；原 `create`/`update` 锚点规则保持。
 

@@ -6,7 +6,7 @@
 
 - [query-operations.ts](query-operations.ts)：CLI/MCP/Web 共用的封闭只读操作与固定输入准备。
 - [task-read.ts](task-read.ts)、[task-operations.ts](task-operations.ts)：共享任务列表、详情、创建与控制投影；只读路径不恢复任务。
-- [metadata-operations.ts](metadata-operations.ts)：显式发现/引用扩展和书目导入适配。
+- [metadata-operations.ts](metadata-operations.ts)：显式发现/引用扩展、书目导入和指定文献（`import-lookup`：`{text}` 或 `{lines}`）的适配。
 - [maintenance-operations.ts](maintenance-operations.ts)：受控维护与提取交付，复用既有业务 owner。
 - [doctor.ts](doctor.ts)：只读环境检查；`startupParts` 给出 Web 启动必须具备的 MuPDF、`flock`、`prlimit` 及各自取得办法，`doctor` 的这三项用同一结果。
 - [literature-recognition.ts](literature-recognition.ts)：`literature-recognize` 的提交：校验请求，缺 MuPDF 时以 `pdf-reader-missing` 拒绝，固定成员后在共用加工任务上每篇排一个 `recognize-literature` 目标并启动。
@@ -51,6 +51,8 @@ CLI/MCP/HTTP 只适配请求；供应商协议、材料验收和事实写入仍�
 library-facets 返回全部命中的标签、作者关键词、主题词，以及各层覆盖篇数。标签主次均计，只列 active 的直接标注；父标签不累计子标签。返回的作者关键词至多 30 个，按规范化名称精确查询 active 标签别名，并附当前标签 ID/名称；词频、覆盖和别名从同一读取快照产生。HTTP、CLI、MCP 共用此投影。
 
 `capture.ts` 只收原始页面，调用网页适配器形成 `user/web-capture` 来源。当前页为 PDF 时先返回文件编号，字节交齐后认篇再接纳；实际下载地址只保留去掉查询串和 fragment 的安全地址。无标识的页面保存后后台认篇，重放读取最终补全结果。
+
+[intake-lookup-items.ts](intake-lookup-items.ts) 组织 `lookup` 格式逐行条目：暂存分段的每一行（换掉的或去掉的行在确认前丢弃其工作状态），预览阶段逐条认篇，进度、取消与只有文件的条目相同；带标识的行先用导入预览的只读身份判定在库里找（最近删除与撤回的也算），找到即“已在库”、不查来源，确认时只记为批次成员，成员写入恢复删除或撤回的文献；批次各分段合计最多 200 个非空行；`candidate`、`unrecognized`、`include`、`exclude` 四种决定；确认时把认出的书目或给出的标识、标题换进条目，没认出又没决定加入的记为 excluded（`lookup-unrecognized`、`lookup-candidates`）。`lookupView` 给出条目的 `lookup` 投影，`lookupSummary` 给出预览与报告的逐行计数。`addLiteratures` 是 CLI 与 stdio MCP 的同步包装：建批次、交文本、等认篇、确认，结果逐行列出加入与没加入的行。
 
 [intake-file-items.ts](intake-file-items.ts) 组织预览前的 PDF 暂存、安全相对路径配对、认篇进度与取消、条目决定及终态清理。书目确认后复用文件通道和 metadata CAS 接纳保留的字节；按 sha256 对应主 PDF 或补充材料，保留冲突。认篇结果存于条目，确认不再查询来源。
 

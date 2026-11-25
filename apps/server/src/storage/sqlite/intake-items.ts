@@ -46,6 +46,19 @@ export interface IntakeItemWork {
   readonly retained_item_id?: string;
   /** Intent checkpoint before a late decision publishes identity; used only with an observation replay. */
   readonly creates_on_resolution?: boolean;
+  /** A `lookup` line; `record` then holds only the given identifier or title. */
+  readonly lookup?: IntakeLookupWork;
+}
+export interface IntakeLookupWork {
+  readonly line: number;
+  readonly text: string;
+  readonly kind: import("@sciretriever/contracts").IntakeLookupKind | null;
+  readonly reason:
+    | "lookup-unsupported-url"
+    | "lookup-too-short"
+    | "lookup-too-long"
+    | "duplicate-line"
+    | null;
 }
 export interface StoredIntakeItem extends IntakeBatchItem {
   readonly batch_id: string;
@@ -73,6 +86,14 @@ export type IntakeItemWrite =
   | {
       kind: "stage-data";
       batch_id: string;
+      items: readonly StoredIntakeItem[];
+      now: string;
+    }
+  | {
+      /** Before confirmation: a changed or removed `lookup` line drops its work. */
+      kind: "lookup-stage";
+      batch_id: string;
+      sequences: readonly number[];
       items: readonly StoredIntakeItem[];
       now: string;
     }
@@ -153,7 +174,8 @@ function stored(row: Record<string, SQLOutputValue>): StoredIntakeItem {
         : String(row.candidate_transfer_id),
     recognition:
       work?.result?.recognition ??
-      (row.origin !== "data" && work && !work.reason
+      ((row.origin !== "data" && work && !work.reason) ||
+      (work?.lookup && !work.lookup.reason)
         ? { state: "pending", step: null, literature_id: null, candidates: [] }
         : null),
     possible_duplicates: JSON.parse(String(row.possible_duplicates_json)),
@@ -367,6 +389,51 @@ export function writeIntakeItem(db: DatabaseSync, r: IntakeItemWrite): unknown {
       )
     )
       fail("intake-batch-state");
+    const put = db.prepare(
+      "INSERT INTO intake_items(item_id,batch_id,origin,sequence,record_index,external_id,title,recognition_json,created_at) VALUES(?,?,'data',?,?,?,?,?,?) ON CONFLICT(item_id) DO NOTHING",
+    );
+    for (const item of r.items)
+      put.run(
+        item.item_id,
+        r.batch_id,
+        item.sequence,
+        item.record_index,
+        item.external_id,
+        item.title,
+        JSON.stringify(item.work),
+        r.now,
+      );
+    return true;
+  }
+  if (r.kind === "lookup-stage") {
+    const state = db
+      .prepare("SELECT state FROM intake_batches WHERE batch_id=?")
+      .get(r.batch_id)?.state;
+    // Confirmed batches keep their staged lines and recognition results.
+    if (!["collecting", "awaiting-confirmation"].includes(String(state)))
+      return false;
+    const wanted = new Map(r.items.map((i) => [i.item_id, i]));
+    const line = (work: IntakeItemWork | null | undefined) =>
+      JSON.stringify(
+        work?.lookup
+          ? [work.lookup.line, work.lookup.text, work.lookup.reason]
+          : null,
+      );
+    for (const row of db
+      .prepare(
+        `SELECT item_id,sequence,recognition_json FROM intake_items WHERE batch_id=? AND origin='data' AND sequence IN (SELECT value FROM json_each(?))`,
+      )
+      .all(r.batch_id, JSON.stringify(r.sequences))) {
+      const next = wanted.get(String(row.item_id));
+      const old =
+        row.recognition_json === null
+          ? null
+          : (JSON.parse(String(row.recognition_json)) as IntakeItemWork);
+      if (!next || line(old) !== line(next.work))
+        db.prepare("DELETE FROM intake_items WHERE item_id=?").run(
+          row.item_id!,
+        );
+    }
     const put = db.prepare(
       "INSERT INTO intake_items(item_id,batch_id,origin,sequence,record_index,external_id,title,recognition_json,created_at) VALUES(?,?,'data',?,?,?,?,?,?) ON CONFLICT(item_id) DO NOTHING",
     );

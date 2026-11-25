@@ -9,6 +9,7 @@ import {
   parseFolderOperation,
   parseIntakeFileName,
   parseIntakeRelativePath,
+  parseLiteratureId,
   type IntakeDecision,
   importInteger,
   IMPORT_LIMITS,
@@ -21,6 +22,8 @@ import {
   type ImportRecordResult,
   type ExternalObjectMapping,
   type IntakeBatch,
+  type IntakeLookupResult,
+  type IntakeLookupSummary,
   type MetadataObservation,
 } from "@sciretriever/contracts";
 import {
@@ -66,6 +69,14 @@ import {
 export { ImportSessionError } from "./import-files.js";
 import { intakeDigest as hash } from "./intake-digest.js";
 import { IntakeFileItems, publicIntakeItem } from "./intake-file-items.js";
+import {
+  IntakeLookupItems,
+  LOOKUP_NOT_ADMITTED,
+  lookupGiven,
+  lookupItemId,
+  lookupLibraryMatch,
+  lookupSummary,
+} from "./intake-lookup-items.js";
 import { IntakeRecognitionService } from "../literature/intake-recognition.js";
 import type { FileClueReader } from "../literature/file-clues.js";
 import type { StoredIntakeItem } from "../storage/sqlite/intake-items.js";
@@ -74,6 +85,7 @@ import {
   type PossibleDuplicatePaper,
 } from "../literature/possible-duplicates.js";
 const intakeId = (value: unknown) => hash(value, "uuid");
+type Mutable<T extends readonly unknown[]> = T[number][];
 
 export type ImportActor =
   | { readonly kind: "device"; readonly connection_id: string }
@@ -275,7 +287,14 @@ export class ImportSessionReadService {
         batch,
         estimated: false as const,
         summary: withCluesUnread(summary),
-        items,
+        // A lookup item is one submitted line: record_index + 1 and its text.
+        items:
+          batch.request.format === "lookup"
+            ? items.map((item) => ({
+                ...item,
+                line: { number: item.record_index + 1, text: item.external_id },
+              }))
+            : items,
         next_cursor,
       };
     });
@@ -371,6 +390,7 @@ export class ImportSessionService extends ImportSessionReadService {
   private readonly uploadStops = new Map<string, Set<AbortController>>();
   readonly fileChannel: ImportFileChannel;
   readonly fileItems: IntakeFileItems;
+  readonly lookupItems: IntakeLookupItems;
   readonly possibleDuplicates: PossibleDuplicateService;
   private pagePdfHandler?: (
     s: StoredImportSession,
@@ -427,6 +447,13 @@ export class ImportSessionService extends ImportSessionReadService {
       options.clueReader,
       this.now,
     );
+    this.lookupItems = new IntakeLookupItems(
+      this.fileItems,
+      writes,
+      this.fileItems.recognition,
+      this.now,
+      (s, work) => this.libraryMatch(s, work),
+    );
     this.possibleDuplicates = new PossibleDuplicateService(
       () =>
         this.fileItems.read<PossibleDuplicatePaper[]>({
@@ -478,6 +505,9 @@ export class ImportSessionService extends ImportSessionReadService {
       throw new ImportSessionError("intake-format-unsupported");
     if (r.source?.identity === "local" && actor.kind !== "device")
       throw new ImportSessionError("intake-local-identity-required");
+    // Named lines are not records of a source library.
+    if (r.format === "lookup" && r.source !== null)
+      throw new ImportSessionError("intake-input-invalid");
     const adhoc = r.source === null;
     const source = r.source ?? {
       system: "file",
@@ -495,10 +525,11 @@ export class ImportSessionService extends ImportSessionReadService {
     const now = new Date(this.now()).toISOString(),
       batchId = parseIntakeBatchId(randomUUID());
     const origin = actor.kind === "device" ? "web" : actor.origin;
-    const label = (adhoc ? (r.file_name ?? r.format) : source.name).slice(
-      0,
-      120,
-    );
+    const label = (
+      adhoc
+        ? (r.file_name ?? (r.format === "lookup" ? "指定文献" : r.format))
+        : source.name
+    ).slice(0, 120);
     const batch: IntakeBatch = {
       batch_id: batchId,
       kind: "import",
@@ -566,7 +597,20 @@ export class ImportSessionService extends ImportSessionReadService {
   ): ImportAdapterResult {
     const adapter = this.adapters.get(format);
     if (!adapter) throw new ImportSessionError("intake-format-unsupported");
-    const result = adapter.decode(data, sequence);
+    let result: ImportAdapterResult;
+    try {
+      result = adapter.decode(data, sequence);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "intake-lookup-too-many"
+      )
+        throw new ImportSessionError("intake-lookup-too-many", {
+          cause: error,
+        });
+      throw error;
+    }
     if (result.items.length > IMPORT_LIMITS.records)
       throw new ImportSessionError("intake-batch-limit");
     return result;
@@ -578,7 +622,7 @@ export class ImportSessionService extends ImportSessionReadService {
     importInteger(sequence, IMPORT_LIMITS.parts - 1);
     const s = await this.stored(id);
     if (
-      ["bibtex", "biblatex", "ris", "csl-json"].includes(s.format) &&
+      ["bibtex", "biblatex", "ris", "csl-json", "lookup"].includes(s.format) &&
       typeof data !== "string"
     )
       throw new ImportSessionError("intake-input-invalid");
@@ -614,9 +658,20 @@ export class ImportSessionService extends ImportSessionReadService {
               keys.push({ kind: "file", id: f.external_id });
         }
       await this.writes.run(async () => {
-        const old = (
-          await this.read<ImportPart[]>({ op: "parts", batch_id: id })
-        ).find((v) => v.sequence === sequence);
+        const staged = await this.read<ImportPart[]>({
+          op: "parts",
+          batch_id: id,
+        });
+        const old = staged.find((v) => v.sequence === sequence);
+        // Every non-empty lookup line is one item; the limit covers the batch.
+        if (
+          s.format === "lookup" &&
+          staged
+            .filter((v) => v.sequence !== sequence)
+            .reduce((n, v) => n + v.record_count, decoded.items.length) >
+            IMPORT_LIMITS.lookup_lines
+        )
+          throw new ImportSessionError("intake-lookup-too-many");
         const ticket = await this.recovery.prepare([
           descriptor,
           ...(old
@@ -756,8 +811,21 @@ export class ImportSessionService extends ImportSessionReadService {
     for (const id of references) visit(id);
     const fileItems = await this.fileItems.prepare(s, decoded);
     const dataItems: StoredIntakeItem[] = [];
+    const lookup =
+      s.format === "lookup"
+        ? await this.lookupItems.stage(s, decoded)
+        : new Map<string, StoredIntakeItem>();
+    if (s.format === "lookup")
+      for (const [sequence, data] of decoded)
+        if (sequence !== IMPORT_LIMITS.parts)
+          decoded.set(sequence, {
+            ...data,
+            items: data.items.map((item) =>
+              this.lookupItems.adapterItem(s.batch_id, sequence, item, lookup),
+            ),
+          });
     for (const [sequence, data] of decoded) {
-      if (sequence === IMPORT_LIMITS.parts) continue;
+      if (sequence === IMPORT_LIMITS.parts || s.format === "lookup") continue;
       for (const value of data.items)
         dataItems.push({
           item_id: intakeId([
@@ -818,6 +886,10 @@ export class ImportSessionService extends ImportSessionReadService {
     for (const item of fileItems.items)
       if (item.work?.clues?.reason)
         addExcluded(summary, item.work.clues.reason);
+    if (s.format === "lookup")
+      (summary as { lookup?: IntakeLookupSummary }).lookup = lookupSummary([
+        ...lookup.values(),
+      ]);
     return {
       parts,
       sequences: [...decoded.keys()],
@@ -825,19 +897,29 @@ export class ImportSessionService extends ImportSessionReadService {
       summary,
       decoded,
       fileItems,
+      lookup,
     };
   }
   private async assertFileSnapshot(
     id: string,
     items: readonly StoredIntakeItem[],
+    lookup?: ReadonlyMap<string, StoredIntakeItem>,
   ) {
-    const current = (
-      await this.fileItems.read<StoredIntakeItem[]>({
-        kind: "all",
-        batch_id: id,
-      })
-    ).filter((i) => i.origin === "file");
+    const all = await this.fileItems.read<StoredIntakeItem[]>({
+      kind: "all",
+      batch_id: id,
+    });
+    const current = all.filter((i) => i.origin === "file");
     if (hash(current) !== hash(items))
+      throw new ImportSessionError("intake-data-changed");
+    // Lookup decisions and results confirmed are the ones prepared.
+    const byId = (values: Iterable<StoredIntakeItem>) =>
+      [...values].sort((a, b) => a.item_id.localeCompare(b.item_id));
+    if (
+      lookup?.size &&
+      hash(byId(all.filter((i) => lookup.has(i.item_id)))) !==
+        hash(byId(lookup.values()))
+    )
       throw new ImportSessionError("intake-data-changed");
   }
   private mapping(
@@ -861,6 +943,7 @@ export class ImportSessionService extends ImportSessionReadService {
       legacy =
         s.source.identity === "adhoc" &&
         s.format !== "web-page" &&
+        s.format !== "lookup" &&
         fileSha === undefined;
     return parseMetadataObservation({
       observation_id: intakeId([
@@ -990,6 +1073,53 @@ export class ImportSessionService extends ImportSessionReadService {
       return { disposition: "rejected", reason: "identity-failed" };
     }
   }
+  /**
+   * The library paper an identifier line names, by the same read-only identity
+   * assessment an import preview uses; deleted and withdrawn papers match too.
+   */
+  private async libraryMatch(
+    s: StoredImportSession,
+    work: NonNullable<StoredIntakeItem["work"]>,
+  ) {
+    const record = { ...work.record!, metadata: lookupGiven(work) };
+    const assessed = await this.identity.preview(this.observation(s, record));
+    if (
+      (assessed.disposition !== "matched" &&
+        assessed.disposition !== "restored") ||
+      !assessed.literature_id
+    )
+      return null;
+    const facts = await this.database.currentFacts(assessed.literature_id);
+    return facts
+      ? {
+          literature_id: assessed.literature_id,
+          metadata: facts.literature.metadata,
+        }
+      : null;
+  }
+  /** One recognition progress for the file items and lookup lines of a batch. */
+  private progress(
+    id: string,
+    files: readonly StoredIntakeItem[],
+    lookup: Iterable<StoredIntakeItem>,
+  ) {
+    const a = this.fileItems.progress(files),
+      b = this.lookupItems.progress(id, lookup);
+    if (!b.total) return a;
+    if (!files.length) return b;
+    return {
+      state:
+        a.state === "running" || b.state === "running"
+          ? ("running" as const)
+          : a.state === "cancelled" || b.state === "cancelled"
+            ? ("cancelled" as const)
+            : a.state === "done" && b.state === "done"
+              ? ("done" as const)
+              : ("idle" as const),
+      recognized: a.recognized + b.recognized,
+      total: a.total + b.total,
+    };
+  }
   preview(id: string) {
     return this.tracked(async () => {
       const s = await this.stored(id);
@@ -998,6 +1128,7 @@ export class ImportSessionService extends ImportSessionReadService {
       const prepared = await this.prepare(s),
         summary = prepared.summary;
       this.fileItems.start(s, prepared.fileItems.items);
+      this.lookupItems.start(s, prepared.lookup.values());
       let duplicateSnapshot: readonly PossibleDuplicatePaper[] | undefined;
       for (const sequence of prepared.sequences)
         for (const item of prepared.decoded.get(sequence)!.items) {
@@ -1005,11 +1136,17 @@ export class ImportSessionService extends ImportSessionReadService {
             if (item.reason === "unpaired-file")
               (summary.records as { pending_decision: number })
                 .pending_decision++;
-            else if (item.reason !== "excluded")
+            else if (
+              item.reason !== "excluded" &&
+              !LOOKUP_NOT_ADMITTED.has(item.reason ?? "")
+            )
               (summary.records as { rejected: number }).rejected++;
             continue;
           }
           const record = item.record;
+          const named = prepared.lookup.get(
+            lookupItemId(id, sequence, item.record_index),
+          );
           const retained =
             sequence === IMPORT_LIMITS.parts
               ? prepared.fileItems.items.find(
@@ -1055,6 +1192,55 @@ export class ImportSessionService extends ImportSessionReadService {
             mapping,
             sequence === IMPORT_LIMITS.parts ? candidate?.sha256 : undefined,
           );
+          const namedResult = named?.work?.result;
+          if (
+            namedResult?.recognition.state === "recognized" &&
+            !lookupLibraryMatch(namedResult)
+          ) {
+            // A recognized line already in the library is shown as such.
+            const existing =
+              decision.disposition === "matched" ||
+              decision.disposition === "restored"
+                ? decision.literature_id
+                : null;
+            if ((namedResult.recognition.literature_id ?? null) !== existing) {
+              const updated = await this.writes.run(async () => {
+                // Only the match changes; a decision made meanwhile is kept.
+                const current = await this.fileItems.read<StoredIntakeItem>({
+                  kind: "one",
+                  batch_id: id,
+                  item_id: named!.item_id,
+                });
+                const result = current.work?.result;
+                if (
+                  !result ||
+                  result.recognition.state !== "recognized" ||
+                  hash(result.metadata) !== hash(namedResult.metadata)
+                )
+                  return current;
+                return this.fileItems.write<StoredIntakeItem>({
+                  kind: "update",
+                  batch_id: id,
+                  item_id: current.item_id,
+                  work: {
+                    ...current.work!,
+                    result: {
+                      ...result,
+                      recognition: {
+                        ...result.recognition,
+                        literature_id:
+                          existing === null
+                            ? null
+                            : parseLiteratureId(existing),
+                      },
+                    },
+                  },
+                  now: new Date(this.now()).toISOString(),
+                });
+              });
+              prepared.lookup.set(updated.item_id, updated);
+            }
+          }
           if (decision.disposition === "conflict") {
             if (decision.reason === "missing-title-or-doi")
               (summary.records as { rejected: number }).rejected++;
@@ -1108,10 +1294,11 @@ export class ImportSessionService extends ImportSessionReadService {
           else if (decision.disposition === "created")
             (summary.records as { created: number }).created++;
           else (summary.records as { matched: number }).matched++;
+          const recognizedWork = retained?.work?.result ?? namedResult;
           if (
             !owner &&
-            retained?.work?.result &&
-            retained.work.result.recognition.state !== "recognized"
+            recognizedWork &&
+            recognizedWork.recognition.state !== "recognized"
           )
             (summary.records as { needs_metadata: number }).needs_metadata++;
           if (!s.metadata_only && selected(record) && !candidate) {
@@ -1131,11 +1318,19 @@ export class ImportSessionService extends ImportSessionReadService {
           kind: "clues-unread",
           batch_id: s.batch_id,
         });
+      if (s.format === "lookup")
+        (summary as { lookup?: IntakeLookupSummary }).lookup = lookupSummary([
+          ...prepared.lookup.values(),
+        ]);
       return {
         batch,
         estimated: true as const,
         summary: { ...summary, full_text: batch.full_text },
-        recognition: this.fileItems.progress(prepared.fileItems.items),
+        recognition: this.progress(
+          id,
+          prepared.fileItems.items,
+          prepared.lookup.values(),
+        ),
       };
     });
   }
@@ -1238,13 +1433,21 @@ export class ImportSessionService extends ImportSessionReadService {
         actor.kind === "device"
           ? `device:${actor.connection_id}`
           : actor.origin;
-      if (decision.kind !== "new" && decision.kind !== "merge")
-        return this.fileItems.decide(
-          await this.stored(id),
-          itemId,
-          decision,
-          who,
-        );
+      if (decision.kind !== "new" && decision.kind !== "merge") {
+        const s = await this.stored(id);
+        if (s.format === "lookup") {
+          const item = await this.fileItems.read<StoredIntakeItem>({
+            kind: "one",
+            batch_id: id,
+            item_id: itemId,
+          });
+          if (item.work?.lookup)
+            return publicIntakeItem(
+              await this.lookupItems.decide(s, item, decision, who),
+            );
+        }
+        return this.fileItems.decide(s, itemId, decision, who);
+      }
       const settle = await this.writes.run(async () => {
         const s = await this.stored(id);
         const item = await this.fileItems.write<StoredIntakeItem>({
@@ -1312,13 +1515,21 @@ export class ImportSessionService extends ImportSessionReadService {
       if (!["collecting", "awaiting-confirmation"].includes(s.state))
         throw new ImportSessionError("intake-batch-state");
       await this.fileItems.cancel(s);
+      await this.lookupItems.cancel(s);
       const items = await this.fileItems.read<StoredIntakeItem[]>({
         kind: "all",
         batch_id: id,
       });
       return {
         batch: await this.project(s),
-        recognition: this.fileItems.progress(items),
+        recognition:
+          s.format === "lookup"
+            ? this.progress(
+                id,
+                items.filter((i) => i.origin === "file"),
+                items.filter((i) => i.origin === "data" && i.work?.lookup),
+              )
+            : this.fileItems.progress(items),
       };
     });
   }
@@ -1344,7 +1555,8 @@ export class ImportSessionService extends ImportSessionReadService {
                 i.decision?.kind === "include" ||
                 i.work?.included === true) &&
               !i.work?.result,
-          )
+          ) ||
+          this.lookupItems.pending(ready.lookup.values())
         )
           throw new ImportSessionError("intake-recognition-pending");
         await this.writes.run(async () => {
@@ -1354,7 +1566,11 @@ export class ImportSessionService extends ImportSessionReadService {
           });
           if (hash(parts) !== hash(ready.parts))
             throw new ImportSessionError("intake-data-changed");
-          await this.assertFileSnapshot(id, ready.fileItems.items);
+          await this.assertFileSnapshot(
+            id,
+            ready.fileItems.items,
+            ready.lookup,
+          );
           await this.write({
             op: "begin",
             batch_id: id,
@@ -1512,7 +1728,8 @@ export class ImportSessionService extends ImportSessionReadService {
             i.decision?.kind === "include" ||
             i.work?.included === true) &&
           !i.work?.result,
-      )
+      ) ||
+      this.lookupItems.pending(prepared.lookup.values())
     )
       throw new ImportSessionError("intake-recognition-pending");
     await this.writes.run(async () => {
@@ -1522,7 +1739,11 @@ export class ImportSessionService extends ImportSessionReadService {
       });
       if (hash(current) !== hash(prepared.parts))
         throw new ImportSessionError("intake-data-changed");
-      await this.assertFileSnapshot(id, prepared.fileItems.items);
+      await this.assertFileSnapshot(
+        id,
+        prepared.fileItems.items,
+        prepared.lookup,
+      );
       await this.write({
         op: "begin",
         batch_id: id,
@@ -1564,6 +1785,9 @@ export class ImportSessionService extends ImportSessionReadService {
     const aggregate = await this.read<Pick<ImportSummary, "records" | "files">>(
       { op: "aggregate", batch_id: id },
     );
+    if (s.format === "lookup")
+      (prepared.summary as { lookup?: IntakeLookupSummary }).lookup =
+        lookupSummary([...(await this.lookupItems.read(id)).values()], true);
     await this.write({
       op: "metadata-done",
       batch_id: id,
@@ -1622,7 +1846,8 @@ export class ImportSessionService extends ImportSessionReadService {
         disposition:
           item.reason === "unpaired-file"
             ? "excluded"
-            : item.reason === "excluded"
+            : item.reason === "excluded" ||
+                LOOKUP_NOT_ADMITTED.has(item.reason ?? "")
               ? "excluded"
               : "rejected",
         literature_id: null,
@@ -1641,6 +1866,16 @@ export class ImportSessionService extends ImportSessionReadService {
       const retainedCandidate = retained?.candidate_transfer_id
         ? await this.fileItems.transfers.recover(retained.candidate_transfer_id)
         : null;
+      // A lookup line carries its recognition like a standalone file does.
+      const named =
+        record && s.format === "lookup"
+          ? (resolving ??
+            (await this.fileItems.read<StoredIntakeItem>({
+              kind: "one",
+              batch_id: id,
+              item_id: lookupItemId(id, sequence, item.record_index),
+            })))
+          : undefined;
       if (record) {
         let existing = await this.mapping(
           s.library_key,
@@ -1676,6 +1911,19 @@ export class ImportSessionService extends ImportSessionReadService {
               ? retainedCandidate?.sha256
               : undefined,
           );
+        // A lookup line matched in the library only joins the batch: no new
+        // source record; the member write restores a deleted or withdrawn paper.
+        const known = lookupLibraryMatch(named?.work?.result);
+        if (known)
+          existing = {
+            library_key: s.library_key,
+            object_kind: "record",
+            external_id: record.external_id,
+            internal_id: known,
+            content_sha256: null,
+            observation_id: null,
+            state: "settled",
+          };
         const assessment = hashOwner?.ambiguous
           ? {
               disposition: "conflict" as const,
@@ -1683,23 +1931,30 @@ export class ImportSessionService extends ImportSessionReadService {
               reason: "file-identity-conflict",
               unchanged: false,
             }
-          : s.source.identity === "adhoc" &&
-              !hashOwner &&
-              record.metadata.identifiers.length > 0
+          : known
             ? {
-                disposition: "created" as const,
-                literature_id: null,
+                disposition: "matched" as const,
+                literature_id: known,
                 reason: null,
-                unchanged: false,
+                unchanged: true,
               }
-            : await this.assessRecord(
-                s,
-                record,
-                existing,
-                sequence === IMPORT_LIMITS.parts
-                  ? retainedCandidate?.sha256
-                  : undefined,
-              );
+            : s.source.identity === "adhoc" &&
+                !hashOwner &&
+                record.metadata.identifiers.length > 0
+              ? {
+                  disposition: "created" as const,
+                  literature_id: null,
+                  reason: null,
+                  unchanged: false,
+                }
+              : await this.assessRecord(
+                  s,
+                  record,
+                  existing,
+                  sequence === IMPORT_LIMITS.parts
+                    ? retainedCandidate?.sha256
+                    : undefined,
+                );
         let undecided = false;
         if (
           (s.source.identity === "adhoc" || sequence === IMPORT_LIMITS.parts) &&
@@ -1838,7 +2093,11 @@ export class ImportSessionService extends ImportSessionReadService {
                 hashOwner?.role !== undefined &&
                 hashOwner.role !== "primary-pdf"
                   ? "matched-by-supplementary"
-                  : (retained?.work?.clues?.reason ?? null),
+                  : (retained?.work?.clues?.reason ??
+                    (named?.work?.result &&
+                    named.work.result.recognition.state !== "recognized"
+                      ? "lookup-unrecognized"
+                      : null)),
             };
             if (hashOwner) {
               if (hashOwner.withdrawn)
@@ -1856,7 +2115,7 @@ export class ImportSessionService extends ImportSessionReadService {
                 },
               });
             }
-            const recognized = retained?.work?.result;
+            const recognized = retained?.work?.result ?? named?.work?.result;
             if (recognized?.observation)
               await this.identity.observe(recognized.observation, {
                 target_literature_id: decision.literature_id,
@@ -2212,6 +2471,7 @@ export class ImportSessionService extends ImportSessionReadService {
     this.stopping.add(id);
     this.preparedConfirmations.delete(id);
     await this.fileItems.cancel(await this.stored(id));
+    await this.lookupItems.cancel(await this.stored(id));
     const retry = this.retries.get(id);
     if (retry) {
       clearTimeout(retry);
@@ -2675,11 +2935,92 @@ export class ImportSessionService extends ImportSessionReadService {
       }
     });
   }
+  /**
+   * Local synchronous lookup (CLI and stdio MCP; literature materials 6.4.12):
+   * recognized lines are admitted; lines needing a choice and unrecognized
+   * lines are not, and are listed with their candidates instead.
+   */
+  addLiteratures(
+    text: string,
+    origin: "web" | "cli" | "mcp",
+  ): Promise<IntakeLookupResult> {
+    return this.tracked(async () => {
+      const s = await this.create(
+        { format: "lookup", source: null, scope: "named literatures" },
+        { kind: "local", origin },
+      );
+      try {
+        await this.putData(s.batch_id, 0, text);
+        await this.preview(s.batch_id);
+        await this.lookupItems.wait(s.batch_id);
+        // Read before confirmation: finishing discards the recognition work.
+        const lines = await this.lookupItems.read(s.batch_id);
+        await this.confirm(s.batch_id);
+        const results: ImportRecordResult[] = [];
+        let cursor: string | null = null,
+          summary: IntakeLookupSummary | undefined;
+        do {
+          const page = await this.report(s.batch_id, cursor);
+          summary ??= page.summary.lookup;
+          results.push(...page.items);
+          cursor = page.next_cursor;
+        } while (cursor !== null);
+        const added: Mutable<IntakeLookupResult["added"]> = [],
+          notAdded: Mutable<IntakeLookupResult["not_added"]> = [];
+        for (const r of results) {
+          const work = lines.get(
+              lookupItemId(s.batch_id, r.sequence, r.record_index),
+            )?.work,
+            line = { line: r.record_index + 1, text: r.external_id };
+          if (
+            r.literature_id &&
+            (r.disposition === "created" ||
+              r.disposition === "enriched" ||
+              r.disposition === "matched" ||
+              r.disposition === "restored")
+          )
+            added.push({
+              ...line,
+              disposition: r.disposition,
+              literature_id: r.literature_id,
+              title: work?.result?.metadata.title ?? null,
+            });
+          else
+            notAdded.push({
+              ...line,
+              disposition: r.disposition,
+              reason: r.reason,
+              candidates:
+                r.reason === "lookup-candidates"
+                  ? (work?.result?.recognition.candidates ?? []).map((c) => ({
+                      title: c.title,
+                      first_author: c.authors[0]?.display_name ?? null,
+                      publication_year: c.publication_year,
+                      identifiers: c.identifiers,
+                    }))
+                  : [],
+            });
+        }
+        return {
+          intake_batch_id: parseIntakeBatchId(s.batch_id),
+          summary: summary ?? lookupSummary([]),
+          added,
+          not_added: notAdded,
+        };
+      } catch (error) {
+        const current = await this.stored(s.batch_id).catch(() => null);
+        if (current && current.state !== "finished")
+          await this.finishOwned(s.batch_id, "cancelled");
+        throw error;
+      }
+    });
+  }
   override async close() {
     if (this.timer) clearInterval(this.timer);
     for (const retry of this.retries.values()) clearTimeout(retry);
     this.retries.clear();
     await this.fileItems.close();
+    await this.lookupItems.close();
     await super.close();
     this.failures.clear();
     this.preparedConfirmations.clear();

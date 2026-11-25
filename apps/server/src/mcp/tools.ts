@@ -70,7 +70,7 @@ const operations = [
     request: {
       type: "object",
       description:
-        "ArchiveBuildRequest: selector, mode, from_step, idempotency_key. Requires existing raw parses.",
+        "ArchiveBuildRequest: selector, mode, from_step, idempotency_key. mode full first parses, through the configured parser service (MinerU), each part without a raw parse for the deployment profile; legacy-vlm-markdown requires existing raw parses.",
     },
   }),
   object({
@@ -1055,7 +1055,7 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
   ),
   tool(
     "archive_manage",
-    "Explicit build {schema_version:2,selector:{kind:'literatures',literature_ids} or {kind:'query',query},mode:'full'|'legacy-vlm-markdown',from_step:null|step,idempotency_key}; resume {literature_id}; resolve {issue_ids,resolution:'continue'|'skip'|'cancel'}. Requires pre-existing raw parses and never calls MinerU. Correct failed facts using arrangement/text editing, metadata or tag commands before resume; acknowledgement cannot establish readiness.",
+    "Explicit build {schema_version:2,selector:{kind:'literatures',literature_ids} or {kind:'query',query},mode:'full'|'legacy-vlm-markdown',from_step:null|step,idempotency_key}; resume {literature_id}; resolve {issue_ids,resolution:'continue'|'skip'|'cancel'}. In mode full, a part without a raw parse for the deployment profile is parsed first through the configured parser service (MinerU) and an existing parse is reused; legacy-vlm-markdown requires pre-existing raw parses and never parses. Correct failed facts using arrangement/text editing, metadata or tag commands before resume; acknowledgement cannot establish readiness.",
     object({
       operation: { enum: ["build", "resume", "resolve"] },
       request: { type: "object" },
@@ -1321,6 +1321,23 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
     false,
   ),
   tool(
+    "add_literatures",
+    "Explicitly add papers the user names, one DOI, DOI or publisher address, arXiv ID, PMID or title per line (at most 200 non-empty lines; more is intake-lookup-too-many). Pass text or lines, not both. An identifier already in this library is matched there without any source query; other lines are recognized with the configured metadata sources (no model, no PDF download) and adds recognized papers to the library synchronously. Lines that match several works or none are not added; the result lists every line not added with line, text, reason (lookup-candidates, lookup-unrecognized, lookup-unsupported-url, lookup-too-short, lookup-too-long, duplicate-line or an identity conflict) and, for lookup-candidates, candidate title, first author, year and identifiers to retry with an exact identifier.",
+    object(
+      {
+        text: { type: "string", minLength: 1, maxLength: 786432 },
+        lines: {
+          type: "array",
+          minItems: 1,
+          maxItems: 10000,
+          items: { type: "string", maxLength: 8192 },
+        },
+      },
+      [],
+    ),
+    false,
+  ),
+  tool(
     "recognize_literatures",
     "Explicitly re-read the saved primary PDF of literatures marked needs-metadata and recognize them with the intake rules and configured sources; no model, no PDF download. Pass literature IDs or {kind:'needs-metadata'} for every marked paper with a PDF (at most 10,000). Returns the durable task; refused with pdf-reader-missing when this server cannot read PDFs.",
     object({
@@ -1543,6 +1560,7 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
 /** HTTP transport restrictions only; every allowed definition/handler remains shared with stdio. */
 export const HTTP_MCP_EXCLUDED_TOOLS = [
   "import_bibliography",
+  "add_literatures",
   "begin_pdf_upload",
   "append_pdf_upload",
   "commit_pdf_upload",
