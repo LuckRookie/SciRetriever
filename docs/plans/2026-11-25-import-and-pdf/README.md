@@ -63,8 +63,8 @@ Owner 同日提出五点，并同意按下面的顺序做（原话：“可以�
 | [01](01-add-by-identifier.md)     | 按 DOI 或标题添加文献：页面、MCP 与 CLI、Skill                     | 后端、前端           | 真实核对等 G-provider            | Pending     |
 | [02](02-pdf-only-metadata.md)     | 只导入 PDF 时的书目：认出率实测，多用 PDF 自带的字段               | 总设计师、后端       | G-provider、G-sample             | Pending     |
 | [03](03-one-pdf-tool.md)          | PDF 工具合一：下载验收改用 MuPDF，去掉 `pdfinfo`、`pdftotext`      | 后端                 | —                                | Pending     |
-| [04](04-agent-entries.md)         | Agent 的入口：通读 MCP 与 Skill，补上缺口                          | 总设计师、后端       | 01 的接口                        | Pending     |
-| [05](05-parse-throughput.md)      | 解析全文的耗时：量出瓶颈，定并发的默认值与入口                     | 总设计师、后端       | G-parse                          | Pending     |
+| [04](04-agent-entries.md)         | Agent 的入口：通读 MCP 与 Skill，补上缺口                          | 总设计师、后端       | 01 的接口                        | In progress |
+| [05](05-parse-throughput.md)      | 解析全文的耗时：量出瓶颈，定并发的默认值与入口                     | 总设计师、后端       | G-parse                          | In progress |
 | [06](06-bibliography-formats.md)  | 书目文件的格式：EndNote、NoteExpress、知网的导出                   | 后端                 | 顺序待 Owner 定                  | Pending     |
 | [07](07-zotero-import-program.md) | Zotero 导入程序与 Skill：Agent 这条路，先做                        | 后端、总设计师       | G-zotero（真实试用）             | Pending     |
 | [08](08-stored-translation.md)    | 全文的译文：解析时翻好，存进文献库；阅读页“全文”的原文、译文、对照 | 后端、前端、总设计师 | ADR 0068 审定；G-parse（实测）   | Pending     |
@@ -121,6 +121,7 @@ Zotero：07 → 14.2、14.4 → 15 → 17；16.4 起排在 07 之后，另等 14
 - 2026-11-25：计划编写完成。Owner 说还要补充内容。
 - 2026-11-25：Owner 定 Zotero 两条路都做（“浏览器扩展可以，Agents也可以”），端口都可以改；同意把计划 25 未完成的部分并入本计划并归档计划 25（“可以，写进去”）。新增 07，搬入 14–17、21–24。下一步：等 Owner 补充内容与各门槛的答复；不需要门槛的 03 可以先开工。
 - 2026-11-25：Owner 说可以开工，前端与后端的代码都交 Opus 子代理，总设计师审核、写文档、指挥，不冲突的并行。派出两个只读任务：PDF 实测（03 的 3.1，02 的 2.2 离线部分与 2.3）、入口清点与并发开关（04 的 4.1，05 的 5.1）。
+- 2026-11-25：入口清点与并发开关交回（04 的 4.1、4.2，05 的 5.1 完成）：缺口主要在 Skill；模型并发全进程默认只有 3 个，单独调大任务并发帮助很小。指南与 Skill 里核实过的错误说法已改。
 - 2026-11-25：Owner 提出解析全文时把译文也翻好并存下来，阅读页的“原文”改名并提供原文、译文、对照三种读法。起草 ADR 0068，新增 08。
 
 ## 变更记录

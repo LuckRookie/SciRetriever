@@ -86,7 +86,7 @@ MCP 请求 JSON 上限为 1 MiB + 4096 字节，领域合同自己的限制仍�
 
 PDF 上传按以下顺序调用，仅在 `--maintenance` 下提供：
 
-1. `begin_pdf_upload`：传入 `literature_id`、完整文件 `sha256` 和 `byte_size`。单文件不超过 16 MiB，返回 `upload_id`、`max_chunk_bytes` 和过期时间。
+1. `begin_pdf_upload`：传入 `literature_id`、完整文件 `sha256` 和 `byte_size`。返回 `upload_id`、`max_chunk_bytes` 和过期时间。
 2. `append_pdf_upload`：传入 `upload_id`、`offset` 和规范 `bytes_base64`，每块最多 192 KiB。offset 必须连续；已经收到的相同字节可重试，跳跃或不一致的重放会拒绝。
 3. `commit_pdf_upload`：只传 `upload_id`，完整大小和 hash 匹配后消费缓冲并调用 Web/CLI 共用的 PDF 接纳服务。已存在主 PDF 时拒绝覆盖，接纳不等于文章身份已核验。
 4. 放弃时调用 `discard_pdf_upload`。上传缓冲只属于当前 MCP 连接，最长存在十分钟；最多四个、总计 32 MiB（含正在提交的缓冲），断开清理。完整性校验前失败可继续补传；开始接纳后句柄已消费，遇到结果不明应先读文献事实，不盲目再次提交。
@@ -112,8 +112,8 @@ PDF 上传按以下顺序调用，仅在 `--maintenance` 下提供：
 桌面上的 Agent（Claude Code、Codex 等）不需要装本仓库，经用户在浏览器里打开文献库用的同一个地址连接（[ADR 0058](../architecture/decisions/0058-import-system-and-agent-access.md)）：
 
 1. 在 Web“设置 → 设备连接 → 连接 Agent”勾选用途（导入、读取，必要时操作），生成连接码，把“复制给 Agent 的话”整段交给 Agent。
-2. Agent 用连接码换得令牌，存在只有本人可读的文件里，之后下载文献库自带的使用说明（`GET /api/v1/device-connections/instructions`）或完整 skill（`/skill`，源文件在仓库 [`skills/sciretriever/`](../../skills/sciretriever/SKILL.md)）。
-3. 导入经导入会话的 HTTP 接口完成：建会话、交数据、预览、确认、交文件、结束。接口说明由文献库在 `GET /api/v1/import/instructions` 给出；会话在 Web“入库 → 导入”里实时可见，用户可以在那里确认或取消。
+2. Agent 用连接码换得令牌，存在只有本人可读的文件里，之后下载文献库自带的使用说明（`GET /api/v1/intake/agent-guide`）或完整 skill（`GET /api/v1/intake/skill`，源文件在仓库 [`skills/sciretriever/`](../../skills/sciretriever/SKILL.md)）。
+3. 导入经入库批次的 HTTP 接口完成：建批次、交数据、预览、确认、交文件、结束。接口说明由文献库在 `GET /api/v1/intake/instructions` 给出；批次在 Web“找文献”页的批次记录里实时可见，用户可以在那里确认或取消。
 4. 检索、阅读与发起任务经同一地址的 HTTP 版 MCP（`/mcp`，Streamable HTTP，请求头带令牌）；工具按连接的用途给出，与 stdio 版同一套。
 
 设备令牌不能登录 Web，不能读写配置与凭据，也不能管理设备连接；撤销后立即失效。下面“连接正在运行的 Web 服务”是在服务器上用 CLI 与 stdio 版 MCP 的方式，两者并存。
