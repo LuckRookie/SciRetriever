@@ -1,6 +1,6 @@
 ---
 name: sciretriever
-description: 代使用者入库、使用文献库。用户要求连接自己的 SciRetriever、把指定范围的书目和 PDF 入库，或经 HTTP 版 MCP 检索、阅读文献与提交任务时使用。
+description: 代使用者入库、使用文献库。用户要求连接自己的 SciRetriever、把指定范围的书目和 PDF 入库，或经 HTTP 版 MCP 检索与阅读文献、搜索主题与扩展引用、整理文献库（加入、移出、删除）、获取 PDF 与解析全文时使用。
 ---
 
 # SciRetriever 文献库
@@ -9,13 +9,16 @@ description: 代使用者入库、使用文献库。用户要求连接自己的 
 
 ## 先读哪篇
 
-| 要做的事                  | 读                                   |
-| ------------------------- | ------------------------------------ |
-| 第一次连接，或令牌失效    | [connect.md](connect.md)             |
-| 代使用者把书目与 PDF 入库 | [import.md](import.md)               |
-| 数据在 Zotero 里          | [source-zotero.md](source-zotero.md) |
-| 检索、阅读、发起任务      | [use.md](use.md)                     |
-| 请求失败、中断后继续      | [recovery.md](recovery.md)           |
+| 要做的事                   | 读                                   |
+| -------------------------- | ------------------------------------ |
+| 第一次连接，或令牌失效     | [connect.md](connect.md)             |
+| 代使用者把书目与 PDF 入库  | [import.md](import.md)               |
+| 数据在 Zotero 里           | [source-zotero.md](source-zotero.md) |
+| 检索、阅读                 | [use.md](use.md)                     |
+| 主题搜索、引用扩展         | [use.md](use.md#搜索与扩展)          |
+| 加入、移出、删除、识别书目 | [use.md](use.md#整理文献库)          |
+| 获取 PDF、解析全文         | [use.md](use.md#获取-pdf-与解析全文) |
+| 请求失败、中断后继续       | [recovery.md](recovery.md)           |
 
 接口的请求、结果、格式、上限与错误码以连接后的 `GET <地址>/api/v1/intake/instructions` 为准。这里讲执行顺序与判断。单篇网页收藏使用浏览器扩展，不由 Agent 模拟扩展操作。从 Zotero 直接导入还没有开放，见 [source-zotero.md](source-zotero.md)。
 
