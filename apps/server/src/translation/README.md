@@ -15,7 +15,7 @@ HTTP 由 `workbench/http.ts` 提供：`GET /api/translation` 返回可选模型�
 
 ## 全文的译文（建档的 `translate` 一步）
 
-- **单元**（`documentUnits`）：校订稿按 `arrangeSourceLayout` 排出的一段，合并段是一个单元，原文是各叶块校订后的文字按渲染 joiner 接起来；`unit_id` 是第一个叶块的编号，`segment_ids` 是全部叶块。只译首叶块类型为 `text`、`title`、`caption`、`list`、`footnote` 的段；章节角色为作者或参考文献的、以及首页文章信息（`article_info`：单位、通讯作者、收稿日期等，整理把它们放在 end-matter）不译。每个单元的原文必须与固定 Markdown 中从首叶块到末叶块的字节一致（标题段允许前面的 `#` 标记），对不上的不译，计入 `stats.unmatched_units`。`source_sha256` 对未规范化的原文计算。
+- **单元**（`documentUnits`）：校订稿按 `arrangeSourceLayout` 排出的一段，合并段是一个单元，原文是各叶块校订后的文字按渲染 joiner 接起来；`unit_id` 是第一个叶块的编号，`segment_ids` 是全部叶块。只译首叶块类型为 `text`、`title`、`caption`、`list`、`footnote` 的段；章节角色为作者或参考文献的、以及首页文章信息（`layout.article_info`：单位、通讯作者与作者注释、收稿与发表日期）不译；其余文末信息（end-matter，含致谢、资助、文末的作者信息）照常翻译。每个单元的原文必须与固定 Markdown 中从首叶块到末叶块的字节一致（标题段允许前面的 `#` 标记），对不上的不译，计入 `stats.unmatched_units`。`source_sha256` 对未规范化的原文计算。
 - **同语言**（`alreadyInLanguage`）：书目语言字段能认出时只比主语言（`zh`、`zh-CN`、`zh-Hans`、`zh-Hant` 同为 `zh`，也认 `English`、`eng` 一类写法）；认不出或为空时，按可译单元的文字（公式除外）统计占多数的文字系统：拉丁、西里尔、谚文、汉字与假名（假名不少于汉字加假名的一成算日文，否则算中文）。与译文语言的文字相同就不译，结果为 `same-language`。
 - **沿用**：取这篇文献这种语言最近一份译文，原文摘要相同的已译单元直接沿用；`from_step: translate` 不沿用、不读缓存，全部重译。更早的 `from_step` 照常沿用。
 - **分批与请求**：剩下的单元按文中顺序分批，每批不超过 `TRANSLATION_BATCH_MAX_CODE_POINTS`（6,000 码点）与 `TRANSLATION_BATCH_MAX_UNITS`（60 个），单个超长单元单独一批。请求体为 `{title, sections, units: [{id: "u1", text}…]}`，`title` 取书目标题，`sections` 是这批单元所在章节的标题，两者只作上下文；结构化返回 `{translations: [{id, translation}]}`。送出的文字在公式（`$…$`、`$$…$$`）之外做 NFKC、把空格与制表符合为一个，保留换行；公式内一字不改。

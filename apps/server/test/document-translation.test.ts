@@ -146,6 +146,12 @@ it("translates every unit, reads the original, the translation and both, and nev
       "A complete synthetic study.\n\n译文：A complete synthetic study.",
     );
     expect(both.match(/\[1\] Example synthetic reference\./gu)).toHaveLength(1);
+    // A heading keeps its one original heading line; its translation follows
+    // as plain text, so the outline is not doubled.
+    expect(both).toContain(
+      "## Introduction\n\n译文：Introduction\n\nA complete synthetic study.",
+    );
+    expect(both.match(/^#+ /gmu)).toEqual(read.original.text.match(/^#+ /gmu));
     // The same contract through the CLI.
     let out = "";
     const cli = await runCli(["document", "translation", "--request", "-"], {

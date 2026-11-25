@@ -21,6 +21,7 @@ const { literatureWithdrawn }: typeof import("./intake-visibility.js") =
 import { createHash } from "node:crypto";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
+  ARCHIVE_STEPS,
   parseLongDocumentInfo,
   type LongDocumentInfo,
   canonicalJsonBytes,
@@ -103,6 +104,8 @@ const version = (v: unknown): string | null =>
   typeof v === "string" ? hash(JSON.parse(v)) : null;
 const rows = (db: DatabaseSync, sql: string, ...args: SQLInputValue[]) =>
   db.prepare(sql).all(...args);
+const currentStep = (step: unknown) =>
+  (ARCHIVE_STEPS as readonly unknown[]).includes(step);
 function fail(code: string): never {
   throw Object.assign(new Error("archive storage refused"), { code });
 }
@@ -368,11 +371,14 @@ export function archiveStates(
           : p.proofread_id
             ? "legacy-v1"
             : "not-built",
+        // Historical rows and step names this release does not know are read
+        // as old steps, never refused.
         legacy_steps: stepRows
           .filter(
             (s) =>
               s.asset_id === p.asset_id &&
-              JSON.parse(String(s.output_json)).schema_version !== 2,
+              (JSON.parse(String(s.output_json)).schema_version !== 2 ||
+                !currentStep(s.step)),
           )
           .map(
             (s) =>
@@ -404,7 +410,8 @@ export function archiveStates(
           .filter(
             (s) =>
               s.asset_id === p.asset_id &&
-              JSON.parse(String(s.output_json)).schema_version === 2,
+              JSON.parse(String(s.output_json)).schema_version === 2 &&
+              currentStep(s.step),
           )
           .map(
             (s) =>
@@ -701,6 +708,9 @@ export function runArchiveStorage(
     if (action === "step") {
       const s = r.receipt as unknown as ArchiveStepReceipt,
         now = new Date().toISOString();
+      // The table checks only the form of a name; the valid names are here.
+      if (!ARCHIVE_STEPS.includes(s.step as (typeof ARCHIVE_STEPS)[number]))
+        fail("archive-step-invalid");
       if (
         !db
           .prepare(

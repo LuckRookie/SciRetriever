@@ -1161,6 +1161,7 @@ export class DocumentReadService {
       payload: number;
       end: number;
       translation: string | null;
+      heading: boolean;
     }[] = [];
     for (const [index, unit] of file.units.entries()) {
       if (index % 256 === 0) {
@@ -1178,7 +1179,12 @@ export class DocumentReadService {
         found as (typeof first)[],
         unit.source_sha256,
       );
-      if (span) spans.push({ ...span, translation: unit.translation });
+      if (span)
+        spans.push({
+          ...span,
+          translation: unit.translation,
+          heading: first.kind === "heading",
+        });
     }
     spans.sort((a, b) => a.start - b.start);
     const max = r.max_bytes;
@@ -1210,10 +1216,14 @@ export class DocumentReadService {
         continue; // kept original, copied with the following bytes
       }
       const prefix = decoder.decode(bytes.subarray(span.start, span.payload));
+      // Bilingual keeps one heading line, the original; its translation
+      // follows as plain text so the outline is not doubled.
       const piece =
         mode === "translation"
           ? span.translation
-          : `${original}\n\n${prefix}${span.translation}`;
+          : span.heading
+            ? `${original}\n\n${span.translation.replace(/^\s*#{1,6}\s+/u, "")}`
+            : `${original}\n\n${prefix}${span.translation}`;
       const n = Buffer.byteLength(piece);
       if (size + n > max) {
         if (at === start && !out)

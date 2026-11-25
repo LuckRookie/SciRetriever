@@ -29,7 +29,7 @@
 
 - `describe` 多 `translation: {target_language, state, units, translated}`；`target_language` 取当时的 `[translation].target_language`，`state` 为 `none|stale|complete|partial|same-language`，初稿恒为 `none`。
 - `document-translation`（HTTP `POST /api/v1/query/document-translation`、CLI `document translation`、MCP `document_read` 的 `translation`）是与 `draft-differences` 一样的专门合同：请求 `{document_version_id, section_id, limit, cursor}`（`section_id` 为 null 时整篇，否则按单元首叶块所在章节），返回 `{document, text_level, machine_translation: true, target_language, state, units: [{unit_id, segment_ids, translation}], total, next_cursor}`。一页最多 `limit`（≤200）个单元，且译文合计不超过 64 KiB（至少一个）。`none`、`stale` 时 `units` 为空。
-- `slice` 可带 `text: original|translation|bilingual`，不带等于 `original`，结果与原来逐字节相同。后两种：范围、`actual_range` 与续读位置仍是原文 UTF-8 字节；结构字节与不翻译的内容原样复制，可译单元整段换成译文（`bilingual` 为原文、空行、同样的标题标记与译文），缺译单元保留原文；一个单元只在整段落在范围内时才替换。结果另有 `machine_translation`（同语言为 false，正文即原文）、`target_language`、`untranslated_units`，`evidence` 恒为空数组：译文不能用来解析证据。单个译文段放不进 `max_bytes` 时返回 `document-budget`。`none`、`stale` 时返回 `translation-unavailable`（HTTP 409），不退回原文。
+- `slice` 可带 `text: original|translation|bilingual`，不带等于 `original`，结果与原来逐字节相同。后两种：范围、`actual_range` 与续读位置仍是原文 UTF-8 字节；结构字节与不翻译的内容原样复制，可译单元整段换成译文（`bilingual` 为原文一段、译文一段；标题只保留原文那一行，译文作为紧随其后的普通段落，不带 `#`，目录不会重复），缺译单元保留原文；一个单元只在整段落在范围内时才替换。结果另有 `machine_translation`（同语言为 false，正文即原文）、`target_language`、`untranslated_units`，`evidence` 恒为空数组：译文不能用来解析证据。单个译文段放不进 `max_bytes` 时返回 `document-budget`。`none`、`stale` 时返回 `translation-unavailable`（HTTP 409），不退回原文。
 
 `read.ts` 的内部 `withReadScope` 供知识／结果读取在一次逻辑操作内复用已核验文档；最多保留 16 份、32 MiB 的正文与序列化结构计量，结束即清空。带独立预算计量的检索不走此复用。
 

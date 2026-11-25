@@ -51,7 +51,7 @@ pnpm sciretriever storage schema-apply --catalog ~/.sciretriever/catalog.sqlite 
 
 不改已有数据；在 35 万篇的库副本上用时约 0.1 秒。换回旧版本能照常读写，但旧版本看不到最近删除。说明见[初始化与恢复](docs/guides/upgrade.md#结构追加)。
 
-这一版还给库结构加了全文译文的登记表，并让建档步骤表接受“翻译”一步。启动前停掉服务，执行一次：
+这一版还给库结构加了全文译文的登记表，并把建档步骤表对步骤名的限制改为只查格式，接受“翻译”一步，以后再加步骤不用再改表。启动前停掉服务，执行一次：
 
 ```bash
 pnpm sciretriever storage schema-apply --catalog ~/.sciretriever/catalog.sqlite --addition document-translations

@@ -94,6 +94,17 @@ it("upgrades an archived catalog to the document-translations addition with ever
           )
           .get(),
       ).toEqual({ n: 3 });
+      // The table checks the form of a step name only: a later step of the
+      // right form needs no rebuild; a malformed name is refused.
+      const copy = (name: string) =>
+        check
+          .prepare(
+            "INSERT INTO archive_steps SELECT literature_id,asset_id,?,status,input_sha256,output_json,reason,elapsed_ms,calls,input_tokens,output_tokens,updated_at FROM archive_steps WHERE step='render'",
+          )
+          .run(name);
+      expect(() => copy("future-step")).not.toThrow();
+      for (const name of ["Bad_Step", "", "a".repeat(33), "-lead"])
+        expect(() => copy(name)).toThrow(/CHECK/u);
     } finally {
       check.close();
     }
@@ -113,8 +124,13 @@ it("upgrades an archived catalog to the document-translations addition with ever
     await e.reopen();
     const state = await e.app.archive.status(e.id);
     expect(state.status).toBe("READY");
-    expect(state.parts[0]!.legacy_steps!.map((s) => s.step)).toContain(
-      "document",
+    // A historical name and a name this release does not know are both read
+    // as old steps, never refused and never a current step.
+    expect(state.parts[0]!.legacy_steps!.map((s) => s.step)).toEqual(
+      expect.arrayContaining(["document", "future-step"]),
+    );
+    expect(state.parts[0]!.steps.map((s) => s.step)).not.toContain(
+      "future-step",
     );
     // The new step is accepted again. Its units come back from the
     // translation cache, so archiving again asks no model at all.

@@ -1165,10 +1165,14 @@ export const LIBRARY_TRASH_ADDITION = defineCatalogAddition("library-trash", [
 const ARCHIVE_STEPS_BASE = CATALOG_BASE_SCHEMA.find((sql) =>
   sql.startsWith("CREATE TABLE archive_steps("),
 )!;
-/** archive_steps accepts `translate`; every other byte of the table is kept. */
+/**
+ * archive_steps checks only the form of a step name, so a later step needs no
+ * rebuild; which names are valid is the code's business (ARCHIVE_STEPS and the
+ * historical names), checked before every write. Every other byte is kept.
+ */
 export const ARCHIVE_STEPS_TRANSLATE_SQL = ARCHIVE_STEPS_BASE.replace(
-  "CHECK(step IN ('arrange','proofread','render','metadata'",
-  "CHECK(step IN ('arrange','proofread','render','translate','metadata'",
+  "CHECK(step IN ('arrange','proofread','render','metadata','references','tags','document','structure'))",
+  "CHECK(length(step) BETWEEN 1 AND 32 AND step GLOB '[a-z]*' AND step NOT GLOB '*[^a-z-]*')",
 );
 if (ARCHIVE_STEPS_TRANSLATE_SQL === ARCHIVE_STEPS_BASE)
   throw new Error("archive_steps step check not found");
