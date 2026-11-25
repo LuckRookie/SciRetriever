@@ -27,6 +27,8 @@ Owner 2026-11-16 决定先把加工之前的部分做好（[计划 25](../../arc
 | 阅读页第三次交付：读取层、概览与脉络、按问题阅读、库内关联、长资料、验收               | [reader-13](reader-13-processing-data.md)、[reader-14](reader-14-overview-and-key-points.md)、[reader-15](reader-15-ask-lens.md)、[reader-16](reader-16-library-relations.md)、[reader-17](reader-17-long-material.md)、[reader-18](reader-18-third-delivery.md) | 原计划 24 的 13–18                                                                                 |
 | 初稿的加工读取、找不到的引用、两种加工结果的评估；阅读页第二次交付中依赖加工结果的部分 | [deferred-items.md](deferred-items.md)                                                                                                                                                                                                                           | 原计划 21 的 7.7、9.1、11.4、G5；原计划 24 的 9.2、9.4、10.3、10.4、11.5、11.7、11.10 中的加工部分 |
 
+Owner 2026-11-25：概览与脉络是读一篇文献的方式，属于阅读，不属于知识加工。这部分（`14-reading-layers.md`、`reader-13`、`reader-14`、`reader-17` 中属于一篇文献读法的内容）改由[计划 28 的 09 块](../../plans/2026-11-25-import-and-pdf/09-layered-reading.md)负责，那里的设计定下之前，这些文件原样留在这里作参考，不再作为计划。跨篇的综合、主题页、实体归一与关系图谱仍属于本提案。
+
 这些文件原样移来，内部的块号、任务号和互相引用保持原计划的写法，不重新编号；指向已归档计划的链接改到 `docs/archive/`。
 
 ## 阅读页第三次交付与加工的对应
