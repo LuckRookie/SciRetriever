@@ -2,7 +2,7 @@
 
 类型：计划
 负责：ADR 0060 第 2–5 节在文档与证据模块中的落地
-状态：Superseded（2026-11-16 归档。02–10 完成，已部署，正式库为 schema 17，3 篇已形成初稿。11 的 E1、E2 移入[计划 25](../../plans/2026-11-16-before-processing/README.md)的 23.7–23.9，12.5 移入 24；只为加工服务的 7.7、9.1、E3 与 G5 中“初稿可否加工”移入[知识加工提案](../../proposals/2026-11-16-knowledge-processing/README.md)）
+状态：Superseded（2026-11-16 归档。02–10 完成，已部署，正式库为 schema 17，3 篇已形成初稿。11 的 E1、E2 移入[计划 25](../2026-11-16-before-processing/README.md)的 23.7–23.9，12.5 移入 24；只为加工服务的 7.7、9.1、E3 与 G5 中“初稿可否加工”移入[知识加工提案](../../proposals/2026-11-16-knowledge-processing/README.md)）
 
 ## 目标
 

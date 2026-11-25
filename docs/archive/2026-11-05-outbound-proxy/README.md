@@ -2,7 +2,7 @@
 
 类型：计划
 负责：ADR 0056 的落地，以及同批修正的旧文档错误
-状态：Completed（2026-11-16 归档：01–03 完成并已部署；完成标准中未满足的一项，Semantic Scholar 经代理，移入[计划 25](../../plans/2026-11-16-before-processing/README.md)的 23.10）
+状态：Completed（2026-11-16 归档：01–03 完成并已部署；完成标准中未满足的一项，Semantic Scholar 经代理，移入[计划 25](../2026-11-16-before-processing/README.md)的 23.10）
 
 ## 目标
 

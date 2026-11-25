@@ -2,7 +2,7 @@
 
 类型：计划
 负责：需求收2“全文取得情况”的可见性与收4“万篇规模”的机制验收、真实运行与后续
-状态：Superseded（2026-11-16 归档。01 完成；02–06 → 18–22，07 → 24，见[计划 25](../../plans/2026-11-16-before-processing/README.md)）
+状态：Superseded（2026-11-16 归档。01 完成；02–06 → 18–22，07 → 24，见[计划 25](../2026-11-16-before-processing/README.md)）
 
 ## 目标
 
@@ -109,11 +109,11 @@
 | 块                                | 结果                                                                                                                     | 负责                 | 依赖                                                            | 状态      |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | -------------------- | --------------------------------------------------------------- | --------- |
 | [01](01-spec-gaps.md)             | 补规格：全文取得情况的定义与单位、计数合同、Web 上的位置、机制验收的口径                                                 | 总设计师             | 无                                                              | Completed |
-| [02](../../plans/2026-11-16-before-processing/18-fulltext-status-read.md)  | `LibraryCounts.full_text`（按论文的总数、已取得、未取得、已试完）、`with_primary_pdf` 与筛选 `has_primary_pdf`，三端一致 | 后端实施者           | G1                                                              | Pending   |
-| [03](../../plans/2026-11-16-before-processing/19-fulltext-status-web.md)   | 文献库的“全文取得情况”一行与链接；快速筛选“有 PDF”“仅元数据”的新含义                                                     | 总设计师、前端实施者 | 02                                                              | Pending   |
-| [04](../../plans/2026-11-16-before-processing/20-scale-mechanics-check.md) | 万篇机制验收：合成数据、假来源、离线运行，记录时长、吞吐、内存、磁盘                                                     | 后端实施者、执行者   | G1；4.6 需 02                                                   | Pending   |
-| [05](../../plans/2026-11-16-before-processing/21-real-run.md)              | 经授权的真实获取运行：覆盖、失败分类、吞吐、试完篇数；运行报告交 Owner                                                   | 执行者、总设计师     | 04；02；G-lib、G-target、G-sources、G-window；G-browser（若用） | Pending   |
-| [06](../../plans/2026-11-16-before-processing/22-scale-follow-up.md)             | 把测出的缺陷与问题变成后续任务、规格修改或新 ADR 草案，交 Owner 决定                                                     | 总设计师             | 04；05（真实部分）                                              | Pending   |
+| [02](../2026-11-16-before-processing/18-fulltext-status-read.md)  | `LibraryCounts.full_text`（按论文的总数、已取得、未取得、已试完）、`with_primary_pdf` 与筛选 `has_primary_pdf`，三端一致 | 后端实施者           | G1                                                              | Pending   |
+| [03](../2026-11-16-before-processing/19-fulltext-status-web.md)   | 文献库的“全文取得情况”一行与链接；快速筛选“有 PDF”“仅元数据”的新含义                                                     | 总设计师、前端实施者 | 02                                                              | Pending   |
+| [04](../2026-11-16-before-processing/20-scale-mechanics-check.md) | 万篇机制验收：合成数据、假来源、离线运行，记录时长、吞吐、内存、磁盘                                                     | 后端实施者、执行者   | G1；4.6 需 02                                                   | Pending   |
+| [05](../../plans/2026-11-25-import-and-pdf/21-real-run.md)              | 经授权的真实获取运行：覆盖、失败分类、吞吐、试完篇数；运行报告交 Owner                                                   | 执行者、总设计师     | 04；02；G-lib、G-target、G-sources、G-window；G-browser（若用） | Pending   |
+| [06](../../plans/2026-11-25-import-and-pdf/22-scale-follow-up.md)             | 把测出的缺陷与问题变成后续任务、规格修改或新 ADR 草案，交 Owner 决定                                                     | 总设计师             | 04；05（真实部分）                                              | Pending   |
 | [07](07-closing.md)               | 收尾：文档改为现状、收尾全量、部署                                                                                       | 总设计师、实施者     | 02–06；G-deploy                                                 | Pending   |
 
 - 01 已完成（2026-11-13）；没有任何块再等补规格。

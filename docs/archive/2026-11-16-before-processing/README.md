@@ -2,7 +2,7 @@
 
 类型：计划
 负责：知识加工之前的全部剩余工作：阅读与使用体验、用户整理、入库（PDF 导入、Zotero）、全文取得与规模
-状态：In progress（2026-11-16 由计划 18–24 的未完成部分合成；01–05 完成，阅读页已部署；12、13、14、16 部分完成；06–11 完成，12、13、16.3、18–20、25 完成；14–17 等 G-probe，21–24 等 Owner 授权）
+状态：Superseded（2026-11-25 归档：01–13、18–20、25–33 完成并已部署；未完成的 14–17、21–24 搬进[计划 28](../../plans/2026-11-25-import-and-pdf/README.md)，块号与任务号不变。归档前的状态：In progress（2026-11-16 由计划 18–24 的未完成部分合成；01–05 完成，阅读页已部署；12、13、14、16 部分完成；06–11 完成，12、13、16.3、18–20、25 完成；14–17 等 G-probe，21–24 等 Owner 授权））
 
 ## 目标
 
@@ -97,16 +97,16 @@ Owner 2026-11-16：“先把阅读、用户体验、元数据下载、pdf导入�
 | [11](11-export.md)                | 分组与筛选的导出                                        | 后端；11.5 前端       | 07；11.5 等 09                      | Completed   |
 | [12](12-intake-web.md)            | 入库页与批次页                                          | 前端                  | 12.7 等 13                          | Completed   |
 | [13](13-withdrawal.md)            | 撤回一个批次                                            | 后端                  | 13.3 前补规格                       | Completed   |
-| [14](14-zotero-probe.md)          | Zotero 接口探测                                         | 总设计师、Owner       | G-probe                             | In progress |
-| [15](15-zotero-adapter.md)        | Zotero 适配器                                           | 后端                  | 14                                  | Pending     |
-| [16](16-extension.md)             | 扩展：弹窗与从 Zotero 导入                              | 前端                  | 16.4 起等 14、15、12                | Partial     |
-| [17](17-zotero-annotations.md)    | Zotero 批注导入                                         | 后端                  | 15；17.1 规格                       | Pending     |
+| [14](../../plans/2026-11-25-import-and-pdf/14-zotero-probe.md)          | Zotero 接口探测                                         | 总设计师、Owner       | G-probe                             | In progress |
+| [15](../../plans/2026-11-25-import-and-pdf/15-zotero-adapter.md)        | Zotero 适配器                                           | 后端                  | 14                                  | Pending     |
+| [16](../../plans/2026-11-25-import-and-pdf/16-extension.md)             | 扩展：弹窗与从 Zotero 导入                              | 前端                  | 16.4 起等 14、15、12                | Partial     |
+| [17](../../plans/2026-11-25-import-and-pdf/17-zotero-annotations.md)    | Zotero 批注导入                                         | 后端                  | 15；17.1 规格                       | Pending     |
 | [18](18-fulltext-status-read.md)  | 全文取得情况的读取                                      | 后端                  | —                                   | Completed   |
 | [19](19-fulltext-status-web.md)   | Web 上的全文取得情况                                    | 前端                  | 18；09 之后                         | Completed   |
 | [20](20-scale-mechanics-check.md) | 万篇机制验收                                            | 后端                  | 20.6 等 18                          | Completed   |
-| [21](21-real-run.md)              | 真实获取运行                                            | 执行者、Owner         | 18、20；G-lib 等                    | Pending     |
-| [22](22-scale-follow-up.md)       | 从数字到后续                                            | 总设计师、Owner       | 20；21                              | Pending     |
-| [23](23-real-checks.md)           | 真实文件、真实文献库上的核对与试用                      | 各方                  | 各项单独授权                        | Pending     |
+| [21](../../plans/2026-11-25-import-and-pdf/21-real-run.md)              | 真实获取运行                                            | 执行者、Owner         | 18、20；G-lib 等                    | Pending     |
+| [22](../../plans/2026-11-25-import-and-pdf/22-scale-follow-up.md)       | 从数字到后续                                            | 总设计师、Owner       | 20；21                              | Pending     |
+| [23](../../plans/2026-11-25-import-and-pdf/23-real-checks.md)           | 真实文件、真实文献库上的核对与试用                      | 各方                  | 各项单独授权                        | Pending     |
 | [25](25-web-intake-gaps.md)       | 网页上的两处入库缺口：书目待补、上传 PDF 改走补 PDF     | 前端；25.3 后端       | —                                   | Completed   |
 | [26](26-main-style-and-themes.md) | 主风格（墨色主按钮、蓝作笔迹、状态四色）与七套阅读主题  | 前端                  | —                                   | Completed   |
 | [27](27-sidebar-and-entries.md)   | 侧栏只留主线、加工折叠；需处理与浏览器并入任务页        | 前端                  | 26 的 26.1、26.2                    | Completed   |
@@ -116,7 +116,7 @@ Owner 2026-11-16：“先把阅读、用户体验、元数据下载、pdf导入�
 | [31](31-task-states.md)           | 任务：状态用词与按钮、未启动与排队中、需处理            | 后端 31.1、31.2；前端 | —                                   | Completed   |
 | [32](32-full-text-results.md)     | 全文检索的结果                                          | 前端                  | 27                                  | Completed   |
 | [33](33-settings-and-dialogs.md)  | 设置重组、对话框与全站规则                              | 前端                  | 26                                  | Completed   |
-| [24](24-closing.md)               | 收尾：规格、指南、部署、全量                            | 总设计师、后端        | 各块                                | Pending     |
+| [24](../../plans/2026-11-25-import-and-pdf/24-closing.md)               | 收尾：规格、指南、部署、全量                            | 总设计师、后端        | 各块                                | Pending     |
 
 ## 先后顺序
 

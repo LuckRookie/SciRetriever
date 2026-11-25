@@ -2,7 +2,7 @@
 
 类型：计划
 负责：ADR 0061 与 ADR 0062 在 Web 阅读页的落地，按阅读体验规格交付
-状态：Superseded（2026-11-16 归档。第一次交付 02–07 与 08 完成；09–12 → [计划 25](../../plans/2026-11-16-before-processing/README.md)的 02–05；第三次交付 13–18 移入[知识加工提案](../../proposals/2026-11-16-knowledge-processing/README.md)）
+状态：Superseded（2026-11-16 归档。第一次交付 02–07 与 08 完成；09–12 → [计划 25](../2026-11-16-before-processing/README.md)的 02–05；第三次交付 13–18 移入[知识加工提案](../../proposals/2026-11-16-knowledge-processing/README.md)）
 
 ## 目标
 
@@ -106,10 +106,10 @@
 | [06](06-open-and-load.md)           | 打开进入实际具备的视图；加载有骨架和进度；切换时不出现空白画面                                 | 前端实施者           | 03；6.1 的第一条需 04 的 4.5 | Pending   |
 | [07](07-first-delivery.md)          | 第一次交付的验收与 R1                                                                          | 前端实施者、总设计师 | 03–06                        | Completed |
 | [08](08-desk-and-top-bar.md)        | 案头、纸页、页眉、顶栏、导航抽屉、专注模式、过渡；PDF 页列放进纸页                             | 前端实施者           | R1                           | Completed |
-| [09](../../plans/2026-11-16-before-processing/02-side-panel.md)              | 右侧面板：停靠与浮起，信息、批注、关联（引用数）、翻译四个标签页                               | 前端实施者           | 08 的 8.1–8.3                | Pending   |
-| [10](../../plans/2026-11-16-before-processing/03-spine-strip-and-toc.md)     | 书脊与目录浮层；取代批注刻度条                                                                 | 前端实施者           | 08 的 8.1–8.3                | Pending   |
-| [11](../../plans/2026-11-16-before-processing/04-type-and-marks.md)          | 排版与标记：字号、段落、期刊排法、作者与机器的字体、关键句竖线、划线、页边批注、证据、查找命中 | 前端实施者           | 08 的 8.1–8.3                | Pending   |
-| [12](../../plans/2026-11-16-before-processing/05-reader-acceptance.md)         | 第二次交付的验收与 R2                                                                          | 前端实施者、总设计师 | 08–11                        | Pending   |
+| [09](../2026-11-16-before-processing/02-side-panel.md)              | 右侧面板：停靠与浮起，信息、批注、关联（引用数）、翻译四个标签页                               | 前端实施者           | 08 的 8.1–8.3                | Pending   |
+| [10](../2026-11-16-before-processing/03-spine-strip-and-toc.md)     | 书脊与目录浮层；取代批注刻度条                                                                 | 前端实施者           | 08 的 8.1–8.3                | Pending   |
+| [11](../2026-11-16-before-processing/04-type-and-marks.md)          | 排版与标记：字号、段落、期刊排法、作者与机器的字体、关键句竖线、划线、页边批注、证据、查找命中 | 前端实施者           | 08 的 8.1–8.3                | Pending   |
+| [12](../2026-11-16-before-processing/05-reader-acceptance.md)         | 第二次交付的验收与 R2                                                                          | 前端实施者、总设计师 | 08–11                        | Pending   |
 | [13](../../proposals/2026-11-16-knowledge-processing/reader-13-processing-data.md)         | 加工结果的读取层与设计样例库里的合成结果                                                       | 前端实施者           | R2                           | Pending   |
 | [14](../../proposals/2026-11-16-knowledge-processing/reader-14-overview-and-key-points.md) | 概览与脉络两个视图、就地展开、出处角标、原文页边的要点与关键句、第一次打开进入概览             | 前端实施者           | 13                           | Pending   |
 | [15](../../proposals/2026-11-16-knowledge-processing/reader-15-ask-lens.md)                | 按问题阅读：提问框、估算浮层、回答块、在三个视图上的镜头                                       | 前端实施者           | 14                           | Pending   |

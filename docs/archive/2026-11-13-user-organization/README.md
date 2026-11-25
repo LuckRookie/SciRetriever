@@ -2,7 +2,7 @@
 
 类型：计划
 负责：模块⑨用户整理在技术文档 09 第 9 节中尚未实现、且不归其他计划的部分的落地
-状态：Superseded（2026-11-16 归档。01 完成；02 → 06，03 → 07，05 → 08，04 → 09，06 → 10，07 → 11，08 → 24，见[计划 25](../../plans/2026-11-16-before-processing/README.md)；schema 编号定为 18）
+状态：Superseded（2026-11-16 归档。01 完成；02 → 06，03 → 07，05 → 08，04 → 09，06 → 10，07 → 11，08 → 24，见[计划 25](../2026-11-16-before-processing/README.md)；schema 编号定为 18）
 
 ## 目标
 
@@ -19,9 +19,9 @@
 | 规格的目标                       | 由谁交付                                                                                                                                                                                                                                                                 |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 9.2 初稿上的批注                 | [计划 21](../2026-11-10-draft-text/README.md)：服务端的锚点校验接受初稿在 [07](../2026-11-10-draft-text/07-machine-read.md) 的 7.6，批注栏写明文本等级在 [10](../2026-11-10-draft-text/10-web.md) 的 10.5                                                                |
-| 9.3 导入的批注                   | [计划 20](../2026-11-09-zotero-import/README.md) 的 [10](../../plans/2026-11-16-before-processing/17-zotero-annotations.md)                                                                                                                                                           |
+| 9.3 导入的批注                   | [计划 20](../2026-11-09-zotero-import/README.md) 的 [10](../../plans/2026-11-25-import-and-pdf/17-zotero-annotations.md)                                                                                                                                                           |
 | 9.4 网页收藏时选择文件夹         | 计划 20 的 [08](../2026-11-09-zotero-import/08-capture-backend.md)（收藏接口与文件夹，已完成）与 [09](../2026-11-09-zotero-import/09-browser-extension.md)（扩展本体）                                                                                                   |
-| 新阅读页上批注的样子与批注标签页 | [计划 24](../2026-11-13-reader/README.md)：[09](../../plans/2026-11-16-before-processing/02-side-panel.md) 的 9.3（批注标签页），[10](../../plans/2026-11-16-before-processing/03-spine-strip-and-toc.md)（书脊取代批注刻度条），[11](../../plans/2026-11-16-before-processing/04-type-and-marks.md)（笔线、页边批注、PDF 上的批注） |
+| 新阅读页上批注的样子与批注标签页 | [计划 24](../2026-11-13-reader/README.md)：[09](../2026-11-16-before-processing/02-side-panel.md) 的 9.3（批注标签页），[10](../2026-11-16-before-processing/03-spine-strip-and-toc.md)（书脊取代批注刻度条），[11](../2026-11-16-before-processing/04-type-and-marks.md)（笔线、页边批注、PDF 上的批注） |
 | PDF 与全文之间的阅读位置换算     | 计划 24 的 [04](../2026-11-13-reader/04-reading-position.md)，复用 `mark-locate.ts` 的比对规则                                                                                                                                                                           |
 | 跨文献的批注总览                 | 不在任何计划：ADR 0046“不在本决定内”                                                                                                                                                                                                                                     |
 
@@ -100,12 +100,12 @@
 | 块                                | 结果                                                                                 | 负责                 | 依赖                                  | 状态      |
 | --------------------------------- | ------------------------------------------------------------------------------------ | -------------------- | ------------------------------------- | --------- |
 | [01](01-spec-gaps.md)             | 补规格：保存的筛选、浏览器导入、重新定位的记录、导出的规则写进规格；三处文档的小修正 | 总设计师             | 无                                    | Completed |
-| [02](../../plans/2026-11-16-before-processing/06-cli-help.md)              | CLI 帮助列出 `folders` 与 `literature open`                                          | 后端实施者           | G1                                    | Pending   |
-| [03](../../plans/2026-11-16-before-processing/07-saved-filters-storage.md) | 保存的筛选存进 catalog，Web、CLI、MCP、HTTP 都能读写；schema 19 与离线迁移           | 后端实施者           | G1；C1                                | Pending   |
-| [04](../../plans/2026-11-16-before-processing/09-saved-filters-web.md)     | Web 的“筛选”菜单改用服务端的保存筛选；浏览器里已有的由使用者明确导入                 | 前端实施者、总设计师 | 03；C3                                | Pending   |
-| [05](../../plans/2026-11-16-before-processing/08-relocation-storage.md)    | 批注重新定位的结果记入 `reading_mark_places`：`place` 操作、校验、列表与导出         | 后端实施者           | 03 的迁移                             | Pending   |
-| [06](../../plans/2026-11-16-before-processing/10-relocation-reader.md)     | 阅读器在 PDF 不同、文本版本不同时按原文重新定位批注，并在后台记下结果                | 前端实施者           | 6.1、6.2 只需 G1；6.3 起需 05 与 C2   | Pending   |
-| [07](../../plans/2026-11-16-before-processing/11-export.md)                | 分组导出（可先于 03）与筛选导出，三个入口与 Web 下载                                 | 后端实施者           | 7.1–7.3 只需 G1；7.4 需 03；7.5 需 C3 | Pending   |
+| [02](../2026-11-16-before-processing/06-cli-help.md)              | CLI 帮助列出 `folders` 与 `literature open`                                          | 后端实施者           | G1                                    | Pending   |
+| [03](../2026-11-16-before-processing/07-saved-filters-storage.md) | 保存的筛选存进 catalog，Web、CLI、MCP、HTTP 都能读写；schema 19 与离线迁移           | 后端实施者           | G1；C1                                | Pending   |
+| [04](../2026-11-16-before-processing/09-saved-filters-web.md)     | Web 的“筛选”菜单改用服务端的保存筛选；浏览器里已有的由使用者明确导入                 | 前端实施者、总设计师 | 03；C3                                | Pending   |
+| [05](../2026-11-16-before-processing/08-relocation-storage.md)    | 批注重新定位的结果记入 `reading_mark_places`：`place` 操作、校验、列表与导出         | 后端实施者           | 03 的迁移                             | Pending   |
+| [06](../2026-11-16-before-processing/10-relocation-reader.md)     | 阅读器在 PDF 不同、文本版本不同时按原文重新定位批注，并在后台记下结果                | 前端实施者           | 6.1、6.2 只需 G1；6.3 起需 05 与 C2   | Pending   |
+| [07](../2026-11-16-before-processing/11-export.md)                | 分组导出（可先于 03）与筛选导出，三个入口与 Web 下载                                 | 后端实施者           | 7.1–7.3 只需 G1；7.4 需 03；7.5 需 C3 | Pending   |
 | [08](08-closing.md)               | 收尾：规格与指南改为现状、收尾全量、部署、正式库迁移与浏览器导入                     | 总设计师、实施者     | 02–07；G-deploy、G-migrate、G-import  | Pending   |
 
 - 01 已完成（2026-11-13）；没有任何块再等补规格。
