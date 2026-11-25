@@ -443,6 +443,7 @@ export interface QueryApplication {
     | "references"
     | "referenceDetail"
     | "intakeBatches"
+    | "intakeBatchSummaries"
     | "facets"
     | "pdfSelection"
   > | null;

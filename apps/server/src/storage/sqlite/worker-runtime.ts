@@ -6094,15 +6094,17 @@ port.on("message", (message: WorkerMessage) => {
       case "library_exact_count":
         value = libraryExactCount(message.command);
         break;
-      case "intake_read": {
+      case "intake_read":
+      case "intake_summary_read": {
         const c = message.command;
-        const read = () => {
-          return intakeModule.queryIntakeBatches(
-            db,
-            c.value,
-            data.archive_profile,
-          );
-        };
+        const read = () =>
+          c.kind === "intake_summary_read"
+            ? intakeModule.queryIntakeBatchSummaries(db, c.request)
+            : intakeModule.queryIntakeBatches(
+                db,
+                c.value,
+                data.archive_profile,
+              );
         value = db.isTransaction ? read() : readTransaction(read);
         break;
       }

@@ -119,20 +119,30 @@ export interface IntakeBatch {
   readonly discovery_run_id: string | null;
   readonly source_failures: number;
 }
+export type IntakeBatchSummary = Omit<IntakeBatch, "full_text" | "estimates">;
+interface IntakeBatchListRequest {
+  readonly limit: number;
+  readonly cursor: string | null;
+}
 export type IntakeBatchQuery =
   | {
       readonly operation: "list";
-      readonly request: {
-        readonly limit: number;
-        readonly cursor: string | null;
-      };
+      readonly request: IntakeBatchListRequest;
     }
   | {
       readonly operation: "get";
       readonly request: { readonly batch_id: IntakeBatchId };
     };
+export interface IntakeBatchSummaryQuery {
+  readonly operation: "list-summary";
+  readonly request: IntakeBatchListRequest;
+}
 export interface IntakeBatchPage {
   readonly items: readonly IntakeBatch[];
+  readonly next_cursor: string | null;
+}
+export interface IntakeBatchSummaryPage {
+  readonly items: readonly IntakeBatchSummary[];
   readonly next_cursor: string | null;
 }
 export interface LibraryFacets extends LibraryCountFlags {
@@ -269,11 +279,24 @@ export function parseIntakeBatchQuery(value: unknown): IntakeBatchQuery {
     };
   }
   if (e.operation !== "list") fail();
+  return { operation: "list", request: parseIntakeBatchListRequest(e.request) };
+}
+export function parseIntakeBatchSummaryQuery(
+  value: unknown,
+): IntakeBatchSummaryQuery {
+  const e = tagRecord(value, ["operation", "request"]);
+  if (e.operation !== "list-summary") fail();
+  return {
+    operation: "list-summary",
+    request: parseIntakeBatchListRequest(e.request),
+  };
+}
+function parseIntakeBatchListRequest(value: unknown): IntakeBatchListRequest {
   const r = tagRecord(
     {
       limit: 50,
       cursor: null,
-      ...tagRecord(e.request, [], ["limit", "cursor"]),
+      ...tagRecord(value, [], ["limit", "cursor"]),
     },
     ["limit", "cursor"],
   );
@@ -281,7 +304,7 @@ export function parseIntakeBatchQuery(value: unknown): IntakeBatchQuery {
   if (limit > 100) fail();
   const cursor = r.cursor === null ? null : text(r.cursor, 512);
   if (cursor !== null && !/^[A-Za-z0-9_-]+$/u.test(cursor)) fail();
-  return { operation: "list", request: { limit, cursor } };
+  return { limit, cursor };
 }
 export function parseIntakeBatchRename(value: unknown) {
   const r = tagRecord(value, ["batch_id", "label"]);
@@ -358,31 +381,52 @@ export function parseAcquirePdfScope(value: unknown): AcquirePdfScope {
     counts: parseAcquirePdfCounts(r.counts),
   };
 }
+const INTAKE_BATCH_SUMMARY_FIELDS = [
+  "batch_id",
+  "kind",
+  "label",
+  "default_label",
+  "renamed",
+  "origin",
+  "created_at",
+  "finished_at",
+  "state",
+  "result",
+  "confirmation",
+  "confirmed_at",
+  "initiated_by",
+  "source",
+  "progress",
+  "request",
+  "counts",
+  "pdf",
+  "discovery_run_id",
+  "source_failures",
+] as const satisfies readonly (keyof IntakeBatchSummary)[];
+
 export function parseIntakeBatch(value: unknown): IntakeBatch {
   const r = tagRecord(value, [
-    "batch_id",
-    "kind",
-    "label",
-    "default_label",
-    "renamed",
-    "origin",
-    "created_at",
-    "finished_at",
-    "state",
-    "result",
-    "confirmation",
-    "confirmed_at",
-    "initiated_by",
-    "source",
-    "progress",
+    ...INTAKE_BATCH_SUMMARY_FIELDS,
     "full_text",
     "estimates",
-    "request",
-    "counts",
-    "pdf",
-    "discovery_run_id",
-    "source_failures",
   ]);
+  const batch = parseIntakeBatchFields(r);
+  const estimates = tagRecord(r.estimates, ["acquire_pdf", "parse"]);
+  return {
+    full_text: parseFullTextCounts(r.full_text),
+    estimates: {
+      acquire_pdf: tagInteger(estimates.acquire_pdf),
+      parse: tagInteger(estimates.parse),
+    },
+    ...batch,
+  };
+}
+export function parseIntakeBatchSummary(value: unknown): IntakeBatchSummary {
+  return parseIntakeBatchFields(tagRecord(value, INTAKE_BATCH_SUMMARY_FIELDS));
+}
+function parseIntakeBatchFields(
+  r: Record<string, unknown>,
+): IntakeBatchSummary {
   const kind = member(r.kind, [
     "topic",
     "citation",
@@ -566,14 +610,6 @@ export function parseIntakeBatch(value: unknown): IntakeBatch {
   )
     fail();
   return {
-    full_text: parseFullTextCounts(r.full_text),
-    estimates: (() => {
-      const estimates = tagRecord(r.estimates, ["acquire_pdf", "parse"]);
-      return {
-        acquire_pdf: tagInteger(estimates.acquire_pdf),
-        parse: tagInteger(estimates.parse),
-      };
-    })(),
     batch_id: parseIntakeBatchId(r.batch_id),
     kind,
     label,
@@ -600,10 +636,21 @@ export function parseIntakeBatch(value: unknown): IntakeBatch {
   };
 }
 export function parseIntakeBatchPage(value: unknown): IntakeBatchPage {
+  return parseIntakeBatchListPage(value, parseIntakeBatch);
+}
+export function parseIntakeBatchSummaryPage(
+  value: unknown,
+): IntakeBatchSummaryPage {
+  return parseIntakeBatchListPage(value, parseIntakeBatchSummary);
+}
+function parseIntakeBatchListPage<T>(
+  value: unknown,
+  parse: (item: unknown) => T,
+) {
   const r = tagRecord(value, ["items", "next_cursor"]);
   if (!Array.isArray(r.items) || r.items.length > 100) fail();
   return {
-    items: r.items.map(parseIntakeBatch),
+    items: r.items.map(parse),
     next_cursor: r.next_cursor === null ? null : text(r.next_cursor, 512),
   };
 }

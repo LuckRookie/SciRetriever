@@ -10,6 +10,9 @@ import {
   parseIntakeBatchPage,
   parseIntakeBatchQuery,
   parseIntakeBatchRename,
+  parseIntakeBatchSummary,
+  parseIntakeBatchSummaryPage,
+  parseIntakeBatchSummaryQuery,
   parseIntakeTaskScope,
   parseFullTextCounts,
   parseLibraryFacets,
@@ -203,6 +206,43 @@ it("bounds list, rename and facets requests without accepting unknown fields", (
       keywords: [{ value: "a", count: 2, tag: null }],
       subject_terms: [],
     }),
+  ).toThrow();
+});
+it("validates summary pages with exactly the shared batch fields and the full list request bounds", () => {
+  const { full_text, estimates, ...item } = batch;
+  const page = { items: [item], next_cursor: "abc_123" };
+  expect(parseIntakeBatchSummary(item)).toEqual(item);
+  expect(parseIntakeBatchSummaryPage(page)).toEqual(page);
+  expect(() => parseIntakeBatch(item)).toThrow();
+  expect(() => parseIntakeBatchPage(page)).toThrow();
+  for (const extra of [{ full_text }, { estimates }])
+    expect(() => parseIntakeBatchSummary({ ...item, ...extra })).toThrow();
+  expect(() =>
+    parseIntakeBatchSummary({ ...item, pdf: { ...item.pdf, pending: 0 } }),
+  ).toThrow();
+  expect(() => parseIntakeBatchSummaryPage({ ...page, extra: true })).toThrow();
+  expect(() =>
+    parseIntakeBatchSummaryPage({ ...page, items: Array(101).fill(item) }),
+  ).toThrow();
+  for (const request of [{}, { limit: 100, cursor: "abc_123" }]) {
+    expect(
+      parseIntakeBatchSummaryQuery({ operation: "list-summary", request }),
+    ).toEqual({
+      ...parseIntakeBatchQuery({ operation: "list", request }),
+      operation: "list-summary",
+    });
+  }
+  for (const request of [
+    { limit: 0 },
+    { limit: 101 },
+    { cursor: "=" },
+    { batch_id: id },
+  ])
+    expect(() =>
+      parseIntakeBatchSummaryQuery({ operation: "list-summary", request }),
+    ).toThrow();
+  expect(() =>
+    parseIntakeBatchQuery({ operation: "list-summary", request: {} }),
   ).toThrow();
 });
 it("requires all three facet layers, bounded coverage and closed nullable keyword tag links", () => {

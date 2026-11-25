@@ -1065,6 +1065,16 @@ it("uses one batch ID from collection through publication and keeps active in th
         request: { batch_id: batch.batch_id },
       }),
     ).toEqual(running);
+    const { full_text, estimates, ...summary } = running;
+    const summaries = await f.app.library.intakeBatchSummaries({
+      operation: "list-summary",
+      request: {},
+    });
+    expect(
+      summaries.items.find((item) => item.batch_id === batch.batch_id),
+    ).toEqual(summary);
+    expect(full_text.total).toBe(1);
+    expect(estimates.acquire_pdf).toBe(1);
     const ended = await f.app.importSessions.finish(batch.batch_id);
     expect(ended).toMatchObject({
       batch_id: batch.batch_id,

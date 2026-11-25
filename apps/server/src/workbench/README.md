@@ -64,6 +64,8 @@ HTTP 关闭先取消并排空正在处理的请求；生产组装随后停止 du
 
 [import-http.ts](import-http.ts) 提供 `/api/v1/intake/` 下的接口说明、批次、预览/确认、文件清单/流式上传与报告。设备分支要求 intake 用途并在读正文前检查批次归属；列表与游标也限本连接。Web 经既有 Cookie、client_id、Origin 和 POST CSRF 后共用处理函数，可操作全部批次。确认只固定 running 并返回进度，接纳在后台继续。设备文件上传订阅撤销，撤销时先尽可能发出 401 device-revoked 并关闭连接；未接纳的候选清理，已接纳事实保留。data 为 8 MiB，其余批次 JSON 为 64 KiB。
 
+`POST /api/v1/query/intake-batches` 的 `list-summary` 操作为工作台提供批次摘要页，使用现有版本 1 查询封套和 `list` 游标。每项是省去 `full_text` 与 `estimates` 的 `IntakeBatch`。`list` 和 `get` 继续返回完整字段。
+
 `POST /api/v1/intake/literatures/:literature_id/pdf` 只接受登录 Web，注册表没有为它授予设备用途。正文为 PDF/八位字节流，文件名头 X-Sciretriever-File-Name 是百分号编码 UTF-8 的 basename；回应 result 包含 batch_id 和 file。它复用同一流式文件通道与按入口每日开放批次，没有 16 MiB 限制。原维护 PDF 地址保留 receipt 响应，生产组装同样传入流式接纳方法。
 
 `POST /api/v1/intake/folders` 通过入库用途或原网页登录准入后只读调用文件夹服务的 list，返回完整文件夹树，不受批次归属限制；read/operate 不能代替 intake。批次、报告含按论文的 full_text；批次 estimates 对应按批次筛选创建获取 PDF/解析任务的预估。既有 `/api/tasks` 接受 acquire-pdf 与 parse-documents 两种范围任务，创建不启动执行。

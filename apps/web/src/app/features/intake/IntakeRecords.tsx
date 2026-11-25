@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import type { IntakeBatch } from "@sciretriever/contracts";
+import type { IntakeBatchSummary } from "@sciretriever/contracts";
 import {
   Button,
   EmptyState,
@@ -21,7 +21,7 @@ import { errorMessage, shortTime } from "../../strings.js";
 import { BatchBadge, Counts, PartsBar } from "./batch-parts.js";
 
 /** What the batch covered, in a few words: years, direction, file, sources. */
-export function requestText(batch: IntakeBatch) {
+export function requestText(batch: IntakeBatchSummary) {
   const r = batch.request;
   const years =
     r.year_from || r.year_to ? `${r.year_from ?? ""}–${r.year_to ?? ""}` : "";
@@ -32,13 +32,13 @@ export function requestText(batch: IntakeBatch) {
     r.providers?.length ? r.providers.join("、") : "",
   ].filter(Boolean);
 }
-export function timeText(batch: IntakeBatch) {
+export function timeText(batch: IntakeBatchSummary) {
   if (batch.kind !== "legacy") return shortTime(batch.created_at);
   return `${shortTime(batch.created_at)} 起`;
 }
 /** Who started it; the batch formed from earlier papers names that instead. */
 export function startedBy(
-  batch: IntakeBatch,
+  batch: IntakeBatchSummary,
   devices: readonly DeviceConnection[],
 ) {
   return batch.kind === "legacy"
@@ -46,7 +46,7 @@ export function startedBy(
     : initiator(batch, devices);
 }
 /** “新增 · 已在库 · 恢复 · 冲突 · 可能重复 · 未接纳”, zeros left out. */
-export const recordCounts = (c: IntakeBatch["counts"]) =>
+export const recordCounts = (c: IntakeBatchSummary["counts"]) =>
   [
     ["新增", c.created],
     ["已在库", c.matched + c.enriched],
@@ -132,7 +132,7 @@ function Record({
   devices,
   open,
 }: {
-  batch: IntakeBatch;
+  batch: IntakeBatchSummary;
   devices: readonly DeviceConnection[];
   open: boolean;
 }) {

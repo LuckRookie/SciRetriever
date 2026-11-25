@@ -3222,12 +3222,21 @@ function createQueryHttpHandler(
       response.once("close", abort);
       streams.add(response);
       try {
-        const result = await executeQuery(
-          application,
-          archiveRead,
-          command.request,
-          AbortSignal.any([stop.signal, stopUploads.signal]),
-        );
+        const signal = AbortSignal.any([stop.signal, stopUploads.signal]);
+        const result =
+          archiveRead === "intake-batches" &&
+          (command.request as { operation?: unknown } | null)?.operation ===
+            "list-summary"
+            ? await application.query.intakeBatchSummaries(
+                command.request,
+                signal,
+              )
+            : await executeQuery(
+                application,
+                archiveRead,
+                command.request,
+                signal,
+              );
         processorReply(response, 200, { protocol_version: 1, result });
       } finally {
         streams.delete(response);

@@ -7,6 +7,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { expect, it } from "vitest";
 import {
   parseIntakeBatchPage,
+  parseIntakeBatchSummaryPage,
   parseLiterature,
   parseLibrarySearchRequest,
   parseLibraryFacets,
@@ -110,12 +111,43 @@ it("shares batch, facets, preview and rename shapes over HTTP, CLI and MCP witho
     expect(
       (await readonlyClient.listTools()).tools.map((tool) => tool.name),
     ).not.toContain("intake_batch_rename");
+    const summaryRequest = { operation: "list-summary", request: { limit: 1 } };
+    const summaries = parseIntakeBatchSummaryPage(
+      await web("intake-batches", summaryRequest),
+    );
+    expect(summaries).toMatchObject({
+      items: [{ batch_id: batch, counts: { hits: 1, created: 1 } }],
+      next_cursor: null,
+    });
+    expect(
+      (
+        await runCli(["library", "batches", "--request", "-", "--json"], {
+          home,
+          stdin: input(summaryRequest),
+        })
+      ).code,
+    ).not.toBe(0);
+    expect(
+      (
+        await readonlyClient.callTool({
+          name: "intake_batches",
+          arguments: { request: summaryRequest },
+        })
+      ).isError,
+    ).toBe(true);
     for (const [operation, args, tool, request, mcpRequest] of [
       [
         "intake-batches",
         ["library", "batches"],
         "intake_batches",
         { operation: "list", request: {} },
+        true,
+      ],
+      [
+        "intake-batches",
+        ["library", "batches"],
+        "intake_batches",
+        { operation: "get", request: { batch_id: batch } },
         true,
       ],
       [

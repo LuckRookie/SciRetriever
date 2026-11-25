@@ -6,6 +6,7 @@ import { Worker } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { parseLibrarySearchRequest } from "@sciretriever/contracts";
 import { createLogger } from "../src/logging/index.js";
+import { finishIntake, startIntake } from "../src/literature/intake.js";
 import { ExecutionRepository } from "../src/storage/execution/repository.js";
 import { CatalogWriteAdmission } from "../src/storage/write-admission.js";
 import { initializeCurrentCatalog } from "../src/storage/sqlite/catalog-layout.js";
@@ -211,6 +212,41 @@ it("routes the archive issue count to the short worker and its library list to t
     expect(listWorker).toBeDefined();
     expect(seen.get("archive")).not.toBe(listWorker);
     expect(seen.get("archive")).toBe(seen.get("execution_get_job"));
+  } finally {
+    spy.mockRestore();
+    await f.close();
+  }
+});
+
+it("keeps batch summaries, complete lists and details off the short read worker", async () => {
+  const f = await fixture();
+  const { seen, spy } = trackWorkers();
+  try {
+    const batch_id = await startIntake(
+      f.worker,
+      "topic",
+      "Batch read lane",
+      {},
+      "web",
+    );
+    await finishIntake(f.worker, batch_id, "completed");
+    await f.worker.intakeBatches({ operation: "list", request: { limit: 20 } });
+    const listWorker = seen.get("intake_read");
+    expect(listWorker).toBeDefined();
+    await expect(
+      f.worker.intakeBatchSummaries({ limit: 20, cursor: null }),
+    ).resolves.toMatchObject({ items: [{ batch_id }] });
+    expect(seen.get("intake_summary_read")).toBe(listWorker);
+    await f.worker.intakeBatches({ operation: "get", request: { batch_id } });
+    expect(seen.get("intake_read")).toBe(listWorker);
+    await expect(
+      f.worker.run({ kind: "import_read", action: { op: "batch", batch_id } }),
+    ).resolves.toMatchObject({ ok: true, value: { batch_id } });
+    expect(seen.get("import_read")).toBe(listWorker);
+    await expect(f.worker.archive("issue-count", {})).resolves.toEqual({
+      total_count: 0,
+    });
+    expect(seen.get("archive")).not.toBe(listWorker);
   } finally {
     spy.mockRestore();
     await f.close();

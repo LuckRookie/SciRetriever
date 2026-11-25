@@ -1,7 +1,7 @@
 import {
   parseAcquirePdfCounts,
   parseIntakeBatch,
-  parseIntakeBatchPage,
+  parseIntakeBatchSummaryPage,
   parseLibraryFacets,
   type AcquirePdfSelector,
   type IntakeBatch,
@@ -27,12 +27,14 @@ export async function listIntakeBatches(
   cursor: string | null,
   signal?: AbortSignal,
 ) {
+  // The list's rows without the two counts only a batch's own page shows
+  // (full text, what can be parsed): those read every member of a batch.
   const value = await api.query(
     "intake-batches",
-    { operation: "list", request: { limit, cursor } },
+    { operation: "list-summary", request: { limit, cursor } },
     signal,
   );
-  return parseIntakeBatchPage(value.result);
+  return parseIntakeBatchSummaryPage(value.result);
 }
 export async function readIntakeBatch(
   api: ApiClient,

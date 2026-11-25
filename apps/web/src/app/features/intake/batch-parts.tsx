@@ -1,4 +1,4 @@
-import type { IntakeBatch } from "@sciretriever/contracts";
+import type { IntakeBatchSummary } from "@sciretriever/contracts";
 import {
   Badge,
   type BadgeStatus,
@@ -7,7 +7,7 @@ import {
 import { batchStateText } from "../../data/imports.js";
 
 /** A finished batch shows its result; the others their state. */
-export function BatchBadge({ batch }: { batch: IntakeBatch }) {
+export function BatchBadge({ batch }: { batch: IntakeBatchSummary }) {
   const status: BadgeStatus =
     batch.state === "running"
       ? "running"

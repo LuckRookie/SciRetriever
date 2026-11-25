@@ -12,6 +12,13 @@ const {
 import type { DatabaseSync, SQLInputValue, SQLOutputValue } from "node:sqlite";
 import { parseFullTextCounts } from "@sciretriever/contracts";
 
+const paperHasPrimaryPdf = `EXISTS(SELECT 1 FROM literatures l JOIN literature_assets a USING(literature_id)
+  WHERE ${visibleLiteratureSql("l.literature_id")} AND ${visibleObjectSql("literature-asset", "a.literature_asset_id")}
+    AND l.meta_literature_id=s.meta_literature_id AND a.role='primary-pdf')`;
+const allVisibleVersionsExhausted = `NOT EXISTS(SELECT 1 FROM literatures l
+  WHERE ${visibleLiteratureSql("l.literature_id")} AND l.meta_literature_id=s.meta_literature_id
+    AND NOT EXISTS(SELECT 1 FROM automatic_pdf_acquisition_exhaustions e WHERE e.literature_id=l.literature_id))`;
+
 /** Compose with other scope aggregates without scanning the same members again. */
 export function fullTextCountsProjection(
   matchingSql: string,
@@ -30,16 +37,11 @@ export function fullTextCountsProjection(
     )`,
     columns: `${totalSql} AS total,
       CASE WHEN EXISTS(SELECT 1 FROM literature_assets WHERE role='primary-pdf') THEN
-        (SELECT count(*) FROM selected s WHERE ${checkpoint}EXISTS(
-          SELECT 1 FROM literatures l JOIN literature_assets a USING(literature_id)
-          WHERE ${visibleLiteratureSql("l.literature_id")} AND ${visibleObjectSql("literature-asset", "a.literature_asset_id")} AND l.meta_literature_id=s.meta_literature_id AND a.role='primary-pdf'))
+        (SELECT count(*) FROM selected s WHERE ${checkpoint}${paperHasPrimaryPdf})
         ELSE 0 END AS obtained,
       CASE WHEN EXISTS(SELECT 1 FROM automatic_pdf_acquisition_exhaustions) THEN
         (SELECT count(*) FROM selected s WHERE ${checkpoint}
-          NOT EXISTS(SELECT 1 FROM literatures l JOIN literature_assets a USING(literature_id)
-            WHERE ${visibleLiteratureSql("l.literature_id")} AND ${visibleObjectSql("literature-asset", "a.literature_asset_id")} AND l.meta_literature_id=s.meta_literature_id AND a.role='primary-pdf')
-          AND NOT EXISTS(SELECT 1 FROM literatures l WHERE ${visibleLiteratureSql("l.literature_id")} AND l.meta_literature_id=s.meta_literature_id
-            AND NOT EXISTS(SELECT 1 FROM automatic_pdf_acquisition_exhaustions e WHERE e.literature_id=l.literature_id)))
+          NOT ${paperHasPrimaryPdf} AND ${allVisibleVersionsExhausted})
         ELSE 0 END AS exhausted`,
   };
 }
@@ -66,4 +68,25 @@ export function fullTextCounts(
       .prepare(`WITH ${projection.cte} SELECT ${projection.columns}`)
       .get(...matching.parameters)!,
   );
+}
+
+export function intakeBatchFullTextCounts(db: DatabaseSync, batchId: string) {
+  // Batch totals retain withdrawn members. Only papers with a visible member
+  // in the batch participate in the two current material outcomes.
+  const counts = db
+    .prepare(
+      `WITH selected AS (
+    SELECT l.meta_literature_id, max(${visibleLiteratureSql("l.literature_id")}) AS visible
+    FROM intake_batch_members m JOIN literatures l USING(literature_id)
+    WHERE m.batch_id=? GROUP BY l.meta_literature_id
+  )
+  SELECT count(*) AS total,
+    count(*) FILTER (WHERE s.visible AND EXISTS(SELECT 1 FROM literature_assets WHERE role='primary-pdf')
+      AND ${paperHasPrimaryPdf}) AS obtained,
+    count(*) FILTER (WHERE s.visible AND EXISTS(SELECT 1 FROM automatic_pdf_acquisition_exhaustions)
+      AND ${allVisibleVersionsExhausted} AND NOT ${paperHasPrimaryPdf}) AS exhausted
+  FROM selected s`,
+    )
+    .get(batchId)!;
+  return fullTextCountsFromRow(counts);
 }

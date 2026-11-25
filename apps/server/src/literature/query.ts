@@ -2,6 +2,9 @@ import {
   parseLibraryFacetsRequest,
   parseAcquirePdfSelector,
   parseIntakeBatchQuery,
+  parseIntakeBatchSummaryQuery,
+  type IntakeBatchSummaryPage,
+  type IntakeBatchSummaryQuery,
   type LibraryFacets,
 } from "@sciretriever/contracts";
 import {
@@ -80,6 +83,10 @@ export interface LibraryQueryRepository {
     | import("@sciretriever/contracts").IntakeBatch
     | import("@sciretriever/contracts").IntakeBatchPage
   >;
+  intakeBatchSummaries?(
+    request: IntakeBatchSummaryQuery["request"],
+    signal?: AbortSignal,
+  ): Promise<IntakeBatchSummaryPage>;
   libraryFacets?(
     query: LibraryQuery,
     limit: number,
@@ -1042,6 +1049,13 @@ export class LiteratureQueryService {
   intakeBatches(value: unknown) {
     if (!this.repository.intakeBatches) throw new LiteratureQueryError();
     return this.repository.intakeBatches(parseIntakeBatchQuery(value));
+  }
+  intakeBatchSummaries(value: unknown, signal?: AbortSignal) {
+    if (!this.repository.intakeBatchSummaries) throw new LiteratureQueryError();
+    return this.repository.intakeBatchSummaries(
+      parseIntakeBatchSummaryQuery(value).request,
+      signal,
+    );
   }
   facets(value: unknown, signal?: AbortSignal) {
     if (!this.repository.libraryFacets) throw new LiteratureQueryError();

@@ -23,21 +23,22 @@ import {
   parseIntakeBatch,
   parseIntakeBatchQuery,
   parseIntakeBatchRename,
+  parseIntakeBatchSummary,
   type IntakeBatch,
   type IntakeBatchId,
+  type IntakeBatchSummaryPage,
+  type IntakeBatchSummaryQuery,
 } from "@sciretriever/contracts";
-const {
-  fullTextCountsProjection,
-  fullTextCountsFromRow,
-}: typeof import("./full-text-counts.js") = await import(
-  new URL(
-    import.meta.url.endsWith(".ts")
-      ? "./full-text-counts.ts"
-      : "./full-text-counts.js",
-    import.meta.url,
-  ).href
-);
-const { parseDocumentCount }: typeof import("./library-page.js") = await import(
+const { intakeBatchFullTextCounts }: typeof import("./full-text-counts.js") =
+  await import(
+    new URL(
+      import.meta.url.endsWith(".ts")
+        ? "./full-text-counts.ts"
+        : "./full-text-counts.js",
+      import.meta.url,
+    ).href
+  );
+const { CURRENT_PARSE_SQL }: typeof import("./library-page.js") = await import(
   new URL(
     import.meta.url.endsWith(".ts") ? "./library-page.ts" : "./library-page.js",
     import.meta.url,
@@ -131,6 +132,27 @@ export function readIntakeBatch(
   id: string,
   profile = "vlm-engine",
 ): IntakeBatch {
+  const { fields, parse } = readIntakeBatchFields(db, id, profile);
+  return parseIntakeBatch({
+    full_text: intakeBatchFullTextCounts(db, id),
+    estimates: { acquire_pdf: fields.pdf.pending, parse },
+    ...fields,
+  });
+}
+
+const BATCH_SUMMARY_PDF_PROBE_LIMIT = 1024;
+interface BatchSummaryPlan {
+  readonly sparsePrimaryPdfs: boolean;
+  readonly hasNeedsMetadata: boolean;
+  readonly hasExhaustions: boolean;
+}
+
+function readIntakeBatchFields(
+  db: DatabaseSync,
+  id: string,
+  parseProfile: string | null,
+  summary?: BatchSummaryPlan,
+) {
   const row = db
     .prepare(
       "SELECT batch_id,kind,default_label,label,origin,created_at,finished_at,state,result,confirmation,confirmed_at,initiated_by,request_json,discovery_run_id,rejected,source_failures,owner_pid FROM intake_batches WHERE batch_id=?",
@@ -140,26 +162,55 @@ export function readIntakeBatch(
     throw Object.assign(new Error("intake batch not found"), {
       code: "intake-batch-missing",
     });
-  const matching = {
-    sql: "SELECT literature_id FROM intake_batch_members WHERE batch_id=?",
-    parameters: [id],
-  };
-  const fullText = fullTextCountsProjection(
-    matching.sql,
-    "count(DISTINCT l.meta_literature_id)",
-  );
+  // The member scan already probes primary PDF links. Estimate parsing from
+  // those same links, without building a second set of all the member IDs.
+  const parseEstimate =
+    parseProfile === null
+      ? ""
+      : `, count(*) FILTER (WHERE p.asset_id IS NOT NULL AND EXISTS(SELECT 1 FROM assets a
+          WHERE a.asset_id=p.asset_id AND NOT ${CURRENT_PARSE_SQL})) AS parse`;
+  const sparsePrimaryPdfs = summary?.sparsePrimaryPdfs === true;
+  const hasNeedsMetadata = summary?.hasNeedsMetadata !== false;
+  const exhaustion = `EXISTS(SELECT 1 FROM automatic_pdf_acquisition_exhaustions ex
+    WHERE ex.literature_id=m.literature_id)`;
+  const unavailablePdf = sparsePrimaryPdfs
+    ? `${exhaustion} AND NOT EXISTS(SELECT 1 FROM literature_assets pdf
+        WHERE pdf.literature_id=m.literature_id AND pdf.role='primary-pdf')`
+    : `p.literature_id IS NULL AND ${exhaustion}`;
+  // The member's foreign key already guarantees the Literature exists.
   const counts = db
     .prepare(
-      `WITH ${fullText.cte} SELECT ${fullText.columns},count(*) AS hits,coalesce(sum(m.disposition='created'),0) AS created,coalesce(sum(m.disposition='enriched'),0) AS enriched,coalesce(sum(m.disposition='matched'),0) AS matched,coalesce(sum(m.disposition='restored'),0) AS restored,count(n.literature_id) AS needs_metadata,count(p.literature_id) AS has_pdf,coalesce(sum(CASE WHEN p.literature_id IS NULL AND EXISTS(SELECT 1 FROM automatic_pdf_acquisition_exhaustions ex WHERE ex.literature_id=m.literature_id) THEN sr_status(m.literature_id)='UNREVIEWED' ELSE 0 END),0) AS unavailable FROM intake_batch_members m JOIN literatures l ON l.literature_id=m.literature_id LEFT JOIN literature_assets p ON p.literature_id=m.literature_id AND p.role='primary-pdf' LEFT JOIN literature_needs_metadata n ON n.literature_id=m.literature_id WHERE m.batch_id=?`,
+      `SELECT count(*) AS hits,
+        count(*) FILTER (WHERE m.disposition='created') AS created,
+        count(*) FILTER (WHERE m.disposition='enriched') AS enriched,
+        count(*) FILTER (WHERE m.disposition='matched') AS matched,
+        count(*) FILTER (WHERE m.disposition='restored') AS restored,
+        ${hasNeedsMetadata ? "count(n.literature_id)" : "0"} AS needs_metadata,
+        ${sparsePrimaryPdfs ? "0" : "count(p.literature_id)"} AS has_pdf,
+        ${summary?.hasExhaustions === false ? "0" : `count(*) FILTER (WHERE ${unavailablePdf} AND sr_status(m.literature_id)='UNREVIEWED')`} AS unavailable${parseEstimate}
+      FROM intake_batch_members m
+      ${summary ? "" : "CROSS JOIN literatures l USING(literature_id)"}
+      ${sparsePrimaryPdfs ? "" : "LEFT JOIN literature_assets p ON p.literature_id=m.literature_id AND p.role='primary-pdf'"}
+      ${hasNeedsMetadata ? "LEFT JOIN literature_needs_metadata n ON n.literature_id=m.literature_id" : ""}
+      WHERE m.batch_id=?`,
     )
-    .get(...matching.parameters, id)!;
-  const { has_pdf, unavailable, total, obtained, exhausted, ...members } =
-    counts;
+    .get(...(parseProfile === null ? [id] : [parseProfile, id]))!;
+  const { has_pdf: joinedPdfs, unavailable, parse, ...members } = counts;
+  const has_pdf = sparsePrimaryPdfs
+    ? db
+        .prepare(
+          `SELECT count(*) AS has_pdf
+           FROM literature_assets p INDEXED BY one_primary_pdf_per_literature
+           CROSS JOIN intake_batch_members m ON m.literature_id=p.literature_id AND m.batch_id=?
+           WHERE p.role='primary-pdf'`,
+        )
+        .get(id)!.has_pdf
+    : joinedPdfs;
   const imported =
     row.kind === "import"
       ? db
           .prepare(
-            "SELECT batch_id,library_key,library_json,format,scope,file_name,import_user_tags,active,phase,storage_failures,created_at,updated_at,last_file_at,metadata_complete,record_count,summary_json FROM import_sessions WHERE batch_id=?",
+            "SELECT library_json,phase,record_count FROM import_sessions WHERE batch_id=?",
           )
           .get(id)
       : undefined;
@@ -185,21 +236,23 @@ export function readIntakeBatch(
       "SELECT coalesce(sum(json_array_length(possible_duplicates_json)>0),0) AS possible_duplicates FROM intake_items WHERE batch_id=?",
     )
     .get(id)!;
-  const files = db
-    .prepare(
-      "SELECT coalesce(sum(status='uploaded'),0) AS uploaded,coalesce(sum(status='existing'),0) AS existing,coalesce(sum(status='conflict'),0) AS conflicts,coalesce(sum(status='pending'),0) AS pending FROM import_files WHERE batch_id=?",
-    )
-    .get(id)!;
+  const progress =
+    state === "running" && imported
+      ? {
+          phase: imported.phase,
+          processed_items: records.processed,
+          total_items: imported.record_count,
+          files: db
+            .prepare(
+              "SELECT coalesce(sum(status='uploaded'),0) AS uploaded,coalesce(sum(status='existing'),0) AS existing,coalesce(sum(status='conflict'),0) AS conflicts,coalesce(sum(status='pending'),0) AS pending FROM import_files WHERE batch_id=?",
+            )
+            .get(id)!,
+        }
+      : null;
   // Query acquisition skips exactly the two categories already counted here.
   const pendingPdf =
     Number(counts.hits) - Number(has_pdf) - Number(unavailable);
-  return parseIntakeBatch({
-    full_text: fullTextCountsFromRow({ total, obtained, exhausted }),
-    estimates: {
-      acquire_pdf: pendingPdf,
-      parse:
-        Number(has_pdf) === 0 ? 0 : parseDocumentCount(db, matching, profile),
-    },
+  const fields = {
     batch_id: row.batch_id,
     kind: row.kind,
     label: row.label ?? row.default_label,
@@ -214,15 +267,7 @@ export function readIntakeBatch(
     confirmed_at: row.confirmed_at,
     initiated_by: row.initiated_by,
     source: imported ? JSON.parse(String(imported.library_json)) : null,
-    progress:
-      state === "running" && imported
-        ? {
-            phase: imported.phase,
-            processed_items: records.processed,
-            total_items: imported.record_count,
-            files,
-          }
-        : null,
+    progress,
     request: JSON.parse(String(row.request_json)),
     counts: {
       ...members,
@@ -238,7 +283,8 @@ export function readIntakeBatch(
     },
     discovery_run_id: row.discovery_run_id,
     source_failures: row.source_failures,
-  });
+  };
+  return { fields, parse };
 }
 export function queryIntakeBatches(
   db: DatabaseSync,
@@ -248,7 +294,40 @@ export function queryIntakeBatches(
   const q = parseIntakeBatchQuery(value);
   if (q.operation === "get")
     return readIntakeBatch(db, q.request.batch_id, profile);
-  const { limit, cursor } = q.request;
+  return readIntakeBatchPage(db, q.request, (id) =>
+    readIntakeBatch(db, id, profile),
+  );
+}
+export function queryIntakeBatchSummaries(
+  db: DatabaseSync,
+  request: IntakeBatchSummaryQuery["request"],
+): IntakeBatchSummaryPage {
+  // Probe once in the page snapshot. A small PDF index costs less to intersect
+  // with each batch than a PDF lookup for every member of that batch.
+  const facts = db
+    .prepare(
+      `SELECT NOT EXISTS(SELECT 1 FROM literature_assets
+      INDEXED BY one_primary_pdf_per_literature WHERE role='primary-pdf' LIMIT 1 OFFSET ?) AS sparse_pdf,
+    EXISTS(SELECT 1 FROM literature_needs_metadata LIMIT 1) AS has_needs_metadata,
+    EXISTS(SELECT 1 FROM automatic_pdf_acquisition_exhaustions LIMIT 1) AS has_exhaustions`,
+    )
+    .get(BATCH_SUMMARY_PDF_PROBE_LIMIT)!;
+  const summary = {
+    sparsePrimaryPdfs: Boolean(facts.sparse_pdf),
+    hasNeedsMetadata: Boolean(facts.has_needs_metadata),
+    hasExhaustions: Boolean(facts.has_exhaustions),
+  };
+  return readIntakeBatchPage(db, request, (id) =>
+    parseIntakeBatchSummary(
+      readIntakeBatchFields(db, id, null, summary).fields,
+    ),
+  );
+}
+function readIntakeBatchPage<T>(
+  db: DatabaseSync,
+  { limit, cursor }: IntakeBatchSummaryQuery["request"],
+  read: (id: string) => T,
+) {
   let after: { at: string; id: string } | null = null;
   if (cursor !== null) {
     try {
@@ -266,14 +345,12 @@ export function queryIntakeBatches(
   }
   const rows = db
     .prepare(
-      `SELECT batch_id,created_at FROM intake_batches ${after ? "WHERE (created_at,batch_id)<(?,?)" : ""} ORDER BY created_at DESC,batch_id DESC LIMIT ?`,
+      `SELECT batch_id,created_at FROM intake_batches INDEXED BY intake_batches_order ${after ? "WHERE (created_at,batch_id)<(?,?)" : ""} ORDER BY created_at DESC,batch_id DESC LIMIT ?`,
     )
     .all(...(after ? [after.at, after.id] : []), limit + 1);
   const last = rows[limit - 1];
   return {
-    items: rows
-      .slice(0, limit)
-      .map((row) => readIntakeBatch(db, String(row.batch_id), profile)),
+    items: rows.slice(0, limit).map((row) => read(String(row.batch_id))),
     next_cursor:
       rows.length > limit && last
         ? Buffer.from(

@@ -1,6 +1,7 @@
 import {
   parseIntakeBatch,
   type IntakeBatch,
+  type IntakeBatchSummary,
   type IntakeBatchItem,
   type IntakeDecision,
   type IntakeBatchResult,
@@ -33,11 +34,11 @@ export const BATCH_RESULTS: Record<IntakeBatchResult, string> = {
   interrupted: "中断",
 };
 /** A finished batch names its result; the others their state. */
-export const batchStateText = (batch: IntakeBatch) =>
+export const batchStateText = (batch: IntakeBatchSummary) =>
   batch.state === "finished" && batch.result
     ? BATCH_RESULTS[batch.result]
     : BATCH_STATES[batch.state];
-export const isActive = (batch: IntakeBatch) =>
+export const isActive = (batch: IntakeBatchSummary) =>
   batch.state === "collecting" ||
   batch.state === "awaiting-confirmation" ||
   batch.state === "running";
@@ -143,7 +144,7 @@ export function readResult(value: unknown): BatchItemResult {
 }
 
 /** The source as the user knows it: the library's name, else the uploaded file. */
-export function batchSource(batch: IntakeBatch): string {
+export function batchSource(batch: IntakeBatchSummary): string {
   const source = batch.source;
   const name =
     source?.name || batch.request.file_name || batch.label || "未命名来源";
@@ -166,7 +167,7 @@ const systemName = (system: string) => SYSTEMS[system] ?? system;
  * connections had a kind.
  */
 export function initiator(
-  batch: IntakeBatch,
+  batch: IntakeBatchSummary,
   devices: readonly DeviceConnection[] = [],
 ): string {
   const by = batch.initiated_by;

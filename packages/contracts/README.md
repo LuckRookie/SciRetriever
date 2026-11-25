@@ -36,3 +36,4 @@ SHA-256 优先使用 Web Crypto；普通 HTTP 浏览器缺少 SubtleCrypto 时�
 
 - `src/marks.ts`：`MarkOperation.place` 使用 PDF 或文档目标、相似度和方法版本；`ReadingMark.places` 保存当前方法的定位记录，JSON 导出与列表同形。
 - `src/archive.ts` 中的 `ArchiveIssueCount` 是 `archive` 查询 `{ operation: "issue-count", request: {} }` 的结果。`total_count` 为当前 PDF 材料上未解决问题的条数，等于默认 `issues` 的总数。
+- `src/intake.ts` 中的 `IntakeBatchSummary` 是省去 `full_text` 和 `estimates` 的 `IntakeBatch`。工作台 HTTP 的 `intake-batches` 查询使用 `{ operation: "list-summary", request: { limit, cursor } }`，结果由 `parseIntakeBatchSummaryPage` 解析。`limit` 默认 50，范围 1–100。`next_cursor` 可与 `list` 互用，到末页为 `null`。

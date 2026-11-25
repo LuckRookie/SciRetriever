@@ -9,6 +9,7 @@
 - [repositories.ts](repositories.ts)：文献等事实仓库。
 - [worker.ts](worker.ts)：Worker 调用边界；`withReadSnapshot` 为多次关联读取创建独立只读连接，消费结束或失败时关闭，不占用普通查询连接的事务。
 - [read-lanes.ts](read-lanes.ts) 列出读取的分道与耗时上限。工作台的查询与应用对象共用一个只读长请求线程。许可内的读取继续随原写入处理。短读排队及执行合计超过 5 秒时记录 `sqlite-short-read-slow`。
+- [intake-engine.ts](intake-engine.ts) 先按批次顺序索引取一页，再在同一只读快照中统计本页各批次的成员与状态。摘要列表沿用完整列表的顺序和游标，省去按论文统计全文与操作预估。摘要、完整列表、单批次详情和导入批次详情均走长读道。
 - [archive-engine.ts](archive-engine.ts) 的问题计数走短读道，经 `archive-unresolved-issues` 增补集的部分索引核对未解决问题和当前 PDF 关系。全库问题列表走长读道，列表与计数共用当前材料条件。增补只建索引，创建时一次填完。
 - [literature-bibliographies.ts](literature-bibliographies.ts)：文献公开批量书目读取的存储适配，只取当前标识、题名与年份；与文件夹导出共享同一快照，不读取正文或状态。
 - [worker-runtime.ts](worker-runtime.ts)：SQLite worker 运行实现。

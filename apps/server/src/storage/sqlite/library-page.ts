@@ -2089,23 +2089,8 @@ function selectionIds(
     : [...selector.literature_ids];
 }
 
-const CURRENT_PARSE_SQL =
+export const CURRENT_PARSE_SQL =
   "EXISTS(SELECT 1 FROM raw_parse_current c WHERE c.source_asset_id=a.asset_id AND c.source_sha256=a.sha256 AND c.profile=? AND c.raw_parse_id IS NOT NULL)";
-
-/** Count the same eligible primary PDFs without ordering or allocating task targets. */
-export function parseDocumentCount(
-  db: DatabaseSync,
-  matching: { sql: string; parameters: readonly SQLInputValue[] },
-  profile: string,
-): number {
-  return Number(
-    db
-      .prepare(
-        `SELECT count(*) AS n FROM literature_assets la JOIN assets a ON a.asset_id=la.asset_id WHERE la.role='primary-pdf' AND la.literature_id IN (${matching.sql}) AND NOT ${CURRENT_PARSE_SQL}`,
-      )
-      .get(...matching.parameters, profile)!.n,
-  );
-}
 
 export function parseDocumentSelection(
   db: DatabaseSync,

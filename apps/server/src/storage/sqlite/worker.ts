@@ -418,6 +418,10 @@ export type SqliteCommand =
     }
   | { readonly kind: "intake_read"; readonly value: unknown }
   | {
+      readonly kind: "intake_summary_read";
+      readonly request: import("@sciretriever/contracts").IntakeBatchSummaryQuery["request"];
+    }
+  | {
       readonly kind: "intake_write";
       readonly action: import("./intake-engine.js").IntakeWrite;
     }
@@ -1542,6 +1546,7 @@ export class SqliteWorker {
       "library_exact_count",
       "library_search_page",
       "library_facets",
+      "intake_summary_read",
       "acquire_pdf_selection",
       "parse_document_selection",
     ].includes(copy.kind);
@@ -3207,6 +3212,15 @@ export class SqliteWorker {
       | import("@sciretriever/contracts").IntakeBatchPage
       | import("@sciretriever/contracts").IntakeBatch
     >({ kind: "intake_read", value });
+  }
+  intakeBatchSummaries(
+    request: import("@sciretriever/contracts").IntakeBatchSummaryQuery["request"],
+    signal?: AbortSignal,
+  ) {
+    return this.run<import("@sciretriever/contracts").IntakeBatchSummaryPage>(
+      { kind: "intake_summary_read", request },
+      signal,
+    );
   }
   async intakeWithdrawal(
     command: import("./intake-withdrawal-engine.js").IntakeWithdrawalCommand,
