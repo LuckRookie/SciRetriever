@@ -16,6 +16,7 @@ import {
   locate,
   rangeOf,
 } from "./mark-locate.js";
+import { ADDED as TRANSLATED } from "./block-text.js";
 
 /**
  * Draws a paper's reading marks on the reader engines and turns pointer
@@ -121,7 +122,35 @@ function lineRects(range: Range, page: HTMLElement, scale: number): MarkRect[] {
     .slice(0, 400)
     .map((l) => [l.x - 0.5, l.y, l.w + 1, l.h] as const);
 }
+/**
+ * The text around a selection, skipping `skip`: a translation shown beside
+ * the original is no part of what the author wrote around a quote.
+ */
+function contextSkipping(range: Range, root: Node, skip: string) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) =>
+      node.parentElement?.closest(skip)
+        ? NodeFilter.FILTER_REJECT
+        : NodeFilter.FILTER_ACCEPT,
+  });
+  let before = "",
+    after = "";
+  for (let n = walker.nextNode() as Text | null; n; ) {
+    const text = n.data;
+    if (n === range.startContainer) before += text.slice(0, range.startOffset);
+    else if (range.comparePoint(n, text.length) < 0) before += text;
+    if (n === range.endContainer) after += text.slice(range.endOffset);
+    else if (range.comparePoint(n, 0) > 0) after += text;
+    n = walker.nextNode() as Text | null;
+  }
+  return {
+    prefix: norm(before).slice(-80),
+    suffix: norm(after).slice(0, 80),
+  };
+}
 function context(range: Range, root: Node) {
+  if (root instanceof Element && root.querySelector(TRANSLATED))
+    return contextSkipping(range, root, TRANSLATED);
   const before = document.createRange(),
     after = document.createRange();
   before.setStart(root, 0);
@@ -738,7 +767,7 @@ export function createDocumentMarkSurface(
   >();
   const skip = (node: Text) =>
     !!node.parentElement?.closest(
-      ".reading-block-source, .reading-margin-note",
+      `.reading-block-source, .reading-margin-note, ${TRANSLATED}`,
     );
   /**
    * The highlights this surface painted. The registry is the document's, so a
@@ -930,7 +959,16 @@ export function createDocumentMarkSurface(
     const anchor = range.getClientRects()[0];
     if (!first || !last || !body.contains(first) || !quote || !anchor)
       return null;
-    const article = first.closest("article") ?? body;
+    const article = first.closest<HTMLElement>("article") ?? body;
+    // Reading-experience 9: marks lie on the original only. The translation
+    // reading takes none; in 对照 a translated paragraph is only copied.
+    if (article.dataset.textMode === "translation") return null;
+    if (
+      [...article.querySelectorAll(TRANSLATED)].some((el) =>
+        range.intersectsNode(el),
+      )
+    )
+      return null;
     return {
       quote,
       ...context(range, article),
@@ -1012,7 +1050,8 @@ export function createDocumentMarkSurface(
     markAt: (event) => hitTest(event),
     reveal(id) {
       const range = ranges.get(id);
-      if (!range) return false;
+      // Hidden by the translation reading (spec 9): the caller shows it first.
+      if (!range || !range.getClientRects().length) return false;
       const r = range.getBoundingClientRect(),
         top = body.getBoundingClientRect().top;
       body.scrollBy({

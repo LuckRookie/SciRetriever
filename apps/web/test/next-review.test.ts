@@ -356,7 +356,7 @@ it(
       await field.waitFor();
       const initial = await field.inputValue();
       await field.fill(initial + "\n\nMy pending change.\n\n");
-      await p.getByRole("tab", { name: "原文", exact: true }).click();
+      await p.getByRole("tab", { name: "全文", exact: true }).click();
       await p
         .getByRole("dialog", { name: "保留未保存的校订？", exact: true })
         .getByRole("button", { name: "继续编辑", exact: true })

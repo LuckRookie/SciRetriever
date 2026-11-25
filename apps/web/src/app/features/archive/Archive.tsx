@@ -23,6 +23,7 @@ import {
   errorMessage,
   issueTitle,
   problemPhrase,
+  translationIssueHint,
 } from "../../strings.js";
 import { Assignment } from "../tags/Assignment.js";
 import { OperationDialog } from "../library/OperationDialog.js";
@@ -309,6 +310,9 @@ const parseReason = (reason: string) =>
   reason.startsWith("parser-");
 /** Where the paper stopped and what that means for reading it, in words. */
 function issueHint(issue: Record<string, unknown>, stepName: string) {
+  // Technical 04 §9.3: a translation problem never holds the full text back.
+  const translation = translationIssueHint(String(issue.reason));
+  if (translation) return translation;
   if (issue.affects_readiness !== false)
     return `停在“${stepName}”这一步，这篇还没有全文`;
   return issue.part === "supplementary"
@@ -360,6 +364,8 @@ function IssueRow({
               asset: String(issue.asset_id),
             }),
         };
+  // Fixing the text does not fill in a translation; resuming does (spec 9.3).
+  const fixable = step !== "translate";
   const actions = [
     ...(parseReason(reason)
       ? [{ id: "parse", label: "重新解析全文", run: onRetryParse }]
@@ -368,7 +374,7 @@ function IssueRow({
       ? [{ id: "edit", ...edit }]
       : []),
     { id: "resume", label: archiveStrings.continue, run: onResume },
-    ...(step === "metadata" || step === "tags"
+    ...(step === "metadata" || step === "tags" || !fixable
       ? []
       : [{ id: "edit", ...edit }]),
   ];
@@ -394,15 +400,17 @@ function IssueRow({
         >
           {main!.label}
         </Button>
-        <Menu
-          label="其他操作"
-          iconOnly
-          items={rest.map((item) => ({
-            id: item.id,
-            label: item.label,
-            onAction: item.run,
-          }))}
-        />
+        {rest.length ? (
+          <Menu
+            label="其他操作"
+            iconOnly
+            items={rest.map((item) => ({
+              id: item.id,
+              label: item.label,
+              onAction: item.run,
+            }))}
+          />
+        ) : null}
       </div>
       {editing ? (
         <div className="archive-issue-editor">

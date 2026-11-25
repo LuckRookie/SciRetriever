@@ -7,6 +7,7 @@ import {
 } from "@sciretriever/contracts";
 import type {
   DocumentLinkPreview,
+  DocumentTextMode,
   LoadProgress,
   LoadStep,
   PdfControls,
@@ -34,7 +35,7 @@ import { archiveJsonStream, archiveQuery, rows } from "../../data/archive.js";
 import type { ApiClient } from "../../data/api.js";
 import { record } from "../../data/wire.js";
 import type { ReaderMode } from "../../data/url.js";
-import { errorMessage } from "../../strings.js";
+import { errorMessage, fullTextStrings } from "../../strings.js";
 import { pageColumn } from "./geometry.js";
 import {
   createFullTextLayer,
@@ -203,6 +204,10 @@ export interface ReaderBindings {
   changeView(kind: ViewKind): void;
   /** The reading size now: the sheet, and the PDF page at 适宽, follow it (spec 1.1, 3.5). */
   fontSize(): number;
+  /** The full text's reading chosen in this browser (reading-experience 9). */
+  textMode(): DocumentTextMode;
+  /** The full text switched its reading itself (a marked paragraph's sign). */
+  textModeChanged(mode: DocumentTextMode): void;
 }
 /** One step of the jump history: which view and where. */
 interface Visit {
@@ -645,6 +650,16 @@ function build(
           }
         : {}),
       documentTitle: request.title,
+      textMode: b.textMode(),
+      textLabels: {
+        untranslated: fullTextStrings.untranslated,
+        marks: fullTextStrings.marks,
+        marksAction: fullTextStrings.marksAction,
+        loadFailed: fullTextStrings.loadFailed,
+      },
+      onTextMode: (mode) => {
+        if (shows(view)) b.textModeChanged(mode);
+      },
       animateNavigation: () =>
         document.documentElement.dataset.reducedMotion !== "true",
       onResources: (resources) => {

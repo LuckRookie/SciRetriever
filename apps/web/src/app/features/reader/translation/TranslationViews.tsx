@@ -9,6 +9,7 @@ import {
   TextArea,
 } from "../../../components/index.js";
 import { copyText } from "../../../../browser-platform.js";
+import { fullTextStrings } from "../../../strings.js";
 import { useAnchored } from "../marks/MarkOverlays.js";
 import type { ReaderTranslation, TranslationEntry } from "./use-translation.js";
 import "./translation.css";
@@ -27,6 +28,8 @@ function copy(text: string, what: string, notify: (message: string) => void) {
 }
 function Meta({ entry }: { entry: TranslationEntry }) {
   if (!entry.result) return null;
+  if (entry.stored)
+    return <span className="translation-meta">{fullTextStrings.stored}</span>;
   return (
     <span className="translation-meta" title={entry.result.model}>
       {modelName(entry.result.model)}
@@ -175,45 +178,54 @@ export function TranslationPopover({
 /**
  * The 翻译 tab beside 信息 and 批注: the source and its translation one above
  * the other, as in a translation side pane, with the selection options below.
+ * The full text's own translation is read in its 译文 and 对照 readings, so
+ * there is no “翻译当前所在的节” (reading-experience 9).
  */
 export function TranslationPanel({
   translation,
   notify,
-  section,
+  service = true,
 }: {
   translation: ReaderTranslation;
   notify: (message: string) => void;
-  /** The full text's section at the reading line (spec 1.4); absent in the PDF. */
-  section?: () => string | null;
+  /**
+   * A translation service is set up. Without one the tab shows only what the
+   * library already translated (plan 28 block 08): no model, no selection.
+   */
+  service?: boolean;
 }) {
   const { settings, setSettings, catalog, model, current, source, load } =
     translation;
   useEffect(load, [load]);
-  const [cut, setCut] = useState(false);
-  /** Takes the current section, as much as one request carries, and translates it. */
-  const translateSection = () => {
-    const text = section?.();
-    if (!text) return;
-    const limit = catalog?.max_chars ?? 4000;
-    let taken = text;
-    if ([...text].length > limit) {
-      // Whole paragraphs up to the limit.
-      const kept: string[] = [];
-      for (const paragraph of text.split("\n\n")) {
-        if ([...[...kept, paragraph].join("\n\n")].length > limit) break;
-        kept.push(paragraph);
-      }
-      taken = kept.length
-        ? kept.join("\n\n")
-        : [...text].slice(0, limit).join("");
-    }
-    setCut(taken !== text);
-    translation.setSource(taken);
-    translation.dismiss();
-    void translation.translate(taken, null);
-  };
   const result = current && current.text === source.trim() ? current : null;
   const output = result?.result?.translation ?? "";
+  if (!service)
+    return (
+      <div className="translation-panel">
+        <p className="ui-description">{fullTextStrings.storedOnly}</p>
+        <section
+          className="translation-output"
+          aria-label="译文"
+          aria-live="polite"
+        >
+          {result ? (
+            <>
+              <Result entry={result} />
+              <Meta entry={result} />
+            </>
+          ) : (
+            <p className="translation-placeholder">
+              {fullTextStrings.storedPlaceholder}
+            </p>
+          )}
+        </section>
+        <div className="translation-copy" role="group" aria-label="复制">
+          <span>复制</span>
+          <Button onPress={() => copy(source, "原文", notify)}>原文</Button>
+          <Button onPress={() => copy(output, "译文", notify)}>译文</Button>
+        </div>
+      </div>
+    );
   return (
     <div className="translation-panel">
       <div className="translation-bar">
@@ -247,14 +259,6 @@ export function TranslationPanel({
         />
       </div>
       <div className="translation-source">
-        {section ? (
-          <Button variant="text" size="compact" onPress={translateSection}>
-            翻译当前所在的节
-          </Button>
-        ) : null}
-        {cut ? (
-          <p className="ui-description">本节较长，只放入了前面的段落。</p>
-        ) : null}
         <TextArea
           label="原文"
           width="full"

@@ -227,7 +227,7 @@ it.each(["no-preference", "reduce"] as const)(
           )
           .first()
           .waitFor();
-        await w.page.getByRole("tab", { name: "原文", exact: true }).click();
+        await w.page.getByRole("tab", { name: "全文", exact: true }).click();
       });
       const moving = seen.filter((a) =>
         /transform|translate|scale|rotate|clip-path|inset|left|top|width|height|margin/.test(

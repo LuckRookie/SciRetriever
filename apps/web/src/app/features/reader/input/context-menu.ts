@@ -145,6 +145,8 @@ export interface MenuAbilities {
   /** The paper can be marked here (not from a fixed source). */
   canMark: boolean;
   canTranslate: boolean;
+  /** “翻译本段”: a translation service, or the library's translation of the paper. */
+  canTranslateBlock?: boolean;
   /** The other view exists (the paper has a PDF, or a full text). */
   otherView: boolean;
   /** The selection lies in one block and is at most 80 characters. */
@@ -179,7 +181,9 @@ export function menuEntries(
         return [
           "copy-block",
           "cite-block",
-          ...(can.canTranslate ? (["translate-block"] as const) : []),
+          ...((can.canTranslateBlock ?? can.canTranslate)
+            ? (["translate-block"] as const)
+            : []),
         ];
       case "pdf-page":
         return ["go-page", ...(can.canMark ? (["tool-region"] as const) : [])];

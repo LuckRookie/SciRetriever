@@ -75,6 +75,7 @@ export function useReaderMarks({
   notify,
   translation,
   onTranslate,
+  onHiddenMark,
 }: {
   detail: LiteratureDetail | undefined;
   mode: string;
@@ -84,6 +85,11 @@ export function useReaderMarks({
   translation?: ReaderTranslation;
   /** The 翻译 button on the selection bar, when the popup is off: the panel shows it. */
   onTranslate?: () => void;
+  /**
+   * A mark to show lies in text the full text's reading hides (its
+   * translation reading, spec 9): the reader shows that block, then the mark.
+   */
+  onHiddenMark?: (markId: string, block: HTMLElement) => Promise<void>;
 }) {
   const id = detail?.literature.literature_id ?? "";
   const view: "pdf" | "doc" | null =
@@ -378,11 +384,19 @@ export function useReaderMarks({
     [toast],
   );
   const jump = useRef<(() => void) | null>(null);
+  const hidden = useRef(onHiddenMark);
+  hidden.current = onHiddenMark;
   const open = useCallback(
     (markId: string) => {
       setCurrent(markId);
-      if (!surface.current?.reveal(markId))
-        notify("这条批注在当前视图里找不到对应的文字。");
+      if (surface.current?.reveal(markId)) return;
+      const block = surface.current?.blockOf?.(markId);
+      if (block && hidden.current)
+        void hidden.current(markId, block).then(() => {
+          if (!surface.current?.reveal(markId))
+            notify("这条批注在当前视图里找不到对应的文字。");
+        });
+      else notify("这条批注在当前视图里找不到对应的文字。");
     },
     [notify],
   );
@@ -789,6 +803,16 @@ export function useReaderMarks({
       </Dialog>
     </>
   ) : null;
+  const blockCounts = useCallback(() => {
+    const counts = new Map<number, number>();
+    for (const markId of placed.all) {
+      const block = surface.current?.blockOf?.(markId);
+      if (!block) continue;
+      const start = Number(block.dataset.byteStart);
+      counts.set(start, (counts.get(start) ?? 0) + 1);
+    }
+    return counts;
+  }, [placed.all]);
   return {
     attach,
     commands,
@@ -806,5 +830,10 @@ export function useReaderMarks({
     /** For the translated pages: the marks to tint and how to show one in the original. */
     list: store.marks,
     open,
+    /**
+     * How many marks each full-text block holds, by its UTF-8 start: the
+     * translation reading's signs in the margin (reading-experience 9).
+     */
+    blockCounts,
   };
 }

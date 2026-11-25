@@ -8,6 +8,7 @@ import {
   paperTitleParts,
 } from "../../data/library.js";
 import { paperSource } from "./ReaderPageHeader.js";
+import { fullTextStrings } from "../../strings.js";
 
 /** The latest step of the view being prepared; only the skeleton listens, once a frame. */
 export interface PreparingProgress {
@@ -52,7 +53,7 @@ function stepText(step: LoadStep) {
 /**
  * Spec 6.3: the skeleton of the view being prepared, drawn on the sheet where
  * its text or pages will be. The page header shows as usual, its right side
- * saying “原文 · 正在准备”; the title, authors and source come from the
+ * saying “全文 · 正在准备”; the title, authors and source come from the
  * bibliography at once; below them the steps of the actual loading and a 2 px
  * bar; then skeleton lines. It lies over the desk, so nothing moves when the
  * text replaces it.
@@ -98,7 +99,7 @@ export function ReaderPreparing({
             {paper ? (narrow ? paperTitle(paper) : paperSource(paper)) : ""}
           </span>
           <span className="reader-page-header-view">
-            {kind === "pdf" ? "PDF" : "原文"} · 正在准备
+            {kind === "pdf" ? "PDF" : fullTextStrings.view} · 正在准备
           </span>
         </header>
         <div className="reader-preparing-column">

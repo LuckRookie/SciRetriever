@@ -5,6 +5,7 @@ import { navigate } from "../../data/url.js";
 import { deviceState, type DeviceConnection } from "../../data/devices.js";
 import { downloadPackage, useDevices } from "../settings/Devices.js";
 import { copyText } from "../../../browser-platform.js";
+import { intakeStrings } from "../../strings.js";
 
 /**
  * The extensions that bring papers in (page specs “入库 · Zotero”): made as
@@ -73,8 +74,8 @@ function ConnectSteps() {
 }
 
 /**
- * “Zotero”: importing straight from Zotero is not open yet, so the line says
- * how to go through an export meanwhile (page specs “找文献 · Zotero”).
+ * “Zotero”: as things are — the import program does it, run by an Agent or
+ * by hand; the extension's entry is not open yet (guides “导入文献 · Zotero”).
  */
 export function ZoteroIntake() {
   const devices = useDevices();
@@ -82,10 +83,8 @@ export function ZoteroIntake() {
   return (
     <div className="intake-extension">
       <ConnectionLine devices={list} />
-      <p>
-        从 Zotero 直接导入还没有开放。现在可以在 Zotero 里导出 BibTeX 或
-        RIS，再从“文件”导入。
-      </p>
+      <p>{intakeStrings.zotero}</p>
+      <p className="ui-description">{intakeStrings.zoteroGuide}</p>
       {list === null || linkedExtensions(list).length ? null : <ConnectSteps />}
     </div>
   );

@@ -364,7 +364,7 @@ it("groups hits by paper with their place in it, folds after three, opens the co
         .getByTestId("retrieval-location")
         .evaluate((el) => getComputedStyle(el).color),
       first
-        .getByRole("button", { name: "在原文中查看", exact: true })
+        .getByRole("button", { name: "在全文中查看", exact: true })
         .evaluate((el) => getComputedStyle(el).color),
     ]);
     expect(note).not.toBe(action);

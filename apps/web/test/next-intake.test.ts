@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import { nextWorkspace } from "./next-workspace-fixture.js";
 import { importExport } from "./import-flow-fixture.js";
 import { missingId } from "./processor-workspace-fixture.js";
+import { intakeStrings } from "../src/app/strings.js";
 import { workbenchPdf } from "../../server/src/workbench/synthetic-fixture.js";
 it("keeps discovery and import explicit and uploads a selected PDF without hidden processing", async () => {
   const w = await nextWorkspace({
@@ -268,12 +269,10 @@ it("says how to connect the extension until one is connected, then where Zotero 
     await page.reload();
     await page.getByRole("tab", { name: "Zotero", exact: true }).click();
     await panel.getByText("已连接扩展 · Chrome 扩展").waitFor();
-    // Importing straight from Zotero is not open yet (plan 28 · 07, 16).
-    await panel
-      .getByText(
-        "从 Zotero 直接导入还没有开放。现在可以在 Zotero 里导出 BibTeX 或 RIS，再从“文件”导入。",
-      )
-      .waitFor();
+    // The import program does it; the extension's entry is not open yet
+    // (plan 28 · 08, 13).
+    await panel.getByText(intakeStrings.zotero).waitFor();
+    await panel.getByText(intakeStrings.zoteroGuide).waitFor();
     expect(await steps.count()).toBe(0);
     // 网页 says the same.
     await page.getByRole("tab", { name: "网页", exact: true }).click();

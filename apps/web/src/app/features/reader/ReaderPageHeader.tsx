@@ -5,7 +5,11 @@ import {
   type TextLevel,
 } from "@sciretriever/contracts";
 import { paperAuthors, paperTitle } from "../../data/library.js";
-import type { PdfControls } from "../../../reading/contract.js";
+import type {
+  DocumentTextMode,
+  PdfControls,
+} from "../../../reading/contract.js";
+import { fullTextStrings } from "../../strings.js";
 
 /**
  * Spec 1.2: where the paper comes from. A journal paper: “《刊名》年, 卷(期):
@@ -42,12 +46,14 @@ function ViewText({
   kind,
   pdf,
   level,
+  reading,
   scaleText,
   pageEdit,
 }: {
   kind: "doc" | "pdf";
   pdf: PdfControls | null;
   level: TextLevel | null;
+  reading: DocumentTextMode;
   scaleText: string | null;
   pageEdit: number;
 }) {
@@ -62,8 +68,10 @@ function ViewText({
   if (kind === "doc")
     return (
       <span>
-        原文
+        {fullTextStrings.view}
         {level ? ` · ${level === "draft" ? "未校对" : "已校对"}` : ""}
+        {/* Reading-experience 9: a translation says it is one. */}
+        {reading === "original" ? "" : ` · ${fullTextStrings.header[reading]}`}
         {scaleText || lastScale ? (
           <span
             className="reader-page-header-scale"
@@ -144,6 +152,7 @@ export function ReaderPageHeader({
   scroller,
   scaleText = null,
   pageEdit = 0,
+  reading = "original",
 }: {
   kind: "doc" | "pdf";
   /** The full text's level, once read (reading-experience 1.2, 3.4). */
@@ -159,6 +168,8 @@ export function ReaderPageHeader({
   scaleText?: string | null;
   /** Bumped to put the focus in the PDF's page field. */
   pageEdit?: number;
+  /** The full text's reading shown (reading-experience 9). */
+  reading?: DocumentTextMode;
 }) {
   const [faded, setFaded] = useState<HeaderLine | null>(null);
   useEffect(() => {
@@ -204,6 +215,7 @@ export function ReaderPageHeader({
           kind={kind}
           pdf={pdf}
           level={level}
+          reading={reading}
           scaleText={scaleText}
           pageEdit={pageEdit}
         />

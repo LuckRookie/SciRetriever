@@ -74,7 +74,7 @@ export const COMMANDS = {
   // 视图与比例
   "view-doc": {
     group: "view",
-    labels: ["切换到原文"],
+    labels: ["切换到全文"],
     keys: [alt("Digit3", "3")],
   },
   "view-pdf": {

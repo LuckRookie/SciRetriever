@@ -480,7 +480,7 @@ it("opens a PDF without text in the PDF view, and its full text says what is mis
       .first()
       .waitFor();
     expect(new URL(w.page.url()).searchParams.get("reader")).toBe("pdf");
-    await w.page.getByRole("tab", { name: "原文", exact: true }).click();
+    await w.page.getByRole("tab", { name: "全文", exact: true }).click();
     const empty = w.page.locator(".reader-surface .ui-empty");
     await empty
       .getByText("这份资料还没有可读的文本。", { exact: true })

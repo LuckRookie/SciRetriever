@@ -43,7 +43,11 @@ import {
 import { TEXT_SCALE } from "../reader/input/scale.js";
 import { record, type JsonRecord } from "../../data/wire.js";
 import { copyText, randomId } from "../../../browser-platform.js";
-import { errorMessage } from "../../strings.js";
+import {
+  errorMessage,
+  fullTextStrings,
+  translationLanguageName,
+} from "../../strings.js";
 import {
   MODEL_APIS,
   MODEL_REASONING,
@@ -1213,6 +1217,30 @@ export default function Settings() {
                           <span className="settings-readonly">
                             {str(value("parsing", "archive_profile")) ||
                               "vlm-engine"}
+                          </span>
+                        </Definition>
+                      </Definitions>
+                    </Section>
+                    {/* Reading-experience 9: the language archiving translates
+                        into; set in the configuration file only. */}
+                    <Section
+                      title={fullTextStrings.settingsTitle}
+                      description={fullTextStrings.settingsDescription}
+                    >
+                      <Definitions>
+                        <Definition
+                          term={fullTextStrings.settingsLanguage}
+                          description={fullTextStrings.settingsLanguageHelp}
+                        >
+                          <span className="settings-readonly">
+                            {translationLanguageName(
+                              str(
+                                draft.translation &&
+                                  typeof draft.translation === "object"
+                                  ? value("translation", "target_language")
+                                  : null,
+                              ) || "zh-Hans",
+                            )}
                           </span>
                         </Definition>
                       </Definitions>

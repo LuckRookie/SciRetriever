@@ -96,12 +96,43 @@ export interface LoadProgress {
   /** 0–1 over all steps. */
   readonly fraction: number;
 }
+/** The full text read as written, as its stored translation, or both (reading-experience 9). */
+export type DocumentTextMode = "original" | "translation" | "bilingual";
 export interface ReaderFrame {
   /**
    * The sheet's page header (spec 1.2): the engine puts it at the top of its
    * content; the reader page fills it. The reading line is measured below it.
    */
   header?: HTMLElement;
+  /**
+   * The full text's reading the engine opens with (reading-experience 9);
+   * it opens in the original when this version has no translation to read.
+   */
+  textMode?: DocumentTextMode;
+  /**
+   * Set by the full-text engine: show another reading, keeping the place
+   * (spec 4.2); true once the reading shown changed.
+   */
+  setTextMode?: (mode: DocumentTextMode) => Promise<boolean>;
+  /**
+   * Set by the full-text engine: switch to 对照 and put the block starting at
+   * this UTF-8 offset on the reading line, as a jump (a marked paragraph read
+   * in translation, spec 9).
+   */
+  revealInBilingual?: (start: number) => Promise<void>;
+  /** The engine switched the reading itself (from a paragraph's mark sign). */
+  onTextMode?: (mode: DocumentTextMode) => void;
+  /** Set by the full-text engine: the stored translation of a block, null when it has none. */
+  translationOf?: (block: HTMLElement) => Promise<string | null>;
+  /** Set by the full-text engine: how many marks each block holds, by its UTF-8 start. */
+  markBlocks?: (counts: ReadonlyMap<number, number>) => void;
+  /** Words the full-text engine writes in the margins of a translation. */
+  textLabels?: {
+    untranslated: string;
+    marks(count: number): string;
+    marksAction(count: number): string;
+    loadFailed: string;
+  };
   /** The engine reports where its loading is (spec 6.3). */
   onLoadStep?: (
     id: LoadStep["id"],
@@ -124,7 +155,8 @@ export interface ReaderFrame {
   controls: HTMLElement;
   outline: HTMLElement;
   findStatus: HTMLElement;
-  onFind: (query: string) => void | Promise<void>;
+  /** Looks for `query`; `stay` finds again in place, without going to the first match. */
+  onFind: (query: string, stay?: boolean) => void | Promise<void>;
   beforeLayout: () => () => void;
   /**
    * Set by the engine. The view leaves the screen (`hide`, after which its

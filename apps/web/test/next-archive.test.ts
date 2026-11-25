@@ -601,7 +601,7 @@ it("preserves summary reading position and presents evidence on demand across sc
       el.closest<HTMLElement>(".reading-scroll")!.scrollTop = 900;
     });
     await expect.poll(scroll).toBeGreaterThan(800);
-    await p.getByRole("tab", { name: "原文", exact: true }).click();
+    await p.getByRole("tab", { name: "全文", exact: true }).click();
     await readerMore(p, "加工结果");
     await p.getByRole("button", { name: "阅读总结", exact: true }).click();
     await expect.poll(scroll).toBeGreaterThan(800);
@@ -660,7 +660,7 @@ it("preserves summary reading position and presents evidence on demand across sc
         .toBe(true);
       await p.keyboard.press("Escape");
     }
-    await readerView(p, "原文");
+    await readerView(p, "全文");
     await readerType(p, "显示核对依据");
     await readerMore(p, "修改全文");
     const editor = p.getByRole("region", { name: "修改全文", exact: true });

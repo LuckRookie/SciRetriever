@@ -599,14 +599,14 @@ it("puts the reader under one top bar: navigation in a drawer, the views, find, 
         exact: true,
       })
       .waitFor();
-    // Only what can be used: 原文 and PDF, no overview, flow or question box,
+    // Only what can be used: 全文 and PDF, no overview, flow or question box,
     // not even disabled (no reading-layer or question capability here).
     expect(
       await w.page
         .getByRole("tablist", { name: "阅读视图" })
         .getByRole("tab")
         .allInnerTexts(),
-    ).toEqual(["原文", "PDF"]);
+    ).toEqual(["全文", "PDF"]);
     expect(await w.page.getByPlaceholder("向这份资料提问").count()).toBe(0);
     expect(await w.page.getByRole("tab", { name: /概览|脉络/ }).count()).toBe(
       0,
@@ -684,7 +684,9 @@ it("puts the reader under one top bar: navigation in a drawer, the views, find, 
     };
     expect(await headings()).toEqual(["这篇文献", "导出", "加工"]);
     const more = await menuItems("更多");
+    // A paper in the library leaves it from here (ADR 0067).
     expect(more).toEqual([
+      "移出文献库…",
       "上传 PDF",
       "修改全文",
       "核对是不是这篇",
@@ -794,7 +796,7 @@ it("puts the reader under one top bar: navigation in a drawer, the views, find, 
           .count(),
       )
       .toBe(0);
-    await w.page.getByRole("button", { name: "视图：原文" }).click();
+    await w.page.getByRole("button", { name: "视图：全文" }).click();
     expect(await w.page.getByRole("menuitem").allInnerTexts()).toEqual(["PDF"]);
     await w.page.keyboard.press("Escape");
     await expect
@@ -869,7 +871,7 @@ it("lays the PDF on the sheet's desk, one sheet per page, and folds the top bar 
     await readerType(w.page, "适合宽度");
     // Focus mode: F folds the top bar up and closes the side panel; the
     // sheet's header stays where it was, and nothing else moves the text.
-    await readerView(w.page, "原文");
+    await readerView(w.page, "全文");
     await w.page
       .locator(`${shown}[data-view="doc"] .reading-article`)
       .waitFor();
@@ -1050,11 +1052,15 @@ it("opens the side panel closed by default, docked from a 1440 px window and flo
     ])
       await info.getByRole("button", { name: button, exact: true }).waitFor();
     expect(await info.innerText()).toContain("原始 PDF 已保存");
-    // 翻译: the section at the reading line can be translated.
+    // 翻译: selections only; the full text's own translation is read in
+    // its readings, so there is no “翻译当前所在的节” (reading-experience 9).
     await readerPanel(w.page, "翻译");
-    await panel
-      .getByRole("button", { name: "翻译当前所在的节", exact: true })
-      .waitFor();
+    await panel.getByRole("button", { name: "翻译", exact: true }).waitFor();
+    expect(
+      await panel
+        .getByRole("button", { name: "翻译当前所在的节", exact: true })
+        .count(),
+    ).toBe(0);
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();

@@ -161,7 +161,7 @@ const readerTokens = [
   {
     name: "案头",
     token: "--reader-desk",
-    usage: "原文与 PDF 共用的阅读区底色",
+    usage: "全文与 PDF 共用的阅读区底色",
   },
   { name: "纸页", token: "--reader-sheet", usage: "纸页与书脊的底色" },
   {

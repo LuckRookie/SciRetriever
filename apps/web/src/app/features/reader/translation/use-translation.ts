@@ -29,6 +29,8 @@ export interface TranslationEntry {
   readonly status: "loading" | "done" | "error";
   readonly result?: TranslationResult;
   readonly error?: string;
+  /** The stored translation of the full text (ADR 0068), not a model's reply. */
+  readonly stored?: boolean;
 }
 function readSettings(): TranslationSettings {
   try {
@@ -254,6 +256,35 @@ export function useReaderTranslation(literatureId: string, enabled: boolean) {
     setPopupOpen(false);
     setPopupAt(null);
   }, []);
+  /**
+   * “翻译本段” on a paragraph the library already translated (spec 9): its
+   * stored translation shows in the panel; no model is asked.
+   */
+  const showStored = useCallback(
+    (text: string, stored: string, language: TranslationLanguage) => {
+      if (pending.current) {
+        clearTimeout(pending.current.timer);
+        pending.current.abort.abort();
+        pending.current = null;
+      }
+      const trimmed = text.trim();
+      setSource(trimmed);
+      setPopupOpen(false);
+      setCurrent({
+        text: trimmed,
+        page: null,
+        status: "done",
+        stored: true,
+        result: {
+          translation: stored,
+          model: "",
+          target_language: language,
+          cached: false,
+        },
+      });
+    },
+    [],
+  );
   const load = useCallback(() => setWanted(true), []);
   /**
    * Translation is set up: the service answers with at least one model. Null
@@ -279,6 +310,7 @@ export function useReaderTranslation(literatureId: string, enabled: boolean) {
     popupAt,
     setPopupAt,
     translate: run,
+    showStored,
     selected,
     show,
     dismiss,

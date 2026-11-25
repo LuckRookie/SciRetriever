@@ -4,8 +4,9 @@ import {
   type DocumentResource,
   type DocumentReadRequestMap,
   type DocumentReadResultMap,
+  type DocumentTranslationResult,
 } from "@sciretriever/contracts";
-import type { ReadingContext } from "./contract.js";
+import type { DocumentTextMode, ReadingContext } from "./contract.js";
 import type { FixedSource } from "./source.js";
 import { button, readerErrorMessage } from "./dom.js";
 import type { ReaderFrame, ReadingAnchor } from "./contract.js";
@@ -13,6 +14,7 @@ import type { ReadingPosition } from "./state.js";
 import {
   forgetDocumentRead,
   readDocument,
+  readDocumentTranslation,
   readResourceBytes,
 } from "./transport.js";
 import { READER_PROBE, probeCount } from "./probe.js";
@@ -26,7 +28,13 @@ import {
   type TextBlock,
 } from "./anchor.js";
 import { appendTitle, titleParts } from "./title.js";
-import { documentMarkdown as markdown, markdownBlocks } from "./markdown.js";
+import {
+  documentMarkdown as markdown,
+  markdown as plainMarkdown,
+  markdownBlocks,
+} from "./markdown.js";
+
+import { blockSourceText } from "./block-text.js";
 
 export async function renderDocument(
   ctx: ReadingContext,
@@ -114,6 +122,16 @@ export async function renderDocument(
   frame.onLoadStep?.("layout");
   const article = document.createElement("article");
   article.className = "reading-article library-reading-text";
+  // Reading-experience 9: the reading asked for, shown when this version has
+  // a translation to read; else the original, the choice kept as it was.
+  const translationSummary = described.translation ?? null;
+  const language = translationSummary?.target_language ?? null;
+  let textMode: DocumentTextMode =
+    translationSummary?.state === "complete" ||
+    translationSummary?.state === "partial"
+      ? (frame.textMode ?? "original")
+      : "original";
+  article.dataset.textMode = textMode;
   // Folded front-page article information (ADR 0054); session state only.
   article.dataset.articleInfo = "collapsed";
   let documentTitle: HTMLElement | null = null;
@@ -259,6 +277,144 @@ export async function renderDocument(
     jumpRevision = 0;
   const rendered: { html: string; element: HTMLElement }[] = [];
   const blocks = () => rendered.map((r) => r.element);
+  type Unit = DocumentTranslationResult["units"][number];
+  /** The stored translation by every segment it covers; null until read. */
+  let units: Map<string, Unit> | null = null,
+    unitsLoading: Promise<boolean> | null = null;
+  const labels = frame.textLabels ?? {
+    untranslated: "未译",
+    marks: (count: number) => `批注 ${count}`,
+    marksAction: (count: number) => `这段有 ${count} 条批注`,
+    loadFailed: "译文没有读到，按原文显示。",
+  };
+  /** Reads the version's translation once; false when it could not be read. */
+  const ensureUnits = () => {
+    if (units) return Promise.resolve(true);
+    unitsLoading ??= readDocumentTranslation(ctx, docId).then(
+      (list) => {
+        const map = new Map<string, Unit>();
+        for (const unit of list)
+          for (const id of unit.segment_ids) map.set(id, unit);
+        units = map;
+        return true;
+      },
+      () => {
+        unitsLoading = null;
+        if (!ctx.signal.aborted) frame.onNote?.(labels.loadFailed);
+        return false;
+      },
+    );
+    return unitsLoading;
+  };
+  /** The first segment starting at or after `offset` (segments are in text order). */
+  const segmentFrom = (offset: number) => {
+    let low = 0,
+      high = segments.length;
+    while (low < high) {
+      const mid = (low + high) >> 1;
+      if (segments[mid]!.start_utf8 < offset) low = mid + 1;
+      else high = mid;
+    }
+    return low;
+  };
+  /** The translation units a block holds: those whose first segment starts in it. */
+  const unitsOf = (el: HTMLElement): Unit[] => {
+    if (!units) return [];
+    const start = Number(el.dataset.byteStart),
+      end = Number(el.dataset.byteEnd),
+      found: Unit[] = [];
+    for (
+      let i = segmentFrom(start);
+      i < segments.length && segments[i]!.start_utf8 < end;
+      i++
+    ) {
+      const unit = units.get(segments[i]!.segment_id);
+      if (unit && unit.unit_id === segments[i]!.segment_id) found.push(unit);
+    }
+    return found;
+  };
+  let markCounts: ReadonlyMap<number, number> = new Map();
+  /**
+   * Spec 9: in the translation reading a paragraph with marks shows a sign in
+   * the right margin; pressing it switches to 对照 at that paragraph.
+   */
+  const decorateMarks = (el: HTMLElement) => {
+    el.querySelector(":scope > .reading-translation-marks")?.remove();
+    const count =
+      textMode === "translation" && el.dataset.translation === "done"
+        ? (markCounts.get(Number(el.dataset.byteStart)) ?? 0)
+        : 0;
+    if (!count) return;
+    const sign = document.createElement("button");
+    sign.type = "button";
+    sign.className = "reading-translation-marks";
+    sign.dataset.origin = "machine";
+    sign.textContent = labels.marks(count);
+    sign.setAttribute("aria-label", labels.marksAction(count));
+    const start = Number(el.dataset.byteStart);
+    sign.onclick = () => void frame.revealInBilingual?.(start);
+    el.append(sign);
+  };
+  /**
+   * Spec 9: a block's translation below its own text. Which of the two shows
+   * is the article's reading (CSS); a translatable block without its
+   * translation is marked “未译”, what is never translated stays as it is.
+   */
+  const decorateTranslation = (el: HTMLElement) => {
+    for (const old of el.querySelectorAll(
+      ":scope > .reading-translation, :scope > .reading-untranslated",
+    ))
+      old.remove();
+    delete el.dataset.translation;
+    if (textMode !== "original" && units) {
+      const found = unitsOf(el);
+      const done = found.filter((unit) => unit.translation !== null);
+      if (found.length) {
+        el.dataset.translation =
+          done.length === found.length ? "done" : "missing";
+        if (done.length) {
+          const box = document.createElement("div");
+          box.className = "reading-translation";
+          box.dataset.origin = "machine";
+          if (language) box.lang = language;
+          const heading = el.querySelector(
+            ":scope > :is(h1, h2, h3, h4, h5, h6)",
+          );
+          for (const unit of done) {
+            if (heading) {
+              // A heading's translation is a heading of its own, not an h* tag:
+              // links, the outline and the sections find the author's only.
+              const level = heading.tagName.slice(1);
+              const title = document.createElement("p");
+              title.className = "reading-translation-heading";
+              title.dataset.level = level;
+              title.setAttribute("role", "heading");
+              title.setAttribute("aria-level", level);
+              title.innerHTML = plainMarkdown.parseInline(unit.translation!, {
+                async: false,
+              }) as string;
+              box.append(title);
+            } else
+              box.insertAdjacentHTML(
+                "beforeend",
+                plainMarkdown.parse(unit.translation!, {
+                  async: false,
+                }) as string,
+              );
+          }
+          el.append(box);
+        }
+        if (el.dataset.translation === "missing") {
+          const label = document.createElement("span");
+          label.className = "reading-untranslated";
+          label.dataset.origin = "machine";
+          label.textContent = labels.untranslated;
+          el.prepend(label);
+        }
+      }
+    }
+    decorateMarks(el);
+  };
   /** Index of the first rendered block for which `after` holds; blocks are in document order. */
   const search = (after: (block: HTMLElement) => boolean) => {
     let low = 0,
@@ -535,7 +691,7 @@ export async function renderDocument(
       label: at >= 0 ? `¶${at + 1}` : "",
       page: el?.dataset.page ? Number(el.dataset.page) : null,
       region: regionOf(el),
-      text: el?.textContent?.slice(0, 240) ?? "",
+      text: el ? blockSourceText(el, false).slice(0, 240) : "",
       pdf:
         at >= 0
           ? textToPdf(
@@ -558,6 +714,39 @@ export async function renderDocument(
     const box = el.getBoundingClientRect(),
       area = frame.body.getBoundingClientRect();
     return box.bottom > area.top && box.top < area.bottom;
+  };
+  /** Spec 9 and 4.2: another reading of the same text, the anchor block where it was. */
+  let modeAsked = 0;
+  frame.setTextMode = async (mode) => {
+    const asked = ++modeAsked;
+    if (mode !== "original" && !(await ensureUnits())) return false;
+    if (asked !== modeAsked || ctx.signal.aborted || mode === textMode)
+      return false;
+    capture();
+    textMode = mode;
+    article.dataset.textMode = mode;
+    for (const block of blocks()) decorateTranslation(block);
+    keep();
+    // Marks find their places again, and their notes are measured anew.
+    frame.onDocumentPaint?.();
+    return true;
+  };
+  frame.revealInBilingual = async (start) => {
+    frame.beforeJump?.();
+    await frame.setTextMode!("bilingual");
+    frame.onTextMode?.("bilingual");
+    place(start, 0, true);
+  };
+  frame.translationOf = async (block) => {
+    if (!(await ensureUnits())) return null;
+    const found = unitsOf(block).flatMap((unit) =>
+      unit.translation === null ? [] : [unit.translation],
+    );
+    return found.length ? found.join("\n\n") : null;
+  };
+  frame.markBlocks = (counts) => {
+    markCounts = counts;
+    for (const block of blocks()) decorateMarks(block);
   };
   const onScroll = () => {
     if (hidden) return;
@@ -802,6 +991,7 @@ export async function renderDocument(
         table.before(wrap);
         wrap.append(table);
       }
+      decorateTranslation(el);
       if (previous) {
         changed = Math.min(changed, Number(previous.element.dataset.byteStart));
         for (const resource of previous.element.querySelectorAll(
@@ -1049,6 +1239,12 @@ export async function renderDocument(
     source?.kind === "document" ? source.end_utf8 : target + 1,
   );
   const initialRevision = jumpRevision;
+  // The translation is read before the first text shows in it, so the page
+  // does not open in the original and change under the reader.
+  if (textMode !== "original" && !(await ensureUnits())) {
+    textMode = "original";
+    article.dataset.textMode = textMode;
+  }
   await load();
   do {
     const page: DocumentReadResultMap["outline"] = await readDocument(
@@ -1142,20 +1338,31 @@ export async function renderDocument(
    */
   const findRegistry =
     typeof CSS !== "undefined" && "highlights" in CSS ? CSS.highlights : null;
-  frame.onFind = (query) => {
+  frame.onFind = (query, stay = false) => {
     frame.onFindNext?.(null);
     const needle = query.toLocaleLowerCase();
     const hits: { block: HTMLElement; range: Range }[] = [];
     if (needle)
       for (const block of blocks()) {
         // The block's text, with where each text node starts in it.
+        // Spec 9: the text the current reading shows; 对照 looks in both.
+        const translated = block.dataset.translation === "done";
         const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT, {
-          acceptNode: (node) =>
-            node.parentElement?.closest(
-              ".reading-block-source, .reading-doubt, .katex-mathml, .reading-margin-note",
+          acceptNode: (node) => {
+            const parent = node.parentElement;
+            if (
+              parent?.closest(
+                ".reading-block-source, .reading-doubt, .katex-mathml, .reading-margin-note, .reading-untranslated, .reading-translation-marks",
+              )
             )
+              return NodeFilter.FILTER_REJECT;
+            // In 译文 a translated block shows only its translation, any
+            // other block only its own text.
+            const inTranslation = !!parent?.closest(".reading-translation");
+            return textMode === "translation" && translated !== inTranslation
               ? NodeFilter.FILTER_REJECT
-              : NodeFilter.FILTER_ACCEPT,
+              : NodeFilter.FILTER_ACCEPT;
+          },
         });
         const nodes: { node: Text; at: number }[] = [];
         let content = "";
@@ -1191,9 +1398,11 @@ export async function renderDocument(
     let index = -1;
     const status = () => {
       frame.findStatus.textContent = `${finished ? "全文" : "已加载范围"}：${
-        hits.length
-          ? `第 ${index + 1} / ${hits.length} 处 · ${blocksHit.length} 段`
-          : "没有匹配"
+        !hits.length
+          ? "没有匹配"
+          : index < 0
+            ? `共 ${hits.length} 处 · ${blocksHit.length} 段`
+            : `第 ${index + 1} / ${hits.length} 处 · ${blocksHit.length} 段`
       }${finished ? "" : "；可继续加载后查找"}`;
     };
     status();
@@ -1206,7 +1415,8 @@ export async function renderDocument(
       go(Number(hit.block.dataset.byteStart), 0, true);
     };
     if (hits.length) {
-      jump();
+      // Found again in another reading (spec 9): the place stays.
+      if (!stay) jump();
       if (frame.onFindNext) frame.onFindNext(jump);
       else frame.findStatus.append(button("下一处命中", () => jump()));
     }

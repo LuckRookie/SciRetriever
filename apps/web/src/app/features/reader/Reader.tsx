@@ -1,6 +1,10 @@
 import { PaperResults } from "./PaperResults.js";
 import { markdown } from "../../../reading/markdown.js";
-import type { DocumentReadResultMap } from "@sciretriever/contracts";
+import {
+  parseDocumentReadResult,
+  type DocumentReadResultMap,
+  type DocumentSliceText,
+} from "@sciretriever/contracts";
 import {
   keepPreviousData,
   useQuery,
@@ -18,6 +22,7 @@ import {
 import { createPortal, flushSync } from "react-dom";
 import type {
   DocumentLinkPreview,
+  DocumentTextMode,
   PdfControls,
   ReaderFrame,
   ReaderOutlineEntry,
@@ -69,7 +74,11 @@ import {
 } from "../../data/url.js";
 import { AnimatedPanel, useMotionPreference } from "../../motion/index.js";
 import { READER_PAINTED, useShell } from "../../shell/context.js";
-import { errorMessage } from "../../strings.js";
+import {
+  errorMessage,
+  fullTextStrings,
+  translationUnavailable,
+} from "../../strings.js";
 import { ProofreadEditor } from "./ProofreadEditor.js";
 import { StructurePanel } from "../archive/StructurePanel.js";
 import { useReaderMarks } from "./marks/ReaderMarks.js";
@@ -83,6 +92,12 @@ import { TranslationPanel } from "./translation/TranslationViews.js";
 import { useReaderTranslation } from "./translation/use-translation.js";
 import { type FullTextLayer } from "./translation/fulltext-layer.js";
 import { FullTextControls } from "./translation/FullTextControls.js";
+import { TextModeControl } from "./translation/TextModeControl.js";
+import {
+  hasTranslation,
+  shownTextMode,
+  textMode as textModeChoice,
+} from "./input/text-mode.js";
 import { ReaderOutline } from "./ReaderOutline.js";
 import { ReaderBibliography } from "./ReaderBibliography.js";
 import { ReaderTypePanel, type TypeScale } from "./ReaderTypePanel.js";
@@ -300,6 +315,55 @@ export default function Reader() {
         wantsPdf.current,
       ),
   });
+  // Reading-experience 9: whether this full text has a translation to read,
+  // asked anew on opening (a version's translation is published after it).
+  const documentRef = sources.data?.document ?? null;
+  const translationQuery = useQuery({
+    queryKey: [
+      "document",
+      "translation-summary",
+      documentRef?.document_version_id ?? null,
+    ],
+    enabled: !!documentRef,
+    retry: false,
+    queryFn: async ({ signal }) => {
+      const request = { document_version_id: documentRef!.document_version_id };
+      const reply = await api.query("document-describe", request, signal);
+      const described = parseDocumentReadResult(
+        "describe",
+        reply.result,
+        request,
+      );
+      return {
+        translation: described.translation ?? null,
+        level: described.text_level ?? ("proofread" as const),
+      };
+    },
+  });
+  const translationSummary = translationQuery.data?.translation ?? null;
+  const translationKnown =
+    !documentRef || translationQuery.isSuccess || translationQuery.isError;
+  // Why there is nothing to read in translation: by the state, and for none
+  // by the text — a proofread text was parsed before translating was a step.
+  const translationReason = translationKnown
+    ? translationUnavailable(
+        translationSummary?.state ?? null,
+        translationSummary?.target_language ?? "zh-Hans",
+        translationQuery.data?.level ?? null,
+      )
+    : null;
+  // The 翻译 tab and “翻译本段”: a translation service, or the library's translation.
+  const storedTranslation = hasTranslation(translationSummary);
+  // One choice in this browser; a paper without a translation reads its original.
+  const chosenText = useSyncExternalStore(
+    textModeChoice.subscribe,
+    textModeChoice.get,
+    textModeChoice.get,
+  );
+  const shownText: DocumentTextMode = shownTextMode(
+    chosenText,
+    translationSummary,
+  );
   const catalog = api.workspace.catalog;
   /**
    * Spec 6.4 (first and third rules): the view this browser remembers for the
@@ -404,8 +468,16 @@ export default function Reader() {
     notify,
     translation,
     onTranslate: () => setSideTab("translation"),
+    // Hidden by the translation reading: 对照 shows the block, then the mark.
+    onHiddenMark: async (_markId, block) => {
+      await frame.current?.revealInBilingual?.(Number(block.dataset.byteStart));
+    },
   });
-  const fullText = useFullTextTranslation(id, translation, notify);
+  const fullText = useFullTextTranslation(
+    id,
+    translationSummary?.target_language ?? translation.settings.language,
+    notify,
+  );
   const fullTextLayer = useRef<FullTextLayer | null>(null),
     fullTextMode = useRef(fullText.mode),
     marksOpen = useRef(marks.open);
@@ -509,6 +581,8 @@ export default function Reader() {
       history: setHistoryBack,
       changeView: (kind) => changeModeRef.current(kind),
       fontSize: () => fontSizeRef.current,
+      textMode: () => textModeChoice.get(),
+      textModeChanged: (value) => textModeChoice.set(value),
     }),
   );
   const detailReady = !!detail.data && !detail.isPlaceholderData,
@@ -813,6 +887,29 @@ export default function Reader() {
   // A tab or view switch closes the context menu without acting (spec 1.8.2).
   const closeMenu = input.closeMenu;
   useEffect(() => closeMenu(), [id, mode]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Reading-experience 9: the full text shows the reading chosen (or its
+  // original), keeping its place; a search in the find bar looks again in the
+  // text now shown, without moving.
+  const findAgain = useRef<string | null>(null);
+  findAgain.current = findOpen && search ? search : null;
+  useEffect(() => {
+    if (mode !== "doc" || !translationKnown) return;
+    const current = frame.current;
+    if (!current?.setTextMode) return;
+    void current.setTextMode(shownText).then((changed) => {
+      const query = findAgain.current;
+      if (changed && query && frame.current === current)
+        void Promise.resolve(current.onFind(query, true)).catch(() => {});
+    });
+  }, [mode, shownText, translationKnown, ready, viewToken]);
+  // The translation reading's signs beside paragraphs with marks.
+  const blockCounts = marks.blockCounts;
+  useEffect(() => {
+    if (mode !== "doc") return;
+    frame.current?.markBlocks?.(
+      shownText === "translation" ? blockCounts() : new Map(),
+    );
+  }, [mode, shownText, blockCounts, ready, viewToken]);
   // The side panel tab and the evidence switch are kept per paper (spec 4.5).
   useLayoutEffect(() => {
     const memory = recallReading(catalog, id);
@@ -889,7 +986,7 @@ export default function Reader() {
         { clearSource: false },
       );
   };
-  const downloadMarkdown = async () => {
+  const downloadMarkdown = async (text: DocumentSliceText = "original") => {
     const documentRef = sources.data?.document;
     if (!documentRef) throw new Error("请先打开全文，固定要下载的文档版本。");
     const controller = new AbortController(),
@@ -920,7 +1017,7 @@ export default function Reader() {
     } while (cursor);
     let continuation: string | null = null,
       offset = 0,
-      text = "";
+      markdownText = "";
     if (!end) throw new Error("没有可下载的正文");
     do {
       const part: DocumentReadResultMap["slice"] = await readDocument(
@@ -931,6 +1028,8 @@ export default function Reader() {
           selector: { kind: "range", start_utf8: 0, end_utf8: end },
           max_bytes: 65536,
           continuation,
+          // Spec 9: the stored translation, or both, in the original's range.
+          ...(text === "original" ? {} : { text }),
         },
       );
       if (
@@ -939,13 +1038,18 @@ export default function Reader() {
       )
         throw new Error("全文续读无法核验");
       offset = part.actual_range.end_utf8;
-      text += part.text;
+      markdownText += part.text;
       continuation = part.continuation;
     } while (continuation);
     if (offset !== end) throw new Error("正文尚未完整");
+    const language = translationSummary?.target_language ?? "translation";
     download(
-      new Blob([text], { type: "text/markdown;charset=utf-8" }),
-      `${id}.md`,
+      new Blob([markdownText], { type: "text/markdown;charset=utf-8" }),
+      text === "original"
+        ? `${id}.md`
+        : text === "translation"
+          ? `${id}.${language}.md`
+          : `${id}.${language}.bilingual.md`,
     );
   };
   // Spec 3.9: what the paper lacks, said on the page where its text would be.
@@ -1080,7 +1184,7 @@ export default function Reader() {
   const hasPdf = !!detail.data.primary_pdf || !!sources.data?.material;
   // The summary and the results are a cell of the views while open (block 30).
   const views = [
-    { id: "doc", label: "原文" },
+    { id: "doc", label: fullTextStrings.view },
     ...(hasPdf ? [{ id: "pdf", label: "PDF" }] : []),
     ...(mode === "know" ? [{ id: "know", label: "总结" }] : []),
     ...(mode === "results" ? [{ id: "results", label: "结果" }] : []),
@@ -1121,6 +1225,9 @@ export default function Reader() {
   const scrollable = mode === "doc" || pdfZoom;
   // A fixed source is read, never marked (spec 1.8.2 “资料可以批注时”).
   const canMark = marks.active && !fromSummary && !route.parameters.has("from");
+  // Reading-experience 9: the translation reading takes no marks; the
+  // marking tools stay where they are, disabled (spec 1.8).
+  const translationReading = mode === "doc" && shownText === "translation";
   /** Opens the find bar, with a short selection in one block as the term (spec 1.8.5). */
   const openFind = () => {
     if (findDisabled) return;
@@ -1246,11 +1353,20 @@ export default function Reader() {
     findOpen &&
       !!search &&
       !!nextMatch && { id: "find-previous", run: () => nextMatch(-1) },
-    ...marks.commands.filter(
-      (command) =>
-        canMark ||
-        !["tool-pen", "tool-region", "mark-color", "note"].includes(command.id),
-    ),
+    ...marks.commands
+      .filter(
+        (command) =>
+          canMark ||
+          !["tool-pen", "tool-region", "mark-color", "note"].includes(
+            command.id,
+          ),
+      )
+      .map((command) =>
+        translationReading &&
+        ["tool-pen", "tool-region", "mark-color", "note"].includes(command.id)
+          ? { ...command, enabled: false }
+          : command,
+      ),
     tabs.list.length > 0 && { id: "tab-close", run: () => tabs.close("one") },
     {
       id: "tab-reopen",
@@ -1530,17 +1646,35 @@ export default function Reader() {
             },
           ]
         : []),
+      // Spec 9: the original, its translation and both, once there is one.
       ...(sources.data?.document
         ? [
-            {
-              id: "markdown",
-              label: "下载全文",
-              onAction: () => {
-                void downloadMarkdown().catch((error) =>
-                  shell.notify(errorMessage(error)),
-                );
-              },
-            },
+            hasTranslation(translationSummary)
+              ? {
+                  id: "markdown",
+                  label: fullTextStrings.download,
+                  onAction: () => {},
+                  submenu: (
+                    ["original", "translation", "bilingual"] as const
+                  ).map((text) => ({
+                    id: `markdown-${text}`,
+                    label: fullTextStrings.downloadAs[text],
+                    onAction: () => {
+                      void downloadMarkdown(text).catch((error) =>
+                        shell.notify(errorMessage(error)),
+                      );
+                    },
+                  })),
+                }
+              : {
+                  id: "markdown",
+                  label: fullTextStrings.download,
+                  onAction: () => {
+                    void downloadMarkdown().catch((error) =>
+                      shell.notify(errorMessage(error)),
+                    );
+                  },
+                },
           ]
         : []),
     ]),
@@ -1576,6 +1710,9 @@ export default function Reader() {
       canMark,
       // Only where translation is set up (plan 25 block 30).
       canTranslate: api.kind === "workspace" && translation.available === true,
+      canTranslateBlock:
+        api.kind === "workspace" &&
+        (translation.available === true || storedTranslation),
       otherView:
         viewKind === "doc" ? views4 : views3 && !!sources.data?.document,
     },
@@ -1604,6 +1741,26 @@ export default function Reader() {
       void translation.translate(text, page);
       setSideTab("translation");
       if (!informationShown) toggleInformation();
+    },
+    // Spec 9: a paragraph the library translated shows that translation.
+    translateBlock: (text, page, block) => {
+      const show = () => {
+        setSideTab("translation");
+        if (!informationShown) toggleInformation();
+      };
+      const summary = translationSummary;
+      const stored =
+        hasTranslation(summary) && frame.current?.translationOf
+          ? frame.current.translationOf(block)
+          : Promise.resolve(null);
+      void stored.then((value) => {
+        if (value && summary)
+          translation.showStored(text, value, summary.target_language);
+        else if (translation.available === true)
+          void translation.translate(text, page);
+        else return notify(fullTextStrings.noStored);
+        show();
+      });
     },
     find: findText,
     zoomImage: (src, alt) => setZoomImage({ src, alt }),
@@ -1665,6 +1822,16 @@ export default function Reader() {
           items={views}
         />
       )}
+      {/* Reading-experience 9: the full text's three readings, beside the views. */}
+      {mode === "doc" && !bibliographyPage && !lacking && documentRef ? (
+        <TextModeControl
+          value={shownText}
+          reason={translationReason}
+          pending={!translationKnown}
+          narrow={narrowBar}
+          onChange={textModeChoice.set}
+        />
+      ) : null}
       {compactBar ? null : (
         <>
           {bibliographyPage
@@ -1732,42 +1899,15 @@ export default function Reader() {
       ? [{ id: "marks", label: marks.count ? `批注 ${marks.count}` : "批注" }]
       : []),
     { id: "relations", label: "关联" },
-    // Only where translation is set up (plan 25 block 30).
-    ...(marks.active && translation.available === true
+    // Where translation is set up (plan 25 block 30), or the paper has the
+    // library's translation (plan 28 block 08).
+    ...(marks.active && (translation.available === true || storedTranslation)
       ? [{ id: "translation", label: "翻译" }]
       : []),
   ];
   const tabShown = sideTabs.some((tab) => tab.id === sideTab)
     ? sideTab
     : "info";
-  /**
-   * The full text's section at the reading line, for “翻译当前所在的节”
-   * (spec 1.4): its heading's block and the blocks up to the next heading.
-   */
-  const currentSection = () => {
-    const scroller = body.current;
-    if (!scroller) return null;
-    const blocks = [
-      ...scroller.querySelectorAll<HTMLElement>(
-        ".reader-engine:not([hidden]) .reader-view:not([hidden]) article [data-byte-start]",
-      ),
-    ];
-    if (!blocks.length) return null;
-    const line = readingLine(readingArea(scroller, headerHost ?? undefined));
-    const heading = (block: HTMLElement) =>
-      !!block.querySelector(":scope > :is(h1, h2, h3, h4, h5, h6)");
-    let at = blocks.findIndex((b) => b.getBoundingClientRect().bottom > line);
-    if (at < 0) at = blocks.length - 1;
-    let start = at;
-    while (start > 0 && !heading(blocks[start]!)) start--;
-    let end = at + 1;
-    while (end < blocks.length && !heading(blocks[end]!)) end++;
-    return blocks
-      .slice(start, end)
-      .map((b) => (b.innerText || "").trim())
-      .filter(Boolean)
-      .join("\n\n");
-  };
   const sidePanel = (
     <aside
       className={`reader-information${docked ? "" : " reader-information-floating"}`}
@@ -1795,12 +1935,16 @@ export default function Reader() {
         <>
           {/* Spec 1.3: the PDF's side-by-side translation is set here. */}
           {mode === "pdf" && api.kind === "workspace" ? (
-            <FullTextControls fullText={fullText} translation={translation} />
+            <FullTextControls
+              fullText={fullText}
+              summary={translationKnown ? translationSummary : null}
+              reason={translationReason}
+            />
           ) : null}
           <TranslationPanel
             translation={translation}
             notify={notify}
-            {...(mode === "doc" ? { section: currentSection } : {})}
+            service={translation.available === true}
           />
         </>
       ) : (
@@ -2016,6 +2160,7 @@ export default function Reader() {
                     narrow={barWidth > 0 ? narrowBar : narrowTop}
                     pdf={pdf}
                     level={textLevel}
+                    reading={shown.kind === "doc" ? shownText : "original"}
                     back={
                       historyBack
                         ? { label: historyBack.label, go: () => engines.back() }

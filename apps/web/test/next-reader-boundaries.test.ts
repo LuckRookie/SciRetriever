@@ -669,7 +669,7 @@ it.each(["no-preference", "reduce"] as const)(
       await w.page.locator(".reading-article").waitFor();
       expect(
         await w.page
-          .getByRole("tab", { name: "原文", exact: true })
+          .getByRole("tab", { name: "全文", exact: true })
           .getAttribute("aria-selected"),
       ).toBe("true");
       // Below 760 px “排版” is folded into “更多” (spec 1.3), reached by keys.

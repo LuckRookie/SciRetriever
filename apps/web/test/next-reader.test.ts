@@ -87,7 +87,7 @@ it.each(["no-preference", "reduce"] as const)(
           .getByRole("button", { name: "显示信息", exact: true })
           .isVisible(),
       ).toBe(true);
-      await w.page.getByRole("tab", { name: "原文", exact: true }).click();
+      await w.page.getByRole("tab", { name: "全文", exact: true }).click();
       await w.page.locator(".reader-engine-body .reading-article").waitFor();
       await expect
         .poll(() =>
@@ -145,7 +145,7 @@ it("switches between PDF and full text on one engine: one build, one PDF read an
     await w.page.goto(`${w.origin}/?literature=${id}&reader=pdf`);
     await pdf.first().waitFor();
     for (let n = 0; n < 3; n++) {
-      await w.page.getByRole("tab", { name: "原文", exact: true }).click();
+      await w.page.getByRole("tab", { name: "全文", exact: true }).click();
       await text.first().waitFor();
       await w.page.getByRole("tab", { name: "PDF", exact: true }).click();
       await pdf.first().waitFor();
@@ -172,7 +172,7 @@ it("switches between PDF and full text on one engine: one build, one PDF read an
     expect(counts!.workersStarted).toBe(1);
     // The hidden PDF view keeps at most the three canvases it showed (spec 5.3),
     // so coming back draws at once.
-    await w.page.getByRole("tab", { name: "原文", exact: true }).click();
+    await w.page.getByRole("tab", { name: "全文", exact: true }).click();
     await text.first().waitFor();
     const kept = await w.page.locator(".reading-pdf-page canvas").count();
     expect(kept).toBeGreaterThan(0);
@@ -416,7 +416,7 @@ it("shows the loading skeleton with its steps in order past 300 ms, and none whe
       true,
     );
     // Switching between views that are both ready shows no skeleton at all.
-    await w.page.getByRole("tab", { name: "原文", exact: true }).click();
+    await w.page.getByRole("tab", { name: "全文", exact: true }).click();
     await w.page
       .locator(".reader-surface .ui-empty")
       .getByText("这份资料还没有可读的文本。", { exact: true })
@@ -426,7 +426,7 @@ it("shows the loading skeleton with its steps in order past 300 ms, and none whe
         window as unknown as { preparing: { first: number | null } }
       ).preparing.first = null;
     });
-    for (const name of ["PDF", "原文", "PDF"] as const) {
+    for (const name of ["PDF", "全文", "PDF"] as const) {
       await w.page.getByRole("tab", { name, exact: true }).click();
       await w.page.waitForTimeout(400);
     }
@@ -759,7 +759,7 @@ it("does not let a late PDF response overwrite a newer full-text view", async ()
       `${w.origin}/?literature=${w.env.parseRequest.literature_id}&reader=pdf`,
     );
     await expect.poll(() => intercepted, { timeout: 20_000 }).toBe(true);
-    await w.page.getByRole("tab", { name: "原文", exact: true }).click();
+    await w.page.getByRole("tab", { name: "全文", exact: true }).click();
     await w.page.locator(".reading-article").waitFor();
     release!();
     await expect
@@ -815,7 +815,7 @@ it("reads a draft as the default text: its level, its note, no editing, its doub
       .poll(() =>
         w.page.locator(`${shown} .reader-page-header-view`).innerText(),
       )
-      .toBe("原文 · 未校对");
+      .toBe("全文 · 未校对");
     expect(
       await w.page.locator(`${shown} .reading-long-document`).innerText(),
     ).toBe("全文 · 未校对：文字可能含解析错误；以 PDF 为准");
@@ -887,7 +887,7 @@ it("reads a draft as the default text: its level, its note, no editing, its doub
         () => w.page.locator(`${shown} .reader-page-header-view`).innerText(),
         { timeout: 20_000 },
       )
-      .toBe("原文 · 已校对");
+      .toBe("全文 · 已校对");
     expect(
       await w.page.locator(`${shown} .reading-long-document`).count(),
     ).toBe(0);

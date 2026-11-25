@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FullTextPage, FullTextSummary } from "@sciretriever/contracts";
+import type {
+  FullTextPage,
+  FullTextSummary,
+  TranslationLanguage,
+} from "@sciretriever/contracts";
 import { ApiError } from "../../../data/api.js";
 import { useApi } from "../../../data/query.js";
 import { record } from "../../../data/wire.js";
+import { translationUnavailable } from "../../../strings.js";
 import type { FullTextMode } from "./fulltext-layer.js";
-import {
-  translationFailure,
-  type ReaderTranslation,
-} from "./use-translation.js";
 
 /** Pages asked for at the same time (ADR 0051 §4). */
 const PARALLEL = 3;
@@ -17,29 +18,27 @@ export interface FullTextProgress {
   readonly failed: readonly number[];
   readonly running: boolean;
 }
-function message(error: unknown): string {
-  const failure = translationFailure(error);
-  if (failure) return failure;
+function message(error: unknown, language: string): string {
   if (error instanceof ApiError) {
     if (error.code === "translation-not-archived")
-      // Technical 04 §8.10: a draft is translated too; this means no default text.
-      return "这份资料还没有可读的文本，无法翻译全文。";
-    if (error.code === "translation-model-unavailable")
-      return "所选模型不可用：在翻译页换一个模型，或登记模型后重启服务。";
+      return translationUnavailable("none", language)!;
     if (error.code === "translation-unavailable")
       return "当前服务没有开启翻译。";
   }
-  return "全文翻译没有完成，可以重试。";
+  return "译文没有读完，可以重试。";
 }
 
 /**
- * Full-text translation in the PDF view (ADR 0051): the view mode, the
- * translated pages by index, and a run that asks page by page, at most three
- * at once, showing each page as it comes back.
+ * The PDF view's side-by-side translation (ADR 0051, 0068): the view mode,
+ * the translated pages by index, and a read that asks page by page, at most
+ * three at once, showing each page as it comes back. The pages carry the
+ * library's stored translation; no model is asked, so nothing is confirmed
+ * first and nothing is translated again.
  */
 export function useFullTextTranslation(
   literatureId: string,
-  translation: ReaderTranslation,
+  /** The stored translation's language (the deployment's), as describe gave it. */
+  language: TranslationLanguage,
   notify: (message: string) => void,
 ) {
   const api = useApi();
@@ -48,29 +47,27 @@ export function useFullTextTranslation(
     () => new Map(),
   );
   const [progress, setProgress] = useState<FullTextProgress | null>(null);
-  const [confirm, setConfirm] = useState<FullTextSummary | null>(null);
   const abort = useRef<AbortController | null>(null);
-  const latest = useRef(translation);
-  latest.current = translation;
+  const latest = useRef(language);
+  latest.current = language;
   useEffect(() => {
     abort.current?.abort();
     setMode("off");
     setPages(new Map());
     setProgress(null);
-    setConfirm(null);
   }, [literatureId]);
   useEffect(() => () => abort.current?.abort(), []);
 
   const request = useCallback(
-    async (page: number, force: boolean, signal: AbortSignal) => {
+    async (page: number, signal: AbortSignal) => {
       const value = await api.request(
         "/api/translation/fulltext/page",
         {
           literature_id: literatureId,
           page_index: page,
-          target_language: latest.current.settings.language,
-          model: latest.current.model,
-          force,
+          target_language: latest.current,
+          model: null,
+          force: false,
         },
         signal,
       );
@@ -81,7 +78,7 @@ export function useFullTextTranslation(
     [api, literatureId],
   );
   const run = useCallback(
-    async (indexes: readonly number[], force = false) => {
+    async (indexes: readonly number[]) => {
       abort.current?.abort();
       const controller = new AbortController();
       abort.current = controller;
@@ -94,11 +91,12 @@ export function useFullTextTranslation(
           while (queue.length && !controller.signal.aborted) {
             const page = queue.shift()!;
             try {
-              await request(page, force, controller.signal);
+              await request(page, controller.signal);
             } catch (error) {
               if (controller.signal.aborted) return;
               failed.push(page);
-              if (!failed.slice(0, -1).length) notify(message(error));
+              if (!failed.slice(0, -1).length)
+                notify(message(error, latest.current));
             }
             done++;
             setProgress({
@@ -115,35 +113,32 @@ export function useFullTextTranslation(
     },
     [notify, request],
   );
-  /** Turn the view on; ask first when pages still need the model. */
+  /** Turns the view on and reads the pages that have text to translate. */
   const open = useCallback(async () => {
-    latest.current.load();
     setMode((m) => (m === "off" ? "pair" : m));
     try {
       const value = await api.read(
-        `/api/translation/fulltext?literature_id=${encodeURIComponent(literatureId)}&target_language=${encodeURIComponent(latest.current.settings.language)}`,
+        `/api/translation/fulltext?literature_id=${encodeURIComponent(literatureId)}&target_language=${encodeURIComponent(latest.current)}`,
       );
       const summary = record(
         value.summary,
         "summary",
       ) as unknown as FullTextSummary;
-      const pending = summary.pages.filter((p) => !p.saved).length;
-      if (pending) setConfirm(summary);
-      else
-        void run(
-          summary.pages.filter((p) => p.blocks).map((p) => p.page_index),
-        );
+      const missing =
+        summary.state === undefined
+          ? null
+          : translationUnavailable(summary.state, latest.current);
+      if (missing) {
+        notify(missing);
+        setMode("off");
+        return;
+      }
+      void run(summary.pages.filter((p) => p.blocks).map((p) => p.page_index));
     } catch (error) {
-      notify(message(error));
+      notify(message(error, latest.current));
       setMode("off");
     }
   }, [api, literatureId, notify, run]);
-  const start = useCallback(() => {
-    const summary = confirm;
-    setConfirm(null);
-    if (summary)
-      void run(summary.pages.filter((p) => p.blocks).map((p) => p.page_index));
-  }, [confirm, run]);
   const close = useCallback(() => {
     abort.current?.abort();
     setProgress((p) => (p ? { ...p, running: false } : p));
@@ -158,13 +153,7 @@ export function useFullTextTranslation(
     setMode,
     pages,
     progress,
-    confirm,
     open,
-    start,
-    dismissConfirm: () => {
-      setConfirm(null);
-      setMode("off");
-    },
     close,
     cancel,
     retry: (indexes: readonly number[]) => void run(indexes),

@@ -632,12 +632,12 @@ async function anchorMove(page: Page, change: () => Promise<void>) {
 const within = (move: number | null, limit: number) =>
   move !== null && move <= limit;
 /** A choice in one of the top bar's menus (reading-experience 1.3), e.g. “排版” → “24 px”. */
-const viewTab = (page: Page, name: "PDF" | "原文") =>
+const viewTab = (page: Page, name: "PDF" | "全文") =>
   page.getByRole("tab", { name, exact: true });
 /** Switch the view with per-frame sampling: blank frames and input-to-paint time. */
 async function sampledSwitch(page: Page, id: string, to: "pdf" | "doc") {
   await page.evaluate((mode) => rs().sample(mode), to);
-  await viewTab(page, to === "pdf" ? "PDF" : "原文").click();
+  await viewTab(page, to === "pdf" ? "PDF" : "全文").click();
   await ready(page, id, to);
   await still(page);
   const [frames, input] = await page.evaluate(
@@ -1248,7 +1248,7 @@ it("no repeated downloads (5.1)", async () => {
     // The tab loop ends on the long document; switch its views ten times.
     for (let n = 0; n < 10; n++) {
       const to = n % 2 ? "pdf" : "doc";
-      await viewTab(r.page, to === "pdf" ? "PDF" : "原文").click();
+      await viewTab(r.page, to === "pdf" ? "PDF" : "全文").click();
       await ready(r.page, papers[1]!, to);
       peakCanvases = Math.max(
         peakCanvases,
@@ -1509,7 +1509,7 @@ it("transitions (6.1)", async () => {
       await r.page.evaluate(() => rs().sample());
       await viewTab(r.page, "PDF").click();
       await ready(r.page, id, "pdf");
-      await viewTab(r.page, "原文").click();
+      await viewTab(r.page, "全文").click();
       await ready(r.page, id, "doc");
       for (const f of await r.page.evaluate(() => rs().stop()))
         for (const a of f.animations) animations.add(a);

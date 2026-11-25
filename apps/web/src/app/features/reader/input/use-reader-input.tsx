@@ -10,6 +10,7 @@ import { copyText } from "../../../../browser-platform.js";
 import type { MenuOption } from "../../../components/index.js";
 import type { ReaderFrame, PdfControls } from "../../../../reading/contract.js";
 import { readingArea, readingLine } from "../../../../reading/anchor.js";
+import { blockSourceText } from "../../../../reading/block-text.js";
 import {
   MARK_COLORS,
   MARK_COLOR_LABELS,
@@ -79,6 +80,8 @@ export interface ReaderInputBindings {
   notify(message: string): void;
   cite(quote: string, page: number | null): void;
   translate(text: string, page: number | null): void;
+  /** “翻译本段”: the block's own text, and the block for its stored translation. */
+  translateBlock(text: string, page: number | null, block: HTMLElement): void;
   find(text: string): void;
   zoomImage(src: string, alt: string): void;
   /** Shows the other view at this point (spec 4.3), not a jump. */
@@ -331,12 +334,21 @@ export function useReaderInput() {
         case "cite-block":
         case "translate-block": {
           if (target.kind !== "block") return;
-          const text = (target.element.innerText || "").trim();
           const page = Number(target.element.dataset.page) || null;
+          // What shows is copied; a quotation and a translation always start
+          // from the author's own text (reading-experience 9).
           if (action === "copy-block")
-            void copyText(text).then(done("已复制本段")).catch(failed);
-          else if (action === "cite-block") t.cite(text, page);
-          else t.translate(text, page);
+            void copyText((target.element.innerText || "").trim())
+              .then(done("已复制本段"))
+              .catch(failed);
+          else if (action === "cite-block")
+            t.cite(blockSourceText(target.element), page);
+          else
+            t.translateBlock(
+              blockSourceText(target.element),
+              page,
+              target.element,
+            );
           return;
         }
         case "zoom-image":
@@ -389,7 +401,7 @@ export function useReaderInput() {
     const label =
       action === "other-view"
         ? t.view === "pdf"
-          ? "在原文中查看此处"
+          ? "在全文中查看此处"
           : "在 PDF 中查看此处"
         : OBJECT_LABELS[action];
     // The browser's own copy key, as this system writes it.

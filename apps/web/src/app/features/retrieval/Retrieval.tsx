@@ -786,7 +786,7 @@ function Result({
           ) : null}
         </span>
         <Button variant="text" data-testid="retrieval-source" onPress={onOpen}>
-          {item.kind === "generated-result" ? "打开结果" : "在原文中查看"}
+          {item.kind === "generated-result" ? "打开结果" : "在全文中查看"}
         </Button>
         <Button
           variant="text"

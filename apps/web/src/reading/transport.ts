@@ -2,6 +2,8 @@ import {
   parseDocumentDraftDifferencesRequest,
   parseDocumentDraftDifferencesResult,
   parseDocumentReadResult,
+  parseDocumentTranslationRequest,
+  parseDocumentTranslationResult,
   parseDraftDifference,
   sha256,
   type DraftDifference,
@@ -11,6 +13,7 @@ import {
   type DocumentReadOperation,
   type DocumentReadRequestMap,
   type DocumentReadResultMap,
+  type DocumentTranslationResult,
   type EvidenceRef,
   type LiteratureDetail,
 } from "@sciretriever/contracts";
@@ -50,8 +53,15 @@ export async function readDocument<K extends DocumentReadOperation>(
   kind: K,
   request: DocumentReadRequestMap[K],
 ): Promise<DocumentReadResultMap[K]> {
+  // A stored translation is published after its version (ADR 0068): text read
+  // from it is never kept, so a later read sees the translation as it is now.
+  const translated =
+    kind === "slice" &&
+    ((request as DocumentReadRequestMap["slice"]).text ?? "original") !==
+      "original";
   const key =
     versionBound.has(kind) &&
+    !translated &&
     typeof (request as { document_version_id?: unknown })
       .document_version_id === "string"
       ? JSON.stringify([kind, request])
@@ -301,4 +311,37 @@ export async function readDraftDifferences(
   const list: unknown = JSON.parse(new TextDecoder().decode(all));
   if (!Array.isArray(list)) throw new Error("未校对全文的差异回执无效");
   return list.map((item) => parseDraftDifference(item));
+}
+/**
+ * Reading-experience 9: the stored translation of a fixed version, unit by
+ * unit (`document-translation`, technical 04 §9.6), every page of it. Not kept
+ * in the session memory: a version's translation is published after it.
+ */
+export async function readDocumentTranslation(
+  ctx: ReadingContext,
+  documentVersionId: string,
+  onPage?: (page: DocumentTranslationResult) => void,
+): Promise<DocumentTranslationResult["units"]> {
+  const units: DocumentTranslationResult["units"][number][] = [];
+  let cursor: string | null = null;
+  do {
+    const request = parseDocumentTranslationRequest({
+      document_version_id: documentVersionId,
+      section_id: null,
+      limit: 200,
+      cursor,
+    });
+    const reply = await ctx.api.query(
+      "document-translation",
+      request,
+      ctx.signal,
+    );
+    const page = parseDocumentTranslationResult(reply.result, request);
+    if (page.document.document_version_id !== documentVersionId)
+      throw new Error("译文与固定文档版本不一致");
+    units.push(...page.units);
+    onPage?.(page);
+    cursor = page.next_cursor;
+  } while (cursor);
+  return units;
 }

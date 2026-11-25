@@ -239,7 +239,7 @@ it("opens the reader's context menus, leaves the browser's where it belongs, and
       Math.abs((await body.evaluate((el) => el.scrollTop)) - top0),
     ).toBeLessThanOrEqual(2);
     // Focus on the views' segmented control: space is the control's.
-    await w.page.getByRole("tab", { name: "原文", exact: true }).focus();
+    await w.page.getByRole("tab", { name: "全文", exact: true }).focus();
     const still = await body.evaluate((el) => el.scrollTop);
     await w.page.keyboard.press("Space");
     await w.page.waitForTimeout(300);

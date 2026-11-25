@@ -5,10 +5,15 @@ import { expect, it } from "vitest";
 import { readerErrorMessage } from "../src/reading/dom.js";
 import {
   archiveReason,
+  archiveStrings,
   errorMessage,
+  estimateStageName,
+  fullTextStrings,
   issueTitle,
   serviceMessage,
   statusLabels,
+  translationIssueHint,
+  translationUnavailable,
   valueCheckReason,
 } from "../src/app/strings.js";
 import { MATERIAL_STATES } from "../src/app/data/material-states.js";
@@ -164,4 +169,47 @@ it("names each 需处理 group by the problem, as a short phrase, never the code
     expect(title).not.toContain(code);
     expect(title.length).toBeLessThanOrEqual(12);
   }
+});
+
+it("names the full text's readings and the translation step, and says why a paper has no translation (reading-experience 9, plan 28 block 08)", () => {
+  expect(fullTextStrings.view).toBe("全文");
+  expect(Object.values(fullTextStrings.reading)).toEqual([
+    "原文",
+    "译文",
+    "对照",
+  ]);
+  for (const state of ["complete", "partial"] as const)
+    expect(translationUnavailable(state, "zh-Hans")).toBeNull();
+  expect(translationUnavailable("none", "zh-Hans")).toBe(
+    "译文在解析全文时产生",
+  );
+  expect(translationUnavailable(null, "zh-Hans")).toBe("译文在解析全文时产生");
+  expect(translationUnavailable("none", "zh-Hans", "draft")).toBe(
+    "译文在解析全文时产生",
+  );
+  // A proofread text parsed before translating was a step.
+  expect(translationUnavailable("none", "zh-Hans", "proofread")).toBe(
+    "这篇解析全文时还没有翻译；再解析一次全文即可补上译文",
+  );
+  expect(translationUnavailable("stale", "zh-Hans", "proofread")).toBe(
+    "全文改过，译文还没有更新；再解析一次全文即可补上",
+  );
+  expect(translationUnavailable("same-language", "zh-Hans")).toBe(
+    "这篇已经是简体中文",
+  );
+  expect(translationUnavailable("stale", "zh-Hans")).toBe(
+    "全文改过，译文还没有更新；再解析一次全文即可补上",
+  );
+  // The step in progress, 需处理 and the usage estimate.
+  expect(archiveStrings.steps.translate).toBe("翻译");
+  expect(estimateStageName("translate")).toBe("翻译");
+  expect(archiveReason("translation-incomplete")).toBe("有段落没有译文");
+  expect(archiveReason("translation-unavailable")).toBe("翻译时模型不可用");
+  expect(translationIssueHint("translation-incomplete")).toContain(
+    "只补这些段落",
+  );
+  expect(translationIssueHint("translation-unavailable")).toContain(
+    "全文照常可读",
+  );
+  expect(translationIssueHint("parse-failed")).toBeNull();
 });

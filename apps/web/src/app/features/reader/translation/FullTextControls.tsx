@@ -1,53 +1,69 @@
-import { TRANSLATION_LANGUAGES } from "@sciretriever/contracts";
+import type { DocumentTranslationSummary } from "@sciretriever/contracts";
+import { Button, Icon, SegmentedControl } from "../../../components/index.js";
 import {
-  Button,
-  Dialog,
-  Icon,
-  SegmentedControl,
-} from "../../../components/index.js";
+  fullTextStrings as t,
+  translationUnavailable,
+} from "../../../strings.js";
 import type { ReaderFullText } from "./use-fulltext.js";
-import type { ReaderTranslation } from "./use-translation.js";
 import "./translation.css";
 
-/** The PDF toolbar's 对照翻译 switch, its view choice and progress (ADR 0051). */
+/**
+ * The PDF view's 对照翻译 (ADR 0051, 0068): it shows the library's stored
+ * translation beside each page. Without one the switch is disabled and says
+ * why, in the words of the full text's readings (reading-experience 9).
+ */
 export function FullTextControls({
   fullText,
-  translation,
+  summary,
+  reason,
 }: {
   fullText: ReaderFullText;
-  translation: ReaderTranslation;
+  /** The stored translation of the paper's full text; null when it has none. */
+  summary: DocumentTranslationSummary | null;
+  /** Why there is none, as the full text's readings say it (`translationUnavailable`). */
+  reason: string | null;
 }) {
-  const { mode, progress, confirm } = fullText;
-  const language =
-    TRANSLATION_LANGUAGES.find((l) => l.code === translation.settings.language)
-      ?.label ?? translation.settings.language;
-  const pending = confirm?.pages.filter((p) => !p.saved).length ?? 0;
+  const { mode, progress } = fullText;
+  const missing =
+    summary?.state === "complete" || summary?.state === "partial"
+      ? null
+      : (reason ?? translationUnavailable(summary?.state ?? null, "zh-Hans"));
   const status = !progress
-    ? null
+    ? summary?.state === "partial" && mode !== "off"
+      ? t.pdfPartial
+      : null
     : progress.running
-      ? `译文 ${progress.done} / ${progress.total} 页`
+      ? t.pdfReading(progress.done, progress.total)
       : progress.failed.length
-        ? `${progress.failed.length} 页未翻译`
-        : `已译 ${progress.total} 页`;
+        ? t.pdfFailed(progress.failed.length)
+        : summary?.state === "partial"
+          ? t.pdfPartial
+          : null;
   return (
-    <div className="ft-controls" role="group" aria-label="全文翻译">
+    <div className="ft-controls" role="group" aria-label={t.pdfOpen}>
       {mode === "off" ? (
-        <Button
-          variant="text"
-          icon={<Icon name="translate" />}
-          onPress={() => void fullText.open()}
-        >
-          对照翻译
-        </Button>
+        <>
+          <Button
+            variant="text"
+            icon={<Icon name="translate" />}
+            isDisabled={!!missing}
+            onPress={() => void fullText.open()}
+          >
+            {t.pdfOpen}
+          </Button>
+          {missing ? (
+            <p className="ui-description ft-missing">{missing}</p>
+          ) : null}
+        </>
       ) : (
         <>
           <SegmentedControl
-            label="译文显示"
+            label={t.pdfMode}
             value={mode}
             onChange={(value) => fullText.setMode(value as "pair" | "only")}
             items={[
-              { id: "pair", label: "对照" },
-              { id: "only", label: "只看译文" },
+              { id: "pair", label: t.pdfPair },
+              { id: "only", label: t.pdfOnly },
             ]}
           />
           {status ? (
@@ -57,14 +73,14 @@ export function FullTextControls({
           ) : null}
           {progress?.running ? (
             <Button variant="text" onPress={fullText.cancel}>
-              停止
+              {t.pdfStop}
             </Button>
           ) : progress?.failed.length ? (
             <Button
               variant="text"
               onPress={() => fullText.retry(progress.failed)}
             >
-              重试
+              {t.pdfRetry}
             </Button>
           ) : null}
           <Button
@@ -72,36 +88,10 @@ export function FullTextControls({
             icon={<Icon name="close" />}
             onPress={fullText.close}
           >
-            关闭译文
+            {t.pdfClose}
           </Button>
         </>
       )}
-      <Dialog
-        title="翻译全文"
-        isOpen={!!confirm}
-        onOpenChange={(open) => {
-          if (!open) fullText.dismissConfirm();
-        }}
-        footer={
-          <>
-            <Button onPress={fullText.dismissConfirm}>取消</Button>
-            <Button variant="primary" onPress={fullText.start}>
-              开始翻译
-            </Button>
-          </>
-        }
-      >
-        <p>
-          译成{language}：共 {confirm?.page_count ?? 0} 页，其中 {pending}{" "}
-          页需要翻译，每页一次模型请求；
-          {confirm && confirm.page_count - pending
-            ? `另外 ${confirm.page_count - pending} 页已有译文或没有要翻译的文字。`
-            : "目前没有已保存的译文。"}
-        </p>
-        <p className="ui-description">
-          翻好的页会先显示；参考文献、作者、图、表和公式保留原文。译文保存在本机程序目录里，下次打开直接显示。
-        </p>
-      </Dialog>
     </div>
   );
 }

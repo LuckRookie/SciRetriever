@@ -2110,3 +2110,202 @@
     border-top: 1px solid var(--line);
   }
 }
+
+/* Reading-experience 9: the full text read as written (原文), as its stored
+   translation (译文), or both, each paragraph's translation under it (对照).
+   A translation is machine-written: sans-serif, --fg2, unindented, at the
+   left (spec 2.2, 2.4); what is never translated shows once. */
+@layer pages {
+  .react-reader
+    .reading-article[data-text-mode="translation"]
+    section[data-translation="done"]
+    > :not(
+      .reading-translation,
+      .reading-translation-marks,
+      .reading-block-source,
+      .reading-doubt
+    ),
+  .react-reader
+    .reading-article[data-text-mode="translation"]
+    section[data-translation="missing"]
+    > .reading-translation {
+    display: none;
+  }
+  .react-reader .reading-article section[data-translation] {
+    position: relative;
+  }
+  .react-reader .reading-article .reading-translation {
+    color: var(--fg2);
+  }
+  .react-reader .reading-article .reading-translation :is(p, ul, ol) {
+    margin: 0;
+    text-indent: 0;
+    text-align: left;
+  }
+  /* One room between paragraphs in a translated reading, whatever shows —
+     an original, a translation, an untranslated one: each paragraph keeps
+     0.9 em above it and none below, so no two margins add up unevenly. */
+  .react-reader
+    .reading-article:is(
+      [data-text-mode="translation"],
+      [data-text-mode="bilingual"]
+    )
+    section[data-translation]:not(
+      .reading-figure-caption,
+      .reading-footnote,
+      .reading-article-info
+    )
+    > :is(p, ul, ol),
+  .react-reader
+    .reading-article[data-text-mode="translation"]
+    section[data-translation]:not(
+      .reading-figure-caption,
+      .reading-footnote,
+      .reading-article-info
+    )
+    .reading-translation
+    > :is(p, ul, ol) {
+    margin: 0.9em 0 0;
+  }
+  /* 对照: the translation follows its original closer than the next
+     paragraph follows it, with no rule between. */
+  .react-reader
+    .reading-article[data-text-mode="bilingual"]
+    section[data-translation]
+    > :is(h1, h2, h3, h4, h5, h6) {
+    margin-bottom: 0.25em;
+  }
+  .react-reader
+    .reading-article[data-text-mode="bilingual"]
+    .reading-translation {
+    margin-top: 0.25em;
+  }
+  .react-reader
+    .reading-article[data-text-mode="bilingual"]
+    .reading-translation
+    > :is(p, ul, ol)
+    + :is(p, ul, ol) {
+    margin-top: 0.25em;
+  }
+  /* A caption's translation keeps the caption's own room. */
+  .react-reader
+    .reading-article[data-text-mode="translation"]
+    .reading-figure-caption
+    .reading-translation
+    p {
+    margin: 0.4em 0 1.2em;
+  }
+  .react-reader
+    .reading-article[data-text-mode="bilingual"]
+    .reading-figure-caption
+    .reading-translation
+    p {
+    margin: 0 0 1.2em;
+  }
+  .react-reader
+    .reading-article[data-text-mode="bilingual"]
+    .reading-figure-caption[data-translation]
+    > p {
+    margin-bottom: 0;
+  }
+  /* A heading's translation: in 译文 the heading's own size and room; in
+     对照 under it, one size smaller (spec 2.1's next level). */
+  .react-reader .reading-article .reading-translation-heading {
+    font-weight: 600;
+    line-height: 1.4;
+    text-wrap: balance;
+  }
+  .react-reader
+    .reading-article[data-text-mode="translation"]
+    .reading-translation-heading[data-level="1"] {
+    margin: 2.8em 0 0.9em;
+    font-size: 1.5em;
+    line-height: 1.35;
+  }
+  .react-reader
+    .reading-article[data-text-mode="translation"]
+    .reading-translation-heading[data-level="2"] {
+    margin: 1.9em 0 0.7em;
+    font-size: 1.2em;
+  }
+  .react-reader
+    .reading-article[data-text-mode="translation"]
+    .reading-translation-heading:not([data-level="1"], [data-level="2"]) {
+    margin: 1.4em 0 0.5em;
+    font-size: 1.05em;
+  }
+  .react-reader
+    .reading-article[data-text-mode="bilingual"]
+    .reading-translation-heading[data-level="1"] {
+    margin: 0 0 0.9em;
+    font-size: 1.2em;
+  }
+  .react-reader
+    .reading-article[data-text-mode="bilingual"]
+    .reading-translation-heading[data-level="2"] {
+    margin: 0 0 0.7em;
+    font-size: 1.05em;
+  }
+  .react-reader
+    .reading-article[data-text-mode="bilingual"]
+    .reading-translation-heading:not([data-level="1"], [data-level="2"]) {
+    margin: 0 0 0.5em;
+    font-size: 1em;
+  }
+  .react-reader
+    .reading-article
+    section[data-abstract]
+    .reading-translation-heading {
+    margin: 0 0 0.5em;
+    font-size: 1.15em;
+  }
+  .react-reader
+    .reading-article[data-text-mode="bilingual"]
+    section[data-abstract]
+    .reading-translation-heading {
+    font-size: 1em;
+  }
+  /* “未译”: a translatable paragraph without its translation, under its ¶n. */
+  .react-reader .reading-article .reading-untranslated {
+    position: absolute;
+    top: calc(0.45em + 18px);
+    right: calc(100% + 14px);
+    color: var(--fg3);
+    font: 400 12px / 1.45 var(--sans);
+    white-space: nowrap;
+  }
+  /* A paragraph with marks, read in translation: “批注 n” in the right
+     margin with a short stroke of the pen; pressed, 对照 at that paragraph. */
+  .react-reader .reading-article .reading-translation-marks {
+    position: absolute;
+    top: 0.45em;
+    left: calc(100% + 24px);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--blue);
+    font: 500 11.5px / 1.45 var(--sans);
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .react-reader .reading-article .reading-translation-marks::before {
+    content: "";
+    width: 3px;
+    height: 12px;
+    background: currentColor;
+  }
+  .react-reader .reading-article .reading-translation-marks:hover {
+    text-decoration: underline;
+  }
+  .react-reader
+    [data-notes="below"]
+    .reading-article
+    .reading-translation-marks {
+    position: static;
+    display: flex;
+    margin: 0.25em 0 0.5em;
+  }
+}

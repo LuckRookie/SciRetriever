@@ -14,6 +14,8 @@ PDF 按段读取：`pdf-bytes.ts` 为每份固定 PDF（按资产 SHA-256）维�
 
 PDF 页码输入保留尚未提交的编辑值，滚动通知不回写覆盖；确认页码后更新实际位置，切换文献继续按各自固定材料恢复。
 
+全文的三种读法（ADR 0068）：`document.ts` 在原文的块上挂库里的译文，`setTextMode` 切换读法并在同一帧保持锚点；`transport.ts` 的 `readDocumentTranslation` 逐页读 `document-translation`，不进会话缓存（译文在版本之后发布），带 `text` 的 `slice` 同样不缓存。`block-text.ts` 取块里作者写的文字，引用、翻译本段与位置核对都用它。
+
 [上级源码目录](../README.md)
 
 React 阅读入口通过 `contract.ts` 的 `ReadingContext` / `ReaderFrame` 接入；`source.ts` 是固定来源 URL 与身份解析。`dom.ts` 提供引擎内部的安全 DOM 控件。旧 DOM 入口 `entry.ts` / `frame.ts` 已删除，正式阅读引擎由 Vite 按需 chunk 装载。框架卸载后不再读取已脱离布局的滚动几何，避免把有效页码覆盖成末页。

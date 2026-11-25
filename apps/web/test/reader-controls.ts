@@ -134,7 +134,7 @@ export async function readerPageNumber(page: Page) {
   return Number(/第\s*(\d+)/u.exec(text)?.[1] ?? Number.NaN);
 }
 /** Chooses a view: its tab, or below 640 px the views button's menu (spec 1.3). */
-export async function readerView(page: Page, name: "原文" | "PDF") {
+export async function readerView(page: Page, name: "全文" | "PDF") {
   const tab = page.getByRole("tab", { name, exact: true });
   await page.getByRole("button", { name: "更多", exact: true }).waitFor();
   if (await tab.isVisible()) return tab.click();

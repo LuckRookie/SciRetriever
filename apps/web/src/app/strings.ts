@@ -1,6 +1,9 @@
-import type {
-  ProcessorCheckStatus,
-  ProofreadBasis,
+import {
+  TRANSLATION_LANGUAGES,
+  type DocumentTranslationState,
+  type TextLevel,
+  type ProcessorCheckStatus,
+  type ProofreadBasis,
 } from "@sciretriever/contracts";
 
 export const sectionLabels = {
@@ -94,6 +97,7 @@ export const archiveStrings = {
     arrange: "整理",
     proofread: "校订",
     render: "全文发布",
+    translate: "翻译",
     document: "全文发布（旧流程）",
     structure: "章节结构（旧流程）",
     metadata: "元数据",
@@ -159,6 +163,8 @@ export function problemPhrase(code: string): string | null {
         "part-unavailable": "补充材料暂不可用",
         "model-unavailable": "模型不可用",
         "metadata-missing": "书目缺少必填项",
+        "translation-incomplete": "有段落没有译文",
+        "translation-unavailable": "翻译时模型不可用",
       } as Record<string, string>
     )[code] ?? null
   );
@@ -173,6 +179,106 @@ export function archiveReason(code: string): string {
  */
 export function issueTitle(code: string, stepName: string): string {
   return problemPhrase(code) ?? `“${stepName}”没有完成`;
+}
+/**
+ * What a translation problem in 需处理 means for the paper and what to do
+ * (technical 04 §9.3): the full text reads as before; resuming fills in only
+ * the paragraphs still missing. Null for any other problem.
+ */
+export function translationIssueHint(code: string): string | null {
+  return code === "translation-incomplete"
+    ? "全文照常可读，没有译文的段落显示原文。继续解析全文只补这些段落。"
+    : code === "translation-unavailable"
+      ? "全文照常可读，这篇还没有完整的译文。确认模型可用后继续解析全文即可补上。"
+      : null;
+}
+
+/** 找文献 → Zotero, as it stands: the import program, not yet the extension. */
+export const intakeStrings = {
+  zotero:
+    "在装了 Zotero 的电脑上运行 Zotero 导入程序，把一个库或其中几个分类连同标签和 PDF 导入文献库；可以让 Agent 代为运行，也可以自己运行。扩展里的“从 Zotero 导入”尚未开放。",
+  zoteroGuide:
+    "做法见使用说明《导入文献》的“Zotero”一节（docs/guides/importing.md）。只要书目和 PDF 时，也可以在 Zotero 里导出 BibTeX 或 RIS，再从“文件”导入。",
+} as const;
+/** A translation language by the name it has for its readers (“简体中文”). */
+export function translationLanguageName(code: string): string {
+  return TRANSLATION_LANGUAGES.find((l) => l.code === code)?.label ?? code;
+}
+/**
+ * The full-text view and its three readings (reading-experience 9, ADR
+ * 0068): the view is “全文”; “原文” is only the author's own language.
+ */
+export const fullTextStrings = {
+  view: "全文",
+  readings: "全文读法",
+  reading: {
+    original: "原文",
+    translation: "译文",
+    bilingual: "对照",
+  },
+  /** What the page header adds after the text level. */
+  header: {
+    translation: "译文（机器翻译）",
+    bilingual: "对照",
+  },
+  untranslated: "未译",
+  /** The right-margin sign of a paragraph with marks, in the translation reading. */
+  marks: (count: number) => `批注 ${count}`,
+  marksAction: (count: number) =>
+    `这段有 ${count} 条批注，切到对照并定位到这一段`,
+  loading: "正在读取译文…",
+  loadFailed: "译文没有读到，按原文显示。",
+  download: "下载全文",
+  downloadAs: {
+    original: "原文",
+    translation: "译文",
+    bilingual: "对照",
+  },
+  /** The side panel's translation that came from the library, not from a model. */
+  stored: "库中的译文",
+  /** The 翻译 tab of a deployment without a translation service (stored translations only). */
+  storedOnly:
+    "没有配置翻译服务，划词翻译不可用。段落上右键“翻译本段”显示库中的译文。",
+  storedPlaceholder: "库中的译文会显示在这里。",
+  noStored: "这一段没有库中的译文。",
+  pdfOpen: "对照翻译",
+  pdfReading: (done: number, total: number) =>
+    `正在读取译文 ${done} / ${total} 页`,
+  pdfFailed: (count: number) => `${count} 页的译文没有读到`,
+  pdfPartial: "部分段落没有译文，显示原文。",
+  pdfClose: "关闭译文",
+  pdfStop: "停止",
+  pdfRetry: "重试",
+  pdfMode: "译文显示",
+  pdfPair: "对照",
+  pdfOnly: "只看译文",
+  settingsTitle: "翻译",
+  settingsDescription:
+    "解析全文的“翻译”一步把校订好的全文逐段译成这种语言，存进文献库；阅读页的“译文”“对照”与 PDF 的对照翻译读的都是它。",
+  settingsLanguage: "译文语言",
+  settingsLanguageHelp:
+    "在配置文件的 [translation] 一节改 target_language，重启服务后生效。只影响以后的解析全文，已有的译文保留。",
+} as const;
+/**
+ * Why “译文” and “对照” cannot be chosen (reading-experience 9): no
+ * translation yet — before the full text is parsed, or for a proofread text
+ * parsed before translating was a step — the text is already in that
+ * language, or the text was edited after it was translated. Null when there
+ * is a translation to read. `level` is the full text's, null without one.
+ */
+export function translationUnavailable(
+  state: DocumentTranslationState | null,
+  language: string,
+  level: TextLevel | null = null,
+): string | null {
+  if (state === "complete" || state === "partial") return null;
+  if ((state === "none" || state === null) && level === "proofread")
+    return "这篇解析全文时还没有翻译；再解析一次全文即可补上译文";
+  if (state === "same-language")
+    return `这篇已经是${translationLanguageName(language)}`;
+  if (state === "stale")
+    return "全文改过，译文还没有更新；再解析一次全文即可补上";
+  return "译文在解析全文时产生";
 }
 
 const valueCheckReasons: Readonly<Record<string, string>> = {
@@ -449,6 +555,7 @@ export function estimateStageName(kind: string) {
         arrange: "整理",
         proofread: "校订",
         render: "全文发布",
+        translate: "翻译",
         references: "引用关系",
         structure: "结构",
         metadata: "元数据",

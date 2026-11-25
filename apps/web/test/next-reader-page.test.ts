@@ -213,7 +213,7 @@ it("opens the PDF of a paper without full text, saying so under the page header 
     await w.page.getByRole("dialog").waitFor();
     await w.page.keyboard.press("Escape");
     // Even where the full text was last left, the PDF opens.
-    await w.page.getByRole("tab", { name: "原文", exact: true }).click();
+    await w.page.getByRole("tab", { name: "全文", exact: true }).click();
     await w.page.locator(".reader-surface .ui-empty").waitFor();
     await w.page.goto(`${w.origin}/?literature=${missingId}`);
     await expect
@@ -225,7 +225,7 @@ it("opens the PDF of a paper without full text, saying so under the page header 
   }
 }, 90000);
 
-it("puts the summary and the results in the views as a cell, on the sheet, with 原文 a press away (block 30.3)", async () => {
+it("puts the summary and the results in the views as a cell, on the sheet, with 全文 a press away (block 30.3)", async () => {
   const w = await nextWorkspace({ ready: "body" });
   try {
     const page = w.page,
@@ -239,7 +239,7 @@ it("puts the summary and the results in the views as a cell, on the sheet, with 
       await views.waitFor();
       await expect
         .poll(() => views.getByRole("tab").allInnerTexts())
-        .toEqual(["原文", "PDF", label]);
+        .toEqual(["全文", "PDF", label]);
       expect(
         await views
           .getByRole("tab", { name: label, exact: true })
@@ -251,13 +251,13 @@ it("puts the summary and the results in the views as a cell, on the sheet, with 
       expect(
         await sheet.evaluate((el) => getComputedStyle(el).boxShadow),
       ).not.toBe("none");
-      await views.getByRole("tab", { name: "原文", exact: true }).click();
+      await views.getByRole("tab", { name: "全文", exact: true }).click();
       await expect
         .poll(() => new URL(page.url()).searchParams.get("reader"))
         .toBe("doc");
       await expect
         .poll(() => views.getByRole("tab").allInnerTexts())
-        .toEqual(["原文", "PDF"]);
+        .toEqual(["全文", "PDF"]);
     }
     expect(w.errors).toEqual([]);
   } finally {
