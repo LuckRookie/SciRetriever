@@ -950,15 +950,31 @@ it("bounds PDF canvases while zooming and bitmaps while scrolling, and releases 
     expect(
       scrolled.bitmapsCreated - scrolled.bitmapsReleased,
     ).toBeLessThanOrEqual(40);
-    const kept = await w.page
-      .locator(".reading-pdf-page > img.reading-pdf-bitmap")
-      .evaluateAll((images) =>
-        images.map((img) =>
-          Number(
-            img.closest<HTMLElement>(".reading-pdf-page")!.dataset.pdfPage,
+    const bitmapPages = () =>
+      w.page
+        .locator(".reading-pdf-page > img.reading-pdf-bitmap")
+        .evaluateAll((images) =>
+          images.map((img) =>
+            Number(
+              img.closest<HTMLElement>(".reading-pdf-page")!.dataset.pdfPage,
+            ),
           ),
-        ),
-      );
+        );
+    // A page keeps its bitmap once its copy is encoded and decoded, after it
+    // left the drawn range (spec 5.3): the pages left last, just before the
+    // drawn ones, are the last to get theirs. Read the pages once they have.
+    const behind = await w.page.evaluate(
+      () =>
+        Math.min(
+          ...[
+            ...document.querySelectorAll<HTMLElement>(
+              '.reading-pdf-page[data-picture="canvas"]',
+            ),
+          ].map((p) => Number(p.dataset.pdfPage)),
+        ) - 1,
+    );
+    await expect.poll(bitmapPages, { timeout: 10000 }).toContain(behind);
+    const kept = await bitmapPages();
     expect(kept.length).toBeGreaterThan(0);
     expect(kept.length).toBeLessThanOrEqual(40);
     // At the end of the paper the nearest pages are kept: the first ones were evicted.

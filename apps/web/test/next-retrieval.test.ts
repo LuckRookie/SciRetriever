@@ -2,7 +2,12 @@ import {
   workbenchTestAccess,
   loginWorkbenchPage,
 } from "../../server/test/workbench-auth-fixture.js";
-import { motionOptions, nextAssets } from "./next-workspace-fixture.js";
+import {
+  motionOptions,
+  nextAssets,
+  nextWorkspace,
+} from "./next-workspace-fixture.js";
+import { retrievalStrings } from "../src/app/strings.js";
 import { readingAssets } from "./reading-assets-fixture.js";
 import { chromium, type Page } from "playwright";
 import { DatabaseSync } from "node:sqlite";
@@ -169,6 +174,7 @@ async function workspace(withSynthesis = false, indexes = true) {
     env,
     page,
     requests,
+    origin: server.origin,
     parsed,
     knowledge,
     async recordSetup() {
@@ -198,10 +204,10 @@ async function search(page: Page, query: string, kind = "all") {
     page,
     "内容",
     kind === "source"
-      ? "仅原文"
+      ? "仅全文"
       : kind === "knowledge"
         ? "仅知识"
-        : "原文与知识",
+        : "全文与知识",
   );
   await Promise.all([
     page.waitForResponse((response) =>
@@ -284,7 +290,7 @@ it("searches source and knowledge in all three modes, paginates, and explains Ch
     await search(w.page, "纳米晶", "knowledge");
     expect(await w.page.locator('[role="note"]').isVisible()).toBe(true);
     expect(await w.page.locator('[role="note"]').textContent()).toContain(
-      "不会自动跨语言",
+      retrievalStrings.hanNote,
     );
     expect(
       await w.page
@@ -292,18 +298,24 @@ it("searches source and knowledge in all three modes, paginates, and explains Ch
         .inputValue(),
     ).toBe("纳米晶");
     expect(await kindsOf(w.page)).toEqual(["knowledge"]);
+    // Chinese is searched by character (technical 04 §9.7): a word inside a
+    // longer run of characters is found too.
     await search(w.page, "纳米晶", "source");
     expect(
       await w.page.locator('[data-testid="retrieval-text"]').allTextContents(),
-    ).toEqual(["纳米晶 合成 nanocrystal."]);
+    ).toEqual(["纳米晶 合成 nanocrystal.", "钙钛矿纳米晶合成"]);
     await search(w.page, "钙钛矿", "source");
+    expect(
+      await w.page.locator('[data-testid="retrieval-text"]').allTextContents(),
+    ).toEqual(["钙钛矿纳米晶合成"]);
+    await search(w.page, "石墨烯", "source");
     // No hits: one sentence and one suggestion, in the results' own place.
     await expect
       .poll(() =>
         w.page.getByRole("region", { name: "检索结果" }).textContent(),
       )
       .toBe(
-        "没有找到与“钙钛矿”匹配的片段。可以换成原文里的用词，或在高级检索选项里放宽范围。",
+        "没有找到与“石墨烯”匹配的片段。可以换成全文里的用词，或在高级检索选项里放宽范围。",
       );
     expect(
       await w.page.locator('[data-testid="retrieval-result"]').count(),
@@ -392,7 +404,7 @@ it("groups hits by paper with their place in it, folds after three, opens the co
         w.page.getByRole("region", { name: "检索结果" }).textContent(),
       )
       .toBe(
-        "没有找到与“nonexistentfixtureword”匹配的片段。可以换成原文里的用词，或在高级检索选项里放宽范围。",
+        "没有找到与“nonexistentfixtureword”匹配的片段。可以换成全文里的用词，或在高级检索选项里放宽范围。",
       );
     expect(
       (await w.page.getByTestId("retrieval-status").textContent())!.trim(),
@@ -587,7 +599,7 @@ it("opens the fixed hit after a new default is published and restores the query 
     await w.page.getByRole("button", { name: "高级检索选项" }).click();
     expect(
       await w.page.getByRole("button", { name: /内容/ }).textContent(),
-    ).toContain("仅原文");
+    ).toContain("仅全文");
     expect(
       await w.page.locator('[data-testid="retrieval-result"]').count(),
     ).toBe(count);
@@ -719,3 +731,251 @@ it("releases grants on repeated reloads and permits WebAssembly without JavaScri
     await w.close();
   }
 }, 60000);
+
+const SHOTS = process.env.SCIRETRIEVER_TRANSLATION_SHOTS;
+it("marks a hit on the library's translation, shows that translation in sans and keeps the original's place to open, note and collect (technical 04 §9.7)", async () => {
+  const w = await workspace();
+  try {
+    const page = w.page;
+    // The service gives the first source hit as matched in its translation.
+    await page.route(
+      (url) => url.pathname.endsWith("/query/knowledge-context"),
+      async (route) => {
+        const response = await route.fetch();
+        const value = await response.json();
+        const first = (
+          value.result.items as { kind: string; text: string }[]
+        ).find((item) => item.kind === "source-text");
+        if (first)
+          Object.assign(first, {
+            text: "纳米晶的合成与原始观测。",
+            matched: "translation",
+            language: "zh-Hans",
+          });
+        // The bundle states its own size in bytes, as the service does.
+        const result = value.result as { usage: { bytes: number } };
+        for (let i = 0, last = -1; i < 10 && last !== result.usage.bytes; i++) {
+          last = result.usage.bytes;
+          result.usage.bytes = Buffer.byteLength(JSON.stringify(result));
+        }
+        await route.fulfill({ response, json: value });
+      },
+    );
+    // The line under the box says how matching goes now.
+    await page
+      .locator('input[placeholder="输入要查找的问题或关键词"]')
+      .fill("纳米晶");
+    await expect
+      .poll(() => page.locator('[role="note"]').textContent())
+      .toBe(retrievalStrings.hanNote);
+    await search(page, "nanocrystal", "source");
+    const results = page.getByTestId("retrieval-result");
+    const translated = results.filter({
+      has: page.getByTestId("retrieval-translated"),
+    });
+    expect(await translated.count()).toBe(1);
+    expect(
+      await translated.getByTestId("retrieval-translated").textContent(),
+    ).toBe("译文");
+    const style = (locator: typeof translated) =>
+      locator.getByTestId("retrieval-text").evaluate((el) => {
+        const probe = document.createElement("span");
+        probe.style.color = "var(--fg2)";
+        document.body.append(probe);
+        const fg2 = getComputedStyle(probe).color;
+        probe.remove();
+        const s = getComputedStyle(el);
+        return {
+          origin: el.getAttribute("data-origin"),
+          family: s.fontFamily.split(",")[0]!.replace(/"/gu, "").trim(),
+          secondary: s.color === fg2,
+        };
+      });
+    const machine = await style(translated);
+    expect(machine.origin).toBe("machine");
+    expect(machine.secondary).toBe(true);
+    const original = await style(
+      results
+        .filter({ hasNot: page.getByTestId("retrieval-translated") })
+        .first(),
+    );
+    expect(original.origin).toBe("author");
+    expect(original.family).not.toBe(machine.family);
+    expect(await translated.getByTestId("retrieval-text").textContent()).toBe(
+      "纳米晶的合成与原始观测。",
+    );
+    if (SHOTS)
+      await page.screenshot({
+        path: join(SHOTS, "retrieval-translation-hit.png"),
+      });
+    // 记下出处 reads the original's fixed range, not the translation.
+    await translated.getByRole("button", { name: "记下出处" }).click();
+    await expect
+      .poll(() => translated.locator(".fixed-quote").textContent())
+      .toContain("nanocrystal");
+    // 加入上下文 keeps the original's reference and evidence.
+    await translated.getByTestId("retrieval-basket").click();
+    const collected = await page.evaluate(
+      () => document.querySelector(".context-basket")?.textContent ?? "",
+    );
+    expect(collected).toContain("纳米晶的合成与原始观测");
+    const basket = page.getByRole("complementary", { name: "上下文" });
+    expect(await basket.getByTestId("basket-translated").textContent()).toBe(
+      "译文",
+    );
+    // The copy says it is a machine translation; its source is the original's.
+    await page
+      .context()
+      .grantPermissions(["clipboard-read", "clipboard-write"], {
+        origin: w.origin,
+      });
+    await basket.getByRole("button", { name: "复制为 Markdown" }).click();
+    await expect
+      .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+      .toContain(retrievalStrings.translatedNote("zh-Hans"));
+    const markdown = await page.evaluate(() => navigator.clipboard.readText());
+    expect(retrievalStrings.translatedNote("zh-Hans")).toBe(
+      "译文（机器翻译，简体中文）；引用请以出处的原文为准。",
+    );
+    expect(markdown).toMatch(
+      /^译文（机器翻译，简体中文）；引用请以出处的原文为准。\n\n纳米晶的合成与原始观测。\n\n来源：`\{"kind":"document"/u,
+    );
+    // 在全文中查看 opens the original's passage in the full text view, its
+    // reading left as chosen.
+    await translated.getByTestId("retrieval-source").click();
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get("reader"))
+      .toBe("doc");
+    expect(new URL(page.url()).searchParams.get("document")).toBeTruthy();
+    expect(
+      await page.evaluate(() =>
+        localStorage.getItem(
+          "sciretriever:react:sciretriever:reader:text-mode:v1",
+        ),
+      ),
+    ).toBeNull();
+  } finally {
+    await w.close();
+  }
+}, 90000);
+
+it("says when the index's rule or translation language is older and when the library search rule is, and rebuilds or rewrites only when asked (technical 04 §9.7)", async () => {
+  const w = await nextWorkspace({
+    path: "/?view=ask",
+    ready: 'input[placeholder="输入要查找的问题或关键词"]',
+  });
+  try {
+    const page = w.page;
+    const fake: Record<string, unknown> = {
+      rule_current: false,
+      rule_reason: "text-rule",
+      library_search_rule_current: true,
+    };
+    let status: Record<string, unknown> | null = null;
+    await page.route(
+      (url) => url.pathname === "/api/v1/query/index-status",
+      async (route) => {
+        const response = await route.fetch();
+        const value = await response.json();
+        status = {
+          ...value.result,
+          status: "idle",
+          index_state: "ready",
+          operation: null,
+          progress: null,
+          ...fake,
+        };
+        await route.fulfill({ response, json: { ...value, result: status } });
+      },
+    );
+    const asked: { path: string; body: unknown }[] = [];
+    for (const operation of ["rebuild-index", "rebuild-library-search"])
+      await page.route(
+        (url) => url.pathname === `/api/v1/maintenance/${operation}`,
+        async (route) => {
+          asked.push({
+            path: operation,
+            body: route.request().postDataJSON(),
+          });
+          await route.fulfill({
+            json: {
+              protocol_version: 1,
+              result:
+                operation === "rebuild-index"
+                  ? { ...status, status: "scheduled", operation: "rebuild" }
+                  : { literatures: 2 },
+            },
+          });
+        },
+      );
+    const line = page.getByTestId("retrieval-index"),
+      library = page.getByTestId("retrieval-library-index");
+    // An older text rule: not current, with the rebuild to ask for.
+    await page.reload();
+    await expect
+      .poll(() => line.textContent())
+      .toContain(retrievalStrings.ruleOld);
+    expect(await library.count()).toBe(0);
+    // The translation language changed.
+    fake.rule_reason = "translation-language";
+    await page.reload();
+    await expect
+      .poll(() => line.textContent())
+      .toContain(retrievalStrings.languageChanged);
+    // The library search rule is older too: a line of its own.
+    fake.library_search_rule_current = false;
+    await page.reload();
+    await expect
+      .poll(() => library.textContent())
+      .toContain(retrievalStrings.libraryOld);
+    if (SHOTS)
+      await page.screenshot({
+        path: join(SHOTS, "retrieval-index-rebuild.png"),
+      });
+    // Nothing runs until asked.
+    await page.waitForTimeout(500);
+    expect(asked).toEqual([]);
+    await line.getByRole("button", { name: "重建索引" }).click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "重建索引", exact: true })
+      .click();
+    await expect.poll(() => asked.length).toBe(1);
+    expect(asked[0]).toEqual({
+      path: "rebuild-index",
+      body: {
+        protocol_version: 1,
+        request: { kind: "rebuild", background: true },
+      },
+    });
+    await library.getByRole("button", { name: "重写书目检索" }).click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "重写书目检索", exact: true })
+      .click();
+    await expect.poll(() => asked.length).toBe(2);
+    expect(asked[1]).toEqual({
+      path: "rebuild-library-search",
+      body: { protocol_version: 1, request: { kind: "rebuild" } },
+    });
+    await expect
+      .poll(() => library.textContent())
+      .toContain(retrievalStrings.libraryRewritten(2));
+    // Everything current: no line at all.
+    Object.assign(fake, {
+      rule_current: true,
+      rule_reason: null,
+      library_search_rule_current: true,
+    });
+    await page.reload();
+    await page
+      .locator('input[placeholder="输入要查找的问题或关键词"]')
+      .waitFor();
+    await page.waitForTimeout(500);
+    expect(await line.count()).toBe(0);
+    expect(await library.count()).toBe(0);
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 120000);

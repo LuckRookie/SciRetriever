@@ -37,7 +37,7 @@ import { useApi } from "../../data/query.js";
 import { navigate, useUrlState } from "../../data/url.js";
 import { record } from "../../data/wire.js";
 import { useShell } from "../../shell/context.js";
-import { errorMessage } from "../../strings.js";
+import { errorMessage, retrievalStrings } from "../../strings.js";
 import { boundedResponseBytes, extractionTransport } from "./delivery.js";
 import "./maintenance.css";
 import {
@@ -792,10 +792,7 @@ function IndexCard() {
     text = "全文索引已损坏，需要重建。";
   return (
     <Tool title="全文索引">
-      <p>
-        从已保存的元数据和原文重新建立全文索引，不下载
-        PDF、解析材料或调用模型。平时索引会随文献变化自动更新，只在索引缺失、损坏或检索结果明显不对时需要重建。
-      </p>
+      <p>{retrievalStrings.indexRebuildSource}</p>
       <Button
         isDisabled={rebuilding}
         confirm={{

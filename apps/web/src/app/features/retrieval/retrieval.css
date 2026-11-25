@@ -130,6 +130,15 @@
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
+  /* Spec 2.4 and 9.7: the author's words in serif; a matched translation
+     is machine-written, in sans and the secondary ink. */
+  .retrieval-result > p[data-origin="author"] {
+    font-family: var(--serif);
+  }
+  .retrieval-result > p[data-origin="machine"] {
+    font-family: var(--sans);
+    color: var(--fg2);
+  }
   .retrieval-source {
     display: flex;
     align-items: center;

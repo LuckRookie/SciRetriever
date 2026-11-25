@@ -4,10 +4,12 @@ import {
   type KnowledgeContextBundle,
 } from "@sciretriever/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Button } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
 import { pacedInterval } from "../../data/polling.js";
+import { record } from "../../data/wire.js";
+import { errorMessage, retrievalStrings as t } from "../../strings.js";
 import { maintain } from "../maintenance/transport.js";
 
 /** Which index the shown results were read from. */
@@ -72,6 +74,36 @@ export function useRebuildIndex() {
     );
   };
 }
+/**
+ * Rewrites the library search rows with the current text rule (technical 04
+ * §9.7), only when asked; the reply comes once every row is written.
+ */
+export function useRewriteLibrarySearch() {
+  const api = useApi(),
+    queries = useQueryClient();
+  const [state, setState] = useState<
+    | { kind: "idle" }
+    | { kind: "running" }
+    | { kind: "done"; count: number }
+    | { kind: "failed"; message: string }
+  >({ kind: "idle" });
+  const run = async () => {
+    setState({ kind: "running" });
+    try {
+      const result = record(
+        (await maintain(api, "rebuild-library-search", { kind: "rebuild" }))
+          .result,
+        "result",
+      );
+      setState({ kind: "done", count: Number(result.literatures) || 0 });
+    } catch (error) {
+      setState({ kind: "failed", message: errorMessage(error) });
+    } finally {
+      void queries.invalidateQueries({ queryKey: statusKey });
+    }
+  };
+  return { state, run };
+}
 /** "X / Y 篇" for a running rebuild, or "" before the source count is known. */
 export function rebuildProgress(status: IndexRefreshStatus) {
   return status.progress
@@ -111,7 +143,8 @@ export function IndexLine({
 }) {
   const api = useApi(),
     queries = useQueryClient(),
-    rebuild = useRebuildIndex();
+    rebuild = useRebuildIndex(),
+    library = useRewriteLibrarySearch();
   const canMaintain = !!api.workspace.capabilities.maintenance;
   // A finished update the shown results have not seen yet.
   const caughtUp = status?.status === "updated" && status.finished_at !== mark;
@@ -137,9 +170,7 @@ export function IndexLine({
         : `正在建立全文索引${progress}。可以离开本页，完成后自动生效。`;
   } else if (state === "missing") {
     tone = "problem";
-    text = canMaintain
-      ? "还没有全文索引，原文和元数据都搜不到。建立约需几分钟，可以离开本页。"
-      : "还没有全文索引，原文和元数据都搜不到。";
+    text = canMaintain ? t.indexMissingBuild : t.indexMissing;
     if (canMaintain)
       action = (
         <Button size="compact" onPress={rebuild}>
@@ -155,13 +186,34 @@ export function IndexLine({
           size="compact"
           confirm={{
             title: "重建全文索引？",
-            description:
-              "将从已有材料重新建立全文索引，约需几分钟，可以离开本页。完成前原文和元数据都搜不到。",
+            description: t.indexCorruptRebuild,
             confirmLabel: "重建索引",
           }}
           onPress={rebuild}
         >
           重建索引
+        </Button>
+      );
+  } else if (status?.rule_current === false) {
+    // Spec 9.7: an index built by an older rule, or for another translation
+    // language, is not called current; a rebuild brings it up to date.
+    tone = "problem";
+    text =
+      status.rule_reason === "translation-language"
+        ? t.languageChanged
+        : t.ruleOld;
+    if (canMaintain)
+      action = (
+        <Button
+          size="compact"
+          confirm={{
+            title: t.rebuildTitle,
+            description: t.rebuildDescription,
+            confirmLabel: t.rebuild,
+          }}
+          onPress={rebuild}
+        >
+          {t.rebuild}
         </Button>
       );
   } else if (status && working(status)) {
@@ -202,16 +254,63 @@ export function IndexLine({
       </Button>
     );
   }
-  if (!text) return null;
-  return (
+  // The library search's own rule, on a line of its own (spec 9.7).
+  const libraryOld = status?.library_search_rule_current === false;
+  const libraryText =
+    library.state.kind === "running"
+      ? t.libraryRewriting
+      : library.state.kind === "done"
+        ? t.libraryRewritten(library.state.count)
+        : library.state.kind === "failed"
+          ? `${t.libraryFailed}${library.state.message}`
+          : libraryOld
+            ? t.libraryOld
+            : null;
+  const libraryLine = libraryText ? (
     <p
       role="status"
       className="retrieval-index"
-      data-tone={tone}
-      data-testid="retrieval-index"
+      data-tone={
+        library.state.kind === "done"
+          ? "done"
+          : library.state.kind === "running"
+            ? "work"
+            : "problem"
+      }
+      data-testid="retrieval-library-index"
     >
-      <span>{text}</span>
-      {action}
+      <span>{libraryText}</span>
+      {canMaintain &&
+      (library.state.kind === "running" ||
+        (libraryOld && library.state.kind !== "done")) ? (
+        <Button
+          size="compact"
+          isPending={library.state.kind === "running"}
+          confirm={{
+            title: t.libraryRewriteTitle,
+            description: t.libraryRewriteDescription,
+            confirmLabel: t.libraryRewrite,
+          }}
+          onPress={library.run}
+        >
+          {t.libraryRewrite}
+        </Button>
+      ) : null}
     </p>
+  ) : null;
+  if (!text) return libraryLine;
+  return (
+    <>
+      <p
+        role="status"
+        className="retrieval-index"
+        data-tone={tone}
+        data-testid="retrieval-index"
+      >
+        <span>{text}</span>
+        {action}
+      </p>
+      {libraryLine}
+    </>
   );
 }

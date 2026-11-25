@@ -193,6 +193,46 @@ export function translationIssueHint(code: string): string | null {
       : null;
 }
 
+/**
+ * 全文检索 (technical 04 §9.7): words are matched as written, translations
+ * stored when the full text was parsed are indexed too, Chinese, Japanese
+ * and Korean by character; the index line says when its rule is older.
+ */
+export const retrievalStrings = {
+  hanNote:
+    "按词匹配，不扩展同义词。解析全文时存下的译文也在索引里，用中文可以搜到英文资料。",
+  translated: "译文",
+  translatedLabel: "命中的是库中的译文，出处是原文的这一段",
+  /** Before a translated hit's text in the copied context. */
+  translatedNote: (language: string) =>
+    `译文（机器翻译，${translationLanguageName(language)}）；引用请以出处的原文为准。`,
+  kindsAll: "全文与知识",
+  kindsSource: "仅全文",
+  kindsKnowledge: "仅知识",
+  noHitsHint: "可以换成全文里的用词，或在高级检索选项里放宽范围。",
+  indexMissing: "还没有全文索引，全文和书目都搜不到。",
+  indexMissingBuild:
+    "还没有全文索引，全文和书目都搜不到。建立约需几分钟，可以离开本页。",
+  indexCorruptRebuild:
+    "将从已有材料重新建立全文索引，约需几分钟，可以离开本页。完成前全文和书目都搜不到。",
+  indexRebuildSource:
+    "从已保存的书目、全文与库中的译文重新建立全文索引，不下载 PDF、解析材料或调用模型。平时索引会随文献变化自动更新，只在索引缺失、损坏或检索结果明显不对时需要重建。",
+  ruleOld: "检索规则已更新，需要重建索引。",
+  languageChanged: "译文语言已更改，需要重建索引。",
+  rebuild: "重建索引",
+  rebuildTitle: "重建全文索引？",
+  rebuildDescription:
+    "将按当前规则从已有材料重新建立全文索引，约需几分钟，在后台进行，期间旧索引照常可搜。可以离开本页，完成后自动生效。",
+  libraryOld: "书目检索按旧规则，中文的部分词查不到。",
+  libraryRewrite: "重写书目检索",
+  libraryRewriteTitle: "重写书目检索？",
+  libraryRewriteDescription:
+    "按当前规则重写全部文献的书目检索，不改动书目本身；文献多时需要一些时间，完成前照常可搜。",
+  libraryRewriting: "正在重写书目检索，完成前照常可搜。",
+  libraryRewritten: (count: number) =>
+    `书目检索已按新规则重写，共 ${count.toLocaleString("zh-CN")} 篇。`,
+  libraryFailed: "书目检索没有重写完，可以重试。",
+} as const;
 /** 找文献 → Zotero, as it stands: the import program, not yet the extension. */
 export const intakeStrings = {
   zotero:

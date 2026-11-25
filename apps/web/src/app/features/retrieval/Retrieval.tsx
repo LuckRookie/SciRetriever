@@ -43,7 +43,7 @@ import { useApi } from "../../data/query.js";
 import { sourceParameters } from "../../data/sources.js";
 import { navigate, useUrlState } from "../../data/url.js";
 import { useShell } from "../../shell/context.js";
-import { errorMessage } from "../../strings.js";
+import { errorMessage, retrievalStrings } from "../../strings.js";
 import { download } from "../library/OperationDialog.js";
 import {
   answerIndex,
@@ -100,6 +100,11 @@ const initial = (): State => ({
   technical: null,
 });
 const key = (item: KnowledgeContextItem) => JSON.stringify(item.reference);
+/** The translation language of a hit on the library's translation; null for any other. */
+const translatedHit = (item: KnowledgeContextItem) =>
+  "matched" in item && item.matched === "translation"
+    ? (item.language ?? "zh-Hans")
+    : null;
 const textOf = (item: KnowledgeContextItem) =>
   item.kind === "generated-result"
     ? item.text || "该结果超过本次预算，可打开完整结果。"
@@ -328,7 +333,7 @@ function TextRetrieval({ header }: { header: ReactNode }) {
           </div>
           {/\p{Script=Han}/u.test(state.draft.query) && (
             <p role="note" className="retrieval-note">
-              当前不会自动跨语言匹配；英文文献可尝试英文关键词。中文按连续词串匹配，子词不保证命中。
+              {retrievalStrings.hanNote}
             </p>
           )}
           <Disclosure title="高级检索选项">
@@ -352,9 +357,12 @@ function TextRetrieval({ header }: { header: ReactNode }) {
                 value={state.draft.kinds}
                 onChange={(kinds) => draft({ kinds })}
                 options={[
-                  { value: "source", label: "仅原文" },
-                  { value: "all", label: "原文与知识" },
-                  { value: "knowledge", label: "仅知识" },
+                  { value: "source", label: retrievalStrings.kindsSource },
+                  { value: "all", label: retrievalStrings.kindsAll },
+                  {
+                    value: "knowledge",
+                    label: retrievalStrings.kindsKnowledge,
+                  },
                 ]}
               />
               <Select
@@ -438,7 +446,7 @@ function TextRetrieval({ header }: { header: ReactNode }) {
               // Page specs “全文检索”: one sentence and one suggestion.
               <EmptyState
                 title={`没有找到与“${state.current.query}”匹配的片段。`}
-                description="可以换成原文里的用词，或在高级检索选项里放宽范围。"
+                description={retrievalStrings.noHitsHint}
               />
             )}
         </div>
@@ -465,6 +473,14 @@ function TextRetrieval({ header }: { header: ReactNode }) {
           <ol>
             {[...state.basket.values()].map((item) => (
               <li key={key(item)}>
+                {translatedHit(item) ? (
+                  <span
+                    className="retrieval-level"
+                    data-testid="basket-translated"
+                  >
+                    {retrievalStrings.translated}
+                  </span>
+                ) : null}
                 <p>{textOf(item).slice(0, 180)}</p>
                 <Button
                   variant="text"
@@ -481,10 +497,12 @@ function TextRetrieval({ header }: { header: ReactNode }) {
               onPress={() =>
                 void copyText(
                   [...state.basket.values()]
-                    .map(
-                      (item) =>
-                        `${textOf(item)}\n\n来源：\`${JSON.stringify(item.reference)}\``,
-                    )
+                    .map((item) => {
+                      // A translated hit says so before its text; the source
+                      // stays the original's (technical 04 §9.7).
+                      const language = translatedHit(item);
+                      return `${language ? `${retrievalStrings.translatedNote(language)}\n\n` : ""}${textOf(item)}\n\n来源：\`${JSON.stringify(item.reference)}\``;
+                    })
                     .join("\n\n---\n\n"),
                 ).then(
                   () => shell.notify("上下文已复制"),
@@ -748,6 +766,9 @@ function Result({
   const [expanded, setExpanded] = useState(false);
   const kind = kindOf(item),
     place = hitLocation(item);
+  // Spec 9.7: the library's translation of the unit matched; the text is
+  // that translation, the reference and evidence the original's.
+  const translated = !!translatedHit(item);
   // A “section” that is the paper's own title names nothing the group does not.
   if (
     place.section &&
@@ -770,7 +791,16 @@ function Result({
       data-testid="retrieval-result"
       data-kind={kind}
     >
-      <p data-testid="retrieval-text">
+      <p
+        data-testid="retrieval-text"
+        // Spec 2.4: the author's words in serif, a translation in sans.
+        {...(kind === "source"
+          ? { "data-origin": translated ? "machine" : "author" }
+          : {})}
+        {...(translated && "language" in item && item.language
+          ? { lang: item.language }
+          : {})}
+      >
         <Highlighted text={hitText(item, paperTitle)} terms={terms} />
       </p>
       <div className="retrieval-source">
@@ -782,6 +812,15 @@ function Result({
           {"text_level" in item && item.text_level ? (
             <span className="retrieval-level" data-testid="retrieval-level">
               {item.text_level === "draft" ? "全文 · 未校对" : "全文 · 已校对"}
+            </span>
+          ) : null}
+          {translated ? (
+            <span
+              className="retrieval-level"
+              data-testid="retrieval-translated"
+              title={retrievalStrings.translatedLabel}
+            >
+              {retrievalStrings.translated}
             </span>
           ) : null}
         </span>
