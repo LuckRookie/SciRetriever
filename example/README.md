@@ -112,4 +112,4 @@ sciretriever --debug complete pdf --all-pending --json \
 示例中的绝对路径、`LITERATURE_ID` 和研究主题都必须由用户替换；本目录不包含个人配置、凭据、
 数据库、PDF、真实 Provider 响应或用户语料。
 
-[项目目录地图](../README.md#项目目录地图)
+[项目目录地图](../docs/development/repository-map.md)

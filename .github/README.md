@@ -12,4 +12,4 @@
 
 本地开发命令由根 package.json 定义；一次性测试脚本与真实连接记录放在本机 sandbox/。
 
-[项目目录地图](../README.md#项目目录地图)
+[项目目录地图](../docs/development/repository-map.md)

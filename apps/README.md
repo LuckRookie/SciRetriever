@@ -18,4 +18,4 @@
 
 跨应用共享的中性合同放在 packages/contracts；本目录各应用的 test/ 保存对应回归。
 
-[项目目录地图](../README.md#项目目录地图)
+[项目目录地图](../docs/development/repository-map.md)

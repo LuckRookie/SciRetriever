@@ -16,4 +16,4 @@
 
 业务服务与入口适配属于 apps/server，各应用的界面代码属于 apps/web；新增共享包应有明确消费者与边界。
 
-[项目目录地图](../README.md#项目目录地图)
+[项目目录地图](../docs/development/repository-map.md)

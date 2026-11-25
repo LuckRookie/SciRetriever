@@ -43,4 +43,4 @@ mkdir -p sandbox/cases sandbox/runs sandbox/reports
 
 - [fixtures/](fixtures/README.md)：共享合成测试输入。
 
-[项目目录地图](../README.md#项目目录地图)
+[项目目录地图](../docs/development/repository-map.md)

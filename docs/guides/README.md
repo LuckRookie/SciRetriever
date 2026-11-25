@@ -8,6 +8,14 @@
 
 本目录优先描述当前公开行为，并在能力尚未接线时明确标记“合同目标·未实现”。当前公开入口是 `sciretriever` console script；主题/引用发现与数据库补全是两类独立操作，书目导入、手动 PDF、补全、查询和导出都作用于同一个 SQLite Catalog 与 ArtifactStore。目标/现状总表见 [TypeScript 架构锚定基线](../architecture/typescript-baseline.md)。
 
+## 从这里开始
+
+- [上手指南](getting-started.md)：从安装、登录到库里有文献、能读、能搜，一步步走；附“哪些功能要先配置”。
+- [导入文献](importing.md)：PDF、导出文件、Zotero、网页收藏、检索，各自怎么做，导入之后做什么。
+- [让 AI 帮你安装和配置](setup-with-ai.md)：交给编程 Agent 的提示词。
+
+## 各项能力
+
 - [项目 README](../../README.md)：安装方式、固定命令树、最小本地旅程，以及当前实现与目标合同的证据边界。
 - [TypeScript 安装与兼容矩阵](installation.md)：Linux x64 portable 支持、Catalog v1–v8 reader 和实际安装验收边界。
 - [Catalog 初始化、升级与恢复](upgrade.md)：精确目标的正式 v8 init/upgrade、只读检查、原始备份与中间版本失败语义。

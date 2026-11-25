@@ -23,4 +23,4 @@
 
 相关说明：[当前基线回归](../apps/server/test/migration-baseline.test.ts)；[当前退役清单回归](../apps/server/test/python-retirement.test.ts)。
 
-[项目目录地图](../README.md#项目目录地图)
+[项目目录地图](../docs/development/repository-map.md)

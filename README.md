@@ -4,77 +4,55 @@
 负责：产品入口、启动步骤与项目导航
 状态：现行
 
-SciRetriever 是通用的文献知识库，让人和 Agent 都能从任何领域的海量文献中得到自己需要的可靠知识，用于学习、写作和研究。
+SciRetriever 是通用的文献知识库。它把文献找来、把 PDF 取到、把 PDF 变成可检索、带出处的全文，让人和 Agent 都能从大量文献里得到可靠的知识，用于学习、写作和研究。不限领域。
 
-Web、CLI 和 MCP 共用一套文献库；查询已有材料与显式获取、解析、建档、加工分别执行。
+- **找文献**：按主题检索多个书目来源，或从一篇文献沿参考文献、被引文献扩展。
+- **导入**：拖入 PDF 或 BibTeX、RIS、CSL JSON 导出文件；用浏览器扩展从 Zotero 导入，或在网页上一键收藏。
+- **获取 PDF**：按开放来源、授权接口、受控浏览器的顺序取 PDF，逐篇记录取得与没取得的原因。
+- **生成全文**：解析 PDF，对照原文校订，得到分章节、带页码出处的全文。
+- **阅读**：全文与 PDF 对照、批注、翻译、标签。
+- **检索与加工**：全文检索；用可配置的算子做总结、问答标注、记录提取和多篇综合，结果都带证据。
+- **给 Agent 用**：Web、CLI 和 MCP 共用一个文献库，桌面上的 Agent 可以直接检索、阅读和发起任务。
 
-当前实现包括元数据发现与导入、PDF 获取、MinerU 原始解析、DSH 校订与总结、元数据人工锁定、标签、快照和多篇综合。领域提取记录由调用方定义，平台保留来源与证据，不替代下游科学判断。能力和限制见[用户指南](docs/guides/README.md)；产品目标与验收见[产品需求](docs/architecture/requirements.md)。
+## 快速开始
 
-## 安装与启动
-
-源码工作区使用锁定的 Node/pnpm 版本：
+需要 Linux x64、Node 22.19.0 和 pnpm（`corepack enable` 即可）。其他系统和 ARM 目前不支持，完整条件见[安装指南](docs/guides/installation.md)。
 
 ```bash
+git clone https://github.com/LuckRookie/SciRetriever.git
+cd SciRetriever
+corepack enable
 pnpm install --frozen-lockfile
 pnpm build
 pnpm sciretriever web --port 4174
 ```
 
-启动后按终端给出的地址和登录提示访问。安装条件、便携包与首次建库见[安装指南](docs/guides/installation.md)；远程访问、登录和页面操作见[Web 指南](docs/guides/web-workbench.md)。配置路径、字段与默认值统一见[配置手册](docs/guides/configuration.md)。已有库结构不匹配时，先按[初始化与恢复](docs/guides/upgrade.md)处理，普通启动不自动转换旧库。
+启动后终端会打印访问地址和一个 `api_key`。用浏览器打开地址，把 `api_key` 粘贴到登录框，就进入文献库。第一次启动会在 `~/.sciretriever/` 下建一个空库，不需要先做任何配置。
 
-## 按工作查指南
+不想自己装？把[给 AI 的配置提示词](docs/guides/setup-with-ai.md)交给 Claude Code、Codex 之类的编程 Agent，让它替你安装、启动和配置。
 
-| 工作                                 | 操作说明                                                                     |
-| ------------------------------------ | ---------------------------------------------------------------------------- |
-| 配置来源、解析和模型                 | [配置手册](docs/guides/configuration.md)                                     |
-| 获取或导入 PDF                       | [PDF 获取](docs/guides/pdf-acquisition.md)                                   |
-| 解析、校订、结构与证据               | [文档处理](docs/guides/document-processing.md)                               |
-| 建档、状态、元数据校正               | [文献建档](docs/guides/literature-archive.md)                                |
-| 词表、标签与回溯                     | [标签](docs/guides/tags.md)                                                  |
-| 总结、问答标注、记录提取、综合和导出 | [知识加工](docs/guides/knowledge-processors.md)                              |
-| 读取已有材料与有界检索               | [独立文献库阅读](docs/guides/library-query.md)                               |
-| 从 Agent、CLI 或 MCP 调用            | [Agent 接口](docs/guides/agent-interface.md)                                 |
-| 初始化、检查和切换库                 | [初始化与恢复](docs/guides/upgrade.md)、[数据库切换](docs/guides/cutover.md) |
+## 接下来
 
-## 项目目录地图
+| 想做什么                               | 看哪里                                         |
+| -------------------------------------- | ---------------------------------------------- |
+| 从安装到读上第一篇，一步步走           | [上手指南](docs/guides/getting-started.md)     |
+| 把已有的文献放进来                     | [导入文献](docs/guides/importing.md)           |
+| 配置文献来源、解析服务和模型           | [配置手册](docs/guides/configuration.md)       |
+| 了解 Web 界面每一页能做什么            | [Web 指南](docs/guides/web-workbench.md)       |
+| 让自己电脑上的 Agent 连上文献库        | [Agent 接口](docs/guides/agent-interface.md)   |
+| 在网页上收藏文献、从 Zotero 导入       | [浏览器扩展](docs/guides/browser-extension.md) |
+| 其余功能（PDF 获取、建档、标签、加工） | [用户指南总目录](docs/guides/README.md)        |
 
-每个由项目维护的目录都有自己的 `README.md`，说明职责、内容入口和相邻目录的分工。从下面进入，再沿各级 README 找到具体模块。目录说明帮助定位；需求、架构决定和当前行为分别由各自真相源维护。
+## 现在的状态
 
-| 目录                                                        | 负责的内容                                                                                |
-| ----------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| [apps/](apps/README.md)                                     | 应用实现：核心服务、CLI/MCP/HTTP 与 Web 界面                                              |
-| [apps/server/src/](apps/server/src/README.md)               | 按业务职责划分的服务端模块地图                                                            |
-| [apps/web/](apps/web/README.md)                             | React 工作台、共享组件与动效、框架无关阅读引擎和界面回归                                  |
-| [apps/browser-extension/](apps/browser-extension/README.md) | 在用户自己浏览器里收藏文献的 Chrome/Edge 扩展                                             |
-| [skills/](skills/README.md)                                 | 文献库自带、给桌面 Agent 用的 skill                                                       |
-| [packages/](packages/README.md)                             | 跨模块、跨应用共享的中性合同包                                                            |
-| [docs/](docs/README.md)                                     | 需求、架构、使用指南、维护说明、提案与计划                                                |
-| [tests/](tests/README.md)                                   | 随仓库分发的共享合成测试材料；正式回归在各模块的 `test/`                                  |
-| `sandbox/`                                                  | 本机真实测试场地：`cases/` 用例、`runs/` 运行材料、`reports/` 报告；整个目录不随 Git 分发 |
-| [scripts/](scripts/README.md)                               | 可复用的构建与打包工具                                                                    |
-| [release/](release/README.md)                               | 构建工具使用的发布运行清单                                                                |
-| [example/](example/README.md)                               | 可共享的配置示例                                                                          |
-| [migration/](migration/README.md)                           | 迁移兼容清单、固定 oracle 与历史证据；部分清单仍由测试消费                                |
-| [.github/](.github/README.md)                               | GitHub CI 工作流                                                                          |
+项目还在快速迭代，用之前请知道这几件事：
 
-### 要做什么，去哪里
+- 只支持 Linux x64；Web 只走普通 HTTP，没有 HTTPS 和域名部署，请在可信网络里用，或经 SSH 端口映射访问。
+- 找文献、导入、阅读已有 PDF 不需要配置。获取更多来源的 PDF、生成全文、翻译、标签和加工要先配置对应的来源、MinerU 解析服务或模型，见[上手指南](docs/guides/getting-started.md#哪些功能要先配置)。
+- 生成全文、标签和加工的质量取决于你接入的解析服务和模型；平台保留来源与证据，不替代你对内容的判断。
+- 库结构变化时，旧库不会被自动转换，升级前先看[初始化与恢复](docs/guides/upgrade.md)。
 
-| 工作                                            | 起点                                                                                                                                                                      |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 增加或修复一家文献供应商                        | [providers/](apps/server/src/providers/README.md)，定义与协议放在对应供应商目录                                                                                           |
-| 调整发现或批量 PDF 获取流程                     | [entry/](apps/server/src/entry/README.md)；元数据能力看 [metadata/](apps/server/src/metadata/README.md)，PDF 接纳看 [acquisition/](apps/server/src/acquisition/README.md) |
-| 修改 Browser Agent 的观察、动作、等待或下载捕获 | [browser/](apps/server/src/browser/README.md)；共享网络与冷却看 [network/](apps/server/src/network/README.md)                                                             |
-| 修改解析、总结或知识查询                        | [parsing/](apps/server/src/parsing/README.md)、[analysis/](apps/server/src/analysis/README.md)、[retrieval/](apps/server/src/retrieval/README.md)                         |
-| 修改统一数据格式、身份或存储                    | [contracts/](packages/contracts/README.md)、[literature/](apps/server/src/literature/README.md)、[storage/](apps/server/src/storage/README.md)                            |
-| 做真实测试、保存日志和整理结果                  | 本机 `sandbox/`；约定见[测试目录说明](tests/README.md#本地真实测试)                                                                                                       |
-| 给 bug 补可重复回归                             | 对应应用或包的 `test/`；共享合成输入放 [tests/fixtures/](tests/fixtures/README.md)                                                                                        |
-| 讨论设计、执行计划或维护长期说明                | [proposals/](docs/proposals/README.md)、[plans/](docs/plans/README.md)、[notes/](docs/notes/README.md)；接受的长期决定归 [ADR](docs/architecture/decisions/README.md)     |
-
-根目录的 [AGENTS.md](AGENTS.md) 是项目约束入口，[HARNESS.md](HARNESS.md) 是工程与验收规则；[package.json](package.json) 定义开发命令，`pnpm-workspace.yaml` 与 `tsconfig*.json` 定义 workspace 和编译范围。
-
-本机可能还保留 `archive/`（退役代码快照）、`work/`（早期工作材料）、`.agent-teams/`（工具状态）和 `.vscode/`（编辑器配置）；这些目录的说明只保存在本机。它们不作为新业务源码或新测试的落点。`.git/`、`node_modules/`、`build/`、`dist/`、缓存、原始运行数据及历史快照内部由工具或原始材料结构决定，不逐层插入 README；其身份在所属上级目录说明。
-
-## 参考项目
+## 致谢
 
 设计时研究并借鉴过下列项目的做法。SciRetriever 没有复制它们的代码；第三方许可与归属义务见 [NOTICE](NOTICE)。
 
@@ -88,6 +66,6 @@ pnpm sciretriever web --port 4174
 
 ## 开发与贡献
 
-开发、构建、预览和打包命令见[TypeScript 开发入口](docs/development/typescript-foundation.md)。测试选择、并发与 Full 规则见 [HARNESS](HARNESS.md#54-typescript-开发验证)；不把历史测试结果当作当前版本的通过声明。
+仓库的目录分工和“要改什么去哪里”见[仓库目录地图](docs/development/repository-map.md)。开发、构建、预览和打包命令见[TypeScript 开发入口](docs/development/typescript-foundation.md)；协作约束见 [AGENTS.md](AGENTS.md)，工程与验收规则见 [HARNESS.md](HARNESS.md)。长期设计从[架构导航](docs/architecture/README.md)进入，文档的分类与归属见[文档导航](docs/README.md)。
 
-长期设计从[架构导航](docs/architecture/README.md)进入，文档类型和主题归属见[文档导航](docs/README.md)，实施进度见[活动计划](docs/plans/README.md)。本页不维护第二份命令树、配置默认值或验收流水账。
+以 [MIT 协议](LICENSE)发布；随包分发的第三方程序的许可见 [NOTICE](NOTICE)。
