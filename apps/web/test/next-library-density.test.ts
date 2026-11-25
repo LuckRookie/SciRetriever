@@ -232,7 +232,7 @@ it("lists only what a paper can use in its menu, by what it has, and the same on
       .click();
     expect(await menuContent(page)).toEqual([
       "打开阅读",
-      "移动到文件夹…",
+      "移动…",
       "导出…",
       "删除",
       "扩展引用…",
@@ -247,7 +247,7 @@ it("lists only what a paper can use in its menu, by what it has, and the same on
       .click();
     expect(await menuContent(page)).toEqual([
       "打开阅读",
-      "移动到文件夹…",
+      "移动…",
       "导出…",
       "删除",
       "获取 PDF",
@@ -265,7 +265,7 @@ it("lists only what a paper can use in its menu, by what it has, and the same on
       .click({ button: "right" });
     expect(await menuContent(page)).toEqual([
       "打开阅读",
-      "移动到文件夹…",
+      "移动…",
       "导出…",
       "删除",
       "获取 PDF",

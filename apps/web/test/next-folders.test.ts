@@ -62,7 +62,7 @@ it("organizes papers into nested folders by dialog and drag, scopes the library,
     await p.keyboard.press("Space");
     await p
       .getByRole("region", { name: "文献选择" })
-      .getByRole("button", { name: "移动到文件夹…", exact: true })
+      .getByRole("button", { name: "移动…", exact: true })
       .click();
     const add = p.getByRole("dialog", { name: "移动到文件夹", exact: true });
     await add

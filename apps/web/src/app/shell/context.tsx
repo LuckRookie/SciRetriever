@@ -18,6 +18,11 @@ export interface ShellState {
     source?: Record<string, string>,
     title?: string,
   ): void;
+  /** Opens several papers, a tab each; `show`, or else the first, is shown. */
+  openPapers(
+    papers: readonly { id: string; title: string }[],
+    show?: string,
+  ): void;
   notify(message: string): void;
   /**
    * Page specs “入库 · 检索”: papers the library hands to citation expansion

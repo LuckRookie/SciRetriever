@@ -306,7 +306,7 @@ it("makes the first usable of 获取 PDF and 生成全文 the selection bar's pr
     expect((await actions()).filter((text) => text !== "取消选择")).toEqual([
       "获取 PDF 1",
       "生成全文 0",
-      "移动到文件夹…",
+      "移动…",
       "更多",
     ]);
     expect(await primary()).toEqual(["获取 PDF 1"]);
@@ -341,7 +341,7 @@ it("makes the first usable of 获取 PDF and 生成全文 the selection bar's pr
       .click();
     expect(await menuContent(page)).toEqual([
       "打开阅读",
-      "移动到文件夹…",
+      "移动…",
       "导出…",
       "删除",
       "获取 PDF",

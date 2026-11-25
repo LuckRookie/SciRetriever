@@ -438,8 +438,32 @@ function Workspace({ api }: { api: ApiClient }) {
   /** Intentional opens are recorded for "recently read"; tab switches are not. */
   const openPaper: typeof showPaper = (...args) => {
     showPaper(...args);
+    recordOpen(args[0]);
+  };
+  /** Several at once: a tab each, in the given order; `show` (else the first) is shown. */
+  const openPapers = (
+    papers: readonly { id: string; title: string }[],
+    show?: string,
+  ) => {
+    const first = papers.find((paper) => paper.id === show) ?? papers[0];
+    if (!first) return;
+    setTabs((current) => [
+      ...current,
+      ...papers
+        .filter((paper) => !current.some((tab) => tab.id === paper.id))
+        .map((paper) => ({
+          id: paper.id,
+          mode: undefined,
+          source: {},
+          title: paper.title,
+        })),
+    ]);
+    navigate({ literature: first.id, reader: null }, { clearSource: true });
+    for (const paper of papers) recordOpen(paper.id);
+  };
+  const recordOpen = (id: string) => {
     if (api.kind !== "workspace") return;
-    recordReadingOpen(api, args[0])
+    recordReadingOpen(api, id)
       .then((opened) => {
         // Counting the whole library is expensive and shares the reader's
         // database worker, so a first open only bumps the sidebar count and
@@ -1008,6 +1032,7 @@ function Workspace({ api }: { api: ApiClient }) {
         selected,
         setSelected,
         openPaper,
+        openPapers,
         notify,
         citationSeeds,
         expandCitations,

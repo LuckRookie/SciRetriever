@@ -1023,6 +1023,8 @@ export default function Library() {
   const removeFromFolderRef = useRef<(ids: readonly string[]) => void>(
     () => {},
   );
+  /** The selection's own menu, rebuilt each render and read when it opens. */
+  const selectionItemsRef = useRef<(on: string) => MenuOption[]>(() => []);
   const deletion = useDeletion();
   const deleteRef = useRef(deletion.request);
   deleteRef.current = deletion.request;
@@ -1030,10 +1032,10 @@ export default function Library() {
     (id: string, title: string, kind: RowAction) => {
       if (kind === "open") shell.openPaper(id, undefined, undefined, title);
       else if (kind === "remove-folder") removeFromFolderRef.current([id]);
-      else if (kind === "delete") {
-        // On a row of the selection, the whole selection goes with it.
+      else if (kind === "delete" || kind === "delete-key") {
+        // The Delete key on a row of the selection takes the whole selection.
         const chosen = selectedRef.current;
-        if (chosen.has(id) && chosen.size > 1)
+        if (kind === "delete-key" && chosen.has(id) && chosen.size > 1)
           deleteRef.current({
             ids: [...chosen],
             label: `已选的 ${chosen.size.toLocaleString()} 篇文献`,
@@ -1059,16 +1061,22 @@ export default function Library() {
       const item = known.get(id);
       if (!item) return;
       const title = paperTitle(item);
+      // On one of several selected rows the menu is the selection's: every
+      // action in it takes them all (page specs “连续选择与选择栏”).
+      const chosen = selectedRef.current,
+        several = chosen.has(id) && chosen.size > 1;
       setRowMenu({
         x,
         y,
         keyboard,
-        label: "文献操作",
-        items: rowMenuItems(
-          item,
-          (kind) => onRowAction(id, title, kind),
-          folder ? (folderLabel ?? "文件夹") : null,
-        ),
+        label: several ? "已选文献操作" : "文献操作",
+        items: several
+          ? selectionItemsRef.current(id)
+          : rowMenuItems(
+              item,
+              (kind) => onRowAction(id, title, kind),
+              folder ? (folderLabel ?? "文件夹") : null,
+            ),
       });
     },
     [known, onRowAction, folder, folderLabel],
@@ -1129,6 +1137,116 @@ export default function Library() {
     ),
     runReason = batchReason("ready", "所选文献都还没有全文");
   const primary = selectionPrimary(acquireReason, archivingReason);
+  const acquireSelected = () =>
+    setAcquire(
+      wholeScope?.key === scopeKey && wholeScope.size === shell.selected.size
+        ? {
+            kind: "query",
+            query: effective,
+            sort: route.sort,
+            label: scopeLabel(),
+          }
+        : {
+            kind: "literatures",
+            ids: groups["no-pdf"],
+            label:
+              groups["no-pdf"].length === shell.selected.size
+                ? `勾选的 ${shell.selected.size.toLocaleString()} 篇`
+                : `勾选的 ${shell.selected.size.toLocaleString()} 篇中还没有 PDF 的 ${groups["no-pdf"].length.toLocaleString()} 篇`,
+          },
+    );
+  selectionItemsRef.current = (on) => {
+    const size = shell.selected.size,
+      count = size.toLocaleString();
+    const unless = (reason: string | undefined | false) =>
+      reason ? { disabled: true, description: reason } : {};
+    // In the order of the list, so the tabs read as the rows did.
+    const ordered = [
+      ...[...known.keys()].filter((id) => shell.selected.has(id)),
+      ...[...shell.selected].filter((id) => !known.has(id)),
+    ];
+    return [
+      {
+        id: "open",
+        label: `打开阅读 ${count} 篇`,
+        ...unless(
+          size > OPEN_TOGETHER_LIMIT &&
+            `一次最多打开 ${OPEN_TOGETHER_LIMIT} 篇，请减少选择。`,
+        ),
+        onAction: () =>
+          shell.openPapers(
+            ordered.map((id) => {
+              const item = known.get(id);
+              return { id, title: item ? paperTitle(item) : "文献" };
+            }),
+            on,
+          ),
+      },
+      {
+        id: "folder",
+        label: "移动…",
+        ...unless(size > 1000 && "最多一次移动 1,000 篇，请减少选择。"),
+        onAction: () => setAdding([...shell.selected]),
+      },
+      ...(folder
+        ? [
+            {
+              id: "remove-folder",
+              label: `移出「${folderLabel}」`,
+              disabled: size > 1000,
+              onAction: () => void removeFromFolder(),
+            },
+          ]
+        : []),
+      {
+        id: "export",
+        label: "导出…",
+        onAction: () => void operate("export", true),
+      },
+      {
+        id: "delete",
+        label: `删除 ${count} 篇…`,
+        onAction: () =>
+          deletion.request({
+            ids: [...shell.selected],
+            label: `已选的 ${count} 篇文献`,
+          }),
+      },
+      {
+        id: "acquire",
+        label: `获取 PDF ${groups["no-pdf"].length.toLocaleString()}`,
+        divider: true,
+        ...unless(acquireReason),
+        onAction: acquireSelected,
+      },
+      {
+        id: "archive",
+        label: `生成全文 ${groups.unarchived.length.toLocaleString()}`,
+        ...unless(archivingReason),
+        onAction: () =>
+          setOperation({ ids: groups.unarchived, kind: "archive" }),
+      },
+      {
+        id: "cite",
+        label: "扩展引用…",
+        ...unless(
+          size > CITATION_SEED_LIMIT &&
+            `最多以 ${CITATION_SEED_LIMIT.toLocaleString()} 篇为种子，请减少选择。`,
+        ),
+        onAction: () => expandCitations(seedsOf(shell.selected)),
+      },
+      {
+        id: "run",
+        label: `运行算子 ${groups.ready.length.toLocaleString()}`,
+        ...unless(runReason),
+        onAction: () =>
+          setRunner({
+            scope: { kind: "literatures", ids: groups.ready },
+            label: `已选中有全文的 ${groups.ready.length} 篇`,
+          }),
+      },
+    ];
+  };
   // The whole catalog is always over the limit, so the reason lives with the
   // disabled actions instead of occupying the toolbar.
   const overLimit = scanIncomplete
@@ -1196,7 +1314,7 @@ export default function Library() {
       : []),
     {
       id: "folder",
-      label: "移动到文件夹…",
+      label: "移动…",
       ...overLimit,
       onAction: () => {
         setMobileTools(false);
@@ -1552,6 +1670,24 @@ export default function Library() {
       data-preview={shownPeek !== null || undefined}
       data-preview-docked={docked || undefined}
       data-display={display}
+      // A click on empty space lets the selection go: not on a row, a
+      // control, the selection bar, the preview, or anything laid over the
+      // page, and not the click that ends a drawn selection.
+      onClick={(event) => {
+        if (
+          !shell.selected.size ||
+          event.defaultPrevented ||
+          range.handledByPress() ||
+          // Menus and dialogs are drawn outside the page: a click that
+          // closes one is not a click on the page's empty space.
+          !event.currentTarget.contains(event.target as Node) ||
+          (event.target as Element).closest?.(
+            'button, a, input, textarea, select, label, summary, [role="menu"], [role="dialog"], [role="listbox"], [role="tab"], .ui-popover, .ui-overlay, .ui-toast, .paper-row, .selection-wrap, .library-preview',
+          )
+        )
+          return;
+        shell.setSelected(new Set());
+      }}
     >
       <div className="library-controls" ref={controls}>
         {/* The search box tops every view: from the library it covers the
@@ -2020,26 +2156,7 @@ export default function Library() {
                   <Button
                     variant={primary === "acquire" ? "primary" : "secondary"}
                     disabledReason={acquireReason}
-                    onPress={() =>
-                      setAcquire(
-                        wholeScope?.key === scopeKey &&
-                          wholeScope.size === shell.selected.size
-                          ? {
-                              kind: "query",
-                              query: effective,
-                              sort: route.sort,
-                              label: scopeLabel(),
-                            }
-                          : {
-                              kind: "literatures",
-                              ids: groups["no-pdf"],
-                              label:
-                                groups["no-pdf"].length === shell.selected.size
-                                  ? `勾选的 ${shell.selected.size.toLocaleString()} 篇`
-                                  : `勾选的 ${shell.selected.size.toLocaleString()} 篇中还没有 PDF 的 ${groups["no-pdf"].length.toLocaleString()} 篇`,
-                            },
-                      )
-                    }
+                    onPress={acquireSelected}
                   >
                     获取 PDF <span>{groups["no-pdf"].length}</span>
                   </Button>
@@ -2061,7 +2178,7 @@ export default function Library() {
                     }
                     onPress={() => setAdding([...shell.selected])}
                   >
-                    移动到文件夹…
+                    移动…
                   </Button>
                   <Menu
                     label="更多"
@@ -2273,6 +2390,8 @@ export default function Library() {
     </section>
   );
 }
+/** How many papers one “打开阅读” opens as tabs at most. */
+const OPEN_TOGETHER_LIMIT = 20;
 /**
  * A paper's menu (page specs “文献库”), in two groups. Above the hairline,
  * what one does with any paper: 打开阅读, 移动到文件夹, 移出 the folder being
@@ -2340,7 +2459,7 @@ function rowMenuItems(
     },
     {
       id: "folder",
-      label: "移动到文件夹…",
+      label: "移动…",
       onAction: () => act("folder"),
     },
     ...(folder
@@ -2916,6 +3035,7 @@ type RowAction =
   | "remove-folder"
   | "export"
   | "delete"
+  | "delete-key"
   | "acquire"
   | "archive"
   | "cite"
@@ -3095,7 +3215,7 @@ const LibraryRow = memo(function LibraryRow({
         onMove(row.index + (event.key === "ArrowDown" ? 1 : -1));
       } else if (event.key === "Delete" && onRowMenu) {
         event.preventDefault();
-        onRowAction(id, title, "delete");
+        onRowAction(id, title, "delete-key");
       } else if (
         onRowMenu &&
         (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))

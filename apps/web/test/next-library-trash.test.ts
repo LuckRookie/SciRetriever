@@ -68,3 +68,48 @@ it("deletes a paper to 最近删除 with an undo, confirms several, and restores
     await w.close();
   }
 }, 90000);
+
+it("opens every selected paper from the selection's menu and lets the selection go on a click in empty space (page specs “连续选择与选择栏”)", async () => {
+  const w = await nextWorkspace();
+  try {
+    const p = w.page;
+    await libraryStatus(p, "全部");
+    const rows = p.locator(".paper-row");
+    await expect.poll(() => rows.count()).toBeGreaterThan(1);
+    const bar = p.getByRole("region", { name: "文献选择" });
+    const select = async () => {
+      for (const index of [0, 1]) {
+        await rows.nth(index).focus();
+        await p.keyboard.press("Space");
+      }
+      await bar.getByText("已选 2 篇").waitFor();
+    };
+    // A click on the page's empty space is “取消选择”; a click on a row is not.
+    await select();
+    await rows.nth(1).locator(".paper-citation").click();
+    expect(await bar.count()).toBe(1);
+    await p.locator(".library-quick").click({ position: { x: 2, y: 2 } });
+    await bar.waitFor({ state: "detached" });
+
+    // On a selected row the menu is the selection's: it opens them all.
+    await select();
+    const second = (await rows.nth(1).getAttribute("data-literature-id"))!;
+    await rows.nth(1).locator(".paper-citation").click({ button: "right" });
+    const labels = await p.getByRole("menuitem").allTextContents();
+    expect(labels.slice(0, 4)).toEqual([
+      "打开阅读 2 篇",
+      "移动…",
+      "导出…",
+      "删除 2 篇…",
+    ]);
+    await p
+      .getByRole("menuitem", { name: "打开阅读 2 篇", exact: true })
+      .click();
+    await expect.poll(() => p.locator(".paper-tab").count()).toBe(2);
+    // The paper that was right-clicked is the one shown.
+    expect(new URL(p.url()).searchParams.get("literature")).toBe(second);
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 90000);
