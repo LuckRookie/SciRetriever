@@ -12,7 +12,19 @@ export function archiveStepKey(
   step: ArchiveStep,
   metadata: { metadata_revision: number; metadata_sha256: string } | null,
   assignment: string | null,
+  language: string | null = null,
 ) {
+  // Translation depends on the content version and the language only (spec
+  // 9.3): a prompt or model change does not translate a paper again.
+  if (step === "translate")
+    return sha256(
+      canonicalJsonBytes({
+        step,
+        asset: part.asset_id,
+        content: part.content_version,
+        language,
+      }),
+    );
   return sha256(
     canonicalJsonBytes({
       method,

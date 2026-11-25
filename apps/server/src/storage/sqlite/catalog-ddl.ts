@@ -15,6 +15,13 @@ export interface CatalogAdditionRequirement {
 export interface CatalogAddition extends CatalogAdditionRequirement {
   readonly statements: readonly string[];
   readonly manifest: readonly string[];
+  /**
+   * Existing tables whose CREATE statement in `statements` replaces the old
+   * one: rebuilt in the same transaction with every row, index and trigger
+   * kept. This is the storage spec 4.4 exception (a stop and the Owner's
+   * consent); older releases no longer open the catalog afterwards.
+   */
+  readonly rebuilds: readonly string[];
 }
 
 export function defineCatalogAddition(
@@ -22,16 +29,29 @@ export function defineCatalogAddition(
   statements: readonly string[],
   backfill_steps: readonly string[] = [],
   manifest = statements,
+  rebuilds: readonly string[] = [],
 ): CatalogAddition {
   return Object.freeze({
     name,
     statements,
     manifest,
     backfill_steps,
+    rebuilds: Object.freeze([...rebuilds]),
     ddl_fingerprint: createHash("sha256")
-      .update(JSON.stringify(statements))
+      .update(
+        JSON.stringify(rebuilds.length ? { statements, rebuilds } : statements),
+      )
       .digest("hex"),
   });
+}
+
+/** The rebuilt table a statement recreates, or null for an additive statement. */
+export function rebuiltTable(
+  addition: Pick<CatalogAddition, "rebuilds">,
+  sql: string,
+): string | null {
+  const name = /^CREATE TABLE ([a-z_][a-z0-9_]*)\(/u.exec(sql)?.[1];
+  return name && addition.rebuilds.includes(name) ? name : null;
 }
 
 export function registerCatalogAddition(

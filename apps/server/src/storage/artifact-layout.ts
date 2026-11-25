@@ -18,6 +18,7 @@ const directories = {
   "proofread-decision": "parsed/proofread/decisions",
   "structure-annotation": "parsed/annotations",
   "document-structure": "parsed/structure",
+  "document-translation": "parsed/translations",
   "knowledge-summary": "knowledge/summaries",
   "knowledge-synthesis": "knowledge/syntheses",
   "processor-result": "knowledge/results",

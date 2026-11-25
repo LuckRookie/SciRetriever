@@ -1,4 +1,8 @@
 import type { SqliteAnnotationStorage } from "../storage/structure-annotations.js";
+import {
+  unitSpan,
+  type DocumentTranslationStore,
+} from "../translation/document.js";
 import { segmentLocation, segmentPageRegion, readSegment } from "./location.js";
 import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -8,6 +12,7 @@ import {
   ContractValidationError,
   parseDocumentReadRequest,
   parseDocumentDraftDifferencesRequest,
+  parseDocumentTranslationRequest,
   parseDocumentMaterialBytesRequest,
   parseDocumentResourceBytesRequest,
   documentReadTitle,
@@ -27,6 +32,9 @@ import {
   type DocumentResource,
   type DocumentStructure,
   type EvidenceRef,
+  type DocumentTranslationFile,
+  type DocumentTranslationSummary,
+  type DocumentTranslationResult,
 } from "@sciretriever/contracts";
 import type { SqliteWorker } from "../storage/sqlite/worker.js";
 import type { FileRangeChunks } from "../storage/files/reader.js";
@@ -54,7 +62,8 @@ export class DocumentReadError extends Error {
       | "document-integrity"
       | "document-budget"
       | "document-cancelled"
-      | "document-closed",
+      | "document-closed"
+      | "translation-unavailable",
     options?: ErrorOptions,
   ) {
     super(code, options);
@@ -276,7 +285,41 @@ export class DocumentReadService {
     private readonly database: SqliteWorker,
     private readonly storage: SqliteDocumentStorage,
     private readonly annotations: SqliteAnnotationStorage | null = null,
+    /** Stored full-text translation (ADR 0068); null reads original text only. */
+    private readonly translations: DocumentTranslationStore | null = null,
   ) {}
+  /** The configured language's translation of a fixed version (spec 9.6). */
+  private async translationOf(
+    document: DocumentRef,
+    signal?: AbortSignal,
+    withFile = true,
+  ) {
+    if (!this.translations) return null;
+    const annotation =
+      document.schema_version === 2 && this.annotations
+        ? await this.annotations.current(document.document_version_id, signal)
+        : null;
+    const found = await this.translations.lookup(
+      document,
+      annotation?.annotation_id ?? null,
+      signal,
+    );
+    let file: DocumentTranslationFile | null = null;
+    if (found.row && withFile) {
+      try {
+        file = await this.translations.load(found.row, signal);
+      } catch (error) {
+        throw new DocumentReadError("document-integrity", { cause: error });
+      }
+    }
+    const summary: DocumentTranslationSummary = {
+      target_language: this.translations.language,
+      state: found.state,
+      units: found.row?.unit_count ?? 0,
+      translated: found.row?.translated_count ?? 0,
+    };
+    return { summary, file };
+  }
 
   close(): Promise<void> {
     if (!this.closing) {
@@ -614,7 +657,89 @@ export class DocumentReadService {
         ...("layout" in structure && structure.layout
           ? { layout: structure.layout }
           : {}),
+        ...(this.translations
+          ? {
+              translation: (await this.translationOf(document, signal, false))!
+                .summary,
+            }
+          : {}),
       }));
+    });
+  }
+  /**
+   * Stored translation by unit (spec 9.6), in a section or the whole
+   * document. Pages stop at 200 units or 64 KiB of translated text.
+   */
+  translation(
+    value: unknown,
+    signal?: AbortSignal,
+  ): Promise<DocumentTranslationResult> {
+    return this.run(async () => {
+      let r;
+      try {
+        r = parseDocumentTranslationRequest(value);
+      } catch (error) {
+        if (error instanceof ContractValidationError) return invalid();
+        throw error;
+      }
+      if (!this.translations)
+        throw new DocumentReadError("translation-unavailable");
+      return this.version(
+        r.document_version_id,
+        signal,
+        async (document, _bytes, structure) => {
+          if (
+            r.section_id !== null &&
+            !structure.sections.some((s) => s.section_id === r.section_id)
+          )
+            invalid();
+          const found = (await this.translationOf(document, signal))!;
+          const sections = new Map(
+            structure.segments.map((s) => [s.segment_id, s.section_id]),
+          );
+          const units =
+            found.file?.units.filter(
+              (u) =>
+                r.section_id === null ||
+                sections.get(u.unit_id) === r.section_id,
+            ) ?? [];
+          const selector = { section_id: r.section_id };
+          const start = cursorPosition(
+            r.cursor,
+            "translation",
+            document,
+            selector,
+            0,
+            units.length + 1,
+          );
+          const page: DocumentTranslationResult["units"][number][] = [];
+          let size = 0;
+          for (const u of units.slice(start, start + r.limit)) {
+            const n = Buffer.byteLength(u.translation ?? "");
+            if (page.length && size + n > DOCUMENT_READ_MAX_BYTES) break;
+            size += n;
+            page.push({
+              unit_id: u.unit_id,
+              segment_ids: u.segment_ids,
+              translation: u.translation,
+            });
+          }
+          const next = start + page.length;
+          return {
+            document: readingRef(document),
+            text_level: textLevel(document),
+            machine_translation: true as const,
+            target_language: found.summary.target_language,
+            state: found.summary.state,
+            units: page,
+            total: units.length,
+            next_cursor:
+              next < units.length
+                ? cursor("translation", document, selector, next)
+                : null,
+          };
+        },
+      );
     });
   }
   default(value: unknown, signal?: AbortSignal) {
@@ -829,7 +954,26 @@ export class DocumentReadService {
             : s.kind === "resource-context"
               ? s.resource_id
               : null;
+      const mode = r.text ?? "original";
       return this.version(id, signal, async (document, bytes, structure) => {
+        const translated =
+          mode === "original"
+            ? null
+            : this.translations
+              ? (await this.translationOf(document, signal))!
+              : null;
+        if (
+          mode !== "original" &&
+          (!translated || ["none", "stale"].includes(translated.summary.state))
+        )
+          // Never the original text passed off as a translation (spec 9.6).
+          throw new DocumentReadError("translation-unavailable");
+        const marks = translated
+          ? {
+              machine_translation: translated.summary.state !== "same-language",
+              target_language: translated.summary.target_language,
+            }
+          : null;
         const resource =
           s.kind === "resource-context"
             ? document.resources.find((item) => item.resource_id === selectedId)
@@ -865,8 +1009,23 @@ export class DocumentReadService {
               ...gaps(document, structure),
               "resource-context-unavailable",
             ],
+            ...(marks ? { ...marks, untranslated_units: 0 } : {}),
           };
         if (!selected) invalid();
+        if (translated && marks)
+          return this.translatedSlice(
+            document,
+            bytes,
+            structure,
+            selector,
+            selected,
+            r,
+            mode as "translation" | "bilingual",
+            translated.file!,
+            marks,
+            resource,
+            signal,
+          );
         const start = cursorPosition(
           r.continuation,
           "slice",
@@ -967,6 +1126,143 @@ export class DocumentReadService {
         };
       });
     });
+  }
+  /**
+   * A slice whose translatable units are the stored translation (spec 9.6).
+   * The range and continuation stay original UTF-8 positions; structure bytes
+   * and untranslated content are copied as they are, a unit's text is
+   * replaced whole. No evidence: only original text locates evidence.
+   */
+  private async translatedSlice(
+    document: DocumentRef,
+    bytes: Uint8Array,
+    structure: VerifiedDocumentStructure,
+    selector: DocumentReadRequestMap["slice"]["selector"],
+    selected: { start_utf8: number; end_utf8: number },
+    r: DocumentReadRequestMap["slice"],
+    mode: "translation" | "bilingual",
+    file: DocumentTranslationFile,
+    marks: { machine_translation: boolean; target_language: string },
+    resource: DocumentResource | undefined,
+    signal?: AbortSignal,
+  ) {
+    const state = { selector, text: mode };
+    const start = cursorPosition(
+      r.continuation,
+      "slice-translation",
+      document,
+      state,
+      selected.start_utf8,
+      selected.end_utf8,
+    );
+    const segments = new Map(structure.segments.map((s) => [s.segment_id, s]));
+    const spans: {
+      start: number;
+      payload: number;
+      end: number;
+      translation: string | null;
+    }[] = [];
+    for (const [index, unit] of file.units.entries()) {
+      if (index % 256 === 0) {
+        check(signal);
+        await yieldToEventLoop();
+      }
+      const found = unit.segment_ids.map((id) => segments.get(id));
+      if (found.some((x) => !x)) continue;
+      const first = found[0]!,
+        last = found.at(-1)!;
+      if (last.end_utf8 <= start || first.start_utf8 >= selected.end_utf8)
+        continue;
+      const span = unitSpan(
+        bytes,
+        found as (typeof first)[],
+        unit.source_sha256,
+      );
+      if (span) spans.push({ ...span, translation: unit.translation });
+    }
+    spans.sort((a, b) => a.start - b.start);
+    const max = r.max_bytes;
+    let out = "",
+      size = 0,
+      at = start,
+      untranslated = 0,
+      stopped = false;
+    const copy = (to: number) => {
+      // Original bytes split at any UTF-8 boundary, like an original slice.
+      if (to <= at) return true;
+      const end = safeEnd(bytes, at, Math.min(to, at + (max - size)));
+      if (end > at) {
+        out += decoder.decode(bytes.subarray(at, end));
+        size += end - at;
+        at = end;
+      }
+      return at === to;
+    };
+    for (const span of spans) {
+      if (span.start < at || span.end > selected.end_utf8) continue;
+      if (!copy(span.payload)) {
+        stopped = true;
+        break;
+      }
+      const original = decoder.decode(bytes.subarray(span.payload, span.end));
+      if (span.translation === null) {
+        if (marks.machine_translation) untranslated++;
+        continue; // kept original, copied with the following bytes
+      }
+      const prefix = decoder.decode(bytes.subarray(span.start, span.payload));
+      const piece =
+        mode === "translation"
+          ? span.translation
+          : `${original}\n\n${prefix}${span.translation}`;
+      const n = Buffer.byteLength(piece);
+      if (size + n > max) {
+        if (at === start && !out)
+          throw new DocumentReadError("document-budget");
+        stopped = true;
+        break;
+      }
+      out += piece;
+      size += n;
+      at = span.end;
+    }
+    if (!stopped) copy(selected.end_utf8);
+    const end = at;
+    if (end <= start) throw new DocumentReadError("document-budget");
+    const covered = structure.segments.filter(
+      (item) => item.start_utf8 >= start && item.end_utf8 <= end,
+    );
+    const partialSegment = structure.segments.some(
+      (item) =>
+        item.start_utf8 < end &&
+        item.end_utf8 > start &&
+        (item.start_utf8 < start || item.end_utf8 > end),
+    );
+    const truncated = end < selected.end_utf8;
+    check(signal);
+    return {
+      document: readingRef(document),
+      text_level: textLevel(document),
+      selector,
+      actual_range: { start_utf8: start, end_utf8: end },
+      text: out,
+      evidence: [],
+      locations: covered.flatMap((x) => {
+        const location = segmentLocation(x);
+        return location ? [location] : [];
+      }),
+      related_resources: resource ? [resource] : [],
+      truncated,
+      continuation: truncated
+        ? cursor("slice-translation", document, state, end)
+        : null,
+      capabilities: capabilities(document, structure),
+      gaps: [
+        ...gaps(document, structure),
+        ...(partialSegment ? ["partial-segment" as const] : []),
+      ],
+      ...marks,
+      untranslated_units: untranslated,
+    };
   }
   resource(value: unknown, signal?: AbortSignal) {
     return this.run(async () => {

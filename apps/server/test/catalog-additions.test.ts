@@ -28,8 +28,10 @@ import {
   commitCatalogWrite,
 } from "../src/storage/sqlite/catalog-write.js";
 import { StoredLibraryState } from "../src/storage/sqlite/library-state.js";
+import { withoutDocumentTranslations } from "./document-translations-fixture.js";
 import {
   ARCHIVE_ISSUES_ADDITION,
+  DOCUMENT_TRANSLATIONS_ADDITION,
   LIBRARY_SCALE_ADDITION,
   LIBRARY_TRASH_ADDITION,
   SCHEMA_FINGERPRINT,
@@ -288,7 +290,8 @@ it("installs the unresolved-issue index on the existing layout while old readers
     const db = new DatabaseSync(path);
     try {
       initializeCurrentCatalog(db, at);
-      // Start from the layout before both later additions.
+      // Start from the layout before the three later additions.
+      withoutDocumentTranslations(db);
       for (const sql of [...LIBRARY_TRASH_ADDITION.statements].reverse()) {
         const object = manifestObject(sql);
         db.exec(`DROP ${object.type.toUpperCase()} ${object.name}`);
@@ -345,6 +348,26 @@ it("installs the unresolved-issue index on the existing layout while old readers
         code: 0,
         value: { name: LIBRARY_TRASH_ADDITION.name },
       });
+      await expect(inspectCatalogSchema(path)).rejects.toMatchObject({
+        reason: "catalog-addition-required",
+        addition: DOCUMENT_TRANSLATIONS_ADDITION.name,
+      });
+      expect(
+        await runCli(
+          [
+            "storage",
+            "schema-apply",
+            "--catalog",
+            path,
+            "--addition",
+            DOCUMENT_TRANSLATIONS_ADDITION.name,
+          ],
+          { home, stdout: () => {}, stderr: () => {} },
+        ),
+      ).toMatchObject({
+        code: 0,
+        value: { name: DOCUMENT_TRANSLATIONS_ADDITION.name },
+      });
       await expect(inspectCatalogSchema(path)).resolves.toMatchObject({
         status: "ready",
         schema_fingerprint: SCHEMA_FINGERPRINT,
@@ -354,6 +377,7 @@ it("installs the unresolved-issue index on the existing layout while old readers
             backfill_step: 0,
             backfill_cursor: null,
           },
+          { name: DOCUMENT_TRANSLATIONS_ADDITION.name },
           { name: LIBRARY_SCALE_ADDITION.name },
           {
             name: LIBRARY_TRASH_ADDITION.name,
@@ -408,6 +432,7 @@ it("keeps known DDL exact and refuses an incompatible or non-additive applicatio
           .all(),
       ).toEqual([
         { name: ARCHIVE_ISSUES_ADDITION.name },
+        { name: DOCUMENT_TRANSLATIONS_ADDITION.name },
         { name: LIBRARY_SCALE_ADDITION.name },
         { name: LIBRARY_TRASH_ADDITION.name },
       ]);

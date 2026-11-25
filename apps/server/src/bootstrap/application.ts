@@ -56,7 +56,14 @@ import { AnthropicMessagesAdapter } from "../agents/anthropic.js";
 import { DshAgentRuntime, type AgentBinding } from "../agents/dsh/runtime.js";
 import { TranslationCache } from "../translation/cache.js";
 import { TranslationService } from "../translation/service.js";
-import { FullTextTranslation } from "../translation/fulltext.js";
+import {
+  FullTextTranslation,
+  removeRetiredFullTextCache,
+} from "../translation/fulltext.js";
+import {
+  DocumentTranslationService,
+  DocumentTranslationStore,
+} from "../translation/document.js";
 import { fullTextSource } from "../translation/source.js";
 import { OpenAIChatAdapter, OpenAIResponsesAdapter } from "../agents/openai.js";
 import type { AgentTransport } from "../agents/protocol.js";
@@ -267,6 +274,8 @@ export interface Application {
   readonly tags: TagService;
   readonly metadataFields: LiteratureMetadataService;
   readonly archiveMetadata: ArchiveMetadataService;
+  /** The archive step `translate` (ADR 0068). */
+  readonly archiveTranslation: DocumentTranslationService;
   readonly archiveReferences: ArchiveReferenceService;
   readonly processors?: ProcessorBatchService | null;
   readonly processorRetention?: ProcessorExternalRetention | null;
@@ -1443,6 +1452,16 @@ async function createApplicationOwned(
         return runtime;
       },
     });
+    // Stored translations replace ADR 0051's per-page files (ADR 0068 §3).
+    const translationStore = new DocumentTranslationStore(
+      database,
+      files,
+      configuration.translation.target_language,
+    );
+    const translationAnnotations = new SqliteAnnotationStorage(database, files);
+    await removeRetiredFullTextCache(
+      join(home, ".sciretriever", "cache", "fulltext"),
+    ).catch(() => undefined);
     await options.afterStage?.("agents");
     const artifactReclaimer = new ArtifactReclaimer(
       files.root,
@@ -1639,6 +1658,7 @@ async function createApplicationOwned(
       database,
       new SqliteDocumentStorage(database, files),
       new SqliteAnnotationStorage(database, files),
+      translationStore,
     );
     valueVerifier = new ProcessorValueVerifier(documentRead);
     const library = new LiteratureQueryService(database);
@@ -1855,7 +1875,20 @@ async function createApplicationOwned(
       new SqliteArchiveTextStorage(database, files),
     );
     const parser = documentProcessing;
+    const archiveTranslation = new DocumentTranslationService({
+      database,
+      files,
+      store: translationStore,
+      translation,
+      concurrency: configuration.proofread.max_concurrent_pages,
+      metadata: async (literatureId, signal) => {
+        const { metadata } = (await metadataFields.read(literatureId, signal))
+          .literature;
+        return { title: metadata.title, language: metadata.language };
+      },
+    });
     const archiveOrchestrator = new ArchiveOrchestrator(database, {
+      translate: archiveTranslation,
       ...(archiveText ? { text: archiveText } : {}),
       archiveProfile: configuration.parsing.archive_profile,
       parse: async (input, signal) => {
@@ -2180,8 +2213,27 @@ async function createApplicationOwned(
       ),
       translation,
       fullTextTranslation: new FullTextTranslation({
-        dir: join(home, ".sciretriever", "cache", "fulltext"),
-        translation,
+        stored: async (document, language, signal) => {
+          const annotation =
+            document.schema_version === 2
+              ? await translationAnnotations.current(
+                  document.document_version_id,
+                  signal,
+                )
+              : null;
+          const found = await translationStore.lookup(
+            document,
+            annotation?.annotation_id ?? null,
+            signal,
+            language,
+          );
+          return {
+            state: found.state,
+            file: found.row
+              ? await translationStore.load(found.row, signal)
+              : null,
+          };
+        },
         source: fullTextSource({
           library,
           documents: documentRead,
@@ -2206,6 +2258,7 @@ async function createApplicationOwned(
       metadataFields,
       archiveReferences,
       archiveMetadata,
+      archiveTranslation,
       bootId,
       metadata,
       acquisition,
@@ -2524,6 +2577,11 @@ export async function createQueryApplication(
       database,
       new SqliteDocumentStorage(database, files),
       new SqliteAnnotationStorage(database, files),
+      new DocumentTranslationStore(
+        database,
+        files,
+        configuration.translation.target_language,
+      ),
     );
     const literature = new LiteratureQueryService(database);
     rawParseRead = new SqliteRawParseStorage(database, files);
@@ -2605,6 +2663,8 @@ export async function createQueryApplication(
         }),
       ),
       configuration.parsing.archive_profile,
+      undefined,
+      configuration.translation.target_language,
     );
     const estimating = new UsageEstimator(
       database,
@@ -2637,6 +2697,7 @@ export async function createQueryApplication(
         }),
       ),
       (part, signal) => archiveReuse.textWork(part, signal),
+      (part) => archiveReuse.translationPending(part),
     );
     return {
       importSessions,

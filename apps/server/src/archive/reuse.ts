@@ -29,7 +29,27 @@ export class ArchiveReusePreview {
     private readonly method: string,
     private readonly profile: string,
     private readonly pagesMethod = PDF_PAGES_METHOD,
+    /** `[translation].target_language`; null leaves the translate step out. */
+    private readonly language: string | null = null,
   ) {}
+  /** The main PDF still needs the translate step for its current content (spec 9.3). */
+  async translationPending(part: ArchivePart): Promise<boolean> {
+    if (this.language === null || part.part !== "main") return false;
+    const before = part.steps.find((s) => s.step === "translate");
+    return (
+      before?.status !== "done" ||
+      before.input_sha256 !==
+        (await archiveStepKey(
+          this.method,
+          "full",
+          part,
+          "translate",
+          null,
+          null,
+          this.language,
+        ))
+    );
+  }
   private textMethod() {
     return {
       arrange: ARRANGEMENT_WORKFLOW,
@@ -135,6 +155,7 @@ export class ArchiveReusePreview {
           )
             return false;
         }
+        if (await this.translationPending(part)) return false;
       }
     }
     return true;

@@ -80,6 +80,10 @@ export class UsageEstimator {
       expected_proofread_pages: number | null;
       page_basis: "accepted-arrangement" | "all-pdf-pages" | "unknown";
     }>,
+    /** The main PDF still needs the translate step (ADR 0068). */
+    private readonly archiveTranslationPending?: (
+      part: import("@sciretriever/contracts").ArchivePart,
+    ) => Promise<boolean>,
   ) {}
   async estimate(
     value: unknown,
@@ -244,6 +248,8 @@ export class UsageEstimator {
         totalPages = 0,
         totalUnknown = 0,
         workParts = 0,
+        translatePages = 0,
+        translateUnknown = 0,
         acceptedBasis = true;
       for (const id of ids) {
         stop.throwIfAborted();
@@ -255,6 +261,11 @@ export class UsageEstimator {
             const work = await this.archiveTextWork(part, stop);
             if (work.total_pdf_pages === null) totalUnknown++;
             else totalPages += work.total_pdf_pages;
+            // Translation is counted by the main PDF's pages, reused or not.
+            if (await this.archiveTranslationPending?.(part)) {
+              if (work.total_pdf_pages === null) translateUnknown++;
+              else translatePages += work.total_pdf_pages;
+            }
             if (fullyReusable) continue;
             if (work.arrange_required) workParts++;
             if (work.expected_proofread_pages === null) unknown++;
@@ -281,7 +292,7 @@ export class UsageEstimator {
       const components = ARCHIVE_STEPS.map(
         (step): ArchiveEstimateComponent & { kind: string } => {
           const unit =
-            step === "proofread"
+            step === "proofread" || step === "translate"
               ? ("page" as const)
               : step === "arrange"
                 ? ("part" as const)
@@ -291,9 +302,13 @@ export class UsageEstimator {
               ? unknown
                 ? null
                 : pages
-              : step === "arrange"
-                ? workParts
-                : ids.length - reused;
+              : step === "translate"
+                ? translateUnknown
+                  ? null
+                  : translatePages
+                : step === "arrange"
+                  ? workParts
+                  : ids.length - reused;
           const deterministic = step === "render" || step === "references";
           const samples = history
             .filter(
@@ -306,8 +321,15 @@ export class UsageEstimator {
                 s.stats.method_sha256 === this.archiveMethod,
             )
             .flatMap((s) => {
+              // Translation history counts per page of papers that asked the model.
+              if (step === "translate" && !Number(s.stats.requested_units ?? 0))
+                return [];
               const n =
-                step === "proofread" ? Number(s.stats.executed_pages ?? 0) : 1;
+                step === "proofread"
+                  ? Number(s.stats.executed_pages ?? 0)
+                  : step === "translate"
+                    ? Number(s.stats.pages ?? 0)
+                    : 1;
               return n > 0
                 ? [
                     {

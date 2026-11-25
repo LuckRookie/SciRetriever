@@ -49,6 +49,18 @@ const { readDefaultTextFacts }: typeof DraftFacts = await import(
     import.meta.url,
   ).href
 );
+const {
+  publishDocumentTranslation,
+  readDocumentTranslation,
+  readLatestDocumentTranslation,
+}: typeof import("./document-translation-engine.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./document-translation-engine.ts"
+      : "./document-translation-engine.js",
+    import.meta.url,
+  ).href
+);
 const { deriveCurrentState }: typeof State = await import(
   new URL(
     import.meta.url.endsWith(".ts")
@@ -69,7 +81,10 @@ export type ArchiveStorageAction =
   | "finish"
   | "resolve"
   | "hook"
-  | "parse";
+  | "parse"
+  | "translation"
+  | "translation-latest"
+  | "translation-publish";
 export const ARCHIVE_READ_ACTIONS: readonly ArchiveStorageAction[] = [
   "state",
   "issue-count",
@@ -77,6 +92,8 @@ export const ARCHIVE_READ_ACTIONS: readonly ArchiveStorageAction[] = [
   "events",
   "stats",
   "revision",
+  "translation",
+  "translation-latest",
 ];
 const hash = (v: unknown) =>
   createHash("sha256").update(canonicalJsonBytes(v)).digest("hex");
@@ -119,6 +136,7 @@ function projectArchiveIssue(
     affects_readiness:
       part === "main" &&
       step !== "references" &&
+      step !== "translate" &&
       reason !== "page-content-missing" &&
       !(arranged && (step === "document" || step === "structure")),
     resolution: row.resolution as ArchiveIssue["resolution"],
@@ -488,6 +506,11 @@ export function runArchiveStorage(
       fail("archive-literature-missing");
     if (action === "state")
       return archiveState(db, String(r.literature_id), maxTags, archiveProfile);
+    if (action === "translation") return readDocumentTranslation(db, r);
+    if (action === "translation-latest")
+      return readLatestDocumentTranslation(db, r);
+    if (action === "translation-publish")
+      return publishDocumentTranslation(db, r);
     if (action === "events")
       return rows(
         db,

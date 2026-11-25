@@ -5,6 +5,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   TranslationInputError,
   parseRawParse,
+  type DocumentRef,
+  type DocumentTranslationFile,
+  type DocumentTranslationState,
   rawParseIdentity,
   sha256,
 } from "@sciretriever/contracts";
@@ -207,66 +210,28 @@ it("names the model failure behind a failed translation and caches nothing", asy
       code: "translation-failed",
       reason: "agent-auth",
     });
+    // A paper's units: two failed calls with unknown usage, nothing kept.
     await expect(
-      service.translateBlocks([{ id: "a", text: "x" }], "zh-Hans", null),
-    ).rejects.toMatchObject({
-      code: "translation-failed",
-      reason: "agent-auth",
+      service.translateUnits(
+        { title: null, sections: [], units: [{ id: "a", text: "x" }] },
+        "zh-Hans",
+      ),
+    ).resolves.toMatchObject({
+      usage: { calls: 2, input_tokens: null, output_tokens: null },
     });
+    expect(await cache.size()).toBe(0);
   } finally {
     await cache.close();
   }
 });
 
+/** The PDF view over a stored translation (ADR 0068): no translator at all. */
 async function fullText(
-  options: { drop?: (round: number) => boolean; limit?: number } = {},
+  stored: (language: string) => {
+    state: DocumentTranslationState;
+    file: DocumentTranslationFile | null;
+  },
 ) {
-  const dir = await mkdtemp(join(tmpdir(), "fulltext-"));
-  dirs.push(dir);
-  const calls: AgentCall[] = [];
-  let round = 0;
-  const execute = async (call: AgentCall): Promise<AgentResult> => {
-    calls.push(call);
-    round++;
-    const part = call.messages[1]!.parts[0]!;
-    const items = JSON.parse("text" in part ? part.text : "[]") as {
-      id: string;
-      text: string;
-    }[];
-    return {
-      kind: "structured",
-      value: {
-        translations: items
-          .filter((_, i) => !(options.drop?.(round) && i === 0))
-          .map((i) => ({ id: i.id, translation: `译:${i.text}` })),
-      },
-      provenance: {
-        provider: "fixture",
-        model: "p/a",
-        usage: { input_tokens: 10, output_tokens: 5 },
-      },
-    };
-  };
-  const runtime = new DshAgentRuntime([
-    {
-      role: "translation",
-      provider: "fixture",
-      model: "p/a",
-      capabilities: ["structured_text"],
-      reasoning: "medium",
-      stream: false,
-      context_window_tokens: 100_000,
-      max_output_tokens: 10_000,
-      adapter: { provider: "fixture", model: "p/a", execute },
-    },
-  ]);
-  const cache = new TranslationCache(join(dir, "translations.sqlite"));
-  const service = new TranslationService({
-    models: ["p/a"],
-    defaultModel: "p/a",
-    runtime: () => runtime,
-    cache,
-  });
   const blocks = [
     {
       leaf_id: "l1",
@@ -290,7 +255,7 @@ async function fullText(
       role: "abstract",
       region: [80, 290, 600, 420] as const,
       page_index: 0,
-      source: "Both enantiomers suffered.",
+      source: "Both enantiomers suffered,",
     },
     {
       leaf_id: "l4",
@@ -309,6 +274,14 @@ async function fullText(
       source: "Scheme 1. A caption.",
     },
     {
+      leaf_id: "l8",
+      type: "text",
+      role: "abstract",
+      region: [80, 60, 600, 120] as const,
+      page_index: 1,
+      source: "and both recovered.",
+    },
+    {
       leaf_id: "l5",
       type: "reference",
       role: "references",
@@ -325,25 +298,46 @@ async function fullText(
       source: "In summary, it works.",
     },
   ];
-  let source = { page_count: 3, blocks };
+  const languages: string[] = [];
   const { FullTextTranslation } = await import(
     "../src/translation/fulltext.js"
   );
   const full = new FullTextTranslation({
-    dir: join(dir, "fulltext"),
-    translation: service,
     source: async (id) =>
-      id === "00000000-0000-4000-8000-000000000001" ? source : null,
-    ...(options.limit ? { limit: options.limit } : {}),
+      id === ID
+        ? {
+            page_count: 3,
+            blocks,
+            document: { schema_version: 2 } as unknown as DocumentRef,
+          }
+        : null,
+    stored: async (_document, language) => {
+      languages.push(language);
+      return stored(language);
+    },
   });
-  return {
-    full,
-    calls,
-    cache,
-    setSource: (next: typeof source) => (source = next),
-    blocks,
-  };
+  return { full, languages };
 }
+const unit = (ids: string[], translation: string | null) => ({
+  unit_id: ids[0]!,
+  segment_ids: ids,
+  source_sha256: "0".repeat(64),
+  translation,
+  model: translation === null ? null : "p/a",
+  prompt_version: translation === null ? null : "document-translation-v1",
+});
+const storedFile = (units: ReturnType<typeof unit>[]) =>
+  ({
+    schema_version: 1,
+    literature_id: ID,
+    asset_id: ID,
+    document_version_id: ID,
+    annotation_id: "a".repeat(64),
+    content_version: "c".repeat(64),
+    target_language: "zh-Hans",
+    status: units.every((u) => u.translation) ? "complete" : "partial",
+    units,
+  }) as DocumentTranslationFile;
 const ID = "00000000-0000-4000-8000-000000000001";
 const pageOf = (page_index: number, extra: Record<string, unknown> = {}) => ({
   literature_id: ID,
@@ -354,7 +348,7 @@ const pageOf = (page_index: number, extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
-it("translates the primary default draft by raw block type without assigning roles or falling back to an old corrected source", async () => {
+it("shows a primary default draft by raw block type with no translation, never asking a model or falling back to an old corrected source", async () => {
   let fixture = await archiveTextFixture([
     { text: "Synthetic title", type: "title" },
     { text: "Ada Author.", type: "text" },
@@ -416,19 +410,10 @@ it("translates the primary default draft by raw block type without assigning rol
     const pages = vi
       .spyOn(f.app.archiveText!.pdf, "inspect")
       .mockRejectedValue(new Error("Synthetic unavailable page tools"));
-    f.setModel((input) => {
-      if (!Array.isArray(input))
-        throw new Error("Synthetic translation batch expected");
-      return {
-        translations: input.map((item: { id: string; text: string }) => ({
-          id: item.id,
-          translation: `译:${item.text}`,
-        })),
-      };
-    });
+    // A draft is not archived, so it has no translation (spec 9.1).
     expect(
       await f.app.fullTextTranslation.summary(lit, "zh-Hans"),
-    ).toMatchObject({ page_count: 1, pages: [{ blocks: 3 }] });
+    ).toMatchObject({ page_count: 1, pages: [{ blocks: 3 }], state: "none" });
     const result = await f.app.fullTextTranslation.page({
       ...pageOf(0),
       literature_id: lit,
@@ -440,13 +425,13 @@ it("translates the primary default draft by raw block type without assigning rol
         block.translation,
       ]),
     ).toEqual([
-      ["Synthetic title", "", "译:Synthetic title"],
-      ["Ada Author.", "", "译:Ada Author."],
-      ["A synthetic finding.", "", "译:A synthetic finding."],
+      ["Synthetic title", "", null],
+      ["Ada Author.", "", null],
+      ["A synthetic finding.", "", null],
     ]);
     expect(pages).not.toHaveBeenCalled();
     expect(parses).toBe(1);
-    expect(f.modelCalls).toBe(1);
+    expect(f.modelCalls).toBe(0);
     pages.mockRestore();
     // Switching the default to a corrected fixed version still works. The
     // translator must not select an unrelated current proofread instead.
@@ -485,95 +470,67 @@ it("translates the primary default draft by raw block type without assigning rol
   }
 }, 60_000);
 
-it("translates a page's own blocks in one request, keeps references, authors and figures, and reuses the saved page", async () => {
-  const { full, calls, cache } = await fullText();
-  try {
-    expect(await full.summary(ID, "zh-Hans")).toMatchObject({
-      page_count: 3,
-      pages: [
-        { page_index: 0, blocks: 3, saved: false },
-        { page_index: 1, blocks: 1, saved: false },
-        { page_index: 2, blocks: 0, saved: true },
-      ],
-    });
-    const first = await full.page(pageOf(0));
-    expect(calls).toHaveLength(1);
-    expect(first).toMatchObject({ saved: false, model: "p/a" });
-    expect(
-      first.blocks.map((b) => [b.leaf_id, b.translation, b.placement]),
-    ).toEqual([
-      ["l1", "译:A Title", "region"],
-      ["l3", "译:Both enantiomers suffered.", "region"],
-      // A caption the parser boxed over its figure is placed from the text layer.
-      ["l7", "译:Scheme 1. A caption.", "text-layer"],
-    ]);
-    expect(first.blocks[0]).toMatchObject({
-      region: [80, 130, 910, 180],
-      placement: "region",
-    });
-    const again = await full.page(pageOf(0));
-    expect(again).toMatchObject({ saved: true });
-    expect(calls).toHaveLength(1);
-    expect((await full.summary(ID, "zh-Hans")).pages[0]).toMatchObject({
-      saved: true,
-    });
-    // Each block also answers a selection from the sentence cache.
-    expect(await cache.size()).toBe(3);
-    await expect(
-      full.page({
-        ...pageOf(0),
-        literature_id: "00000000-0000-4000-8000-000000000002",
-      }),
-    ).rejects.toMatchObject({ code: "translation-not-archived" });
-    await expect(full.page(pageOf(9))).rejects.toBeInstanceOf(
-      TranslationInputError,
-    );
-  } finally {
-    await cache.close();
-  }
-});
-it("asks once more for a block the answer left out, translates again only a page whose blocks changed, and keeps at most the limit of papers", async () => {
-  const { full, calls, cache, setSource, blocks } = await fullText({
-    drop: (round) => round === 1,
+it("places the stored translation of a page's blocks, keeps references, authors and figures, and never asks a model", async () => {
+  const file = storedFile([
+    unit(["l1"], "标题"),
+    unit(["l3", "l8"], "两种对映体都受损，并且都恢复了。"),
+    unit(["l7"], "图式 1. 图注。"),
+    unit(["l6"], null),
+  ]);
+  const { full, languages } = await fullText(() => ({
+    state: "partial",
+    file,
+  }));
+  expect(await full.summary(ID, "zh-Hans")).toMatchObject({
+    page_count: 3,
+    state: "partial",
+    pages: [
+      { page_index: 0, blocks: 3, saved: true },
+      { page_index: 1, blocks: 2, saved: false },
+      { page_index: 2, blocks: 0, saved: true },
+    ],
   });
-  try {
-    const page = await full.page(pageOf(0));
-    // The first answer left out l1; the second request carried only l1.
-    expect(calls).toHaveLength(2);
-    const second = calls[1]!.messages[1]!.parts[0]!;
-    expect(JSON.parse("text" in second ? second.text : "[]")).toEqual([
-      { id: "b1", text: "A Title" },
-    ]);
-    expect(page.blocks.every((b) => b.translation)).toBe(true);
-    await full.page(pageOf(1));
-    expect(calls).toHaveLength(3);
-    setSource({
-      page_count: 3,
-      blocks: blocks.map((b) =>
-        b.leaf_id === "l6" ? { ...b, source: "In summary, it works well." } : b,
-      ),
-    });
-    expect(
-      (await full.summary(ID, "zh-Hans")).pages.map((p) => p.saved),
-    ).toEqual([true, false, true]);
-    expect((await full.page(pageOf(0))).saved).toBe(true);
-    expect((await full.page(pageOf(1))).saved).toBe(false);
-    expect(calls).toHaveLength(4);
-  } finally {
-    await cache.close();
-  }
-  const capped = await fullText({ limit: 1 });
-  try {
-    await capped.full.page(pageOf(0));
-    await capped.full.page(pageOf(0, { target_language: "ja" }));
-    // Only the paper-language file used last is kept.
-    expect((await capped.full.summary(ID, "ja")).pages[0]).toMatchObject({
-      saved: true,
-    });
-    expect((await capped.full.summary(ID, "zh-Hans")).pages[0]).toMatchObject({
-      saved: false,
-    });
-  } finally {
-    await capped.cache.close();
-  }
+  // force is accepted and translates nothing: there is no translator.
+  const first = await full.page(pageOf(0, { force: true }));
+  expect(first).toMatchObject({ saved: true, model: "p/a", state: "partial" });
+  expect(
+    first.blocks.map((b) => [b.leaf_id, b.translation, b.placement]),
+  ).toEqual([
+    ["l1", "标题", "region"],
+    ["l3", "两种对映体都受损，", "region"],
+    // A caption the parser boxed over its figure is placed from the text layer.
+    ["l7", "图式 1. 图注。", "text-layer"],
+  ]);
+  // The merged paragraph's second region on the next page has the rest.
+  expect(
+    (await full.page(pageOf(1))).blocks.map((b) => [b.leaf_id, b.translation]),
+  ).toEqual([
+    ["l8", "并且都恢复了。"],
+    ["l6", null],
+  ]);
+  expect(languages).toEqual(["zh-Hans", "zh-Hans", "zh-Hans"]);
+  await expect(
+    full.page({
+      ...pageOf(0),
+      literature_id: "00000000-0000-4000-8000-000000000002",
+    }),
+  ).rejects.toMatchObject({ code: "translation-not-archived" });
+  await expect(full.page(pageOf(9))).rejects.toBeInstanceOf(
+    TranslationInputError,
+  );
+});
+it("shows the print with no translation when none is stored in the language asked", async () => {
+  const { full, languages } = await fullText((language) => ({
+    state: language === "ja" ? "none" : "stale",
+    file: null,
+  }));
+  const page = await full.page(pageOf(0, { target_language: "ja" }));
+  expect(page).toMatchObject({ state: "none", saved: false, model: null });
+  expect(page.blocks.map((b) => [b.leaf_id, b.translation])).toEqual([
+    ["l1", null],
+    ["l3", null],
+    ["l7", null],
+  ]);
+  expect(await full.summary(ID, "zh-Hans")).toMatchObject({ state: "stale" });
+  expect(languages).toEqual(["ja", "zh-Hans"]);
 });

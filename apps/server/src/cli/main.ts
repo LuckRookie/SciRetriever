@@ -189,6 +189,7 @@ function usage(options: CliOptions): CliResult {
     "    text_level=draft|proofread belongs to the fixed version; describe adds draft_summary={differs_segments,differences,image_only_pages} for drafts\n" +
     "    Draft locations use basis=text-layer-match|text-layer-differs|no-text-layer; roles returns the whole draft with coverage_note; corrected basis is unchanged\n" +
     "  document draft-differences --request FILE|-  # saved draft differences as bounded json-utf8; collect continuations before parsing\n" +
+    "  document translation --request FILE|-  # stored machine translation by unit; slice takes text=original|translation|bilingual\n" +
     "    corrections is corrected-only; devices read via HTTP MCP /mcp with purpose read, not query HTTP routes\n" +
     "  context search|knowledge --request FILE|-; analysis prepare --request FILE|-; extraction prepare --request FILE|-\n" +
     "  literature status; literature search|read|references|reference|identity|artifact-chunk|bibliography --request FILE|-\n" +
@@ -1143,6 +1144,7 @@ async function execute(
     "document parts": "document-parts",
     "document corrections": "document-corrections",
     "document draft-differences": "document-draft-differences",
+    "document translation": "document-translation",
     "document parsing-status": "document-parsing-status",
     "document default": "document-default",
     "document describe": "document-describe",

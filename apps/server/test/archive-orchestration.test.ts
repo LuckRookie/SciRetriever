@@ -87,9 +87,10 @@ it("parses first when needed, builds a durable archive, reuses the parse and mod
     ).toEqual([]);
     const state = await e.app.archive.status(id);
     expect(state.status).toBe("READY");
+    // arrange, proofread, render, translate, metadata, references, tags
     expect(
       state.parts[0]!.steps.filter((s) => s.status === "done"),
-    ).toHaveLength(6);
+    ).toHaveLength(7);
     expect(state.parts[0]!.content_version).toMatch(/^[a-f0-9]{64}$/);
     expect(state.description_version).toMatch(/^[a-f0-9]{64}$/);
     const calls = e.modelCalls,

@@ -110,6 +110,7 @@ it("starts the production six-step workflow through CLI with only external adapt
       "references",
       "render",
       "tags",
+      "translate",
     ]);
     expect(e.parseCalls).toBe(2);
   } finally {
@@ -351,6 +352,24 @@ it("estimates no-history and partial text reuse without running a model or creat
       available: false,
       total: { calls: null, input_tokens: null, output_tokens: null },
     });
+    // Translation is estimated by the primary PDF's pages (ADR 0068).
+    expect(initial.components.map((c) => c.step)).toEqual([
+      "arrange",
+      "proofread",
+      "render",
+      "translate",
+      "metadata",
+      "references",
+      "tags",
+    ]);
+    expect(
+      initial.components.find((c) => c.step === "translate"),
+    ).toMatchObject({
+      unit: "page",
+      units: 1,
+      basis: "unknown",
+      unknown_code: "no-matching-history",
+    });
     expect(e.modelCalls).toBe(0);
     await e.app.archiveText!.arrange(e.asset.asset_id, "full");
     const arranged = (await e.app.archiveText!.storage.state(e.asset.asset_id))
@@ -380,11 +399,15 @@ it("estimates no-history and partial text reuse without running a model or creat
     expect(e.modelCalls).toBe(calls);
     expect(await e.app.jobs!.listJobs()).toEqual(jobs);
     await e.submit("complete-estimate");
-    expect(await read()).toMatchObject({
+    const complete = await read();
+    expect(complete).toMatchObject({
       reused_count: 1,
       available: true,
       total: { calls: { median: 0, p90: 0 } },
     });
+    expect(
+      complete.components.find((c) => c.step === "translate"),
+    ).toMatchObject({ units: 0, sample_count: 1, basis: "matching-history" });
     const part = (await e.app.archive.status(e.id)).parts[0]!,
       before = e.modelCalls;
     expect(

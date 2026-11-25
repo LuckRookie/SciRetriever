@@ -13,6 +13,8 @@ import {
   parseDocumentReadRequest,
   parseDocumentDraftDifferencesRequest,
   parseDocumentDraftDifferencesResult,
+  parseDocumentTranslationRequest,
+  parseDocumentTranslationResult,
   parseDocumentReadResult,
   parseFormDraftsPartResult,
   parseLiteratureId,
@@ -116,6 +118,7 @@ export const QUERY_OPERATIONS = [
   "document-parts",
   "document-corrections",
   "document-draft-differences",
+  "document-translation",
   "document-parsing-status",
   "document-default",
   "document-describe",
@@ -399,6 +402,21 @@ async function readQuery(
     if (arranged) return arranged;
     if (!q.proofreadRead) unavailable();
     return q.proofreadRead.inspect(value, signal);
+  }
+  if (operation === "document-translation") {
+    if (!q.documentRead) unavailable();
+    let request;
+    try {
+      request = parseDocumentTranslationRequest(value);
+    } catch (error) {
+      throw new DocumentReadError("document-invalid", { cause: error });
+    }
+    const result = await q.documentRead.translation(request, signal);
+    try {
+      return parseDocumentTranslationResult(result, request);
+    } catch (error) {
+      throw new DocumentReadError("document-integrity", { cause: error });
+    }
   }
   if (operation === "document-draft-differences") {
     if (!q.documentRead) unavailable();

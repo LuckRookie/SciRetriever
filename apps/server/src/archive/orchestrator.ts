@@ -41,6 +41,14 @@ export interface ArchiveRuntime {
     "build" | "state" | "assignment" | "consolidate"
   >;
   readonly metadataFields: Pick<LiteratureMetadataService, "read">;
+  /**
+   * The `translate` step (ADR 0068). A runtime without it, as in focused
+   * tests of other steps, leaves the step out.
+   */
+  readonly translate?: Pick<
+    import("../translation/document.js").DocumentTranslationService,
+    "build" | "language"
+  >;
   readonly method_sha256: string;
   readonly archiveProfile?: "pipeline" | "vlm-engine";
   /**
@@ -196,9 +204,10 @@ export class ArchiveOrchestrator {
         for (const step of ARCHIVE_STEPS) {
           if (
             part.part !== "main" &&
-            ["metadata", "references", "tags"].includes(step)
+            ["translate", "metadata", "references", "tags"].includes(step)
           )
             continue;
+          if (step === "translate" && !this.runtime.translate) continue;
           try {
             await withActivity(
               { operation: `archive-${step}`, literature_id: id },
@@ -242,8 +251,9 @@ export class ArchiveOrchestrator {
                 true,
               );
             }
-            // Missing references are visible but do not block tags or readiness.
-            if (step !== "references") break;
+            // Missing references or translation are visible but block neither
+            // the later steps nor readiness (spec 9.3).
+            if (step !== "references" && step !== "translate") break;
           }
         }
       }
@@ -307,6 +317,9 @@ export class ArchiveOrchestrator {
         step,
         metadata,
         assignment?.assignment_sha256 ?? null,
+        step === "translate"
+          ? (this.runtime.translate?.language ?? null)
+          : null,
       ),
     };
   }
@@ -321,13 +334,18 @@ export class ArchiveOrchestrator {
     const id = request.literature_id,
       input = await this.input(request, part, step, signal),
       prior = input.current.steps.find((s) => s.step === step),
+      // Only `from_step: translate` translates every unit again; an earlier
+      // from_step keeps reusing unchanged units (spec 9.3).
       force =
-        request.from_step !== null &&
-        ARCHIVE_STEPS.indexOf(step) >= ARCHIVE_STEPS.indexOf(request.from_step);
+        step === "translate"
+          ? request.from_step === "translate"
+          : request.from_step !== null &&
+            ARCHIVE_STEPS.indexOf(step) >=
+              ARCHIVE_STEPS.indexOf(request.from_step);
     // Early stages validate their method/manual inputs in the existing publication services.
     if (
       !force &&
-      ["metadata", "references", "tags"].includes(step) &&
+      ["translate", "metadata", "references", "tags"].includes(step) &&
       prior?.status === "done" &&
       prior.input_sha256 === input.sha256
     ) {
@@ -426,7 +444,20 @@ export class ArchiveOrchestrator {
         };
         if (!reference.document_version_id || !reference.annotation_id)
           throw new ArchiveError("structure-unsatisfied");
-        if (step === "metadata") {
+        if (step === "translate") {
+          output = {
+            ...(await this.runtime.translate!.build(
+              {
+                literature_id: id,
+                asset_id: part.asset_id,
+                document_version_id: reference.document_version_id,
+                annotation_id: reference.annotation_id,
+                force,
+              },
+              signal,
+            )),
+          };
+        } else if (step === "metadata") {
           output = {
             ...reference,
             ...(await this.runtime.metadata.build(
@@ -493,7 +524,11 @@ export class ArchiveOrchestrator {
         ? "needs-parse"
         : step === "references" && !signal?.aborted
           ? "references-missing"
-          : originalCode;
+          : step === "translate" &&
+              !signal?.aborted &&
+              originalCode !== "translation-incomplete"
+            ? "translation-unavailable"
+            : originalCode;
       if (!output.stop)
         output = {
           ...output,

@@ -537,13 +537,13 @@ export function parseArchiveUsageEstimateV2(
             q.unknown_code as ArchiveEstimateComponent["unknown_code"],
         };
       },
-      6,
+      ARCHIVE_STEPS.length,
     ),
     t = annotationRecord(r.total, ["calls", "input_tokens", "output_tokens"]),
     count = annotationInteger(r.count),
     reused_count = annotationInteger(r.reused_count, 0, count);
   if (
-    components.length !== 6 ||
+    components.length !== ARCHIVE_STEPS.length ||
     components.some((c, i) => c.step !== ARCHIVE_STEPS[i])
   )
     throw new ContractValidationError();

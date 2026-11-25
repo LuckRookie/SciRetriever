@@ -90,6 +90,7 @@ export async function processorFixture(
         references: e.app.archiveReferences,
         tags: e.app.tags,
         metadataFields: e.app.metadataFields,
+        translate: e.app.archiveTranslation,
         method_sha256: await sha256(
           canonicalJsonBytes({
             method: "archive-arrange-v2",

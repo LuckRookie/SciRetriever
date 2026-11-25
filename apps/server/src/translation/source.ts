@@ -50,6 +50,7 @@ export function fullTextSource(options: {
           const content = await options.drafts.draftContent(version, signal);
           const retained = new Set(content.leaves.map((leaf) => leaf.leaf_id));
           return {
+            document: version,
             page_count: content.pages.length,
             blocks: content.source_blocks.flatMap((root) => {
               const leaf_id = arrangementLeafId(
@@ -80,6 +81,7 @@ export function fullTextSource(options: {
           );
           if (!output) throw new Error("Translation corrected source missing");
           return {
+            document: version,
             page_count: output.bundle.page_count,
             blocks: output.bundle.leaves.flatMap((leaf) =>
               leaf.destination.kind === "assigned"
@@ -123,6 +125,7 @@ export function fullTextSource(options: {
           ),
         );
         return {
+          document: version,
           page_count: blocks.page_count,
           blocks: blocks.blocks.flatMap((block) => {
             const segment = segments.get(block.block_id);

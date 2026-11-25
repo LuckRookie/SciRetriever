@@ -19,6 +19,12 @@ import {
   type DocumentBasis,
 } from "./draft-document.js";
 import {
+  isTranslationLanguage,
+  type DocumentTranslationState,
+  type DocumentTranslationSummary,
+  type TranslationLanguage,
+} from "./translation.js";
+import {
   ContractValidationError,
   parseAssetId,
   parseLiteratureId,
@@ -173,6 +179,8 @@ export interface DocumentReadRequestMap {
     readonly selector: DocumentSelector;
     readonly max_bytes: number;
     readonly continuation: string | null;
+    /** Stored machine translation (ADR 0068); absent means original. */
+    readonly text?: DocumentSliceText;
   };
   resource: {
     readonly document_version_id: string;
@@ -189,6 +197,12 @@ export interface DocumentReadRequestMap {
   };
 }
 export type DocumentReadOperation = keyof DocumentReadRequestMap;
+export const DOCUMENT_SLICE_TEXTS = [
+  "original",
+  "translation",
+  "bilingual",
+] as const;
+export type DocumentSliceText = (typeof DOCUMENT_SLICE_TEXTS)[number];
 export function parseDocumentReadRequest<K extends DocumentReadOperation>(
   kind: K,
   value: unknown,
@@ -273,20 +287,28 @@ export function parseDocumentReadRequest<K extends DocumentReadOperation>(
       break;
     }
     case "slice": {
+      const texted = Boolean(
+        value && typeof value === "object" && Object.hasOwn(value, "text"),
+      );
       const r = object(value, [
         "document_version_id",
         "selector",
         "max_bytes",
         "continuation",
+        ...(texted ? ["text"] : []),
       ]);
+      if (texted && !DOCUMENT_SLICE_TEXTS.includes(r.text as DocumentSliceText))
+        fail();
       result = {
         document_version_id: uuid(r.document_version_id),
         selector: parseDocumentSelector(r.selector),
         max_bytes: count(r.max_bytes, DOCUMENT_READ_MAX_BYTES),
         continuation: cursor(r.continuation),
+        ...(texted ? { text: r.text as DocumentSliceText } : {}),
       };
       break;
     }
+
     case "resource": {
       const r = object(value, [
         "document_version_id",
@@ -736,6 +758,8 @@ export interface DocumentReadResultMap {
     readonly capabilities: DocumentReadCapabilities;
     readonly gaps: readonly DocumentReadGap[];
     readonly layout?: DocumentLayout;
+    /** Stored machine translation of this version (ADR 0068). */
+    readonly translation?: DocumentTranslationSummary;
     readonly section_count: number;
     readonly segment_count: number;
     readonly resource_count: number;
@@ -762,6 +786,11 @@ export interface DocumentReadResultMap {
     readonly continuation: string | null;
     readonly capabilities: DocumentReadCapabilities;
     readonly gaps: readonly DocumentReadGap[];
+    /** Present only for `text: translation | bilingual`; such text is not evidence. */
+    readonly machine_translation?: boolean;
+    readonly target_language?: TranslationLanguage;
+    /** Translatable units in the range that have no translation. */
+    readonly untranslated_units?: number;
   };
   resource: {
     readonly text_level?: TextLevel;
@@ -866,6 +895,9 @@ function parseResult<K extends DocumentReadOperation>(
         ...(value && typeof value === "object" && "layout" in value
           ? ["layout"]
           : []),
+        ...(value && typeof value === "object" && "translation" in value
+          ? ["translation"]
+          : []),
       ]);
       const document = parseDocumentReadingRef(r.document);
       matchDocument(document, req as DocumentReadRequestMap["describe"]);
@@ -907,6 +939,14 @@ function parseResult<K extends DocumentReadOperation>(
         ...(r.layout === undefined
           ? {}
           : { layout: parseDocumentLayout(r.layout) }),
+        ...(r.translation === undefined
+          ? {}
+          : {
+              translation: translationSummary(
+                r.translation,
+                level.text_level === "draft",
+              ),
+            }),
       });
     }
     case "outline":
@@ -946,7 +986,13 @@ function parseResult<K extends DocumentReadOperation>(
       const located = Boolean(
         value && typeof value === "object" && "locations" in value,
       );
+      const translated =
+        ((req as DocumentReadRequestMap["slice"]).text ?? "original") !==
+        "original";
       const r = object(value, [
+        ...(translated
+          ? ["machine_translation", "target_language", "untranslated_units"]
+          : []),
         "document",
         "selector",
         "actual_range",
@@ -1003,8 +1049,17 @@ function parseResult<K extends DocumentReadOperation>(
             related_resources.length !== 1 ||
             related_resources[0]?.resource_id !== selector.resource_id ||
             !parsedGaps.includes("resource-context-unavailable")
-          : actual_range.end_utf8 - actual_range.start_utf8 !==
-            encoder.encode(r.text).length
+          : // Translated text is rebuilt from the range; only original text matches it byte for byte.
+            !translated &&
+            actual_range.end_utf8 - actual_range.start_utf8 !==
+              encoder.encode(r.text).length
+      )
+        fail();
+      if (
+        translated &&
+        (typeof r.machine_translation !== "boolean" ||
+          !isTranslationLanguage(r.target_language) ||
+          evidence.length !== 0)
       )
         fail();
       const continuation = cursor(r.continuation);
@@ -1040,6 +1095,13 @@ function parseResult<K extends DocumentReadOperation>(
         continuation,
         capabilities: capabilities(r.capabilities),
         gaps: parsedGaps,
+        ...(translated
+          ? {
+              machine_translation: r.machine_translation as boolean,
+              target_language: r.target_language as TranslationLanguage,
+              untranslated_units: nonnegative(r.untranslated_units),
+            }
+          : {}),
       });
     }
     case "resource": {
@@ -1232,6 +1294,129 @@ function parseResult<K extends DocumentReadOperation>(
   }
 }
 
+/** Stored translation by unit (ADR 0068, spec 9.6), a dedicated read like draft differences. */
+export interface DocumentTranslationRequest {
+  readonly document_version_id: string;
+  readonly section_id: string | null;
+  readonly limit: number;
+  readonly cursor: string | null;
+}
+export interface DocumentTranslationResult {
+  readonly text_level?: TextLevel;
+  readonly document: DocumentReadingRef;
+  readonly machine_translation: true;
+  readonly target_language: TranslationLanguage;
+  readonly state: DocumentTranslationState;
+  readonly units: readonly {
+    readonly unit_id: string;
+    readonly segment_ids: readonly string[];
+    readonly translation: string | null;
+  }[];
+  readonly total: number;
+  readonly next_cursor: string | null;
+}
+export function parseDocumentTranslationRequest(
+  value: unknown,
+): DocumentTranslationRequest {
+  const r = object(value, [
+    "document_version_id",
+    "section_id",
+    "limit",
+    "cursor",
+  ]);
+  return Object.freeze({
+    document_version_id: uuid(r.document_version_id),
+    section_id: r.section_id === null ? null : token(r.section_id),
+    limit: count(r.limit, DOCUMENT_READ_MAX_ITEMS),
+    cursor: cursor(r.cursor),
+  });
+}
+export function parseDocumentTranslationResult(
+  value: unknown,
+  request: DocumentTranslationRequest,
+): DocumentTranslationResult {
+  const r = object(value, [
+    "document",
+    "machine_translation",
+    "target_language",
+    "state",
+    "units",
+    "total",
+    "next_cursor",
+    ...levelKeys(value),
+  ]);
+
+  const document = parseDocumentReadingRef(r.document);
+  matchDocument(document, request);
+  if (
+    r.machine_translation !== true ||
+    !isTranslationLanguage(r.target_language) ||
+    !TRANSLATION_STATES.includes(r.state as DocumentTranslationState) ||
+    !Array.isArray(r.units) ||
+    r.units.length > request.limit ||
+    (["none", "stale"].includes(String(r.state)) && r.units.length)
+  )
+    fail();
+  const units = r.units.map((item) => {
+    const u = object(item, ["unit_id", "segment_ids", "translation"]);
+    if (
+      !Array.isArray(u.segment_ids) ||
+      !u.segment_ids.length ||
+      u.segment_ids.length > 10_000 ||
+      (u.translation !== null && typeof u.translation !== "string")
+    )
+      fail();
+    const ids = u.segment_ids.map(token);
+    if (token(u.unit_id) !== ids[0]) fail();
+    return Object.freeze({
+      unit_id: ids[0]!,
+      segment_ids: Object.freeze(ids),
+      translation: u.translation as string | null,
+    });
+  });
+  const total = nonnegative(r.total);
+  if (total < units.length) fail();
+  const next = cursor(r.next_cursor);
+  matchPage(request, { next_cursor: next });
+  return Object.freeze({
+    ...levelFields(r),
+    document,
+    machine_translation: true as const,
+    target_language: r.target_language,
+    state: r.state as DocumentTranslationState,
+    units: Object.freeze(units),
+    total,
+    next_cursor: next,
+  });
+}
+const TRANSLATION_STATES: readonly DocumentTranslationState[] = [
+  "none",
+  "stale",
+  "complete",
+  "partial",
+  "same-language",
+];
+function translationSummary(
+  value: unknown,
+  draft: boolean,
+): DocumentTranslationSummary {
+  const r = object(value, ["target_language", "state", "units", "translated"]);
+  if (
+    !isTranslationLanguage(r.target_language) ||
+    !TRANSLATION_STATES.includes(r.state as DocumentTranslationState) ||
+    (draft && r.state !== "none")
+  )
+    fail();
+  const units = nonnegative(r.units),
+    translated = nonnegative(r.translated);
+  if (translated > units) fail();
+  return Object.freeze({
+    target_language: r.target_language,
+    state: r.state as DocumentTranslationState,
+    units,
+    translated,
+  });
+}
 /** Truncate only the read projection; the published structure hash is unchanged. */
 export function documentReadTitle(title: string | null): {
   readonly title: string | null;

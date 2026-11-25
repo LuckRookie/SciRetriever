@@ -80,6 +80,7 @@ it("publishes the six-step X workflow, excludes dropped text from fixed document
       "references",
       "render",
       "tags",
+      "translate",
     ]);
     const output = (await new SqliteArchiveTextStorage(
       e.app.database,
@@ -132,7 +133,8 @@ it("publishes the six-step X workflow, excludes dropped text from fixed document
           v.kind === "archive-progress" &&
           (v.payload as { phase: string }).phase === "completed",
       ),
-    ).toHaveLength(6);
+      // Six archive steps and translate (ADR 0068).
+    ).toHaveLength(7);
     expect(
       events.filter(
         (v) =>
@@ -158,6 +160,7 @@ it("publishes the six-step X workflow, excludes dropped text from fixed document
       arrange: "done",
       proofread: "done",
       render: "done",
+      translate: "done",
       metadata: "done",
       references: "done",
       tags: "done",

@@ -3,6 +3,7 @@ import { CatalogWriteAdmission } from "../write-admission.js";
 import {
   appendedColumns,
   catalogObjects,
+  rebuiltTable,
   registerCatalogAddition,
   type CatalogAddition,
 } from "./catalog-ddl.js";
@@ -61,6 +62,38 @@ function validateNewTrigger(db: DatabaseSync, name: string, sql: string) {
   }
 }
 
+/**
+ * Recreate one table with a new CREATE statement and every row, keeping its
+ * indexes and triggers byte for byte. Triggers are dropped first, so copying
+ * the rows back records no change: the content is the same.
+ */
+function rebuildTable(db: DatabaseSync, table: string, sql: string) {
+  const dependents = db
+    .prepare(
+      "SELECT type,name,sql FROM sqlite_schema WHERE tbl_name=? AND type IN ('index','trigger') AND sql IS NOT NULL ORDER BY type,name",
+    )
+    .all(table) as { type: string; name: string; sql: string }[];
+  const count = () =>
+    Number(
+      (db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number })
+        .n,
+    );
+  const before = count();
+  for (const object of dependents)
+    db.exec(`DROP ${object.type.toUpperCase()} ${object.name}`);
+  db.exec(`CREATE TEMP TABLE catalog_rebuild AS SELECT * FROM main.${table}`);
+  db.exec(`DROP TABLE main.${table}`);
+  const statement = db.prepare(sql);
+  if (statement.sourceSQL.trim() !== sql.trim())
+    throw new CatalogSchemaError("catalog-addition-not-additive");
+  statement.run();
+  db.exec(`INSERT INTO main.${table} SELECT * FROM temp.catalog_rebuild`);
+  db.exec("DROP TABLE temp.catalog_rebuild");
+  for (const object of dependents) db.exec(object.sql);
+  if (count() !== before)
+    throw new CatalogSchemaError("catalog-addition-not-additive");
+}
+
 /** Applies a built-in addition from the applying release under business admission. */
 export async function applyCatalogAddition(
   path: string,
@@ -93,7 +126,16 @@ export async function applyCatalogAddition(
         if (layout.additions.some((entry) => entry.name === addition.name))
           throw new CatalogSchemaError("catalog-addition-already-applied");
         const before = catalogObjects(db);
+        const replaced = new Map<string, string>();
         for (const sql of addition.statements) {
+          const rebuilt = rebuiltTable(addition, sql);
+          if (rebuilt) {
+            if (!before.has(`table:${rebuilt}`))
+              throw new CatalogSchemaError("catalog-addition-not-additive");
+            rebuildTable(db, rebuilt, sql);
+            replaced.set(`table:${rebuilt}`, sql);
+            continue;
+          }
           if (
             !/^\s*(?:CREATE\s+(?:(?:UNIQUE\s+)?INDEX|(?:VIRTUAL\s+)?TABLE|TRIGGER|VIEW)\b|ALTER\s+TABLE\s+\S+\s+ADD\s+)/iu.test(
               sql,
@@ -112,7 +154,9 @@ export async function applyCatalogAddition(
           const current = after.get(key);
           if (
             !current ||
-            (old.sql !== current.sql && !appendedColumns(db, old, current))
+            (old.sql !== current.sql &&
+              replaced.get(key) !== current.sql &&
+              !appendedColumns(db, old, current))
           )
             throw new CatalogSchemaError("catalog-addition-not-additive");
         }

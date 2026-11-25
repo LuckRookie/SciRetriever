@@ -3375,6 +3375,7 @@ function createQueryHttpHandler(
       case "/api/v1/query/document-resources":
       case "/api/v1/query/document-slice":
       case "/api/v1/query/document-draft-differences":
+      case "/api/v1/query/document-translation":
       case "/api/v1/query/document-resource":
       case "/api/v1/query/material-evidence":
       case "/api/v1/query/evidence-resolve": {
@@ -3405,13 +3406,16 @@ function createQueryHttpHandler(
                       : url.pathname ===
                           "/api/v1/query/document-draft-differences"
                         ? "draft-differences"
-                        : url.pathname === "/api/v1/query/document-slice"
-                          ? "slice"
-                          : url.pathname === "/api/v1/query/document-resource"
-                            ? "resource"
-                            : url.pathname === "/api/v1/query/material-evidence"
-                              ? "material"
-                              : "evidence";
+                        : url.pathname === "/api/v1/query/document-translation"
+                          ? "translation"
+                          : url.pathname === "/api/v1/query/document-slice"
+                            ? "slice"
+                            : url.pathname === "/api/v1/query/document-resource"
+                              ? "resource"
+                              : url.pathname ===
+                                  "/api/v1/query/material-evidence"
+                                ? "material"
+                                : "evidence";
           const readRequest =
             kind === "evidence" &&
             command.request &&
@@ -3755,7 +3759,9 @@ function createQueryHttpHandler(
                     : error.code === "document-v3-required" ||
                         error.code === "document-unsupported"
                       ? 422
-                      : 503
+                      : error.code === "translation-unavailable"
+                        ? 409
+                        : 503
               : error instanceof ContractValidationError ||
                   error instanceof WorkbenchInputError
                 ? 400

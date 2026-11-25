@@ -1,6 +1,9 @@
 import {
+  TRANSLATION_DEFAULT_LANGUAGE,
+  TRANSLATION_LANGUAGES,
   parseOutboundNetworkConfiguration,
   type OutboundNetworkConfiguration,
+  type TranslationLanguage,
 } from "@sciretriever/contracts";
 import { validateNetworkServices } from "./network.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -156,6 +159,8 @@ export interface OrdinaryConfiguration {
     readonly model: string | null;
     readonly max_concurrent_pages: number;
   };
+  /** Stored full-text translation (ADR 0068): the language archiving translates into. */
+  readonly translation: { readonly target_language: TranslationLanguage };
   readonly browser: BrowserConfig;
   readonly execution: { readonly max_concurrency: number };
   readonly library: { readonly max_input_bytes: number };
@@ -172,6 +177,7 @@ const ROOT_KEYS = [
   "analyze",
   "tags",
   "proofread",
+  "translation",
   "browser",
   "execution",
   "library",
@@ -990,6 +996,20 @@ function parseConfigurationObject(
         ? 3
         : positiveInteger(proofreadRaw.max_concurrent_pages, 1, 8),
   });
+  const translationRaw = exact(
+    optionalRecord(raw.translation),
+    [],
+    ["target_language"],
+  );
+  const translation = Object.freeze({
+    target_language:
+      translationRaw.target_language === undefined
+        ? TRANSLATION_DEFAULT_LANGUAGE
+        : enumValue(
+            translationRaw.target_language,
+            new Set(TRANSLATION_LANGUAGES.map((l) => l.code)),
+          ),
+  });
   const analyzeModel =
     analyze.model === null ? null : normalizeModelReference(analyze.model);
   if (analyzeModel !== null && !(analyzeModel in models)) invalid();
@@ -1085,6 +1105,7 @@ function parseConfigurationObject(
     analyze: Object.freeze({ ...analyze, model: analyzeModel }),
     tags,
     proofread,
+    translation,
     browser,
     execution: Object.freeze({
       max_concurrency:

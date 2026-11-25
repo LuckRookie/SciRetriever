@@ -79,6 +79,17 @@ export async function coreProcessingFixture(
   let parseCalls = 0;
   let parseHook: (signal?: AbortSignal) => Promise<void> = async () => {};
   let modelCalls = 0;
+  /** Archive translation (ADR 0068): every unit back, prefixed, formulas kept. */
+  let translationReply: (input: {
+    readonly title: string | null;
+    readonly sections: readonly string[];
+    readonly units: readonly { id: string; text: string }[];
+  }) => unknown = (input) => ({
+    translations: input.units.map((u) => ({
+      id: u.id,
+      translation: `译文：${u.text}`,
+    })),
+  });
   let modelReply: (
     input: ModelInput,
     signal?: AbortSignal,
@@ -253,7 +264,15 @@ export async function coreProcessingFixture(
       const input = JSON.parse(
         wire.messages[1]!.content[0]!.text,
       ) as ModelInput;
-      const value = await modelReply(input, request.signal);
+      const system = wire.messages[0]?.content;
+      const value = (typeof system === "string"
+        ? system
+        : (system?.[0]?.text ?? "")
+      ).startsWith("You translate the paragraphs")
+        ? translationReply(
+            input as unknown as Parameters<typeof translationReply>[0],
+          )
+        : await modelReply(input, request.signal);
       return {
         status: 200,
         headers: [],
@@ -323,6 +342,9 @@ export async function coreProcessingFixture(
       },
       setModel: (reply: typeof modelReply) => {
         modelReply = reply;
+      },
+      setTranslation: (reply: typeof translationReply) => {
+        translationReply = reply;
       },
       async identityRequest(): Promise<ArticleIdentityRequest> {
         const detail = await app.library.detail(

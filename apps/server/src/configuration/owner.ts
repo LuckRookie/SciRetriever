@@ -257,6 +257,7 @@ function renderConfiguration(configuration: OrdinaryConfiguration): string {
     "parsing",
     "tags",
     "proofread",
+    "translation",
     "analyze",
     "browser",
     "execution",

@@ -2055,6 +2055,8 @@ export class SqliteWorker {
       "events",
       "stats",
       "revision",
+      "translation",
+      "translation-latest",
     ].includes(action);
     if (this.readOnly && !read)
       throw new KnowledgeStorageError("archive-read-only");

@@ -250,6 +250,7 @@ it(
         ),
         e.app.configuration.parsing.archive_profile,
         proof!.version.method.page_classify,
+        e.app.configuration.translation.target_language,
       );
       expect(await preview.reusable(state, new AbortController().signal)).toBe(
         true,
@@ -277,6 +278,7 @@ it(
         "references",
         "render",
         "tags",
+        "translate",
       ]);
       expect(progress.items[0]!.steps.every((s) => s.status === "done")).toBe(
         true,

@@ -1162,10 +1162,40 @@ export const LIBRARY_TRASH_ADDITION = defineCatalogAddition("library-trash", [
   ...libraryTrashPagingTriggers(),
 ]);
 
+const ARCHIVE_STEPS_BASE = CATALOG_BASE_SCHEMA.find((sql) =>
+  sql.startsWith("CREATE TABLE archive_steps("),
+)!;
+/** archive_steps accepts `translate`; every other byte of the table is kept. */
+export const ARCHIVE_STEPS_TRANSLATE_SQL = ARCHIVE_STEPS_BASE.replace(
+  "CHECK(step IN ('arrange','proofread','render','metadata'",
+  "CHECK(step IN ('arrange','proofread','render','translate','metadata'",
+);
+if (ARCHIVE_STEPS_TRANSLATE_SQL === ARCHIVE_STEPS_BASE)
+  throw new Error("archive_steps step check not found");
+/**
+ * Stored full-text translations (ADR 0068, document spec 9.4). One row per
+ * literature, primary PDF, proofread content version and language registers
+ * the immutable file: its identity and counts, never the translated text. The
+ * archive_steps rebuild is the storage spec 4.4 exception: stop the service.
+ */
+export const DOCUMENT_TRANSLATIONS_ADDITION = defineCatalogAddition(
+  "document-translations",
+  [
+    ARCHIVE_STEPS_TRANSLATE_SQL,
+    "CREATE TABLE document_translations(literature_id TEXT NOT NULL,asset_id TEXT NOT NULL,content_version TEXT NOT NULL CHECK(length(content_version)=64 AND content_version NOT GLOB '*[^0-9a-f]*'),target_language TEXT NOT NULL CHECK(length(trim(target_language))>0),document_version_id TEXT NOT NULL,annotation_id TEXT NOT NULL CHECK(length(annotation_id)=64),artifact_reference TEXT NOT NULL,sha256 TEXT NOT NULL,byte_size INTEGER NOT NULL,media_type TEXT NOT NULL CHECK(media_type='application/json'),unit_count INTEGER NOT NULL CHECK(unit_count>=0),translated_count INTEGER NOT NULL CHECK(translated_count>=0 AND translated_count<=unit_count),status TEXT NOT NULL CHECK(status IN ('complete','partial','same-language')),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(literature_id,asset_id,content_version,target_language),FOREIGN KEY(literature_id) REFERENCES literatures(literature_id),FOREIGN KEY(asset_id) REFERENCES assets(asset_id),FOREIGN KEY(document_version_id) REFERENCES document_versions(document_version_id) ON DELETE RESTRICT,FOREIGN KEY(artifact_reference,sha256,byte_size,media_type) REFERENCES artifact_objects(relative_path,sha256,byte_size,media_type) ON DELETE RESTRICT) STRICT, WITHOUT ROWID",
+    "CREATE INDEX document_translations_version ON document_translations(document_version_id,target_language)",
+    "CREATE INDEX document_translations_latest ON document_translations(literature_id,target_language,updated_at)",
+  ],
+  [],
+  undefined,
+  ["archive_steps"],
+);
+
 export const CATALOG_ADDITIONS = [
   LIBRARY_SCALE_ADDITION,
   ARCHIVE_ISSUES_ADDITION,
   LIBRARY_TRASH_ADDITION,
+  DOCUMENT_TRANSLATIONS_ADDITION,
 ] as const;
 export const SCHEMA_MANIFEST = manifestWithAdditions(
   CATALOG_BASE_SCHEMA,
