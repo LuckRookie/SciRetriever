@@ -12,6 +12,10 @@ export const MUPDF_VERSION = "1.28.6";
 /** Cache identity of page images; the geometry matches the previous PDF.js rendering. */
 export const PAGE_IMAGE_METHOD = `mupdf-${MUPDF_VERSION}:margin8:scale2:pixels2000000`;
 
+/** What a missing reader costs and how to restore it (doctor, `sciretriever web`). */
+export const MUPDF_MISSING_HINT =
+  "导入的 PDF 读不出标题、作者和 DOI，也不能生成全文；在仓库目录执行 `pnpm vendor:mupdf`";
+
 export interface MupdfRuntime {
   readonly executable: string;
   readonly version: string;

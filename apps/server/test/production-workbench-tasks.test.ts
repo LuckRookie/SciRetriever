@@ -870,7 +870,12 @@ describe("production task workbench composition", () => {
             catalog_path: env.catalog,
             artifact_root: env.artifacts,
             schema_version: SCHEMA_VERSION,
-            capabilities: { tasks: true, query: true, maintenance: true },
+            capabilities: {
+              tasks: true,
+              query: true,
+              maintenance: true,
+              pdf_reader: true,
+            },
           },
         },
       });

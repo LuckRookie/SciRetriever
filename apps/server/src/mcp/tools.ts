@@ -1305,6 +1305,28 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
     false,
   ),
   tool(
+    "recognize_literatures",
+    "Explicitly re-read the saved primary PDF of literatures marked needs-metadata and recognize them with the intake rules and configured sources; no model, no PDF download. Pass literature IDs or {kind:'needs-metadata'} for every marked paper with a PDF (at most 10,000). Returns the durable task; refused with pdf-reader-missing when this server cannot read PDFs.",
+    object({
+      selector: {
+        oneOf: [
+          object({
+            kind: { const: "literatures" },
+            literature_ids: {
+              type: "array",
+              minItems: 1,
+              maxItems: 1000,
+              uniqueItems: true,
+              items: id,
+            },
+          }),
+          object({ kind: { const: "needs-metadata" } }),
+        ],
+      },
+    }),
+    false,
+  ),
+  tool(
     "lookup_metadata",
     "Explicitly complete bibliography for existing literatures through configured metadata sources; records a durable task, never downloads PDF.",
     object({

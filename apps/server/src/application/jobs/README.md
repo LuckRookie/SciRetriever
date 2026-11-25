@@ -5,7 +5,7 @@
 ## 内容入口
 
 - [service.ts](service.ts)：任务队列和执行调度。
-- [processing.ts](processing.ts)：解析/分析等加工任务接线。
+- [processing.ts](processing.ts)：解析/分析等加工任务接线。`recognize-literature` 目标逐篇重新识别书目，跳过的目标记为 skipped；这类任务的详情另带 `literature_recognition` 计数。
 - [drafts.ts](drafts.ts)：已有 raw 的初稿补形成；同一个只读选择函数用于预览与固定成员，沿用 execution queue、analysis 阶段、尝试、控制和事件，业务目标为 draft。
 - [interventions.ts](interventions.ts)：人工介入与任务恢复协作。
 

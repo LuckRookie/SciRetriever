@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   canonicalJsonBytes,
+  emptyIntakeCluesUnread,
   parseMetadataObservation,
   parseIntakeBatch,
   parseIntakeBatchId,
@@ -127,6 +128,7 @@ function blank(): ImportSummary {
       possible_duplicates: 0,
       pending_decision: 0,
       needs_metadata: 0,
+      clues_unread: emptyIntakeCluesUnread(),
     },
     files: {
       upload: 0,
@@ -147,6 +149,17 @@ function selected(record: ImportRecord) {
       (f) => f.preferred && f.media_type === "application/pdf",
     ) ?? null
   );
+}
+/** Summaries saved before `clues_unread` existed report it as zero. */
+function withCluesUnread<T extends Pick<ImportSummary, "records">>(
+  summary: T,
+): T {
+  return summary.records.clues_unread
+    ? summary
+    : {
+        ...summary,
+        records: { ...summary.records, clues_unread: emptyIntakeCluesUnread() },
+      };
 }
 function addExcluded(summary: ImportSummary, kind: string, count = 1) {
   const values = summary.excluded as { kind: string; count: number }[];
@@ -223,7 +236,7 @@ export class ImportSessionReadService {
       op: "aggregate",
       batch_id: s.batch_id,
     });
-    return { ...blank(), ...s.summary, ...counts };
+    return withCluesUnread({ ...blank(), ...s.summary, ...counts });
   }
   report(
     id: string,
@@ -261,7 +274,7 @@ export class ImportSessionReadService {
       return {
         batch,
         estimated: false as const,
-        summary,
+        summary: withCluesUnread(summary),
         items,
         next_cursor,
       };
@@ -1112,6 +1125,12 @@ export class ImportSessionService extends ImportSessionReadService {
           }
         }
       const batch = await this.project(s);
+      // Clue reads continue in the background; each preview counts those saved so far.
+      (summary.records as { clues_unread: unknown }).clues_unread =
+        await this.fileItems.read({
+          kind: "clues-unread",
+          batch_id: s.batch_id,
+        });
       return {
         batch,
         estimated: true as const,

@@ -193,6 +193,7 @@ function usage(options: CliOptions): CliResult {
     "  context search|knowledge --request FILE|-; analysis prepare --request FILE|-; extraction prepare --request FILE|-\n" +
     "  literature status; literature search|read|references|reference|identity|artifact-chunk|bibliography --request FILE|-\n" +
     "  literature collect --request FILE|-\n" +
+    "  literature recognize --request FILE|-  # re-read saved PDFs of needs-metadata papers; no model; waits for its durable task\n" +
     "  jobs list|inspect|create-request|resolve --request FILE|- (create-request only saves)\n" +
     "  library batches|facets|batch-rename --request FILE|-; acquire-pdf preview --request FILE|-\n" +
     "  form-drafts preview|start --request FILE|-  # existing raw parses only; no model, network or parser; start waits for its durable task\n" +
@@ -1209,6 +1210,7 @@ async function execute(
     "form-drafts start": "form-drafts",
     "library batch-rename": "intake-batch-rename",
     "literature collect": "library-collect",
+    "literature recognize": "literature-recognize",
     "literature resolve-references": "archive-references",
     "literature metadata-edit": "metadata-edit",
     "archive arrangement-edit": "archive-arrangement-edit",
@@ -1236,7 +1238,10 @@ async function execute(
       if (bytes.byteLength > 1024 * 1024 + 4096) invalidInput();
       request = parseStrictJsonValue(bytes);
     } catch (cause) {
-      if (operation === "library-collect") {
+      if (
+        operation === "library-collect" ||
+        operation === "literature-recognize"
+      ) {
         if (options.signal?.aborted)
           throw new ProductOperationError("operation-cancelled", { cause });
         if (
@@ -1254,7 +1259,8 @@ async function execute(
         request,
         options.signal,
       );
-      if (operation === "form-drafts") {
+      // The task runs in this process, which closes when the command returns.
+      if (operation === "form-drafts" || operation === "literature-recognize") {
         const job = accepted as { job_id: string };
         await app.processingTasks!.run(job.job_id, options.signal);
       }
@@ -1269,6 +1275,11 @@ async function execute(
     const access = webAccessOptions(parsed.access);
     if (options.signal?.aborted) return { code: 130 };
     const { startWebSupervisor } = await import("./web-supervisor.js");
+    const { resolveMupdfRuntime, MUPDF_MISSING_HINT } = await import(
+      "../proofread/mupdf.js"
+    );
+    // The supervised service reads PDFs from the same bundle; starting stays allowed.
+    const pdfReader = (await resolveMupdfRuntime()) !== undefined;
     let running: Awaited<ReturnType<typeof startWebSupervisor>>;
     try {
       running = await startWebSupervisor({
@@ -1276,8 +1287,12 @@ async function execute(
         port,
         access,
         ...(options.signal ? { signal: options.signal } : {}),
-        onReady: (ready) =>
-          output(
+        onReady: (ready) => {
+          if (!pdfReader)
+            (options.stderr ?? ((text: string) => process.stderr.write(text)))(
+              `警告：没有找到 MuPDF。${MUPDF_MISSING_HINT}。\n`,
+            );
+          return output(
             {
               mode: "web",
               listen: ready.listen,
@@ -1292,7 +1307,8 @@ async function execute(
                   : "Log in with api_key. This key changes when the service restarts.",
             },
             options,
-          ),
+          );
+        },
       });
     } catch (error) {
       if (options.signal?.aborted) return { code: 0 };

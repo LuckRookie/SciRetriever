@@ -159,6 +159,8 @@ import {
   metadataRecognitionSources,
 } from "../literature/intake-recognition.js";
 import { PostParseRecognitionService } from "../literature/post-parse-recognition.js";
+import { LiteratureFileRecognitionService } from "../literature/file-recognition.js";
+import { FileClueReader } from "../literature/file-clues.js";
 import { ManualPdfIngestionService } from "../entry/manual-pdf.js";
 import {
   EntryPdfAcquisitionService,
@@ -282,6 +284,8 @@ export interface Application {
   readonly discovery: TopicDiscoveryService;
   readonly citations: CitationDiscoveryService;
   readonly identity: LiteratureIdentityService;
+  /** Re-reads marked literatures' saved PDFs (8.4); absent in read-only graphs. */
+  readonly fileRecognition?: LiteratureFileRecognitionService;
   readonly completion: LiteratureCompletionService | null;
   readonly maintenance: {
     readonly ingestPdf: ManualPdfIngestionService["ingestPdf"];
@@ -780,6 +784,7 @@ async function createApplicationOwned(
   let browserAgentCapability: BrowserAgentCapability | undefined;
   let rawParsing: RawParsingService | undefined;
   let postParseRecognition: PostParseRecognitionService | undefined;
+  let fileRecognition: LiteratureFileRecognitionService | undefined;
   let proofreadDocuments: ProofreadDocumentService | undefined;
   let draftDocuments: DraftPublicationService | undefined;
   let structureAnnotations: StructureAnnotationService | undefined;
@@ -1915,6 +1920,13 @@ async function createApplicationOwned(
           tags,
           documents: documentProcessing,
           identity: articleIdentity,
+          recognition: {
+            recognize: (literatureId, signal) => {
+              if (!fileRecognition)
+                throw new Error("file recognition is not assembled");
+              return fileRecognition.recognize(literatureId, signal);
+            },
+          },
           metadata: {
             execute: (request, signal, jobId, targetId) =>
               executeMetadataTask(
@@ -1974,6 +1986,13 @@ async function createApplicationOwned(
       database,
       identity,
       intakeRecognition,
+    );
+    fileRecognition = new LiteratureFileRecognitionService(
+      database,
+      files,
+      identity,
+      intakeRecognition,
+      options.importSessions?.clueReader ?? new FileClueReader(),
     );
     importSessions = new ImportSessionService(
       database,
@@ -2118,6 +2137,7 @@ async function createApplicationOwned(
         admission,
       ),
       restartAdmission: admission,
+      ...(fileRecognition ? { fileRecognition } : {}),
       folders,
       trash: new LiteratureTrashService(database),
       filters,

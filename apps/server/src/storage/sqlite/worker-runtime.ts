@@ -2306,7 +2306,8 @@ function publishIdentityObservation(p: Dynamic): Dynamic {
         manualTitle ||
         (observation.metadata.identifiers.length &&
           (p.intake_member ||
-            observation.provenance.source_name === "post-parse-recognition"))
+            observation.provenance.source_name === "post-parse-recognition" ||
+            observation.provenance.source_name === "file-recognition"))
       )
         db.prepare(
           "DELETE FROM literature_needs_metadata WHERE literature_id=?",

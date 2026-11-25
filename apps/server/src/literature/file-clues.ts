@@ -6,6 +6,7 @@ import {
   importObject,
   importInteger,
   type Identifier,
+  type IntakeCluesUnreadReason,
 } from "@sciretriever/contracts";
 import {
   acceptPdfFile,
@@ -31,6 +32,11 @@ export interface FileClues {
     | "encrypted-pdf"
     | "pdf-invalid"
     | null;
+  /**
+   * Why no text clue was read, or null when it was. `reason` keeps its older
+   * values; this field separates a missing reader from a failed one.
+   */
+  readonly unread: IntakeCluesUnreadReason | null;
   readonly info: {
     readonly title: string | null;
     readonly subject: string | null;
@@ -299,6 +305,30 @@ function readTool(
     });
   });
 }
+class ClueReaderMissing extends Error {
+  constructor() {
+    super("intake-clues-reader-unavailable");
+  }
+}
+/**
+ * The clue reason of a stored read, including reads saved before `unread`
+ * existed: their `clues-unavailable` cannot tell a missing reader from a
+ * failed one and counts as `reader-failed`.
+ */
+export function cluesUnreadReason(
+  clues: Pick<FileClues, "status" | "reason"> & {
+    readonly unread?: IntakeCluesUnreadReason | null;
+  },
+): IntakeCluesUnreadReason | null {
+  if (clues.status === "read") return null;
+  if (clues.unread) return clues.unread;
+  if (clues.status === "image-only") return "image-only";
+  if (clues.reason === "clues-timeout") return "reader-timeout";
+  if (clues.reason === "encrypted-pdf") return "encrypted-pdf";
+  if (clues.reason === "pdf-invalid" || clues.reason === "non-pdf-file")
+    return "invalid-pdf";
+  return "reader-failed";
+}
 /** Reads one already-scoped input, without catalogue, model or network access. */
 export class FileClueReader {
   constructor(
@@ -322,6 +352,7 @@ export class FileClueReader {
         ).replace(/\.[^.]+$/u, ""),
         status: "unavailable",
         reason: null,
+        unread: null,
         info: { title: null, subject: null, keywords: null },
         xmp: { title: null, identifier: null, dois: [] },
         pages: [],
@@ -335,7 +366,11 @@ export class FileClueReader {
     const timer = setTimeout(() => deadline.abort(), this.timeoutMs);
     const aborted = () => {
       if (signal?.aborted) throw signal.reason;
-      return { ...base, reason: "clues-timeout" as const };
+      return {
+        ...base,
+        reason: "clues-timeout" as const,
+        unread: "reader-timeout" as const,
+      };
     };
     let removeAbort = () => {};
     try {
@@ -345,7 +380,7 @@ export class FileClueReader {
           await acceptPdfFile(file, this.timeoutMs, stop);
           const runtime = await this.runtime();
           stop.throwIfAborted();
-          if (!runtime) throw new Error("intake-clues-reader-unavailable");
+          if (!runtime) throw new ClueReaderMissing();
           directory = await mkdtemp(join(tmpdir(), "sciretriever-file-clues-"));
           const script = join(directory, "read.js");
           await writeFile(script, SCRIPT, { mode: 0o600 });
@@ -394,9 +429,11 @@ export class FileClueReader {
         pageIds = uniqueIdentifiers(
           pages.flatMap((p) => [...clueDois(p.text), ...clueArxiv(p.text)]),
         );
+      const read = pages.some((p) => p.text);
       return {
         ...base,
-        status: pages.some((p) => p.text) ? "read" : "image-only",
+        status: read ? "read" : "image-only",
+        unread: read ? null : "image-only",
         info,
         xmp,
         pages,
@@ -417,12 +454,32 @@ export class FileClueReader {
       if (error instanceof PdfAcceptanceError) {
         const code = (error.cause as { code?: string } | undefined)?.code;
         if (code === "pdf-reader-timeout")
-          return { ...base, reason: "clues-timeout" };
+          return { ...base, reason: "clues-timeout", unread: "reader-timeout" };
         if (code && code !== "pdf-reader-cancelled")
-          return { ...base, reason: "clues-unavailable" };
-        return { ...base, status: "rejected", reason: error.reason };
+          return {
+            ...base,
+            reason: "clues-unavailable",
+            unread:
+              code === "pdf-reader-unavailable"
+                ? "reader-unavailable"
+                : "reader-failed",
+          };
+        return {
+          ...base,
+          status: "rejected",
+          reason: error.reason,
+          unread:
+            error.reason === "encrypted-pdf" ? "encrypted-pdf" : "invalid-pdf",
+        };
       }
-      return { ...base, reason: "clues-unavailable" };
+      return {
+        ...base,
+        reason: "clues-unavailable",
+        unread:
+          error instanceof ClueReaderMissing
+            ? "reader-unavailable"
+            : "reader-failed",
+      };
     } finally {
       clearTimeout(timer);
       removeAbort();

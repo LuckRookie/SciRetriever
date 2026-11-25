@@ -87,6 +87,7 @@ describe("staged file lifecycle", () => {
             maintenance: false,
             discovery: false,
             import: true,
+            pdf_reader: true,
           },
         },
       });

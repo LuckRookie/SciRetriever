@@ -8,6 +8,7 @@
 - [task-read.ts](task-read.ts)、[task-operations.ts](task-operations.ts)：共享任务列表、详情、创建与控制投影；只读路径不恢复任务。
 - [metadata-operations.ts](metadata-operations.ts)：显式发现/引用扩展和书目导入适配。
 - [maintenance-operations.ts](maintenance-operations.ts)：受控维护与提取交付，复用既有业务 owner。
+- [literature-recognition.ts](literature-recognition.ts)：`literature-recognize` 的提交：校验请求，缺 MuPDF 时以 `pdf-reader-missing` 拒绝，固定成员后在共用加工任务上每篇排一个 `recognize-literature` 目标并启动。
 - [configuration-operations.ts](configuration-operations.ts)：非交互配置预览、CAS 发布、凭据设置/移除和显式 probe；不初始化 catalog。
 
 - [import-sessions.ts](import-sessions.ts)：持久入库批次、可独立组装的 ImportSessionReadService、不写文献事实的预览、逐条接纳检查点与公共文件通道。HTTP 确认先固定 running，再在后台接纳；CLI/stdio 书目包装同步完成。恢复与七天过期维护只由服务组装显式启用，存储失败间隔一分钟重试、连续三次记 failed。补 PDF 按网页/CLI/MCP 与系统时区日期归入开放批次；身份、文件夹与 PDF 发布仍分别调用既有 owner。

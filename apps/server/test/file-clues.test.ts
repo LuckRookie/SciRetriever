@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { FileStore } from "../src/storage/files/store.js";
-import { FileClueReader } from "../src/literature/file-clues.js";
+import {
+  cluesUnreadReason,
+  FileClueReader,
+} from "../src/literature/file-clues.js";
 import {
   resolveMupdfRuntime,
   mupdfBundleCandidates,
@@ -49,6 +52,7 @@ it("reads DOI clues in document information and XMP before filename or first-pag
   expect(info).toMatchObject({
     status: "read",
     reason: null,
+    unread: null,
     info: { title: "Synthetic information title" },
     identifiers: [{ namespace: "doi", value: "10.5555/info" }],
   });
@@ -179,6 +183,7 @@ it("reports scan-only, encrypted, non-PDF and malformed inputs explicitly", asyn
   expect(await read(recognitionPdf({ pages: [[]] }))).toMatchObject({
     status: "image-only",
     reason: null,
+    unread: "image-only",
     prominent_titles: [],
     identifiers: [],
   });
@@ -190,14 +195,20 @@ it("reports scan-only, encrypted, non-PDF and malformed inputs explicitly", asyn
           .replace("%%EOF", "/Encrypt 90 0 R\n%%EOF"),
       ),
     ),
-  ).toMatchObject({ status: "rejected", reason: "encrypted-pdf" });
+  ).toMatchObject({
+    status: "rejected",
+    reason: "encrypted-pdf",
+    unread: "encrypted-pdf",
+  });
   expect(await read(Buffer.from("<html>synthetic</html>"))).toMatchObject({
     status: "rejected",
     reason: "non-pdf-file",
+    unread: "invalid-pdf",
   });
   expect(await read(Buffer.from("%PDF-1.4\ninvalid"))).toMatchObject({
     status: "rejected",
     reason: "pdf-invalid",
+    unread: "invalid-pdf",
   });
 });
 it("bounds the complete clue read by ten seconds and keeps a missing reader distinct", async () => {
@@ -207,7 +218,27 @@ it("bounds the complete clue read by ten seconds and keeps a missing reader dist
       "No reader.pdf",
       new FileClueReader(async () => undefined),
     ),
-  ).toMatchObject({ status: "unavailable", reason: "clues-unavailable" });
+  ).toMatchObject({
+    status: "unavailable",
+    reason: "clues-unavailable",
+    unread: "reader-unavailable",
+  });
+  const broken = await read(
+    recognitionPdf(),
+    "Broken reader.pdf",
+    new FileClueReader(async () => ({
+      executable: "/nonexistent/sciretriever/mutool",
+      version: "1.28.6",
+    })),
+  );
+  expect(broken).toMatchObject({
+    status: "unavailable",
+    reason: "clues-unavailable",
+    unread: "reader-failed",
+  });
+  expect(
+    cluesUnreadReason({ status: "unavailable", reason: "clues-unavailable" }),
+  ).toBe("reader-failed");
   const start = performance.now(),
     result = await read(
       recognitionPdf(),
@@ -217,6 +248,7 @@ it("bounds the complete clue read by ten seconds and keeps a missing reader dist
   expect(result).toMatchObject({
     status: "unavailable",
     reason: "clues-timeout",
+    unread: "reader-timeout",
     identifiers: [],
     pages: [],
   });

@@ -21,6 +21,10 @@ import {
   type MetadataTaskRequest,
 } from "./source-results.js";
 import { parseAcquirePdfSelector } from "./intake.js";
+import {
+  parseLiteratureRecognizeOperationRequest,
+  type LiteratureRecognizeOperationRequest,
+} from "./literature-recognition.js";
 import { tagRecord } from "./tags.js";
 import type {
   FormDraftsPreviewRequest,
@@ -92,6 +96,10 @@ export type ProcessingOperation =
   | {
       readonly operation: "assess-article-identity";
       readonly request: ArticleIdentityRequest;
+    }
+  | {
+      readonly operation: "recognize-literature";
+      readonly request: LiteratureRecognizeOperationRequest;
     };
 export interface ProcessingTaskRequest {
   readonly schema_version: 1 | 2;
@@ -152,6 +160,11 @@ export async function parseProcessingOperation(
       return {
         operation: r.operation,
         request: parseArticleIdentityRequest(r.request),
+      };
+    case "recognize-literature":
+      return {
+        operation: r.operation,
+        request: parseLiteratureRecognizeOperationRequest(r.request),
       };
     default:
       throw new ContractValidationError();

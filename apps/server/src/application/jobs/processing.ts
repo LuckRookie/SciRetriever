@@ -4,6 +4,8 @@ import {
   ContractValidationError,
   parseProcessingTaskRequest,
   sha256,
+  summarizeLiteratureRecognition,
+  type LiteratureRecognizeResult,
   type ProcessingOperation,
   type ProcessingTaskRequest,
 } from "@sciretriever/contracts";
@@ -52,6 +54,41 @@ export interface ProcessingRuntime {
   };
   readonly documents: Pick<DocumentProcessingService, "parseDocuments">;
   readonly identity: Pick<ArticleIdentityService, "assess"> | null;
+  readonly recognition?: {
+    recognize(
+      literatureId: string,
+      signal: AbortSignal,
+    ): Promise<LiteratureRecognizeResult>;
+  };
+}
+/** Recognition tasks carry their counts beside the per-target results. */
+function recognitionReport(selector: unknown, results: readonly unknown[]) {
+  const request =
+    selector && typeof selector === "object" && "request" in selector
+      ? (selector.request as { operations?: unknown })
+      : null;
+  const operations = Array.isArray(request?.operations)
+    ? (request.operations as { operation?: unknown }[])
+    : [];
+  if (
+    !operations.length ||
+    operations.some((o) => o?.operation !== "recognize-literature")
+  )
+    return {};
+  return {
+    literature_recognition: summarizeLiteratureRecognition(
+      operations.length,
+      results.flatMap((value) =>
+        value &&
+        typeof value === "object" &&
+        "operation" in value &&
+        value.operation === "recognize-literature" &&
+        "result" in value
+          ? [value.result as LiteratureRecognizeResult]
+          : [],
+      ),
+    ),
+  };
 }
 export async function processingEvents(
   repository: ExecutionRepository,
@@ -132,6 +169,12 @@ export async function readProcessingTaskWithEvents(
     results: events
       .filter((e) => e.kind === "processing-result")
       .map((e) => e.payload),
+    ...recognitionReport(
+      job.selector,
+      events
+        .filter((e) => e.kind === "processing-result")
+        .map((e) => e.payload),
+    ),
     partial_results: events
       .filter((e) => e.kind === "processing-partial-result")
       .map((e) => e.payload),
@@ -585,14 +628,14 @@ export class ProcessingTaskService {
               });
               throw new ProcessingTaskError("archive-failed");
             }
-            const disposition = [
-              "blocked",
-              "needs-parse",
-              "needs-pdf",
-              "excluded",
-            ].includes(String(result.outcome))
-              ? ("skipped" as const)
-              : ("completed" as const);
+            const disposition =
+              ["blocked", "needs-parse", "needs-pdf", "excluded"].includes(
+                String(result.outcome),
+              ) ||
+              (operation.operation === "recognize-literature" &&
+                result.outcome === "skipped")
+                ? ("skipped" as const)
+                : ("completed" as const);
             await this.repository.appendEvent({
               event_id: resultId,
               job_id: jobId,
@@ -657,9 +700,11 @@ export class ProcessingTaskService {
           stage_for_target: (target) =>
             request.operations[target.ordinal]?.operation === "parse-documents"
               ? "parsing"
-              : ["assess-article-identity", "acquire-metadata"].includes(
-                    request.operations[target.ordinal]!.operation,
-                  )
+              : [
+                    "assess-article-identity",
+                    "acquire-metadata",
+                    "recognize-literature",
+                  ].includes(request.operations[target.ordinal]!.operation)
                 ? "literature"
                 : "analysis",
         },
@@ -759,6 +804,16 @@ export class ProcessingTaskService {
               signal,
             );
             return { ...r };
+          }
+          case "recognize-literature": {
+            if (!this.runtime.recognition)
+              throw new ProcessingTaskError("recognition-unavailable");
+            return {
+              ...(await this.runtime.recognition.recognize(
+                operation.request.literature_id,
+                signal,
+              )),
+            };
           }
           case "assess-article-identity": {
             if (!this.runtime.identity)

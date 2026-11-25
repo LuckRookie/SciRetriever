@@ -122,6 +122,7 @@ import {
 import { ProductionWorkbenchSession } from "./production-session.js";
 import { WorkbenchSession, WorkbenchSessionError } from "./session.js";
 import { staticAssetCacheControl } from "./assets.js";
+import { resolveMupdfRuntime } from "../proofread/mupdf.js";
 import {
   materialBytesPath,
   pdfMaterialHeaders,
@@ -168,6 +169,8 @@ export interface WorkbenchWorkspace {
     readonly maintenance: boolean;
     readonly discovery: boolean;
     readonly import: boolean;
+    /** The bundled MuPDF reader was found when the service started. */
+    readonly pdf_reader: boolean;
   };
   readonly runtime_capabilities: WorkbenchRuntimeCapabilities | null;
 }
@@ -999,6 +1002,8 @@ export async function startWorkbenchHttp(
   const cookieName = `sr_workbench_${randomBytes(8).toString("hex")}`;
   const cookie = randomBytes(32).toString("hex");
   const clients = new Map<string, ClientGrant>();
+  // Without a production workspace, the reader is looked up once, on first read.
+  let pdfReaderAvailable: Promise<boolean> | undefined;
   const access = await WorkbenchAccess.create(accessOptions ?? {}, (id) => {
     for (const [clientId, grant] of clients) {
       if (grant.authSessionId === id) {
@@ -1331,6 +1336,11 @@ export async function startWorkbenchHttp(
         return;
       }
       if (request.method === "GET" && pathname === "/api/workspace") {
+        const pdfReader = options.workspace
+          ? options.workspace.capabilities.pdf_reader
+          : await (pdfReaderAvailable ??= resolveMupdfRuntime().then(
+              (runtime) => runtime !== undefined,
+            ));
         json(response, 200, {
           workspace: options.workspace ?? {
             catalog_path: null,
@@ -1344,6 +1354,7 @@ export async function startWorkbenchHttp(
               maintenance: !!options.maintenance,
               discovery: !!options.discovery,
               import: !!options.importBibliography,
+              pdf_reader: pdfReader,
             },
             runtime_capabilities:
               options.configuration?.runtime_capabilities ?? null,
@@ -2580,6 +2591,7 @@ const ARCHIVE_HTTP_WRITES = [
   "marks",
   "reading-open",
   "library-collect",
+  "literature-recognize",
   "library-trash",
   "snapshot-rename",
   "archive",
@@ -3659,7 +3671,7 @@ function createQueryHttpHandler(
           else
             json(
               response,
-              /conflict|stale|busy/.test(code)
+              /conflict|stale|busy/.test(code) || code === "pdf-reader-missing"
                 ? 409
                 : /invalid/.test(code)
                   ? 400

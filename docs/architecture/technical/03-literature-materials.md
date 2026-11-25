@@ -1551,6 +1551,16 @@ IntakeDisposition = "created" | "enriched" | "matched" | "restored" | "conflict"
 - `IntakeFileStatus`、`IntakeItemResult` 沿用 `ImportFileStatus`、`ImportRecordResult` 的字段，`disposition` 改用 `IntakeDisposition`。
 - `IntakeSummary` 在 `ImportSummary` 上增加以下字段：
   - `records.restored`（恢复被撤回的文献，[6.4.11](#6411-撤回)）、`records.possible_duplicates`、`records.pending_decision`、`records.needs_metadata`（书目待补）；
+  - `records.clues_unread: {total, by_reason}`：内容没读出来的文件数，即 6.4.4 的线索读取没有得到文字的文件。`by_reason` 总是列出六种原因，`total` 是它们的和：
+    - `reader-unavailable`：读 PDF 的工具不可用（没有找到合格的 MuPDF，或系统缺 `pdfinfo`）；
+    - `reader-timeout`：读取超过 10 秒；
+    - `reader-failed`：工具运行失败；
+    - `encrypted-pdf`：加密的 PDF；
+    - `invalid-pdf`：不是合法 PDF；
+    - `image-only`：只有图像、没有文字层的扫描件。
+
+    预览按已经读完的文件计数，认篇进行中会增长。这些文件照常入库：认不出时以文件名为暂时的标题，标为书目待补。条目上原有的 `clues-timeout`、`clues-unavailable` 原因不变；没有分开记录工具缺失与运行失败的旧条目，`clues-unavailable` 计为 `reader-failed`。
+
   - `files.unpaired`；
   - `full_text`，即这一批的全文取得情况，定义同[查询 2.1.8](06-retrieval-context.md#218-文献库计数与全文取得情况)，范围是批次成员。
 
@@ -1863,7 +1873,7 @@ HTTP 和 Browser 测试使用本地受控站点，不连接真实供应商。
 
 **什么时候清除。**
 
-- 被认出时清除：解析之后再认一次时认出，或者之后的入库按标识认出了它。
+- 被认出时清除：解析之后再认一次或入库后重新识别时认出，或者之后的入库按标识认出了它。
 - 使用者人工保存了标题时清除，即元数据编辑中设置了 `title` 字段。
 
 **解析之后再认一次。**
@@ -1873,6 +1883,22 @@ HTTP 和 Browser 测试使用本地受控站点，不连接真实供应商。
 - 认出时：取回的书目照常作为文献信息来源的来源记录接纳；另记一条 `source_kind = "user"`、`source_name = "post-parse-recognition"` 的来源记录，内容为认出所依据的标识与标题；然后清除标记。
 - 仍认不出时：用解析出的标题，以同一种来源记录替换暂时的标题（不覆盖人工锁定的字段），标记保留。
 - 不调用模型，不另外花费；查询照 ADR 0056 的来源设置出网。
+
+**入库后重新识别。**
+
+- 一个后台任务，用已保存的主 PDF 重新读 6.4.4 的线索，按 6.4.6 走前三步，规则与来源和入库时相同。适用于入库时读不出线索的文献，例如当时服务器没有 MuPDF。
+- 提交是维护写操作 `literature-recognize`（HTTP `POST /api/v1/maintenance/literature-recognize`，CLI `literature recognize`，MCP `recognize_literatures`，MCP 权限与发起获取元数据相同）：
+  - 请求 `{selector: {kind: "literatures", literature_ids} | {kind: "needs-metadata"}}`。`literatures` 为 1–1,000 个不重复的 ID；`needs-metadata` 在提交时固定为库里所有带书目待补标记、有主 PDF、未删除也未撤回的文献，超过 10,000 篇时以 `recognize-selection-too-large` 拒绝，不截断；一篇也没有时为 `recognize-selection-empty`。请求不合法为 `invalid-request`。
+  - 这台服务器读不了 PDF（没有 MuPDF）时以 `pdf-reader-missing`（HTTP 409）拒绝，不建任务。
+  - 返回所建的任务（与获取元数据任务提交后的形状相同），每篇文献是一个 `recognize-literature` 目标，在任务页可以暂停、继续、取消。CLI 等任务结束才返回。
+- 每一篇：
+  - 没有标记、没有主 PDF、已删除或已撤回的跳过（`not-marked`、`no-pdf`、`trashed`、`withdrawn`；文献已不存在为 `missing`）。
+  - 线索读不出、也没有可查的标识和标题时，按 6.4.10 的原因计为读不出；扫描件的文档信息或 XMP 里有 DOI 或标题时照常去认。
+  - 认出时照“解析之后再认一次”的办法接纳书目：取回的书目先经身份收敛；认出的作品已是库里另一篇文献时不作改动，计为冲突，标记保留。另记一条 `source_kind = "user"`、`source_name = "file-recognition"` 的来源记录（依据所保存 PDF 的资产编号与 sha256），然后清除标记。
+  - 没认出、PDF 里有标题（XMP 标题、文档信息标题或最醒目的行）时，以同一种来源记录用它替换暂时的标题，不覆盖人工锁定的字段，标记保留。
+  - 只是标题相近的候选不采纳（后台没有人挑选），按没认出处理，单独计数。
+  - 一篇失败不影响其他篇；不调用模型；查询照 ADR 0056 的来源设置出网，遵守来源调度与限速。
+- 报告：每个目标的结果为 `{literature_id, outcome, reason, title_replaced}`，`outcome` 为 `recognized`、`conflict`、`candidates`、`title-replaced`、`unrecognized`、`unread`、`skipped` 之一。任务详情另带 `literature_recognition`：`{total, processed, recognized, conflicts, candidates, title_replaced, unrecognized, unread: {total, by_reason}, skipped: {total, by_reason}}`；`candidates` 一项中换了标题的，只计在 `candidates`。
 
 ## 9. 目标接口（尚未实现）
 

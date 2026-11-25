@@ -821,6 +821,44 @@ export interface IntakeFileStatus {
   readonly sha256: string | null;
   readonly reason: string | null;
 }
+/** Why a PDF's own clues (information, XMP, first-page text) could not be read. */
+export const INTAKE_CLUES_UNREAD_REASONS = [
+  "reader-unavailable",
+  "reader-timeout",
+  "reader-failed",
+  "encrypted-pdf",
+  "invalid-pdf",
+  "image-only",
+] as const;
+export type IntakeCluesUnreadReason =
+  (typeof INTAKE_CLUES_UNREAD_REASONS)[number];
+export interface IntakeCluesUnread {
+  readonly total: number;
+  /** Every reason is present; `total` is their sum. */
+  readonly by_reason: Readonly<Record<IntakeCluesUnreadReason, number>>;
+}
+export function emptyIntakeCluesUnread(): IntakeCluesUnread {
+  return {
+    total: 0,
+    by_reason: Object.fromEntries(
+      INTAKE_CLUES_UNREAD_REASONS.map((reason) => [reason, 0]),
+    ) as Record<IntakeCluesUnreadReason, number>,
+  };
+}
+export function parseIntakeCluesUnread(value: unknown): IntakeCluesUnread {
+  const r = importObject(value, ["total", "by_reason"]);
+  const counts = importObject(r.by_reason, INTAKE_CLUES_UNREAD_REASONS);
+  const by_reason = Object.fromEntries(
+    INTAKE_CLUES_UNREAD_REASONS.map((reason) => [
+      reason,
+      importInteger(counts[reason]),
+    ]),
+  ) as Record<IntakeCluesUnreadReason, number>;
+  const total = importInteger(r.total);
+  if (Object.values(by_reason).reduce((a, b) => a + b, 0) !== total)
+    throw new ContractValidationError();
+  return { total, by_reason };
+}
 export interface IntakeSummary {
   readonly full_text: FullTextCounts;
   readonly records: {
@@ -833,6 +871,11 @@ export interface IntakeSummary {
     readonly possible_duplicates: number;
     readonly pending_decision: number;
     readonly needs_metadata: number;
+    /**
+     * Files whose PDF clues could not be read, by reason. Preview and report
+     * responses always carry it; summaries saved before it existed do not.
+     */
+    readonly clues_unread?: IntakeCluesUnread;
   };
   readonly files: {
     readonly upload: number;

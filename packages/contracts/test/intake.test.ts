@@ -373,3 +373,86 @@ it("binds the six batch states to nullable results and rejects the retired statu
   ])
     expect(() => parseIntakeBatch({ ...batch, ...patch })).toThrow();
 });
+it("parses clue-unread counts with every reason and a matching total", async () => {
+  const { emptyIntakeCluesUnread, parseIntakeCluesUnread } = await import(
+    "../src/index.js"
+  );
+  const empty = emptyIntakeCluesUnread();
+  expect(parseIntakeCluesUnread(empty)).toEqual(empty);
+  const counted = {
+    total: 3,
+    by_reason: { ...empty.by_reason, "reader-unavailable": 2, "image-only": 1 },
+  };
+  expect(parseIntakeCluesUnread(counted)).toEqual(counted);
+  for (const bad of [
+    { ...counted, total: 2 },
+    { total: 0, by_reason: { "reader-unavailable": 0 } },
+    { ...empty, by_reason: { ...empty.by_reason, "clues-unavailable": 0 } },
+  ])
+    expect(() => parseIntakeCluesUnread(bad)).toThrow();
+});
+it("parses literature-recognize requests and their queued operations exactly", async () => {
+  const {
+    parseLiteratureRecognizeRequest,
+    parseLiteratureId,
+    parseProcessingOperation,
+    summarizeLiteratureRecognition,
+  } = await import("../src/index.js");
+  expect(
+    parseLiteratureRecognizeRequest({ selector: { kind: "needs-metadata" } }),
+  ).toEqual({ selector: { kind: "needs-metadata" } });
+  expect(
+    parseLiteratureRecognizeRequest({
+      selector: { kind: "literatures", literature_ids: [id] },
+    }),
+  ).toEqual({ selector: { kind: "literatures", literature_ids: [id] } });
+  const many = Array.from(
+    { length: 1001 },
+    (_, i) => `00000000-0000-0000-0000-${String(i).padStart(12, "0")}`,
+  );
+  for (const bad of [
+    {},
+    { selector: { kind: "needs-metadata", limit: 1 } },
+    { selector: { kind: "literatures", literature_ids: [] } },
+    { selector: { kind: "literatures", literature_ids: [id, id] } },
+    { selector: { kind: "literatures", literature_ids: many } },
+    { selector: { kind: "query", query: {} } },
+  ])
+    expect(() => parseLiteratureRecognizeRequest(bad)).toThrow();
+  expect(
+    await parseProcessingOperation({
+      operation: "recognize-literature",
+      request: { literature_id: id },
+    }),
+  ).toEqual({
+    operation: "recognize-literature",
+    request: { literature_id: id },
+  });
+  await expect(
+    parseProcessingOperation({
+      operation: "recognize-literature",
+      request: { literature_id: id, extra: true },
+    }),
+  ).rejects.toThrow();
+  expect(
+    summarizeLiteratureRecognition(3, [
+      {
+        literature_id: parseLiteratureId(id),
+        outcome: "unread",
+        reason: "reader-timeout",
+        title_replaced: false,
+      },
+      {
+        literature_id: parseLiteratureId(id),
+        outcome: "skipped",
+        reason: "no-pdf",
+        title_replaced: false,
+      },
+    ]),
+  ).toMatchObject({
+    total: 3,
+    processed: 2,
+    unread: { total: 1, by_reason: { "reader-timeout": 1 } },
+    skipped: { total: 1, by_reason: { "no-pdf": 1 } },
+  });
+});

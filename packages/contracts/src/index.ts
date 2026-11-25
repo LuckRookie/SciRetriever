@@ -47,6 +47,7 @@ export * from "./article-identity.js";
 export * from "./operations.js";
 export * from "./form-drafts.js";
 export * from "./intake.js";
+export * from "./literature-recognition.js";
 import { parseIntakeBatchId, type IntakeBatchId } from "./intake.js";
 export * from "./capture.js";
 export * from "./long-document.js";
@@ -3785,9 +3786,12 @@ export function parseMetadataObservation(value: unknown): MetadataObservation {
       fail();
   } else if (
     provenance.source_kind === "user" &&
-    ["import", "web-capture", "post-parse-recognition"].includes(
-      provenance.source_name,
-    )
+    [
+      "import",
+      "web-capture",
+      "post-parse-recognition",
+      "file-recognition",
+    ].includes(provenance.source_name)
   ) {
     if (
       provenance.source_record_id === null ||

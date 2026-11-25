@@ -38,6 +38,7 @@ import { createMetadataOperations } from "./metadata-operations.js";
 import { operationRecord, ProductOperationError } from "./query-operations.js";
 import { manageTags } from "./tag-operations.js";
 import { createTaskOperations } from "./task-operations.js";
+import { submitLiteratureRecognition } from "./literature-recognition.js";
 import { LiteratureNotFoundError, queryTerms } from "../literature/query.js";
 import { WriteAdmissionError } from "../storage/write-admission.js";
 
@@ -110,6 +111,7 @@ export const MAINTENANCE_OPERATIONS = [
   "marks",
   "reading-open",
   "library-collect",
+  "literature-recognize",
   "library-trash",
   "archive",
   "archive-arrangement-edit",
@@ -235,6 +237,8 @@ async function performMaintenance(
       throw cause;
     }
   }
+  if (operation === "literature-recognize")
+    return submitLiteratureRecognition(app, input);
   if (operation === "library-trash") {
     try {
       return await app.trash.manage(input, signal);

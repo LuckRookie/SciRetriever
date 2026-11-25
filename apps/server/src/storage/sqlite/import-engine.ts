@@ -501,7 +501,16 @@ export function readImportStorage(
         )
         .get(r.batch_id)!.n,
     );
-    return { records, files: { ...files, unpaired } };
+    return {
+      records: {
+        ...records,
+        clues_unread: readIntakeItem(db, {
+          kind: "clues-unread",
+          batch_id: r.batch_id,
+        }),
+      },
+      files: { ...files, unpaired },
+    };
   }
   if (r.op === "result") {
     const v = db

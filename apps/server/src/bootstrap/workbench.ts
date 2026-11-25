@@ -50,6 +50,7 @@ import {
 } from "../configuration/owner.js";
 import { WorkbenchSession } from "../workbench/session.js";
 import { ProductionWorkbenchSession } from "../workbench/production-session.js";
+import { resolveMupdfRuntime } from "../proofread/mupdf.js";
 import {
   startQueryOnlyHttp,
   type QueryOnlyHttpOptions,
@@ -578,6 +579,8 @@ async function startProductionWorkbenchOwned(
           maintenance: !!app.maintenance,
           discovery: true,
           import: true,
+          // Judged again at every start; never stored in the catalog.
+          pdf_reader: (await resolveMupdfRuntime()) !== undefined,
         },
         runtime_capabilities: describeWorkbenchRuntime(app),
       },

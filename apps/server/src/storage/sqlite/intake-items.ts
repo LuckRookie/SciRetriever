@@ -12,6 +12,10 @@ const {
 import {
   IMPORT_LIMITS,
   EMPTY_METADATA,
+  INTAKE_CLUES_UNREAD_REASONS,
+  emptyIntakeCluesUnread,
+  type IntakeCluesUnread,
+  type IntakeCluesUnreadReason,
   parseLiteratureId,
   parseLiteratureMetadata,
   type IntakeBatchItem,
@@ -59,6 +63,9 @@ export type IntakeItemRead =
   | { kind: "one"; batch_id: string; item_id: string }
   | { kind: "hash"; sha256: string }
   | { kind: "needs"; literature_id: string }
+  | { kind: "clues-unread"; batch_id: string }
+  | { kind: "needs-pdf-literatures"; limit: number }
+  | { kind: "recognition-state"; literature_id: string }
   | { kind: "raw-owners"; asset_id: string }
   | { kind: "source-url"; file_id: string };
 export type IntakeItemWrite =
@@ -163,7 +170,62 @@ function stored(row: Record<string, SQLOutputValue>): StoredIntakeItem {
     retain_until: row.retain_until === null ? null : String(row.retain_until),
   };
 }
+/** What a later file recognition needs to know about one literature. */
+export interface RecognitionState {
+  readonly needs_metadata: boolean;
+  readonly trashed: boolean;
+  readonly withdrawn: boolean;
+  /** The name the PDF arrived with, when an intake recorded one. */
+  readonly file_name: string | null;
+}
+// Stored clue reads from before `unread` keep their older `reason`; the same
+// mapping as cluesUnreadReason() in literature/file-clues.ts.
+const CLUES_UNREAD_SQL = `coalesce(json_extract(recognition_json,'$.clues.unread'),CASE WHEN json_extract(recognition_json,'$.clues.status')='image-only' THEN 'image-only' WHEN json_extract(recognition_json,'$.clues.reason')='clues-timeout' THEN 'reader-timeout' WHEN json_extract(recognition_json,'$.clues.reason')='encrypted-pdf' THEN 'encrypted-pdf' WHEN json_extract(recognition_json,'$.clues.reason') IN ('pdf-invalid','non-pdf-file') THEN 'invalid-pdf' ELSE 'reader-failed' END)`;
+const LIVE_LITERATURE_SQL = (column: string) =>
+  `NOT EXISTS(SELECT 1 FROM intake_withdrawn_objects w WHERE w.object_kind='literature' AND w.object_id=${column}) AND NOT EXISTS(SELECT 1 FROM library_trash t WHERE t.literature_id=${column})`;
 export function readIntakeItem(db: DatabaseSync, r: IntakeItemRead): unknown {
+  if (r.kind === "clues-unread") {
+    const counts = emptyIntakeCluesUnread() as {
+      total: number;
+      by_reason: Record<IntakeCluesUnreadReason, number>;
+    };
+    for (const row of db
+      .prepare(
+        `SELECT ${CLUES_UNREAD_SQL} AS reason,count(*) AS n FROM intake_items WHERE batch_id=? AND json_type(recognition_json,'$.clues')='object' AND json_extract(recognition_json,'$.clues.status')<>'read' GROUP BY 1`,
+      )
+      .all(r.batch_id)) {
+      const reason = (
+        INTAKE_CLUES_UNREAD_REASONS as readonly string[]
+      ).includes(String(row.reason))
+        ? (String(row.reason) as IntakeCluesUnreadReason)
+        : "reader-failed";
+      counts.by_reason[reason] += Number(row.n);
+      counts.total += Number(row.n);
+    }
+    return counts satisfies IntakeCluesUnread;
+  }
+  if (r.kind === "needs-pdf-literatures")
+    return db
+      .prepare(
+        `SELECT n.literature_id FROM literature_needs_metadata n WHERE EXISTS(SELECT 1 FROM literature_assets a WHERE a.literature_id=n.literature_id AND a.role='primary-pdf') AND ${LIVE_LITERATURE_SQL("n.literature_id")} ORDER BY n.literature_id LIMIT ?`,
+      )
+      .all(r.limit)
+      .map((row) => String(row.literature_id));
+  if (r.kind === "recognition-state") {
+    const row = db
+      .prepare(
+        "SELECT EXISTS(SELECT 1 FROM literature_needs_metadata n WHERE n.literature_id=l.literature_id) AS needs,EXISTS(SELECT 1 FROM library_trash t WHERE t.literature_id=l.literature_id) AS trashed,EXISTS(SELECT 1 FROM intake_withdrawn_objects w WHERE w.object_kind='literature' AND w.object_id=l.literature_id) AS withdrawn,coalesce((SELECT i.file_name FROM intake_items i WHERE i.literature_id=l.literature_id AND i.file_name IS NOT NULL ORDER BY i.created_at DESC,i.item_id LIMIT 1),(SELECT f.file_name FROM import_files f WHERE f.literature_id=l.literature_id ORDER BY f.file_id LIMIT 1)) AS file_name FROM literatures l WHERE l.literature_id=?",
+      )
+      .get(r.literature_id);
+    return row
+      ? ({
+          needs_metadata: !!row.needs,
+          trashed: !!row.trashed,
+          withdrawn: !!row.withdrawn,
+          file_name: row.file_name === null ? null : String(row.file_name),
+        } satisfies RecognitionState)
+      : null;
+  }
   if (r.kind === "pending-resolution-files")
     return db
       .prepare(

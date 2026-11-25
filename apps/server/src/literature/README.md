@@ -24,7 +24,7 @@
 
 - [import-adapters.ts](import-adapters.ts)：中性记录、书目格式和网页原始标签的纯适配器登记；decode 只转换输入，不访问时钟、随机数、网络、文件或数据库。[bibliography-attachments.ts](bibliography-attachments.ts) 读取 BibTeX/BibLaTeX file 与 RIS L1，形成首选 PDF 的中性引用、脱敏本机路径并统计未导入附件；CSL JSON 不推断附件。
 - [web-page-adapter.ts](web-page-adapter.ts)：按标签与 JSON-LD 优先序产生中性书目、PDF 地址和无效 JSON 计数；单篇收藏接收原始 `WebPageData`，PDF 页面由文件流程处理，不据页面地址猜书目。
-- [file-clues.ts](file-clues.ts)：单个受控 PDF 的只读线索端口，由适配器入口导出；复用基本验收，再用受限 MuPDF 读取文档信息、XMP、首页/必要的第二页和醒目标题，全部操作受 10 秒总时限约束，不查库、不联网、不调用模型。文件条目上传与确认的组装不在此端口中。[import-clues.ts](import-clues.ts) 共用字符串及标识规范化。
+- [file-clues.ts](file-clues.ts)：单个受控 PDF 的只读线索端口，由适配器入口导出；复用基本验收，再用受限 MuPDF 读取文档信息、XMP、首页/必要的第二页和醒目标题，全部操作受 10 秒总时限约束，不查库、不联网、不调用模型。读不出文字时 `unread` 给出六种原因之一（工具不可用、超时、运行失败、加密、非法 PDF、扫描件），`cluesUnreadReason` 也为没有这一字段的已存读取给出原因。文件条目上传与确认的组装不在此端口中。[import-clues.ts](import-clues.ts) 共用字符串及标识规范化。
 
 书目适配器只收原始文本；bibliography-import 的 bibliographyText 共用 UTF-8/带 BOM UTF-16 的严格字节解码，供本地入口转换文本。只导书目的文件策略由 Entry 的批次选项处理，纯适配器仍返回同样的文件引用与排除计数。
 
@@ -40,7 +40,7 @@
 
 `query.ts` 的 parseSelection 复用获取 PDF 的范围选择器，读取有主 PDF 且没有当前部署 profile 原始解析的版本；它只读，不下载、解析或创建任务。批次与文献库计数的 full_text 共用按论文的取得情况聚合，查看命中论文的全部可见版本；文献库 statuses、with_primary_pdf 与 has_primary_pdf 筛选按版本。省略 has_primary_pdf 时规范化查询及 cursor 字节保持原样。
 
-[intake-recognition.ts](intake-recognition.ts) 依次核对标识、标题与作者/年份，只复用配置允许的元数据查询；按 Unicode 码点计算标题相似度，候选不自动接纳。预览不写文献事实。[post-parse-recognition.ts](post-parse-recognition.ts) 在原始解析发布后只处理书目待补文献，保留来源与人工锁；不执行解析或模型。文献查询的 needs_metadata 标记独立于建档状态。
+[intake-recognition.ts](intake-recognition.ts) 依次核对标识、标题与作者/年份，只复用配置允许的元数据查询；按 Unicode 码点计算标题相似度，候选不自动接纳。预览不写文献事实。[post-parse-recognition.ts](post-parse-recognition.ts) 在原始解析发布后只处理书目待补文献，保留来源与人工锁；不执行解析或模型。[file-recognition.ts](file-recognition.ts) 是入库后重新识别的逐篇执行：只处理带标记、有主 PDF、未删除未撤回的文献，经受限读取重读所保存的主 PDF，以入库时同一认篇服务认，跳过与读不出各有原因。两者认出或换标题后的接纳共用 [recognition-adoption.ts](recognition-adoption.ts)：先经身份收敛，再记一条用户来源记录（`post-parse-recognition` 或 `file-recognition`），只有认出时清除标记。文献查询的 needs_metadata 标记独立于建档状态。
 
 [possible-duplicates.ts](possible-duplicates.ts) 提供可能重复的纯判断与只读服务：复用认篇的标题规范化和码点相似度，结合第一作者和年份给出最多三个有序候选；标识、来源库编号及严格身份命中优先。服务只调用身份预览与书目小投影，不写文献事实。入库预览只比较已在库文献，确认按顺序重判；同批已接纳的前序条目也参与比较。批次与网页收藏共用本判断，候选不自行触发合并或新增。
 

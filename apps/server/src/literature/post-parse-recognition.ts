@@ -1,7 +1,4 @@
-import { createHash } from "node:crypto";
 import {
-  EMPTY_METADATA,
-  parseMetadataObservation,
   parseRawBlocksV1,
   type RawParse,
   type WebPageData,
@@ -10,9 +7,8 @@ import {
 import { decodeWebPage } from "./web-page-adapter.js";
 import type { SqliteWorker } from "../storage/sqlite/worker.js";
 import type { LiteratureIdentityService } from "./identity.js";
-import { LiteratureMetadataService } from "./metadata-service.js";
-import { adjudicateMetadataFields } from "./metadata-fields.js";
 import type { IntakeRecognitionService } from "./intake-recognition.js";
+import { adoptRecognition } from "./recognition-adoption.js";
 
 /** Runs after RawParse commits. Failure must never turn a successful parse into a failed parse. */
 export class PostParseRecognitionService {
@@ -69,82 +65,20 @@ export class PostParseRecognitionService {
     );
     for (const literatureId of owners.value) {
       signal?.throwIfAborted();
-      if (result.observation) {
-        const accepted = await this.identity.observe(result.observation, {
-          target_literature_id: literatureId,
-        });
-        if (accepted.disposition !== "accepted") continue;
-      }
-      const service = new LiteratureMetadataService(this.database),
-        current = await service.read(literatureId, signal);
-      const digest = createHash("sha256")
-        .update(
-          JSON.stringify([
-            literatureId,
-            raw.raw_parse_id,
-            result.metadata.title,
-            result.metadata.identifiers,
-          ]),
-        )
-        .digest("hex");
-      const observation = parseMetadataObservation({
-        observation_id: `post-parse-${digest}`,
-        metadata: {
-          ...EMPTY_METADATA,
-          title: result.metadata.title ?? title,
-          identifiers: result.metadata.identifiers,
-        },
-        provenance: {
-          provenance_id: `${digest.slice(0, 8)}-${digest.slice(8, 12)}-${digest.slice(12, 16)}-${digest.slice(16, 20)}-${digest.slice(20, 32)}`,
-          source_kind: "user",
+      await adoptRecognition(
+        this.database,
+        this.identity,
+        literatureId,
+        result,
+        {
           source_name: "post-parse-recognition",
+          observation_prefix: "post-parse",
           source_record_id: raw.raw_parse_id,
-          observed_at:
-            (await this.database.getObservation(`post-parse-${digest}`))
-              ?.provenance.observed_at ?? new Date().toISOString(),
           input_sha256: raw.result_sha256,
-          parameters_sha256: null,
+          title,
         },
-        source_type: null,
-        source_type_mapping_version: null,
-        version_role: null,
-        version_links: [],
-        declared_keywords: [],
-        reference_texts: [],
-        reference_count: null,
-        cited_by_count: null,
-        asset_hints: [],
-      });
-      const resolved = adjudicateMetadataFields({
-        current: current.literature.metadata,
-        states: current.field_states,
-        candidates: [
-          {
-            field: "title",
-            value: observation.metadata.title,
-            evidence: {
-              source: "manual",
-              observation_id: observation.observation_id,
-              provenance: observation.provenance,
-            },
-          },
-        ],
-      });
-      await service.publish(current, resolved, observation, signal);
-      if (result.recognition.state === "recognized")
-        await this.database.run({
-          kind: "import_write",
-          action: {
-            op: "items-write",
-            action: {
-              kind: "needs",
-              literature_id: literatureId,
-              needed: false,
-              batch_id: null,
-              now: new Date().toISOString(),
-            },
-          },
-        });
+        signal,
+      );
     }
   }
   async page(

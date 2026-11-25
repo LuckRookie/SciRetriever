@@ -9,6 +9,7 @@ import {
   CLOAK_VERSION,
   verifyInstalledCloakRuntime,
 } from "../configuration/cloak-runtime.js";
+import { MUPDF_MISSING_HINT, resolveMupdfRuntime } from "../proofread/mupdf.js";
 
 export interface DoctorCheck {
   readonly name: string;
@@ -79,6 +80,16 @@ export async function runDoctor(
     check("prlimit", prlimit),
     check("pdfinfo", pdfinfo),
     check("Xvfb", xvfb),
+  );
+  const mupdf = await resolveMupdfRuntime();
+  checks.push(
+    Object.freeze({
+      name: "mupdf",
+      status: mupdf ? ("ready" as const) : ("blocked" as const),
+      detail: mupdf
+        ? `${mupdf.version} (${mupdf.executable})`
+        : `MuPDF bundle is unavailable: ${MUPDF_MISSING_HINT}`,
+    }),
   );
   if (options.browser) {
     const capacity = effectiveBrowserConcurrency(options.browser);
