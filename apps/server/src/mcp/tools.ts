@@ -419,7 +419,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "tags_query",
-    "Read the library tag vocabulary (list/search/show/state/changes/undo-preview), ordered literature assignment or a model-free backfill-preview. List/search returns {items,total,next_offset}; each item has the Tag fields plus uses, the direct literature assignment count (same as show.uses, excluding descendants). List defaults to active tags. Parent and merged tags resolve to active children. Preview reports candidates and estimated calls; old assignments may need explicit backfill.",
+    "Read the library tag vocabulary (list/search/show/state/changes/undo-preview), ordered literature assignment, assignment-detail (reasons, evidence segment locators with a stale flag, origin and locks; empty items without an assignment), or a model-free backfill-preview. List/search returns {items,total,next_offset}; each item has the Tag fields plus uses, the direct literature assignment count (same as show.uses, excluding descendants). List defaults to active tags. Parent and merged tags resolve to active children. Preview reports candidates and estimated calls; old assignments may need explicit backfill.",
     object({
       operation: {
         enum: [
@@ -429,6 +429,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
           "state",
           "changes",
           "assignment",
+          "assignment-detail",
           "backfill-preview",
           "undo-preview",
         ],

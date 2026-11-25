@@ -944,7 +944,15 @@ function libraryTagBadges(ids: readonly string[]): Map<string, Dynamic[]> {
   const result = new Map<string, Dynamic[]>();
   for (const row of db
     .prepare(
-      "SELECT i.literature_id,i.rank,t.tag_id,t.row_json FROM literature_tag_items i JOIN tags t ON t.tag_id=i.tag_id WHERE i.literature_id IN (SELECT value FROM json_each(?)) ORDER BY i.literature_id,i.rank",
+      // Origin and evidence count come from the same page's assignment rows
+      // (primary-key lookups), never from per-literature history reads.
+      `SELECT i.literature_id,i.rank,i.locked,t.tag_id,t.row_json,
+        json_extract(j.value,'$.origin') AS origin,
+        (SELECT coalesce(sum(json_array_length(e.value,'$.segment_ids')),0) FROM json_each(j.value,'$.evidence') e) AS evidence_count
+      FROM literature_tag_items i JOIN tags t ON t.tag_id=i.tag_id
+      LEFT JOIN literature_tag_assignments a ON a.literature_id=i.literature_id
+      LEFT JOIN json_each(a.row_json,'$.items') j ON json_extract(j.value,'$.tag_id')=i.tag_id
+      WHERE i.literature_id IN (SELECT value FROM json_each(?)) ORDER BY i.literature_id,i.rank`,
     )
     .all(JSON.stringify(ids))) {
     const t = JSON.parse(String(row.row_json)),
@@ -953,6 +961,13 @@ function libraryTagBadges(ids: readonly string[]): Map<string, Dynamic[]> {
       tag_id: row.tag_id,
       name: t.name_zh || t.name_en,
       rank: row.rank,
+      ...(row.origin === null
+        ? {}
+        : {
+            origin: row.origin,
+            locked: Number(row.locked) === 1,
+            evidence_count: Number(row.evidence_count),
+          }),
     });
     result.set(String(row.literature_id), items);
   }

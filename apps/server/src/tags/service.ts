@@ -1,6 +1,7 @@
 import {
   parseAssetId,
   parseLiteratureId,
+  parseTagAssignmentDetail,
   parseTagAssignmentItem,
   parseTagDraft,
   parseVocabularyMutation,
@@ -10,6 +11,7 @@ import {
   type Tag,
   type TagListItem,
   type TagAssignment,
+  type TagAssignmentDetail,
   type TagAssignmentItem,
   type VocabularyActor,
   type VocabularyChange,
@@ -101,6 +103,48 @@ export class TagService {
       { literature_id: parseLiteratureId(id) },
       signal,
     );
+  }
+  /**
+   * The current assignment with reasons, evidence, origin and locks. Evidence
+   * is stale when its version is no longer the default full text of the
+   * primary PDF, the same condition under which `build` refuses with
+   * `tag-evidence-stale`. Reads only this literature's rows.
+   */
+  async assignmentDetail(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<TagAssignmentDetail> {
+    const literature = parseLiteratureId(id),
+      assignment = await this.assignment(literature, signal),
+      primary = (await this.database.currentFacts(literature))?.primary_asset,
+      current = primary
+        ? ((
+            await this.database.documentDefault(
+              literature,
+              primary.asset_id,
+              primary.sha256,
+            )
+          )?.document_version_id ?? null)
+        : null;
+    return parseTagAssignmentDetail({
+      literature_id: literature,
+      current_document_version_id: current,
+      revision: assignment?.revision ?? null,
+      vocab_version: assignment?.vocab_version ?? null,
+      model: assignment?.model ?? null,
+      items: (assignment?.items ?? []).map((item) => {
+        const evidence = item.evidence.map((e) => ({
+          document_version_id: e.document_version_id,
+          segment_ids: e.segment_ids,
+          stale: e.document_version_id !== current,
+        }));
+        return {
+          ...item,
+          evidence,
+          evidence_stale: evidence.some((e) => e.stale),
+        };
+      }),
+    });
   }
   change(
     value: unknown,

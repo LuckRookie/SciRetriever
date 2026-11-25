@@ -236,6 +236,100 @@ export function parseTagAssignmentItem(value: unknown): TagAssignmentItem {
     locked: bool(r.locked),
   });
 }
+/**
+ * One literature's current tag assignment with reasons and evidence, for the
+ * `tags` query operation `assignment-detail`. Each evidence entry is the stored
+ * locator: read a segment with the `document-slice` query
+ * `{document_version_id, selector: {kind: "segment", segment_id}}`.
+ */
+export interface TagAssignmentDetailEvidence extends TagEvidence {
+  /** The cited version is no longer the current full text of the primary PDF. */
+  readonly stale: boolean;
+}
+export interface TagAssignmentDetailItem
+  extends Omit<TagAssignmentItem, "evidence"> {
+  readonly evidence: readonly TagAssignmentDetailEvidence[];
+  /** Some evidence points to a full-text version that is no longer current. */
+  readonly evidence_stale: boolean;
+}
+export interface TagAssignmentDetail {
+  readonly literature_id: string;
+  /** Current default full text of the primary PDF; null when there is none. */
+  readonly current_document_version_id: string | null;
+  /** Null, with `items: []`, when the literature has no tag assignment. */
+  readonly revision: number | null;
+  readonly vocab_version: number | null;
+  readonly model: string | null;
+  readonly items: readonly TagAssignmentDetailItem[];
+}
+export function parseTagAssignmentDetail(value: unknown): TagAssignmentDetail {
+  const r = tagRecord(value, [
+    "literature_id",
+    "current_document_version_id",
+    "revision",
+    "vocab_version",
+    "model",
+    "items",
+  ]);
+  if (!Array.isArray(r.items) || r.items.length > 64) fail();
+  const items = r.items.map((v) => {
+    const i = tagRecord(v, [
+      "tag_id",
+      "rank",
+      "reason",
+      "evidence",
+      "origin",
+      "locked",
+      "evidence_stale",
+    ]);
+    if (!Array.isArray(i.evidence)) fail();
+    const evidence = i.evidence.map((e) => {
+      const x = tagRecord(e, ["document_version_id", "segment_ids", "stale"]);
+      return Object.freeze({
+        ...parseTagEvidence({
+          document_version_id: x.document_version_id,
+          segment_ids: x.segment_ids,
+        }),
+        stale: bool(x.stale),
+      });
+    });
+    const item = parseTagAssignmentItem({
+      tag_id: i.tag_id,
+      rank: i.rank,
+      reason: i.reason,
+      evidence: evidence.map(({ document_version_id, segment_ids }) => ({
+        document_version_id,
+        segment_ids,
+      })),
+      origin: i.origin,
+      locked: i.locked,
+    });
+    const stale = bool(i.evidence_stale);
+    if (stale !== evidence.some((e) => e.stale)) fail();
+    return Object.freeze({
+      ...item,
+      evidence: Object.freeze(evidence),
+      evidence_stale: stale,
+    });
+  });
+  const none = r.revision === null;
+  if (
+    none !== (r.vocab_version === null) ||
+    (none && (items.length || r.model !== null))
+  )
+    fail();
+  return Object.freeze({
+    literature_id: parseLiteratureId(r.literature_id),
+    current_document_version_id:
+      r.current_document_version_id === null
+        ? null
+        : parseAssetId(r.current_document_version_id),
+    revision: none ? null : tagInteger(r.revision, 1),
+    vocab_version: none ? null : tagInteger(r.vocab_version),
+    model: r.model === null ? null : tagText(r.model),
+    items: Object.freeze(items),
+  });
+}
 export async function tagAssignmentHash(
   value: Pick<TagAssignment, "literature_id" | "items">,
 ): Promise<string> {

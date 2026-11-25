@@ -361,6 +361,18 @@ export interface LiteratureSearchItem {
     readonly tag_id: string;
     readonly name: string;
     readonly rank: number;
+    /**
+     * Who put the tag there, as stored on the assignment item: `auto` the
+     * model from the corrected full text, `backfill` the model from title,
+     * abstract and keywords, `manual` a person added it or saved it while
+     * editing or (un)locking (the data does not tell these two apart).
+     * Absent from older servers.
+     */
+    readonly origin?: "auto" | "manual" | "backfill";
+    /** Locked against automatic changes. Absent from older servers. */
+    readonly locked?: boolean;
+    /** Number of cited full-text segments; read them with tags assignment-detail. */
+    readonly evidence_count?: number;
   }[];
 
   readonly literature: Literature;
@@ -766,11 +778,35 @@ export function parseLiteratureSearchItem(
       ? {}
       : {
           tags: list(r.tags, [], (v) => {
-            const t = exact(v, ["tag_id", "name", "rank"], []);
+            const optional = ["origin", "locked", "evidence_count"].filter(
+              (key) => v && typeof v === "object" && Object.hasOwn(v, key),
+            );
+            const t = exact(v, ["tag_id", "name", "rank", ...optional], []);
+            if (
+              Object.hasOwn(t, "origin") &&
+              !["auto", "manual", "backfill"].includes(t.origin as string)
+            )
+              fail(["tags", "origin"]);
             return {
               tag_id: parseAssetId(t.tag_id),
               name: text(t.name, []),
               rank: integer(t.rank, [], 1, 1000),
+              ...(Object.hasOwn(t, "origin")
+                ? { origin: t.origin as "auto" | "manual" | "backfill" }
+                : {}),
+              ...(Object.hasOwn(t, "locked")
+                ? { locked: wireBoolean(t.locked) }
+                : {}),
+              ...(Object.hasOwn(t, "evidence_count")
+                ? {
+                    evidence_count: integer(
+                      t.evidence_count,
+                      ["tags", "evidence_count"],
+                      0,
+                      Number.MAX_SAFE_INTEGER,
+                    ),
+                  }
+                : {}),
             };
           }),
         }),

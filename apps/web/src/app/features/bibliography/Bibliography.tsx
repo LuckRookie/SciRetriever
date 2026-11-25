@@ -6,6 +6,7 @@ import {
 import { RichTitle, literatureTone } from "../../components/index.js";
 import { paperAuthors, paperTitleParts } from "../../data/library.js";
 import { statusLabels } from "../../strings.js";
+import { BibliographyTags } from "./TagEvidence.js";
 import "./bibliography.css";
 
 const CJK = /[㐀-鿿豈-﫿]/u;
@@ -138,17 +139,7 @@ export function BibliographyContent({
         </p>
       ) : null}
       {holdings && item.tags?.length ? (
-        <p className="bibliography-tags" aria-label="标签">
-          <span>标签</span>
-          {item.tags.map((tag) => (
-            <span
-              key={tag.tag_id}
-              className={tag.rank === 1 ? "paper-tag primary" : "paper-tag"}
-            >
-              {tag.name}
-            </span>
-          ))}
-        </p>
+        <BibliographyTags key={item.literature.literature_id} item={item} />
       ) : null}
     </div>
   );

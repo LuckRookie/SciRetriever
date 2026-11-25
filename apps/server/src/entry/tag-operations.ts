@@ -55,6 +55,10 @@ export async function queryTags(
     const q = tagRecord(r.request, ["literature_id"]);
     return tags.assignment(tagText(q.literature_id), signal);
   }
+  if (r.operation === "assignment-detail") {
+    const q = tagRecord(r.request, ["literature_id"]);
+    return tags.assignmentDetail(tagText(q.literature_id), signal);
+  }
   if (r.operation === "backfill-preview") {
     const q = tagRecord(r.request, ["tag_ids"]);
     if (!Array.isArray(q.tag_ids)) throw new TagError("tags-invalid");
