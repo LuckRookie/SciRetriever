@@ -106,6 +106,7 @@ import {
   MORE_MATERIAL_STATES,
   materialCount,
   materialCountScope,
+  materialCountTruncated,
   materialQuery,
   queryMaterialState,
   type MaterialState,
@@ -743,7 +744,11 @@ export default function Library() {
   /** Counted from the first 10,000 matches, “1 万+”; with older hits unread, “n+”. */
   const quickCount = (filter: MaterialState | "") =>
     libraryCount(countFor(filter)!, {
-      truncated: counts.data?.count_truncated === true,
+      truncated:
+        counts.data !== undefined &&
+        (filter === ""
+          ? counts.data.count_truncated === true
+          : materialCountTruncated(counts.data, filter)),
       incomplete: counts.data?.scan_incomplete === true,
       lowerBound: windowNumber === 1,
     });

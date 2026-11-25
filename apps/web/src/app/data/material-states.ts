@@ -54,6 +54,8 @@ export function materialCount(
   counts: LibraryCounts,
   state: MaterialState,
 ): number {
+  // Past 10,000 hits each category is counted on its own, up to 10,000.
+  if (counts.material_counts) return counts.material_counts[state].count;
   switch (state) {
     case "metadata":
       return counts.statuses.UNREVIEWED - counts.unavailable_pdf;
@@ -62,6 +64,18 @@ export function materialCount(
     default:
       return counts.statuses[state];
   }
+}
+/**
+ * Whether one category's number stopped at the 10,000 limit. Past the limit
+ * every category says so for itself: one with twelve papers is twelve.
+ */
+export function materialCountTruncated(
+  counts: LibraryCounts,
+  state: MaterialState,
+): boolean {
+  return counts.material_counts
+    ? counts.material_counts[state].truncated === true
+    : counts.count_truncated === true;
 }
 /** The category one paper is in. */
 export function itemMaterialState(item: LiteratureSearchItem): MaterialState {

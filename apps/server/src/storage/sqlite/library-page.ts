@@ -23,6 +23,7 @@ import {
   draftSortFields,
   globalLibraryCountScope,
   LIBRARY_COUNT_LIMIT,
+  LIBRARY_MATERIAL_STATES,
   LIBRARY_SORT_SCOPE_LIMIT,
   parseIntakeBatchId,
   RELEVANCE_RESULT_LIMIT,
@@ -115,6 +116,16 @@ const {
 );
 export const OPENED_SQL =
   "(SELECT last_opened_at FROM reading_history h WHERE h.literature_id=l.literature_id)";
+/** Membership of one material category, over a hit row aliased `l`. */
+const MATERIAL_SQL: Record<(typeof LIBRARY_MATERIAL_STATES)[number], string> = {
+  READY: "l.status='READY'",
+  ASSET_READY: "l.status='ASSET_READY'",
+  metadata: `l.status='UNREVIEWED' AND NOT ${HAS_EXHAUSTION_SQL}`,
+  ARCHIVING: "l.status='ARCHIVING'",
+  ARCHIVE_FAILED: "l.status='ARCHIVE_FAILED'",
+  unavailable: `l.status='UNREVIEWED' AND ${HAS_EXHAUSTION_SQL}`,
+  EXCLUDED: "l.status='EXCLUDED'",
+};
 const recentCutoffAt = (at: number) =>
   new Date(at - 30 * 86_400_000).toISOString();
 /** Earliest known observation, not publication date or the last metadata refresh. */
@@ -1136,10 +1147,22 @@ export function libraryCounts(
   const matching =
     text?.matching ??
     `SELECT l.literature_id,${status} AS status ${from} ${where}`;
+  // A limited sample gives the fields below; past the limit each material
+  // category is counted again over all hits, each with its own limit.
   const sample = bounded
-    ? `window AS MATERIALIZED (${matching} LIMIT ${LIBRARY_COUNT_LIMIT + 1}),
-       matches AS MATERIALIZED (SELECT * FROM window LIMIT ${LIBRARY_COUNT_LIMIT})`
+    ? `hits AS NOT MATERIALIZED (${matching}),
+       window AS MATERIALIZED (SELECT * FROM hits LIMIT ${LIBRARY_COUNT_LIMIT + 1}),
+       matches AS MATERIALIZED (SELECT * FROM window LIMIT ${LIBRARY_COUNT_LIMIT}),
+       edge AS MATERIALIZED (SELECT count(*)>${LIBRARY_COUNT_LIMIT} AS truncated FROM window)`
     : `matches AS MATERIALIZED (${matching})`;
+  const materials = bounded
+    ? LIBRARY_MATERIAL_STATES.map(
+        (state, i) =>
+          `, CASE WHEN e.truncated THEN (SELECT count(*) FROM (
+            SELECT 1 FROM hits l WHERE ${MATERIAL_SQL[state]} AND sr_query_continue()
+            LIMIT ${LIBRARY_COUNT_LIMIT + 1})) END AS material_${i}`,
+      ).join("")
+    : "";
   const paper = fullTextCountsProjection(
     "SELECT literature_id FROM matches",
     undefined,
@@ -1160,15 +1183,31 @@ export function libraryCounts(
         FROM matches CROSS JOIN literatures l USING(literature_id) WHERE sr_query_continue()
       ), paper_counts AS (SELECT ${paper.columns})
      SELECT v.*, p.total AS papers, p.obtained, p.exhausted
-       ${bounded ? `, (SELECT count(*)>${LIBRARY_COUNT_LIMIT} FROM window) AS truncated` : ""}
+       ${bounded ? `, e.truncated AS truncated ${materials}` : ""}
        ${text ? `, ${text.incomplete} AS incomplete` : ""}
-     FROM version_counts v CROSS JOIN paper_counts p`,
+     FROM version_counts v CROSS JOIN paper_counts p
+       ${bounded ? "CROSS JOIN edge e" : ""}`,
     )
     .get(...(text?.args ?? args), recentCutoff)!;
   const total = Number(row.versions);
   return {
     ...countReadFlags(state, updating),
-    ...(row.truncated ? { count_truncated: true as const } : {}),
+    ...(row.truncated
+      ? {
+          count_truncated: true as const,
+          material_counts: Object.fromEntries(
+            LIBRARY_MATERIAL_STATES.map((state, i) => {
+              const n = Number(row[`material_${i}`]);
+              return [
+                state,
+                n > LIBRARY_COUNT_LIMIT
+                  ? { count: LIBRARY_COUNT_LIMIT, truncated: true as const }
+                  : { count: n },
+              ];
+            }),
+          ) as NonNullable<LibraryCounts["material_counts"]>,
+        }
+      : {}),
     ...(row.incomplete ? { scan_incomplete: true as const } : {}),
     ...(scope === "all"
       ? {

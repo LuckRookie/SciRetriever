@@ -125,6 +125,56 @@ it("parses exact version counts and paper counts without equating their units", 
   expect(() => parseLibraryCounts(missingFullText)).toThrow();
   expect(() => parseLibraryCounts(missingPrimary)).toThrow();
 });
+it("accepts material counts only beside a truncated total, each limited on its own", () => {
+  const limited = {
+    ...counts,
+    total: 10_000,
+    unavailable_pdf: 0,
+    full_text: { total: 0, obtained: 0, missing: 0, exhausted: 0 },
+    statuses: { ...counts.statuses, UNREVIEWED: 10_000 },
+    count_truncated: true,
+  };
+  const material_counts = {
+    READY: { count: 0 },
+    ASSET_READY: { count: 12 },
+    metadata: { count: 10_000, truncated: true },
+    ARCHIVING: { count: 0 },
+    ARCHIVE_FAILED: { count: 0 },
+    unavailable: { count: 3 },
+    EXCLUDED: { count: 0 },
+  };
+  expect(
+    parseLibraryCounts({ ...limited, material_counts }).material_counts,
+  ).toEqual(material_counts);
+  expect(parseLibraryCounts(limited).material_counts).toBeUndefined();
+  for (const bad of [
+    { ...counts, material_counts },
+    { ...limited, material_counts: { ...material_counts, READY: undefined } },
+    {
+      ...limited,
+      material_counts: { ...material_counts, other: { count: 0 } },
+    },
+    {
+      ...limited,
+      material_counts: { ...material_counts, READY: { count: 10_001 } },
+    },
+    {
+      ...limited,
+      material_counts: {
+        ...material_counts,
+        READY: { count: 9, truncated: true },
+      },
+    },
+    {
+      ...limited,
+      material_counts: {
+        ...material_counts,
+        READY: { count: 0, truncated: false },
+      },
+    },
+  ])
+    expect(() => parseLibraryCounts(bad)).toThrow();
+});
 it("checks FullTextCounts relations, exact keys and bounded integers", () => {
   expect(
     parseFullTextCounts({ total: 0, obtained: 0, missing: 0, exhausted: 0 }),

@@ -121,6 +121,28 @@ export function parseFullTextCounts(value: unknown): FullTextCounts {
   return Object.freeze(result);
 }
 
+/**
+ * The material categories the library counts by: the statuses, with
+ * UNREVIEWED split into "metadata" (automatic routes not exhausted) and
+ * "unavailable" (`unavailable_pdf`). They do not overlap.
+ */
+export const LIBRARY_MATERIAL_STATES = [
+  "READY",
+  "ASSET_READY",
+  "metadata",
+  "ARCHIVING",
+  "ARCHIVE_FAILED",
+  "unavailable",
+  "EXCLUDED",
+] as const;
+export type LibraryMaterialState = (typeof LIBRARY_MATERIAL_STATES)[number];
+export interface LibraryMaterialCount {
+  /** Matching versions in this category, counted up to LIBRARY_COUNT_LIMIT. */
+  readonly count: number;
+  /** The category has more than LIBRARY_COUNT_LIMIT matching versions. */
+  readonly truncated?: true;
+}
+
 export interface LibraryCounts extends LibraryCountFlags {
   readonly total: number;
   readonly recently_opened: number;
@@ -133,6 +155,33 @@ export interface LibraryCounts extends LibraryCountFlags {
     readonly collected: number;
     readonly discovered_only: number;
   };
+  /**
+   * Present only with `count_truncated`: each category counted on its own
+   * over all matches (within the scan window when `scan_incomplete`), each
+   * limited separately. The other fields still describe the limited sample.
+   */
+  readonly material_counts?: Readonly<
+    Record<LibraryMaterialState, LibraryMaterialCount>
+  >;
+}
+
+function parseMaterialCounts(
+  value: unknown,
+): NonNullable<LibraryCounts["material_counts"]> {
+  const r = record(value, LIBRARY_MATERIAL_STATES);
+  return Object.freeze(
+    Object.fromEntries(
+      LIBRARY_MATERIAL_STATES.map((state) => {
+        const entry = record(r[state], ["count"], ["truncated"]);
+        const n = count(entry.count);
+        if (n > LIBRARY_COUNT_LIMIT) fail();
+        if (!Object.hasOwn(entry, "truncated"))
+          return [state, Object.freeze({ count: n })];
+        if (entry.truncated !== true || n !== LIBRARY_COUNT_LIMIT) fail();
+        return [state, Object.freeze({ count: n, truncated: true as const })];
+      }),
+    ) as Record<LibraryMaterialState, LibraryMaterialCount>,
+  );
 }
 export function parseLibraryCounts(value: unknown): LibraryCounts {
   const r = record(
@@ -145,7 +194,7 @@ export function parseLibraryCounts(value: unknown): LibraryCounts {
       "unavailable_pdf",
       "with_primary_pdf",
     ],
-    [...LIBRARY_COUNT_FLAGS, "collection_counts"],
+    [...LIBRARY_COUNT_FLAGS, "collection_counts", "material_counts"],
   );
   const states = record(r.statuses, LITERATURE_STATUSES);
   const total = count(r.total),
@@ -164,8 +213,13 @@ export function parseLibraryCounts(value: unknown): LibraryCounts {
     full_text = parseFullTextCounts(r.full_text);
   if (with_primary_pdf > total || full_text.total > total) fail();
   const flags = parseLibraryCountFlags(r, total);
+  const material_counts = Object.hasOwn(r, "material_counts")
+    ? parseMaterialCounts(r.material_counts)
+    : undefined;
+  if (material_counts && !flags.count_truncated) fail();
   return Object.freeze({
     ...flags,
+    ...(material_counts ? { material_counts } : {}),
     ...(Object.hasOwn(r, "collection_counts")
       ? {
           collection_counts: (() => {
