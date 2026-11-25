@@ -89,7 +89,7 @@ node scripts/migrate-citation-limits-v19.mjs /absolute/path/to/offline-copy.sqli
 sciretriever storage schema-apply --catalog /absolute/data/catalog.sqlite --addition <名字>
 ```
 
-命令只做追加，在一个事务里完成，重复执行同一项不会改动已追加的内容。追加之后旧版本仍能照常读写这个库，所以换回旧构建不需要撤销。每个版本要追加哪一项，见[更新记录](../../CHANGELOG.md)。
+命令只做追加，在一个事务里完成。已经追加过的一项再执行会以 `catalog-addition-already-applied` 拒绝，库不受影响。追加之后旧版本仍能照常读写这个库，所以换回旧构建不需要撤销。每个版本要追加哪一项，见[更新记录](../../CHANGELOG.md)。
 
 ## Web 守护的首次切换与程序升级
 
