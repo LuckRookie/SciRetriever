@@ -13,6 +13,7 @@ import { presentActors } from "../logging/actor-label.js";
 import {
   ContractValidationError,
   parseCollectLiteraturesRequest,
+  parseUncollectLiteraturesRequest,
   parseExtractionAcceptedResult,
   parseExtractionOperationResult,
   parseExtractionReceiptResult,
@@ -111,6 +112,7 @@ export const MAINTENANCE_OPERATIONS = [
   "marks",
   "reading-open",
   "library-collect",
+  "library-uncollect",
   "literature-recognize",
   "library-trash",
   "archive",
@@ -204,10 +206,13 @@ async function performMaintenance(
   if (operation === "filters") return app.filters.manage(input, signal);
   if (operation === "marks") return app.marks.manage(input, signal);
   if (operation === "reading-open") return app.folders.opened(input, signal);
-  if (operation === "library-collect") {
+  if (operation === "library-collect" || operation === "library-uncollect") {
     let selection: ReturnType<typeof parseCollectLiteraturesRequest>;
     try {
-      selection = parseCollectLiteraturesRequest(input);
+      selection =
+        operation === "library-collect"
+          ? parseCollectLiteraturesRequest(input)
+          : parseUncollectLiteraturesRequest(input);
     } catch (cause) {
       if (cause instanceof ContractValidationError)
         throw new ProductOperationError("invalid-request", { cause });
@@ -221,11 +226,21 @@ async function performMaintenance(
             .join(" AND ")
         : null;
     try {
-      const result = await app.database.collectLiteratures(
-        { selector, ftsQuery },
-        signal,
-      );
+      const result =
+        operation === "library-collect"
+          ? await app.database.collectLiteratures(
+              { selector, ftsQuery },
+              signal,
+            )
+          : await app.database.uncollectLiteratures(
+              { selector, ftsQuery },
+              signal,
+            );
       if (result === null) throw new LiteratureNotFoundError();
+      // Membership is still derived from historical evidence: removing rows
+      // would not change it, so refuse rather than report a removal.
+      if (result === "collection-pending")
+        throw new ProductOperationError("library-collection-pending");
       return result;
     } catch (cause) {
       if (

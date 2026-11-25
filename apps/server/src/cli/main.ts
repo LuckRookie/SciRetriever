@@ -192,7 +192,7 @@ function usage(options: CliOptions): CliResult {
     "    corrections is corrected-only; devices read via HTTP MCP /mcp with purpose read, not query HTTP routes\n" +
     "  context search|knowledge --request FILE|-; analysis prepare --request FILE|-; extraction prepare --request FILE|-\n" +
     "  literature status; literature search|read|references|reference|identity|artifact-chunk|bibliography --request FILE|-\n" +
-    "  literature collect --request FILE|-\n" +
+    "  literature collect|uncollect --request FILE|-\n" +
     "  literature recognize --request FILE|-  # re-read saved PDFs of needs-metadata papers; no model; waits for its durable task\n" +
     "  jobs list|inspect|create-request|resolve --request FILE|- (create-request only saves)\n" +
     "  library batches|facets|batch-rename --request FILE|-; acquire-pdf preview --request FILE|-\n" +
@@ -1210,6 +1210,7 @@ async function execute(
     "form-drafts start": "form-drafts",
     "library batch-rename": "intake-batch-rename",
     "literature collect": "library-collect",
+    "literature uncollect": "library-uncollect",
     "literature recognize": "literature-recognize",
     "literature resolve-references": "archive-references",
     "literature metadata-edit": "metadata-edit",
@@ -1240,6 +1241,7 @@ async function execute(
     } catch (cause) {
       if (
         operation === "library-collect" ||
+        operation === "library-uncollect" ||
         operation === "literature-recognize"
       ) {
         if (options.signal?.aborted)

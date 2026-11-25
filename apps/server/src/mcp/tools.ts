@@ -621,7 +621,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "search_library",
-    "Search existing literature with full LibraryQuery filters, sorting and pagination. Listing defaults to collected papers. Use query.collection_scope='all' to list the entire library. Text search defaults to the entire library. A miss never starts discovery or PDF acquisition. The legacy text/limit/cursor form remains supported. relevance_scored_count means only that many workset matches were scored. Other matches follow in workset order. scan_incomplete means earlier entries remain to scan even when the current window is empty. scan_side identifies whether these entries are raw hits or workset members. Member windows also support workset time order. Pass next_window_cursor as window_cursor with the same search terms and, for member windows, the same workset. Use cursor for another page in the current window.",
+    "Search existing literature with full LibraryQuery filters, sorting and pagination. Listing defaults to collected papers, except recently_opened, which also lists opened candidates. Use query.collection_scope='all' to list the entire library. Text search defaults to the entire library. A miss never starts discovery or PDF acquisition. The legacy text/limit/cursor form remains supported. relevance_scored_count means only that many workset matches were scored. Other matches follow in workset order. scan_incomplete means earlier entries remain to scan even when the current window is empty. scan_side identifies whether these entries are raw hits or workset members. Member windows also support workset time order. Pass next_window_cursor as window_cursor with the same search terms and, for member windows, the same workset. Use cursor for another page in the current window.",
     {
       type: "object",
       oneOf: [
@@ -981,6 +981,22 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
   tool(
     "collect_literatures",
     "Collect selected literature versions. Pass literature IDs or a library query selecting all matches. Reports target_count and newly_collected.",
+    object({
+      selector: {
+        oneOf: [
+          object({
+            kind: { const: "literatures" },
+            literature_ids: { type: "array", minItems: 1, items: id },
+          }),
+          object({ kind: { const: "query" }, query: { type: "object" } }),
+        ],
+      },
+    }),
+    false,
+  ),
+  tool(
+    "uncollect_literatures",
+    "Remove selected literature versions from the library; they become candidates again and leave every folder. Bibliography, sources, files, full text, annotations, tags, reading history and batches stay. Same selector as collect_literatures. Reports target_count, removed and folder_members_removed.",
     object({
       selector: {
         oneOf: [

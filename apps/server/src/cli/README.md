@@ -26,11 +26,13 @@
 
 `literature search --request FILE|-` 接受完整 LibraryQuery 及排序，包括主 PDF 默认初稿的事实筛选和四种降序；查询范围可以直接交给显式任务。`literature read` 的 PDF 资产带默认文本版本与事实，`archive status` 按部分返回同样的事实；读取不启动校订。
 
-`literature search --sort collected-desc` 按首次选用时间列文献，`--sort intake-desc` 按入库时间列文献。超过一万篇时，收进来范围用 `collected-desc`，文件夹与批次等范围用 `intake-desc`，文本搜索用 `relevance`。超出范围的排序返回 `library-sort-scope-limit`。
+`literature search --sort collected-desc` 按加入文献库的时间列文献，`--sort intake-desc` 按入库时间列文献。超过一万篇时，文献库范围用 `collected-desc`，文件夹与批次等范围用 `intake-desc`，文本搜索用 `relevance`。超出范围的排序返回 `library-sort-scope-limit`。
 
 文本搜索带 `scan_incomplete` 时，`scan_side` 表明窗口按原始命中（`hits`）或工作集成员（`members`）划定。保留同一检索词，用 `--window-cursor` 或 JSON 的 `window_cursor` 传入 `next_window_cursor` 可查更早一窗。成员窗须保留同一工作集。同一窗口可调整筛选，JSON 计数和分面也接受该窗口游标。`next_cursor` 用于当前窗口内翻页。
 
-`literature collect --request FILE|-` 接受 `{selector}`，按文献 ID 或完整查询范围收进来。`result` 含 `target_count` 和 `newly_collected`。重新收进来保留第一次选用时间。搜索页中只被发现的项带 `discovery_origin`，没有发现记录时值为 `null`。
+`literature collect --request FILE|-` 接受 `{selector}`，按文献 ID 或完整查询范围加入文献库。`result` 含 `target_count` 和 `newly_collected`。已在文献库里的保留原来的加入时间。搜索页中的候选带 `discovery_origin`，没有发现记录时值为 `null`。
+
+`literature uncollect --request FILE|-` 接受同样的 `{selector}`，把文献移出文献库，同时去掉它们的文件夹成员关系。`result` 含 `target_count`、`removed` 和 `folder_members_removed`；之后再加入时取新的加入时间。库还在回填时返回 `library-collection-pending`。
 
 `literature trash delete|restore --request FILE|-` 的文件为 `{selector}`，返回 `{operation, target_count, changed}`；`literature trash list --request FILE|-` 的文件为 `{limit, cursor}`，`literature trash count` 不带文件。读取用只读的 QueryApplication，写入用完整 Application。
 

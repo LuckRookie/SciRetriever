@@ -205,7 +205,8 @@ function browseQuery(q: LibraryQuery): LibraryQuery {
     !q.author_orcids.length &&
     !q.discovery_run_ids.length &&
     !q.intake_batch_ids.length;
-  return listing && q.collection_scope === undefined
+  // Recent reading includes candidates that were opened.
+  return listing && !q.recently_opened && q.collection_scope === undefined
     ? { ...q, collection_scope: "collected" }
     : q;
 }

@@ -129,9 +129,9 @@ CONTENT_READY
 
 **被撤回的文献**：任何 `LibraryQuery` 的结果、`total_count`、计数（2.1.8）、词频、引用关系的两端、发现原因与 `QuerySelector` 的展开都排除被撤回的文献，详情按不存在处理；字段不变，调用方不能选择包含它们。撤回的规则见[文献与材料 6.4.11](03-literature-materials.md#6411-撤回)。
 
-`collection_scope` 只接受 `collected | all`，区分收进来的文献与只被发现的文献（[ADR 0065](../decisions/0065-scale-rules.md) 第 2 节）。省略时：浏览列表（查询里没有 text、title、author、venue、publisher、identifiers、author_orcids、discovery_run_ids、intake_batch_ids）按 `collected` 处理，其余查询（搜索、按发现或入库批次查看）覆盖全部；`QuerySelector` 只按显式给出的值展开。每个 `LiteratureSearchItem` 带 `collected`。一篇被导入（`kind='import'` 的批次）、浏览时收藏、手动加标签、放进文件夹或快照、登记过打开阅读（工作台、CLI、MCP 的 `reading-open`）、请求全文或发起加工时，在同一事务里标为收进来，之后不撤销；独立查询页只读，它的打开阅读不算。“收进来”操作见[用户组织 7](09-user-organization.md#7-三个入口)。
+`collection_scope` 只接受 `collected | all`，区分文献库里的文献与候选（[ADR 0067](../decisions/0067-library-and-candidates.md)）。省略时：浏览列表（查询里没有 text、title、author、venue、publisher、identifiers、author_orcids、discovery_run_ids、intake_batch_ids，也不是 `recently_opened`）按 `collected` 处理；最近读过（`recently_opened: true`）与其余查询（搜索、按发现或入库批次查看）覆盖全部，最近读过因此包含打开过的候选；`QuerySelector` 只按显式给出的值展开。每个 `LiteratureSearchItem` 带 `collected`。一篇被导入（`kind='import'` 的批次）、浏览时收藏、手动加标签、放进文件夹或快照、提供或要求 PDF、要求生成全文或发起加工时，在同一事务里加入文献库；登记打开阅读（`reading-open`）只写阅读记录，不加入。移出文献库删去这个标记，之后再有上述任一种使用或“加入文献库”时重新加入。“加入文献库”与“移出文献库”操作见[用户组织 7](09-user-organization.md#7-三个入口)。
 
-只被发现的项（`collected=false`）带 `discovery_origin`：发现过它的主题搜索或引用扩展的入库批次里，`created_at` 最晚的一个（相同时按批次 ID），`kind` 是该批次的发现类型，界面用 `intake_batch_id` 打开那次的发现批次。没有任何发现批次的（例如“早期入库”里缺选用证据的历史文献）为 `null`，不推测来历。收进来的项不带这个字段。取值在同一读快照里按页批量查，耗时与本页项数和每篇被发现的次数有关，与总篇数无关；不另建投影。
+候选（`collected=false`）带 `discovery_origin`：发现过它的主题搜索或引用扩展的入库批次里，`created_at` 最晚的一个（相同时按批次 ID），`kind` 是该批次的发现类型，界面用 `intake_batch_id` 打开那次的发现批次。没有任何发现批次的（例如“早期入库”里缺选用证据的历史文献）为 `null`，不推测来历。文献库里的项不带这个字段。取值在同一读快照里按页批量查，耗时与本页项数和每篇被发现的次数有关，与总篇数无关；不另建投影。
 
 `needs_metadata` 为 true 时，只匹配带“书目待补”标记的版本；为 false 时只匹配不带的；null 或省略时不筛选。省略时不进入规范化的查询，已有请求与 cursor 的字节不变。标记的含义见[文献与材料 8.4](03-literature-materials.md#84-书目待补)。
 
@@ -175,9 +175,9 @@ LibrarySearchPage
 
 `limit >= 1`；cursor 非空时是调用方不得解释或修改的不透明字符串，并与规范化 query、sort 和稳定位置绑定。cursor 不保存查询或数据库 snapshot；后续翻页重新读取当时的 current facts，数据库在两次请求之间变化时结果和 `total_count` 可以相应变化。`relevance` 只允许在 `query.text` 非空时使用。年份或标题缺失的记录在对应排序中排在具有该值的记录之后；所有排序最后使用 `literature_id` 作为稳定 tie-breaker。`total_count >= 0`，表示忽略本节 cursor/limit 后同一 query 的命中数，口径同 2.1.8 的截断：有筛选或搜索且超过 10,000 时只算到 10,000 并带 `count_truncated`；总数在第一页算出，续页沿用游标里的值，不再重算；按 `relevance` 排序时只能翻到相关度最高的前 1,000 条，命中数超过 1,000 时页面带 `relevance_limit: 1000`，翻到第 1,000 条即止。处理范围的展开（`QuerySelector` 与批量选择）不受这个上限影响。`items` 不重复且数量不超过 limit，`next_cursor` 只在仍有下一页时存在。
 
-`intake-desc` 按最早书目观察的时间（`intake_at`，“最近入库”）；`collected-desc` 按第一次选用的时间（`collected_at`，“最近收进来”），在登记选用的同一事务里写入，之后不改；历史文献按选用证据自带的最早时间回填，没有时间的排在最后。
+`intake-desc` 按最早书目观察的时间（`intake_at`，“最近入库”）；`collected-desc` 按加入文献库的时间（`collected_at`，“最近加入”），在加入的同一事务里写入；已在文献库里的再次加入不改时间，移出文献库时删去，之后再加入时取那一次的时间；历史文献按选用证据自带的最早时间回填，没有时间的排在最后。
 
-**受限排序。** 范围超过 10,000 篇（`count_truncated`，或未截断而 `total_count > 10000`）时只接受有索引支撑、按游标翻页的排序：收进来的文献 `collected-desc`，全库、文件夹、入库批次与发现批次 `intake-desc`，最近读过 `opened-desc`，文本搜索 `relevance`；未指定时用这些默认值。其他排序返回 `library-sort-scope-limit`（HTTP 400，CLI 与 MCP 同码），提示先缩小范围，不静默改用别的排序（[ADR 0065](../decisions/0065-scale-rules.md) 第 6 节第 3 条）。不超过 10,000 篇时所有排序照常。文件夹（含下级）、入库批次与发现批次的可见成员由触发器维护成带排序键的投影，翻任意一页只与页大小有关。`relevance` 的第一页给全部命中打分并取前 1,000 条，排名在进程内按最近使用缓存（最多 16 份）；续页沿用第一页的排名与总数，只读取仍可见条目的当前事实；缓存不在时重新打分，从游标锚点接续。
+**受限排序。** 范围超过 10,000 篇（`count_truncated`，或未截断而 `total_count > 10000`）时只接受有索引支撑、按游标翻页的排序：文献库里的文献 `collected-desc`，全库、文件夹、入库批次与发现批次 `intake-desc`，最近读过 `opened-desc`，文本搜索 `relevance`；未指定时用这些默认值。其他排序返回 `library-sort-scope-limit`（HTTP 400，CLI 与 MCP 同码），提示先缩小范围，不静默改用别的排序（[ADR 0065](../decisions/0065-scale-rules.md) 第 6 节第 3 条）。不超过 10,000 篇时所有排序照常。文件夹（含下级）、入库批次与发现批次的可见成员由触发器维护成带排序键的投影，翻任意一页只与页大小有关。`relevance` 的第一页给全部命中打分并取前 1,000 条，排名在进程内按最近使用缓存（最多 16 份）；续页沿用第一页的排名与总数，只读取仍可见条目的当前事实；缓存不在时重新打分，从游标锚点接续。
 
 每个 `LiteratureSearchItem` 表示一篇具体 `Literature`，不按 `MetaLiterature` 折叠。不同 Provider 的重复记录已经作为同一 Literature 的多个 observations 收敛，不制造多个列表项；同一 MetaLiterature 下的不同明确版本仍分别出现，并通过 `literature.meta_literature_id` 归组。`Literature` 已经包含当前完整 `LiteratureMetadata` 和派生 `LiteratureStatus`，因此 SearchItem 不在顶层重复 metadata/status；revision/hash、第一缺失步骤和人工 PDF 标记是当前读取上下文的补充。
 
@@ -478,7 +478,7 @@ LibraryCounts
   status_updating?: true          # 标签上限或建档方式改变后，状态正在后台重算；重算完后省略
   count_truncated?: true          # 有筛选或搜索且命中超过 10,000 个版本时出现，各数只算到 10,000（显示“1 万以上”）
   counts_backfill_pending?: true  # 迁移后的计数器回填尚未完成
-  collection_counts?: {collected: int, discovered_only: int}  # 全库收进来与只被发现的版本数
+  collection_counts?: {collected: int, discovered_only: int}  # 全部文献中文献库与候选的版本数
 
 FullTextCounts
   total: int                      # 范围内的论文数
@@ -500,7 +500,7 @@ FullTextCounts
 - **关系**：`total = obtained + missing`，`exhausted ≤ missing`。“还可以再试”是 `missing − exhausted`，入口可以这样显示，合同不另设字段。
 - **与状态计数的关系**：状态计数按版本，`full_text` 按论文，两者不能相加相减。例如一篇论文的预印本是 `UNREVIEWED`、正式版是 `READY`，状态计数里两个版本各计一次，`full_text` 里这篇论文只计一次，算已取得。
 
-**计数器与截断。** 没有筛选，或只按收进来筛选时，各数来自写入时维护的计数器，读取是常数级；计数器与文献状态在同一事务里增减，其他写入者的变更由触发器记下、后台按变化量改正，等待改正期间从同一快照精确计算。有筛选或搜索时，计数与分面取到第 10,001 个命中即停：超过时带 `count_truncated`，分面带 `facets_truncated`，表示分面的覆盖与排名来自前 10,000 个版本；全库与收进来的总数仍准确（[ADR 0065](../decisions/0065-scale-rules.md) 第 6 节第 2 条）。
+**计数器与截断。** 没有筛选，或只按文献库筛选时，各数来自写入时维护的计数器，读取是常数级；计数器与文献状态在同一事务里增减，其他写入者的变更由触发器记下、后台按变化量改正，等待改正期间从同一快照精确计算。有筛选或搜索时，计数与分面取到第 10,001 个命中即停：超过时带 `count_truncated`，分面带 `facets_truncated`，表示分面的覆盖与排名来自前 10,000 个版本；全部文献与文献库的总数仍准确（[ADR 0065](../decisions/0065-scale-rules.md) 第 6 节第 2 条）。
 
 **准确数。** `LibraryExactCountRequest {kind: "counts" | "search-total", query} | {kind: "facets", query, limit}` 在长请求道上用一个读快照算出准确数，可取消，返回 `snapshot_at` 与对应结果；每次请求重新计算，不缓存。HTTP `/api/v1/query/library-exact-count`、CLI `literature exact-count`、MCP `library_exact_count` 共用这个合同。
 
@@ -602,7 +602,7 @@ content 的 canonical JSON、hash 与生成谱系；ParserResult 也重算规范
 
 ### 2.4 规模与目标耗时
 
-规模规则、人与 Agent 的分工和各处做法见 [ADR 0065](../decisions/0065-scale-rules.md)；工作集与“收进来的文献”的含义见该 ADR 第 2 节。下表是目标耗时，在一百万篇书目（其中十万篇有全文）的合成库上、同时每秒写入 100 篇时测量；一千万篇的压力检查中，各项不超过表中的 2 倍。
+规模规则、人与 Agent 的分工和各处做法见 [ADR 0065](../decisions/0065-scale-rules.md)，工作集见该 ADR 第 2 节；文献库与候选的含义见 [ADR 0067](../decisions/0067-library-and-candidates.md)。下表是目标耗时，在一百万篇书目（其中十万篇有全文）的合成库上、同时每秒写入 100 篇时测量；一千万篇的压力检查中，各项不超过表中的 2 倍。
 
 | 操作                                     | 目标                                        |
 | ---------------------------------------- | ------------------------------------------- |

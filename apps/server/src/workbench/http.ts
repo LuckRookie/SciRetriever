@@ -2591,6 +2591,7 @@ const ARCHIVE_HTTP_WRITES = [
   "marks",
   "reading-open",
   "library-collect",
+  "library-uncollect",
   "literature-recognize",
   "library-trash",
   "snapshot-rename",
@@ -3663,7 +3664,8 @@ function createQueryHttpHandler(
             isMaintenanceFailure(error) || isQueryFailure(error)
               ? error.code
               : error instanceof ContractValidationError ||
-                  (route === "/api/v1/maintenance/library-collect" &&
+                  ((route === "/api/v1/maintenance/library-collect" ||
+                    route === "/api/v1/maintenance/library-uncollect") &&
                     error instanceof WorkbenchInputError)
                 ? "invalid-request"
                 : "operation-unavailable";
@@ -3671,7 +3673,9 @@ function createQueryHttpHandler(
           else
             json(
               response,
-              /conflict|stale|busy/.test(code) || code === "pdf-reader-missing"
+              /conflict|stale|busy/.test(code) ||
+                code === "pdf-reader-missing" ||
+                code === "library-collection-pending"
                 ? 409
                 : /invalid/.test(code)
                   ? 400

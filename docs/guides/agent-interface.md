@@ -312,6 +312,7 @@ Browser 复用前四层的实际响应准备有限文章入口，不增加 HEAD/
 - `LibraryQuery.folder:{id,include_descendants}` 与其它筛选组合，可直接用于快照和算子范围。搜索结果包含 folder_ids；父目录的 total_count 按子树文献去重。
 - `literature trash delete|restore --request FILE` / `library_trash_manage {operation,selector}` 把文献移到最近删除或恢复；CLI 文件只含 `{selector:{kind:"literatures",literature_ids}}`（1–1000 个不重复 ID），返回 `{operation,target_count,changed}`。有排队或运行中的任务以其中某篇为目标时返回 `library-trash-busy`。规则见[用户整理 6.5](../architecture/technical/09-user-organization.md#65-文献的删除与恢复)。
 - `literature trash list --request FILE` / `library_trash_query` 的 `list` 分页读最近删除（文件为 `{limit:1..100,cursor}`，首次 cursor 为 null）；`literature trash count` / `library_trash_query` 的 `count`（request `{}`）返回 `{total_count}`。
-- `literature open ID` / `reading_open {literature_id}` 显式更新共享阅读历史。`recently_opened:true` 选最近 30 天内满足其它筛选的最近 100 篇，支持 `opened-desc`；查询本身不写入历史。
+- `literature uncollect --request FILE` / `uncollect_literatures {selector}` 把文献移出文献库、回到候选，同时离开所有文件夹，其余数据保留；`selector` 与 `literature collect` / `collect_literatures` 相同，返回 `{target_count,removed,folder_members_removed}`，库还在回填时返回 `library-collection-pending`。规则见[用户整理 7](../architecture/technical/09-user-organization.md#7-三个入口)。
+- `literature open ID` / `reading_open {literature_id}` 显式更新共享阅读历史，不把候选加入文献库。`recently_opened:true` 选最近 30 天内满足其它筛选的最近 100 篇，未给 `collection_scope` 时包含打开过的候选，支持 `opened-desc`；查询本身不写入历史。
 - `snapshot create --name NAME` / `snapshot_create` 可提供名称。`snapshot rename ID --name NAME` / `snapshot_rename {snapshot_id,name}` 改显示名，空名恢复默认，不改变内容哈希。
 - `literature reading-status --request FILE` / `reading_status {asset_id}` 读取校订稿块来源、文字层页数及最后人工修改。Agent 会话的 read 按 events.sequence 续读；其 value 中的 sequence 是会话内部序号，不能用作数据库游标。文本保持换行、图片留占位、隐藏推理和凭据不保存。

@@ -389,8 +389,10 @@ export class TopicDiscoveryService {
             }
             accepted += decision.created ? 1 : 0;
             matched += decision.created ? 0 : 1;
+            // A deleted paper stays in recently deleted; the batch still records it.
             const literature = await this.database.getLiteratureIds(
               decision.literature_id,
+              true,
             );
             if (!literature)
               throw new Error(
@@ -873,7 +875,10 @@ export class CitationDiscoveryService {
           intake_exclude_ids: seeds,
         });
         if (decision.disposition === "accepted" && decision.literature_id) {
-          target = await this.database.getLiteratureIds(decision.literature_id);
+          target = await this.database.getLiteratureIds(
+            decision.literature_id,
+            true,
+          );
           if (target)
             await progress?.observed(
               target.meta_literature_id,
@@ -1178,6 +1183,7 @@ export class CitationDiscoveryService {
             if (decision.disposition === "accepted" && decision.literature_id) {
               targetLiterature = await this.database.getLiteratureIds(
                 decision.literature_id,
+                true,
               );
               intakeMemberRecorded = targetLiterature !== null;
               if (targetLiterature)

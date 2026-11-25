@@ -128,6 +128,44 @@ export function recordCollectedLiteratures(
   );
 }
 
+/** Return papers to candidates. Only the membership, its entry time and the
+ * folder memberships go; every other fact stays. Requires stored membership:
+ * while historical evidence still counts, deleting rows would not take effect. */
+export function removeCollectedLiteratures(
+  db: DatabaseSync,
+  targets: LibraryCollectionTargets,
+) {
+  const ids = db
+    .prepare(
+      `SELECT t.literature_id FROM (${targets.sql}) t
+       WHERE EXISTS(SELECT 1 FROM library_collected c WHERE c.literature_id=t.literature_id)`,
+    )
+    .all(...targets.parameters)
+    .map((row) => String(row.literature_id));
+  if (!ids.length) return { removed: 0, folder_members_removed: 0 };
+  const scope = "SELECT value FROM json_each(?)";
+  const json = JSON.stringify(ids);
+  // Folders first: their history trigger re-collects a paper that is still
+  // in library_collected, which is then a no-op.
+  const folder_members_removed = Number(
+    db
+      .prepare(`DELETE FROM folder_members WHERE literature_id IN (${scope})`)
+      .run(json).changes,
+  );
+  const removed = Number(
+    db
+      .prepare(
+        `DELETE FROM library_collected WHERE literature_id IN (${scope})`,
+      )
+      .run(json).changes,
+  );
+  // A later collection takes the time of that collection.
+  db.prepare(
+    `DELETE FROM library_collection_times WHERE literature_id IN (${scope})`,
+  ).run(json);
+  return { removed, folder_members_removed };
+}
+
 export interface LibraryCollectionTargets {
   readonly sql: string;
   readonly parameters: readonly SQLInputValue[];

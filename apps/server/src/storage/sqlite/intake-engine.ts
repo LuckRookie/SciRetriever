@@ -112,7 +112,12 @@ export function recordResolvedIntakeMember(
   insertIntakeMember(db, member);
 }
 function insertIntakeMember(db: DatabaseSync, member: IntakeMember): void {
-  if (restoreWithdrawnLiterature(db, member.literature_id))
+  const discovery = !!db
+    .prepare(
+      "SELECT 1 FROM intake_batches WHERE batch_id=? AND kind IN ('topic','citation')",
+    )
+    .get(member.batch_id);
+  if (restoreWithdrawnLiterature(db, member.literature_id, discovery))
     member = { ...member, disposition: "restored" };
   db.prepare(
     `INSERT INTO intake_batch_members(batch_id,literature_id,disposition) VALUES(?,?,?) ON CONFLICT(batch_id,literature_id) DO UPDATE SET disposition=${member.authoritative ? "excluded.disposition" : "CASE WHEN disposition='restored' OR excluded.disposition='restored' THEN 'restored' WHEN disposition='created' OR excluded.disposition='created' THEN 'created' WHEN disposition='enriched' OR excluded.disposition='enriched' THEN 'enriched' ELSE 'matched' END"}`,

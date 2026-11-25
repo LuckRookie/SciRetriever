@@ -213,9 +213,25 @@ export function runFolderStorage(db: DatabaseSync, value: unknown): unknown {
           .get(literature_id)
       )
         fail("literature-not-found");
+      // Opening is looking, not choosing. The stored reading-history trigger
+      // still collects; undo that in the same transaction for a candidate.
+      const member = db
+        .prepare(
+          "SELECT EXISTS(SELECT 1 FROM library_collected WHERE literature_id=?) AS collected,EXISTS(SELECT 1 FROM library_collection_times WHERE literature_id=?) AS timed",
+        )
+        .get(literature_id, literature_id)!;
       db.prepare(
         "INSERT INTO reading_history(literature_id,last_opened_at,open_count) VALUES(?,?,1) ON CONFLICT(literature_id) DO UPDATE SET last_opened_at=MAX(last_opened_at,excluded.last_opened_at),open_count=open_count+1",
       ).run(literature_id, r.now!);
+      if (!member.collected) {
+        db.prepare("DELETE FROM library_collected WHERE literature_id=?").run(
+          literature_id,
+        );
+        if (!member.timed)
+          db.prepare(
+            "DELETE FROM library_collection_times WHERE literature_id=?",
+          ).run(literature_id);
+      }
       result = db
         .prepare(
           "SELECT literature_id,last_opened_at,open_count FROM reading_history WHERE literature_id=?",

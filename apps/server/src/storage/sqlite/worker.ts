@@ -50,6 +50,7 @@ import {
   type CandidatePublicationIntent,
   type CandidatePublicationReceipt,
   type CollectLiteraturesResult,
+  type UncollectLiteraturesResult,
   type MetadataObservation as ContractMetadataObservation,
   type DocumentMaterialRef,
   type DocumentRef,
@@ -790,6 +791,11 @@ export type SqliteCommand =
       readonly cancellation: SharedArrayBuffer;
     }
   | {
+      readonly kind: "library_uncollect";
+      readonly request: LibraryCollectRequest;
+      readonly cancellation: SharedArrayBuffer;
+    }
+  | {
       readonly kind: "library_counts";
       readonly query: LibraryPageQuery["query"];
       readonly ftsQuery: string | null;
@@ -823,7 +829,11 @@ export type SqliteCommand =
       readonly fallbackIdentitySha256: string | null;
     }
   | { readonly kind: "get_literature"; readonly literatureId: string }
-  | { readonly kind: "get_literature_ids"; readonly literatureId: string }
+  | {
+      readonly kind: "get_literature_ids";
+      readonly literatureId: string;
+      readonly includeHidden?: boolean;
+    }
   | { readonly kind: "begin_read_snapshot" }
   | {
       readonly kind: "literature_bibliographies";
@@ -3576,6 +3586,30 @@ export class SqliteWorker {
         signal,
       );
   }
+  /** Null when an explicit ID is absent or hidden; `collection-pending`
+   * while library membership is still derived from historical evidence. */
+  async uncollectLiteratures(
+    request: LibraryCollectRequest,
+    signal?: AbortSignal,
+  ): Promise<UncollectLiteraturesResult | null | "collection-pending"> {
+    const cancellation = new Int32Array(new SharedArrayBuffer(4));
+    const abort = () => Atomics.store(cancellation, 0, 1);
+    signal?.addEventListener("abort", abort, { once: true });
+    try {
+      return await this.run<
+        UncollectLiteraturesResult | null | "collection-pending"
+      >(
+        {
+          kind: "library_uncollect",
+          request,
+          cancellation: cancellation.buffer,
+        },
+        signal,
+      );
+    } finally {
+      signal?.removeEventListener("abort", abort);
+    }
+  }
   async librarySearchPage(
     request: LibraryPageQuery,
     signal?: AbortSignal,
@@ -3789,10 +3823,13 @@ export class SqliteWorker {
       meta_literature_id: parseMetaLiteratureId(row.meta_literature_id),
     };
   }
-  async getLiteratureIds(literatureId: string) {
+  /** `includeHidden` also resolves a withdrawn or deleted paper. Discovery
+   * uses it: a batch records a deleted paper it finds without restoring it. */
+  async getLiteratureIds(literatureId: string, includeHidden = false) {
     const result = await this.run<unknown>({
       kind: "get_literature_ids",
       literatureId,
+      ...(includeHidden ? { includeHidden } : {}),
     });
     return result === null ? null : this.parseLiteratureIds(result);
   }

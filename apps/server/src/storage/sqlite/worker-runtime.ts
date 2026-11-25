@@ -1502,6 +1502,38 @@ function collectLibrarySelection(
   queryCheckpoint();
   return { target_count, newly_collected };
 }
+function uncollectLibrarySelection(
+  request: import("../../literature/query.js").LibraryCollectRequest,
+):
+  | import("@sciretriever/contracts").UncollectLiteraturesResult
+  | null
+  | "collection-pending" {
+  queryCheckpoint();
+  const { selector } = request;
+  if (selector.kind === "query")
+    validateDiscoveryCauses(selector.query.discovery_run_ids);
+  if (!libraryState.readPlan().collectionReady) return "collection-pending";
+  const targets = libraryPageModule.libraryCollectionTargets(db, request);
+  const count = db
+    .prepare(
+      `SELECT count(*) AS total,count(DISTINCT literature_id) AS unique_count FROM (${targets.sql})`,
+    )
+    .get(...targets.parameters)!;
+  if (count.total !== count.unique_count)
+    throw new Error("duplicate library search rows");
+  queryCheckpoint();
+  const target_count = Number(count.total);
+  if (
+    selector.kind === "literatures" &&
+    target_count !== selector.literature_ids.length
+  )
+    return null;
+  const removal = target_count
+    ? libraryStateModule.removeCollectedLiteratures(db, targets)
+    : { removed: 0, folder_members_removed: 0 };
+  queryCheckpoint();
+  return { target_count, ...removal };
+}
 function listLiterature(afterId: Dynamic, limit: Dynamic): Dynamic {
   const rows = db
     .prepare(
@@ -6120,6 +6152,17 @@ port.on("message", (message: WorkerMessage) => {
         }
         break;
       }
+      case "library_uncollect": {
+        const command = message.command;
+        cancellation = new Int32Array(command.cancellation);
+        try {
+          value = transaction(() => uncollectLibrarySelection(command.request));
+        } finally {
+          // A cancellation after the commit point must not report a rollback.
+          cancellation = undefined;
+        }
+        break;
+      }
       case "library_counts": {
         const command = message.command;
         value = readTransaction(() => {
@@ -6260,7 +6303,10 @@ port.on("message", (message: WorkerMessage) => {
         value = pendingReceipts();
         break;
       case "get_literature_ids":
-        value = getLiteratureIds(message.command.literatureId);
+        value = getLiteratureIds(
+          message.command.literatureId,
+          message.command.includeHidden === true,
+        );
         break;
       case "find_literature_by_identifiers":
         value = findLiteratureByIdentifiers(

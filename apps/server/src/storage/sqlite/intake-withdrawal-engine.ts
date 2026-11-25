@@ -306,12 +306,21 @@ function restoreFts(db: DatabaseSync, id: string) {
 }
 /** In the intake owner's transaction. Keep the original withdrawal/report intact.
  * A new intake of a paper in recently deleted also takes it out of there. */
+/** A new intake restores a withdrawn paper. A deleted paper comes back only
+ * when the user names it again: `keepDeleted` (discovery) leaves it, and a
+ * paper both withdrawn and deleted, in recently deleted. */
 export function restoreWithdrawnLiterature(
   db: DatabaseSync,
   id: string,
+  keepDeleted = false,
 ): boolean {
   if (!db.isTransaction)
     throw new Error("intake restoration requires a transaction");
+  if (
+    keepDeleted &&
+    db.prepare("SELECT 1 FROM library_trash WHERE literature_id=?").get(id)
+  )
+    return false;
   const deleted =
     db.prepare("DELETE FROM library_trash WHERE literature_id=?").run(id)
       .changes > 0;

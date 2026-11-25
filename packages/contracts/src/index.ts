@@ -345,6 +345,13 @@ export interface CollectLiteraturesResult {
   readonly target_count: number;
   readonly newly_collected: number;
 }
+/** Same selector as collecting; removing from the library returns papers to candidates. */
+export type UncollectLiteraturesRequest = CollectLiteraturesRequest;
+export interface UncollectLiteraturesResult {
+  readonly target_count: number;
+  readonly removed: number;
+  readonly folder_members_removed: number;
+}
 export interface LiteratureSearchItem {
   readonly collected?: boolean;
   readonly discovery_origin?: DiscoveryOrigin | null;
@@ -660,6 +667,12 @@ export function parseCollectLiteraturesRequest(
       literature_ids: Object.freeze([...new Set(ids)]),
     },
   };
+}
+
+export function parseUncollectLiteraturesRequest(
+  value: unknown,
+): UncollectLiteraturesRequest {
+  return parseCollectLiteraturesRequest(value);
 }
 
 function parseDiscoveryOrigin(value: unknown): DiscoveryOrigin {

@@ -15,10 +15,10 @@
 - [worker-runtime.ts](worker-runtime.ts)：SQLite worker 运行实现。
 - [citation-progress.ts](citation-progress.ts) 将引用扩展的待查队列、原因去重、待补查队列和未完成查询的回放键放入临时 SQLite。持久来源为与发现结果同一事务提交的 `citation-write-checkpoint`。恢复按事件序号每页取 32 条，执行按索引取各队列的最早待查项。旧检查点中尚未发布的原因按段补写。
 - [literature-search-rows.ts](literature-search-rows.ts) 使用内容表的 `c0` 覆盖索引按文献 ID 找到书目 FTS 的 rowid，供改写和撤回使用。FTS5 内部内容表的文件格式规定 `id` 为 rowid，`c0` 为第一个声明列，此处是 `literature_id`。SQLite 随每次 FTS 写入维护该索引。
-- [library-page.ts](library-page.ts) 按 FTS5 rowid 倒序限制整库文字查询的原始命中，再筛选、计数、分面或排名。文件夹、批次、任务产出、收进来的文献和近期阅读用计数器或有界探针比较两侧成本，小工作集精确匹配，大工作集按原始命中或成员时间分窗。成员按时间倒序、文献 ID 升序，空时间在后。续查在同一侧从最旧位置排他地往后读，窗口内冷续页在原区间重排。索引标题里的空格分隔词能确认短 ASCII 查询的全部命中时直接接纳该成员，其余成员执行完整 `MATCH`。[library-search-rank.ts](library-search-rank.ts) 用 FTS 文档长度与短语数为工作集顺序中的前缀分配计分预算。计分从索引文本还原短语频次，混合 Unicode 片段使用 `unicode61` 分词及请求内有界缓存，超过分词预算时合并提取原生高亮。整次查询共享全局词频和平均文档长度，钳位词使用真实频次。已打分项先按原生 BM25 排序，其余按工作集顺序接在后面。
+- [library-page.ts](library-page.ts) 按 FTS5 rowid 倒序限制整库文字查询的原始命中，再筛选、计数、分面或排名。文件夹、批次、任务产出、文献库里的文献和近期阅读用计数器或有界探针比较两侧成本，小工作集精确匹配，大工作集按原始命中或成员时间分窗。成员按时间倒序、文献 ID 升序，空时间在后。续查在同一侧从最旧位置排他地往后读，窗口内冷续页在原区间重排。索引标题里的空格分隔词能确认短 ASCII 查询的全部命中时直接接纳该成员，其余成员执行完整 `MATCH`。[library-search-rank.ts](library-search-rank.ts) 用 FTS 文档长度与短语数为工作集顺序中的前缀分配计分预算。计分从索引文本还原短语频次，混合 Unicode 片段使用 `unicode61` 分词及请求内有界缓存，超过分词预算时合并提取原生高亮。整次查询共享全局词频和平均文档长度，钳位词使用真实频次。已打分项先按原生 BM25 排序，其余按工作集顺序接在后面。
 - [literature-search-schema-migration.ts](literature-search-schema-migration.ts) 接受五个旧结构 19 指纹与已经合并 04–07 的旧指纹，登记首个增补集 `library-scale-04-07`。首次切换在同一事务中将存量触发器改为按列名写入并保留原执行顺序，重建 `archive_current_parts`，按文献和 PDF 的索引定位默认文档。已完成的状态、计数和分页投影沿用原水位。需要补齐检索水位时，用迁移入口的 `--reconcile` 显式比对并登记差异。
-- [library-state.ts](library-state.ts) 保存在写事务中计算的文献状态和缺失步骤、选用记录以及回填游标。SQLite 触发器为其他写入者记录受影响的 Literature ID，后台以短事务核对。读取在同一快照内优先使用当前代的存储值，回填和后台核对期间按篇现算缺少或已改变的值。
-- [library-page.ts](library-page.ts) 依据首页总数选择允许的排序。收进来范围用 `collected_at`，其他范围用 `intake_at`。相关度查询在长请求道保留最多 16 个前 1,000 项的排名，续页沿用入选 ID 与评分并读取仍可见条目的当前事实。缓存淘汰或服务重启时重算。
+- [library-state.ts](library-state.ts) 保存在写事务中计算的文献状态和缺失步骤、文献库成员（加入与移出）以及回填游标。移出文献库先删文件夹成员再删成员行与加入时间，回填未完成时由调用方拒绝。SQLite 触发器为其他写入者记录受影响的 Literature ID，后台以短事务核对。读取在同一快照内优先使用当前代的存储值，回填和后台核对期间按篇现算缺少或已改变的值。
+- [library-page.ts](library-page.ts) 依据首页总数选择允许的排序。文献库范围用 `collected_at`，其他范围用 `intake_at`。相关度查询在长请求道保留最多 16 个前 1,000 项的排名，续页沿用入选 ID 与评分并读取仍可见条目的当前事实。缓存淘汰或服务重启时重算。
 - [library-paging-schema.ts](library-paging-schema.ts) 的触发器登记首次选用时间，同时维护文件夹、入库批次和发现批次的有序成员与发现原因校验结果。[library-paging-state.ts](library-paging-state.ts) 按原表批量回填，完成前分页使用原始事实。
 - [draft-text-engine.ts](draft-text-engine.ts)：初稿版本、资源闭包、不可变计数、当前指针及默认关系的同事务登记；按版本读事实、按本页文献批量读主 PDF 默认版本与等级。补形成候选共用文献库筛选和排序，在同一只读快照返回 PDF 部分、当前部署/历史 Markdown raw、指定 raw 的既有初稿 ID 和当前初稿方法；不读取正文或其它文件，业务跳过、limit 与任务冻结由应用层决定。
 - [document-defaults.ts](document-defaults.ts)：原始解析当前切换、初稿登记与校订发布事务内按独立 CAS 重求默认文本，优先有效完整校订稿，再选有效当前初稿，否则删除默认关系。校订发布可提名刚登记的版本，仍复检当前校订内容、人工 revision 和原始解析 pin；相同校订内容的等价方法版本可以复用固定表示。没有提名时保留仍有效的默认表示。资产当前指针切换同时重求其全部文献关系；读取不重求。
@@ -64,11 +64,11 @@
 
 `archive-engine.ts` 保存建档步骤、问题与统计，读取当前材料和描述的版本投影；就绪状态统一调用 `literature/state.ts`。版本变化在原事实的写入事务中记录，不依赖读取触发，不启动后续任务。
 
-`folder-engine.ts` 保存目录树、幂等成员与显式阅读历史；`library-page.ts` 为列表和快速计数共用 SQL 条件；`snapshot-engine.ts` 将人工显示名称保存在附加表。`processor_result_summaries.method_revision` 是当前生成方法的读取投影标记；`processor_result_currentness` 在读取旧方法结果时返回 stale，不改写旧产物或自动重算。所有 DDL 只在当前 `schema.ts` 维护，不创建额外数据库版本。
+`folder-engine.ts` 保存目录树、幂等成员与显式阅读历史，阅读历史的触发器给候选加上的文献库成员在同一事务里删去；`library-page.ts` 为列表和快速计数共用 SQL 条件；`snapshot-engine.ts` 将人工显示名称保存在附加表。`processor_result_summaries.method_revision` 是当前生成方法的读取投影标记；`processor_result_currentness` 在读取旧方法结果时返回 stale，不改写旧产物或自动重算。所有 DDL 只在当前 `schema.ts` 维护，不创建额外数据库版本。
 
 ## 文献库查询投影与取消
 
-全库和收进来的文献计数在计数器就绪时直接读汇总。计数器回填或核对期间，长请求道在同一只读快照中计算准确数。稳定期的状态筛选页走短请求道，查询直接使用状态索引。回填或核对期间，涉及状态或历史选用的筛选页走长请求道，在读取快照里按篇补算。
+全部文献和文献库的计数在计数器就绪时直接读汇总。计数器回填或核对期间，长请求道在同一只读快照中计算准确数。稳定期的状态筛选页走短请求道，查询直接使用状态索引。回填或核对期间，涉及状态或历史选用的筛选页走长请求道，在读取快照里按篇补算。
 
 任务详情由 [task-detail-engine.ts](task-detail-engine.ts) 聚合。没有可用缓存时固定事件尾部，按序号每段读最多 1,000 条，然后复核任务身份、尾锚及前缀条数。短线程最多保留 32 个任务的聚合缓存，续读只重放尾部新增事件。
 
@@ -80,7 +80,7 @@
 
 状态输入包括：文献与元数据完整性、作者存在性、文献资产角色与 PDF 类型/hash、当前原始解析与 pin、校订版本/当前指针/人工 revision、固定文档与默认指针、结构注释及当前指针、建档 run 与对应 job 状态、步骤、问题处置、标签数量和描述头。完整表集合与 INSERT/UPDATE/DELETE 触发器由 `schema.ts` 的 `LIBRARY_STATE_INPUT_TABLES` 定义。获取失败记录不改变六态，仍在每次计数/筛选的同一快照中读取；阅读历史和文件夹不改变状态缓存版本。结果引用不改变六态，但会改变初稿事实：`library-state-cache.ts` 在同一快照按版本索引比较各篇 PDF 默认初稿的事实摘要，只失效事实变化的文献；不在结果发布事务或冻结结构中另加触发器。内部仅推导就绪状态时不重复聚合事实。
 
-[library-count-store.ts](library-count-store.ts) 按 MetaLiterature 保存全库与收进来范围的贡献，状态提交钩子在同一事务内把差额计入两个汇总行。耗尽、撤回、收进来成员和版本移组或删除通过触发器记录受影响论文。旧写入者的提交由状态维护循环按批核对。计数回填与设置重算期间，读取同一快照中的文献事实并带进度标记。最近打开按时间索引最多取 100 个当前版本。
+[library-count-store.ts](library-count-store.ts) 按 MetaLiterature 保存全部文献与文献库范围的贡献，状态提交钩子在同一事务内把差额计入两个汇总行。耗尽、撤回、文献库成员和版本移组或删除通过触发器记录受影响论文。旧写入者的提交由状态维护循环按批核对。计数回填与设置重算期间，读取同一快照中的文献事实并带进度标记。最近打开按时间索引最多取 100 个当前版本。
 
 [library-page.ts](library-page.ts) 的普通筛选计数及分面用第 10,001 个匹配判定截断，列表游标保留第一页总数。显式准确数在长请求道持有一个可取消的读快照并返回 `snapshot_at`。批量选择保持全量。
 
@@ -114,4 +114,4 @@ metadata_only 仅存 intake_batches.request_json，不增加列；import-engine 
 
 [intake-objects.ts](intake-objects.ts) 在文献、文件夹、成员、资产关系与批注的创建事务中登记批次归属；文献登记与 created 成员在同一事务完成，保留条目的延迟决定沿用原保留校验进入身份发布事务。[intake-withdrawal-engine.ts](intake-withdrawal-engine.ts) 在单个事务中重判八种保留原因、检查忙碌任务、撤回或恢复并保存报告。撤回记录读回与恢复预估复用已有记录和剩余标记；与批次状态在同一个只读快照返回，恢复执行重新读取剩余标记。旧批次没有登记时，有任何文件夹成员或批注都保留；不推断历史归属。共享文件字节与来源事实保留。
 
-[intake-visibility.ts](intake-visibility.ts) 为文献库、词频、全文检索与 Context、引用两端、发现原因、任务范围、文件夹与批注提供读取排除条件，同时排除被撤回与在最近删除里的文献；MetaLiterature 代表只在读投影中重选。身份、sha256 和外部对应读取完整事实，命中后在成员写入事务恢复原文献及其原撤回关系（在最近删除里的也一并移出），分类 restored，原批次报告保持不变。撤回服务只接网页登录的五条入库 HTTP 路由，无设备用途、CLI 或 MCP 操作。
+[intake-visibility.ts](intake-visibility.ts) 为文献库、词频、全文检索与 Context、引用两端、发现原因、任务范围、文件夹与批注提供读取排除条件，同时排除被撤回与在最近删除里的文献；MetaLiterature 代表只在读投影中重选。身份、sha256 和外部对应读取完整事实，命中后在成员写入事务恢复原文献及其原撤回关系，分类 restored，原批次报告保持不变。在最近删除里的只由导入批次一并移出；主题搜索与引用扩展的批次不恢复它，既撤回又删除的也不恢复。撤回服务只接网页登录的五条入库 HTTP 路由，无设备用途、CLI 或 MCP 操作。

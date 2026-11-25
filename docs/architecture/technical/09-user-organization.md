@@ -123,7 +123,7 @@
 - 只在明确的“打开”操作时写入：Web 在使用者打开一篇文献的阅读页时调用一次，在已打开的文献之间切换标签不记；CLI 为 `literature open ID`，MCP 为 `reading_open`。查询、读取全文和读取批注都不写它。
 - 写入时 `last_opened_at` 只前进不后退，`open_count` 加一。
 - 筛选 `recently_opened: true` 取最近 30 天内打开过、且满足其它条件的文献，计数最多显示 100；排序 `opened-desc` 按最近打开时间。
-- 它是使用者的阅读足迹，不是文献事实，不影响文献状态和检索投影。
+- 它是使用者的阅读足迹，不是文献事实，不影响文献状态和检索投影，也不把候选加入文献库；“最近读过”因此包含打开过的候选（[查询 2.1.1](06-retrieval-context.md#211-libraryquery)）。
 - 它全库共用一份，不区分是谁打开的。
 
 ## 4. 保存的筛选
@@ -325,7 +325,7 @@ Agent 与人使用同一套合同和同一份数据，没有专供 Agent 的副�
 
 **删除之后。** 读取上与被撤回的文献相同：文献库列表、计数（含材料状态与文件夹计数）、搜索与候选、全文检索、阅读页与详情、批注、任务范围与新任务目标、CLI 与 MCP 的读取都不再出现它，详情按不存在处理，不另设错误码。排除的范围见 6.4.11 的“撤回之后”。删除的文献仍参与身份匹配、sha256 对应与外部编号对应，不进入可能重复的比较范围。与撤回不同，它的文献库检索行保留，由读取排除，所以恢复时不需重建。
 
-**再次入库。** 在最近删除里的文献又被导入、收藏或检索带回（按标识、严格后备键、sha256 或外部编号命中）时，移出最近删除，成为新批次的成员，分类为 `restored`，不新建文献。这与撤回的再次入库走同一处（`restoreWithdrawnLiterature`）。
+**再次入库。** 在最近删除里的文献又被导入或收藏（按标识、严格后备键、sha256 或外部编号命中）时，移出最近删除，成为新批次的成员，分类为 `restored`，不新建文献，并按导入的规则在文献库里。主题搜索与引用扩展再次找到它时不恢复：它留在最近删除里，来源记录与这一批的成员关系照常写下，恢复之后能在这一批里看到它；既被撤回又被删除的同样不恢复。这与撤回的再次入库走同一处（`restoreWithdrawnLiterature`）。
 
 **保存。** 一篇一行记在 `library_trash`（删除时间与操作人），行存在即在最近删除里，恢复即删除这一行。表、索引与维护计数的触发器由结构追加 `library-trash` 加入，见[⑦ 第 7 节](07-versioned-storage.md#7-运行审查存储)；删除与恢复后的计数在同一事务里更新。
 
@@ -333,23 +333,25 @@ Agent 与人使用同一套合同和同一份数据，没有专供 Agent 的副�
 
 ## 7. 三个入口
 
-| 能力                   | Web                                                        | CLI                                                                                     | MCP                               | HTTP（Web 登录）                                                 |
-| ---------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------- | --------------------------------- | ---------------------------------------------------------------- |
-| 读文件夹               | 侧栏目录树、阅读页信息栏                                   | `folders list`、`folders delete-preview --request FILE`                                 | `folders_query`                   | `POST /api/v1/query/folders`                                     |
-| 写文件夹               | 新建、改名、拖动、删除（先预览）、加入与移出、撤销加入     | `folders create\|rename\|move\|delete\|add\|remove --request FILE`                      | `folders_manage`                  | `POST /api/v1/maintenance/folders`                               |
-| 记录打开               | 打开阅读页时                                               | `literature open ID`                                                                    | `reading_open`                    | `POST /api/v1/maintenance/reading-open`                          |
-| 收进来                 | 搜索结果里只被发现的行的“收进来”，选择栏“更多”的“收进来 n” | `literature collect --request FILE`                                                     | `collect_literatures`             | `POST /api/v1/maintenance/library-collect`                       |
-| 删除与恢复文献         | —                                                          | `literature trash delete\|restore --request FILE`                                       | `library_trash_manage`            | `POST /api/v1/maintenance/library-trash`                         |
-| 读最近删除             | —                                                          | `literature trash list --request FILE`、`literature trash count`                        | `library_trash_query`             | `POST /api/v1/query/library-trash`                               |
-| 按文件夹或最近阅读筛选 | 文献库                                                     | `literature search` 的 `LibraryQuery`                                                   | 文献库查询工具的 `LibraryQuery`   | 文献库查询                                                       |
-| 读批注                 | 阅读器与批注栏                                             | `marks list\|export --request FILE`                                                     | `marks_query`                     | `POST /api/v1/query/marks`                                       |
-| 写批注                 | 阅读器中高亮、框选、改色、写笔记、删除与撤销               | `marks create\|update\|delete\|restore --request FILE`                                  | `marks_manage`                    | `POST /api/v1/maintenance/marks`                                 |
-| 保存的筛选             | 文献库“筛选”菜单                                           | `filters list\|export`；`filters create\|rename\|update\|delete\|import --request FILE` | `filters_query`、`filters_manage` | `POST /api/v1/query/filters`、`POST /api/v1/maintenance/filters` |
-| 导出分组               | 侧栏“文件夹”一组的菜单                                     | `folders export --request FILE`                                                         | `folders_query` 的 `export`       | `POST /api/v1/query/folders-export`                              |
+| 能力                   | Web                                                    | CLI                                                                                     | MCP                               | HTTP（Web 登录）                                                 |
+| ---------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------- | --------------------------------- | ---------------------------------------------------------------- |
+| 读文件夹               | 侧栏目录树、阅读页信息栏                               | `folders list`、`folders delete-preview --request FILE`                                 | `folders_query`                   | `POST /api/v1/query/folders`                                     |
+| 写文件夹               | 新建、改名、拖动、删除（先预览）、加入与移出、撤销加入 | `folders create\|rename\|move\|delete\|add\|remove --request FILE`                      | `folders_manage`                  | `POST /api/v1/maintenance/folders`                               |
+| 记录打开               | 打开阅读页时                                           | `literature open ID`                                                                    | `reading_open`                    | `POST /api/v1/maintenance/reading-open`                          |
+| 加入文献库             | 候选行的“加入文献库”，选择栏“更多”的“加入文献库 n”     | `literature collect --request FILE`                                                     | `collect_literatures`             | `POST /api/v1/maintenance/library-collect`                       |
+| 移出文献库             | 文献操作菜单与选择栏“更多”的“移出文献库…”              | `literature uncollect --request FILE`                                                   | `uncollect_literatures`           | `POST /api/v1/maintenance/library-uncollect`                     |
+| 删除与恢复文献         | —                                                      | `literature trash delete\|restore --request FILE`                                       | `library_trash_manage`            | `POST /api/v1/maintenance/library-trash`                         |
+| 读最近删除             | —                                                      | `literature trash list --request FILE`、`literature trash count`                        | `library_trash_query`             | `POST /api/v1/query/library-trash`                               |
+| 按文件夹或最近阅读筛选 | 文献库                                                 | `literature search` 的 `LibraryQuery`                                                   | 文献库查询工具的 `LibraryQuery`   | 文献库查询                                                       |
+| 读批注                 | 阅读器与批注栏                                         | `marks list\|export --request FILE`                                                     | `marks_query`                     | `POST /api/v1/query/marks`                                       |
+| 写批注                 | 阅读器中高亮、框选、改色、写笔记、删除与撤销           | `marks create\|update\|delete\|restore --request FILE`                                  | `marks_manage`                    | `POST /api/v1/maintenance/marks`                                 |
+| 保存的筛选             | 文献库“筛选”菜单                                       | `filters list\|export`；`filters create\|rename\|update\|delete\|import --request FILE` | `filters_query`、`filters_manage` | `POST /api/v1/query/filters`、`POST /api/v1/maintenance/filters` |
+| 导出分组               | 侧栏“文件夹”一组的菜单                                 | `folders export --request FILE`                                                         | `folders_query` 的 `export`       | `POST /api/v1/query/folders-export`                              |
 
 - CLI 与 HTTP 的 request 就是 `FolderOperation` / `MarkOperation` 的 `request`；MCP 工具参数为 `{operation, request}`。HTTP 封套与认证见[产品接口 2.4](01-product-interface.md#24-当前只读-api)。
 - 删除与恢复文献：CLI 的文件只含 `{selector}`，`list` 的文件只含 `{limit, cursor}`；MCP 与 HTTP 传完整的写请求或查询（[6.5](#65-文献的删除与恢复)）。
-- “收进来”的 request 是 `{selector}`：`selector` 为 `literatures`（一篇或多篇 ID）或 `QuerySelector`（展开全部命中）。它登记一次选用，规则与 [查询 2.1.1](06-retrieval-context.md#211-libraryquery) 的选用相同：同一事务写入收进来与第一次选用时间，已经收进来的不改时间，之后不撤销，也不提供取消。结果为 `{target_count, newly_collected}`，`target_count` 含已经收进来的篇数。错误码为 `invalid-request`、`literature-not-found`、`operation-cancelled`。
+- “加入文献库”的 request 是 `{selector}`：`selector` 为 `literatures`（一篇或多篇 ID）或 `QuerySelector`（展开全部命中）。规则与 [查询 2.1.1](06-retrieval-context.md#211-libraryquery) 的加入相同：同一事务写入标记与加入时间，已经在文献库里的不改时间。结果为 `{target_count, newly_collected}`，`target_count` 含已经在文献库里的篇数。错误码为 `invalid-request`、`literature-not-found`、`operation-cancelled`。
+- “移出文献库”的 request 与“加入文献库”相同，校验、取消与按 `QuerySelector` 展开的做法也相同：任一 ID 不存在、已撤回或在最近删除里时整批返回 `literature-not-found`，`QuerySelector` 本来就不含它们。一个写入事务里删去这些文献的标记与加入时间，并删去它们的全部文件夹成员关系（文件夹计数与排序投影随之更新），快照不动；书目、来源记录、文件、全文、批注、标签、阅读记录、加工结果与批次成员关系都保留。结果为 `{target_count, removed, folder_members_removed}`：`removed` 是这次真正移出的篇数，原本就是候选的不算；`folder_members_removed` 是去掉的文件夹成员行数。移出之后它是候选，照常出现在搜索、批次与引用关系里；再次加入时取那一次的时间，原来的文件夹归属不恢复。耗时只与这一批的篇数和它们的文件夹成员数有关。“是否在文献库里”还在由历史证据回填时（`library_state_progress.collection_ready=0`），删行不会生效，请求返回 409 `library-collection-pending`，什么都不改。其余错误码同“加入文献库”。
 - `marks export` 不带 `--json` 时直接打印导出的文档，可以重定向成文件。
 - CLI 的读操作使用只读的 QueryApplication，写操作使用完整 Application。
 - Web 的操作步骤见 [Web 指南](../../guides/web-workbench.md#批注)；Agent 的调用示例见 [Agent 接口指南](../../guides/agent-interface.md#库组织与阅读记录)。CLI 的 `--help` 当前没有列出 `folders` 与 `literature open`。
@@ -358,19 +360,20 @@ Agent 与人使用同一套合同和同一份数据，没有专供 Agent 的副�
 
 现有的直接测试：
 
-| 测试                                       | 覆盖                                                                                                                               |
-| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/server/test/library-folders.test.ts` | 嵌套文件夹与成员、最近阅读、CLI/MCP/HTTP 同一结果、不调用模型                                                                      |
-| `apps/server/test/reading-marks.test.ts`   | 批注的建立、锚点校验、改色与笔记、删除与恢复、Markdown/JSON 导出、各入口一致、外键完整                                             |
-| `apps/server/test/import-sessions.test.ts` | 导入的分组层级与多归属；使用者改名、移动后再次导入不被改回                                                                         |
-| `apps/server/test/mcp-http.test.ts`        | HTTP MCP 按设备用途列出和拒绝 `folders_manage` 等工具                                                                              |
-| `apps/server/test/library-trash.test.ts`   | 删除后各处读不到、恢复后原样回来（含文件夹成员与阅读记录）、列表顺序与分页、计数、拒绝与忙碌、再次入库恢复、CLI/MCP/HTTP、结构追加 |
-| `apps/web/test/next-folders.test.ts`       | Web 文件夹对话框与拖动、按文件夹筛选、记录最近阅读                                                                                 |
-| `apps/web/test/next-reader-marks.test.ts`  | 阅读器里的批注交互                                                                                                                 |
+| 测试                                          | 覆盖                                                                                                                                                        |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/server/test/library-folders.test.ts`    | 嵌套文件夹与成员、最近阅读、CLI/MCP/HTTP 同一结果、不调用模型                                                                                               |
+| `apps/server/test/reading-marks.test.ts`      | 批注的建立、锚点校验、改色与笔记、删除与恢复、Markdown/JSON 导出、各入口一致、外键完整                                                                      |
+| `apps/server/test/import-sessions.test.ts`    | 导入的分组层级与多归属；使用者改名、移动后再次导入不被改回                                                                                                  |
+| `apps/server/test/mcp-http.test.ts`           | HTTP MCP 按设备用途列出和拒绝 `folders_manage` 等工具                                                                                                       |
+| `apps/server/test/library-trash.test.ts`      | 删除后各处读不到、恢复后原样回来（含文件夹成员与阅读记录）、列表顺序与分页、计数、拒绝与忙碌、再次入库恢复、CLI/MCP/HTTP、结构追加                          |
+| `apps/server/test/library-candidates.test.ts` | 移出文献库（文件夹成员去掉、其余保留、计数、再次加入取新时间、`QuerySelector`、回填未完成时拒绝、CLI/MCP/HTTP）；打开阅读不加入；发现批次不恢复已删除的文献 |
+| `apps/web/test/next-folders.test.ts`          | Web 文件夹对话框与拖动、按文件夹筛选、记录最近阅读                                                                                                          |
+| `apps/web/test/next-reader-marks.test.ts`     | 阅读器里的批注交互                                                                                                                                          |
 
 修改本模块时，直接测试必须覆盖：
 
-- **不改变文献事实**：建、改、删文件夹和批注前后，文献的书目、来源、资产、文本、标签、状态投影和加工结果的新旧状态都不变。唯一的例外是放进文件夹会把文献标为收进来（[查询技术篇 2.1.1](06-retrieval-context.md#211-libraryquery)），移出不撤销。
+- **不改变文献事实**：建、改、删文件夹和批注前后，文献的书目、来源、资产、文本、标签、状态投影和加工结果的新旧状态都不变。例外只有两处：放进文件夹会把文献加入文献库（[查询技术篇 2.1.1](06-retrieval-context.md#211-libraryquery)），移出文件夹不改变它是否在文献库里；移出文献库会删去它的全部文件夹成员关系（[7](#7-三个入口)）。
 - **约束**：同级重名、移动成环、空名和超长名、超过 1,000 篇的成员批次、不存在的文献整批拒绝；锚点指向别的文献、超出字节范围、框选没有 PDF 锚点。
 - **级联**：删除子树只删成员不删文献；删除文献（移到最近删除）不删除成员、阅读记录和批注，恢复后照旧可见；外键检查为空。
 - **删除与恢复**：30 天内能恢复，期满后下一次写入清除，再恢复返回 `mark-not-found`。
