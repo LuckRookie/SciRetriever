@@ -2,7 +2,7 @@
 
 类型：计划（结果块）
 负责：EndNote、NoteExpress、知网等导出的书目文件的导入
-状态：Pending（是否纳入与排在哪里，等 Owner 定）
+状态：In progress（Owner 2026-11-26：“整个计划还剩下什么？需要做的？可以开始做了。”按此纳入；没有真实的导出文件，按公开的格式说明做）
 
 ## Outcome
 
@@ -19,8 +19,8 @@
 
 ## Tasks
 
-- [ ] 6.1 样本与取舍（总设计师、Owner）：收集真实的导出文件；定先支持哪几种。
-- [ ] 6.2 规格：各格式的字段对应写进文献与材料 6.4 的格式一节。
+- [x] 6.1 取舍（总设计师，2026-11-26）：先支持 EndNote 的文本格式（`.enw`，知网的“EndNote”导出同此）、EndNote 的 XML、NoteExpress 的文本格式（`.net`，知网的“NoteExpress”导出同此）。RefWorks 与知网 E-Study 不做。**没有收集到真实的导出文件**：实现只在按格式说明合成的样本上验证，Owner 提供真实文件后再核对一遍。
+- [x] 6.2 规格（2026-11-26）：[文献与材料 6.4.14](../../architecture/technical/03-literature-materials.md#6414-endnote-与-noteexpress-的导出文件)，标为目标。
 - [ ] 6.3 后端：解析器与测试；同时拖入的 PDF 照现有办法按路径配对。
 - [ ] 6.4 前端：文件导入的说明文字列出新格式。
 - [ ] 6.5 MCP 与 Skill：`import_bibliography` 的说明与 `skills/sciretriever/import.md` 同步。
