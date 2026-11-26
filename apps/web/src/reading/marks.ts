@@ -813,7 +813,9 @@ export function createDocumentMarkSurface(
     const spans = all.map((el) => {
       // Index a section again only when its text changed (an image replacing
       // its placeholder); painted sections otherwise keep their text nodes.
-      const content = el.textContent ?? "",
+      // The reading layers put elements around a section's words without
+      // changing them; they say so with a revision.
+      const content = `${el.dataset.textRevision ?? ""}\u0000${el.textContent ?? ""}`,
         cached = indexed.get(el);
       if (cached?.content === content) return { el, index: cached.index };
       const index = indexText(el, skip);

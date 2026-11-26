@@ -34,4 +34,12 @@ describe("margin notes", () => {
     // A folded note takes its first line's height only.
     expect(places[2]!.top).toBe(210 + 18 + MARGIN.gap);
   });
+  it("go below what already stands in the margin of an annotated copy (ADR 0070)", () => {
+    const places = layoutMargin(
+      [note("a", 30), note("b", 300)],
+      [{ top: 0, bottom: 90 }],
+    );
+    expect(places[0]).toMatchObject({ top: 90 + MARGIN.gap, folded: false });
+    expect(places[1]!.top).toBe(300);
+  });
 });

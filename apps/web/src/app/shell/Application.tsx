@@ -430,8 +430,9 @@ function Workspace({ api }: { api: ApiClient }) {
         ? current.map((item) => (item.id === id ? tab : item))
         : [...current, tab];
     });
+    // Another paper, or another view of this one, opens in the full text's own layer.
     navigate(
-      { literature: id, reader: mode ?? null, ...source },
+      { literature: id, reader: mode ?? null, layer: null, ...source },
       { clearSource: true },
     );
   };

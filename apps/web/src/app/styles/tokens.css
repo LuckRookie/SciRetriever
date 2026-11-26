@@ -108,6 +108,10 @@
       "IBM Plex Sans", "Noto Sans SC", -apple-system, BlinkMacSystemFont,
       "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
     --serif: "Source Serif 4", "Noto Serif SC", "Songti SC", Georgia, serif;
+    /* The machine's hand (ADR 0070): Latin in the serif's italic, Chinese in 楷体. */
+    --kai:
+      "Source Serif 4 Italic", "Reader Kai", "Kaiti SC", STKaiti, KaiTi,
+      "AR PL KaitiM GB", "Noto Serif SC", serif;
     --mono: "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
     --shadow-1:
       0 1px 2px rgba(40, 30, 15, 0.04), 0 3px 10px rgba(40, 30, 15, 0.05);
@@ -188,6 +192,8 @@
     --fg2: #605e58;
     --fg3: #696760;
     --fg-quiet: #a5a4a1;
+    /* 朱: what the machine adds to the author's text (ADR 0070). */
+    --zhu: #a8392a;
     --side-fg: #4c4a44;
     --side-icon: #7f7e7a;
     --blue: #3b529b;
@@ -240,6 +246,8 @@
     --fg2: #5f5345;
     --fg3: #685c4e;
     --fg-quiet: #a29b8e;
+    /* 朱: what the machine adds to the author's text (ADR 0070). */
+    --zhu: #a3301f;
     --side-fg: #4c4236;
     --side-icon: #7e766b;
     --blue: #3a4f8c;
@@ -292,6 +300,8 @@
     --fg2: #5a574f;
     --fg3: #646058;
     --fg-quiet: #9c9a94;
+    /* 朱: what the machine adds to the author's text (ADR 0070). */
+    --zhu: #a53626;
     --side-fg: #42403b;
     --side-icon: #75736f;
     --blue: #2a6478;
@@ -344,6 +354,8 @@
     --fg2: #4d5c4c;
     --fg3: #546353;
     --fg-quiet: #979f96;
+    /* 朱: what the machine adds to the author's text (ADR 0070). */
+    --zhu: #9d3324;
     --side-fg: #3c4a3e;
     --side-icon: #727b72;
     --blue: #325a8c;
@@ -396,6 +408,8 @@
     --fg2: #52514d;
     --fg3: #5c5b56;
     --fg-quiet: #969692;
+    /* 朱: what the machine adds to the author's text (ADR 0070). */
+    --zhu: var(--fg);
     --side-fg: #3f3e3c;
     --side-icon: #71716e;
     --blue: #2c2c2a;
@@ -451,6 +465,8 @@
     --fg2: #aaa69d;
     --fg3: #a09c93;
     --fg-quiet: #706e6a;
+    /* 朱: what the machine adds to the author's text (ADR 0070). */
+    --zhu: #e2826c;
     --side-fg: #c8c4bc;
     --side-icon: #8b8984;
     --blue: #9fb0ec;
@@ -503,6 +519,8 @@
     --fg2: #b7a68a;
     --fg3: #af9e84;
     --fg-quiet: #74695a;
+    /* 朱: what the machine adds to the author's text (ADR 0070). */
+    --zhu: #ea8e70;
     --side-fg: #cab99c;
     --side-icon: #8d816e;
     --blue: #e0b36a;

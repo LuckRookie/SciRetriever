@@ -1,3 +1,4 @@
+import type { ReadingLayer } from "./layers/model.js";
 import type { ReadingPosition } from "./state.js";
 
 /** Framework-neutral access supplied by either application shell. */
@@ -236,4 +237,30 @@ export interface ReaderFrame {
     retry?: () => void | Promise<void>,
     more?: { retained?: string; detail?: string },
   ) => void;
+  /**
+   * The reading layer the full text opens in (reading-experience 3.3.1) when
+   * this version has layers; 全文 otherwise.
+   */
+  readingLayer?: ReadingLayer;
+  /** Whether stressed words are marked (排版 → 标出重点词). */
+  keyTerms?: boolean;
+  /**
+   * Set by the full-text engine once the layers are on the sheet: shows a
+   * layer, arriving at a note or at a place of the full text.
+   */
+  setLayer?: (
+    layer: ReadingLayer,
+    target?: {
+      point?: number | null;
+      start?: number | null;
+      instant?: boolean;
+    },
+  ) => void;
+  /** Set with `setLayer`: Alt and the wheel move the change by hand; true when taken. */
+  layerWheel?: (deltaY: number) => boolean;
+  setKeyTerms?: (on: boolean) => void;
+  /** The layers are on the sheet (true), or could not be read (false). */
+  onLayers?: (ready: boolean) => void;
+  /** The layer shown changed. */
+  onLayer?: (layer: ReadingLayer) => void;
 }

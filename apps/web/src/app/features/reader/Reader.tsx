@@ -77,6 +77,7 @@ import { READER_PAINTED, useShell } from "../../shell/context.js";
 import {
   errorMessage,
   fullTextStrings,
+  layerStrings,
   translationUnavailable,
 } from "../../strings.js";
 import { ProofreadEditor } from "./ProofreadEditor.js";
@@ -86,6 +87,8 @@ import { download, OperationDialog } from "../library/OperationDialog.js";
 import { useLibraryRemoval } from "../library/Uncollect.js";
 import { ReaderInformation, ReaderRelations } from "./ReaderInformation.js";
 import { RunOperatorDialog } from "../processing/RunOperator.js";
+import "./layers.css";
+import type { ReadingLayer } from "../../../reading/layers/model.js";
 import "./reading.css";
 import { SummaryView } from "./SummaryView.js";
 import { TranslationPanel } from "./translation/TranslationViews.js";
@@ -145,6 +148,8 @@ function subscribeDocking(change: () => void) {
   return () => media.removeEventListener("change", change);
 }
 
+/** “排版 → 标出重点词”, on unless turned off in this browser (spec 3.3.2). */
+const KEY_TERMS = "sciretriever:reader:key-terms:v1";
 export default function Reader() {
   const api = useApi(),
     shell = useShell(),
@@ -172,7 +177,13 @@ export default function Reader() {
   const id = route.literature ?? "",
     // Spec 6.4: an open without a view leaves the choice to the reader.
     chosen = route.readerChosen,
-    sourceKey = route.parameters.toString();
+    // The reading layer is a way of showing the same material: it is no
+    // part of what the engine is built for.
+    sourceKey = (() => {
+      const parameters = new URLSearchParams(route.parameters);
+      parameters.delete("layer");
+      return parameters.toString();
+    })();
   // The material a reader engine is built for: the paper and its fixed source,
   // everything in the address except the view (`reader`) it is shown in.
   const materialKey = useMemo(() => {
@@ -337,9 +348,26 @@ export default function Reader() {
       return {
         translation: described.translation ?? null,
         level: described.text_level ?? ("proofread" as const),
+        layers: described.layers ?? null,
       };
     },
   });
+  // Reading-experience 3: a proofread text with layers is an annotated copy,
+  // unless its layers could not be read.
+  const [layersFailed, setLayersFailed] = useState<string | null>(null);
+  const [layersToken, setLayersToken] = useState(0);
+  const layersSummary = translationQuery.data?.layers ?? null;
+  const annotated =
+    layersSummary?.state === "complete" &&
+    translationQuery.data?.level !== "draft" &&
+    layersFailed !== documentRef?.document_version_id;
+  const [keyTerms, setKeyTerms] = useState(
+    () => preferences.read(KEY_TERMS) !== "off",
+  );
+  const versionRef = useRef<string | null>(null);
+  versionRef.current = documentRef?.document_version_id ?? null;
+  const routeLayer = useRef<ReadingLayer>(route.layer);
+  routeLayer.current = route.layer;
   const translationSummary = translationQuery.data?.translation ?? null;
   const translationKnown =
     !documentRef || translationQuery.isSuccess || translationQuery.isError;
@@ -406,6 +434,9 @@ export default function Reader() {
     ? route.reader
     : (picked ?? (detail.data?.primary_pdf ? "pdf" : "doc"));
   wantsPdf.current = (chosen || !!picked) && viewOf(mode) === "pdf";
+  // The layer shown: the address's, for a full text that has layers.
+  const layer: ReadingLayer =
+    mode === "doc" && annotated ? route.layer : "full";
   useLayoutEffect(() => {
     setDocumentLink(null);
     setDoubt(null);
@@ -583,6 +614,18 @@ export default function Reader() {
       fontSize: () => fontSizeRef.current,
       textMode: () => textModeChoice.get(),
       textModeChanged: (value) => textModeChoice.set(value),
+      layer: () => routeLayer.current,
+      layerChanged: (shown) => {
+        if (shown !== routeLayer.current)
+          navigate(
+            { layer: shown === "full" ? null : shown },
+            { replace: true },
+          );
+      },
+      layersReady: (ready) => {
+        if (!ready) setLayersFailed(versionRef.current);
+        setLayersToken((value) => value + 1);
+      },
     }),
   );
   const detailReady = !!detail.data && !detail.isPlaceholderData,
@@ -611,6 +654,15 @@ export default function Reader() {
     // Until the view is picked nothing is built, and what shows stays.
     if (chosen) engines.view(viewOf(mode));
   }, [engines, mode, chosen]);
+  useEffect(() => {
+    frame.current?.setKeyTerms?.(keyTerms);
+  }, [keyTerms, viewToken, layersToken]);
+  // The layer the address names is the layer the sheet shows.
+  useEffect(() => {
+    // Only for a text known to have layers: while that is being read again
+    // the sheet keeps the layer it shows.
+    if (mode === "doc" && annotated) frame.current?.setLayer?.(layer);
+  }, [mode, layer, annotated, viewToken, layersToken]);
   // Spec 1.1: the sheet's geometry follows the desk's width and the reading
   // size; “排版 → 行宽” sets the column (34 em is 适中, plan 25 block 30).
   const columnEm = MEASURE_EM[lines.measure];
@@ -629,8 +681,15 @@ export default function Reader() {
       const desk = scroller.clientWidth || surface.clientWidth;
       if (!desk) return;
       // On the surface: the scroll area and the skeleton over it share it.
-      const g = sheetGeometry(desk, size, columnEm),
+      const g = sheetGeometry(
+          desk,
+          size,
+          columnEm,
+          annotated && mode === "doc",
+        ),
         style = surface.style;
+      style.setProperty("--sheet-gutter", `${g.gutter}px`);
+      style.setProperty("--sheet-note-width", `${g.noteWidth}px`);
       style.setProperty("--sheet-width", `${g.sheet}px`);
       style.setProperty("--sheet-left", `${g.left}px`);
       style.setProperty("--sheet-margin-left", `${g.marginLeft}px`);
@@ -647,7 +706,7 @@ export default function Reader() {
     observer.observe(scroller);
     observer.observe(page);
     return () => observer.disconnect();
-  }, [fontSize, columnEm, layout, detailReady, mode]);
+  }, [fontSize, columnEm, layout, detailReady, mode, annotated]);
   /**
    * Spec 6.1: the side panel slides in from the right (--dur-3, --ease-out)
    * and out (--dur-2, --ease-in), and the sheet moves to its new place on
@@ -863,6 +922,20 @@ export default function Reader() {
       element?.style.setProperty("--reading-font-size", `${size}px`);
     geometry.current(size);
   };
+  // Reading-experience 3.3.1: the wheel with Alt held moves the change of
+  // layer by hand; up is nearer (toward 全文), down is farther.
+  useEffect(() => {
+    if (!desk) return;
+    const wheel = (event: WheelEvent) => {
+      if (!event.altKey || event.ctrlKey || event.metaKey) return;
+      const px =
+        event.deltaY *
+        (event.deltaMode === 1 ? 33 : event.deltaMode === 2 ? 600 : 1);
+      if (px && frame.current?.layerWheel?.(px)) event.preventDefault();
+    };
+    desk.addEventListener("wheel", wheel, { passive: false });
+    return () => desk.removeEventListener("wheel", wheel);
+  }, [desk]);
   const scale = useReadingScale({
     view:
       mode === "doc" ? "doc" : mode === "pdf" || mode === "edit" ? "pdf" : null,
@@ -940,6 +1013,15 @@ export default function Reader() {
     );
   changeModeRef.current = (value: string) => changeMode(value);
   const changeMode = (value: string) => {
+    // A reading layer is the full text's: the address keeps the paper and its source.
+    if (value === "map" || value === "overview" || value === "outline") {
+      navigate({ reader: "doc", layer: value }, { replace: mode === "doc" });
+      return;
+    }
+    if (value === "doc" && mode === "doc") {
+      navigate({ layer: null }, { replace: true });
+      return;
+    }
     const material = sources.data?.material;
     shell.openPaper(
       id,
@@ -1183,14 +1265,22 @@ export default function Reader() {
     narrowBar = barLayout.views === "menu";
   const hasPdf = !!detail.data.primary_pdf || !!sources.data?.material;
   // The summary and the results are a cell of the views while open (block 30).
-  const views = [
+  const views: { id: string; label: string; gap?: boolean }[] = [
+    ...(annotated
+      ? [
+          { id: "map", label: "导图" },
+          { id: "overview", label: layerStrings.names[0], gap: true },
+          { id: "outline", label: layerStrings.names[1] },
+        ]
+      : []),
     { id: "doc", label: fullTextStrings.view },
-    ...(hasPdf ? [{ id: "pdf", label: "PDF" }] : []),
+    ...(hasPdf ? [{ id: "pdf", label: "PDF", gap: annotated }] : []),
     ...(mode === "know" ? [{ id: "know", label: "总结" }] : []),
     ...(mode === "results" ? [{ id: "results", label: "结果" }] : []),
   ];
   // Editing the proofread text is not one of the views: leaving it is choosing one.
-  const viewValue = mode === "edit" ? "" : mode;
+  const viewValue =
+    mode === "edit" ? "" : mode === "doc" && layer !== "full" ? layer : mode;
   const findDisabled = mode === "results" || (mode !== "know" && !ready);
   const toggleFind = () => setFindOpen((value) => !value);
   const toggleOutline = () =>
@@ -1270,6 +1360,14 @@ export default function Reader() {
    * what this paper or deployment lacks is not in it.
    */
   const commandList: (ReaderCommand | null | false)[] = [
+    annotated && {
+      id: "view-overview",
+      run: () => void (viewValue !== "overview" && changeMode("overview")),
+    },
+    annotated && {
+      id: "view-outline",
+      run: () => void (viewValue !== "outline" && changeMode("outline")),
+    },
     views3 && {
       id: "view-doc",
       run: () => void (viewValue !== "doc" && changeMode("doc")),
@@ -1458,8 +1556,17 @@ export default function Reader() {
       onLeading={(leading) => relayout(() => readingLayout.set({ leading }))}
       theme={shell.themes.theme}
       onTheme={shell.setTheme}
-      keySentences={keySentences}
+      keyTerms={annotated}
+      keySentences={annotated ? keyTerms : keySentences}
       onKeySentences={(value) => {
+        // A paper with layers: the switch marks their stressed words, one
+        // choice in this browser (spec 3.3.2).
+        if (annotated) {
+          setKeyTerms(value);
+          preferences.write(KEY_TERMS, value ? "on" : "off");
+          frame.current?.setKeyTerms?.(value);
+          return;
+        }
         setKeySentences(value);
         rememberReading(catalog, id, { keySentences: value });
       }}
@@ -2103,7 +2210,10 @@ export default function Reader() {
                 it. A bibliography page has none (plan 25 block 30). */}
             <ReaderSpine
               body={
-                (mode === "doc" || mode === "pdf") && !bibliographyPage
+                // 导图 is a fold-out leaf as wide as the desk: no spine beside it.
+                (mode === "doc" || mode === "pdf") &&
+                !bibliographyPage &&
+                layer !== "map"
                   ? body.current
                   : null
               }

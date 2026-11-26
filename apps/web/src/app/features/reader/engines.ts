@@ -1,3 +1,4 @@
+import type { ReadingLayer } from "../../../reading/layers/model.js";
 import { pdfZoom } from "./input/scale.js";
 import {
   type TextLevel,
@@ -208,6 +209,12 @@ export interface ReaderBindings {
   textMode(): DocumentTextMode;
   /** The full text switched its reading itself (a marked paragraph's sign). */
   textModeChanged(mode: DocumentTextMode): void;
+  /** The reading layer the address asks for (reading-experience 3.3.1). */
+  layer(): ReadingLayer;
+  /** The sheet shows another layer (a note pressed, the wheel with Alt). */
+  layerChanged(layer: ReadingLayer): void;
+  /** The layers are on the sheet, or could not be read. */
+  layersReady(ready: boolean): void;
 }
 /** One step of the jump history: which view and where. */
 interface Visit {
@@ -659,6 +666,13 @@ function build(
       },
       onTextMode: (mode) => {
         if (shows(view)) b.textModeChanged(mode);
+      },
+      readingLayer: b.layer(),
+      onLayer: (shown) => {
+        if (shows(view)) b.layerChanged(shown);
+      },
+      onLayers: (ready) => {
+        if (!controller.signal.aborted) b.layersReady(ready);
       },
       animateNavigation: () =>
         document.documentElement.dataset.reducedMotion !== "true",

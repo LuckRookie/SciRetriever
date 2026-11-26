@@ -18,12 +18,26 @@ export interface MarginPlace {
   want: number;
   folded: boolean;
 }
-export function layoutMargin(items: readonly MarginItem[]): MarginPlace[] {
+/**
+ * `taken`: stretches of the margin something else stands in (the machine's
+ * notes of an annotated copy, ADR 0070): a reader's note goes below them.
+ */
+export function layoutMargin(
+  items: readonly MarginItem[],
+  taken: readonly { top: number; bottom: number }[] = [],
+): MarginPlace[] {
   const sorted = [...items].sort((a, b) => a.want - b.want);
+  const blocks = [...taken].sort((a, b) => a.top - b.top);
   const out: MarginPlace[] = [];
   let bottom = -Infinity;
   for (const item of sorted) {
-    const top = Math.max(item.want, bottom + MARGIN.gap);
+    let top = Math.max(item.want, bottom + MARGIN.gap);
+    for (const block of blocks)
+      if (
+        top < block.bottom + MARGIN.gap &&
+        top + item.height > block.top - MARGIN.gap
+      )
+        top = block.bottom + MARGIN.gap;
     const folded = top - item.want > MARGIN.far;
     out.push({ id: item.id, top, want: item.want, folded });
     bottom = top + (folded ? item.firstLine : item.height);

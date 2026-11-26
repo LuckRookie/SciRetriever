@@ -24,6 +24,13 @@ export interface SheetGeometry {
   framed: boolean;
   /** The page header's side indent, px (spec 1.2). */
   headerIndent: number;
+  /**
+   * An annotated copy (ADR 0070): the room between the text column and the
+   * notes, with the column rule in its middle, and the notes' own width.
+   * Both 0 when the sheet has no column rule.
+   */
+  gutter: number;
+  noteWidth: number;
 }
 export const SPINE_GAP = 8;
 export const SPINE_WIDTH = 16;
@@ -39,11 +46,15 @@ const NOTE_MARGIN = 190;
 /**
  * `columnEm` overrides the 34 em text column (the width setting the current
  * toolbar still offers); the margins and tiers stay as the spec gives them.
+ * `annotated`: the paper has reading layers, so its sheet is an annotated
+ * copy: on a wide desk the right margin holds the machine's notes beside a
+ * column rule (reading-experience 3.4).
  */
 export function sheetGeometry(
   desk: number,
   fontSize: number,
   columnEm = COLUMN_EM,
+  annotated = false,
 ): SheetGeometry {
   const em = (n: number) => n * fontSize,
     widest = em(columnEm),
@@ -68,11 +79,29 @@ export function sheetGeometry(
       compactLeft: true,
       framed: false,
       headerIndent: 16,
+      gutter: 0,
+      noteWidth: 0,
     };
   }
   let tier: SheetTier, marginLeft: number, column: number, marginRight: number;
+  let gutter = 0,
+    noteWidth = 0;
   const room = desk - SIDE;
-  if (desk >= 1088) {
+  if (desk >= 1088 && annotated) {
+    tier = "wide";
+    // Left margin, gutter, notes, and the paper beyond the notes.
+    const [left, gap, notes, edge] =
+      desk >= 1560
+        ? [110, 46, 350, 48]
+        : desk >= 1240
+          ? [96, 46, 310, 48]
+          : [72, 38, 250, 28];
+    marginLeft = left;
+    gutter = gap;
+    noteWidth = notes;
+    marginRight = gap + notes + edge;
+    column = fit(room - marginLeft - marginRight);
+  } else if (desk >= 1088) {
     tier = "wide";
     marginLeft = 150;
     marginRight = 210;
@@ -108,6 +137,8 @@ export function sheetGeometry(
     compactLeft: marginLeft < 96,
     framed: true,
     headerIndent: tier === "wide" ? 40 : 24,
+    gutter,
+    noteWidth,
   };
 }
 

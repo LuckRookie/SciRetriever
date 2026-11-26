@@ -38,6 +38,8 @@ export interface TabItem {
   id: string;
   label: ReactNode;
   disabled?: boolean;
+  /** Begins another group: a gap and a hairline before it (the reader's views). */
+  gap?: boolean;
 }
 export interface TabsProps {
   label: string;
@@ -100,7 +102,12 @@ function TabNavigation({
     >
       <TabList aria-label={label} className="ui-tab-list">
         {items.map((item) => (
-          <Tab key={item.id} id={item.id} className="ui-tab">
+          <Tab
+            key={item.id}
+            id={item.id}
+            className="ui-tab"
+            data-gap={item.gap ? "" : undefined}
+          >
             {({ isSelected }) => (
               <>
                 {isSelected ? <span className="ui-tab-indicator" /> : null}

@@ -5,6 +5,7 @@
 import "./styles/tokens.css";
 import "./styles/font-faces.css";
 import "./styles/font-faces-cjk.css";
+import "./styles/font-faces-kai.css";
 import "./styles/base.css";
 import "./styles/components.css";
 import "./styles/pages.css";

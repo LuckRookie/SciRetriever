@@ -25,3 +25,5 @@ React 阅读入口通过 `contract.ts` 的 `ReadingContext` / `ReaderFrame` 接�
 `table.ts` 从 inert template 重建 MinerU HTML 表格，只保留表格结构、有限排版和跨行/跨列属性；事件、样式、脚本与远程图片不进入页面。表内本地图片仍由固定文档资源 owner 读取，原文和证据字节不变。
 
 批注的重新定位（用户整理 9.4）：`mark-relocate.ts` 是纯函数，决定在另一份 PDF 或另一个文本版本上要不要找（只找同一部分的高亮，框选从不找）、读出当前方法 `mark-locate-v1` 下记下的位置、按 `mark-locate.ts` 的比对与阈值分档。`marks.ts` 在 PDF 上逐页、在全文上按已载入的文本查找，同一会话里找不到的不重复找；找到的经 `place` 记一次，以后打开直接读记录，批注自己的锚点从不改写。
+
+阅读层（阅读体验第 3 节，ADR 0070）在 [layers](layers/README.md)：全文上的批语、脉络、概览、导图与换层，由 `document.ts` 在正文排好后挂到纸页上。

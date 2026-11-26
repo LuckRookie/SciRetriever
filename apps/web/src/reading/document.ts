@@ -35,6 +35,13 @@ import {
 } from "./markdown.js";
 
 import { blockSourceText } from "./block-text.js";
+import {
+  captionParts,
+  type LayerFigure,
+  type LayersPort,
+} from "./layers/model.js";
+import { readLayers } from "./layers/read.js";
+import { attachLayers, type LayersView } from "./layers/view.js";
 
 export async function renderDocument(
   ctx: ReadingContext,
@@ -536,10 +543,14 @@ export async function renderDocument(
   };
   /** The anchor block (spec 4.1) and its top on screen, as last measured. */
   let kept: { el: HTMLElement; top: number; area: number } | null = null;
+  /** Another reading layer shows in the sheet: the full text keeps its place as it was. */
+  let layerAway = false,
+    layersView: LayersView | null = null;
   const capture = (closing = false) => {
     if (
       restoring ||
       hidden ||
+      layerAway ||
       (!closing && ctx.signal.aborted) ||
       !frame.body.isConnected ||
       frame.body.clientHeight === 0
@@ -574,6 +585,7 @@ export async function renderDocument(
    * before paint. Not left to the browser's `overflow-anchor`.
    */
   const keep = () => {
+    if (layerAway) return;
     if (held && !hidden && !restoring && held.el.isConnected) {
       // A change of reading size keeps the point under the pointer (spec 1.8.1).
       const box = held.el.getBoundingClientRect();
@@ -618,6 +630,8 @@ export async function renderDocument(
   };
   /** A jump (outline, link): near the top; within a screen it glides, further it lands and flashes. */
   const go = (offset: number, ratio = 0, animate = false) => {
+    // A jump into the text from another layer shows the full text first.
+    if (layerAway) layersView?.setLayer("full", { point: null, instant: true });
     if (hidden) {
       state.textOffset = offset;
       state.blockOffset = ratio;
@@ -726,6 +740,8 @@ export async function renderDocument(
     textMode = mode;
     article.dataset.textMode = mode;
     for (const block of blocks()) decorateTranslation(block);
+    layersView?.setText(mode);
+    layersView?.painted();
     keep();
     // Marks find their places again, and their notes are measured anew.
     frame.onDocumentPaint?.();
@@ -749,7 +765,7 @@ export async function renderDocument(
     for (const block of blocks()) decorateMarks(block);
   };
   const onScroll = () => {
-    if (hidden) return;
+    if (hidden || layerAway) return;
     capture();
     void prefetch();
   };
@@ -1034,6 +1050,7 @@ export async function renderDocument(
     tail.textContent = finished ? "" : "继续向下阅读，正文将自动加载";
     frame.onIssue?.(null);
     ctx.root.dataset.readingReady = "true";
+    layersView?.painted();
     frame.onDocumentPaint?.();
     return changed;
   };
@@ -1216,6 +1233,8 @@ export async function renderDocument(
       return new Promise<void>((done) => {
         pendingFollow = { anchor, done };
       });
+    if (layerAway && jumped)
+      layersView?.setLayer("full", { point: null, instant: true });
     if (anchor.kind === "doc") place(anchor.start, anchor.ratio, jumped);
     else await followPdf(anchor.page, anchor.ratio);
   };
@@ -1246,6 +1265,7 @@ export async function renderDocument(
     article.dataset.textMode = textMode;
   }
   await load();
+  const sectionPlaces = new Map<string, { start: number; level: number }>();
   do {
     const page: DocumentReadResultMap["outline"] = await readDocument(
       ctx,
@@ -1273,6 +1293,11 @@ export async function renderDocument(
               .trim() || "middle";
         });
       }
+      if (section.section_id)
+        sectionPlaces.set(section.section_id, {
+          start: section.start_utf8,
+          level: section.level,
+        });
       const activate = async () => {
         frame.beforeJump?.();
         const revision = ++jumpRevision;
@@ -1421,6 +1446,111 @@ export async function renderDocument(
       else frame.findStatus.append(button("下一处命中", () => jump()));
     }
   };
+  // Reading layers (reading-experience 3, ADR 0070): a version that has them
+  // is an annotated copy. They rest on the whole text, so it is read to the
+  // end first; a version with layers is never a long document.
+  if (described.layers?.state !== "complete" || level === "draft") return;
+  try {
+    const data = await readLayers(ctx, docId, described.layers);
+    while (!finished && !ctx.signal.aborted) await load();
+    ctx.signal.throwIfAborted();
+    if (data.text !== "original") await ensureUnits();
+    const starts = new Map(segments.map((s) => [s.segment_id, s.start_utf8]));
+    const figures = new Map<string, LayerFigure>();
+    for (const group of layout?.figure_groups ?? []) {
+      const captionText = group.captions
+        .map((c) => {
+          const block = blockAt(c.start_utf8);
+          return block ? blockSourceText(block, false) : "";
+        })
+        .join(" ")
+        .trim();
+      const lead = captionParts(captionText).lead;
+      const translated =
+        group.captions
+          .map((c) => units?.get(c.segment_id)?.translation ?? "")
+          .join(" ")
+          .trim() || null;
+      for (const object of group.objects)
+        figures.set(object.segment_id, {
+          segment_id: object.segment_id,
+          kind: group.kind,
+          label:
+            lead ??
+            (group.kind === "table"
+              ? "表"
+              : group.kind === "scheme"
+                ? "方案"
+                : "图"),
+          caption: (mode) =>
+            mode === "original" ? captionText || null : translated,
+          start: object.start_utf8,
+          image: async () => {
+            if (group.kind === "table") return null;
+            const holder = blockAt(
+              object.start_utf8,
+            )?.querySelector<HTMLElement>("[data-resource]");
+            const resource = holder
+              ? resources.get(holder.dataset.resource!)
+              : undefined;
+            return resource ? imageUrl(resource) : null;
+          },
+        });
+    }
+    const port: LayersPort = {
+      sheet: layer,
+      article,
+      body: frame.body,
+      header: frame.header ?? null,
+      title: frame.documentTitle ?? null,
+      blocks,
+      blockAt,
+      loadAll: async () => {
+        while (!finished && !ctx.signal.aborted) await load();
+      },
+      section: (id) => {
+        const found = sectionPlaces.get(id);
+        if (!found) return null;
+        const heading = segments[segmentFrom(found.start)];
+        return {
+          ...found,
+          translation:
+            (heading && units?.get(heading.segment_id)?.translation) || null,
+        };
+      },
+      figure: (id) => figures.get(id) ?? null,
+      away: (on) => {
+        if (layerAway === on) return;
+        layerAway = on;
+        if (!on) capture();
+      },
+      place: () => state.textOffset,
+      enlarge: (url, label) => frame.onImage?.(url, label),
+      repainted: () => frame.onDocumentPaint?.(),
+      reducedMotion: () => !(frame.animateNavigation?.() ?? true),
+    };
+    const view = attachLayers(port, data, {
+      layer: frame.readingLayer ?? "full",
+      text: textMode,
+      keyTerms: frame.keyTerms ?? true,
+      onLayer: (shown) => frame.onLayer?.(shown),
+      offsetOf: (id) => starts.get(id) ?? null,
+    });
+    layersView = view;
+    frame.setLayer = (next, target) => view.setLayer(next, target);
+    frame.layerWheel = (deltaY) => view.wheel(deltaY);
+    frame.setKeyTerms = (on) => view.setKeyTerms(on);
+    ctx.signal.addEventListener("abort", () => view.destroy(), { once: true });
+    frame.onLayers?.(true);
+    frame.onLayer?.(view.layer());
+  } catch (error) {
+    if (!ctx.signal.aborted) {
+      frame.onLayers?.(false);
+      frame.onNote?.(
+        readerErrorMessage(error, "概览与脉络没有读到，按全文显示。"),
+      );
+    }
+  }
 }
 
 /** Wraps the leading text `pattern` matches in a span (no text changes). */

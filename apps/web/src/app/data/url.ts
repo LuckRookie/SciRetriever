@@ -27,6 +27,12 @@ export const sections = [
 ] as const;
 export type Section = (typeof sections)[number];
 export type ReaderMode = "pdf" | "doc" | "know" | "edit" | "results";
+/**
+ * The reading layer of the full text (reading-experience 3.3.1): `layer` in
+ * the address, beside `reader=doc`; absent is 全文.
+ */
+export type ReaderLayer = "map" | "overview" | "outline" | "full";
+const readerLayers: readonly ReaderLayer[] = ["map", "overview", "outline"];
 const eventName = "sciretriever:react-navigation";
 export const sourceParameterKeys = [
   "agentSession",
@@ -56,6 +62,8 @@ export interface UrlState {
   section: Section;
   literature: string | null;
   reader: ReaderMode;
+  /** The full text's reading layer; 全文 unless the address names another. */
+  layer: ReaderLayer;
   /** The address names the view; otherwise the reader picks it (spec 6.4). */
   readerChosen: boolean;
   query: LibraryQuery;
@@ -123,6 +131,8 @@ export function parseUrl(search: string): UrlState {
       reader === "results"
         ? reader
         : "pdf",
+    layer:
+      readerLayers.find((item) => item === parameters.get("layer")) ?? "full",
     readerChosen: !!reader,
     query,
     sort,

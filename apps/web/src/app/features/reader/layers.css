@@ -1,0 +1,1056 @@
+@layer pages {
+  /*
+   * The annotated copy (reading-experience 3, ADR 0070). What the author
+   * printed is in ink, inside the text block. What the machine adds is in the
+   * commentator's second ink (朱) beside it: notes in the margin, a stroke on
+   * the column rule beside the sentence a note stands on, the words it
+   * stresses, the note's number at the sentence's end. Where the machine's
+   * words are the text themselves (脉络, 概览, 导图) they are in ink, in the
+   * commentator's hand. Nothing says what it is by a label.
+   */
+  .react-reader .reader-view[data-view="doc"][data-annotated] {
+    position: relative;
+    min-height: max(100%, calc(var(--rl-side-end, 0px) + 72px));
+  }
+  .react-reader
+    .reader-view[data-annotated]:is(
+      [data-layer="overview"],
+      [data-layer="outline"],
+      [data-layer="map"]
+    )
+    > :is(
+      .reading-article,
+      .reading-continuation,
+      #reader-load-more,
+      .reading-margin-notes
+    ) {
+    display: none;
+  }
+  .rl-leaf {
+    width: var(--sheet-column);
+    padding-top: var(--space-6);
+  }
+  .rl-leaf[hidden],
+  .rl-map[hidden] {
+    display: none;
+  }
+  .rl-col,
+  .rl-side,
+  .rl-stage {
+    font-family: var(--serif);
+    font-size: var(--reading-font-size, 20px);
+    color: var(--fg);
+  }
+  /* 栏线: the edge of the text block on the side of the notes; a note's stroke lies on it. */
+  .rl-rule {
+    position: absolute;
+    left: calc(
+      var(--sheet-margin-left) + var(--sheet-column) + var(--sheet-gutter) / 2
+    );
+    width: 1px;
+    background: var(--line2);
+    pointer-events: none;
+  }
+  .rl-stroke {
+    position: absolute;
+    left: calc(
+      var(--sheet-margin-left) + var(--sheet-column) + var(--sheet-gutter) / 2 -
+        0.5px
+    );
+    width: 2px;
+    border-radius: 1px;
+    background: var(--zhu);
+    opacity: 0.8;
+  }
+  .rl-stroke.rl-lit {
+    opacity: 1;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--zhu) 22%, transparent);
+  }
+  .reading-scroll:not([data-sheet="wide"]) :is(.rl-rule, .rl-strokes, .rl-side),
+  .reader-view[data-layer="map"] > :is(.rl-rule, .rl-strokes, .rl-side) {
+    display: none;
+  }
+  /* The commentator's marks in the text. */
+  .rl-kt {
+    color: var(--zhu);
+    font-weight: 650;
+  }
+  .rl-pi .rl-kt {
+    color: var(--fg);
+  }
+  :root[data-theme="eink"] .rl-kt {
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.24em;
+  }
+  [data-key-terms="false"] .rl-kt {
+    color: inherit;
+    font-weight: inherit;
+    text-decoration: none;
+  }
+  .rl-ev-end::after,
+  .rl-nm,
+  .rl-pi-no,
+  .rl-gang-no {
+    box-sizing: border-box;
+    display: inline-block;
+    min-width: 1.5em;
+    height: 1.5em;
+    padding: 0 0.18em;
+    border: 1px solid var(--zhu);
+    border-radius: 0.75em;
+    color: var(--zhu);
+    font: 600 12px / calc(1.5em - 2px) var(--sans);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0;
+    text-align: center;
+    text-indent: 0;
+  }
+  .rl-ev-end::after {
+    content: attr(data-no);
+    margin: 0 0.14em 0 0.2em;
+    font-size: 0.6em;
+    vertical-align: 0.62em;
+    font-weight: 600;
+    font-style: normal;
+  }
+  .rl-ring.rl-ev-end::after,
+  .rl-nm.rl-ring,
+  .rl-pi-no.rl-ring,
+  .rl-gang-no.rl-ring {
+    background: var(--zhu);
+    color: var(--reader-sheet);
+  }
+  .rl-ev.rl-lit {
+    background: color-mix(in srgb, var(--zhu) 9%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--zhu) 9%, transparent);
+    border-radius: 2px;
+  }
+  /* 页边: the notes, in the commentator's hand and ink. */
+  .rl-side {
+    position: absolute;
+    top: 0;
+    left: calc(
+      var(--sheet-margin-left) + var(--sheet-column) + var(--sheet-gutter)
+    );
+    width: var(--sheet-note-width);
+  }
+  .rl-pi {
+    position: absolute;
+    left: 0;
+    right: 0;
+    margin: 0;
+    color: var(--zhu);
+    cursor: default;
+  }
+  .rl-pi-h {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 22px;
+    font: 600 12.5px / 1 var(--sans);
+    letter-spacing: 0.06em;
+  }
+  .rl-pi-kind {
+    font-weight: 500;
+  }
+  .rl-pi-t {
+    margin: 2px 0 0;
+    text-indent: 0;
+    font: 400 0.94em / 1.62 var(--kai);
+    text-wrap: pretty;
+  }
+  .rl-pi-t:lang(en) {
+    font-size: 0.86em;
+    line-height: 1.5;
+  }
+  .rl-pi-x {
+    margin: 3px 0 0;
+    font: 400 12.5px / 1.6 var(--sans);
+    color: var(--fg3);
+  }
+  .rl-pi-x a {
+    color: inherit;
+    text-decoration: none;
+    border-bottom: 1px solid var(--line3);
+    cursor: pointer;
+  }
+  .rl-pi-x a:hover {
+    color: var(--zhu);
+    border-color: var(--zhu);
+  }
+  .rl-pi-x span + span {
+    margin-left: 1.2em;
+  }
+  .rl-pi.rl-lit .rl-pi-t {
+    background: color-mix(in srgb, var(--zhu) 7%, transparent);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--zhu) 7%, transparent);
+    border-radius: 2px;
+  }
+  .rl-pi.rl-rel {
+    color: var(--fg3);
+  }
+  .rl-pi.rl-rel .rl-pi-h {
+    color: var(--zhu);
+  }
+  /* A narrow sheet: the note under the paragraph of its first sentence. */
+  .rl-pi.rl-below {
+    position: static;
+    margin: 0.5em 0 1em 1.2em;
+    padding-left: 12px;
+    border-left: 2px solid color-mix(in srgb, var(--zhu) 70%, transparent);
+    font-size: var(--reading-font-size, 20px);
+  }
+  /* 凡例: how to read the marks, said once, at the front. */
+  .rl-rules {
+    position: absolute;
+    left: 0;
+    right: 0;
+    margin: 0;
+    font: 400 13px / 1.85 var(--serif);
+    color: var(--fg2);
+  }
+  .rl-rules h3 {
+    margin: 0 0 4px;
+    font: 650 13px / 1.6 var(--serif);
+    letter-spacing: 0.3em;
+    color: var(--fg);
+  }
+  .rl-rules dl {
+    display: grid;
+    grid-template-columns: 3.6em minmax(0, 1fr);
+    gap: 0 10px;
+    margin: 0;
+    align-items: baseline;
+  }
+  .rl-rules dt {
+    font-family: var(--kai);
+    font-size: 15.5px;
+    white-space: nowrap;
+  }
+  .rl-rules dd {
+    margin: 0;
+  }
+  .rl-rules .rl-ink {
+    font-family: var(--serif);
+    font-weight: 650;
+    color: var(--fg);
+  }
+  .rl-rules .rl-zhu {
+    color: var(--zhu);
+  }
+  .rl-rules .rl-lan {
+    color: var(--reader-pen);
+  }
+  .rl-rules .rl-nm {
+    margin: 0 2px 0 0;
+    font-size: 10.5px;
+    vertical-align: 0.1em;
+  }
+  /* 题 and 卷末 */
+  .rl-title {
+    margin: 0;
+    font: 650 1.65em / 1.3 var(--serif);
+    letter-spacing: 0.005em;
+    text-wrap: balance;
+  }
+  .rl-title:lang(zh-Hans) {
+    font-size: 1.5em;
+    line-height: 1.42;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+  .rl-title-end {
+    height: 1px;
+    margin: 26px 0;
+    background: var(--line2);
+  }
+  .rl-end {
+    margin: 64px 0 0;
+  }
+  .rl-end::before {
+    content: "";
+    display: block;
+    height: 5px;
+    border-top: 1px solid var(--fg);
+    border-bottom: 2px solid var(--fg);
+    opacity: 0.82;
+  }
+  .rl-end p {
+    margin: 14px 0 0;
+    font: 400 13px / 1.6 var(--serif);
+    color: var(--fg3);
+    text-align: center;
+    letter-spacing: 0.12em;
+  }
+  /* 脉络: the notes as 纲, the author's sentences under them as 目. */
+  .rl-col .rl-h {
+    margin: 2.3em 0 0.75em;
+    font: 650 1.05em / 1.4 var(--serif);
+    letter-spacing: 0.02em;
+  }
+  .rl-col h3.rl-h {
+    margin: 1.9em 0 0;
+    font-size: 0.9em;
+    line-height: 1.5;
+  }
+  .rl-col .rl-h:lang(zh-Hans) {
+    font-weight: 700;
+    letter-spacing: 0.08em;
+  }
+  .rl-hno {
+    margin-right: 0.6em;
+    font-weight: 500;
+    color: var(--fg2);
+  }
+  .rl-gang {
+    position: relative;
+    margin: 1.5em 0 0;
+    cursor: pointer;
+  }
+  .rl-col .rl-h + .rl-gang {
+    margin-top: 0.9em;
+  }
+  .rl-gang > .rl-gang-no {
+    position: absolute;
+    left: -42px;
+    top: 0.5em;
+  }
+  .rl-gang-t {
+    margin: 0;
+    font: 400 1.14em / 1.6 var(--kai);
+    color: var(--fg);
+    text-wrap: pretty;
+  }
+  .rl-gang-t:lang(en) {
+    font-size: 1.04em;
+    line-height: 1.45;
+  }
+  .rl-gang.rl-main .rl-gang-t {
+    font-size: 1.22em;
+  }
+  .rl-gang.rl-main .rl-gang-t:lang(en) {
+    font-size: 1.12em;
+  }
+  .rl-gang.rl-lit .rl-gang-t {
+    background: color-mix(in srgb, var(--zhu) 7%, transparent);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--zhu) 7%, transparent);
+    border-radius: 2px;
+  }
+  .rl-mu {
+    margin: 0.5em 0 0;
+    padding-left: 2.2em;
+    font-size: 0.92em;
+  }
+  .rl-mu-s {
+    position: relative;
+    margin: 0.3em 0 0;
+    line-height: 1.7;
+    color: var(--fg);
+    overflow-wrap: break-word;
+  }
+  .rl-mu-s:has(> [lang="zh-Hans"]) {
+    line-height: 1.85;
+    text-align: justify;
+    letter-spacing: 0.01em;
+  }
+  .rl-mu-tr {
+    display: block;
+    margin-top: 0.15em;
+    color: var(--fg2);
+  }
+  .rl-pn {
+    position: absolute;
+    top: 0.38em;
+    right: calc(100% + 14px + 2.2em);
+    line-height: 0;
+    user-select: none;
+  }
+  .rl-pn > i {
+    display: block;
+    color: var(--fg3);
+    font: 400 12px / 1.45 var(--sans);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .rl-mu-s.rl-cut > span:not(.rl-pn)::before,
+  .rl-mu-s.rl-cut > span:not(.rl-pn)::after {
+    content: "…";
+    color: var(--fg3);
+  }
+  .rl-mu-s.rl-fig {
+    display: flex;
+    gap: 0.7em;
+    align-items: baseline;
+    white-space: nowrap;
+  }
+  .rl-mu-s.rl-fig a {
+    flex: none;
+    font-weight: 650;
+    color: var(--fg);
+    border-bottom: 1px solid var(--line3);
+    cursor: pointer;
+  }
+  .rl-mu-s.rl-fig a:hover {
+    color: var(--zhu);
+    border-color: var(--zhu);
+  }
+  .rl-mu-s.rl-fig span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--fg2);
+  }
+  .rl-plate {
+    margin: 0.9em 0 0.4em;
+  }
+  .rl-plate img {
+    display: block;
+    max-width: min(100%, 420px);
+    height: auto;
+    cursor: zoom-in;
+  }
+  .rl-plate img:not([src]),
+  .rl-oplate img:not([src]),
+  .rl-ms-plate img:not([src]) {
+    min-height: 80px;
+    background: var(--reader-skeleton);
+  }
+  .rl-cap {
+    margin: 0.7em 0 0;
+    font-size: 0.8em;
+    line-height: 1.6;
+    color: var(--fg2);
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
+  .rl-cap b,
+  .rl-oplate figcaption b,
+  .rl-ms-plate figcaption b {
+    font-weight: 650;
+    color: var(--fg);
+    margin-right: 0.3em;
+  }
+  /* A plate is printed on the same paper: its white takes the paper's colour. */
+  :root:not([data-theme="dark"], [data-theme="candle"])
+    :is(.rl-plate, .rl-oplate, .rl-ms-plate)
+    img {
+    mix-blend-mode: multiply;
+  }
+  :root:is([data-theme="dark"], [data-theme="candle"])
+    :is(.rl-plate, .rl-oplate, .rl-ms-plate)
+    img {
+    filter: brightness(0.86) contrast(1.04);
+  }
+  /* 概览 */
+  .rl-osec {
+    position: relative;
+    margin: 0;
+    padding: 22px 0 6px;
+  }
+  .rl-title-end + .rl-osec {
+    padding-top: 0;
+  }
+  .rl-title-end + .rl-osec .rl-oh {
+    top: 3px;
+  }
+  .rl-osec + .rl-osec {
+    margin-top: 20px;
+    border-top: 1px solid var(--line2);
+  }
+  .rl-oh {
+    position: absolute;
+    right: calc(100% + 22px);
+    top: 25px;
+    width: max-content;
+    max-width: calc(var(--sheet-margin-left) - 30px);
+    margin: 0;
+    text-align: right;
+    font: 650 13.5px / 1.6 var(--serif);
+    letter-spacing: 0.12em;
+    color: var(--fg2);
+  }
+  .reading-scroll:is([data-sheet="narrow"], [data-sheet="full"]) .rl-oh {
+    position: static;
+    max-width: none;
+    margin-bottom: 6px;
+    text-align: left;
+  }
+  .rl-ti {
+    margin: 0;
+    font: 400 1.03em / 1.85 var(--kai);
+    color: var(--fg);
+    text-wrap: pretty;
+  }
+  .rl-ti:lang(en),
+  .rl-ol li:lang(en) {
+    line-height: 1.6;
+  }
+  .rl-ti a {
+    color: inherit;
+    text-decoration: underline;
+    text-decoration-color: var(--line3);
+    text-underline-offset: 0.22em;
+    cursor: pointer;
+  }
+  .rl-ti a:hover {
+    color: var(--zhu);
+    text-decoration-color: var(--zhu);
+  }
+  .rl-none {
+    margin: 0;
+    font: 400 0.9em / 1.7 var(--serif);
+    color: var(--fg3);
+  }
+  .rl-onote {
+    margin: 2px 0 0;
+    font: 400 13.5px / 1.7 var(--serif);
+    color: var(--fg3);
+  }
+  .rl-onote a {
+    color: var(--fg2);
+    border-bottom: 1px solid var(--line3);
+    cursor: pointer;
+  }
+  .rl-onote a:hover {
+    color: var(--zhu);
+    border-color: var(--zhu);
+  }
+  .rl-osec .rl-gang {
+    margin-top: 1.15em;
+  }
+  .rl-osec .rl-onote + .rl-gang {
+    margin-top: 0.8em;
+  }
+  .rl-ol {
+    margin: 0;
+    padding: 0 0 0 1.2em;
+    font: 400 0.97em / 1.8 var(--kai);
+    color: var(--fg);
+  }
+  .rl-ol li {
+    margin: 0 0 0.2em;
+  }
+  .rl-ol li::marker {
+    color: var(--fg3);
+  }
+  .rl-src {
+    margin-left: 0.5em;
+    font: 400 12px / 1 var(--sans);
+    color: var(--fg3);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .rl-src a,
+  .rl-dt .rl-s a {
+    color: inherit;
+    cursor: pointer;
+  }
+  .rl-src a:hover,
+  .rl-dt .rl-s a:hover {
+    color: var(--zhu);
+  }
+  .rl-src a + a {
+    margin-left: 0.4em;
+  }
+  .rl-dt {
+    width: 100%;
+    border-collapse: collapse;
+    border-top: 1.5px solid var(--fg);
+    border-bottom: 1.5px solid var(--fg);
+    font-size: 0.86em;
+    line-height: 1.6;
+  }
+  .rl-dt th {
+    padding: 5px 14px 5px 0;
+    border-bottom: 1px solid var(--fg2);
+    font: 400 13px / 1.5 var(--serif);
+    color: var(--fg2);
+    text-align: left;
+    letter-spacing: 0.1em;
+  }
+  .rl-dt td {
+    padding: 6px 14px 6px 0;
+    vertical-align: baseline;
+  }
+  .rl-dt tr + tr td {
+    border-top: 1px solid var(--line);
+  }
+  .rl-dt td.rl-v {
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .rl-dt td.rl-s {
+    font: 400 12px / 1.5 var(--sans);
+    color: var(--fg3);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .rl-oplate {
+    position: absolute;
+    left: 0;
+    right: 0;
+    margin: 0;
+  }
+  .rl-oplate img {
+    display: block;
+    width: 100%;
+    height: auto;
+    cursor: zoom-in;
+  }
+  .rl-oplate figcaption,
+  .rl-ms-plate figcaption {
+    margin: 6px 0 0;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--fg2);
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
+  .rl-oplate figcaption .rl-gang-no {
+    margin-right: 6px;
+    font-size: 10.5px;
+    vertical-align: 1px;
+  }
+  .rl-oplate.rl-lit img {
+    outline: 1px solid var(--zhu);
+    outline-offset: 3px;
+  }
+  /* 导图: a fold-out leaf as wide as the desk. */
+  .react-reader .reader-view[data-view="doc"][data-layer="map"] {
+    width: auto;
+    min-height: 0;
+    margin: 0 16px;
+    padding: 0;
+  }
+  .react-reader
+    .reader-view[data-view="doc"][data-layer="map"]
+    .reader-page-header {
+    margin: 0;
+  }
+  .rl-map {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) clamp(300px, 25vw, 440px);
+    font-family: var(--serif);
+    color: var(--fg);
+  }
+  .rl-map-bar {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 6px 26px;
+    padding: 12px 28px 10px;
+    font: 400 13.5px / 1.4 var(--serif);
+    color: var(--fg2);
+  }
+  .rl-map-bar .rl-g {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+  }
+  .rl-map-bar .rl-grow {
+    flex: 1;
+  }
+  .rl-map-bar .rl-cap {
+    margin: 0;
+    font-size: inherit;
+    color: var(--fg3);
+    letter-spacing: 0.1em;
+  }
+  .rl-map-bar .rl-sep {
+    align-self: center;
+    width: 1px;
+    height: 12px;
+    background: var(--line3);
+  }
+  .rl-tb {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--fg2);
+    font: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .rl-tb:hover {
+    color: var(--fg);
+  }
+  .rl-tb:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 3px;
+  }
+  .rl-tb[aria-pressed="true"] {
+    color: var(--fg);
+    font-weight: 650;
+    text-decoration: underline;
+    text-decoration-color: var(--reader-pen);
+    text-decoration-thickness: 2px;
+    text-underline-offset: 5px;
+  }
+  .rl-map-bar output {
+    min-width: 3em;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+  .rl-map-view {
+    position: relative;
+    overflow: hidden;
+    cursor: grab;
+    border-top: 1px solid var(--line2);
+  }
+  .rl-map-view.rl-panning {
+    cursor: grabbing;
+    user-select: none;
+  }
+  .rl-map-pad {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: max-content;
+    will-change: transform;
+  }
+  .rl-tree {
+    position: relative;
+    --mz: 1;
+  }
+  .rl-tree svg {
+    position: absolute;
+    left: 0;
+    top: 0;
+    overflow: visible;
+    pointer-events: none;
+  }
+  .rl-tree path {
+    fill: none;
+    stroke: var(--fg);
+    stroke-width: calc(1.1px * var(--mz));
+    opacity: 0.55;
+    transition: opacity 140ms;
+  }
+  .rl-tree path.rl-twig {
+    stroke-width: calc(1px * var(--mz));
+    opacity: 0.5;
+  }
+  .rl-tree path.rl-dim {
+    opacity: 0.08;
+  }
+  .rl-mn {
+    position: absolute;
+    left: 0;
+    top: 0;
+    box-sizing: border-box;
+    color: var(--fg);
+    line-height: 1.4;
+    transition: opacity 140ms;
+    cursor: pointer;
+  }
+  .rl-mn:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 3px;
+  }
+  .rl-mn.rl-dim {
+    opacity: 0.22;
+  }
+  /* The title: in a frame of a heavy and a hair rule, as on a title leaf. */
+  .rl-mn-root {
+    width: max-content;
+    max-width: calc(230px * var(--mz));
+    padding: calc(14px * var(--mz)) calc(18px * var(--mz));
+    border: calc(2px * var(--mz)) solid var(--fg);
+    outline: 1px solid var(--fg);
+    outline-offset: calc(-6px * var(--mz));
+  }
+  .rl-mn-root .rl-t {
+    display: block;
+    font: 650 calc(17.5px * var(--mz)) / 1.4 var(--serif);
+    text-wrap: balance;
+  }
+  .rl-mn-root .rl-meta {
+    display: block;
+    margin-top: calc(8px * var(--mz));
+    font: 400 calc(12px * var(--mz)) / 1.4 var(--serif);
+    color: var(--fg2);
+    letter-spacing: 0.08em;
+  }
+  .rl-mn-sec {
+    max-width: calc(250px * var(--mz));
+    padding: calc(3px * var(--mz)) calc(2px * var(--mz)) calc(4px * var(--mz));
+    border-bottom: calc(1.5px * var(--mz)) solid var(--fg);
+    font: 650 calc(16px * var(--mz)) / 1.4 var(--serif);
+    letter-spacing: 0.02em;
+  }
+  .rl-mn-sec.rl-d2 {
+    border-bottom-width: 1px;
+    border-bottom-color: var(--line3);
+    font-size: calc(14.5px * var(--mz));
+  }
+  .rl-mn-sec .rl-more {
+    position: absolute;
+    left: calc(100% + 8px * var(--mz));
+    bottom: calc(3px * var(--mz));
+    font: 400 calc(12px * var(--mz)) / 1.4 var(--sans);
+    color: var(--fg3);
+    white-space: nowrap;
+    letter-spacing: 0;
+  }
+  .rl-mn-leaf {
+    display: flex;
+    align-items: center;
+    gap: calc(7px * var(--mz));
+    max-width: calc(330px * var(--mz));
+    padding: calc(2px * var(--mz)) calc(6px * var(--mz)) calc(2px * var(--mz))
+      calc(4px * var(--mz));
+    border-radius: 3px;
+    font: 400 calc(16px * var(--mz)) / 1.4 var(--kai);
+    white-space: nowrap;
+  }
+  .rl-mn-leaf.rl-main {
+    font-size: calc(17px * var(--mz));
+  }
+  .rl-mn-leaf .rl-t {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .rl-mn-leaf .rl-no {
+    flex: none;
+    box-sizing: border-box;
+    min-width: 1.5em;
+    height: 1.5em;
+    padding: 0 0.18em;
+    border: 1px solid var(--zhu);
+    border-radius: 0.75em;
+    color: var(--zhu);
+    font: 600 calc(10.5px * var(--mz)) / calc(1.5em - 2px) var(--sans);
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+  .rl-mn-leaf.rl-main .rl-no {
+    background: var(--zhu);
+    color: var(--reader-sheet);
+  }
+  .rl-mn-leaf .rl-kind {
+    flex: none;
+    margin-left: calc(4px * var(--mz));
+    font: 400 calc(11.5px * var(--mz)) / 1 var(--sans);
+    color: var(--fg3);
+    letter-spacing: 0.04em;
+  }
+  .rl-mn-leaf .rl-hasfig {
+    flex: none;
+    font: 400 calc(11px * var(--mz)) / 1 var(--serif);
+    color: var(--fg3);
+  }
+  .rl-mn-leaf:hover,
+  .rl-mn-leaf.rl-sel {
+    background: var(--hover);
+  }
+  .rl-mn-leaf.rl-here::after {
+    content: "读到此处";
+    position: absolute;
+    left: calc(100% + 6px * var(--mz));
+    top: 50%;
+    transform: translateY(-50%);
+    font: 400 calc(11.5px * var(--mz)) / 1 var(--serif);
+    color: var(--reader-pen);
+    white-space: nowrap;
+    letter-spacing: 0.06em;
+  }
+  .rl-map-side {
+    grid-row: 2;
+    grid-column: 2;
+    overflow: auto;
+    box-sizing: border-box;
+    padding: 22px 28px 28px 26px;
+    border-top: 1px solid var(--line2);
+    border-left: 1px solid var(--line2);
+    font-size: 16px;
+  }
+  .rl-ms-h {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    font: 500 12.5px / 1.4 var(--sans);
+    color: var(--zhu);
+    letter-spacing: 0.06em;
+  }
+  .rl-ms-h .rl-where {
+    color: var(--fg3);
+    font: 400 12.5px / 1.4 var(--serif);
+    letter-spacing: 0.02em;
+  }
+  .rl-ms-t {
+    margin: 8px 0 0;
+    font: 400 19px / 1.65 var(--kai);
+  }
+  .rl-ms-t:lang(en) {
+    font-size: 18px;
+    line-height: 1.5;
+  }
+  .rl-ms-x {
+    margin: 4px 0 0;
+    font: 400 12.5px / 1.6 var(--sans);
+    color: var(--fg3);
+  }
+  .rl-ms-x a {
+    color: inherit;
+    border-bottom: 1px solid var(--line3);
+    cursor: pointer;
+  }
+  .rl-ms-x a:hover {
+    color: var(--zhu);
+    border-color: var(--zhu);
+  }
+  .rl-ms-x span + span {
+    margin-left: 1.2em;
+  }
+  .rl-ms-mu {
+    margin: 16px 0 0;
+    padding-left: 14px;
+    border-left: 2px solid color-mix(in srgb, var(--zhu) 80%, transparent);
+  }
+  .rl-ms-mu p {
+    margin: 0 0 0.5em;
+    font-size: 15.5px;
+    line-height: 1.75;
+  }
+  .rl-ms-plate {
+    margin: 16px 0 0;
+  }
+  .rl-ms-plate img {
+    display: block;
+    width: 100%;
+    height: auto;
+    cursor: zoom-in;
+  }
+  .rl-ms-go {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+    margin: 18px 0 0;
+    font: 400 13.5px / 1.4 var(--serif);
+  }
+  .rl-ms-go a {
+    color: var(--fg);
+    border-bottom: 1px solid var(--line3);
+    cursor: pointer;
+    letter-spacing: 0.06em;
+  }
+  .rl-ms-go a:hover {
+    color: var(--zhu);
+    border-color: var(--zhu);
+  }
+  .rl-ms-sum {
+    margin: 0;
+    font: 400 17px / 1.8 var(--kai);
+  }
+  .rl-ms-sum:lang(en) {
+    font-size: 16.5px;
+    line-height: 1.55;
+  }
+  .rl-ms-list {
+    list-style: none;
+    margin: 14px 0 0;
+    padding: 14px 0 0;
+    border-top: 1px solid var(--line2);
+    display: grid;
+    gap: 10px;
+  }
+  .rl-ms-list li {
+    display: grid;
+    grid-template-columns: 22px minmax(0, 1fr);
+    gap: 8px;
+    align-items: baseline;
+    font: 400 16px / 1.6 var(--kai);
+    cursor: pointer;
+  }
+  .rl-ms-list .rl-gang-no {
+    font-size: 10.5px;
+  }
+  .rl-ms-hint {
+    margin: 16px 0 0;
+    font: 400 12.5px / 1.7 var(--serif);
+    color: var(--fg3);
+  }
+  @media (max-width: 900px) {
+    .rl-map {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr) auto;
+    }
+    .rl-map-side {
+      grid-row: 3;
+      grid-column: 1;
+      max-height: 38vh;
+      border-left: 0;
+    }
+  }
+  /* The move between layers: copies of what is on both leaves, over the page. */
+  .rl-stage {
+    position: fixed;
+    inset: 0;
+    z-index: 4;
+    pointer-events: none;
+    overflow: hidden;
+  }
+  .rl-ghost {
+    will-change: transform, opacity;
+    pointer-events: none;
+  }
+  .rl-old {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    pointer-events: none;
+  }
+  .rl-gone {
+    visibility: hidden !important;
+  }
+  .rl-away,
+  .rl-away * {
+    color: transparent !important;
+  }
+  .rl-away.rl-ev-end::after {
+    visibility: hidden;
+  }
+  .rl-ghost-p,
+  .rl-ghost-p * {
+    color: transparent !important;
+    background: none !important;
+    border-color: transparent !important;
+    text-decoration-color: transparent !important;
+  }
+  .rl-ghost-p::before,
+  .rl-ghost-p *::before,
+  .rl-ghost-p *::after {
+    visibility: hidden;
+  }
+  .rl-ghost-p [data-keep],
+  .rl-ghost-p [data-keep] * {
+    color: var(--fg) !important;
+  }
+  .rl-ghost-p [data-keep] .rl-kt {
+    color: var(--zhu) !important;
+  }
+  /* The reader's views in the top bar: 导图｜概览 · 脉络 · 全文｜PDF. */
+  .ui-segmented .ui-tab[data-gap] {
+    position: relative;
+    margin-left: 13px;
+  }
+  .ui-segmented .ui-tab[data-gap]::before {
+    content: "";
+    position: absolute;
+    left: -7px;
+    top: 25%;
+    width: 1px;
+    height: 50%;
+    background: var(--line3);
+  }
+}

@@ -69,6 +69,8 @@ export function MarginNotes({
     sheet: HTMLElement;
     below: boolean;
     column: number;
+    /** Where the notes begin, from the sheet's left edge. */
+    left: number;
     width: number;
     places: (MarginPlace & { line: number })[];
   } | null>(null);
@@ -84,7 +86,28 @@ export function MarginNotes({
         s = sheet.getBoundingClientRect(),
         a = article.getBoundingClientRect();
       const column = a.right - s.left;
-      const width = body.dataset.sheet === "wide" ? 166 : 156;
+      // An annotated copy (ADR 0070): the notes stand beyond the column rule,
+      // as wide as the machine's, and below any of those in their way.
+      const style = getComputedStyle(sheet);
+      const gutter = parseFloat(style.getPropertyValue("--sheet-gutter")) || 0,
+        noteWidth =
+          parseFloat(style.getPropertyValue("--sheet-note-width")) || 0;
+      const annotated = !below && noteWidth > 0 && !!sheet.dataset.annotated;
+      const width = annotated
+        ? noteWidth
+        : body.dataset.sheet === "wide"
+          ? 166
+          : 156;
+      const taken = annotated
+        ? [
+            ...sheet.querySelectorAll<HTMLElement>(
+              ".rl-side > .rl-pi, .rl-side > .rl-rules",
+            ),
+          ].map((el) => {
+            const r = el.getBoundingClientRect();
+            return { top: r.top - s.top, bottom: r.bottom - s.top };
+          })
+        : [];
       const items = noted.flatMap((m) => {
         const rect = anchorRect(m.mark_id);
         if (!rect) return [];
@@ -105,7 +128,8 @@ export function MarginNotes({
         below,
         column,
         width,
-        places: layoutMargin(items).map((p) => ({
+        left: column + (annotated ? gutter : 24),
+        places: layoutMargin(items, taken).map((p) => ({
           ...p,
           line: lines.get(p.id)!,
         })),
@@ -161,7 +185,7 @@ export function MarginNotes({
         })}
       </>
     );
-  const left = layout.column + 24;
+  const left = layout.left;
   return createPortal(
     <div className="reading-margin-notes" aria-label="页边批注">
       <svg className="reading-margin-leaders" aria-hidden="true">

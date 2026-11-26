@@ -10,6 +10,8 @@ PDF.js、连续 Markdown/KaTeX 与字节校验保留在 [reading](../../../readi
 
 计划 25 的 30 块：没有 PDF 的文献打开为书目页（`ReaderBibliography.tsx`，复用 `BibliographyContent`），不显示视图切换与书脊；“排版”是面板（`ReaderTypePanel.tsx`：字号或比例、行宽、行距、主题色块、两个开关），行宽与行距存本机偏好（`input/reading-layout.ts`），主题与“设置 → 外观”同一偏好；总结与结果是视图切换里临时多出的一格，排在案头的纸页上。翻译是否可用读 `GET /api/translation` 的模型列表，选中文字只填原文框，点“翻译”才出浮框。
 
+阅读层（阅读体验第 3 节，ADR 0070）：有阅读层的文献，视图切换是“导图｜概览 · 脉络 · 全文｜PDF”，层写在地址的 `layer` 参数里（`map`、`overview`、`outline`，没有就是全文；它不是引擎的建造条件，换层不重建引擎）。`Reader.tsx` 从 `describe` 的 `layers` 得知有没有阅读层，把地址里的层交给引擎的 `frame.setLayer`，引擎自己换了层（点一条批语、`Alt` 加滚轮）经 `layerChanged` 写回地址。纸页的几何多一档“带批语”（`geometry.ts` 的 `annotated`：栏线所在的间隔与批语的宽写进 `--sheet-gutter`、`--sheet-note-width`）。`layers.css` 是四个视图与换层的样式；DOM 由 [reading/layers](../../../reading/layers/README.md) 的框架无关模块生成。“排版 → 标出重点词”存本机偏好 `sciretriever:reader:key-terms:v1`，默认打开。读者的页边批注在带批语的纸页上与机器的批语同宽，并排在挡路的批语下方（`marks/margin.ts` 的 `taken`）。
+
 [上级功能目录](../README.md) · [应用源码](../../README.md)
 
 证据预览复用安全 Markdown/公式渲染，在阅读区边界内采用浮层；窄屏保留核对依据与校订入口。总结的逐值核对以折叠标记呈现，原因由共享 strings 映射为中文，展开后可查看每个来源的固定原文。

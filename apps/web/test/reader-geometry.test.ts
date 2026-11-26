@@ -59,6 +59,33 @@ describe("sheet on the desk (spec 1.1)", () => {
     expect(g.left).toBe(188);
   });
 
+  it("gives an annotated copy a column rule and a margin for the machine's notes on a wide desk (ADR 0070)", () => {
+    expect(sheetGeometry(1440, 20, 34, true)).toMatchObject({
+      tier: "wide",
+      marginLeft: 96,
+      column: 680,
+      gutter: 46,
+      noteWidth: 310,
+      marginRight: 404,
+      notes: "margin",
+    });
+    expect(sheetGeometry(1920, 20, 34, true)).toMatchObject({
+      marginLeft: 110,
+      noteWidth: 350,
+    });
+    // A tighter desk narrows the notes first, then the column.
+    const tight = sheetGeometry(1100, 20, 34, true);
+    expect(tight).toMatchObject({ gutter: 38, noteWidth: 250 });
+    expect(tight.sheet).toBeLessThanOrEqual(1100 - 56);
+    // Below the wide tier a sheet has no rule: the notes go under their paragraphs.
+    expect(sheetGeometry(1000, 20, 34, true)).toMatchObject({
+      gutter: 0,
+      noteWidth: 0,
+      notes: "below",
+    });
+    expect(sheetGeometry(1440, 20)).toMatchObject({ gutter: 0, noteWidth: 0 });
+  });
+
   it("moves notes below the paragraph once the right margin is narrower than 190 px", () => {
     expect(sheetGeometry(1024, 20)).toMatchObject({
       marginRight: 192,
