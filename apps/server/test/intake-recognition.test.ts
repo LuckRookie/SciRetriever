@@ -75,6 +75,51 @@ it("recognizes a checked identifier, rejects a cited title and falls back to exa
   expect(recognitionSimilarity("Ａ: Test!", "a test")).toBe(1);
   expect(recognitionSimilarity("", "")).toBe(0);
 });
+it("says no-metadata-source when nothing could be asked, and only then", async () => {
+  const lookup = vi.fn(async () => []),
+    search = vi.fn(async () => []);
+  const clues = {
+    identifiers: [{ namespace: "doi", value: "10.5555/recognition" }],
+    titles: ["Synthetic identity article"],
+    text: "",
+    corroboration: "",
+    fallback: "Synthetic identity article",
+  } as const;
+  const none = new IntakeRecognitionService({
+    lookup,
+    search,
+    configured: () => ({ lookup: false, search: false }),
+  });
+  const unasked = await none.recognize(clues, new AbortController().signal);
+  expect(unasked.recognition).toEqual({
+    state: "unrecognized",
+    step: 4,
+    literature_id: null,
+    candidates: [],
+    reason: "no-metadata-source",
+  });
+  expect(
+    (
+      await none.recognizeNamed(
+        { title: "Synthetic identity article" },
+        EMPTY_METADATA,
+        new AbortController().signal,
+      )
+    ).recognition.reason,
+  ).toBe("no-metadata-source");
+  expect(lookup).not.toHaveBeenCalled();
+  expect(search).not.toHaveBeenCalled();
+  // A configured source that found nothing is an ordinary unrecognized.
+  const some = new IntakeRecognitionService({
+    lookup,
+    search,
+    configured: () => ({ lookup: true, search: false }),
+  });
+  expect(
+    (await some.recognize(clues, new AbortController().signal)).recognition,
+  ).not.toHaveProperty("reason");
+  expect(lookup).toHaveBeenCalled();
+});
 it("lists conflicting or merely similar candidates without adopting either source automatically", async () => {
   const service = new IntakeRecognitionService({
     lookup: async () => [],
@@ -215,8 +260,19 @@ it("stages one synthetic PDF, keeps preview read-only, admits it and deduplicate
           ).toBe("done"),
         { timeout: 20000, interval: 30 },
       );
-      if (!index)
+      if (!index) {
         expect((await app.library.search({ query: {} })).total_count).toBe(0);
+        // No bibliographic source is configured: said, not left blank.
+        expect(
+          (await app.importSessions.preview(batch.batch_id)).recognition,
+        ).toMatchObject({ state: "done", reason: "no-metadata-source" });
+        const [listed] = (await app.importSessions.items(batch.batch_id)).items;
+        expect(listed!.recognition).toMatchObject({
+          state: "unrecognized",
+          step: 4,
+          reason: "no-metadata-source",
+        });
+      }
       const done = await app.importSessions.confirm(batch.batch_id);
       expect(done).toMatchObject({ state: "finished", result: "completed" });
       expect(

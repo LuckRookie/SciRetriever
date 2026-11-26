@@ -505,6 +505,7 @@ export class ImportSessionService extends ImportSessionReadService {
         new IntakeRecognitionService({
           lookup: async () => [],
           search: async () => [],
+          configured: () => ({ lookup: false, search: false }),
         }),
       options.clueReader,
       this.now,
@@ -1521,6 +1522,11 @@ export class ImportSessionService extends ImportSessionReadService {
               : ("idle" as const),
       recognized: a.recognized + b.recognized,
       total: a.total + b.total,
+      ...("reason" in a
+        ? { reason: a.reason }
+        : "reason" in b
+          ? { reason: b.reason }
+          : {}),
     };
   }
   preview(id: string) {

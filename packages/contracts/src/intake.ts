@@ -1564,6 +1564,9 @@ export function parseIntakeDecision(value: unknown): IntakeDecision {
   }
   throw new ContractValidationError();
 }
+export const INTAKE_RECOGNITION_REASONS = ["no-metadata-source"] as const;
+export type IntakeRecognitionReason =
+  (typeof INTAKE_RECOGNITION_REASONS)[number];
 export interface IntakeRecognition {
   readonly state:
     | "pending"
@@ -1573,6 +1576,11 @@ export interface IntakeRecognition {
     | "cancelled";
   readonly step: 1 | 2 | 3 | 4 | null;
   readonly literature_id: LiteratureId | null;
+  /**
+   * Why nothing was looked up: `no-metadata-source` when no bibliographic
+   * source is configured, so recognition could not ask any. Absent otherwise.
+   */
+  readonly reason?: IntakeRecognitionReason;
   readonly candidates: readonly {
     readonly candidate_id: string;
     readonly title: string | null;

@@ -325,6 +325,9 @@ export class IntakeLookupItems {
             : ("idle" as const),
       recognized: eligible.filter((i) => i.work?.result).length,
       total: eligible.length,
+      ...(eligible.length && !this.recognition.sourcesConfigured()
+        ? { reason: "no-metadata-source" as const }
+        : {}),
     };
   }
   start(s: StoredImportSession, items: Iterable<StoredIntakeItem>) {

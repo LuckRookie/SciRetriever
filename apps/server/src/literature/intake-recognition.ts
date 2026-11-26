@@ -26,6 +26,8 @@ export interface RecognitionSources {
     title: string,
     signal: AbortSignal,
   ): Promise<readonly MetadataObservation[]>;
+  /** Which kinds of source are configured; absent means both may answer. */
+  configured?(): { readonly lookup: boolean; readonly search: boolean };
 }
 export interface RecognizedCandidate {
   readonly candidate_id: string;
@@ -140,6 +142,18 @@ function withCandidates(
 }
 export class IntakeRecognitionService {
   constructor(private readonly sources: RecognitionSources) {}
+  /** False when no bibliographic source at all is configured. */
+  sourcesConfigured(): boolean {
+    const configured = this.sources.configured?.();
+    return !configured || configured.lookup || configured.search;
+  }
+  /** Step 4 because there was nobody to ask: said, not left blank. */
+  private noSource(result: RecognitionResult): RecognitionResult {
+    return {
+      ...result,
+      recognition: { ...result.recognition, reason: "no-metadata-source" },
+    };
+  }
   fallback(
     clues: RecognitionClues,
     state: "unrecognized" | "cancelled" = "unrecognized",
@@ -175,6 +189,8 @@ export class IntakeRecognitionService {
   ): Promise<RecognitionResult> {
     const check = () => signal.throwIfAborted();
     check();
+    if (!this.sourcesConfigured())
+      return this.noSource(this.unrecognized(fallback));
     if ("identifier" in named) {
       const wanted = named.identifier;
       let observations: readonly MetadataObservation[] = [];
@@ -232,6 +248,7 @@ export class IntakeRecognitionService {
   ): Promise<RecognitionResult> {
     const check = () => signal.throwIfAborted();
     check();
+    if (!this.sourcesConfigured()) return this.noSource(this.fallback(clues));
     if (!titleOnly && clues.identifiers.length) {
       let observations: readonly MetadataObservation[] = [];
       try {
@@ -349,6 +366,14 @@ export function metadataRecognitionSources(
         observations.push(...result.observations);
       }
       return observations;
+    },
+    configured() {
+      return {
+        lookup: registry.lookup_selection.length > 0,
+        search: ["crossref", "openalex"].some((p) =>
+          registry.topic_selection.includes(p),
+        ),
+      };
     },
     async search(title, signal) {
       const observations: MetadataObservation[] = [];
