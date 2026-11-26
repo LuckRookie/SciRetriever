@@ -47,12 +47,13 @@ function failure(
   status: number,
   code: string,
   rpc = -32000,
+  limit?: { retry_after_s: number; message: string; detail: object },
 ) {
   if (res.headersSent || res.destroyed) {
     res.destroy();
     return;
   }
-  if (status === 429) res.setHeader("Retry-After", "60");
+  if (limit) res.setHeader("Retry-After", String(limit.retry_after_s));
   res.writeHead(status, {
     "Content-Type": "application/json",
     "Cache-Control": "no-store",
@@ -62,7 +63,11 @@ function failure(
     JSON.stringify({
       jsonrpc: "2.0",
       id: null,
-      error: { code: rpc, message: "MCP request rejected", data: { code } },
+      error: {
+        code: rpc,
+        message: limit?.message ?? "MCP request rejected",
+        data: { code, ...(limit?.detail ?? {}) },
+      },
     }),
   );
 }
@@ -173,6 +178,36 @@ export class McpHttpService {
       )
         this.retire(session);
   }
+  /**
+   * When a session slot frees at the earliest: an idle session is released by
+   * the first request after its idle deadline (every request sweeps); one with
+   * an open stream only after the stream closes and then the full idle time.
+   * Closing a session with DELETE /mcp frees its slot at once.
+   */
+  private sessionLimit(blocking: readonly Session[], device: boolean) {
+    const now = this.now();
+    const wait = Math.min(
+      ...blocking.map((s) =>
+        s.responses.size
+          ? this.limits.idle_ms
+          : Math.max(0, s.touched + this.limits.idle_ms - now),
+      ),
+    );
+    const retry_after_s = Math.max(1, Math.ceil(wait / 1000));
+    const limit = device
+      ? this.limits.sessions_per_device
+      : this.limits.sessions;
+    return {
+      retry_after_s,
+      message: `${device ? "This device connection" : "The library"} already has ${blocking.length} open MCP sessions (at most ${limit}). Reuse an open session by sending its Mcp-Session-Id, and close sessions you no longer need with DELETE /mcp, which frees them at once; otherwise the earliest idle session is released in ${retry_after_s} s.`,
+      detail: {
+        open_sessions: blocking.length,
+        limit,
+        scope: device ? "device" : "library",
+        retry_after_s,
+      },
+    };
+  }
   routes(): DeviceRoute[] {
     return (["GET", "POST", "DELETE"] as const).map((method) => ({
       method,
@@ -234,13 +269,18 @@ export class McpHttpService {
         failure(res, 400, "mcp-session-required");
         return;
       }
-      if (
-        this.sessions.size >= this.limits.sessions ||
-        [...this.sessions.values()].filter(
-          (s) => s.connectionId === connection.connection_id,
-        ).length >= this.limits.sessions_per_device
-      ) {
-        failure(res, 429, "mcp-session-limit");
+      const own = [...this.sessions.values()].filter(
+        (s) => s.connectionId === connection.connection_id,
+      );
+      const device = own.length >= this.limits.sessions_per_device;
+      if (device || this.sessions.size >= this.limits.sessions) {
+        failure(
+          res,
+          429,
+          "mcp-session-limit",
+          -32000,
+          this.sessionLimit(device ? own : [...this.sessions.values()], device),
+        );
         return;
       }
       if (!this.timer) {

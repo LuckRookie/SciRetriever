@@ -606,7 +606,22 @@ it("bounds HTTP sessions and request bytes, expires idle sessions, and closes ac
         clientInfo: { name: "fixture", version: "1" },
       },
     };
-    expect((await f.rpc(paired.token, init)).status).toBe(429);
+    const limited = await f.rpc(paired.token, init);
+    expect(limited.status).toBe(429);
+    // The open session holds a stream: the slot frees a full idle time after it closes.
+    expect(limited.headers.get("retry-after")).toBe("1");
+    const refusal = (await limited.json()) as {
+      error: { message: string; data: Record<string, unknown> };
+    };
+    expect(refusal.error.data).toMatchObject({
+      code: "mcp-session-limit",
+      open_sessions: 1,
+      limit: 1,
+      scope: "device",
+      retry_after_s: 1,
+    });
+    expect(refusal.error.message).toContain("DELETE /mcp");
+    expect(refusal.error.message).toContain("Mcp-Session-Id");
     // Close the client's standalone SSE before checking the idle deadline.
     await remote.client.close();
     now += 2000;
