@@ -19,18 +19,18 @@ stdout 专用于 MCP JSON-RPC，诊断写 stderr。查询模式不会启动维�
 
 ## 工具与流程
 
-| 工具                                          | 行为                                                                                                                               |
-| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `status`、`search_library`、`read_literature` | 本地 readiness、库内查询和详情；缺口不扩库                                                                                         |
-| `document_read`                               | default/describe/outline/segments/slice/translation/resources/resource/evidence/material；使用[固定文档读取合同](library-query.md) |
-| `prepare_analysis_inputs`                     | 从明确 Literature ID 固定已有材料和默认文档，返回 InputManifest 与元数据身份快照                                                   |
-| `snapshots_query`、`snapshot_create`          | 查询或显式创建固定文献快照；创建需要维护权限                                                                                       |
-| `processor_query`、`search_context`           | 读取已有单篇/集合知识和检索上下文                                                                                                  |
-| `read_task`、`read_article_identity`          | 读取执行结果引用、失败和已保存的身份判断                                                                                           |
-| `submit_processing`                           | 显式加工已有材料，返回持久任务 ID；使用工具声明的封闭请求 schema                                                                   |
-| `acquire_pdf`                                 | 明确 Literature ID 的 PDF 获取，复用 direct → publisher-api → general-api → public-web → browser 五层流程                          |
-| `discover_metadata`                           | 有界主题发现，只接纳元数据，不下载 PDF                                                                                             |
-| `control_task`                                | run/pause/cancel/resume/retry；保留完成结果                                                                                        |
+| 工具                                          | 行为                                                                                                                                      |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `status`、`search_library`、`read_literature` | 本地 readiness、库内查询和详情；缺口不扩库                                                                                                |
+| `document_read`                               | default/describe/outline/segments/slice/translation/layers/resources/resource/evidence/material；使用[固定文档读取合同](library-query.md) |
+| `prepare_analysis_inputs`                     | 从明确 Literature ID 固定已有材料和默认文档，返回 InputManifest 与元数据身份快照                                                          |
+| `snapshots_query`、`snapshot_create`          | 查询或显式创建固定文献快照；创建需要维护权限                                                                                              |
+| `processor_query`、`search_context`           | 读取已有单篇/集合知识和检索上下文                                                                                                         |
+| `read_task`、`read_article_identity`          | 读取执行结果引用、失败和已保存的身份判断                                                                                                  |
+| `submit_processing`                           | 显式加工已有材料，返回持久任务 ID；使用工具声明的封闭请求 schema                                                                          |
+| `acquire_pdf`                                 | 明确 Literature ID 的 PDF 获取，复用 direct → publisher-api → general-api → public-web → browser 五层流程                                 |
+| `discover_metadata`                           | 有界主题发现，只接纳元数据，不下载 PDF                                                                                                    |
+| `control_task`                                | run/pause/cancel/resume/retry；保留完成结果                                                                                               |
 
 读取和准备输入的工具无需维护模式。`submit_processing`、`acquire_pdf`、`discover_metadata`、
 `control_task` 只在 `--maintenance` 下声明；Agent 只应执行用户已明确启动的任务。
@@ -80,6 +80,8 @@ Browser 获取在一篇文章内保留模型工具历史、人工指导和真实
 ## 文本等级与核对依据
 
 全文的译文：`describe` 的 `translation.state` 说明这一版全文有没有译文（`none`、`complete`、`partial`、`same-language`、`stale`）；`slice` 加 `text: "translation"` 或 `"bilingual"` 读译文或原文译文对照的 Markdown，范围仍用原文的位置；`translation` 操作按段返回译文。译文是机器翻译，结果带 `machine_translation`，不能用来定位证据，引用一律回到原文。没有译文时这两种读法返回 `translation-unavailable`。
+
+概览与脉络：`describe` 的 `layers.state` 说明这一版全文有没有阅读层（`none`、`complete`、`stale`、`not-applicable`）。`layers` 操作取它：`part: "overview"` 给提要三项与按章节分组的要点；`part: "outline"` 按要点分页，每个要点带依据（全文里的原句或图表，附证据定位，可以照常解析回原文）。先取概览，需要时取脉络，再取全文。`text` 同样可取 `translation` 或 `bilingual`；`format: "markdown"` 导出。要点与提要是机器写的（结果带 `machine_written`），引用一律用依据的原句。没有阅读层时返回 `layers-unavailable`，不触发任何加工。
 
 文档读取（describe、outline、segments、slice、resources、evidence）、文献库条目、建档状态与查找命中都带 `text_level`（`draft` 或 `proofread`），取自所读的固定版本。初稿的 describe 另有 `draft_summary`，片段位置的 `basis` 是初稿的三种取值；按章节角色读初稿时返回整篇并带 `coverage_note`。初稿与文字层的差异经 `document_read` 的 `draft-differences` 分段读取，收齐后再解析。设备连接经 HTTP 版 MCP 读取，用途为 `read`。字段见[文档与证据 8.4](../architecture/technical/04-document-evidence.md#84-文本等级的标注)与[查询技术篇 2.1.7](../architecture/technical/06-retrieval-context.md#217-文本等级与选择校订范围的事实)。
 

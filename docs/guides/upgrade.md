@@ -91,6 +91,8 @@ sciretriever storage schema-apply --catalog /absolute/data/catalog.sqlite --addi
 
 命令只做追加，在一个事务里完成。已经追加过的一项再执行会以 `catalog-addition-already-applied` 拒绝，库不受影响。追加之后旧版本仍能照常读写这个库，所以换回旧构建不需要撤销；例外是 `document-translations`，它重建了一张表，要先停服再执行，执行之后旧版本不能打开这个库，换回旧构建要先恢复执行前的备份。执行并换上新版本之后，检索结果会标“索引不是最新”，因为中文、日文、韩文改为按字检索：执行一次 `sciretriever maintenance rebuild-index` 重建全文索引，再执行一次 `sciretriever maintenance rebuild-library-search` 重写书目检索的行。两条命令都可以在服务运行时执行，重建完成之前检索照常可用，只是中文的部分词查不到。在一个 35 万篇、绝大多数只有书目的库上，前一条用了约 2 小时，后一条约 5 分钟。每个版本要追加哪一项，见[更新记录](../../CHANGELOG.md)。
 
+`document-layers` 为概览与脉络新建一张登记表，是普通追加，不停服：先执行追加，再换上新版本（新版本在没有这张表的库上拒绝启动）。
+
 缺几项时，按 `catalog-addition-required` 报出的名字逐项执行，每次一项。`library-trash` 加入文献的“最近删除”（一张空表、一个索引和九个触发器，见[存储 7](../architecture/technical/07-versioned-storage.md#7-运行审查存储)）：
 
 ```bash
