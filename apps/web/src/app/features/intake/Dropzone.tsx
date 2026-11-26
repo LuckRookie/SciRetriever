@@ -7,6 +7,7 @@ import { IMPORT_FORMATS } from "../../data/imports.js";
 import {
   droppedFiles,
   dropProblem,
+  encodingProblem,
   hiddenInFolder,
   pickedFiles,
   sortDrop,
@@ -14,9 +15,8 @@ import {
   type DroppedFile,
   type SortedDrop,
 } from "../../data/intake-drop.js";
-import { errorMessage } from "../../strings.js";
+import { errorMessage, intakeStrings } from "../../strings.js";
 
-const SUPPORTED = "支持 PDF；BibTeX、BibLaTeX、RIS、CSL JSON 导出文件";
 /** Files of a drop not sent, shown again on the batch page it opened. */
 export const unrecognized = new Map<string, string[]>();
 
@@ -66,8 +66,10 @@ export function Dropzone() {
     if (!dropProblem(sorted) && !sorted.exports.length && sorted.pdfs.length)
       submit.mutate({ drop: sorted, format: null });
   };
-  const problem = drop ? dropProblem(drop) : null;
   const exported = drop?.exports.length === 1 ? drop.exports[0]! : null;
+  const problem =
+    (drop ? dropProblem(drop) : null) ??
+    (exported && format ? encodingProblem(exported, format) : null);
   return (
     <div className="intake-drop">
       <div
@@ -103,7 +105,8 @@ export function Dropzone() {
             选择文件夹
           </Button>
         </p>
-        <p className="ui-description">{SUPPORTED}</p>
+        <p className="ui-description">{intakeStrings.supported}。</p>
+        <p className="ui-description">{intakeStrings.supportedAttachments}</p>
         <input
           ref={files}
           className="intake-drop-input"
@@ -133,6 +136,9 @@ export function Dropzone() {
         <div className="intake-drop-export">
           <span>
             导出文件 {exported.file.name}
+            {exported.encoding === "gb18030"
+              ? ` · ${intakeStrings.gb18030}`
+              : ""}
             {drop!.pdfs.length
               ? ` · 一同放入 ${drop!.pdfs.length.toLocaleString()} 个 PDF，按导出里写的路径配对`
               : ""}
@@ -170,7 +176,7 @@ export function Dropzone() {
               没有识别出这个文件的格式：{item.file.name}
             </li>
           ))}
-          <li className="ui-description">{SUPPORTED}。</li>
+          <li className="ui-description">{intakeStrings.supported}。</li>
         </ul>
       ) : null}
       {submit.isError ? (

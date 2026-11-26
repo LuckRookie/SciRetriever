@@ -1,10 +1,13 @@
-import type { ApiClient } from "./api.js";
 import {
-  detectFormat,
-  IMPORT_FILE_LIMIT,
-  intakeRoute,
-  readBatch,
-} from "./imports.js";
+  bibliographyEncodingAccepted,
+  decodeBibliographyBytes,
+  detectBibliographyFormat,
+  isIntakeBibliographyFormat,
+  type IntakeBibliographyFormat,
+} from "@sciretriever/contracts";
+import { intakeStrings } from "../strings.js";
+import type { ApiClient } from "./api.js";
+import { IMPORT_FILE_LIMIT, intakeRoute, readBatch } from "./imports.js";
 
 /**
  * What one drop on the intake page holds (page specs “入库 · 文件”): the
@@ -16,9 +19,14 @@ export interface DroppedFile {
   readonly path: string | null;
 }
 export interface DroppedExport extends DroppedFile {
+  /** The whole file decoded; empty for one over the limit or not decodable. */
   readonly text: string;
   /** Null when neither the name nor the content tells the format. */
-  readonly format: string | null;
+  readonly format: IntakeBibliographyFormat | null;
+  /** How the bytes were read; null when they are neither UTF-8 nor GB18030, or not read. */
+  readonly encoding:
+    | ReturnType<typeof decodeBibliographyBytes>["encoding"]
+    | null;
 }
 export interface SortedDrop {
   readonly pdfs: readonly DroppedFile[];
@@ -26,7 +34,6 @@ export interface SortedDrop {
   readonly unknown: readonly DroppedFile[];
 }
 
-const EXPORT_EXTENSIONS = new Set(["bib", "ris", "json"]);
 const extension = (name: string) =>
   name.includes(".") ? (name.toLowerCase().split(".").pop() ?? "") : "";
 async function head(file: Blob, bytes: number) {
@@ -34,11 +41,20 @@ async function head(file: Blob, bytes: number) {
 }
 const isPdfHead = (bytes: Uint8Array) =>
   String.fromCharCode(...bytes.slice(0, 5)) === "%PDF-";
+/** The contract's decoding, or null when the bytes are not text it reads. */
+function decoded(bytes: Uint8Array) {
+  try {
+    return decodeBibliographyBytes(bytes);
+  } catch {
+    return null;
+  }
+}
 
 /**
- * The recognition rules: `.pdf` or content starting `%PDF-` is a PDF;
- * `.bib`, `.ris`, `.json`, or content in BibTeX, RIS or CSL JSON form, is an
- * export (its format null when unclear); anything else is not recognized.
+ * The recognition rules: `.pdf` or content starting `%PDF-` is a PDF; a file
+ * whose name or opening the contract's `detectBibliographyFormat` reads is an
+ * export (literature materials 6.4.14). A loose `.xml` it cannot read is an
+ * export whose format is chosen by hand; anything else is not recognized.
  */
 export async function sortDrop(
   files: readonly DroppedFile[],
@@ -56,16 +72,43 @@ export async function sortDrop(
     }
     // The opening is enough to tell the format; an export is then read whole
     // (one over the limit is still an export, and the limit is said later).
-    const format = detectFormat(file.name, await file.slice(0, 65536).text());
-    if (format || EXPORT_EXTENSIONS.has(ext))
+    // An opening cut inside a character still shows its first line.
+    const opening = await head(file, 65536),
+      format = detectBibliographyFormat(
+        file.name,
+        decoded(opening)?.text ?? new TextDecoder().decode(opening),
+      );
+    if (format || (ext === "xml" && !dropped.path)) {
+      const read =
+        file.size <= IMPORT_FILE_LIMIT
+          ? decoded(new Uint8Array(await file.arrayBuffer()))
+          : null;
       exports.push({
         ...dropped,
-        text: file.size <= IMPORT_FILE_LIMIT ? await file.text() : "",
+        text: read?.text ?? "",
         format,
+        encoding: read?.encoding ?? null,
       });
-    else unknown.push(dropped);
+    } else unknown.push(dropped);
   }
   return { pdfs, exports, unknown };
+}
+
+/**
+ * Why the export cannot be read in the chosen format (6.4.14 “编码”), or
+ * null when it can.
+ */
+export function encodingProblem(
+  exported: DroppedExport,
+  format: string,
+): string | null {
+  // A file over the limit is not read; dropProblem says so.
+  if (exported.file.size > IMPORT_FILE_LIMIT) return null;
+  if (!exported.encoding) return intakeStrings.undecodable;
+  return isIntakeBibliographyFormat(format) &&
+    !bibliographyEncodingAccepted(format, exported.encoding)
+    ? intakeStrings.encodingRefused(intakeStrings.formats[format])
+    : null;
 }
 
 /** Why a drop cannot form a batch, or null when it can. */

@@ -236,9 +236,44 @@ export const retrievalStrings = {
 /** 找文献 → Zotero, as it stands: the import program, not yet the extension. */
 export const intakeStrings = {
   zotero:
-    "在装了 Zotero 的电脑上运行 Zotero 导入程序，把一个库或其中几个分类连同标签和 PDF 导入文献库；可以让 Agent 代为运行，也可以自己运行。扩展里的“从 Zotero 导入”尚未开放。",
+    "在装了 Zotero 的电脑上运行 Zotero 导入程序，把一个库或其中几个分类连同标签和 PDF 导入文献库；可以让 Agent 代为运行，也可以自己运行。PDF 上的批注在这个 PDF 与库里这篇文献的主 PDF 相同时一并导入。扩展里的“从 Zotero 导入”尚未开放。",
   zoteroGuide:
     "做法见使用说明《导入文献》的“Zotero”一节（docs/guides/importing.md）。只要书目和 PDF 时，也可以在 Zotero 里导出 BibTeX 或 RIS，再从“文件”导入。",
+  /** 找文献 → 文件: what a drop may hold (literature materials 6.4.14). */
+  supported:
+    "支持 PDF；BibTeX、BibLaTeX、RIS、CSL JSON、EndNote（.enw、.xml）、NoteExpress（.net）导出文件，以及知网、万方、维普导出的 EndNote 与 NoteExpress 文本",
+  supportedAttachments:
+    "导出文件里的附件路径只用来配对同时放入的 PDF，不读取路径所指的文件。",
+  /** The format names a drop's export may be read in. */
+  formats: {
+    bibtex: "BibTeX",
+    biblatex: "BibLaTeX",
+    ris: "RIS",
+    "csl-json": "CSL JSON",
+    "endnote-tagged": "EndNote（.enw）",
+    "endnote-xml": "EndNote XML",
+    noteexpress: "NoteExpress",
+  },
+  gb18030: "按 GB18030 编码读出",
+  encodingRefused: (format: string) =>
+    `这个文件不是 UTF-8 编码，${format} 只接受 UTF-8；请另存为 UTF-8 后再放入，或选择别的格式。`,
+  undecodable: "这个文件既不是 UTF-8 也不是 GB18030 编码，读不出文字。",
+  /** A batch's “批注” item (literature materials 6.4.13). */
+  annotationsImportable: "可导入",
+  annotationsImported: "已导入",
+  annotationsWaiting: "等文件",
+  annotationsUnit: "条",
+  annotationsSkipped: "不导入的批注",
+  annotationReasons: {
+    "unsupported-kind": "种类不支持（便笺、文字框、手绘）",
+    "annotation-other-file": "在这篇文献的其他附件上",
+    "pdf-differs": "Zotero 里的 PDF 与库里的主 PDF 不同",
+    "file-missing": "PDF 文件没有交来",
+    "position-invalid": "位置无法确定",
+    "comment-too-long": "评论超过 20,000 个字符",
+    "quote-invalid": "原文为空或超过 4,000 个字符",
+    "already-imported": "已经导入过",
+  },
 } as const;
 /** A translation language by the name it has for its readers (“简体中文”). */
 export function translationLanguageName(code: string): string {

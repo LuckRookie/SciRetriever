@@ -84,7 +84,23 @@ const summary = {
     missing: 0,
     unpaired: 1,
   },
-  annotations: { supported: 7, unsupported: 2, imported: 0, deferred: 0 },
+  annotations: {
+    supported: 7,
+    unsupported: 2,
+    imported: 0,
+    deferred: 0,
+    importable: 7,
+    by_reason: {
+      "unsupported-kind": 2,
+      "annotation-other-file": 0,
+      "pdf-differs": 0,
+      "file-missing": 0,
+      "position-invalid": 0,
+      "comment-too-long": 0,
+      "quote-invalid": 0,
+      "already-imported": 0,
+    },
+  },
   excluded: [{ kind: "note", count: 6 }],
 };
 const literatureA = "00000000-0000-4000-8000-0000000000d1",
@@ -248,9 +264,13 @@ it("shows a batch awaiting confirmation: estimated counts, recognition that bloc
     expect(await view.getByLabel("文件计数").textContent()).toBe(
       "要上传 118只核对 30",
     );
-    expect(await view.getByLabel("批注计数").textContent()).toBe(
-      "可导入 7不能导入 2",
-    );
+    expect(await view.getByLabel("批注计数").textContent()).toBe("可导入 7 条");
+    expect(
+      await view
+        .getByLabel("不导入的批注")
+        .getByRole("listitem")
+        .allTextContents(),
+    ).toEqual(["种类不支持（便笺、文字框、手绘）：2 条"]);
     expect(await view.getByLabel("不导入的内容计数").textContent()).toBe(
       "笔记 6",
     );
@@ -705,3 +725,124 @@ it("shows the intake page's four parts, the drop zone and the batch page in each
     await w.close();
   }
 }, 180000);
+
+it("shows a Zotero batch's annotations as they stand: importable in a preview, imported and waiting in a report, each reason in words, none without data (literature materials 6.4.13)", async () => {
+  const w = await nextWorkspace({ path: "/?view=disc", ready: ".intake-form" });
+  const shots = process.env.SCIRETRIEVER_WEB_INTAKE_FORMAT_SHOTS;
+  try {
+    const page = w.page;
+    const { view, id } = await exportBatch(page);
+    // A bibliography batch carries no annotation data: no “批注”.
+    await view.getByLabel("书目计数").getByText("新增 2").waitFor();
+    expect(await view.getByText("批注", { exact: true }).count()).toBe(0);
+    const route = (action: string) => (url: URL) =>
+      url.pathname === `/api/v1/intake/batches/${id}/${action}`;
+    const every = {
+      "unsupported-kind": 1,
+      "annotation-other-file": 2,
+      "pdf-differs": 3,
+      "file-missing": 4,
+      "position-invalid": 5,
+      "comment-too-long": 6,
+      "quote-invalid": 7,
+      "already-imported": 8,
+    };
+    const zotero = {
+      ...summary,
+      annotations: {
+        ...summary.annotations,
+        imported: 0,
+        importable: 12,
+        by_reason: every,
+      },
+      excluded: [{ kind: "annotation-standalone-file", count: 3 }],
+    };
+    await page.route(route("preview"), (r) =>
+      r.fulfill(
+        ok({
+          batch: null,
+          estimated: true,
+          summary: zotero,
+          recognition: { state: "done", recognized: 10, total: 10 },
+        }),
+      ),
+    );
+    await page.reload();
+    await expect
+      .poll(() => view.getByLabel("批注计数").textContent())
+      .toBe("可导入 12 条");
+    expect(
+      await view
+        .getByLabel("不导入的批注")
+        .getByRole("listitem")
+        .allTextContents(),
+    ).toEqual([
+      "种类不支持（便笺、文字框、手绘）：1 条",
+      "在这篇文献的其他附件上：2 条",
+      "Zotero 里的 PDF 与库里的主 PDF 不同：3 条",
+      "PDF 文件没有交来：4 条",
+      "位置无法确定：5 条",
+      "评论超过 20,000 个字符：6 条",
+      "原文为空或超过 4,000 个字符：7 条",
+      "已经导入过：8 条",
+    ]);
+    expect(await view.getByLabel("不导入的内容计数").textContent()).toBe(
+      "独立 PDF 上的批注 3",
+    );
+    if (shots) {
+      await mkdir(shots, { recursive: true });
+      await view.getByLabel("批注计数").scrollIntoViewIfNeeded();
+      await page.screenshot({
+        path: join(shots, "batch-annotations-preview.png"),
+        fullPage: true,
+      });
+    }
+    // The report while files are still owed: imported, and those waiting.
+    await patchBatch(page, (batch) => ({
+      ...batch,
+      state: "running",
+      result: null,
+      finished_at: null,
+      progress: {
+        phase: "files",
+        processed_items: 2,
+        total_items: 2,
+        files: { uploaded: 1, existing: 0, conflicts: 0, pending: 1 },
+      },
+    }));
+    await page.route(route("report"), (r) =>
+      r.fulfill(
+        ok({
+          batch: null,
+          estimated: false,
+          summary: {
+            ...zotero,
+            annotations: {
+              ...zotero.annotations,
+              imported: 9,
+              importable: 12,
+              by_reason: { ...every, "file-missing": 0 },
+            },
+          },
+          items: [],
+          next_cursor: null,
+        }),
+      ),
+    );
+    await page.reload();
+    await expect
+      .poll(() => view.getByLabel("批注计数").textContent())
+      .toBe("已导入 9 条等文件 3 条");
+    expect(
+      await view.getByLabel("不导入的批注").getByRole("listitem").count(),
+    ).toBe(7);
+    if (shots)
+      await page.screenshot({
+        path: join(shots, "batch-annotations-report.png"),
+        fullPage: true,
+      });
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 120000);

@@ -53,7 +53,7 @@ import { emptyQuery } from "../../data/library.js";
 import { openBatch } from "../library/Folders.js";
 import { AcquireDialog } from "../library/AcquireDialog.js";
 import { useDevices } from "../settings/Devices.js";
-import { errorMessage, shortTime } from "../../strings.js";
+import { errorMessage, intakeStrings, shortTime } from "../../strings.js";
 import { BatchBadge, Counts, PartsBar } from "./batch-parts.js";
 import { unrecognized } from "./Dropzone.js";
 import { ParseDialog } from "./ParseDialog.js";
@@ -69,6 +69,53 @@ import {
   Withdrawn,
   withdrawalReports,
 } from "./Withdrawal.js";
+
+/**
+ * “批注” of a `zotero-api` batch (literature materials 6.4.13): how many will
+ * be imported (a preview) or were (a report, with those still waiting for
+ * their file), and each reason one was not, as a sentence.
+ */
+function Annotations({
+  detail,
+  report,
+}: {
+  detail: NonNullable<BatchSummary["annotations"]["detail"]>;
+  report: boolean;
+}) {
+  const s = intakeStrings,
+    waiting = detail.importable - detail.imported;
+  const line = (name: string, value: number) => (
+    <span>
+      {name} <b>{value.toLocaleString()}</b> {s.annotationsUnit}
+    </span>
+  );
+  return (
+    <>
+      <span className="intake-counts" aria-label="批注计数">
+        {report
+          ? line(s.annotationsImported, detail.imported)
+          : line(s.annotationsImportable, detail.importable)}
+        {report && waiting > 0 ? line(s.annotationsWaiting, waiting) : null}
+      </span>
+      {detail.reasons.length ? (
+        <p className="intake-unread-note">{s.annotationsSkipped}：</p>
+      ) : null}
+      {detail.reasons.length ? (
+        <ul
+          className="intake-annotation-reasons"
+          aria-label={s.annotationsSkipped}
+        >
+          {detail.reasons.map(([reason, value]) => (
+            <li key={reason}>
+              {s.annotationReasons[reason]}：<b>{value.toLocaleString()}</b>{" "}
+              {s.annotationsUnit}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </>
+  );
+}
 
 const batchKey = (id: string) => ["library", "intake-batches", "page", id];
 /**
@@ -687,8 +734,7 @@ export function BatchPage({ id }: { id: string }) {
             <li key={`${file}:${index}`}>没有识别出这个文件的格式：{file}</li>
           ))}
           <li className="ui-description">
-            支持 PDF；BibTeX、BibLaTeX、RIS、CSL JSON
-            导出文件。这些文件没有交给服务端。
+            {intakeStrings.supported}。这些文件没有交给服务端。
           </li>
         </ul>
       ) : null}
@@ -736,16 +782,14 @@ export function BatchPage({ id }: { id: string }) {
                 }
               />
             </Definition>
-            <Definition term="批注">
-              <Counts
-                keepZero
-                label="批注计数"
-                items={[
-                  ["可导入", summary.annotations.supported],
-                  ["不能导入", summary.annotations.unsupported],
-                ]}
-              />
-            </Definition>
+            {summary.annotations.detail ? (
+              <Definition term="批注">
+                <Annotations
+                  detail={summary.annotations.detail}
+                  report={!awaiting}
+                />
+              </Definition>
+            ) : null}
             {summary.unread.total ? (
               <Definition term="没读出内容的 PDF">
                 <Counts

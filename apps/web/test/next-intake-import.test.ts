@@ -352,25 +352,133 @@ it("lists files it cannot recognize, names the supported formats, and sends noth
     await unknown.getByText("没有识别出这个文件的格式：notes.txt").waitFor();
     await unknown.getByText("没有识别出这个文件的格式：figure.png").waitFor();
     await unknown
-      .getByText("支持 PDF；BibTeX、BibLaTeX、RIS、CSL JSON 导出文件。")
+      .getByText(
+        "支持 PDF；BibTeX、BibLaTeX、RIS、CSL JSON、EndNote（.enw、.xml）、NoteExpress（.net）导出文件，以及知网、万方、维普导出的 EndNote 与 NoteExpress 文本。",
+      )
       .waitFor();
     expect(sent).toEqual([]);
     expect(new URL(page.url()).searchParams.get("session")).toBeNull();
-    // An export whose format cannot be told waits for one to be chosen.
+    // An export whose format cannot be told waits for one to be chosen,
+    // the three new formats among the choices.
     await page.getByLabel("选择文件", { exact: true }).setInputFiles({
-      name: "export.json",
-      mimeType: "application/json",
-      buffer: Buffer.from('{"items": []}'),
+      name: "export.xml",
+      mimeType: "application/xml",
+      buffer: Buffer.from('<?xml version="1.0"?>\n<catalog/>'),
     });
     await page.getByText("没能识别格式，请选一个。").waitFor();
-    expect(
-      await page
-        .getByRole("button", { name: "继续", exact: true })
-        .isDisabled(),
-    ).toBe(true);
+    const proceed = page.getByRole("button", { name: "继续", exact: true });
+    expect(await proceed.isDisabled()).toBe(true);
+    await page.getByRole("button", { name: "格式" }).click();
+    expect(await page.getByRole("option").allTextContents()).toEqual([
+      "请选择",
+      "BibTeX",
+      "BibLaTeX",
+      "RIS",
+      "CSL JSON",
+      "EndNote（.enw）",
+      "EndNote XML",
+      "NoteExpress",
+    ]);
+    await page
+      .getByRole("option", { name: "EndNote XML", exact: true })
+      .click();
+    await expect.poll(() => proceed.isDisabled()).toBe(false);
     expect(sent).toEqual([]);
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();
   }
 }, 60000);
+
+it("reads a GB18030 NoteExpress text from 知网 as its format, says how it was read, and makes the batch with it (literature materials 6.4.14)", async () => {
+  const w = await nextWorkspace({ path: "/?view=disc", ready: ".intake-form" });
+  const shots = process.env.SCIRETRIEVER_WEB_INTAKE_FORMAT_SHOTS;
+  try {
+    const page = w.page;
+    const sent = intakeLog(page);
+    await filesTab(page);
+    // The supported formats and what attachment paths are for, below the zone.
+    await page
+      .getByText(
+        "导出文件里的附件路径只用来配对同时放入的 PDF，不读取路径所指的文件。",
+      )
+      .waitFor();
+    if (shots) {
+      await mkdir(shots, { recursive: true });
+      await page.screenshot({
+        path: join(shots, "intake-files-supported.png"),
+        fullPage: true,
+      });
+    }
+    // “硝基中文” is not ASCII: CF F5 BB F9 D6 D0 CE C4 in GB18030.
+    const title = [0xcf, 0xf5, 0xbb, 0xf9, 0xd6, 0xd0, 0xce, 0xc4];
+    const bytes = Buffer.concat([
+      Buffer.from("{Reference Type}: Journal Article\r\n{Title}: "),
+      Buffer.from(title),
+      Buffer.from("\r\n{Year}: 2025\r\n{DOI}: 10.5555/noteexpress-one\r\n"),
+    ]);
+    const text = new TextDecoder("gb18030").decode(bytes);
+    expect(text).toContain("{Title}: 硝基中文");
+    await page.getByLabel("选择文件", { exact: true }).setInputFiles({
+      name: "CNKI-20261126.txt",
+      mimeType: "text/plain",
+      buffer: bytes,
+    });
+    await expect
+      .poll(() => page.getByRole("button", { name: "格式" }).textContent())
+      .toContain("NoteExpress");
+    await page
+      .getByText("导出文件 CNKI-20261126.txt · 按 GB18030 编码读出")
+      .waitFor();
+    if (shots)
+      await page.screenshot({
+        path: join(shots, "intake-files-recognized.png"),
+        fullPage: true,
+      });
+    // CSL JSON takes UTF-8 only: chosen for this file, the reason is said.
+    await page.getByRole("button", { name: "格式" }).click();
+    await page.getByRole("option", { name: "CSL JSON", exact: true }).click();
+    await page
+      .getByRole("alert")
+      .getByText(/^这个文件不是 UTF-8 编码，CSL JSON 只接受 UTF-8/u)
+      .waitFor();
+    const proceed = page.getByRole("button", { name: "继续", exact: true });
+    expect(await proceed.isDisabled()).toBe(true);
+    if (shots)
+      await page.screenshot({
+        path: join(shots, "intake-files-encoding-refused.png"),
+        fullPage: true,
+      });
+    await page.getByRole("button", { name: "格式" }).click();
+    await page
+      .getByRole("option", { name: "NoteExpress", exact: true })
+      .click();
+    await proceed.click();
+    const view = page.getByRole("region", { name: "批次", exact: true });
+    await view.getByRole("heading", { name: "CNKI-20261126.txt" }).waitFor();
+    expect(sent.slice(0, 2).map((r) => [r.path, r.body])).toEqual([
+      [
+        "/api/v1/intake/batches",
+        {
+          protocol_version: 1,
+          request: {
+            format: "noteexpress",
+            source: null,
+            scope: "网页上传 CNKI-20261126.txt",
+            file_name: "CNKI-20261126.txt",
+          },
+        },
+      ],
+      [
+        "/api/v1/intake/batches/:id/data",
+        { protocol_version: 1, request: { sequence: 0, data: text } },
+      ],
+    ]);
+    await view.getByLabel("书目计数").getByText("新增 1").waitFor();
+    // Not a Zotero batch: no annotation data, so no “批注”.
+    expect(await view.getByLabel("批注计数").count()).toBe(0);
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 120000);

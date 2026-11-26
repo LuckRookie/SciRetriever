@@ -1,5 +1,8 @@
 import {
+  INTAKE_ANNOTATION_REASONS,
+  INTAKE_BIBLIOGRAPHY_FORMATS,
   parseIntakeBatch,
+  type IntakeAnnotationReason,
   type IntakeBatch,
   type IntakeBatchSummary,
   type IntakeBatchItem,
@@ -12,6 +15,7 @@ import {
   type IntakeLookupSummary,
   type IntakeSummary,
 } from "@sciretriever/contracts";
+import { intakeStrings } from "../strings.js";
 import { record, type JsonRecord } from "./wire.js";
 import type { DeviceConnection } from "./devices.js";
 
@@ -65,7 +69,22 @@ export interface BatchSummary {
    */
   unread: { total: number; reasons: (readonly [string, number])[] };
   files: IntakeSummary["files"];
-  annotations: { supported: number; unsupported: number; deferred: number };
+  annotations: {
+    supported: number;
+    unsupported: number;
+    deferred: number;
+    /**
+     * A `zotero-api` batch's annotations as they stand (literature
+     * materials 6.4.13): the importable and imported counts, and the
+     * reasons that occurred with their counts. Null for a batch without
+     * them, or with no annotations at all.
+     */
+    detail: {
+      importable: number;
+      imported: number;
+      reasons: (readonly [IntakeAnnotationReason, number])[];
+    } | null;
+  };
   excluded: { kind: string; count: number }[];
   /** A `lookup` batch's line counts (literature materials 6.4.10); null otherwise. */
   lookup: IntakeLookupSummary | null;
@@ -110,6 +129,23 @@ const LOOKUP_COUNTS = [
   "duplicates",
   "pending",
 ] as const;
+function annotationDetail(
+  value: unknown,
+): BatchSummary["annotations"]["detail"] {
+  const item = value && typeof value === "object" ? (value as JsonRecord) : {};
+  if (!item.by_reason || typeof item.by_reason !== "object") return null;
+  const byReason = counts(item.by_reason, INTAKE_ANNOTATION_REASONS);
+  const detail = {
+    importable: count(item.importable),
+    imported: count(item.imported),
+    reasons: INTAKE_ANNOTATION_REASONS.map(
+      (reason) => [reason, byReason[reason]] as const,
+    ).filter(([, n]) => n > 0),
+  };
+  return detail.importable || detail.imported || detail.reasons.length
+    ? detail
+    : null;
+}
 export function readSummary(value: unknown): BatchSummary {
   const item = record(value, "intake summary");
   const unread =
@@ -155,11 +191,14 @@ export function readSummary(value: unknown): BatchSummary {
       "missing",
       "unpaired",
     ] as const),
-    annotations: counts(item.annotations, [
-      "supported",
-      "unsupported",
-      "deferred",
-    ] as const),
+    annotations: {
+      ...counts(item.annotations, [
+        "supported",
+        "unsupported",
+        "deferred",
+      ] as const),
+      detail: annotationDetail(item.annotations),
+    },
     excluded: (Array.isArray(item.excluded) ? item.excluded : []).map(
       (entry) => {
         const excluded = record(entry, "excluded");
@@ -255,29 +294,12 @@ export function initiator(
   );
 }
 
-export const IMPORT_FORMATS = [
-  { value: "bibtex", label: "BibTeX" },
-  { value: "biblatex", label: "BibLaTeX" },
-  { value: "ris", label: "RIS" },
-  { value: "csl-json", label: "CSL JSON" },
-] as const;
+/** The formats an export may be read in, in the contract's order (literature materials 6.4.14). */
+export const IMPORT_FORMATS = INTAKE_BIBLIOGRAPHY_FORMATS.map((value) => ({
+  value,
+  label: intakeStrings.formats[value],
+}));
 export const IMPORT_FILE_LIMIT = 7 * 1024 * 1024;
-
-/** The export format from the file's name and opening content, or null when unclear. */
-export function detectFormat(name: string, content: string): string | null {
-  const head = content.slice(0, 4096).trimStart(),
-    extension = name.toLowerCase().split(".").pop() ?? "";
-  if (/^TY {2}- /mu.test(head) || extension === "ris") return "ris";
-  if (head.startsWith("[") || head.startsWith("{") || extension === "json")
-    return head.startsWith("[") || /"type"\s*:/u.test(head) ? "csl-json" : null;
-  if (/@[a-z]+\s*[{(]/iu.test(head) || extension === "bib")
-    return /@(online|mvbook|thesis|report)\s*[{(]|\b(date|journaltitle|location)\s*=/iu.test(
-      content.slice(0, 65536),
-    )
-      ? "biblatex"
-      : "bibtex";
-  return null;
-}
 
 /** Files in a chosen folder by name; a size the source gave breaks ties. */
 export function matchFile(
@@ -328,6 +350,7 @@ const EXCLUDED: Record<string, string> = {
   "non-pdf-file": "非 PDF 附件",
   "extra-file": "其他附件",
   "linked-file": "链接文件",
+  "annotation-standalone-file": "独立 PDF 上的批注",
 };
 export const excludedName = (kind: string) => EXCLUDED[kind] ?? kind;
 
