@@ -4106,3 +4106,17 @@ export * from "./sentence-split.js";
 export * from "./key-terms.js";
 export * from "./reading-layers.js";
 export * from "./reading-layers-read.js";
+
+/** The bibliographic sources in use, by name, in the order they are asked. */
+export interface MetadataSourcesInUse {
+  readonly topic_search: readonly string[];
+  readonly lookup: readonly string[];
+}
+/** Result of the read-only `status` operation (MCP `status`). */
+export interface LibraryStatus {
+  readonly status: "ready" | "not-initialized" | "unavailable";
+  readonly schema_version: number | null;
+  readonly schema_fingerprint: string | null;
+  /** Names only, never credentials or addresses; null before the library is ready. */
+  readonly metadata_sources: MetadataSourcesInUse | null;
+}

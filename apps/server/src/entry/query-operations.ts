@@ -175,7 +175,11 @@ async function readQuery(
   }
   if (operation === "status") {
     operationRecord(value, []);
-    return q.readiness;
+    // Source names in use; null before the library is ready.
+    return {
+      ...q.readiness,
+      metadata_sources: q.metadataSources?.() ?? null,
+    } satisfies import("@sciretriever/contracts").LibraryStatus;
   }
   if (operation === "source-statistics") {
     if (!q.tasks || q.readiness.status !== "ready") unavailable();

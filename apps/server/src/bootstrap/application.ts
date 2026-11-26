@@ -202,6 +202,7 @@ import type {
 } from "../metadata/ports.js";
 import {
   buildMetadataRegistry,
+  configuredMetadataSelections,
   type MetadataRegistry,
 } from "../metadata/registry.js";
 import { createBrowserNetworkAdmission } from "../network/browser-admission.js";
@@ -405,6 +406,9 @@ export type ProcessorReader = Pick<
   | "verifyCitation"
   | "records"
 >;
+export type { MetadataSourcesInUse } from "@sciretriever/contracts";
+type MetadataSourcesInUse =
+  import("@sciretriever/contracts").MetadataSourcesInUse;
 export interface QueryApplication {
   readonly formDraftsPreview?: (
     value: unknown,
@@ -458,6 +462,11 @@ export interface QueryApplication {
     readonly schema_version: number | null;
     readonly schema_fingerprint: string | null;
   };
+  /**
+   * The bibliographic sources in use, by name only: from configuration
+   * here; a host that shares a running Application reads its registry.
+   */
+  readonly metadataSources?: () => MetadataSourcesInUse;
   /** Read-only literature and artifact operations. No maintenance or Job port is exposed. */
   readonly query: Pick<
     LiteratureQueryService,
@@ -2771,6 +2780,10 @@ export async function createQueryApplication(
           configuration.parsing.archive_profile,
         ).preview(value, signal),
       usageEstimate: (value, signal) => estimating.estimate(value, signal),
+      metadataSources: () => {
+        const chosen = configuredMetadataSelections(configuration);
+        return { topic_search: [...chosen.topic], lookup: [...chosen.lookup] };
+      },
       readiness: {
         status: "ready",
         schema_version:

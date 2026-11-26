@@ -129,6 +129,44 @@ async function fixture(
 function structured(result: unknown): unknown {
   return (result as { structuredContent: unknown }).structuredContent;
 }
+it("status names the bibliographic sources in use to a read device, names only", async () => {
+  const f = await fixture(undefined, {
+    lookup_ports: [],
+    topic_search_ports: [],
+  });
+  try {
+    const paired = await f.token(["read"]),
+      remote = await f.connect(paired.token);
+    const result = await remote.client.callTool({
+      name: "status",
+      arguments: {},
+    });
+    expect(result.isError).not.toBe(true);
+    // The running Application's registry: this library was built with none.
+    expect(structured(result)).toMatchObject({
+      result: {
+        status: "ready",
+        metadata_sources: { topic_search: [], lookup: [] },
+      },
+    });
+    expect([
+      ...f.app.metadata.topic_selection,
+      ...f.app.metadata.lookup_selection,
+    ]).toEqual([]);
+    // Without a shared Application the query side reads configuration.
+    const configured = (await f.query.metadataSources!()) as {
+      topic_search: string[];
+      lookup: string[];
+    };
+    expect(configured.topic_search).toContain("crossref");
+    expect(configured.lookup.length).toBeGreaterThan(0);
+    for (const name of [...configured.topic_search, ...configured.lookup])
+      expect(name).toMatch(/^[a-z][a-z0-9-]*$/u);
+  } finally {
+    await f.close();
+  }
+}, 30000);
+
 it("keeps draft preview in read and creation in operate without registering either direct HTTP device route", async () => {
   const f = await fixture();
   try {

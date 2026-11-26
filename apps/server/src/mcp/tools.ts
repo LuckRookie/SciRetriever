@@ -556,7 +556,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "status",
-    "Read local library readiness. No initialization, recovery or external calls.",
+    "Read local library readiness and metadata_sources: {topic_search, lookup}, the bibliographic source names in use in the order they are asked (null before the library is ready); use topic_search names as discover_metadata provider_name. Names only, never credentials or addresses. No initialization, recovery or external calls.",
     object({}),
   ),
   tool(

@@ -520,6 +520,18 @@ export function createMcpServer(options: McpOptions = {}) {
       prepare_extraction: "extraction-prepare",
     };
     if (!Object.hasOwn(routes, name)) unavailable();
+    // A host sharing its running Application (HTTP MCP) answers with the
+    // registry actually in use; otherwise the query side reads configuration.
+    if (name === "status" && (app || options.applicationFactory)) {
+      const running = (await application()).metadata;
+      return {
+        ...((await executeQuery(q, "status", args, signal)) as object),
+        metadata_sources: {
+          topic_search: [...running.topic_selection],
+          lookup: [...running.lookup_selection],
+        },
+      };
+    }
     return executeQuery(
       q,
       routes[name]!,
