@@ -28,7 +28,7 @@ import {
   ContractValidationError,
   decodeBibliographyBytes,
   detectBibliographyFormat,
-  ENDNOTE_FAMILY_FORMATS,
+  bibliographyEncodingAccepted,
   INTAKE_BIBLIOGRAPHY_FORMATS,
   emptyIntakeAnnotationReasons,
   INTAKE_ANNOTATION_REASONS,
@@ -713,6 +713,9 @@ export class ImportSessionService extends ImportSessionReadService {
         reference: artifactReference("import-source", artifact),
         artifact,
       };
+      const bibliography = (
+        INTAKE_BIBLIOGRAPHY_FORMATS as readonly string[]
+      ).includes(s.format);
       const keys: { kind: string; id: string }[] = decoded.groups.map((g) => ({
         kind: "group",
         id: g.external_id,
@@ -720,7 +723,9 @@ export class ImportSessionService extends ImportSessionReadService {
       for (const item of decoded.items)
         if (item.record) {
           keys.push({ kind: "record", id: item.record.external_id });
-          if (!s.metadata_only)
+          // A bibliography file may name one attachment twice; the first
+          // record keeps it (prepare), so it is no staging conflict (6.4.14).
+          if (!s.metadata_only && !bibliography)
             for (const f of item.record.files)
               keys.push({ kind: "file", id: f.external_id });
         }
@@ -796,8 +801,24 @@ export class ImportSessionService extends ImportSessionReadService {
         primary: ReturnType<typeof selected>;
       }[] = [],
       annotationReasons = emptyIntakeAnnotationReasons();
+    const seenFiles = new Set<string>();
     for (const part of parts) {
-      const data = await this.decodePart(s.format, part);
+      let data = await this.decodePart(s.format, part);
+      // Bibliography files: a later record naming an attachment reference
+      // already named loses it; the first keeps it (6.4.14). Parts come in
+      // sequence order.
+      if ((INTAKE_BIBLIOGRAPHY_FORMATS as readonly string[]).includes(s.format))
+        data = {
+          ...data,
+          items: data.items.map((item) => {
+            const files = item.record?.files ?? [];
+            const kept = files.filter((f) => !seenFiles.has(f.external_id));
+            for (const f of kept) seenFiles.add(f.external_id);
+            return kept.length === files.length
+              ? item
+              : { ...item, record: { ...item.record!, files: kept } };
+          }),
+        };
       decoded.set(part.sequence, data);
       if (s.source.identity === "adhoc") {
         if (data.groups.length)
@@ -3289,8 +3310,8 @@ export class ImportSessionService extends ImportSessionReadService {
   }
   /**
    * `format` null: recognized from the file name, else the content (6.4.14).
-   * EndNote and NoteExpress files that are not UTF-8 are read as GB18030;
-   * the other formats keep their strict decoding.
+   * Text formats that are not UTF-8 are read as GB18030; CSL JSON stays
+   * UTF-8 only.
    */
   importBibliography(
     bytes: Uint8Array,
@@ -3326,10 +3347,7 @@ export class ImportSessionService extends ImportSessionReadService {
       const chosen = requested ?? detectBibliographyFormat(fileName, text);
       if (!chosen) throw new ImportSessionError("intake-format-unsupported");
       format = chosen;
-      if (
-        decoded.encoding === "gb18030" &&
-        !(ENDNOTE_FAMILY_FORMATS as readonly string[]).includes(format)
-      )
+      if (!bibliographyEncodingAccepted(format, decoded.encoding))
         return rejected("malformed-document");
       if (
         canonicalJsonBytes({ import_data: text }).byteLength >

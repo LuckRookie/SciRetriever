@@ -276,7 +276,9 @@ describe("recognizing a file", () => {
       "noteexpress",
     );
     expect(detectBibliographyFormat("library.xml", XML)).toBe("endnote-xml");
-    expect(detectBibliographyFormat(null, "\uFEFF" + TAGGED)).toBe("endnote-tagged");
+    expect(detectBibliographyFormat(null, "\uFEFF" + TAGGED)).toBe(
+      "endnote-tagged",
+    );
     expect(detectBibliographyFormat("a.ris", "")).toBe("ris");
     expect(detectBibliographyFormat("notes.txt", "just a note")).toBeNull();
     expect(
@@ -324,15 +326,41 @@ describe("import_bibliography", () => {
       expect(found.map((i) => i.literature.metadata.title)).toEqual([
         "高氮含能盐的合成",
       ]);
-      // The other formats keep their strict decoding.
+      // One rule for the text formats: a GB18030 RIS file is read too.
       expect(
         await app.importSessions.importBibliography(
-          Buffer.from("TY  - JOUR\r\nTI  - \xb8\xdf\r\nER  - \r\n", "latin1"),
-          "ris",
+          Buffer.concat([
+            Buffer.from("TY  - JOUR\r\nAU  - "),
+            Buffer.from("cdf5d0a1c3f7", "hex"),
+            Buffer.from("\r\nTI  - "),
+            Buffer.from("baacc4dcb2c4c1cf", "hex"),
+            Buffer.from(
+              "\r\nPY  - 2021\r\nDO  - 10.5555/synth.ris.gb\r\nER  - \r\n",
+            ),
+          ]),
+          null,
+          "CNKI-RIS.txt",
+          "cli",
+        ),
+      ).toMatchObject({ format: "ris", items: [{ disposition: "created" }] });
+      // CSL JSON stays UTF-8 only.
+      expect(
+        await app.importSessions.importBibliography(
+          Buffer.concat([
+            Buffer.from('[{"type":"article-journal","title":"'),
+            Buffer.from("baacc4dcb2c4c1cf", "hex"),
+            Buffer.from('"}]'),
+          ]),
+          "csl-json",
           null,
           "cli",
         ),
       ).toMatchObject({ items: [{ reason: "malformed-document" }] });
+      expect(
+        (await app.library.search({ query: {} })).items
+          .map((i) => i.literature.metadata.title)
+          .sort(),
+      ).toEqual(["含能材料", "高氮含能盐的合成"].sort());
       await expect(
         app.importSessions.importBibliography(
           Buffer.from("not a bibliography"),
@@ -341,6 +369,47 @@ describe("import_bibliography", () => {
           "cli",
         ),
       ).rejects.toMatchObject({ code: "intake-format-unsupported" });
+    } finally {
+      await app.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 60000);
+});
+
+describe("attachment references named twice", () => {
+  it("keep the reference on the first record only, without a staging conflict", async () => {
+    const home = await mkdtemp(join(tmpdir(), "sciretriever-endnote-twice-"));
+    const app = await createApplication(home, {
+      indexRefreshIntervalMs: null,
+      metadata: { lookup_ports: [], topic_search_ports: [] },
+    });
+    const twice = (n: number) =>
+      `%0 Journal Article\n%T Synthetic shared attachment paper ${n}\n%R 10.5555/synth.twice.${n}\n%> internal-pdf://5555555555/shared.pdf\n`;
+    try {
+      const batch = await app.importSessions.create(
+        {
+          format: "endnote-tagged",
+          source: null,
+          scope: "two records, one PDF",
+          file_name: "twice.enw",
+        },
+        { kind: "local", origin: "web" },
+      );
+      // Within one segment, and again from a later segment.
+      await app.importSessions.putData(batch.batch_id, 0, twice(1) + twice(2));
+      await app.importSessions.putData(batch.batch_id, 1, twice(3));
+      await app.importSessions.confirm(batch.batch_id);
+      const report = await app.importSessions.report(batch.batch_id, null, 200);
+      expect(report.items.map((i) => i.disposition)).toEqual([
+        "created",
+        "created",
+        "created",
+      ]);
+      const files = (await app.importSessions.missingFiles(batch.batch_id))
+        .items;
+      expect(
+        files.map((f) => [f.external_id, f.file_name, f.literature_id]),
+      ).toEqual([["5555555555", "shared.pdf", report.items[0]!.literature_id]]);
     } finally {
       await app.close();
       await rm(home, { recursive: true, force: true });

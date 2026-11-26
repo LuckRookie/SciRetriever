@@ -14,7 +14,7 @@
 - [capture.ts](capture.ts)：单篇网页入库的原始页面输入、预览、请求 UUID 与文件声明、补全/接纳结果；PDF 页面在认篇之前返回 literature_id 为 null 的独立待交文件形状，有标题的网页立即保存；空条目由页面适配后的应用边界拒绝。web-capture 的用户 provenance 仍由 index 中的封闭 observation 合同校验。
 - [intake-page.ts](intake-page.ts)：原始 WebPageData 的精确键、URL、meta/JSON-LD 数量与 UTF-8 字节上限；保留原始标签值，不在合同层解读页面；拥有上传文件名、相对路径校验与来源地址脱敏。`index.ts` 导出的 URL 解析复用已有来源地址校验。
 - [intake-withdrawal.ts](intake-withdrawal.ts)：撤回/恢复预估与撤回/恢复报告的精确键、八种保留原因、对象计数及最多 200 条有序保留项目；registered 标记旧批次的保守范围。
-- [bibliography-formats.ts](bibliography-formats.ts)：入库接受的书目格式名（含 `endnote-tagged`、`endnote-xml`、`noteexpress`），以及网页与服务端共用的认格式（扩展名优先，`.txt`、`.xml` 与认不出的扩展名看第一行）和读字节（UTF-8 去 BOM，不是合法 UTF-8 时按 GB18030）。
+- [bibliography-formats.ts](bibliography-formats.ts)：入库接受的书目格式名（含 `endnote-tagged`、`endnote-xml`、`noteexpress`），以及网页与服务端共用的认格式（扩展名优先，`.txt`、`.xml` 与认不出的扩展名看第一行）和读字节（UTF-8 去 BOM，不是合法 UTF-8 时按 GB18030；`bibliographyEncodingAccepted` 只对 CSL JSON 拒绝 GB18030）。
 - [intake.ts](intake.ts)：统一批次、条目、来源、分段、纯适配器、报告、文件状态、状态/结果、进度、端点与错误码；source 可为 null，由服务形成一次性来源。也拥有范围词频与 PDF 获取范围/预览合同，以及预览与报告的 `records.clues_unread`（六种读不出原因，逐项列出，合计校验）。`lookup` 格式另有 `INTAKE_LIMITS.lookup_lines`、错误码 `intake-lookup-too-many`、条目的 `lookup`（`IntakeLookupItem`）、报告条目的 `line`、摘要的 `lookup`（`IntakeLookupSummary`）与本机同步入口的 `IntakeLookupResult`，都是只加的可选字段。Zotero 适配器另用 `IntakeFile.md5` 与 `IntakeItem.file_only` 两个可选字段；`IntakeAdapterResult.optional_group_references` 表示条目可以引用没交来的分组（那一处归属略去）。收到时被拒绝的文件条目带可选的 `IntakeBatchItem.reason`。
 - [literature-recognition.ts](literature-recognition.ts)：入库后重新识别的请求（1–1,000 个不重复 ID 或全部书目待补）、加工目标 `recognize-literature` 的请求、逐篇结果、跳过原因与任务计数的汇总函数。
 - [acquisition.ts](acquisition.ts)：当前/待生效来源与有界安全获取轨迹，供配置、任务和浏览器读取。

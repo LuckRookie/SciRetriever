@@ -14,12 +14,6 @@ export const INTAKE_BIBLIOGRAPHY_FORMATS = [
 ] as const;
 export type IntakeBibliographyFormat =
   (typeof INTAKE_BIBLIOGRAPHY_FORMATS)[number];
-/** EndNote and NoteExpress exports, the formats 6.4.14 added. */
-export const ENDNOTE_FAMILY_FORMATS = [
-  "endnote-tagged",
-  "endnote-xml",
-  "noteexpress",
-] as const;
 export function isIntakeBibliographyFormat(
   value: unknown,
 ): value is IntakeBibliographyFormat {
@@ -95,6 +89,16 @@ export function detectBibliographyFormat(
     ?.toLowerCase();
   const named = extension ? EXTENSIONS[extension] : undefined;
   return named ?? bibliographyFormatOfContent(text);
+}
+/**
+ * Whether a decoded file may be read in this format: GB18030 applies to the
+ * text formats alike; CSL JSON is UTF-8 (or a UTF-16 BOM, as before) only.
+ */
+export function bibliographyEncodingAccepted(
+  format: IntakeBibliographyFormat,
+  encoding: ReturnType<typeof decodeBibliographyBytes>["encoding"],
+): boolean {
+  return encoding !== "gb18030" || format !== "csl-json";
 }
 /**
  * 6.4.14 “编码”: UTF-8 without its BOM; bytes that are not valid UTF-8 are
