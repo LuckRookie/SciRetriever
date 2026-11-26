@@ -6,10 +6,21 @@
  * - done: green, ready and finished;
  * - pdf: blue, has a PDF;
  * - problem: red, failed or needs a person;
- * - other: grey, the rest (excluded, cancelled, stale, unobtainable, waiting);
- * - running: grey with a turning ring, work in progress.
+ * - other: grey, the rest (excluded, cancelled, stale, waiting);
+ * - running: grey with a turning ring, a task in progress.
+ *
+ * A paper's material keeps the colours set on 2026-10-23 (ADR 0070, section
+ * 5): besides the above, being archived is yellow with a turning ring and
+ * "no PDF found" is purple.
  */
-export type StatusTone = "done" | "pdf" | "problem" | "other" | "running";
+export type StatusTone =
+  | "done"
+  | "pdf"
+  | "problem"
+  | "other"
+  | "running"
+  | "archiving"
+  | "unavailable";
 
 /** A paper's material state (the library's status column and filters). */
 export function literatureTone(state: string): StatusTone {
@@ -21,9 +32,11 @@ export function literatureTone(state: string): StatusTone {
     case "ARCHIVE_FAILED":
       return "problem";
     case "ARCHIVING":
-      return "running";
+      return "archiving";
+    case "UNAVAILABLE":
+      return "unavailable";
     default:
-      // UNREVIEWED, EXCLUDED, UNAVAILABLE.
+      // UNREVIEWED, EXCLUDED.
       return "other";
   }
 }

@@ -751,6 +751,18 @@
     --tone-ground: var(--status-problem-bg);
     --tone-chart: var(--chart-problem);
   }
+  /* A paper's material, as set on 2026-10-23 and restored by ADR 0070:
+     being archived is yellow, "no PDF found" is purple. */
+  [data-tone="archiving"] {
+    --tone-ink: var(--status-archiving);
+    --tone-ground: var(--status-archiving-bg);
+    --tone-chart: var(--chart-archiving);
+  }
+  [data-tone="unavailable"] {
+    --tone-ink: var(--status-unavailable);
+    --tone-ground: var(--status-unavailable-bg);
+    --tone-chart: var(--chart-unavailable);
+  }
   :is([data-tone="other"], [data-tone="running"]) {
     --tone-ink: var(--status-other);
     --tone-ground: var(--status-other-bg);
@@ -762,8 +774,9 @@
   }
   /* Work in progress has no colour of its own: the dot turns into a ring
      (still under reduced motion). */
-  .ui-badge[data-tone="running"] > span[aria-hidden="true"]:first-child,
-  .paper-status[data-tone="running"]::before {
+  .ui-badge:is([data-tone="running"], [data-tone="archiving"])
+    > span[aria-hidden="true"]:first-child,
+  .paper-status:is([data-tone="running"], [data-tone="archiving"])::before {
     width: 9px;
     height: 9px;
     border: 1.5px solid currentColor;

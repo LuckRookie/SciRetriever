@@ -253,17 +253,13 @@ function collectStatusColours(): StatusColour[] {
     if (!box.width || !box.height) continue;
     const style = getComputedStyle(el);
     const fill = el.classList.contains("ui-tone-fill");
-    // A paper's material mark is a dot in the status colour beside quiet
-    // words, with no ground (design core “状态徽标”): its dot is what must
-    // be one colour everywhere.
-    const mark = el.classList.contains("paper-status");
+    // A paper's material mark is a status badge like any other (ADR 0070,
+    // section 5): its ink on its ground must be one pair everywhere.
     out.push({
-      tone: `${fill ? "fill" : mark ? "mark" : "label"} ${el.getAttribute("data-tone")}`,
+      tone: `${fill ? "fill" : "label"} ${el.getAttribute("data-tone")}`,
       colour: fill
         ? style.backgroundColor
-        : mark
-          ? `${getComputedStyle(el, "::before").backgroundColor} beside ${style.color}`
-          : `${style.color} on ${style.backgroundColor}`,
+        : `${style.color} on ${style.backgroundColor}`,
     });
   }
   return out;

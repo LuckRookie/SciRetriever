@@ -134,15 +134,29 @@ it("draws the primary button in ink (paper on ink at night), a disabled one grey
       const pairs = new Map<string, Set<string>>();
       for (const { tone, pair } of badges)
         pairs.set(tone, (pairs.get(tone) ?? new Set()).add(pair));
+      // A paper's material keeps the colours set on 2026-10-23 (ADR 0070,
+      // section 5): being archived is yellow, "no PDF found" is purple.
       expect([...pairs.keys()].sort()).toEqual(
-        ["done", "other", "pdf", "problem", "running"].sort(),
+        [
+          "archiving",
+          "done",
+          "other",
+          "pdf",
+          "problem",
+          "running",
+          "unavailable",
+        ].sort(),
       );
       for (const set of pairs.values()) expect(set.size).toBe(1);
       const one = (tone: string) => [...pairs.get(tone)!][0]!;
       expect(one("running")).toBe(one("other"));
-      expect(new Set(["done", "pdf", "problem", "other"].map(one)).size).toBe(
-        4,
-      );
+      expect(
+        new Set(
+          ["done", "pdf", "problem", "other", "archiving", "unavailable"].map(
+            one,
+          ),
+        ).size,
+      ).toBe(6);
       const ring = await page
         .locator('.ui-badge[data-tone="running"] > span[aria-hidden="true"]')
         .first()
