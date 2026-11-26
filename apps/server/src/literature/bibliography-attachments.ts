@@ -41,9 +41,48 @@ function bibAttachment(value: string) {
   return { path: unescape(parts.join(":")), type: last.toLowerCase() };
 }
 
-function fileReference(path: string, position: string): ImportFile | null {
+function fileReference(
+  path: string,
+  position: string,
+  internalPdfIds = false,
+): ImportFile | null {
   try {
     path = importString(path);
+    // EndNote's `internal-pdf://<folder>/<name>` (6.4.14): the folder is the
+    // attachment's ID, compared as “ID/file name” with delivered paths.
+    const internal = internalPdfIds
+      ? /^internal-pdf:\/\/([^/\\?#:]+)\/([^/\\?#]+)$/iu.exec(path)
+      : null;
+    if (internal) {
+      let folder: string, name: string;
+      try {
+        folder = decodeURIComponent(internal[1]!);
+        name = decodeURIComponent(internal[2]!);
+      } catch (error) {
+        if (error instanceof URIError) return null;
+        throw error;
+      }
+      if (
+        [folder, name].some((v) => v === "." || v === ".." || /[/\\:]/u.test(v))
+      )
+        return null;
+      return parseImportData({
+        records: [
+          {
+            external_id: "attachment",
+            metadata: EMPTY_METADATA,
+            files: [
+              {
+                external_id: folder,
+                file_name: name,
+                media_type: "application/pdf",
+                preferred: true,
+              },
+            ],
+          },
+        ],
+      }).records[0]!.files[0]!;
+    }
     const uri = /^(?:file|internal-pdf):\/\//iu.exec(path);
     let local = uri !== null;
     if (uri) {
@@ -93,6 +132,8 @@ export function bibliographyAttachments(
   bibtex: boolean,
   sequence: number,
   recordIndex: number,
+  /** EndNote exports: `internal-pdf://<folder>/<name>` pairs by folder ID. */
+  internalPdfIds = false,
 ): { files: readonly ImportFile[]; excluded: readonly ImportExcluded[] } {
   const files: ImportFile[] = [],
     counts = new Map<string, number>();
@@ -108,6 +149,7 @@ export function bibliographyAttachments(
       const file = fileReference(
         attachment.path,
         `${sequence}:${recordIndex}:${index++}`,
+        internalPdfIds,
       );
       if (!file) exclude("invalid-file-reference");
       else if (

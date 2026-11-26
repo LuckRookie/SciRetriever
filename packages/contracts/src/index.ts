@@ -47,6 +47,7 @@ export * from "./article-identity.js";
 export * from "./operations.js";
 export * from "./form-drafts.js";
 export * from "./intake.js";
+export * from "./bibliography-formats.js";
 export * from "./literature-recognition.js";
 import { parseIntakeBatchId, type IntakeBatchId } from "./intake.js";
 export * from "./capture.js";

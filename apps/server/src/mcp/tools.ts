@@ -1311,14 +1311,24 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
   ),
   tool(
     "import_bibliography",
-    "Explicitly import supplied bibliography bytes as text into the shared library; no PDF acquisition.",
+    'Explicitly import supplied bibliography bytes as text into the shared library; no PDF acquisition. Formats: bibtex, biblatex, ris, csl-json, endnote-tagged (EndNote .enw, CNKI/Wanfang/VIP "EndNote" .txt), endnote-xml (EndNote .xml) and noteexpress (.net, CNKI "NoteExpress" .txt). Omit format to have it recognized from file_name (.bib, .ris, .json, .enw, .net), else from the content\'s first line (%0, {Reference Type}:, TY  -, or an EndNote <xml><records> root); an unrecognized file is intake-format-unsupported. Attachment paths in the file are only file names for pairing; the files are never read.',
     object(
       {
-        format: { enum: ["bibtex", "biblatex", "ris", "csl-json"] },
+        format: {
+          enum: [
+            "bibtex",
+            "biblatex",
+            "ris",
+            "csl-json",
+            "endnote-tagged",
+            "endnote-xml",
+            "noteexpress",
+          ],
+        },
         content: { type: "string", maxLength: 786432 },
         file_name: nullable({ type: "string", minLength: 1, maxLength: 1024 }),
       },
-      ["format", "content"],
+      ["content"],
     ),
     false,
   ),

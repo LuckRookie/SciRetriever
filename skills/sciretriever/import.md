@@ -34,6 +34,10 @@ post "/batches/$BID/preview" "$WORK_DIR/empty.json"
 
 预览是估计，核对书目的新增、已有、补全、冲突与未接纳，待交文件，以及“不导入的内容”。预览里的待交数量不等于本机找不到的数量。使用者要求先看时，在这里停下。
 
+## 使用者给的是书目导出文件
+
+支持的格式：`bibtex`、`biblatex`、`ris`、`csl-json`、`endnote-tagged`（EndNote 的 `.enw`，知网、万方、维普的“EndNote”导出 `.txt`）、`endnote-xml`（EndNote 的 `.xml`）、`noteexpress`（`.net`，知网的“NoteExpress”导出 `.txt`）。按扩展名选；`.txt`、`.xml` 看第一行：`%0 ` 开头是 `endnote-tagged`，`{Reference Type}:` 开头是 `noteexpress`，`<xml><records>` 是 `endnote-xml`；对不上的告诉使用者不支持，不要改写成别的格式。EndNote 与 NoteExpress 的文件不是 UTF-8 时按 GB18030 读成文字再交。文件里的附件路径只用来配对同时交来的 PDF，不要去读或上传路径所指的文件。本机的 MCP `import_bibliography` 可以不给 `format`，由文献库按文件名与内容认。
+
 ## 使用者点名要某几篇
 
 使用者给出的是 DOI、文献的网址或标题，而不是文件时，用格式 `lookup`：建批次时 `format` 为 `lookup`、`source` 为 null；数据是一份文本，每行一篇，一个批次最多 200 行。不要自己去查书目再改写成条目，认出是哪一篇由文献库来做。

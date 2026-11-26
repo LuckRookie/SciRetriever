@@ -17,6 +17,7 @@ import {
 import { withActivity, machineActor } from "../logging/activity.js";
 import {
   ContractValidationError,
+  isIntakeBibliographyFormat,
   parseDiscoveryRunId,
   parseDocumentRequest,
   parseLibraryQuery,
@@ -178,7 +179,7 @@ function usage(options: CliOptions): CliResult {
     "  literature counts --request FILE|-  # full_text counts papers (MetaLiterature); statuses and with_primary_pdf count versions; read-only\n" +
     "  literature exact-count --request FILE|-  # kind=counts|facets|search-total, query, limit for facets; one read snapshot\n" +
     "    --needs-metadata | --no-needs-metadata filters the independent bibliographic recognition mark\n" +
-    "  import metadata FORMAT SOURCE | import pdf ID SOURCE\n" +
+    "  import metadata [FORMAT] SOURCE (bibtex|biblatex|ris|csl-json|endnote-tagged|endnote-xml|noteexpress; recognized from .enw/.net/.txt/.xml when omitted) | import pdf ID SOURCE\n" +
     "  document parse --literature-id ID --asset-id ID --asset-sha256 SHA256 [--profiles pipeline,vlm-engine] [--force] (default: deployment profile)\n" +
     "  export metadata FORMAT OUTPUT | export pdf ID --path PATH\n" +
     "  config [--theme auto|dark|light|mono] | config status [--json] [--theme ...] | config test ...\n" +
@@ -1838,15 +1839,17 @@ async function execute(
   if (group === "import" && command === "metadata") {
     const legacyFormat = args[2] as BibliographyInputFormat | undefined;
     const legacySource = args[3];
-    const path = argument(args, "--format")
-      ? args[2]
-      : (legacySource ?? args[2]);
-    const format = (argument(args, "--format") ??
-      legacyFormat) as BibliographyInputFormat | null;
+    const named = argument(args, "--format");
+    const path = named ? args[2] : (legacySource ?? args[2]);
+    // `import metadata PATH` alone: the format is recognized (6.4.14).
+    const format = (named ??
+      (legacySource === undefined
+        ? null
+        : legacyFormat)) as BibliographyInputFormat | null;
     if (
       !path ||
-      !format ||
-      !["bibtex", "biblatex", "ris", "csl-json"].includes(format)
+      (format !== null && !isIntakeBibliographyFormat(format)) ||
+      (format === null && path === "-")
     )
       invalidInput();
     const bytes = await inputBytes(path, options);
@@ -1894,7 +1897,8 @@ async function execute(
       ["bibtex", "biblatex", "ris", "csl-json"].includes(args[2] ?? "") &&
       args[3]
     ) {
-      const format = args[2] as BibliographyInputFormat;
+      // Export writes the four formats it always did.
+      const format = args[2] as "bibtex" | "biblatex" | "ris" | "csl-json";
       const target = args[3];
       if (target !== "-" && !target.startsWith("/")) invalidInput();
       if (target === "-" && options.json) invalidInput();

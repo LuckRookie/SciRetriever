@@ -64,22 +64,67 @@ const DATACITE: Readonly<Record<string, Mapping>> = {
   // DataCite Text is broader than a paper: do not guess a publication form.
   text: UNKNOWN,
 };
+const RIS: Readonly<Record<string, Mapping>> = {
+  ...CROSSREF,
+  jour: FORMS["journal-article"]!,
+  conf: FORMS["proceedings-article"]!,
+  cpaper: FORMS["proceedings-article"]!,
+  book: FORMS.book!,
+  chap: FORMS["book-chapter"]!,
+  thes: FORMS.thesis!,
+  pat: FORMS.patent!,
+  rpt: FORMS.report!,
+  rprt: FORMS.report!,
+  data: FORMS.dataset!,
+  stan: FORMS.standard!,
+};
+/**
+ * EndNote and NoteExpress reference types (6.4.14), English and the Chinese
+ * names CNKI-style exports use, as the RIS type codes they correspond to; the
+ * forms then come from the RIS table above.
+ */
+const ENDNOTE_TYPE_CODES: Readonly<Record<string, string>> = {
+  "journal article": "jour",
+  "electronic article": "jour",
+  "magazine article": "jour",
+  "newspaper article": "jour",
+  期刊文章: "jour",
+  期刊论文: "jour",
+  报纸文章: "jour",
+  thesis: "thes",
+  dissertation: "thes",
+  学位论文: "thes",
+  硕士论文: "thes",
+  博士论文: "thes",
+  "conference proceedings": "conf",
+  "conference paper": "cpaper",
+  会议论文: "conf",
+  book: "book",
+  "edited book": "book",
+  "electronic book": "book",
+  图书: "book",
+  专著: "book",
+  "book section": "chap",
+  "electronic book section": "chap",
+  图书章节: "chap",
+  report: "rprt",
+  报告: "rprt",
+  patent: "pat",
+  专利: "pat",
+  standard: "stan",
+  标准: "stan",
+  dataset: "data",
+  数据集: "data",
+};
+const ENDNOTE = Object.fromEntries(
+  Object.entries(ENDNOTE_TYPE_CODES).map(([name, code]) => [name, RIS[code]!]),
+);
 const SOURCES: Readonly<Record<string, Readonly<Record<string, Mapping>>>> = {
   crossref: CROSSREF,
-  ris: {
-    ...CROSSREF,
-    jour: FORMS["journal-article"]!,
-    conf: FORMS["proceedings-article"]!,
-    cpaper: FORMS["proceedings-article"]!,
-    book: FORMS.book!,
-    chap: FORMS["book-chapter"]!,
-    thes: FORMS.thesis!,
-    pat: FORMS.patent!,
-    rpt: FORMS.report!,
-    rprt: FORMS.report!,
-    data: FORMS.dataset!,
-    stan: FORMS.standard!,
-  },
+  ris: RIS,
+  "endnote-tagged": ENDNOTE,
+  "endnote-xml": ENDNOTE,
+  noteexpress: ENDNOTE,
   bibtex: {
     article: FORMS["journal-article"]!,
     inproceedings: FORMS["proceedings-article"]!,

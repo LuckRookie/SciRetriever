@@ -26,6 +26,10 @@ import {
   type IntakeLookupSummary,
   type MetadataObservation,
   ContractValidationError,
+  decodeBibliographyBytes,
+  detectBibliographyFormat,
+  ENDNOTE_FAMILY_FORMATS,
+  INTAKE_BIBLIOGRAPHY_FORMATS,
   emptyIntakeAnnotationReasons,
   INTAKE_ANNOTATION_REASONS,
   type Asset,
@@ -66,7 +70,6 @@ import { IntakeWithdrawalService } from "../literature/intake-withdrawal.js";
 import { importAdapters } from "../literature/import-adapters.js";
 import { SOURCE_TYPE_MAPPING_VERSION } from "../literature/metadata-types.js";
 import {
-  bibliographyText,
   type BibliographyInputFormat,
   type BibliographyImportResult,
 } from "../literature/bibliography-import.js";
@@ -684,7 +687,9 @@ export class ImportSessionService extends ImportSessionReadService {
     importInteger(sequence, IMPORT_LIMITS.parts - 1);
     const s = await this.stored(id);
     if (
-      ["bibtex", "biblatex", "ris", "csl-json", "lookup"].includes(s.format) &&
+      ([...INTAKE_BIBLIOGRAPHY_FORMATS, "lookup"] as string[]).includes(
+        s.format,
+      ) &&
       typeof data !== "string"
     )
       throw new ImportSessionError("intake-input-invalid");
@@ -3282,13 +3287,19 @@ export class ImportSessionService extends ImportSessionReadService {
     );
     return pending;
   }
+  /**
+   * `format` null: recognized from the file name, else the content (6.4.14).
+   * EndNote and NoteExpress files that are not UTF-8 are read as GB18030;
+   * the other formats keep their strict decoding.
+   */
   importBibliography(
     bytes: Uint8Array,
-    format: BibliographyInputFormat,
+    requested: BibliographyInputFormat | null,
     fileName: string | null,
     origin: "web" | "cli" | "mcp",
   ): Promise<BibliographyImportResult> {
     return this.tracked(async () => {
+      let format = requested ?? ("ris" as BibliographyInputFormat);
       const rejected = (reason: string): BibliographyImportResult => ({
         format,
         items: [
@@ -3303,12 +3314,23 @@ export class ImportSessionService extends ImportSessionReadService {
       });
       if (bytes.byteLength > IMPORT_LIMITS.request_bytes)
         return rejected("input-too-large");
-      let text: string;
+      let decoded: ReturnType<typeof decodeBibliographyBytes>;
       try {
-        text = bibliographyText(bytes);
+        decoded = decodeBibliographyBytes(bytes);
       } catch {
+        if (requested === null)
+          throw new ImportSessionError("intake-format-unsupported");
         return rejected("malformed-document");
       }
+      const text = decoded.text;
+      const chosen = requested ?? detectBibliographyFormat(fileName, text);
+      if (!chosen) throw new ImportSessionError("intake-format-unsupported");
+      format = chosen;
+      if (
+        decoded.encoding === "gb18030" &&
+        !(ENDNOTE_FAMILY_FORMATS as readonly string[]).includes(format)
+      )
+        return rejected("malformed-document");
       if (
         canonicalJsonBytes({ import_data: text }).byteLength >
         IMPORT_LIMITS.request_bytes

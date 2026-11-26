@@ -12,12 +12,20 @@ import {
   type MetadataObservation,
   type LiteratureMetadata,
 } from "@sciretriever/contracts";
+import {
+  parseEndnoteTagged,
+  parseEndnoteXml,
+  parseNoteExpress,
+} from "./endnote-import.js";
 
 export type BibliographyInputFormat =
   | "bibtex"
   | "biblatex"
   | "ris"
-  | "csl-json";
+  | "csl-json"
+  | "endnote-tagged"
+  | "endnote-xml"
+  | "noteexpress";
 export type BibliographyItemStatus = "decoded" | "rejected";
 export interface BibliographyDecodeItem {
   readonly record_index: number;
@@ -253,15 +261,29 @@ function identifiers(fields: Fields): readonly Identifier[] {
   return result;
 }
 
+/** EndNote-family lists (6.4.14): already split by their own rules. */
+function listField(value: string | undefined): readonly string[] | null {
+  if (value === undefined) return null;
+  const parsed: unknown = JSON.parse(value);
+  if (!Array.isArray(parsed) || parsed.some((v) => typeof v !== "string"))
+    throw new TypeError("list field is invalid");
+  return parsed.map((v) => text(v)).filter((v): v is string => v !== null);
+}
+function keywordsOf(fields: Fields): readonly string[] {
+  return listField(fields.__keywords) ?? splitKeywords(fields.keywords);
+}
+
 function metadata(
   fields: Fields,
   sourceType: string | null,
   format: BibliographyInputFormat,
 ): LiteratureMetadata {
   const date = publicationDate(fields.date);
+  const named = listField(fields.__authors);
   return {
     title: text(fields.title),
-    authors: authors(fields.author),
+    // “姓, 名” is split at the comma; a name without one stays whole.
+    authors: named ? named.map((name) => author(name)) : authors(fields.author),
     abstract: text(fields.abstract),
     publication_date: date.date,
     publication_year: year(fields.year) ?? date.year,
@@ -279,7 +301,7 @@ function metadata(
     issue: first(fields.number, fields.issue),
     pages: text(fields.pages),
     identifiers: identifiers(fields),
-    keywords: splitKeywords(fields.keywords),
+    keywords: keywordsOf(fields),
     subject_terms: [],
   };
 }
@@ -314,7 +336,7 @@ function observation(
     version_links: identifier
       ? [{ record_id: null, identifiers: [identifier] }]
       : [],
-    declared_keywords: splitKeywords(fields.keywords),
+    declared_keywords: keywordsOf(fields),
     reference_texts: [],
     reference_count: null,
     cited_by_count: null,
@@ -828,6 +850,9 @@ function parseFields(
 ): readonly ParsedFields[] {
   if (format === "bibtex" || format === "biblatex") return parseBibtex(source);
   if (format === "ris") return parseRis(source);
+  if (format === "endnote-tagged") return parseEndnoteTagged(source);
+  if (format === "noteexpress") return parseNoteExpress(source);
+  if (format === "endnote-xml") return parseEndnoteXml(source);
   return parseCsl(source);
 }
 

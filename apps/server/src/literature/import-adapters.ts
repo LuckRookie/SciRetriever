@@ -63,6 +63,7 @@ export function bibliographyAdapter(
           format === "bibtex" || format === "biblatex",
           sequence,
           item.record_index,
+          format === "endnote-tagged" || format === "endnote-xml",
         );
         for (const e of attachments.excluded)
           excluded.set(e.kind, (excluded.get(e.kind) ?? 0) + e.count);
@@ -98,9 +99,17 @@ export function importAdapters(
 ): ReadonlyMap<string, ImportAdapter> {
   const adapters: ImportAdapter[] = [
     nativeImportAdapter,
-    ...(["bibtex", "biblatex", "ris", "csl-json"] as const).map(
-      bibliographyAdapter,
-    ),
+    ...(
+      [
+        "bibtex",
+        "biblatex",
+        "ris",
+        "csl-json",
+        "endnote-tagged",
+        "endnote-xml",
+        "noteexpress",
+      ] as const
+    ).map(bibliographyAdapter),
     webPageAdapter,
     lookupAdapter,
     zoteroAdapter,

@@ -2,6 +2,7 @@ import { guardRuntimeMethods } from "../application/restart-admission.js";
 import type { Application } from "../bootstrap/application.js";
 import {
   ContractValidationError,
+  isIntakeBibliographyFormat,
   IMPORT_LIMITS,
   parseLiteratureId,
 } from "@sciretriever/contracts";
@@ -109,7 +110,8 @@ export function createMetadataOperations(app: Application) {
       );
     },
     importBibliography: async (value: unknown) => {
-      const r = inputRecord(value, ["format", "content"], ["file_name"]);
+      // format may be left out: recognized from file_name, else the content (6.4.14).
+      const r = inputRecord(value, ["content"], ["format", "file_name"]);
       if (
         r.file_name !== undefined &&
         r.file_name !== null &&
@@ -120,12 +122,14 @@ export function createMetadataOperations(app: Application) {
         throw new ContractValidationError();
       if (
         typeof r.content !== "string" ||
-        !["bibtex", "biblatex", "ris", "csl-json"].includes(r.format as string)
+        (r.format !== undefined &&
+          r.format !== null &&
+          !isIntakeBibliographyFormat(r.format))
       )
         throw new ContractValidationError();
       return app.importSessions.importBibliography(
         new TextEncoder().encode(r.content),
-        r.format as BibliographyInputFormat,
+        (r.format ?? null) as BibliographyInputFormat | null,
         (r.file_name ?? null) as string | null,
         intakeOrigin(),
       );
