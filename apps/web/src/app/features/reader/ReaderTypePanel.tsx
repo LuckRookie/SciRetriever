@@ -13,6 +13,7 @@ import {
   Switch,
 } from "../../components/index.js";
 import { THEMES, type Theme } from "../../data/preferences.js";
+import { layerStrings } from "../../strings.js";
 import {
   LEADING_LABELS,
   MEASURE_LABELS,
@@ -87,6 +88,7 @@ export function ReaderTypePanel({
   theme,
   onTheme,
   keySentences,
+  keyTerms = false,
   onKeySentences,
   sources,
   onSources,
@@ -107,6 +109,8 @@ export function ReaderTypePanel({
   theme: Theme;
   onTheme: (value: Theme) => void;
   keySentences: boolean;
+  /** A paper with reading layers: the switch marks their key terms (spec 3.3.2). */
+  keyTerms?: boolean;
   onKeySentences: (value: boolean) => void;
   /** “显示核对依据”: null where there is nothing to check (outside the full text). */
   sources: boolean | null;
@@ -268,7 +272,7 @@ export function ReaderTypePanel({
         </div>
         <div className="reader-type-switches">
           <Switch isSelected={keySentences} onChange={onKeySentences}>
-            标出关键句
+            {keyTerms ? layerStrings.keys : "标出关键句"}
           </Switch>
           {sources !== null ? (
             <Switch isSelected={sources} onChange={onSources}>

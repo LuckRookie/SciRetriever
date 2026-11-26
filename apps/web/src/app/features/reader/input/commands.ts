@@ -72,6 +72,16 @@ const alt = (code: string, label: string, shift = false): KeyChord => ({
 });
 export const COMMANDS = {
   // 视图与比例
+  "view-overview": {
+    group: "view",
+    labels: ["切换到概览"],
+    keys: [alt("Digit1", "1")],
+  },
+  "view-outline": {
+    group: "view",
+    labels: ["切换到脉络"],
+    keys: [alt("Digit2", "2")],
+  },
   "view-doc": {
     group: "view",
     labels: ["切换到全文"],

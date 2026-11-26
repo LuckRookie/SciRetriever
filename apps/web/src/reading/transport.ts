@@ -21,6 +21,7 @@ import type { ReadingContext } from "./contract.js";
 import type { FixedSource } from "./source.js";
 import { prefetchPdf as prefetchPdfStart } from "./pdf-bytes.js";
 import { remember } from "./session-cache.js";
+import { takeLayers } from "./layers/contract.js";
 
 const operations: Record<DocumentReadOperation, string> = {
   default: "document-default",
@@ -73,7 +74,13 @@ export async function readDocument<K extends DocumentReadOperation>(
     return cached.value as DocumentReadResultMap[K];
   }
   const reply = await ctx.api.query(operations[kind], request, ctx.signal);
-  const value = parseDocumentReadResult(kind, reply.result, request);
+  // `describe.layers` (technical 04 §10.7) is read by the reading layers;
+  // the contracts package's describe parser does not know it yet.
+  const result =
+    kind === "describe"
+      ? takeLayers(reply.result as Record<string, unknown>).rest
+      : reply.result;
+  const value = parseDocumentReadResult(kind, result, request);
   if (key)
     versionReadSize = remember(
       versionReads,

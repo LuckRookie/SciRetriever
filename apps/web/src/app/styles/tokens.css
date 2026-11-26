@@ -67,6 +67,17 @@
     /* The spine's parts: the two lightest greys (plan 25 block 30). */
     --reader-spine-a: var(--line);
     --reader-spine-b: var(--line2);
+    /* The reading layers (design core “阅读页”, ADR 0069): the words of an
+       evidence line that are not the evidence, the brace of the outline and
+       the bar of a group of evidence, the crease where lines are folded, and
+       the key terms' rule at rest (a dotted one where colour is not used). */
+    --reader-context: var(--fg3);
+    --reader-key-rule: transparent;
+    --reader-key-rule-style: solid;
+    --brace: rgb(var(--ink-rgb) / 0.38);
+    --crease: var(--line2);
+    /* The top bar's segmented track for the layers: sunk below the bar. */
+    --seg-track: rgb(var(--ink-rgb) / 0.06);
     --space-1: 4px;
     --space-2: 8px;
     --space-3: 12px;
@@ -159,6 +170,10 @@
     --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.2), 0 3px 10px rgba(0, 0, 0, 0.18);
     --shadow-pop: 0 5px 18px rgba(0, 0, 0, 0.4);
     --shadow-modal: 0 16px 48px rgba(0, 0, 0, 0.45);
+    /* At night an ink tint lifts the track to the raised thumb's colour: the
+       paper sinks it instead; and the lightest hairline is the crease. */
+    --seg-track: var(--bg);
+    --crease: var(--line);
   }
   /* 纸墨（默认白天）. `data-theme-preview` lets a preview card in “设置 →
      外观” wear a theme that is not the page's. */
@@ -205,6 +220,7 @@
     --reader-pen-soft: rgba(59, 82, 155, 0.55);
     --reader-tick-evidence: #f0c41e;
     --reader-check-fail: #9a3a32;
+    --reader-key: #8a5516;
   }
   /* 旧书 */
   :root[data-theme="oldbook"],
@@ -250,6 +266,7 @@
     --reader-pen-soft: rgba(58, 79, 140, 0.55);
     --reader-tick-evidence: #d9a816;
     --reader-check-fail: #96392c;
+    --reader-key: #7f4d14;
   }
   /* 宣纸：石青作笔，藤黄作荧光，朱印作标志 */
   :root[data-theme="xuan"],
@@ -295,6 +312,7 @@
     --reader-pen-soft: rgba(42, 100, 120, 0.55);
     --reader-tick-evidence: #dca51a;
     --reader-check-fail: #a5372a;
+    --reader-key: #85501a;
   }
   /* 豆绿 */
   :root[data-theme="bean"],
@@ -340,6 +358,7 @@
     --reader-pen-soft: rgba(50, 90, 140, 0.55);
     --reader-tick-evidence: #e2b81c;
     --reader-check-fail: #94392f;
+    --reader-key: #8a4f1c;
   }
   /* 墨水屏：没有彩色，笔也是墨色，荧光是灰带 */
   :root[data-theme="eink"],
@@ -385,6 +404,10 @@
     --reader-pen-soft: rgba(44, 44, 42, 0.55);
     --reader-tick-evidence: #7a7974;
     --reader-check-fail: #7d3a33;
+    /* No colour: a key term is told by a dotted rule, not by its ink. */
+    --reader-key: var(--fg);
+    --reader-key-rule: rgb(var(--ink-rgb) / 0.55);
+    --reader-key-rule-style: dotted;
   }
   /* 夜读（默认夜里） */
   :root[data-theme="dark"],
@@ -430,6 +453,7 @@
     --reader-pen-soft: rgba(159, 176, 236, 0.6);
     --reader-tick-evidence: #e6c34a;
     --reader-check-fail: #f2726a;
+    --reader-key: #d39a4e;
   }
   /* 烛光：琥珀色的字与笔，蓝光最少 */
   :root[data-theme="candle"],
@@ -475,5 +499,6 @@
     --reader-pen-soft: rgba(224, 179, 106, 0.6);
     --reader-tick-evidence: #c99a45;
     --reader-check-fail: #ee8070;
+    --reader-key: #d08d4c;
   }
 }

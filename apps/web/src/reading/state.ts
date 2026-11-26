@@ -85,6 +85,8 @@ export interface ReadingMemory {
   sideTab: string | null;
   keySentences: boolean | null;
   sources: boolean | null;
+  /** The reading layer last rested in (ADR 0069): 0 概览, 1 脉络, 2 全文. */
+  layer: number | null;
 }
 export const READING_MEMORY_LIMIT = 300;
 const PREFIX = "sciretriever:reading:v1:";
@@ -99,6 +101,7 @@ const emptyMemory = (): ReadingMemory => ({
   sideTab: null,
   keySentences: null,
   sources: null,
+  layer: null,
 });
 type Store = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 /** Local storage, or null where the browser refuses it: reading still works, unremembered. */

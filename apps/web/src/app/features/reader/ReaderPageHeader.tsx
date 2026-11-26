@@ -9,7 +9,22 @@ import type {
   DocumentTextMode,
   PdfControls,
 } from "../../../reading/contract.js";
-import { fullTextStrings } from "../../strings.js";
+import { fullTextStrings, layerStrings } from "../../strings.js";
+
+/** The 鱼尾 of a block-printed page's fold: the one book mark on the page (spec 1.2). */
+function Yuwei() {
+  return (
+    <svg
+      className="reader-page-header-yuwei"
+      width="10"
+      height="8"
+      viewBox="0 0 10 8"
+      aria-hidden="true"
+    >
+      <path d="M0 0H10V8L5 4.5L0 8Z" />
+    </svg>
+  );
+}
 
 /**
  * Spec 1.2: where the paper comes from. A journal paper: “《刊名》年, 卷(期):
@@ -49,6 +64,7 @@ function ViewText({
   reading,
   scaleText,
   pageEdit,
+  layer,
 }: {
   kind: "doc" | "pdf";
   pdf: PdfControls | null;
@@ -56,6 +72,7 @@ function ViewText({
   reading: DocumentTextMode;
   scaleText: string | null;
   pageEdit: number;
+  layer: HeaderLayer | null;
 }) {
   const [editing, setEditing] = useState(false);
   // `G` and “跳到页码…” put the focus in the page field (spec 1.8.4).
@@ -65,9 +82,20 @@ function ViewText({
   // The reading scale while it is not 100%, or just changed (spec 1.2).
   const [lastScale, setLastScale] = useState(scaleText);
   if (scaleText && scaleText !== lastScale) setLastScale(scaleText);
+  if (kind === "doc" && layer && layer.index < 2)
+    return (
+      <span className="reader-page-header-layer">
+        <Yuwei />
+        {layerStrings.names[layer.index]}
+        {layer.index === 1 ? ` · ${layerStrings.points(layer.points)}` : ""}
+        {` · ${layerStrings.basis(level)}`}
+        {reading === "original" ? "" : ` · ${fullTextStrings.header[reading]}`}
+      </span>
+    );
   if (kind === "doc")
     return (
-      <span>
+      <span className={layer ? "reader-page-header-layer" : undefined}>
+        {layer ? <Yuwei /> : null}
         {fullTextStrings.view}
         {level ? ` · ${level === "draft" ? "未校对" : "已校对"}` : ""}
         {/* Reading-experience 9: a translation says it is one. */}
@@ -129,6 +157,11 @@ function ViewText({
   );
 }
 
+/** The reading layer shown (ADR 0069), for a paper that has them. */
+export interface HeaderLayer {
+  index: 0 | 1 | 2;
+  points: number;
+}
 export interface HeaderLine {
   /** Fades after the next scroll or 8 s; otherwise it stays (spec 1.2). */
   transient: boolean;
@@ -153,6 +186,7 @@ export function ReaderPageHeader({
   scaleText = null,
   pageEdit = 0,
   reading = "original",
+  layer = null,
 }: {
   kind: "doc" | "pdf";
   /** The full text's level, once read (reading-experience 1.2, 3.4). */
@@ -170,6 +204,8 @@ export function ReaderPageHeader({
   pageEdit?: number;
   /** The full text's reading shown (reading-experience 9). */
   reading?: DocumentTextMode;
+  /** The reading layer, for a paper with layers (spec 1.2). */
+  layer?: HeaderLayer | null;
 }) {
   const [faded, setFaded] = useState<HeaderLine | null>(null);
   useEffect(() => {
@@ -218,6 +254,7 @@ export function ReaderPageHeader({
           reading={reading}
           scaleText={scaleText}
           pageEdit={pageEdit}
+          layer={layer}
         />
       </span>
       {shown ? (

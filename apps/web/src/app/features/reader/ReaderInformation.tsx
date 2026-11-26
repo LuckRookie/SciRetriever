@@ -40,7 +40,12 @@ import { navigate } from "../../data/url.js";
 import { titleParts } from "../../../reading/title.js";
 import { useShell } from "../../shell/context.js";
 import { record } from "../../data/wire.js";
-import { errorMessage, statusLabels, shortTime } from "../../strings.js";
+import {
+  errorMessage,
+  layerStrings,
+  statusLabels,
+  shortTime,
+} from "../../strings.js";
 import type { ReaderResourceEntry } from "../../../reading/contract.js";
 import { copyText } from "../../../browser-platform.js";
 import { EvidencePreview } from "./SummaryView.js";
@@ -261,10 +266,16 @@ export function ReaderInformation({
   document,
   resources,
   archivePrimaryElsewhere = false,
+  layers = null,
 }: {
   detail: LiteratureDetail;
   document: DocumentReadingRef | null;
   resources: readonly ReaderResourceEntry[];
+  /**
+   * Spec 1.4, 3.9: the “概览与脉络” row, once the text's description says
+   * whether it has them; `reason` says why not.
+   */
+  layers?: { reason: string | null } | null;
   /** The text area already shows “建立文献档案” as the screen's one primary button. */
   archivePrimaryElsewhere?: boolean;
 }) {
@@ -675,6 +686,11 @@ export function ReaderInformation({
               </p>
             ) : null}
           </Step>
+          {layers ? (
+            <Step state={layers.reason ? "todo" : "done"}>
+              {layerStrings.material}：{layers.reason ?? layerStrings.present}
+            </Step>
+          ) : null}
         </ul>
         <ul className="reader-relation-list">
           {relations

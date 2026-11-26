@@ -98,6 +98,7 @@ export const archiveStrings = {
     proofread: "校订",
     render: "全文发布",
     translate: "翻译",
+    layers: "分层",
     document: "全文发布（旧流程）",
     structure: "章节结构（旧流程）",
     metadata: "元数据",
@@ -165,6 +166,10 @@ export function problemPhrase(code: string): string | null {
         "metadata-missing": "书目缺少必填项",
         "translation-incomplete": "有段落没有译文",
         "translation-unavailable": "翻译时模型不可用",
+        // Technical 04 §10.3, §10.5.
+        "layers-incomplete": "概览与脉络的要点太少",
+        "layers-unavailable": "分层时模型不可用",
+        "layers-translation-incomplete": "概览与脉络没有译文",
       } as Record<string, string>
     )[code] ?? null
   );
@@ -190,7 +195,13 @@ export function translationIssueHint(code: string): string | null {
     ? "全文照常可读，没有译文的段落显示原文。继续解析全文只补这些段落。"
     : code === "translation-unavailable"
       ? "全文照常可读，这篇还没有完整的译文。确认模型可用后继续解析全文即可补上。"
-      : null;
+      : code === "layers-incomplete"
+        ? "全文照常可读，这篇没有概览与脉络：核对后留下的要点太少。继续解析全文会重做分层。"
+        : code === "layers-unavailable"
+          ? "全文照常可读，这篇还没有概览与脉络。确认模型可用后继续解析全文即可补上。"
+          : code === "layers-translation-incomplete"
+            ? "概览与脉络照常可读，只有原文一种读法。继续解析全文会补上它们的译文。"
+            : null;
 }
 
 /**
@@ -334,6 +345,65 @@ export const fullTextStrings = {
   settingsLanguageHelp:
     "在配置文件的 [translation] 一节改 target_language，重启服务后生效。只影响以后的解析全文，已有的译文保留。",
 } as const;
+/**
+ * The reading layers (reading-experience 3.1–3.3.3, 3.8, 3.9; ADR 0069):
+ * 概览, 脉络 and 全文 are one page folded three ways.
+ */
+export const layerStrings = {
+  names: ["概览", "脉络", "全文"] as const,
+  /** What the page header says the layer rests on (spec 1.2). */
+  basis: (level: "draft" | "proofread" | null) =>
+    level === "draft" ? "基于未校对的全文" : "基于已校对的全文",
+  points: (count: number) => `要点 ${count} 项`,
+  digest: "提要",
+  digestKinds: {
+    nature: "这是一份什么资料",
+    limits: "局限与未决事项",
+    advice: "精读建议",
+  },
+  notGiven: "原文未给出",
+  folded: (lines: number) => `${lines} 行`,
+  expand: "展开这一段",
+  collapse: "收起",
+  marks: (count: number) => `批注 ${count}`,
+  evidence: (count: number) => `证据 ${count}`,
+  farther: "远一层",
+  nearer: "近一层",
+  view: (name: string) => `切换到${name}`,
+  keys: "标出重点词",
+  /** The view switch's group, for assistive technology. */
+  group: "阅读层",
+  /** The information panel's “概览与脉络” row (spec 1.4, 3.9). */
+  material: "概览与脉络",
+  present: "有",
+  /** One line under the page header when the layers belong to an older text (spec 3.1). */
+  staleLine: "全文改过，概览与脉络还没有更新；再解析一次全文即可更新。",
+  ready: "概览与脉络已可用。",
+  /** 译文 and 对照 in a paper whose layers have no translation part (spec 3.4.1). */
+  noTranslation: "这篇的概览与脉络没有译文；再解析一次全文即可补上",
+  readFailed: "概览与脉络没有读到，按全文显示。",
+} as const;
+/**
+ * Why a paper has no 概览 and 脉络 (reading-experience 3.9, 3.8): before
+ * the full text is parsed or while it is a draft; a proofread text parsed
+ * before layering was a step (or the step failed); the text edited since; a
+ * long document; too short. Null when there are layers to read.
+ */
+export function layersUnavailable(
+  state: "none" | "complete" | "stale" | "not-applicable" | null,
+  reason: "long-document" | "too-short" | null,
+  level: TextLevel | null,
+): string | null {
+  if (state === "complete") return null;
+  if (state === "stale") return "全文改过，概览与脉络还没有更新";
+  if (state === "not-applicable")
+    return reason === "too-short"
+      ? "这篇太短，不提供概览与脉络"
+      : "长文档暂不提供概览与脉络";
+  if (level === "proofread")
+    return "这篇解析全文时还没有产生概览与脉络；再解析一次全文即可补上";
+  return "概览与脉络在解析全文时产生";
+}
 /**
  * Why “译文” and “对照” cannot be chosen (reading-experience 9): no
  * translation yet — before the full text is parsed, or for a proofread text
@@ -631,6 +701,7 @@ export function estimateStageName(kind: string) {
         proofread: "校订",
         render: "全文发布",
         translate: "翻译",
+        layers: "分层",
         references: "引用关系",
         structure: "结构",
         metadata: "元数据",
