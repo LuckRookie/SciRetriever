@@ -36,7 +36,9 @@ post "/batches/$BID/preview" "$WORK_DIR/empty.json"
 
 ## 使用者给的是书目导出文件
 
-支持的格式：`bibtex`、`biblatex`、`ris`、`csl-json`、`endnote-tagged`（EndNote 的 `.enw`，知网、万方、维普的“EndNote”导出 `.txt`）、`endnote-xml`（EndNote 的 `.xml`）、`noteexpress`（`.net`，知网的“NoteExpress”导出 `.txt`）。按扩展名选；`.txt`、`.xml` 看第一行：`%0 ` 开头是 `endnote-tagged`，`{Reference Type}:` 开头是 `noteexpress`，`<xml><records>` 是 `endnote-xml`；对不上的告诉使用者不支持，不要改写成别的格式。除 CSL JSON 外，文件不是 UTF-8 时按 GB18030 读成文字再交。文件里的附件路径只用来配对同时交来的 PDF，不要去读或上传路径所指的文件。本机的 MCP `import_bibliography` 可以不给 `format`，由文献库按文件名与内容认。
+支持的格式：`bibtex`、`biblatex`、`ris`、`csl-json`、`endnote-tagged`（EndNote 的 `.enw`，知网、万方、维普的“EndNote”导出 `.txt`）、`endnote-xml`（EndNote 的 `.xml`）、`noteexpress`（`.net`，知网的“NoteExpress”导出 `.txt`）。按扩展名选；`.txt`、`.xml` 看第一行：`%0 ` 开头是 `endnote-tagged`，`{Reference Type}:` 开头是 `noteexpress`，去掉开头的 BOM 与 `<?xml … ?>` 声明后以 `<xml>` 开头、下面是 `<records>` 的是 `endnote-xml`；对不上的告诉使用者不支持，不要改写成别的格式。除 CSL JSON 外，文件不是 UTF-8 时按 GB18030 读成文字再交。文件里的附件路径只用来配对同时交来的 PDF，不要去读或上传路径所指的文件。本机 stdio 版的 MCP 有 `import_bibliography`，可以不给 `format`，由文献库按文件名与内容认；HTTP 版的 `/mcp` 没有这个工具，用本文的 HTTP 入库接口。
+
+批次里只要有被拒收的文件（不是 PDF、加密、损坏），批次的结果就是 `partial`：其余条目照常入库，被拒的文件在报告里各有原因，把原因转告使用者即可，不用重做整批。
 
 ## 使用者点名要某几篇
 

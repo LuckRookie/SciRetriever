@@ -19,7 +19,7 @@ SCRIPT="$SKILL_DIR/scripts/zotero_import.py"
 
 1. **只在第一次或出错时探测**：`python3 "$SCRIPT" --config-dir "$CONFIG_DIR" probe`。输出一份 JSON，只有字段名、类型、计数与枚举值，没有标题、作者、文件名或路径，可以原样交给使用者或维护者。`checks` 里每一项为 `confirmed`、`differs` 或 `unknown`；有 `differs` 时把这份输出交给使用者，先不要导入。
 2. **列出库**：`python3 "$SCRIPT" --config-dir "$CONFIG_DIR" libraries`，每行是库的代号（`user` 或 `group:<编号>`）、名称与条目数。要按分类导入时，再列出分类：`libraries --library <代号>`，每行是分类编号与它的完整路径。把名称给使用者选，用代号与编号运行。
-3. **交数据**：`python3 "$SCRIPT" --config-dir "$CONFIG_DIR" import --library <代号> [--collection <分类编号> ...] [--data-dir <数据文件夹>]`。选了分类时包括它的子分类。程序建批次、分段交条目与分类、把独立 PDF 交上去、触发预览，然后停下，打印批次编号与“找文献”页的地址。
+3. **交数据**：`python3 "$SCRIPT" --config-dir "$CONFIG_DIR" import --library <代号> [--collection <分类编号>]…（要几个分类就写几次 `--collection`，每次一个编号） [--data-dir <数据文件夹>]`。选了分类时包括它的子分类。程序建批次、分段交条目与分类、把独立 PDF 交上去、触发预览，然后停下，打印批次编号与“找文献”页的地址。
 4. **把地址交给使用者**，请他在“找文献”的批次记录里打开这个批次，看预览、做决定、确认。**等他说确认了再继续。**
 5. **传文件**：`python3 "$SCRIPT" --config-dir "$CONFIG_DIR" files [--data-dir <数据文件夹>]`。只上传文献库待交清单里的文件：先用 Zotero 接口给出的文件，再找数据文件夹里的 `storage/<附件编号>/`；找不到就计为未交并按原因汇总，不猜。
 6. **报告**：把程序的摘要（成功数、未交数及原因）告诉使用者；结果以批次报告为准（[import.md](import.md)“结束与报告”）。还有未交的文件时，由使用者决定是补齐后重跑 `files`，还是在网页上结束批次。
