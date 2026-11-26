@@ -1793,11 +1793,11 @@ IntakeRestorePreview               # 整批恢复之前，不写库
 | `noteexpress`    | `.net`，或知网导出的 `.txt` | 第一个非空行以 `{Reference Type}:` 开头 |
 | `endnote-xml`    | `.xml`                      | 根元素是 `xml`，下面有 `records`        |
 
-- **认格式**：网页的文件导入与 `import_bibliography` 先看扩展名，扩展名是 `.txt`、`.xml` 或认不出时看内容的开头。认不出的照旧拒绝并说明支持哪些格式。
-- **编码**：按 UTF-8 读（去掉开头的 BOM）；不是合法的 UTF-8 时按 GB18030 读。
+- **认格式**：网页的文件导入、CLI 与 `import_bibliography` 先看扩展名，扩展名是 `.txt`、`.xml` 或认不出时看内容的开头；第一个非空行以 `TY  -` 开头的 `.txt` 认作 RIS（知网的 RIS 导出是 `.txt`）。认不出的返回 `intake-format-unsupported` 并说明支持哪些格式。规则只有一份实现，在 contracts 包里，服务端与网页共用。
+- **编码**：读文件字节的入口（网页的文件导入、CLI）按 UTF-8 读（去掉开头的 BOM）；不是合法的 UTF-8 时按 GB18030 读。这条规则对 BibTeX、BibLaTeX、RIS 同样适用；CSL JSON 只接受 UTF-8。XML 里写的 `encoding` 声明不看。MCP 的 `content` 是调用方已经解码的文字，不经这一步。
 - **一条记录**：`endnote-tagged` 从 `%0` 行开始到下一个 `%0` 行之前；`noteexpress` 从 `{Reference Type}:` 行开始到下一个这样的行之前；`endnote-xml` 是一个 `record` 元素。没有标题、也没有标识的记录按 6.4.1 的最低条件拒绝。
 - **续行**：`endnote-tagged` 与 `noteexpress` 里不以标记开头的行接在上一个字段后面（摘要、关键词常见）。
-- **`endnote-xml` 的文字**：字段的文字可能包在 `style` 元素里，取其中的文字并按顺序接起来。
+- **`endnote-xml` 的文字**：字段的文字可能包在 `style` 元素里，取其中的文字并按顺序接起来。解析有上限（8,000,000 个字符、32 层、400,000 个元素），带 `DOCTYPE` 的文件拒绝，不展开自定义实体。
 
 字段对应：
 
@@ -1811,7 +1811,7 @@ IntakeRestorePreview               # 整批恢复之前，不写库
 | 卷、期、页码 | `%V`、`%N`、`%P`  | `{Volume}`、`{Issue}`、`{Pages}`        | `volume`、`number`、`pages`                              |
 | 出版者       | `%I`              | `{Publisher}`                           | `publisher`                                              |
 | DOI          | `%R`              | `{DOI}`                                 | `electronic-resource-num`                                |
-| ISSN、ISBN   | `%@`              | `{ISSN}`、`{ISBN}`                      | `isbn`                                                   |
+| ISSN、ISBN   | `%@`              | `{ISSN}`、`{ISBN}`、`{ISBN/ISSN}`       | `isbn`                                                   |
 | 网址         | `%U`              | `{URL}`                                 | `urls/related-urls/url`                                  |
 | 摘要         | `%X`              | `{Abstract}`                            | `abstract`                                               |
 | 关键词       | `%K`              | `{Keywords}`                            | `keywords/keyword`                                       |
@@ -1819,10 +1819,11 @@ IntakeRestorePreview               # 整批恢复之前，不写库
 | 附件         | `%>`              | 不读                                    | `urls/pdf-urls/url`                                      |
 
 - **类型**按 RIS 适配器已有的对应表归到同一组取值（期刊文章、学位论文、会议论文、图书、图书章节、报告、专利、标准）；认不出的类型不填，不拒绝。学位论文的学校取出版者字段。
-- **作者**：一个字段里有分号时按分号拆成几位。写成“姓, 名”的按逗号分出姓与名；没有逗号的整个作为显示名，不拆姓名（中文姓名属于这一种）。
+- **作者**：一个字段里有分号时按分号拆成几位。写成“姓, 名”的按逗号分出姓与名；没有逗号的整个作为显示名，不拆姓名（中文姓名属于这一种）；全角逗号不算分隔。
 - **关键词**：按分号（全角或半角）与换行拆开，去掉首尾空白与重复。
+- **ISSN 与 ISBN** 写在同一个字段里时按号码的形状区分。
 - **DOI 与网址**：按 6.4.6 的规范化处理；网址里能认出 DOI 的取 DOI。
-- **附件**：只取文件名，供同时拖入的 PDF 配对（6.4.3）。`endnote-xml` 的 `internal-pdf://<目录>/<文件名>` 取“目录/文件名”，按“编号/文件名”的方式比较。不读、不上传路径所指的文件。
+- **附件**：只取文件名，供同时拖入的 PDF 配对（6.4.3）。`endnote-xml` 的 `internal-pdf://<目录>/<文件名>` 取“目录/文件名”，按“编号/文件名”的方式比较。同一批里两条记录引用同一个“目录/文件名”时，第一条保留这个引用，后面的记录不带它。不读、不上传路径所指的文件。
 - **不导入的**：导师（`%Y`、`{Tertiary Author}`）、作者单位、数据库名、馆藏号、笔记。不计数。
 
 ## 7. 材料与文献验证
