@@ -19,7 +19,13 @@ it("recognizes PDFs by name or content, exports by the contract's rules, and not
     { file: file("library.bib", "@article{a,title={A}}"), path: null },
     { file: file("export.txt", "TY  - JOUR\nTI  - A\nER  - \n"), path: null },
     // An export by its name: the contract reads `.json` as CSL JSON.
-    { file: file("items.json", '{"items": []}'), path: null },
+    {
+      file: file(
+        "items.json",
+        '[{"type":"article-journal","title":"A title"}]',
+      ),
+      path: null,
+    },
     // No extension: the opening tells the format.
     { file: file("cnki", "\n%0 Journal Article\n%T A\n"), path: null },
     { file: file("notes.txt", "salt, flour"), path: null },
