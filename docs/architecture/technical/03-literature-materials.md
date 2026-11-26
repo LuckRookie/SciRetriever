@@ -1764,7 +1764,7 @@ IntakeRestorePreview               # 整批恢复之前，不写库
 
 目标，尚未实现（计划 28 的 17 块）。依据 [ADR 0057](../decisions/0057-zotero-import-and-browser-capture.md) 第 3 节；批注本身的模型见[用户整理](09-user-organization.md)。Zotero 的批注数据结构只按公开的格式写成，没有在真实的 Zotero 上核对过。
 
-- **从哪里来**：`zotero-api` 的数据里，批注是 `itemType` 为 `annotation` 的条目，`parentItem` 指向它所在的附件。适配器把它们收进所属条目的首选附件之下；挂在其他附件上的批注只计数（`annotation-other-file`）。
+- **从哪里来**：`zotero-api` 的数据里，批注是 `itemType` 为 `annotation` 的条目，`parentItem` 指向它所在的附件。适配器把它们收进所属条目的首选附件之下；挂在其他附件上的批注只计数（`annotation-other-file`）。独立 PDF（没有父条目的附件）上的批注首版不导入，在“不导入的内容”里计 `annotation-standalone-file`。
 - **什么时候导入**：只在 Zotero 的那个附件与本系统里这篇文献的主 PDF 逐字节相同时导入。判断用文件的 sha256：附件的文件交来并成为主 PDF，或交来的文件与已有主 PDF 的 sha256 相同。不同（`pdf-differs`）或文件没有交来（`file-missing`）时，这个附件上的批注全部不导入，只计数。
 - **导入哪几种**：
 
@@ -1777,9 +1777,11 @@ IntakeRestorePreview               # 整批恢复之前，不写库
 - **位置**：`annotationPosition` 里的 `pageIndex` 与 `rects`（PDF 的坐标，原点在左下，单位是点）按这一页的页面框换成本系统的坐标（原点在左上）：先减去裁切框的偏移，再按页面的旋转角换算。页码超出范围、没有矩形、矩形落在页面之外的不导入，计数 `position-invalid`；不猜位置。
 - **颜色**：按 `annotationColor` 就近归到本系统的五种：黄、橙归黄；红归红；绿归绿；蓝、灰归蓝；紫、洋红归紫。认不出的颜色归蓝。
 - **评论**：`annotationComment` 导成笔记。超过 20,000 个字符的批注不导入，计数 `comment-too-long`。
+- **原文**：高亮的原文为空或超过批注写入接口的上限（4,000 个字符）时不导入，计数 `quote-invalid`。Zotero 不给前后文，导入的批注前后文为空，文本变化时只靠原文重新定位。
+- **页面框**：由读 PDF 的工具取得；读不出（超时等）时这个文件上的批注都计 `position-invalid`，不重试。
 - **再次导入**：每条导入的批注记下它的外部编号（来源编号加 Zotero 的批注编号）。再次导入时外部编号已经导入过的不再创建，计数 `already-imported`；使用者在本系统里改过或删除的批注不被覆盖、不被恢复。
-- **写入与批次**：经批注的现有写入接口创建，与使用者自己的批注用同一套规则（原文与前后文、文本变化时的重新定位）。创建时在同一事务里登记到入库批次的对象里。撤回批次时，本批导入且之后没有被动过的批注一并移除；动过的保留（6.4.11）。
-- **预览与报告**：批注数改为实际值：能导入的条数，以及不能导入的各原因的条数（`unsupported-kind`、`annotation-other-file`、`pdf-differs`、`file-missing`、`position-invalid`、`comment-too-long`、`already-imported`）。
+- **写入与批次**：经批注的现有写入接口创建，与使用者自己的批注用同一套规则（原文与前后文、文本变化时的重新定位）。创建时在同一事务里登记到入库批次的对象里。撤回批次时，本批导入且之后没有被动过的批注随文献一并移除；一篇文献有导入后被改过的批注时，它按 `annotated` 的原因整篇保留（6.4.11）。使用者删掉的导入批注不算动过。
+- **预览与报告**：批注数改为实际值：能导入的条数，以及不能导入的各原因的条数（`unsupported-kind`、`annotation-other-file`、`pdf-differs`、`file-missing`、`position-invalid`、`comment-too-long`、`quote-invalid`、`already-imported`），字段为 `annotations.importable`、`annotations.imported` 与 `annotations.by_reason`。批次结束时文件仍没有交来的计 `file-missing`。
 
 #### 6.4.14 EndNote 与 NoteExpress 的导出文件
 
