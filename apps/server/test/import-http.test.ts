@@ -7,13 +7,19 @@ import {
   DEVICE_PURPOSES,
   parseDeviceConnectionCode,
   type DevicePurpose,
+  parseIntakeCreate,
+  parseIntakeDecision,
 } from "@sciretriever/contracts";
 import { createApplication } from "../src/bootstrap/application.js";
 import { createMetadataOperations } from "../src/entry/metadata-operations.js";
 import { deviceBusinessRoutes } from "../src/bootstrap/device-routes.js";
 import { startWorkbenchHttp } from "../src/workbench/http.js";
 import { ProductionWorkbenchSession } from "../src/workbench/production-session.js";
-import { importInterface } from "../src/workbench/import-http.js";
+import {
+  importInterface,
+  INTAKE_CREATE_EXAMPLES,
+  INTAKE_DECISION_EXAMPLES,
+} from "../src/workbench/import-http.js";
 import {
   FIXTURE_LITERATURE,
   workbenchPdf,
@@ -32,6 +38,38 @@ it("describes metadata-only creation and idempotent, immutable data sequences", 
     "Repeating a sequence with identical data is idempotent; different data is rejected with intake-data-conflict",
   );
   expect(docs.semantics.join(" ")).not.toContain("replaces that part");
+});
+
+it("says what scope is, with complete create requests and every decision shape", () => {
+  const text = importInterface(["file"]).semantics.join(" ");
+  expect(text).toContain("scope is required plain text");
+  expect(text).toContain("usage_estimate");
+  expect(text).toContain(
+    '{"kind":"query","query":{"intake_batch_ids":[batch_id]}}',
+  );
+  for (const example of INTAKE_CREATE_EXAMPLES) {
+    expect(text).toContain(
+      JSON.stringify({ protocol_version: 1, request: example }),
+    );
+    expect(() => parseIntakeCreate(example)).not.toThrow();
+  }
+  const id = "00000000-0000-4000-8000-000000000001";
+  for (const example of INTAKE_DECISION_EXAMPLES) {
+    expect(text).toContain(JSON.stringify(example));
+    const filled = JSON.parse(
+      JSON.stringify(example)
+        .replace("<literature_id>", id)
+        .replace("<candidate_id>", "a".repeat(64)),
+    );
+    expect(() => parseIntakeDecision(filled)).not.toThrow();
+  }
+  // null and an object are refused, as the text says.
+  expect(() =>
+    parseIntakeCreate({ format: "file", source: null, scope: null }),
+  ).toThrow();
+  expect(() =>
+    parseIntakeCreate({ format: "file", source: null, scope: {} }),
+  ).toThrow();
 });
 
 it("shares the exact import handlers between authenticated Web and import-purpose devices without granting other purposes", async () => {

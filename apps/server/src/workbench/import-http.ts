@@ -59,6 +59,35 @@ IntakeSummary = {full_text:{total:number,obtained:number,missing:number,exhauste
 IntakeLookupSummary = {lines:number,recognized:number,existing:number,candidates:number,unrecognized:number,included:number,rejected:number,duplicates:number,pending:number}
 IntakeBatchItem.lookup? = {line:number,text:string,kind:doi|arxiv|pmid|title|null,reason:lookup-unsupported-url|lookup-too-short|lookup-too-long|duplicate-line|null,outcome:pending|recognized|existing|candidates|unrecognized|rejected|duplicate,included:boolean,found:{title:string|null,first_author:string|null,publication_year:number|null,identifiers:{namespace:string,value:string}[]}|null}`;
 const errorStatuses: Readonly<Record<string, number>> = INTAKE_ERROR_STATUSES;
+/** Complete create requests the instructions show; tests parse them. */
+export const INTAKE_CREATE_EXAMPLES = [
+  {
+    format: "file",
+    source: null,
+    scope: "PDFs from the folder papers",
+    file_name: "papers",
+  },
+  {
+    format: "zotero-api",
+    source: {
+      system: "zotero",
+      library_id: "groups/2000001",
+      identity: "global",
+      name: "Group",
+    },
+    scope: "Zotero group, all collections",
+    import_user_tags: true,
+  },
+] as const;
+/** Every decision shape; IDs are placeholders from the item's own lists. */
+export const INTAKE_DECISION_EXAMPLES = [
+  { kind: "merge", literature_id: "<literature_id>" },
+  { kind: "new" },
+  { kind: "candidate", candidate_id: "<candidate_id>" },
+  { kind: "unrecognized" },
+  { kind: "include" },
+  { kind: "exclude" },
+] as const;
 export function importInterface(formats: readonly string[]) {
   return {
     protocol_version: 1,
@@ -84,6 +113,9 @@ export function importInterface(formats: readonly string[]) {
       }),
     ),
     semantics: [
+      `Create: scope is required plain text, 1 to 8192 characters without control characters, that says what this batch brings in words a person reads on the batch page (for example the library and collections chosen, the folder of PDFs, or the export file's name); it is stored and shown, never interpreted, so there is no fixed set of values and null or an object is invalid. source is null for a one-off file, folder or pasted lines, or {system,library_id,identity,name} for a source library. Examples of a complete request: ${INTAKE_CREATE_EXAMPLES.map((e) => JSON.stringify({ protocol_version: 1, request: e })).join(" ; ")}.`,
+      `Decide one item: POST /api/v1/intake/batches/:batch_id/items/:item_id/decide {"protocol_version":1,"request":{"decision":D}} where D is one of ${INTAKE_DECISION_EXAMPLES.map((e) => JSON.stringify(e)).join(", ")}: merge names one of the item's possible_duplicates, candidate one of recognition.candidates, include or exclude an unpaired file or an unrecognized lookup line. Only a kind the item currently lists is accepted, else intake-decision-invalid. The response is the updated IntakeBatchItem with decided_by and decided_at.`,
+      'Usage estimates are a query operation, not part of intake: a device calls the HTTP MCP tool usage_estimate (the Web uses POST /api/v1/query/usage-estimate, the CLI usage estimate) with {"kind":"archive","request":{"selector":S}}. Select by search conditions with S = {"kind":"query","query":LibraryQuery}, for example {"kind":"query","query":{"intake_batch_ids":[batch_id]}} for this batch\'s papers (statuses may list only READY), or by IDs with {"kind":"literatures","literature_ids":[...]} (1 to 10000).',
       "records is a public format for neutral items. When a source has a dedicated adapter, send its original data instead of rewriting it into records.",
       `Single-page capture accepts {page:WebPageData}, never decoded metadata or web-page data segments. The server interprets tags and JSON-LD. Limits: ${WEB_PAGE_LIMITS.meta} meta tags, ${WEB_PAGE_LIMITS.json_ld} JSON-LD blocks, ${WEB_PAGE_LIMITS.json_ld_bytes} UTF-8 bytes per block, ${WEB_PAGE_LIMITS.bytes} canonical JSON bytes in total. Both page operations require an intake device; Web receives intake-device-required.`,
       "Create format=file for standalone PDFs and send file-items before preview. X-Sciretriever-File-Name is percent-encoded UTF-8; optional X-Sciretriever-Relative-Path is a safe relative path used only for pairing. Pairing takes the longest unique path suffix, then a unique filename with equal size when declared. Unpaired files default to exclusion; decide include explicitly to import one.",
