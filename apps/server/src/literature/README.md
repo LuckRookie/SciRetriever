@@ -24,7 +24,9 @@
 
 - [import-adapters.ts](import-adapters.ts)：中性记录、书目格式和网页原始标签的纯适配器登记；decode 只转换输入，不访问时钟、随机数、网络、文件或数据库。[bibliography-attachments.ts](bibliography-attachments.ts) 读取 BibTeX/BibLaTeX file 与 RIS L1，形成首选 PDF 的中性引用、脱敏本机路径并统计未导入附件；CSL JSON 不推断附件。
 - [lookup-adapter.ts](lookup-adapter.ts)：`lookup` 格式的纯适配器：按行切分，依次判断 DOI、arXiv 号、PMID、不支持的网址与标题，太短、太长（规范化后超过 500 个码点）与重复的行给出原因，一段超过 200 个非空行整段拒绝（批次合计的上限由入库批次检查）；每个非空行成为一条，`record_index` 为行号减一，`external_id` 为整理后的原文，条目只带给出的一个标识或标题。
-- [zotero-adapter.ts](zotero-adapter.ts)：`zotero-api` 格式的纯适配器：一段是 Zotero 接口原样返回的条目与分类。书目先经现有 CSL JSON 规则读条目自带的 `csljson`，规则不接受或没有时，按 Zotero 字段组成 CSL 记录再经同一规则；Extra 的 `DOI:`、`arXiv:`、`PMID:` 行补标识。分类成为分组，自动标签成为作者关键词，手动标签成为用户标签；首选 PDF 取 `links.attachment`，否则取最早加入的存储 PDF，引用名为附件编号并带文件名、大小与 md5；独立的存储 PDF 成为 `file_only` 条目。其余内容按种类计数。读取链接、大小与编号的位置集中在 `ZoteroShape`，本地接口与网络 API 共用。
+- [zotero-adapter.ts](zotero-adapter.ts)：`zotero-api` 格式的纯适配器：一段是 Zotero 接口原样返回的条目与分类。书目先经现有 CSL JSON 规则读条目自带的 `csljson`，规则不接受或没有时，按 Zotero 字段组成 CSL 记录再经同一规则；Extra 的 `DOI:`、`arXiv:`、`PMID:` 行补标识。分类成为分组，自动标签成为作者关键词，手动标签成为用户标签；首选 PDF 取 `links.attachment`，否则取最早加入的存储 PDF，引用名为附件编号并带文件名、大小与 md5；独立的存储 PDF 成为 `file_only` 条目。其余内容按种类计数。读取链接、大小与编号的位置集中在 `ZoteroShape`，本地接口与网络 API 共用。批注（`itemType = annotation`）随首选 PDF 进入条目的 `annotations`，其他附件上的计 `annotation-other-file`，独立 PDF 上的计 `annotation-standalone-file`；读批注字段的位置也在 `ZoteroShape`。
+- [zotero-annotations.ts](zotero-annotations.ts)：Zotero 批注转成批注写入请求的纯函数：入库前就能判定的原因（种类、评论长度、原文、位置的形状），颜色就近归到五种，按页面框（裁切框与 `/Rotate`）把左下原点的矩形换成阅读器的左上原点矩形；落在页外、页码超出的不导入，不猜位置。
+- [pdf-page-frames.ts](pdf-page-frames.ts)：在独立的 MuPDF 进程里读出指定页的页面框与变换（与 pdf.js 按 1 倍渲染的页面一致），供批注坐标换算。
 - [web-page-adapter.ts](web-page-adapter.ts)：按标签与 JSON-LD 优先序产生中性书目、PDF 地址和无效 JSON 计数；单篇收藏接收原始 `WebPageData`，PDF 页面由文件流程处理，不据页面地址猜书目。
 - [file-clues.ts](file-clues.ts)：单个受控 PDF 的只读线索端口，由适配器入口导出；复用基本验收，再用受限 MuPDF 读取文档信息、XMP（分块拼接，大包也不超内存上限）、首页/必要的第二页和醒目标题；首页有叫不出名字的字符时，按字体编码表里“字母加字符码”的字形名还原，只在这时多读两遍，全部操作受 10 秒总时限约束，不查库、不联网、不调用模型。读不出文字时 `unread` 给出六种原因之一（工具不可用、超时、运行失败、加密、非法 PDF、扫描件），`cluesUnreadReason` 也为没有这一字段的已存读取给出原因。文件条目上传与确认的组装不在此端口中。[import-clues.ts](import-clues.ts) 共用字符串及标识规范化。
 

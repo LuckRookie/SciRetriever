@@ -759,8 +759,13 @@ export interface IntakeAnnotation {
   readonly quote: string;
   readonly note: string;
   readonly color: string | null;
+  /** 0-based page of the PDF. */
   readonly page_index: number | null;
   readonly coordinate_space: "pdf-bottom-left" | "normalized-top-left";
+  /**
+   * `pdf-bottom-left` (Zotero's `annotationPosition.rects`): the corners
+   * `[x1, y1, x2, y2]` in the page's PDF user space, origin bottom-left, in points.
+   */
   readonly rects: readonly (readonly [number, number, number, number])[];
 }
 export interface IntakeItem {
@@ -970,6 +975,30 @@ export function parseIntakeCluesUnread(value: unknown): IntakeCluesUnread {
     throw new ContractValidationError();
   return { total, by_reason };
 }
+/**
+ * Why a source annotation was not imported (literature materials 6.4.13).
+ * `quote-invalid`: a highlight or underline whose text is empty or longer
+ * than a reading mark's quote allows.
+ */
+export const INTAKE_ANNOTATION_REASONS = [
+  "unsupported-kind",
+  "annotation-other-file",
+  "pdf-differs",
+  "file-missing",
+  "position-invalid",
+  "comment-too-long",
+  "quote-invalid",
+  "already-imported",
+] as const;
+export type IntakeAnnotationReason = (typeof INTAKE_ANNOTATION_REASONS)[number];
+export function emptyIntakeAnnotationReasons(): Record<
+  IntakeAnnotationReason,
+  number
+> {
+  return Object.fromEntries(
+    INTAKE_ANNOTATION_REASONS.map((reason) => [reason, 0]),
+  ) as Record<IntakeAnnotationReason, number>;
+}
 export interface IntakeSummary {
   readonly full_text: FullTextCounts;
   readonly records: {
@@ -1000,8 +1029,18 @@ export interface IntakeSummary {
   readonly annotations: {
     readonly supported: number;
     readonly unsupported: number;
-    readonly imported: 0;
+    /** Reading marks written from source annotations; 0 outside `zotero-api`. */
+    readonly imported: number;
+    /** Supported and still waiting: for `zotero-api`, on the file of a record whose bytes have not been settled yet. */
     readonly deferred: number;
+    /**
+     * `zotero-api` batches only (literature materials 6.4.13). A preview: the
+     * annotations that will be imported when their file arrives and matches.
+     * A report: imported plus those still waiting for their file.
+     */
+    readonly importable?: number;
+    /** `zotero-api` batches only: every reason is present. */
+    readonly by_reason?: Readonly<Record<IntakeAnnotationReason, number>>;
   };
   readonly excluded: readonly IntakeExcluded[];
   /** `lookup` batches only. */

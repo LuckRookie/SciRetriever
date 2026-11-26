@@ -300,8 +300,14 @@ export const STANDALONE = child("SOLO0001", null, {
   md5: "7d793037a0760186574b0282f2f435e7",
   collections: [],
 });
-const annotation = (key: string, type: string, position: Json) =>
-  child(key, "PDFA0001", {
+export const annotation = (
+  key: string,
+  type: string,
+  position: Json,
+  extra: Json = {},
+  parent = "PDFA0001",
+) =>
+  child(key, parent, {
     itemType: "annotation",
     annotationType: type,
     annotationText: "",
@@ -309,20 +315,33 @@ const annotation = (key: string, type: string, position: Json) =>
     annotationColor: "#ffd400",
     annotationPageLabel: "3",
     annotationPosition: JSON.stringify(position),
+    ...extra,
   });
 export const ANNOTATIONS = [
-  annotation("ANNO0001", "highlight", {
-    pageIndex: 2,
-    rects: [[72, 640.2, 300.5, 652]],
-  }),
-  annotation("ANNO0002", "underline", {
-    pageIndex: 2,
-    rects: [[310, 500, 420, 511.5]],
-  }),
-  annotation("ANNO0003", "image", {
-    pageIndex: 4,
-    rects: [[90, 300, 400, 520]],
-  }),
+  annotation(
+    "ANNO0001",
+    "highlight",
+    { pageIndex: 2, rects: [[72, 640.2, 300.5, 652]] },
+    {
+      annotationText: "synthetic highlighted sentence",
+      annotationComment: "check density",
+    },
+  ),
+  annotation(
+    "ANNO0002",
+    "underline",
+    { pageIndex: 2, rects: [[310, 500, 420, 511.5]] },
+    {
+      annotationText: "synthetic underlined phrase",
+      annotationColor: "#2ea8e5",
+    },
+  ),
+  annotation(
+    "ANNO0003",
+    "image",
+    { pageIndex: 4, rects: [[90, 300, 400, 520]] },
+    { annotationColor: "#a28ae5" },
+  ),
   annotation("ANNO0004", "note", {
     pageIndex: 0,
     rects: [[500, 700, 522, 722]],

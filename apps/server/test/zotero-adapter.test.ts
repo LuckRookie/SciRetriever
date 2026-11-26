@@ -15,8 +15,11 @@ import {
   PDF_A,
   PDF_A2,
   STANDALONE,
+  TRASHED,
+  TRASHED_PDF,
   USER,
   USER_ITEMS,
+  annotation,
 } from "./zotero-fixture.js";
 
 const decode = (data: unknown) => zoteroAdapter.decode(data, 0);
@@ -106,7 +109,66 @@ it("maps Zotero items, collections, tags, identifiers and the preferred PDF", ()
     "linked-url": 1,
     "non-pdf-file": 1,
     "trashed-item": 2,
-    annotation: 5,
+  });
+  // Annotations travel with the preferred file (6.4.13), as Zotero gave them.
+  expect(a.annotations.map((x) => [x.external_id, x.kind])).toEqual([
+    ["ANNO0001", "highlight"],
+    ["ANNO0002", "underline"],
+    ["ANNO0003", "region"],
+    ["ANNO0004", "note"],
+    ["ANNO0005", "ink"],
+  ]);
+  expect(a.annotations[0]).toEqual({
+    external_id: "ANNO0001",
+    file_external_id: "PDFA0001",
+    kind: "highlight",
+    quote: "synthetic highlighted sentence",
+    note: "check density",
+    color: "#ffd400",
+    page_index: 2,
+    coordinate_space: "pdf-bottom-left",
+    rects: [[72, 640.2, 300.5, 652]],
+  });
+  // Ink keeps paths, not rectangles: no position to convert.
+  expect(a.annotations[4]).toMatchObject({ page_index: 1, rects: [] });
+});
+
+it("counts annotations away from the preferred file by why they stay out", () => {
+  const onSi = annotation(
+    "ANNO0101",
+    "highlight",
+    { pageIndex: 0, rects: [[1, 1, 2, 2]] },
+    { annotationText: "on the SI" },
+    "PDFA0002",
+  );
+  const orphan = annotation("ANNO0102", "highlight", {}, {}, "MISSING1");
+  const scan = annotation("ANNO0103", "image", {}, {}, "SOLO0001");
+  const trashed = annotation("ANNO0104", "image", {}, {}, "TRSHPDF1");
+  const eraser = annotation("ANNO0105", "eraser", {});
+  const result = decode({
+    items: [
+      A,
+      PDF_A,
+      PDF_A2,
+      TRASHED,
+      TRASHED_PDF,
+      STANDALONE,
+      onSi,
+      orphan,
+      scan,
+      trashed,
+      eraser,
+    ],
+  });
+  expect(record(result, "AAAA0001").record!.annotations).toEqual([]);
+  expect(
+    Object.fromEntries(result.excluded.map((e) => [e.kind, e.count])),
+  ).toMatchObject({
+    "annotation-other-file": 1,
+    "child-without-parent": 1,
+    "annotation-standalone-file": 1,
+    "annotation-unsupported-kind": 1,
+    "trashed-item": 3,
   });
 });
 
@@ -224,9 +286,20 @@ it("imports a Zotero library through the intake batch: folders, tags, files and 
         { kind: "linked-url", count: 1 },
         { kind: "non-pdf-file", count: 1 },
         { kind: "trashed-item", count: 2 },
-        { kind: "annotation", count: 5 },
       ]),
     );
+    expect(report.summary.excluded.map((e) => e.kind)).not.toContain(
+      "annotation",
+    );
+    // Note and ink are counted; the three others wait for PDFA0001.
+    expect(report.summary.annotations).toMatchObject({
+      supported: 3,
+      unsupported: 2,
+      imported: 0,
+      deferred: 3,
+      importable: 3,
+      by_reason: { "unsupported-kind": 2 },
+    });
     const files = (await app.importSessions.missingFiles(id)).items;
     expect(
       files.map((f) => [f.external_id, f.file_name, f.size_bytes]),
@@ -258,6 +331,15 @@ it("imports a Zotero library through the intake batch: folders, tags, files and 
 
     // Without its bytes a standalone PDF is reported, never guessed.
     await app.importSessions.finish(id);
+    // The file never came: its annotations are file-missing, none imported.
+    expect(
+      (await app.importSessions.report(id, null, 200)).summary.annotations,
+    ).toMatchObject({
+      imported: 0,
+      deferred: 0,
+      importable: 0,
+      by_reason: { "file-missing": 3, "unsupported-kind": 2 },
+    });
     const second = await app.importSessions.create(
       {
         format: "zotero-api",

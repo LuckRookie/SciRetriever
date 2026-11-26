@@ -56,6 +56,8 @@ library-facets 返回全部命中的标签、作者关键词、主题词，以�
 
 文件引用是来源里的编号而不是路径时（一段、不是文件名、不含 `:`），按“编号/文件名”与交来文件的相对路径逐段比较，只有比到编号那一段才算路径匹配，其余照旧走文件名配对。适配器结果带 `optional_group_references` 时（Zotero），条目引用没交来的分组只略去那一处归属，其余格式缺分组仍是 `intake-group-missing`。收到时被拒绝的文件条目在公开投影里带 `reason`。`file_only` 的书目条目（Zotero 的独立 PDF）与预览前交来的文件照常配对；配上时文件留作只有文件的条目、默认入库并认篇，书目条目不再单独入库；没配上时记为 excluded（`standalone-file-missing`）。
 
+`zotero-api` 批次的批注：预览按种类、评论、原文、位置形状与外部编号（`external_object_mappings` 的 `annotation`）先判定，其余等文件；确认时把等文件的批注记在条目的 `work.annotations`。文件结清、并且就是这篇文献主 PDF 的字节（sha256 相同）时，读页面框换算位置，经 `MarkService.manageForIntake` 建批注（同一事务登记 `intake_batch_objects` 的 `mark`），再写外部编号；批注编号由来源库与 Zotero 批注编号确定，重放不重复。结果记在 `work.annotation_result`，运行中的批次按它实时汇总 `summary.annotations`；批次结束时仍在等的计为 `file-missing`，进程中断时未处理的已结清文件在结束前补做。其他格式的批注计数不变。
+
 [intake-file-items.ts](intake-file-items.ts) 组织预览前的 PDF 暂存、安全相对路径配对、认篇进度与取消、条目决定及终态清理。书目确认后复用文件通道和 metadata CAS 接纳保留的字节；按 sha256 对应主 PDF 或补充材料，保留冲突。认篇结果存于条目，确认不再查询来源。
 
 可能重复的候选保存在条目工作状态，预览不建文献，确认按顺序重判。merge/new 决定保留来源入口与时间；未决定的条目不入库，终态保留数据和暂存 PDF 三十天。结束后补决定仍写原批次的报告与成员，通过专用的待决定接纳入口完成，不重开批次；PDF 准备在写入准入之外进行。单篇网页预览返回候选，保存前要求决定；保存时的重判、身份与条目检查点共用短写入准入，避免并发请求自动新增近似文献；PDF 字节认篇后新发现的重复也在接纳事实之前拒绝，调用方可用新的 request_id 提交明确决定。

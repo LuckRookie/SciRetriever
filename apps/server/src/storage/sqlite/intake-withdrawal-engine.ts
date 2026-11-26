@@ -129,6 +129,7 @@ function plan(
       WHERE ${ownership("folder-member", "json_array(fm.folder_id,fm.literature_id)")}
     UNION SELECT m.literature_id,'annotated' FROM members m JOIN reading_marks r USING(literature_id)
       WHERE ${ownership("mark", "r.mark_id")}
+        OR (r.deleted_at IS NULL AND r.updated_at<>r.created_at)
     UNION SELECT m.literature_id,'opened' FROM members m JOIN reading_history h USING(literature_id)
     UNION SELECT m.literature_id,'processed' FROM members m WHERE
       EXISTS(SELECT 1 FROM literature_assets a JOIN raw_parses p ON p.source_asset_id=a.asset_id WHERE a.literature_id=m.literature_id)

@@ -48,6 +48,14 @@ export interface IntakeItemWork {
   readonly creates_on_resolution?: boolean;
   /** A `lookup` line; `record` then holds only the given identifier or title. */
   readonly lookup?: IntakeLookupWork;
+  /**
+   * `zotero-api` data items (literature materials 6.4.13): the annotations on
+   * the record's file still to be imported once that file settles, and what
+   * became of them. A result is written once; its keys are `imported` and the
+   * reasons decided by the file.
+   */
+  readonly annotations?: readonly import("@sciretriever/contracts").IntakeAnnotation[];
+  readonly annotation_result?: Readonly<Record<string, number>>;
 }
 export interface IntakeLookupWork {
   readonly line: number;

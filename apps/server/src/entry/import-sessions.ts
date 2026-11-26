@@ -25,7 +25,22 @@ import {
   type IntakeLookupResult,
   type IntakeLookupSummary,
   type MetadataObservation,
+  ContractValidationError,
+  emptyIntakeAnnotationReasons,
+  INTAKE_ANNOTATION_REASONS,
+  type Asset,
+  type IntakeAnnotation,
+  type IntakeAnnotationReason,
 } from "@sciretriever/contracts";
+import { MarkService } from "../literature/marks.js";
+import {
+  annotationMarkRequest,
+  annotationReason,
+} from "../literature/zotero-annotations.js";
+import {
+  readPdfPageFrames,
+  type PdfPageFrames,
+} from "../literature/pdf-page-frames.js";
 import {
   SqliteWorkerError,
   type SqliteWorker,
@@ -103,6 +118,21 @@ export interface ImportSessionOptions {
   readonly availableBytes?: BrowserDownloadResourceOptions["available_bytes"];
   /** Only long-lived service entry points enable recovery and expiry. */
   readonly maintain?: boolean;
+  /** The marks owner's write port for imported annotations (default: a MarkService on this database). */
+  readonly marks?: Pick<MarkService, "manageForIntake">;
+  /** Page frames of a stored PDF (default: MuPDF on the stored bytes). */
+  readonly pageFrames?: (
+    asset: Asset,
+    pages: readonly number[],
+    signal: AbortSignal,
+  ) => Promise<PdfPageFrames>;
+}
+/** `annotation-<reason>` adapter counts are annotation reasons (6.4.13). */
+function annotationReasonKind(kind: string): IntakeAnnotationReason | null {
+  const reasons = INTAKE_ANNOTATION_REASONS as readonly string[];
+  if (reasons.includes(kind)) return kind as IntakeAnnotationReason;
+  const rest = kind.startsWith("annotation-") ? kind.slice(11) : "";
+  return reasons.includes(rest) ? (rest as IntakeAnnotationReason) : null;
 }
 function storageFailure(error: unknown): boolean {
   let current = error;
@@ -409,6 +439,9 @@ export class ImportSessionService extends ImportSessionReadService {
     this.pagePdfHandler = handler;
   }
   private readonly logger = createLogger("import-sessions");
+  private readonly marks: Pick<MarkService, "manageForIntake">;
+  private readonly pageFrames: NonNullable<ImportSessionOptions["pageFrames"]>;
+  private readonly annotationRuns = new Map<string, Promise<void>>();
   private timer: ReturnType<typeof setInterval> | undefined;
   private maintenance: Promise<void> | undefined;
   constructor(
@@ -423,6 +456,27 @@ export class ImportSessionService extends ImportSessionReadService {
     super(database);
     this.adapters = importAdapters(options.adapters);
     this.now = options.now ?? Date.now;
+    // Creating a mark reads neither the paper's detail nor its page count.
+    this.marks =
+      options.marks ??
+      new MarkService(
+        database,
+        () => Promise.reject(new Error("mark-detail-unavailable")),
+        null,
+      );
+    this.pageFrames =
+      options.pageFrames ??
+      ((asset, pages, signal) =>
+        files.withVerifiedFile(
+          asset.path,
+          {
+            sha256: asset.sha256,
+            byte_size: asset.size_bytes,
+            media_type: asset.media_type,
+          },
+          (file) => readPdfPageFrames(file, pages, signal),
+          { maxBytes: 256 * 1024 * 1024, signal },
+        ));
     const resources = new BrowserDownloadResources({
       temporary_bytes: Number.MAX_SAFE_INTEGER,
       disk_reserve_bytes: IMPORT_LIMITS.disk_reserve_bytes,
@@ -730,7 +784,13 @@ export class ImportSessionService extends ImportSessionReadService {
       groups = new Map<string, ImportGroup>(),
       references = new Set<string>(),
       decoded = new Map<number, ImportAdapterResult>(),
-      summary = blank();
+      summary = blank(),
+      zotero = s.format === "zotero-api",
+      zoteroAnnotations: {
+        record: ImportRecord;
+        primary: ReturnType<typeof selected>;
+      }[] = [],
+      annotationReasons = emptyIntakeAnnotationReasons();
     for (const part of parts) {
       const data = await this.decodePart(s.format, part);
       decoded.set(part.sequence, data);
@@ -740,14 +800,17 @@ export class ImportSessionService extends ImportSessionReadService {
       } else
         for (const group of data.groups) groups.set(group.external_id, group);
       for (const e of data.excluded)
-        addExcluded(
-          summary,
-          s.metadata_only &&
-            ["additional-file", "non-pdf-file"].includes(e.kind)
-            ? "metadata-only-attachment"
-            : e.kind,
-          e.count,
-        );
+        if (zotero && annotationReasonKind(e.kind))
+          annotationReasons[annotationReasonKind(e.kind)!] += e.count;
+        else
+          addExcluded(
+            summary,
+            s.metadata_only &&
+              ["additional-file", "non-pdf-file"].includes(e.kind)
+              ? "metadata-only-attachment"
+              : e.kind,
+            e.count,
+          );
       for (const item of data.items)
         if (item.record) {
           const record = item.record,
@@ -772,6 +835,11 @@ export class ImportSessionService extends ImportSessionReadService {
                 );
           if (!s.import_user_tags && record.user_tags.length)
             addExcluded(summary, "user-tags-disabled", record.user_tags.length);
+          if (s.format === "zotero-api") {
+            if (record.annotations.length)
+              zoteroAnnotations.push({ record, primary });
+            continue;
+          }
           for (const a of record.annotations) {
             if (
               !["highlight", "underline", "region"].includes(a.kind) ||
@@ -794,6 +862,29 @@ export class ImportSessionService extends ImportSessionReadService {
             }
           }
         }
+    }
+    if (zotero) {
+      // Preview counts (6.4.13): what the kind, comment, quote, position and
+      // earlier imports decide now; the rest waits for its file.
+      let supported = 0,
+        waiting = 0;
+      for (const { record, primary } of zoteroAnnotations) {
+        const plan = await this.annotationPlan(s, record, primary);
+        supported += record.annotations.filter((a) =>
+          ["highlight", "underline", "region"].includes(a.kind),
+        ).length;
+        for (const [reason, n] of Object.entries(plan.reasons))
+          annotationReasons[reason as IntakeAnnotationReason] += n;
+        waiting += plan.candidates.length;
+      }
+      (summary as { annotations: ImportSummary["annotations"] }).annotations = {
+        supported,
+        unsupported: annotationReasons["unsupported-kind"],
+        imported: 0,
+        deferred: waiting,
+        importable: waiting,
+        by_reason: annotationReasons,
+      };
     }
     const visiting = new Set<string>(),
       depths = new Map<string, number>();
@@ -981,12 +1072,251 @@ export class ImportSessionService extends ImportSessionReadService {
       external_id,
     });
   }
+  /**
+   * The record content a source record and its mapping are keyed by. Zotero
+   * annotations are reading marks of their own (6.4.13): a changed annotation
+   * is not a changed bibliographic record.
+   */
+  private content(s: StoredImportSession, record: ImportRecord) {
+    return hash(
+      s.format === "zotero-api" && record.annotations.length
+        ? { ...record, annotations: [] }
+        : record,
+    );
+  }
+  /**
+   * What can be decided about a record's annotations before its file arrives,
+   * and the candidates that wait for the file (literature materials 6.4.13).
+   */
+  private async annotationPlan(
+    s: StoredImportSession,
+    record: ImportRecord,
+    primary: ReturnType<typeof selected>,
+  ) {
+    const reasons: Partial<Record<IntakeAnnotationReason, number>> = {};
+    const add = (reason: IntakeAnnotationReason) =>
+      (reasons[reason] = (reasons[reason] ?? 0) + 1);
+    const open: IntakeAnnotation[] = [];
+    for (const a of record.annotations) {
+      const reason =
+        annotationReason(a) ??
+        (!primary
+          ? "file-missing"
+          : a.file_external_id !== primary.external_id
+            ? "annotation-other-file"
+            : null);
+      if (reason) add(reason);
+      else open.push(a);
+    }
+    const imported = open.length
+      ? new Set(
+          await this.read<string[]>({
+            op: "mapped",
+            library_key: s.library_key,
+            object_kind: "annotation",
+            external_ids: open.map((a) => a.external_id),
+          }),
+        )
+      : new Set<string>();
+    const candidates = open.filter((a) => {
+      if (!imported.has(a.external_id)) return true;
+      add("already-imported");
+      return false;
+    });
+    return { reasons, candidates };
+  }
+  /** Keep a record's waiting annotations on its data item until the file settles. */
+  private async stageAnnotations(
+    s: StoredImportSession,
+    itemId: string,
+    record: ImportRecord,
+    fileComing: boolean,
+  ) {
+    const plan = await this.annotationPlan(
+      s,
+      record,
+      s.metadata_only ? null : selected(record),
+    );
+    if (!plan.candidates.length) return;
+    const stored = await this.fileItems.read<StoredIntakeItem>({
+      kind: "one",
+      batch_id: s.batch_id,
+      item_id: itemId,
+    });
+    if (stored.work?.annotation_result) return;
+    await this.fileItems.write({
+      kind: "update",
+      batch_id: s.batch_id,
+      item_id: itemId,
+      work: {
+        ...(stored.work ?? {
+          relative_path: null,
+          paired_to: null,
+          clues: null,
+          result: null,
+          reason: null,
+          source_url: null,
+        }),
+        annotations: plan.candidates,
+        // A record that was not admitted with its file brings no PDF to match.
+        ...(fileComing
+          ? {}
+          : { annotation_result: { "file-missing": plan.candidates.length } }),
+      },
+      now: new Date(this.now()).toISOString(),
+    });
+  }
+  /**
+   * Import the waiting annotations of a settled file, once (6.4.13): only when
+   * the settled bytes are the paper's main PDF; positions through the page
+   * frames of that PDF; each mark through the marks owner, registered to this
+   * batch, then its external mapping.
+   */
+  private importAnnotations(id: string, fileId: string): Promise<void> {
+    const key = `${id}\u0000${fileId}`;
+    const running = this.annotationRuns.get(key);
+    if (running) return running;
+    const pending = this.importAnnotationsOwned(id, fileId).finally(() =>
+      this.annotationRuns.delete(key),
+    );
+    this.annotationRuns.set(key, pending);
+    return pending;
+  }
+  private async importAnnotationsOwned(id: string, fileId: string) {
+    const s = await this.stored(id);
+    if (s.format !== "zotero-api" || s.state !== "running") return;
+    const itemId = await this.read<string | null>({
+      op: "file-item",
+      batch_id: id,
+      file_id: fileId,
+    });
+    if (!itemId) return;
+    const item = await this.fileItems.read<StoredIntakeItem>({
+      kind: "one",
+      batch_id: id,
+      item_id: itemId,
+    });
+    const candidates = item.work?.annotations ?? [];
+    if (!candidates.length || item.work?.annotation_result) return;
+    const file = await this.read<ImportFileStatus>({
+      op: "file",
+      batch_id: id,
+      file_id: fileId,
+    });
+    if (file.status === "pending") return;
+    const result: Record<string, number> = {};
+    const add = (key: string, n = 1) => (result[key] = (result[key] ?? 0) + n);
+    const facts =
+      file.status === "conflict"
+        ? null
+        : await this.database.currentFacts(file.literature_id);
+    const primary = facts?.primary_asset ?? null;
+    if (!primary || primary.sha256 !== file.sha256)
+      add("pdf-differs", candidates.length);
+    else {
+      let frames: PdfPageFrames | null = null;
+      try {
+        frames = await this.pageFrames(
+          primary,
+          candidates.flatMap((a) =>
+            a.page_index === null ? [] : [a.page_index],
+          ),
+          this.stop.signal,
+        );
+      } catch (error) {
+        if (this.stop.signal.aborted) throw error;
+        this.logger.warn("Annotation page frames could not be read");
+      }
+      for (const a of candidates) {
+        const markId = intakeId(["import-mark", s.library_key, a.external_id]);
+        if (await this.mapping(s.library_key, "annotation", a.external_id)) {
+          add("already-imported");
+          continue;
+        }
+        const planned = frames
+          ? annotationMarkRequest(a, {
+              literature_id: file.literature_id,
+              sha256: primary.sha256,
+              mark_id: markId,
+              page_count: frames.page_count,
+              frames: frames.frames,
+            })
+          : { reason: "position-invalid" as const };
+        if ("reason" in planned) {
+          add(planned.reason);
+          continue;
+        }
+        const written = await this.writes.run(async () => {
+          try {
+            await this.marks.manageForIntake(
+              planned.request,
+              id,
+              this.stop.signal,
+            );
+          } catch (error) {
+            const code =
+              error instanceof ContractValidationError
+                ? "mark-request-invalid"
+                : (error as { code?: string }).code;
+            // A replay after the mark was written but before its mapping.
+            if (code !== "mark-exists") {
+              if (
+                code === "mark-request-invalid" ||
+                code === "mark-anchor-invalid"
+              )
+                return false;
+              throw error;
+            }
+          }
+          await this.write({
+            op: "mapping",
+            mapping: {
+              library_key: s.library_key,
+              object_kind: "annotation",
+              external_id: a.external_id,
+              internal_id: markId,
+              content_sha256: null,
+              observation_id: null,
+              state: "settled",
+            },
+          });
+          return true;
+        });
+        add(written ? "imported" : "position-invalid");
+      }
+    }
+    await this.writes.run(async () => {
+      const current = await this.fileItems.read<StoredIntakeItem>({
+        kind: "one",
+        batch_id: id,
+        item_id: itemId,
+      });
+      if (current.work && !current.work.annotation_result)
+        await this.fileItems.write({
+          kind: "update",
+          batch_id: id,
+          item_id: itemId,
+          work: { ...current.work, annotation_result: result },
+          now: new Date(this.now()).toISOString(),
+        });
+    });
+  }
+  /** Settled files whose annotations a stopped process did not import yet. */
+  private async recoverAnnotations(id: string) {
+    const s = await this.stored(id);
+    if (s.format !== "zotero-api" || s.state !== "running") return;
+    for (const fileId of await this.read<string[]>({
+      op: "annotation-files",
+      batch_id: id,
+    }))
+      await this.importAnnotations(id, fileId);
+  }
   private observation(
     s: StoredImportSession,
     record: ImportRecord,
     fileSha?: string,
   ): MetadataObservation {
-    const content = hash(record),
+    const content = this.content(s, record),
       legacy =
         s.source.identity === "adhoc" &&
         s.format !== "web-page" &&
@@ -1040,7 +1370,7 @@ export class ImportSessionService extends ImportSessionReadService {
     mapping: ExternalObjectMapping | null,
     fileSha?: string,
   ) {
-    if (mapping?.content_sha256 === hash(record)) {
+    if (mapping?.content_sha256 === this.content(s, record)) {
       const facts = await this.database.currentFacts(mapping.internal_id);
       const withdrawn = await this.database.literatureWithdrawn(
         mapping.internal_id,
@@ -1950,7 +2280,7 @@ export class ImportSessionService extends ImportSessionReadService {
             observation_id: null,
             state: "settled",
           };
-        const content = hash(record),
+        const content = this.content(s, record),
           observation = this.observation(
             s,
             record,
@@ -2234,6 +2564,18 @@ export class ImportSessionService extends ImportSessionReadService {
           }
         }
       }
+      if (
+        s.format === "zotero-api" &&
+        record?.annotations.length &&
+        !resolving &&
+        sequence !== IMPORT_LIMITS.parts
+      )
+        await this.stageAnnotations(
+          s,
+          intakeId(["intake-item", id, sequence, item.record_index]),
+          record,
+          files.length > 0,
+        );
       await this.write({
         op: resolving ? "resolve-result" : "result",
         batch_id: id,
@@ -2500,13 +2842,38 @@ export class ImportSessionService extends ImportSessionReadService {
       await this.finishOwned(id, "finished");
   }
   private async finishOwned(id: string, state: "finished" | "cancelled") {
+    try {
+      await this.recoverAnnotations(id);
+    } catch (error) {
+      if (this.stop.signal.aborted) throw error;
+      this.logger.warn("Annotation import at batch end failed");
+    }
     await this.writes.run(async () => {
       const s = await this.stored(id);
+      const summary = await this.summary(s);
+      const annotations = summary.annotations;
       await this.write({
         op: "finish",
         batch_id: id,
         state,
-        summary: await this.summary(s),
+        // Annotations whose file never arrived are file-missing (6.4.13).
+        summary:
+          s.format === "zotero-api" && annotations.by_reason
+            ? {
+                ...summary,
+                annotations: {
+                  ...annotations,
+                  deferred: 0,
+                  importable: annotations.imported,
+                  by_reason: {
+                    ...annotations.by_reason,
+                    "file-missing":
+                      annotations.by_reason["file-missing"] +
+                      annotations.deferred,
+                  },
+                },
+              }
+            : summary,
         now: new Date(this.now()).toISOString(),
       });
     });
@@ -2598,6 +2965,14 @@ export class ImportSessionService extends ImportSessionReadService {
         file_id: current.file_id,
       });
     });
+    if (result.status !== "pending")
+      try {
+        await this.importAnnotations(id, result.file_id);
+      } catch (error) {
+        // The file stays settled; the batch end imports what is left.
+        if (this.stop.signal.aborted) throw error;
+        this.logger.warn("Annotation import failed; retried at batch end");
+      }
     await this.finishIfComplete(id);
     if (await this.resolutionFile(id, file.file_id)) await this.cleanParts(id);
     return result;

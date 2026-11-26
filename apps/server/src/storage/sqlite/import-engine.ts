@@ -125,6 +125,17 @@ export type ImportRead =
       pending: boolean;
     }
   | { op: "file"; batch_id: string; file_id: string }
+  /** The external IDs among these that already have a mapping. */
+  | {
+      op: "mapped";
+      library_key: string;
+      object_kind: ExternalObjectMapping["object_kind"];
+      external_ids: readonly string[];
+    }
+  /** The data item a batch file belongs to. */
+  | { op: "file-item"; batch_id: string; file_id: string }
+  /** Settled files whose item still has annotations without a result (6.4.13). */
+  | { op: "annotation-files"; batch_id: string }
   | { op: "folder"; folder_id: string | null; parent_id: string | null }
   | { op: "intake-member"; batch_id: string; literature_id: string };
 export type ImportWrite =
@@ -351,6 +362,48 @@ function map(db: DatabaseSync, m: ExternalObjectMapping) {
     m.state,
   );
 }
+/**
+ * Live annotation counts of a running `zotero-api` batch (literature materials
+ * 6.4.13): the preview counts saved at confirmation, with the results each
+ * data item recorded when its file settled. Other batches, and a batch after
+ * it ends, keep the counts saved in their summary.
+ */
+function annotationAggregate(
+  db: DatabaseSync,
+  session: Row,
+): ImportSummary["annotations"] | null {
+  if (session.state !== "running" || session.summary_json === null) return null;
+  const saved = (
+    JSON.parse(str(session.summary_json)) as {
+      annotations?: ImportSummary["annotations"];
+    }
+  ).annotations;
+  if (!saved?.by_reason) return null;
+  const by_reason = { ...saved.by_reason } as Record<string, number>;
+  let imported = 0,
+    settled = 0;
+  for (const row of db
+    .prepare(
+      "SELECT j.key,sum(j.value) n FROM intake_items i,json_each(i.recognition_json,'$.annotation_result') j WHERE i.batch_id=? AND i.origin='data' AND i.recognition_json IS NOT NULL AND json_type(i.recognition_json,'$.annotation_result')='object' GROUP BY j.key",
+    )
+    .all(str(session.batch_id))) {
+    const key = str(row.key),
+      n = Number(row.n);
+    settled += n;
+    if (key === "imported") imported += n;
+    else if (key in by_reason) by_reason[key] = by_reason[key]! + n;
+  }
+  const deferred = Math.max(0, saved.deferred - settled);
+  return {
+    ...saved,
+    imported,
+    deferred,
+    importable: imported + deferred,
+    by_reason: by_reason as NonNullable<
+      ImportSummary["annotations"]["by_reason"]
+    >,
+  };
+}
 export function readImportStorage(
   db: DatabaseSync,
   r: ImportRead,
@@ -459,6 +512,37 @@ export function readImportStorage(
         )
         .get(r.library_key, r.object_kind, r.external_id) ?? null
     );
+  if (r.op === "mapped") {
+    const found: string[] = [];
+    const ids = [...new Set(r.external_ids)];
+    for (let i = 0; i < ids.length; i += 500)
+      for (const row of db
+        .prepare(
+          "SELECT external_id FROM external_object_mappings WHERE library_key=? AND object_kind=? AND external_id IN (SELECT value FROM json_each(?))",
+        )
+        .all(
+          r.library_key,
+          r.object_kind,
+          JSON.stringify(ids.slice(i, i + 500)),
+        ))
+        found.push(str(row.external_id));
+    return found;
+  }
+  if (r.op === "file-item") {
+    const v = db
+      .prepare(
+        "SELECT item_id FROM import_files WHERE batch_id=? AND file_id=?",
+      )
+      .get(r.batch_id, r.file_id);
+    return v?.item_id == null ? null : str(v.item_id);
+  }
+  if (r.op === "annotation-files")
+    return db
+      .prepare(
+        "SELECT f.file_id FROM import_files f JOIN intake_items i ON i.item_id=f.item_id WHERE f.batch_id=? AND f.status<>'pending' AND i.recognition_json IS NOT NULL AND coalesce(json_array_length(i.recognition_json,'$.annotations'),0)>0 AND json_type(i.recognition_json,'$.annotation_result') IS NULL ORDER BY f.file_id",
+      )
+      .all(r.batch_id)
+      .map((v) => str(v.file_id));
   if (r.op === "folder")
     return {
       folder:
@@ -482,8 +566,9 @@ export function readImportStorage(
         )
         .get(r.batch_id, r.literature_id) ?? null
     );
-  row(db, r.batch_id);
+  const current = row(db, r.batch_id);
   if (r.op === "aggregate") {
+    const annotations = annotationAggregate(db, current);
     const records = db
       .prepare(
         "SELECT count(CASE WHEN disposition='created' THEN 1 END) created,count(CASE WHEN disposition='enriched' THEN 1 END) enriched,count(CASE WHEN disposition='matched' THEN 1 END) matched,count(CASE WHEN disposition='conflict' THEN 1 END) conflicts,count(CASE WHEN disposition='rejected' THEN 1 END) rejected,count(CASE WHEN disposition='restored' THEN 1 END) restored,count(CASE WHEN disposition='pending-decision' THEN 1 END) pending_decision,(SELECT count(*) FROM intake_items WHERE batch_id=? AND json_array_length(possible_duplicates_json)>0) possible_duplicates,(SELECT count(DISTINCT i.literature_id) FROM import_record_results i JOIN literature_needs_metadata n USING(literature_id) WHERE i.batch_id=import_record_results.batch_id) needs_metadata FROM import_record_results WHERE batch_id=?",
@@ -510,6 +595,7 @@ export function readImportStorage(
         }),
       },
       files: { ...files, unpaired },
+      ...(annotations ? { annotations } : {}),
     };
   }
   if (r.op === "result") {
@@ -936,10 +1022,25 @@ export function writeImportStorage(
         ).run(r.status, r.sha256, r.reason, r.file_id);
       resolvedBatchResult(db, r.batch_id);
     } else if (r.op === "metadata-done") {
-      live(db, r.batch_id, ["running"]);
+      const s = live(db, r.batch_id, ["running"]);
+      // Live annotation counts build on the ones saved at confirmation.
+      const saved =
+        s.summary_json === null
+          ? undefined
+          : (
+              JSON.parse(str(s.summary_json)) as {
+                annotations?: ImportSummary["annotations"];
+              }
+            ).annotations;
       db.prepare(
         "UPDATE import_sessions SET metadata_complete=1,storage_failures=0,phase='files',summary_json=?,updated_at=? WHERE batch_id=?",
-      ).run(summaryJson(r.summary), r.now, r.batch_id);
+      ).run(
+        summaryJson(
+          saved?.by_reason ? { ...r.summary, annotations: saved } : r.summary,
+        ),
+        r.now,
+        r.batch_id,
+      );
       db.prepare("UPDATE intake_batches SET rejected=? WHERE batch_id=?").run(
         r.summary.records.rejected,
         r.batch_id,

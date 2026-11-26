@@ -9,6 +9,7 @@ import {
   type ImportAdapterResult,
   type ImportFile,
   type ImportGroup,
+  type IntakeAnnotation,
   type LiteratureMetadata,
 } from "@sciretriever/contracts";
 import { decodeBibliography } from "./bibliography-import.js";
@@ -81,6 +82,69 @@ const ZoteroShape = {
       )
         return value;
     return null;
+  },
+  /**
+   * An annotation item (`itemType = annotation`, `parentItem` = its
+   * attachment). `annotationPosition` is a JSON string, or an object, with
+   * `pageIndex` (0-based) and `rects` (`[x1, y1, x2, y2]` in PDF user space);
+   * ink keeps `paths` instead. Following Zotero's published schema, not yet
+   * checked against a real Zotero.
+   */
+  annotation(item: Json): IntakeAnnotation | null {
+    const data = item.data as Json,
+      key = ZoteroShape.key(item)!,
+      parent = string(data.parentItem);
+    if (!parent) return null;
+    const type = string(data.annotationType);
+    const kind = (
+      {
+        highlight: "highlight",
+        underline: "underline",
+        image: "region",
+        note: "note",
+        text: "text",
+        ink: "ink",
+      } as const
+    )[type ?? ""];
+    if (!kind) return null;
+    let position: unknown = data.annotationPosition;
+    if (typeof position === "string")
+      try {
+        position = JSON.parse(position);
+      } catch {
+        position = null;
+      }
+    const p = isObject(position) ? position : {};
+    const page =
+      typeof p.pageIndex === "number" &&
+      Number.isSafeInteger(p.pageIndex) &&
+      p.pageIndex >= 0
+        ? p.pageIndex
+        : null;
+    const rects =
+      Array.isArray(p.rects) &&
+      p.rects.every(
+        (r) =>
+          Array.isArray(r) &&
+          r.length === 4 &&
+          r.every((n) => typeof n === "number" && Number.isFinite(n)),
+      )
+        ? (p.rects as [number, number, number, number][])
+        : [];
+    return {
+      external_id: key,
+      file_external_id: parent,
+      kind,
+      quote: typeof data.annotationText === "string" ? data.annotationText : "",
+      note:
+        typeof data.annotationComment === "string"
+          ? data.annotationComment
+          : "",
+      color: string(data.annotationColor),
+      page_index: page,
+      coordinate_space: "pdf-bottom-left",
+      rects,
+    };
   },
 };
 
@@ -277,7 +341,19 @@ export const zoteroAdapter: ImportAdapter = {
       children = new Map<string, Json[]>(),
       standalone: { index: number; item: Json }[] = [],
       malformed: { index: number; key: string | null }[] = [],
-      trashed = new Set<string>();
+      trashed = new Set<string>(),
+      // Annotations by the attachment they are on (6.4.13).
+      annotations = new Map<string, IntakeAnnotation[]>(),
+      attachmentOf = new Map<string, string | null>();
+    // Annotations on an attachment other than the preferred file are counted
+    // by why they cannot be imported; the session reads `annotation-<reason>`.
+    const countAnnotations = (attachment: string | null, kind: string) => {
+      const n =
+        attachment === null ? 0 : (annotations.get(attachment)?.length ?? 0);
+      if (!n) return;
+      excluded.set(kind, (excluded.get(kind) ?? 0) + n);
+      annotations.delete(attachment!);
+    };
     items.forEach((item, index) => {
       const key = isObject(item) ? ZoteroShape.key(item) : null;
       if (!isObject(item) || !key || !isObject(item.data)) {
@@ -287,14 +363,23 @@ export const zoteroAdapter: ImportAdapter = {
       const data = item.data,
         type = string(data.itemType),
         parent = string(data.parentItem);
+      if (type === "attachment") attachmentOf.set(key, parent);
       // `data.deleted` marks an item in Zotero's trash (Web API documentation).
       if (data.deleted === true || data.deleted === 1) {
         trashed.add(key);
         count("trashed-item");
         return;
       }
-      if (type === "annotation") count("annotation");
-      else if (parent)
+      if (type === "annotation") {
+        const annotation = ZoteroShape.annotation(item);
+        if (!parent) count("child-without-parent");
+        else if (!annotation) count("annotation-unsupported-kind");
+        else
+          annotations.set(parent, [
+            ...(annotations.get(parent) ?? []),
+            annotation,
+          ]);
+      } else if (parent)
         children.set(parent, [...(children.get(parent) ?? []), item]);
       else if (type === "note") count("note");
       else if (type === "attachment") standalone.push({ index, item });
@@ -405,6 +490,17 @@ export const zoteroAdapter: ImportAdapter = {
       const file = ordered[0] ? fileOf(item, ordered[0]) : null;
       if (ordered[0] && !file) count("invalid-file-reference");
       for (let i = 1; i < ordered.length; i++) count("additional-file");
+      // Annotations come only with the preferred file; on any other
+      // attachment of this item they are counted (6.4.13).
+      const preferredKey = ordered[0] ? ZoteroShape.key(ordered[0]) : null;
+      const own_annotations = file
+        ? (annotations.get(preferredKey!) ?? [])
+        : [];
+      if (file) annotations.delete(preferredKey!);
+      else countAnnotations(preferredKey, "annotation-file-missing");
+      for (const child of own)
+        if (ZoteroShape.key(child) !== preferredKey)
+          countAnnotations(ZoteroShape.key(child), "annotation-other-file");
       result.push({
         external_id: key,
         record_index: index,
@@ -422,7 +518,7 @@ export const zoteroAdapter: ImportAdapter = {
           ],
           user_tags: [...new Set(manual)],
           files: file ? [file] : [],
-          annotations: [],
+          annotations: own_annotations,
         },
       });
     });
@@ -453,6 +549,21 @@ export const zoteroAdapter: ImportAdapter = {
             },
           });
       }
+    }
+    // Annotations not placed above: on a standalone PDF (not imported yet),
+    // in the trash, on an attachment of a rejected item, or with no parent.
+    for (const attachment of [...annotations.keys()]) {
+      const parent = attachmentOf.get(attachment);
+      countAnnotations(
+        attachment,
+        trashed.has(attachment) || (parent && trashed.has(parent))
+          ? "trashed-item"
+          : parent === null
+            ? "annotation-standalone-file"
+            : parent && regular.has(parent)
+              ? "annotation-file-missing"
+              : "child-without-parent",
+      );
     }
     return {
       optional_group_references: true,
