@@ -66,7 +66,7 @@ R2 通过。
   - 故意包含：一处与原文不符的数字（带所引片段的原文）、一处“原文未给出”、一份没有关键图表的资料、一份 `freshness` 为 `outdated` 的结果、一份 `on_read_version` 为 `false` 的脉络（建在初稿上、现在读校订稿：`material-marks` 返回 `marks-version-mismatch`，出处角标所引原句来自初稿版本，其中一句在校订稿里能重新定位、一句不能）、一处句号算不出的引用（`sentences` 为 `null`）。
   - 另备四份能力报告：全部可用；全部不可用；只有 `reading_layers` 可用；全部可用但 `can_start` 都为假（只读部署）。
   - 所有文字是合成的，标明“样例”；可以参考 `sandbox/cases/2026-11-12-reader-mockups/src/argument.js` 的样例文字，但不引用 sandbox 中的文件。
-  - `mark` 按[文档与证据 3.5](../../architecture/technical/04-document-evidence.md#35-分句与出处角标目标尚未实现)的分句规则手工算好，作为夹具的期望值。
+  - `mark` 按[文档与证据 3.5](../../architecture/technical/04-document-evidence.md#35-分句与出处角标)的分句规则手工算好，作为夹具的期望值。
 - [ ] **13.3 让样例库提供合成结果**
   - 在截图与测量的 Playwright 会话里，拦截 `POST /api/v1/query/material-reading` 与 `GET /api/v1/query/status`，按请求里的 `operation` 返回 13.2 的响应，能力报告取四份中的一份；测试用同一份夹具。“不可用”“只有阅读层可用”“只读部署”各截一组，证明对应的入口不出现或照规格改写。
   - 手动浏览样例库（`serve`）时没有合成结果，服务也不报告能力可用，所以顶栏上没有“概览”“脉络”与提问框；在截图清单里注明这一点。

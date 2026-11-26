@@ -66,6 +66,10 @@ import {
   currentDocumentTranslation,
 } from "../translation/document.js";
 import { fullTextSource } from "../translation/source.js";
+import {
+  DocumentLayersService,
+  DocumentLayersStore,
+} from "../layers/document.js";
 import { OpenAIChatAdapter, OpenAIResponsesAdapter } from "../agents/openai.js";
 import type { AgentTransport } from "../agents/protocol.js";
 import {
@@ -277,6 +281,8 @@ export interface Application {
   readonly archiveMetadata: ArchiveMetadataService;
   /** The archive step `translate` (ADR 0068). */
   readonly archiveTranslation: DocumentTranslationService;
+  /** The archive step `layers` (ADR 0069). */
+  readonly archiveLayers: DocumentLayersService;
   readonly archiveReferences: ArchiveReferenceService;
   readonly processors?: ProcessorBatchService | null;
   readonly processorRetention?: ProcessorExternalRetention | null;
@@ -1462,6 +1468,7 @@ async function createApplicationOwned(
       configuration.translation.target_language,
     );
     const translationAnnotations = new SqliteAnnotationStorage(database, files);
+    const layersStore = new DocumentLayersStore(database, files);
     await removeRetiredFullTextCache(
       join(home, ".sciretriever", "cache", "fulltext"),
     ).catch(() => undefined);
@@ -1662,6 +1669,7 @@ async function createApplicationOwned(
       new SqliteDocumentStorage(database, files),
       new SqliteAnnotationStorage(database, files),
       translationStore,
+      layersStore,
     );
     valueVerifier = new ProcessorValueVerifier(documentRead);
     const library = new LiteratureQueryService(database);
@@ -1898,8 +1906,20 @@ async function createApplicationOwned(
         return { title: metadata.title, language: metadata.language };
       },
     });
+    const archiveLayers = new DocumentLayersService({
+      database,
+      files,
+      store: layersStore,
+      translations: translationStore,
+      model: translation,
+      metadata: async (literatureId, signal) => ({
+        title: (await metadataFields.read(literatureId, signal)).literature
+          .metadata.title,
+      }),
+    });
     const archiveOrchestrator = new ArchiveOrchestrator(database, {
       translate: archiveTranslation,
+      layers: archiveLayers,
       ...(archiveText ? { text: archiveText } : {}),
       archiveProfile: configuration.parsing.archive_profile,
       parse: async (input, signal) => {
@@ -2270,6 +2290,7 @@ async function createApplicationOwned(
       archiveReferences,
       archiveMetadata,
       archiveTranslation,
+      archiveLayers,
       bootId,
       metadata,
       acquisition,
@@ -2593,11 +2614,13 @@ export async function createQueryApplication(
       configuration.translation.target_language,
     );
     const queryAnnotations = new SqliteAnnotationStorage(database, files);
+    const queryLayers = new DocumentLayersStore(database, files);
     documentRead = new DocumentReadService(
       database,
       new SqliteDocumentStorage(database, files),
       new SqliteAnnotationStorage(database, files),
       queryTranslations,
+      queryLayers,
     );
     const literature = new LiteratureQueryService(database);
     rawParseRead = new SqliteRawParseStorage(database, files);
@@ -2690,6 +2713,21 @@ export async function createQueryApplication(
       configuration.parsing.archive_profile,
       undefined,
       configuration.translation.target_language,
+      {
+        translationSha256: async (
+          document_version_id,
+          content_version,
+          signal,
+        ) =>
+          (
+            await queryTranslations.row(
+              document_version_id,
+              content_version,
+              configuration.translation.target_language,
+              signal,
+            )
+          )?.sha256 ?? null,
+      },
     );
     const estimating = new UsageEstimator(
       database,
@@ -2723,6 +2761,7 @@ export async function createQueryApplication(
       ),
       (part, signal) => archiveReuse.textWork(part, signal),
       (part) => archiveReuse.translationPending(part),
+      (part, signal) => archiveReuse.layersPending(part, signal),
     );
     return {
       importSessions,

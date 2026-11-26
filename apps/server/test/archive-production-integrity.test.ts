@@ -105,6 +105,7 @@ it("starts the production six-step workflow through CLI with only external adapt
     expect(state.status).toBe("READY");
     expect(state.parts[0]!.steps.map((s) => s.step).sort()).toEqual([
       "arrange",
+      "layers",
       "metadata",
       "proofread",
       "references",
@@ -358,6 +359,7 @@ it("estimates no-history and partial text reuse without running a model or creat
       "proofread",
       "render",
       "translate",
+      "layers",
       "metadata",
       "references",
       "tags",

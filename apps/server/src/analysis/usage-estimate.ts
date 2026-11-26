@@ -84,6 +84,11 @@ export class UsageEstimator {
     private readonly archiveTranslationPending?: (
       part: import("@sciretriever/contracts").ArchivePart,
     ) => Promise<boolean>,
+    /** The main PDF still needs the layers step (ADR 0069). */
+    private readonly archiveLayersPending?: (
+      part: import("@sciretriever/contracts").ArchivePart,
+      signal: AbortSignal,
+    ) => Promise<boolean>,
   ) {}
   async estimate(
     value: unknown,
@@ -250,6 +255,7 @@ export class UsageEstimator {
         workParts = 0,
         translatePages = 0,
         translateUnknown = 0,
+        layersParts = 0,
         acceptedBasis = true;
       for (const id of ids) {
         stop.throwIfAborted();
@@ -266,6 +272,8 @@ export class UsageEstimator {
               if (work.total_pdf_pages === null) translateUnknown++;
               else translatePages += work.total_pdf_pages;
             }
+            // Reading layers are counted per main PDF, reused or not.
+            if (await this.archiveLayersPending?.(part, stop)) layersParts++;
             if (fullyReusable) continue;
             if (work.arrange_required) workParts++;
             if (work.expected_proofread_pages === null) unknown++;
@@ -306,9 +314,11 @@ export class UsageEstimator {
                 ? translateUnknown
                   ? null
                   : translatePages
-                : step === "arrange"
-                  ? workParts
-                  : ids.length - reused;
+                : step === "layers"
+                  ? layersParts
+                  : step === "arrange"
+                    ? workParts
+                    : ids.length - reused;
           const deterministic = step === "render" || step === "references";
           const samples = history
             .filter(
@@ -324,6 +334,8 @@ export class UsageEstimator {
               // Translation history counts per page of papers that asked the model.
               if (step === "translate" && !Number(s.stats.requested_units ?? 0))
                 return [];
+              // Layers history counts per paper that asked the model.
+              if (step === "layers" && s.stats.requested !== true) return [];
               const n =
                 step === "proofread"
                   ? Number(s.stats.executed_pages ?? 0)

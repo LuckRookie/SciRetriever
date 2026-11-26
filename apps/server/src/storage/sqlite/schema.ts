@@ -1294,11 +1294,31 @@ export const DOCUMENT_TRANSLATIONS_ADDITION = defineCatalogAddition(
   ["archive_steps"],
 );
 
+/**
+ * Stored reading layers (ADR 0069, document spec 10.4). One row per
+ * literature, primary PDF and proofread content version registers the
+ * immutable file: identity, point count and the translation file it was
+ * aligned with, never a point or an evidence. A not-applicable row has no
+ * file. A plain addition (storage spec 4.4): one new table, no rebuild, no
+ * trigger; the service keeps running.
+ */
+export const DOCUMENT_LAYERS_TABLE_SQL =
+  "CREATE TABLE document_layers(literature_id TEXT NOT NULL,asset_id TEXT NOT NULL,content_version TEXT NOT NULL CHECK(length(content_version)=64 AND content_version NOT GLOB '*[^0-9a-f]*'),document_version_id TEXT NOT NULL,annotation_id TEXT NOT NULL CHECK(length(annotation_id)=64),status TEXT NOT NULL CHECK(status IN ('complete','not-applicable')),reason TEXT CHECK(reason IS NULL OR reason IN ('long-document','too-short')),artifact_reference TEXT,sha256 TEXT,byte_size INTEGER,media_type TEXT CHECK(media_type IS NULL OR media_type='application/json'),point_count INTEGER NOT NULL CHECK(point_count>=0),target_language TEXT CHECK(target_language IS NULL OR length(trim(target_language))>0),translation_sha256 TEXT CHECK(translation_sha256 IS NULL OR (length(translation_sha256)=64 AND translation_sha256 NOT GLOB '*[^0-9a-f]*')),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,CHECK((status='complete' AND reason IS NULL AND artifact_reference IS NOT NULL AND sha256 IS NOT NULL AND byte_size IS NOT NULL AND media_type IS NOT NULL AND point_count>0) OR (status='not-applicable' AND reason IS NOT NULL AND artifact_reference IS NULL AND sha256 IS NULL AND byte_size IS NULL AND media_type IS NULL AND point_count=0 AND target_language IS NULL)),CHECK((target_language IS NULL)=(translation_sha256 IS NULL)),PRIMARY KEY(literature_id,asset_id,content_version),FOREIGN KEY(literature_id) REFERENCES literatures(literature_id),FOREIGN KEY(asset_id) REFERENCES assets(asset_id),FOREIGN KEY(document_version_id) REFERENCES document_versions(document_version_id) ON DELETE RESTRICT,FOREIGN KEY(artifact_reference,sha256,byte_size,media_type) REFERENCES artifact_objects(relative_path,sha256,byte_size,media_type) ON DELETE RESTRICT) STRICT, WITHOUT ROWID";
+const DOCUMENT_LAYERS_INDEX_SQL = [
+  "CREATE INDEX document_layers_version ON document_layers(document_version_id)",
+  "CREATE INDEX document_layers_latest ON document_layers(literature_id,status,updated_at)",
+] as const;
+export const DOCUMENT_LAYERS_ADDITION = defineCatalogAddition(
+  "document-layers",
+  [DOCUMENT_LAYERS_TABLE_SQL, ...DOCUMENT_LAYERS_INDEX_SQL],
+);
+
 export const CATALOG_ADDITIONS = [
   LIBRARY_SCALE_ADDITION,
   ARCHIVE_ISSUES_ADDITION,
   LIBRARY_TRASH_ADDITION,
   DOCUMENT_TRANSLATIONS_ADDITION,
+  DOCUMENT_LAYERS_ADDITION,
 ] as const;
 export const SCHEMA_MANIFEST = manifestWithAdditions(
   CATALOG_BASE_SCHEMA,

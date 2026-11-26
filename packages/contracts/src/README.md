@@ -19,6 +19,10 @@
 - [acquisition.ts](acquisition.ts)：当前/待生效来源与有界安全获取轨迹，供配置、任务和浏览器读取。
 - [document.ts](document.ts)：文档合同。
 - [document-read.ts](document-read.ts)：固定文档与证据的有界读取；可选文本等级、初稿计数与角色覆盖说明按精确键解析，片段核对依据按等级分开校验。初稿差异使用独立审计请求/结果合同，规范 JSON 分片收齐后解析；不改变普通读取请求与游标的形状。
+- [sentence-split.ts](sentence-split.ts)：分句规则 `sentence-split-v1`（规格 3.5），服务端与网页共用的唯一实现：`splitSentences(text, {whole})` 返回 JavaScript 下标的句子范围，`splitSentencesUtf8` 与 `utf8Offset` 换成 UTF-8 字节，`sentenceNumbers` 给出一个范围碰到的句号（从 1 起）。
+- [key-terms.ts](key-terms.ts)：重点词匹配 `key-term-match-v1`（规格 10.7）：`matchKeyTerm(text, term)` 与 `markKeyTerms(text, terms)`（排好序、不重叠，先列的词优先），范围是 JavaScript 下标；拉丁等有词界的文字不分大小写、从词首匹配、词尾可多 `s` 或 `es`、不在词中间；中日韩文字逐字匹配。
+- [reading-layers.ts](reading-layers.ts)：阅读层文件 `DocumentLayersFile` 与 `describe.layers` 摘要的严格解析、提示词版本与各项上限（要点 3–40 个、`statement` 300 码点、提要文字 600 码点、重点词 40 码点且每项至多 2 个、依据每个要点 1–3 条且每条 1–4 句、提要段号至多 6 个、正文少于 3,000 码点不做）。
+- [reading-layers-read.ts](reading-layers-read.ts)：文档读取 `layers` 的请求与三种结果（`overview`、`outline`、`markdown`）的精确键解析，以及 Markdown 文首的机器说明。
 - [draft-document.ts](draft-document.ts)：两级文本、schema 3 初稿引用、初稿内容、差异与形成回执的严格合同；初稿用显式解析入口，原 `parseDocumentRef` 仍只接受 schema 2。片段核对依据按显式版本校验。
 - [form-drafts.ts](form-drafts.ts)：显式补形成初稿的预览、任务请求、互斥范围计数与逐部分回执合同；请求解析在 `operations.ts`，保存的范围由 `intake.ts` 共用解析。
 - [draft-facts.ts](draft-facts.ts)：初稿默认文本的五项计数、PDF 部分的默认版本投影与四个排序键；列表、详情与建档状态共用同一合同。`index.ts` 中的五个新筛选只在有效显式取值时进入规范化查询，省略时保留旧请求与 selector 的编码。
@@ -33,7 +37,7 @@
 
 ## 放置边界
 
-`archive-text.ts` 定义中性 source/叶块、整理操作、断段、页校订与停止合同；`archive-publication.ts` 定义 V2 文本清单、校订版本、整理查询/人工 CAS、预计消耗与进度。`archive.ts` 的新请求采用 schema 2 六步；历史步骤仅作读取。`structure-annotation.ts` 按 schema 分派历史注释与整理派生注释，新角色不自动映射旧角色。
+`archive-text.ts` 定义中性 source/叶块、整理操作、断段、页校订与停止合同；`archive-publication.ts` 定义 V2 文本清单、校订版本、整理查询/人工 CAS、预计消耗与进度。`archive.ts` 的新请求采用 schema 2，步骤为 `ARCHIVE_STEPS`（含 `translate` 与 `layers`）；历史步骤仅作读取。`structure-annotation.ts` 按 schema 分派历史注释与整理派生注释，新角色不自动映射旧角色。
 
 修改字段需要同步生产者、消费者、序列化和持久化兼容；不要把厂商原始响应或机器绝对路径放进中性合同。
 

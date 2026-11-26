@@ -19,6 +19,7 @@
 | [entry/](entry/README.md)                 | 统一业务操作入口          |
 | [extraction/](extraction/README.md)       | 调用方提取候选交付        |
 | [literature/](literature/README.md)       | 文献事实与身份            |
+| [layers/](layers/README.md)               | 阅读层：概览与脉络        |
 | [logging/](logging/README.md)             | 安全日志                  |
 | [mcp/](mcp/README.md)                     | MCP 入口适配              |
 | [metadata/](metadata/README.md)           | 中性元数据服务            |

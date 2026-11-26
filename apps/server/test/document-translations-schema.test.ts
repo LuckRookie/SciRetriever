@@ -7,6 +7,7 @@ import { catalogConfigFor } from "../src/storage/sqlite/catalog-layout.js";
 import { inspectCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
 import {
   ARCHIVE_ISSUES_ADDITION,
+  DOCUMENT_LAYERS_ADDITION,
   DOCUMENT_TRANSLATIONS_ADDITION,
   LIBRARY_SCALE_ADDITION,
   LIBRARY_TRASH_ADDITION,
@@ -78,6 +79,24 @@ it("upgrades an archived catalog to the document-translations addition with ever
         ddl_fingerprint: DOCUMENT_TRANSLATIONS_ADDITION.ddl_fingerprint,
       },
     });
+    // The reading-layers addition that follows is applied next.
+    await expect(inspectCatalogSchema(path)).rejects.toMatchObject({
+      reason: "catalog-addition-required",
+      addition: DOCUMENT_LAYERS_ADDITION.name,
+    });
+    expect(
+      await runCli(
+        [
+          "storage",
+          "schema-apply",
+          "--catalog",
+          path,
+          "--addition",
+          DOCUMENT_LAYERS_ADDITION.name,
+        ],
+        { home: e.home, stdout: () => {}, stderr: () => {} },
+      ),
+    ).toMatchObject({ code: 0 });
     await expect(inspectCatalogSchema(path)).resolves.toMatchObject({
       status: "ready",
     });

@@ -49,6 +49,14 @@ export interface ArchiveRuntime {
     import("../translation/document.js").DocumentTranslationService,
     "build" | "language"
   >;
+  /**
+   * The `layers` step (ADR 0069). A runtime without it, as in focused tests
+   * of other steps, leaves the step out.
+   */
+  readonly layers?: Pick<
+    import("../layers/document.js").DocumentLayersService,
+    "build" | "language" | "translationSha256"
+  >;
   readonly method_sha256: string;
   readonly archiveProfile?: "pipeline" | "vlm-engine";
   /**
@@ -204,10 +212,13 @@ export class ArchiveOrchestrator {
         for (const step of ARCHIVE_STEPS) {
           if (
             part.part !== "main" &&
-            ["translate", "metadata", "references", "tags"].includes(step)
+            ["translate", "layers", "metadata", "references", "tags"].includes(
+              step,
+            )
           )
             continue;
           if (step === "translate" && !this.runtime.translate) continue;
+          if (step === "layers" && !this.runtime.layers) continue;
           try {
             await withActivity(
               { operation: `archive-${step}`, literature_id: id },
@@ -251,9 +262,9 @@ export class ArchiveOrchestrator {
                 true,
               );
             }
-            // Missing references or translation are visible but block neither
-            // the later steps nor readiness (spec 9.3).
-            if (step !== "references" && step !== "translate") break;
+            // Missing references, translation or reading layers are visible
+            // but block neither the later steps nor readiness (spec 9.3, 10.3).
+            if (!["references", "translate", "layers"].includes(step)) break;
           }
         }
       }
@@ -319,6 +330,18 @@ export class ArchiveOrchestrator {
         assignment?.assignment_sha256 ?? null,
         step === "translate"
           ? (this.runtime.translate?.language ?? null)
+          : step === "layers"
+            ? (this.runtime.layers?.language ?? null)
+            : null,
+        step === "layers" &&
+          this.runtime.layers &&
+          current.document_version_id &&
+          current.content_version
+          ? await this.runtime.layers.translationSha256(
+              current.document_version_id,
+              current.content_version,
+              signal,
+            )
           : null,
       ),
     };
@@ -337,15 +360,17 @@ export class ArchiveOrchestrator {
       // Only `from_step: translate` translates every unit again; an earlier
       // from_step keeps reusing unchanged units (spec 9.3).
       force =
-        step === "translate"
-          ? request.from_step === "translate"
+        step === "translate" || step === "layers"
+          ? request.from_step === step
           : request.from_step !== null &&
             ARCHIVE_STEPS.indexOf(step) >=
               ARCHIVE_STEPS.indexOf(request.from_step);
     // Early stages validate their method/manual inputs in the existing publication services.
     if (
       !force &&
-      ["translate", "metadata", "references", "tags"].includes(step) &&
+      ["translate", "layers", "metadata", "references", "tags"].includes(
+        step,
+      ) &&
       prior?.status === "done" &&
       prior.input_sha256 === input.sha256
     ) {
@@ -457,6 +482,19 @@ export class ArchiveOrchestrator {
               signal,
             )),
           };
+        } else if (step === "layers") {
+          output = {
+            ...(await this.runtime.layers!.build(
+              {
+                literature_id: id,
+                asset_id: part.asset_id,
+                document_version_id: reference.document_version_id,
+                annotation_id: reference.annotation_id,
+                force,
+              },
+              signal,
+            )),
+          };
         } else if (step === "metadata") {
           output = {
             ...reference,
@@ -528,7 +566,12 @@ export class ArchiveOrchestrator {
               !signal?.aborted &&
               originalCode !== "translation-incomplete"
             ? "translation-unavailable"
-            : originalCode;
+            : step === "layers" &&
+                !signal?.aborted &&
+                originalCode !== "layers-incomplete" &&
+                originalCode !== "layers-translation-incomplete"
+              ? "layers-unavailable"
+              : originalCode;
       if (!output.stop)
         output = {
           ...output,

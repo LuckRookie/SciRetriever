@@ -3412,6 +3412,7 @@ function createQueryHttpHandler(
       case "/api/v1/query/document-slice":
       case "/api/v1/query/document-draft-differences":
       case "/api/v1/query/document-translation":
+      case "/api/v1/query/document-layers":
       case "/api/v1/query/document-resource":
       case "/api/v1/query/material-evidence":
       case "/api/v1/query/evidence-resolve": {
@@ -3444,14 +3445,17 @@ function createQueryHttpHandler(
                         ? "draft-differences"
                         : url.pathname === "/api/v1/query/document-translation"
                           ? "translation"
-                          : url.pathname === "/api/v1/query/document-slice"
-                            ? "slice"
-                            : url.pathname === "/api/v1/query/document-resource"
-                              ? "resource"
+                          : url.pathname === "/api/v1/query/document-layers"
+                            ? "layers"
+                            : url.pathname === "/api/v1/query/document-slice"
+                              ? "slice"
                               : url.pathname ===
-                                  "/api/v1/query/material-evidence"
-                                ? "material"
-                                : "evidence";
+                                  "/api/v1/query/document-resource"
+                                ? "resource"
+                                : url.pathname ===
+                                    "/api/v1/query/material-evidence"
+                                  ? "material"
+                                  : "evidence";
           const readRequest =
             kind === "evidence" &&
             command.request &&
@@ -3798,7 +3802,8 @@ function createQueryHttpHandler(
                     : error.code === "document-v3-required" ||
                         error.code === "document-unsupported"
                       ? 422
-                      : error.code === "translation-unavailable"
+                      : error.code === "translation-unavailable" ||
+                          error.code === "layers-unavailable"
                         ? 409
                         : 503
               : error instanceof ContractValidationError ||
@@ -3817,7 +3822,13 @@ function createQueryHttpHandler(
                       : error instanceof LiteratureQueryError
                         ? 409
                         : 503;
-        json(response, status, { protocol_version: 1, code });
+        json(response, status, {
+          protocol_version: 1,
+          code,
+          ...(error instanceof DocumentReadError && error.details
+            ? error.details
+            : {}),
+        });
       }),
     close: () => {
       closing = true;

@@ -46,14 +46,15 @@ export function deriveCurrentState(
     )
   )
     return { status: "EXCLUDED", missing_step: null };
-  // A translation issue never affects readiness (spec 9.3).
+  // A translation or reading-layers issue never affects readiness (spec 9.3, 10.3).
   const failure = facts.issues.find(
     (i) =>
       i.affects_readiness &&
       i.resolution !== "continue" &&
-      i.step !== "translate",
+      i.step !== "translate" &&
+      i.step !== "layers",
   );
-  if (failure && failure.step !== "translate")
+  if (failure && failure.step !== "translate" && failure.step !== "layers")
     return { status: "ARCHIVE_FAILED", missing_step: failure.step };
   return { status: missing ? "ASSET_READY" : "READY", missing_step: missing };
 }

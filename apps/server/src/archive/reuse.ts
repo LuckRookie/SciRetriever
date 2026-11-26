@@ -31,7 +31,44 @@ export class ArchiveReusePreview {
     private readonly pagesMethod = PDF_PAGES_METHOD,
     /** `[translation].target_language`; null leaves the translate step out. */
     private readonly language: string | null = null,
+    /** Reading layers (ADR 0069); null leaves the layers step out. */
+    private readonly layers: Pick<
+      import("../layers/document.js").DocumentLayersService,
+      "translationSha256"
+    > | null = null,
   ) {}
+  /** The main PDF still needs the layers step for its current content (spec 10.3). */
+  async layersPending(
+    part: ArchivePart,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    if (this.language === null || this.layers === null || part.part !== "main")
+      return false;
+    const before = part.steps.find((s) => s.step === "layers");
+    if (
+      before?.status !== "done" ||
+      !part.document_version_id ||
+      !part.content_version
+    )
+      return true;
+    return (
+      before.input_sha256 !==
+      (await archiveStepKey(
+        this.method,
+        "full",
+        part,
+        "layers",
+        null,
+        null,
+        this.language,
+        await this.layers.translationSha256(
+          part.document_version_id,
+          part.content_version,
+          signal,
+        ),
+      ))
+    );
+  }
   /** The main PDF still needs the translate step for its current content (spec 9.3). */
   async translationPending(part: ArchivePart): Promise<boolean> {
     if (this.language === null || part.part !== "main") return false;
@@ -156,6 +193,7 @@ export class ArchiveReusePreview {
             return false;
         }
         if (await this.translationPending(part)) return false;
+        if (await this.layersPending(part, signal)) return false;
       }
     }
     return true;

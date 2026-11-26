@@ -1087,7 +1087,7 @@ Agent 的分层读取（需求[用2](../requirements.md#用2-agent-取用知识)
 - 每个操作按资料寻址：`literature_id`，加上正在读的文档版本 `document_version_id`（主 PDF 或某个补充材料部分的一个版本）。版本不属于这份资料时，按请求无效拒绝（`reading-target-mismatch`）。长资料的一章另加 `chapter_id`（大纲里最高一级章节的标识，8.16）；不给时指整份资料。
 - 只读：不发起加工，不调用模型，不排队，不重算也不改写任何结果。由脉络推出的内容（8.16）在读取时按规则计算，可以用可重建的查询投影加速，结果相同。
 - 有界：列表操作的 `limit` 默认 50、最多 200，每个响应不超过 1 MiB，放不下时少给几条并给出续读位置 `next_cursor`。续读位置绑定资料、文档版本与所读结果的 ID，不能用于别的对象。
-- 证据照常携带：每个引用带文档版本、文本等级、核对依据（8.2），以及出处角标 `mark`：`{paragraph, sentences}`，按[文档与证据 3.5](04-document-evidence.md#35-分句与出处角标目标尚未实现)的规则计算，句号算不出时 `sentences` 为 `null`。
+- 证据照常携带：每个引用带文档版本、文本等级、核对依据（8.2），以及出处角标 `mark`：`{paragraph, sentences}`，按[文档与证据 3.5](04-document-evidence.md#35-分句与出处角标)的规则计算，句号算不出时 `sentences` 为 `null`。
 - 结果描述 `ResultDescriptor`：`{result_id, content_sha256, producer（算子或汇总模式的 id@版本）, method_sha256, created_at, built_on: {document_version_id, text_level}, on_read_version, freshness, method_current, coverage}`。`freshness` 是 8.4 的内容过时标记（`current` 或 `outdated`）；`on_read_version` 说明它是否建在正在读的版本上；`method_current` 说明方法是否为当前版本。过时的结果照常返回，只是这样标明。
 - 部分结果不作为“当前结果”返回。一份资料的全部结果（含部分与旧结果）仍由既有的 `literature_results` 列出。
 

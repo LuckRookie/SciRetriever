@@ -273,6 +273,7 @@ it(
       }>("task-run", { job_id: job.job!.job_id });
       expect(progress.items[0]!.steps.map((s) => s.step).sort()).toEqual([
         "arrange",
+        "layers",
         "metadata",
         "proofread",
         "references",

@@ -190,6 +190,7 @@ function usage(options: CliOptions): CliResult {
     "    Draft locations use basis=text-layer-match|text-layer-differs|no-text-layer; roles returns the whole draft with coverage_note; corrected basis is unchanged\n" +
     "  document draft-differences --request FILE|-  # saved draft differences as bounded json-utf8; collect continuations before parsing\n" +
     "  document translation --request FILE|-  # stored machine translation by unit; slice takes text=original|translation|bilingual\n" +
+    "  document layers --request FILE|-  # stored reading layers: part=overview|outline, text=original|translation|bilingual, format=json|markdown; never builds them\n" +
     "    corrections is corrected-only; devices read via HTTP MCP /mcp with purpose read, not query HTTP routes\n" +
     "  context search|knowledge --request FILE|-; analysis prepare --request FILE|-; extraction prepare --request FILE|-\n" +
     "  literature status; literature search|read|references|reference|identity|artifact-chunk|bibliography --request FILE|-\n" +
@@ -1146,6 +1147,7 @@ async function execute(
     "document corrections": "document-corrections",
     "document draft-differences": "document-draft-differences",
     "document translation": "document-translation",
+    "document layers": "document-layers",
     "document parsing-status": "document-parsing-status",
     "document default": "document-default",
     "document describe": "document-describe",
@@ -2411,6 +2413,13 @@ export async function runCli(
           : {}),
         ...(error instanceof ProcessorQueryError
           ? { fields: error.fields }
+          : {}),
+        // A document read refusal may say why, e.g. layers-unavailable's state and reason.
+        ...(isQueryFailure(error) &&
+        "details" in error &&
+        error.details &&
+        typeof error.details === "object"
+          ? error.details
           : {}),
         ...(error instanceof CatalogSchemaError
           ? {

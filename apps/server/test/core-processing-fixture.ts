@@ -34,6 +34,89 @@ export interface ModelInput {
   readonly purpose?: string;
   readonly [key: string]: unknown;
 }
+export interface LayersTranslationInput {
+  readonly items: readonly {
+    readonly id: string;
+    readonly text: string;
+    readonly key_terms: readonly string[];
+    readonly evidence?: readonly {
+      readonly id: string;
+      readonly unit: string;
+      readonly original: string;
+    }[];
+  }[];
+  readonly units: readonly {
+    readonly id: string;
+    readonly sentences: readonly {
+      readonly n: number;
+      readonly text: string;
+    }[];
+  }[];
+}
+/** The paragraphs of a layers input: short id and sentence texts. */
+export function layersParagraphs(input: string) {
+  return [...input.matchAll(/^\[(p\d+)\] (.*)$/gmu)].map((m) => ({
+    id: m[1]!,
+    sentences: m[2]!
+      .split(/<\d+> /u)
+      .map((s) => s.trim())
+      .filter(Boolean),
+  }));
+}
+/**
+ * A valid layers answer: one point per paragraph (up to six) resting on its
+ * first sentence, whose statement repeats that sentence's first words, so its
+ * key term is found in it.
+ */
+export function defaultLayersReply(input: string) {
+  const paragraphs = layersParagraphs(input).slice(0, 6);
+  return {
+    digest: {
+      nature: {
+        text: "A synthetic study of spectra. Read the results first.",
+        not_given: null,
+        units: [paragraphs[0]?.id ?? "p1"],
+        key_terms: ["synthetic study"],
+      },
+      limits: {
+        text: null,
+        not_given: "The study states no limitation.",
+        units: [],
+        key_terms: [],
+      },
+      advice: {
+        text: "Read the results closely.",
+        not_given: null,
+        units: [],
+        key_terms: ["results"],
+      },
+    },
+    points: paragraphs.map((p) => {
+      const words = p.sentences[0]!.replace(/[.!?]$/u, "").split(/\s+/u);
+      return {
+        statement: `The paper states that ${words.slice(0, 6).join(" ")}.`,
+        evidence: [`${p.id}.1`],
+        key_terms: [
+          words.slice(0, 6).find((w) => /^[A-Za-z]{5,}$/u.test(w)) ?? words[0]!,
+        ],
+      };
+    }),
+  };
+}
+/** Every item translated with a prefix, key terms kept, evidence on sentence 1. */
+export function defaultLayersTranslationReply(input: LayersTranslationInput) {
+  return {
+    items: input.items.map((item) => ({
+      id: item.id,
+      translation: `译文：${item.text}`,
+      key_terms: item.key_terms.map((term) => ({ term, translation: term })),
+      evidence: (item.evidence ?? []).map((e) => ({
+        id: e.id,
+        sentences: [1],
+      })),
+    })),
+  };
+}
 const baseConfiguration =
   '[providers.fixture]\napi="openai-chat-completions"\nbase_url="http://127.0.0.1:9/v1"\n[models."fixture/model"]\nreasoning="medium"\nimage=true\nstream=false\n[analyze]\nmodel="fixture/model"\n';
 export async function coreProcessingFixture(
@@ -90,6 +173,11 @@ export async function coreProcessingFixture(
       translation: `译文：${u.text}`,
     })),
   });
+  /** Reading layers (ADR 0069): the first call gets the plain-text input. */
+  let layersReply: (input: string) => unknown = defaultLayersReply;
+  /** The layers translation part (spec 10.5): JSON items and units. */
+  let layersTranslationReply: (input: LayersTranslationInput) => unknown =
+    defaultLayersTranslationReply;
   let modelReply: (
     input: ModelInput,
     signal?: AbortSignal,
@@ -261,18 +349,24 @@ export async function coreProcessingFixture(
           body: Buffer.from(JSON.stringify(value)),
         };
       }
-      const input = JSON.parse(
-        wire.messages[1]!.content[0]!.text,
-      ) as ModelInput;
       const system = wire.messages[0]?.content;
-      const value = (typeof system === "string"
-        ? system
-        : (system?.[0]?.text ?? "")
-      ).startsWith("You translate the paragraphs")
-        ? translationReply(
-            input as unknown as Parameters<typeof translationReply>[0],
-          )
-        : await modelReply(input, request.signal);
+      const systemText =
+        typeof system === "string" ? system : (system?.[0]?.text ?? "");
+      const userText = wire.messages[1]!.content[0]!.text;
+      const value = systemText.startsWith("You write two reading layers")
+        ? layersReply(userText)
+        : systemText.startsWith("You translate the reading notes")
+          ? layersTranslationReply(
+              JSON.parse(userText) as LayersTranslationInput,
+            )
+          : systemText.startsWith("You translate the paragraphs")
+            ? translationReply(
+                JSON.parse(userText) as Parameters<typeof translationReply>[0],
+              )
+            : await modelReply(
+                JSON.parse(userText) as ModelInput,
+                request.signal,
+              );
       return {
         status: 200,
         headers: [],
@@ -349,6 +443,12 @@ export async function coreProcessingFixture(
       },
       setTranslation: (reply: typeof translationReply) => {
         translationReply = reply;
+      },
+      setLayers: (reply: typeof layersReply) => {
+        layersReply = reply;
+      },
+      setLayersTranslation: (reply: typeof layersTranslationReply) => {
+        layersTranslationReply = reply;
       },
       async identityRequest(): Promise<ArticleIdentityRequest> {
         const detail = await app.library.detail(

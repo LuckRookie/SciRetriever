@@ -19,6 +19,7 @@ const directories = {
   "structure-annotation": "parsed/annotations",
   "document-structure": "parsed/structure",
   "document-translation": "parsed/translations",
+  "document-layers": "parsed/layers",
   "knowledge-summary": "knowledge/summaries",
   "knowledge-synthesis": "knowledge/syntheses",
   "processor-result": "knowledge/results",

@@ -13,7 +13,21 @@ export function archiveStepKey(
   metadata: { metadata_revision: number; metadata_sha256: string } | null,
   assignment: string | null,
   language: string | null = null,
+  /** `layers`: sha256 of the current content version's translation file, or null. */
+  translation: string | null = null,
 ) {
+  // Reading layers depend on the content version, the language and the
+  // translation file only (spec 10.3); prompt and model changes do not redo them.
+  if (step === "layers")
+    return sha256(
+      canonicalJsonBytes({
+        step,
+        asset: part.asset_id,
+        content: part.content_version,
+        language,
+        translation,
+      }),
+    );
   // Translation depends on the content version and the language only (spec
   // 9.3): a prompt or model change does not translate a paper again.
   if (step === "translate")

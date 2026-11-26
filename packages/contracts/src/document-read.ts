@@ -25,6 +25,10 @@ import {
   type TranslationLanguage,
 } from "./translation.js";
 import {
+  parseDocumentLayersSummary,
+  type DocumentLayersSummary,
+} from "./reading-layers.js";
+import {
   ContractValidationError,
   parseAssetId,
   parseLiteratureId,
@@ -760,6 +764,8 @@ export interface DocumentReadResultMap {
     readonly layout?: DocumentLayout;
     /** Stored machine translation of this version (ADR 0068). */
     readonly translation?: DocumentTranslationSummary;
+    /** Stored reading layers of this version (ADR 0069). */
+    readonly layers?: DocumentLayersSummary;
     readonly section_count: number;
     readonly segment_count: number;
     readonly resource_count: number;
@@ -898,6 +904,9 @@ function parseResult<K extends DocumentReadOperation>(
         ...(value && typeof value === "object" && "translation" in value
           ? ["translation"]
           : []),
+        ...(value && typeof value === "object" && "layers" in value
+          ? ["layers"]
+          : []),
       ]);
       const document = parseDocumentReadingRef(r.document);
       matchDocument(document, req as DocumentReadRequestMap["describe"]);
@@ -944,6 +953,14 @@ function parseResult<K extends DocumentReadOperation>(
           : {
               translation: translationSummary(
                 r.translation,
+                level.text_level === "draft",
+              ),
+            }),
+        ...(r.layers === undefined
+          ? {}
+          : {
+              layers: parseDocumentLayersSummary(
+                r.layers,
                 level.text_level === "draft",
               ),
             }),

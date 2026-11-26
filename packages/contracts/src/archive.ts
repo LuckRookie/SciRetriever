@@ -14,6 +14,7 @@ export const ARCHIVE_STEPS = [
   "proofread",
   "render",
   "translate",
+  "layers",
   "metadata",
   "references",
   "tags",

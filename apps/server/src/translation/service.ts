@@ -336,6 +336,79 @@ export class TranslationService {
     await ask(wanted, true);
     return { translations, usage: usage(), truncated };
   }
+  /**
+   * One structured request with the archive translation's model choice (the
+   * default model, role `translation`), for steps that reuse that choice
+   * without a configuration key of their own (reading layers, spec 10.3).
+   * Never cached. Throws `translation-model-unavailable` before any call and
+   * `translation-cancelled` on abort; any other failure is returned, with the
+   * call counted and its tokens unknown.
+   */
+  async structured(
+    request: {
+      readonly system: string;
+      readonly user: string;
+      readonly media_type: "text/plain" | "application/json";
+      readonly schema: Record<string, unknown>;
+      readonly input_sha256: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<
+    | {
+        readonly kind: "answer";
+        readonly value: unknown;
+        readonly model: string;
+        readonly usage: UnitTranslationUsage;
+      }
+    | {
+        readonly kind: "truncated" | "failed";
+        readonly model: string;
+        readonly usage: UnitTranslationUsage;
+      }
+  > {
+    const { model, runtime } = this.ready(null);
+    try {
+      const result = await runtime.execute(
+        {
+          role: "translation",
+          messages: [
+            {
+              role: "system",
+              parts: [{ media_type: "text/plain", text: request.system }],
+            },
+            {
+              role: "user",
+              parts: [{ media_type: request.media_type, text: request.user }],
+            },
+          ],
+          required_capabilities: ["structured_text"],
+          response_schema: request.schema,
+          input_sha256: request.input_sha256,
+        },
+        signal,
+      );
+      const usage = {
+        calls: 1,
+        input_tokens: result.provenance.usage.input_tokens,
+        output_tokens: result.provenance.usage.output_tokens,
+      };
+      return result.kind === "structured"
+        ? { kind: "answer", value: result.value, model, usage }
+        : { kind: "failed", model, usage };
+    } catch (error) {
+      if (signal?.aborted)
+        throw new TranslationError("translation-cancelled", { cause: error });
+      const usage = { calls: 1, input_tokens: null, output_tokens: null };
+      return {
+        kind:
+          error instanceof AgentFailure && error.code === "agent-truncated"
+            ? "truncated"
+            : "failed",
+        model,
+        usage,
+      };
+    }
+  }
   async translate(
     value: unknown,
     signal?: AbortSignal,

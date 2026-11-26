@@ -62,6 +62,18 @@ const {
     import.meta.url,
   ).href
 );
+const {
+  publishDocumentLayers,
+  readDocumentLayers,
+  readLatestDocumentLayers,
+}: typeof import("./document-layers-engine.js") = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./document-layers-engine.ts"
+      : "./document-layers-engine.js",
+    import.meta.url,
+  ).href
+);
 const { deriveCurrentState }: typeof State = await import(
   new URL(
     import.meta.url.endsWith(".ts")
@@ -85,7 +97,10 @@ export type ArchiveStorageAction =
   | "parse"
   | "translation"
   | "translation-latest"
-  | "translation-publish";
+  | "translation-publish"
+  | "layers"
+  | "layers-latest"
+  | "layers-publish";
 export const ARCHIVE_READ_ACTIONS: readonly ArchiveStorageAction[] = [
   "state",
   "issue-count",
@@ -95,6 +110,8 @@ export const ARCHIVE_READ_ACTIONS: readonly ArchiveStorageAction[] = [
   "revision",
   "translation",
   "translation-latest",
+  "layers",
+  "layers-latest",
 ];
 const hash = (v: unknown) =>
   createHash("sha256").update(canonicalJsonBytes(v)).digest("hex");
@@ -140,6 +157,7 @@ function projectArchiveIssue(
       part === "main" &&
       step !== "references" &&
       step !== "translate" &&
+      step !== "layers" &&
       reason !== "page-content-missing" &&
       !(arranged && (step === "document" || step === "structure")),
     resolution: row.resolution as ArchiveIssue["resolution"],
@@ -518,6 +536,9 @@ export function runArchiveStorage(
       return readLatestDocumentTranslation(db, r);
     if (action === "translation-publish")
       return publishDocumentTranslation(db, r);
+    if (action === "layers") return readDocumentLayers(db, r);
+    if (action === "layers-latest") return readLatestDocumentLayers(db, r);
+    if (action === "layers-publish") return publishDocumentLayers(db, r);
     if (action === "events")
       return rows(
         db,

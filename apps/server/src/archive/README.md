@@ -12,7 +12,9 @@
 
 `input-key.ts` 统一步骤复用键；`reuse.ts` 只读检查当前原稿、人工决定、方法、模型及各步缓存，供启动前预估完整可复用篇数，不把部分复用计作整篇复用。
 
-建档步骤为 `arrange → proofread → render → translate → metadata → references → tags`。`translate`（ADR 0068，实现在 `translation/document.ts`）只在主 PDF 上执行，输入键为“主 PDF、校订稿内容版本、译文语言”，相同且上次完成时跳过；只有 `from_step: translate` 强制重译全部单元。它与 `references` 一样失败不中断后面的步骤，问题的 `affects_readiness` 为 false；原因只有 `translation-incomplete` 与 `translation-unavailable`，后者的原始失败码记在 `output.failure_code`。运行时没有接上 `translate` 时（只测其他步骤的测试）这一步不出现。已有全文、没有译文的文献再次建档时，前三步靠各自的复用不调用模型，后三步按输入键跳过，只有这一步调用模型。
+建档步骤为 `arrange → proofread → render → translate → layers → metadata → references → tags`。`translate`（ADR 0068，实现在 `translation/document.ts`）只在主 PDF 上执行，输入键为“主 PDF、校订稿内容版本、译文语言”，相同且上次完成时跳过；只有 `from_step: translate` 强制重译全部单元。它与 `references` 一样失败不中断后面的步骤，问题的 `affects_readiness` 为 false；原因只有 `translation-incomplete` 与 `translation-unavailable`，后者的原始失败码记在 `output.failure_code`。运行时没有接上 `translate` 时（只测其他步骤的测试）这一步不出现。已有全文、没有译文的文献再次建档时，前三步靠各自的复用不调用模型，后三步按输入键跳过，只有这一步调用模型。
+
+`layers`（ADR 0069，实现在 `layers/document.ts`）同样只在主 PDF 上执行，输入键为“主 PDF、校订稿内容版本、译文语言、当前内容版本的译文文件 sha256”；只有 `from_step: layers` 强制全部重做，只有译文文件变了时这一步只重做译文部分。失败不中断后面的步骤、不影响就绪；原因为 `layers-incomplete`、`layers-translation-incomplete` 与 `layers-unavailable`（原始失败码记在 `output.failure_code`）。运行时没有接上 `layers` 时这一步不出现。`reuse.ts` 的 `layersPending` 判断主 PDF 是否还要这一步，供整篇复用与用量估算。
 
 `text-pipeline.ts` 是生产六步前半段的组装：中性 source、整理、逐页校订、文本清单 CAS、文档/注释发布和索引刷新。`render.ts` 只生成确定性 Markdown、结构、source map 与派生注释；`arrangement-access.ts` 提供固定版本查询、人工恢复/重归属与锁，`markdown-edit.ts` 校验整份 Markdown 的唯一叶块映射。
 

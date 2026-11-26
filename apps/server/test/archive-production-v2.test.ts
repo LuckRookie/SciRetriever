@@ -75,6 +75,7 @@ it("publishes the six-step X workflow, excludes dropped text from fixed document
     expect(state.status).toBe("READY");
     expect(part.steps.map((s) => s.step).sort()).toEqual([
       "arrange",
+      "layers",
       "metadata",
       "proofread",
       "references",
@@ -133,8 +134,8 @@ it("publishes the six-step X workflow, excludes dropped text from fixed document
           v.kind === "archive-progress" &&
           (v.payload as { phase: string }).phase === "completed",
       ),
-      // Six archive steps and translate (ADR 0068).
-    ).toHaveLength(7);
+      // Six archive steps, translate (ADR 0068) and layers (ADR 0069).
+    ).toHaveLength(8);
     expect(
       events.filter(
         (v) =>
@@ -161,6 +162,7 @@ it("publishes the six-step X workflow, excludes dropped text from fixed document
       proofread: "done",
       render: "done",
       translate: "done",
+      layers: "done",
       metadata: "done",
       references: "done",
       tags: "done",

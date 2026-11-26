@@ -3,6 +3,7 @@
 本目录有两件事：阅读页的划词翻译（ADR 0049），以及建档时产生并存进文献库的全文译文（ADR 0068，规格见技术篇“文档与证据”第 9 节）。
 
 - `service.ts`：内置提示词与 `TranslationService`。划词翻译用 `translationSystem`（版本 `TRANSLATION_PROMPT_VERSION`）、`normalizeTranslationText` 与 `translationKey`，每次一次结构化请求，返回 `{translation}`；模型取请求所带的、服务启动时已登记的模型，未指定时用 `analyze.model`。全文译文用 `documentTranslationSystem`（版本 `DOCUMENT_TRANSLATION_PROMPT_VERSION`）、`normalizeUnitText` 与 `documentUnitKey`，由 `translateUnits` 一批一次请求。
+- `TranslationService.structured`：用全文译文的模型选择（默认模型、角色 `translation`）发一次结构化请求，不读写缓存；模型不可用在请求前抛 `translation-model-unavailable`，取消抛 `translation-cancelled`，其余失败作为 `truncated` 或 `failed` 返回，调用计一次、token 未知。阅读层一步（`layers/`）用它，不另设模型配置。
 - `cache.ts`：`TranslationCache`，一个独立的 SQLite 文件 `~/.sciretriever/cache/translations.sqlite`，最多 `TRANSLATION_CACHE_LIMIT`（20,000）条，满了删除最久没有用到的一条。键为“提示词版本、目标语言、规范化原文”的 SHA-256，不含模型；每条记录所用模型。划词与全文共用这一个文件，提示词版本不同，键互不相交。
 - `document.ts`：建档的 `translate` 一步（`DocumentTranslationService`）与译文的登记和文件（`DocumentTranslationStore`）。
 - `fulltext.ts`、`source.ts`：PDF 视图的对照翻译，读库里的译文，不请求模型。

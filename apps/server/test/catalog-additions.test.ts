@@ -31,6 +31,7 @@ import { StoredLibraryState } from "../src/storage/sqlite/library-state.js";
 import { withoutDocumentTranslations } from "./document-translations-fixture.js";
 import {
   ARCHIVE_ISSUES_ADDITION,
+  DOCUMENT_LAYERS_ADDITION,
   DOCUMENT_TRANSLATIONS_ADDITION,
   LIBRARY_SCALE_ADDITION,
   LIBRARY_TRASH_ADDITION,
@@ -368,6 +369,26 @@ it("installs the unresolved-issue index on the existing layout while old readers
         code: 0,
         value: { name: DOCUMENT_TRANSLATIONS_ADDITION.name },
       });
+      await expect(inspectCatalogSchema(path)).rejects.toMatchObject({
+        reason: "catalog-addition-required",
+        addition: DOCUMENT_LAYERS_ADDITION.name,
+      });
+      expect(
+        await runCli(
+          [
+            "storage",
+            "schema-apply",
+            "--catalog",
+            path,
+            "--addition",
+            DOCUMENT_LAYERS_ADDITION.name,
+          ],
+          { home, stdout: () => {}, stderr: () => {} },
+        ),
+      ).toMatchObject({
+        code: 0,
+        value: { name: DOCUMENT_LAYERS_ADDITION.name },
+      });
       await expect(inspectCatalogSchema(path)).resolves.toMatchObject({
         status: "ready",
         schema_fingerprint: SCHEMA_FINGERPRINT,
@@ -377,6 +398,7 @@ it("installs the unresolved-issue index on the existing layout while old readers
             backfill_step: 0,
             backfill_cursor: null,
           },
+          { name: DOCUMENT_LAYERS_ADDITION.name },
           { name: DOCUMENT_TRANSLATIONS_ADDITION.name },
           { name: LIBRARY_SCALE_ADDITION.name },
           {
@@ -432,6 +454,7 @@ it("keeps known DDL exact and refuses an incompatible or non-additive applicatio
           .all(),
       ).toEqual([
         { name: ARCHIVE_ISSUES_ADDITION.name },
+        { name: DOCUMENT_LAYERS_ADDITION.name },
         { name: DOCUMENT_TRANSLATIONS_ADDITION.name },
         { name: LIBRARY_SCALE_ADDITION.name },
         { name: LIBRARY_TRASH_ADDITION.name },

@@ -15,6 +15,8 @@ import {
   parseDocumentDraftDifferencesResult,
   parseDocumentTranslationRequest,
   parseDocumentTranslationResult,
+  parseDocumentLayersRequest,
+  parseDocumentLayersResult,
   parseDocumentReadResult,
   parseFormDraftsPartResult,
   parseLiteratureId,
@@ -119,6 +121,7 @@ export const QUERY_OPERATIONS = [
   "document-corrections",
   "document-draft-differences",
   "document-translation",
+  "document-layers",
   "document-parsing-status",
   "document-default",
   "document-describe",
@@ -414,6 +417,21 @@ async function readQuery(
     const result = await q.documentRead.translation(request, signal);
     try {
       return parseDocumentTranslationResult(result, request);
+    } catch (error) {
+      throw new DocumentReadError("document-integrity", { cause: error });
+    }
+  }
+  if (operation === "document-layers") {
+    if (!q.documentRead) unavailable();
+    let request;
+    try {
+      request = parseDocumentLayersRequest(value);
+    } catch (error) {
+      throw new DocumentReadError("document-invalid", { cause: error });
+    }
+    const result = await q.documentRead.layers(request, signal);
+    try {
+      return parseDocumentLayersResult(result, request);
     } catch (error) {
       throw new DocumentReadError("document-integrity", { cause: error });
     }

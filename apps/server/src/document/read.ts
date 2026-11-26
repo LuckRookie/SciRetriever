@@ -4,6 +4,14 @@ import {
   type DocumentTranslationStore,
 } from "../translation/document.js";
 import { segmentLocation, segmentPageRegion, readSegment } from "./location.js";
+import type { DocumentLayersStore } from "../layers/document.js";
+import {
+  LayersReader,
+  layersMarkdownHeader,
+  layersMarkdownPoint,
+  layersMarkdownSection,
+} from "../layers/read.js";
+import { LiteratureMetadataService } from "../literature/metadata-service.js";
 import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
@@ -13,6 +21,10 @@ import {
   parseDocumentReadRequest,
   parseDocumentDraftDifferencesRequest,
   parseDocumentTranslationRequest,
+  parseDocumentLayersRequest,
+  LAYERS_OUTLINE_MAX_LIMIT,
+  type DocumentLayersResult,
+  type DocumentLayersSummary,
   parseDocumentMaterialBytesRequest,
   parseDocumentResourceBytesRequest,
   documentReadTitle,
@@ -63,11 +75,17 @@ export class DocumentReadError extends Error {
       | "document-budget"
       | "document-cancelled"
       | "document-closed"
-      | "translation-unavailable",
-    options?: ErrorOptions,
+      | "translation-unavailable"
+      | "layers-unavailable",
+    options?: ErrorOptions & {
+      /** Non-secret facts a reader can act on, such as `state` and `reason`. */
+      readonly details?: Readonly<Record<string, unknown>>;
+    },
   ) {
     super(code, options);
+    this.details = options?.details;
   }
+  readonly details: Readonly<Record<string, unknown>> | undefined;
 }
 function invalid(): never {
   throw new DocumentReadError("document-invalid");
@@ -287,7 +305,24 @@ export class DocumentReadService {
     private readonly annotations: SqliteAnnotationStorage | null = null,
     /** Stored full-text translation (ADR 0068); null reads original text only. */
     private readonly translations: DocumentTranslationStore | null = null,
+    /** Stored reading layers (ADR 0069); null reads none. */
+    private readonly layerStore: DocumentLayersStore | null = null,
   ) {}
+  /** `describe.layers` (spec 10.7). */
+  private async layersSummary(
+    document: DocumentRef,
+    signal?: AbortSignal,
+  ): Promise<DocumentLayersSummary> {
+    const annotation =
+      document.schema_version === 2 && this.annotations
+        ? await this.annotations.current(document.document_version_id, signal)
+        : null;
+    return this.layerStore!.summary(
+      document,
+      annotation?.annotation_id ?? null,
+      signal,
+    );
+  }
   /** The configured language's translation of a fixed version (spec 9.6). */
   private async translationOf(
     document: DocumentRef,
@@ -663,6 +698,9 @@ export class DocumentReadService {
                 .summary,
             }
           : {}),
+        ...(this.layerStore
+          ? { layers: await this.layersSummary(document, signal) }
+          : {}),
       }));
     });
   }
@@ -740,6 +778,243 @@ export class DocumentReadService {
           };
         },
       );
+    });
+  }
+  /**
+   * Stored reading layers (spec 10.7): the overview in one page, the outline
+   * by points with their evidence, or either as Markdown. Reads only stored
+   * content; never builds layers or calls a model.
+   */
+  layers(value: unknown, signal?: AbortSignal): Promise<DocumentLayersResult> {
+    return this.run(async () => {
+      let r;
+      try {
+        r = parseDocumentLayersRequest(value);
+      } catch (error) {
+        if (error instanceof ContractValidationError) return invalid();
+        throw error;
+      }
+      const result: unknown = await this.version(
+        r.document_version_id,
+        signal,
+        async (document, bytes, structure) => {
+          const unavailable = (state: string, reason: string | null) =>
+            new DocumentReadError("layers-unavailable", {
+              details: { state, reason },
+            });
+          if (!this.layerStore) throw unavailable("none", null);
+          const annotation =
+            document.schema_version === 2 && this.annotations
+              ? await this.annotations.current(
+                  document.document_version_id,
+                  signal,
+                )
+              : null;
+          const found = await this.layerStore.lookup(
+            document,
+            annotation?.annotation_id ?? null,
+            signal,
+          );
+          if (found.state !== "complete" || !found.row)
+            throw unavailable(found.state, found.row?.reason ?? null);
+          let file;
+          try {
+            file = await this.layerStore.load(found.row, signal);
+          } catch (error) {
+            throw new DocumentReadError("document-integrity", { cause: error });
+          }
+          const part = file.translation;
+          if (r.text !== "original" && !part)
+            throw new DocumentReadError("translation-unavailable");
+          // Evidence translations come from the stored translation in the
+          // part's language; its positions count only on the same file.
+          let translated = null;
+          if (part && r.text !== "original" && this.translations) {
+            const row = await this.translations.row(
+              document.document_version_id,
+              file.content_version,
+              part.target_language,
+              signal,
+            );
+            if (row && row.status !== "same-language")
+              try {
+                translated = {
+                  file: await this.translations.load(row, signal),
+                  aligned: row.sha256 === part.translation_sha256,
+                };
+              } catch (error) {
+                throw new DocumentReadError("document-integrity", {
+                  cause: error,
+                });
+              }
+          }
+          const reader = new LayersReader({
+            mode: r.text,
+            markdown: bytes,
+            structure: structure as never,
+            file,
+            translation: translated?.file ?? null,
+            aligned: translated?.aligned ?? false,
+          });
+          const common = {
+            document: readingRef(document),
+            text_level: textLevel(document),
+            part: r.part,
+            text: r.text,
+            state: "complete" as const,
+            machine_written: true as const,
+            model: file.model,
+            prompt_version: file.prompt_version,
+          };
+          const marks = () =>
+            r.text === "original"
+              ? {}
+              : {
+                  machine_translation: true as const,
+                  target_language: part!.target_language,
+                  untranslated: reader.untranslated,
+                };
+          const title = await new LiteratureMetadataService(this.database)
+            .read(document.source_material_ref.literature_id, signal)
+            .then((m) => m.literature.metadata.title ?? null)
+            .catch(() => null);
+          check(signal);
+          if (r.part === "overview") {
+            const digest = reader.digest(),
+              sections = reader.sections();
+            if (r.format === "markdown") {
+              let markdown = layersMarkdownHeader(title, digest, r.text);
+              for (const section of sections) {
+                markdown += layersMarkdownSection(section.title);
+                for (const p of section.points)
+                  markdown += layersMarkdownPoint(p, null) + "\n";
+              }
+              return {
+                ...common,
+                format: "markdown" as const,
+                markdown: markdown.trimEnd() + "\n",
+                total: file.points.length,
+                next_cursor: null,
+                ...marks(),
+              };
+            }
+            return {
+              ...common,
+              format: "json" as const,
+              title,
+              digest,
+              sections,
+              ...marks(),
+            };
+          }
+          const selector = { part: r.part, text: r.text, format: r.format };
+          const start = cursorPosition(
+            r.cursor,
+            "layers",
+            document,
+            selector,
+            0,
+            file.points.length + 1,
+          );
+          const limit = Math.min(r.limit, LAYERS_OUTLINE_MAX_LIMIT);
+          const points = [];
+          let size = 0,
+            markdown =
+              r.format === "markdown" && start === 0
+                ? layersMarkdownHeader(title, reader.digest(), r.text)
+                : "";
+          // The digest (and its untranslated texts) is on the first Markdown page only.
+          let section: string | null | undefined =
+            start > 0 ? file.points[start - 1]!.section_id : undefined;
+          for (
+            let i = start;
+            i < file.points.length && points.length < limit;
+            i++
+          ) {
+            const counted = reader.untranslated;
+            const point = reader.point(i),
+              evidence = reader.evidence(i);
+            const piece =
+              r.format === "markdown"
+                ? (section !== point.section_id
+                    ? layersMarkdownSection(point.section_title)
+                    : "") +
+                  layersMarkdownPoint(point, evidence) +
+                  "\n"
+                : JSON.stringify({ ...point, evidence });
+            const n = Buffer.byteLength(piece);
+            if (points.length && size + n > DOCUMENT_READ_MAX_BYTES) {
+              // A point left for the next page is not counted on this one.
+              reader.untranslated = counted;
+              break;
+            }
+            size += n;
+            section = point.section_id;
+            if (r.format === "markdown") markdown += piece;
+            points.push({ ...point, evidence });
+          }
+          const next = start + points.length;
+          const next_cursor =
+            next < file.points.length
+              ? cursor("layers", document, selector, next)
+              : null;
+          if (r.format === "markdown")
+            return {
+              ...common,
+              format: "markdown" as const,
+              markdown: markdown.trimEnd() + "\n",
+              total: file.points.length,
+              next_cursor,
+              ...marks(),
+            };
+          // Evidence references of the page, as slice gives them.
+          const evidence: EvidenceRef[] = [];
+          const seen = new Set<string>();
+          const segments = new Map(
+            structure.segments.map((s) => [s.segment_id, s]),
+          );
+          for (const p of points)
+            for (const e of p.evidence)
+              for (const id of e.kind === "block"
+                ? [e.segment_id]
+                : e.segment_ids) {
+                const item = segments.get(id);
+                if (
+                  !item ||
+                  seen.has(id) ||
+                  evidence.length >= DOCUMENT_READ_MAX_EVIDENCE
+                )
+                  continue;
+                seen.add(id);
+                evidence.push(
+                  parseEvidenceRef({
+                    schema_version: 1,
+                    target_kind: "document",
+                    locator_scheme: "utf8-segment-v1",
+                    document_version_id: document.document_version_id,
+                    representation_sha256: document.representation_sha256,
+                    locator: { kind: "segment", segment_id: item.segment_id },
+                    ...(segmentPageRegion(item)
+                      ? { page_region: segmentPageRegion(item) }
+                      : {}),
+                    content_sha256: await sha256(
+                      bytes.subarray(item.start_utf8, item.end_utf8),
+                    ),
+                  }),
+                );
+              }
+          return {
+            ...common,
+            format: "json" as const,
+            points,
+            evidence,
+            total: file.points.length,
+            next_cursor,
+            ...marks(),
+          };
+        },
+      );
+      return result as DocumentLayersResult;
     });
   }
   default(value: unknown, signal?: AbortSignal) {

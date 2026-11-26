@@ -1,3 +1,4 @@
+import { DocumentReadError } from "../document/read.js";
 import { catalogCorruption } from "../storage/sqlite/errors.js";
 import { NetworkBudgetCoordinator } from "../network/budget.js";
 import { withoutRestartAdmission } from "../application/restart-admission.js";
@@ -628,6 +629,10 @@ export function createMcpServer(options: McpOptions = {}) {
                 : {}),
               ...(error instanceof ProcessorQueryError
                 ? { fields: error.fields }
+                : {}),
+              // A document read refusal may say why (layers-unavailable: state, reason).
+              ...(error instanceof DocumentReadError && error.details
+                ? error.details
                 : {}),
               message:
                 "The requested operation could not complete. Inspect readiness, fixed inputs or the durable task result.",

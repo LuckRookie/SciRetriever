@@ -3,6 +3,7 @@ import {
   CATALOG_BASE_SCHEMA,
   DOCUMENT_TRANSLATIONS_ADDITION,
 } from "../src/storage/sqlite/schema.js";
+import { withoutDocumentLayers } from "./document-layers-fixture.js";
 
 /**
  * Turn a current catalog back into the layout before the
@@ -10,6 +11,8 @@ import {
  * (rows of the new step left out), no translation table, no registration.
  */
 export function withoutDocumentTranslations(db: DatabaseSync) {
+  // The later addition goes first.
+  withoutDocumentLayers(db);
   const base = CATALOG_BASE_SCHEMA.find((sql) =>
     sql.startsWith("CREATE TABLE archive_steps("),
   )!;
@@ -21,7 +24,7 @@ export function withoutDocumentTranslations(db: DatabaseSync) {
   for (const object of dependents)
     db.exec(`DROP ${object.type.toUpperCase()} ${object.name}`);
   db.exec(
-    "CREATE TEMP TABLE older_steps AS SELECT * FROM archive_steps WHERE step<>'translate'",
+    "CREATE TEMP TABLE older_steps AS SELECT * FROM archive_steps WHERE step NOT IN ('translate','layers')",
   );
   db.exec("DROP TABLE archive_steps");
   db.exec(base);
