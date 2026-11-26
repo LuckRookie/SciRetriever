@@ -92,6 +92,27 @@ export const COMMANDS = {
     labels: ["切换到 PDF"],
     keys: [alt("Digit4", "4")],
   },
+  // ADR 0071: the two balls' pairs, and the map behind its button.
+  "view-pair": {
+    group: "view",
+    labels: ["PDF 与读本并排", "收回并排"],
+    keys: [alt("Digit5", "5")],
+  },
+  "view-map": {
+    group: "view",
+    labels: ["打开导图", "关闭导图"],
+    keys: [letter("M")],
+  },
+  "text-translate": {
+    group: "view",
+    labels: ["读译文", "读原文"],
+    keys: [letter("T")],
+  },
+  "text-pair": {
+    group: "view",
+    labels: ["原文与译文对照", "收回对照"],
+    keys: [{ keys: ["t", "T"], shift: true, scope: "text", label: "Shift+T" }],
+  },
   "zoom-in": {
     group: "view",
     labels: ["放大"],

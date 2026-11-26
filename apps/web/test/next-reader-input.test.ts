@@ -238,12 +238,13 @@ it("opens the reader's context menus, leaves the browser's where it belongs, and
     expect(
       Math.abs((await body.evaluate((el) => el.scrollTop)) - top0),
     ).toBeLessThanOrEqual(2);
-    // Focus on the views' segmented control: space is the control's.
-    await w.page.getByRole("tab", { name: "全文", exact: true }).focus();
+    // Focus on a control (“更多”): space is the control's, it opens its menu.
+    await w.page.getByRole("button", { name: "更多", exact: true }).focus();
     const still = await body.evaluate((el) => el.scrollTop);
     await w.page.keyboard.press("Space");
     await w.page.waitForTimeout(300);
     expect(await body.evaluate((el) => el.scrollTop)).toBe(still);
+    await w.page.keyboard.press("Escape");
     await w.page.evaluate(() => (document.activeElement as HTMLElement).blur());
 
     // M1: a paragraph's menu: its own part, the reading part, the paper part.

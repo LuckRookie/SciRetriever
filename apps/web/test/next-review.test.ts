@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { nextWorkspace } from "./next-workspace-fixture.js";
-import { readerPanel } from "./reader-controls.js";
+import { readerPanel, readerView } from "./reader-controls.js";
 import { topicDraft } from "../../server/test/tag-fixture.js";
 
 it(
@@ -356,7 +356,7 @@ it(
       await field.waitFor();
       const initial = await field.inputValue();
       await field.fill(initial + "\n\nMy pending change.\n\n");
-      await p.getByRole("tab", { name: "全文", exact: true }).click();
+      await readerView(p, "doc");
       await p
         .getByRole("dialog", { name: "保留未保存的校订？", exact: true })
         .getByRole("button", { name: "继续编辑", exact: true })

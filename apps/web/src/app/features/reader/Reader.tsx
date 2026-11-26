@@ -94,8 +94,8 @@ import { SummaryView } from "./SummaryView.js";
 import { TranslationPanel } from "./translation/TranslationViews.js";
 import { useReaderTranslation } from "./translation/use-translation.js";
 import { type FullTextLayer } from "./translation/fulltext-layer.js";
-import { FullTextControls } from "./translation/FullTextControls.js";
-import { TextModeControl } from "./translation/TextModeControl.js";
+import { ReaderBalls, type ReaderBall } from "./ReaderBalls.js";
+import type { BallState } from "./input/balls.js";
 import {
   hasTranslation,
   shownTextMode,
@@ -150,6 +150,8 @@ function subscribeDocking(change: () => void) {
 
 /** “排版 → 标出重点词”, on unless turned off in this browser (spec 3.3.2). */
 const KEY_TERMS = "sciretriever:reader:key-terms:v1";
+/** The left page's width while the PDF stands beside the reading copy (ADR 0071). */
+const PAIR_LEFT = "sciretriever:reader:pair-left:v1";
 export default function Reader() {
   const api = useApi(),
     shell = useShell(),
@@ -364,6 +366,11 @@ export default function Reader() {
   const [keyTerms, setKeyTerms] = useState(
     () => preferences.read(KEY_TERMS) !== "off",
   );
+  // What the map was opened from, and what a pair of readings goes back to.
+  const beforeMap = useRef<{ mode: ReaderMode; layer: ReadingLayer } | null>(
+    null,
+  );
+  const languageBack = useRef<"first" | "second">("second");
   const versionRef = useRef<string | null>(null);
   versionRef.current = documentRef?.document_version_id ?? null;
   const routeLayer = useRef<ReadingLayer>(route.layer);
@@ -393,6 +400,27 @@ export default function Reader() {
     translationSummary,
   );
   const catalog = api.workspace.catalog;
+  // The PDF and the reading copy side by side (ADR 0071), kept for the paper.
+  const [paired, setPairedState] = useState(false);
+  const readBack = useRef<"first" | "second">("first");
+  useEffect(() => {
+    setPairedState(recallReading(catalog, id).pair === true);
+  }, [catalog, id]);
+  const setPaired = (on: boolean) => {
+    setPairedState(on);
+    rememberReading(catalog, id, { pair: on });
+  };
+  /** How wide the left page is, in per cent of the desk, kept in this browser. */
+  const [pairLeft, setPairLeftState] = useState(() => {
+    const kept = Number(preferences.read(PAIR_LEFT));
+    return kept >= 30 && kept <= 70 ? kept : 50;
+  });
+  const setPairLeft = (value: number) => {
+    const next = Math.round(Math.min(70, Math.max(30, value)) * 10) / 10;
+    setPairLeftState(next);
+    preferences.write(PAIR_LEFT, String(next));
+  };
+  const companionBody = useRef<HTMLDivElement>(null);
   /**
    * Spec 6.4 (first and third rules): the view this browser remembers for the
    * paper, else what it has: text opens the full text, a PDF alone the PDF,
@@ -409,6 +437,16 @@ export default function Reader() {
     // where the full text was last left (it may have been generated since).
     if (remembered === "doc" && (!hasPdf || sources.data?.document))
       return "doc";
+    // ADR 0071: the PDF is what a paper opens on; the reading copy comes
+    // when it is asked for.
+    // (A paper last left in its reading copy waits for its sources above.)
+    if (
+      hasPdf &&
+      !source.error &&
+      source.value?.kind !== "metadata" &&
+      (remembered !== "doc" || !!sources.data || sources.isError)
+    )
+      return "pdf";
     if (!hasPdf || source.value?.kind === "metadata" || source.error)
       return hasPdf ? "pdf" : "doc";
     if (sources.isError) return "pdf";
@@ -561,6 +599,63 @@ export default function Reader() {
     [historyBack, setHistoryBack] = useState<{ label: string } | null>(null);
   const changeModeRef = useRef<(value: string) => void>(() => {});
   const coverRef = useRef<() => void>(() => {});
+  // ADR 0071: the PDF beside the reading copy is an engine of its own, in a
+  // scroll area of its own; it reads the same material and shows its PDF.
+  const companionFrame = useRef<ReaderFrame | null>(null);
+  const [companion] = useState(() => {
+    const none = () => {};
+    return createReaderEngines({
+      root: () => root.current,
+      findHost: () => null,
+      set: {
+        pdf: none,
+        pdfUrl: none,
+        outline: none,
+        outlineNote: none,
+        readingOffset: none,
+        nextMatch: none,
+        findHits: none,
+        issue: none,
+        empty: none,
+        textLevel: none,
+        ready: none,
+        resources: none,
+        shown: none,
+        prepared: none,
+        header: none,
+      },
+      frame: companionFrame,
+      twins: { current: null },
+      appliedMode: new WeakMap(),
+      fullTextMode: () => "off",
+      marksActive: () => false,
+      attachMarks: () => {
+        throw new Error("no marks beside the reading copy");
+      },
+      openMark: none,
+      image: (src, alt) => setZoomImage({ src, alt }),
+      documentLink: none,
+      doubt: none,
+      cover: none,
+      progress: none,
+      openPaper: (paper, value, parameters) =>
+        readerActions.current.openPaper(paper, value, parameters),
+      notify: (message) => readerActions.current.notify(message),
+      retry: none,
+      viewChanged: none,
+      offer: none,
+      note: none,
+      history: none,
+      changeView: none,
+      fontSize: () => fontSizeRef.current,
+      textMode: () => "original",
+      textModeChanged: none,
+      layer: () => "full",
+      layerChanged: none,
+      layersReady: none,
+    });
+  });
+  useEffect(() => () => companion.destroy(), [companion]);
   const [engines] = useState(() =>
     createReaderEngines({
       root: () => root.current,
@@ -657,6 +752,45 @@ export default function Reader() {
   useEffect(() => {
     frame.current?.setKeyTerms?.(keyTerms);
   }, [keyTerms, viewToken, layersToken]);
+  // ADR 0071: one choice of language for the reading copy and for the PDF.
+  // On the PDF it is the stored translation's pages: beside each page, or
+  // in its place. Asked once per choice, so a read that failed is not
+  // asked again by itself.
+  const pdfAsked = useRef("");
+  useEffect(() => {
+    if (mode !== "pdf" || api.kind !== "workspace" || !translationKnown) return;
+    const want =
+      shownText === "original"
+        ? "off"
+        : shownText === "translation"
+          ? "only"
+          : "pair";
+    const key = `${id}|${want}`;
+    if (pdfAsked.current === key) return;
+    pdfAsked.current = key;
+    if (want === "off") {
+      if (fullText.mode !== "off") fullText.close();
+      return;
+    }
+    if (fullText.mode === "off") void fullText.open();
+    fullText.setMode(want);
+    // `fullText` is a new object each render; its mode is what matters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, shownText, translationKnown, id, api.kind, fullText.mode]);
+  // ADR 0071: the PDF or the reading copy is remembered for the paper as it
+  // shows, however it was reached (a ball, the address, a link), so that
+  // opening it again without a view comes back to it.
+  useEffect(() => {
+    if (!chosen || !id || (mode !== "doc" && mode !== "pdf")) return;
+    rememberReading(catalog, id, { view: mode });
+  }, [chosen, id, mode, catalog]);
+  // The depth a paper's reading copy was left at (reading-experience 1.9).
+  useEffect(() => {
+    if (mode !== "doc" || !annotated || layer === "map") return;
+    rememberReading(catalog, id, {
+      layer: layer === "overview" ? 0 : layer === "outline" ? 1 : 2,
+    });
+  }, [mode, annotated, layer, catalog, id]);
   // The layer the address names is the layer the sheet shows.
   useEffect(() => {
     // Only for a text known to have layers: while that is being read again
@@ -1203,6 +1337,169 @@ export default function Reader() {
         fontSize={fontSize}
       />
     ) : null;
+  // ── The PDF beside the reading copy (reading-experience 1.9, ADR 0071) ──
+  const [deskWidth, setDeskWidth] = useState(0);
+  useEffect(() => {
+    if (!desk) return;
+    const observer = new ResizeObserver(() => setDeskWidth(desk.clientWidth));
+    observer.observe(desk);
+    setDeskWidth(desk.clientWidth);
+    return () => observer.disconnect();
+  }, [desk]);
+  /** Two pages fit: 1100 px of desk at least. */
+  const pairFits = deskWidth === 0 || deskWidth >= 1100;
+  const showPair =
+    paired &&
+    pairFits &&
+    mode === "doc" &&
+    layer !== "map" &&
+    !!detail.data?.primary_pdf &&
+    !!sources.data?.document &&
+    !!sources.data?.material &&
+    source.value?.kind !== "metadata";
+  // The left page's engine follows the paper; it is released once the pair ends.
+  useLayoutEffect(() => {
+    const scroller = companionBody.current;
+    const material = sources.data;
+    if (!showPair || !scroller || !material || !detailReady) {
+      companion.view(null);
+      return;
+    }
+    companion.open(
+      {
+        key: `${materialKey}|beside`,
+        id,
+        api,
+        material,
+        source: source.value,
+        reading,
+        catalog,
+        title: detailRef.current?.literature.metadata.title || "未命名文献",
+        revision,
+      },
+      scroller,
+    );
+    companion.view("pdf");
+  }, [
+    showPair,
+    companion,
+    sources.data,
+    detailReady,
+    materialKey,
+    id,
+    api,
+    source.value,
+    reading,
+    catalog,
+    revision,
+  ]);
+  useEffect(() => {
+    if (!showPair) companion.destroy();
+  }, [showPair, companion]);
+  // Each page follows the other: the one the reader works in leads.
+  useEffect(() => {
+    const main = body.current,
+      left = companionBody.current;
+    if (!showPair || !main || !left) return;
+    let leader: "doc" | "pdf" = "doc",
+      frameId = 0,
+      last = "";
+    const lead = (side: "doc" | "pdf") => () => {
+      leader = side;
+    };
+    const follow = () => {
+      frameId = 0;
+      const text = frame.current,
+        pdf = companionFrame.current;
+      if (!text || !pdf) return;
+      if (leader === "doc") {
+        const start = text.layerStart?.() ?? null;
+        const anchor =
+          start !== null ? (text.anchorAt?.(start) ?? null) : text.anchor?.();
+        const place = anchor?.kind === "doc" ? anchor.pdf : null;
+        if (!place) return;
+        const key = `${place.page}:${place.ratio.toFixed(2)}`;
+        if (key === last) return;
+        last = key;
+        void pdf.follow?.({
+          kind: "pdf",
+          page: place.page,
+          ratio: place.ratio,
+          label: "",
+        });
+      } else {
+        // 概览 and 脉络 keep their own order; only 全文 follows the pages.
+        if (text.layerStart?.() !== null && text.layerStart?.() !== undefined)
+          return;
+        const anchor = pdf.anchor?.();
+        if (!anchor || anchor.kind !== "pdf") return;
+        const key = `${anchor.page}:${anchor.ratio.toFixed(2)}`;
+        if (key === last) return;
+        last = key;
+        void text.follow?.(anchor);
+      }
+    };
+    const scrolled = (side: "doc" | "pdf") => () => {
+      if (side === leader && !frameId) frameId = requestAnimationFrame(follow);
+    };
+    const events = ["wheel", "pointerdown", "keydown", "touchstart"] as const;
+    const onMain = lead("doc"),
+      onLeft = lead("pdf"),
+      mainScroll = scrolled("doc"),
+      leftScroll = scrolled("pdf");
+    for (const name of events) {
+      main.addEventListener(name, onMain, { passive: true });
+      left.addEventListener(name, onLeft, { passive: true });
+    }
+    main.addEventListener("scroll", mainScroll, { passive: true });
+    left.addEventListener("scroll", leftScroll, { passive: true });
+    // A press on a page: the reading copy goes to that paragraph.
+    const pressed = (event: MouseEvent) => {
+      if (getSelection()?.toString()) return;
+      const page = (event.target as Element).closest<HTMLElement>(
+        ".reading-pdf-page",
+      );
+      const number = Number(page?.dataset.pdfPage);
+      if (!page || !number) return;
+      const box = page.getBoundingClientRect();
+      void frame.current?.follow?.(
+        {
+          kind: "pdf",
+          page: number,
+          ratio: Math.min(
+            1,
+            Math.max(0, (event.clientY - box.top) / box.height),
+          ),
+          label: "",
+        },
+        true,
+      );
+    };
+    left.addEventListener("click", pressed);
+    // A note or a sentence pressed in the reading copy: the PDF shows its place.
+    const text = frame.current;
+    if (text)
+      text.onPick = (start) => {
+        const anchor = text.anchorAt?.(start) ?? null;
+        const pdf = companionFrame.current;
+        if (!anchor || !pdf?.follow) return false;
+        leader = "doc";
+        last = "";
+        void pdf.follow(anchor);
+        return true;
+      };
+    return () => {
+      cancelAnimationFrame(frameId);
+      for (const name of events) {
+        main.removeEventListener(name, onMain);
+        left.removeEventListener(name, onLeft);
+      }
+      main.removeEventListener("scroll", mainScroll);
+      left.removeEventListener("scroll", leftScroll);
+      left.removeEventListener("click", pressed);
+      if (text) delete text.onPick;
+    };
+  }, [showPair, viewToken, layersToken, companion]);
   const invalidMetadata =
     source.value?.kind === "metadata" &&
     detail.data &&
@@ -1281,6 +1578,126 @@ export default function Reader() {
   // Editing the proofread text is not one of the views: leaving it is choosing one.
   const viewValue =
     mode === "edit" ? "" : mode === "doc" && layer !== "full" ? layer : mode;
+  // Reading-experience 1.9 (ADR 0071): the map behind one button; the depth
+  // bar under the reading copy; two balls for the translation and the copy.
+  const onPaper = mode === "doc" || mode === "pdf";
+  const mapOffered = annotated && onPaper && !bibliographyPage;
+  const mapOn = mode === "doc" && layer === "map";
+  const toggleMap = () => {
+    if (!mapOn) {
+      beforeMap.current = { mode, layer };
+      navigate({ reader: "doc", layer: "map" }, { replace: mode === "doc" });
+      return;
+    }
+    const back = beforeMap.current;
+    beforeMap.current = null;
+    if (back?.mode === "pdf") changeMode("pdf");
+    else
+      navigate(
+        { layer: !back || back.layer === "full" ? null : back.layer },
+        { replace: true },
+      );
+  };
+  const depthBar =
+    mode === "doc" && annotated && layer !== "map" && !bibliographyPage;
+  const hasText = !!sources.data?.document;
+  const languageState: BallState =
+    shownText === "bilingual"
+      ? { side: languageBack.current, paired: true }
+      : {
+          side: shownText === "translation" ? "second" : "first",
+          paired: false,
+        };
+  const pdfStatus =
+    mode === "pdf" && fullText.mode !== "off" && fullText.progress
+      ? fullText.progress.running
+        ? {
+            text: fullTextStrings.pdfReading(
+              fullText.progress.done,
+              fullText.progress.total,
+            ),
+          }
+        : fullText.progress.failed.length
+          ? {
+              text: fullTextStrings.pdfFailed(fullText.progress.failed.length),
+              action: {
+                label: fullTextStrings.pdfRetry,
+                run: () => fullText.retry(fullText.progress!.failed),
+              },
+            }
+          : null
+      : null;
+  const balls: ReaderBall[] =
+    !onPaper || bibliographyPage || lacking
+      ? []
+      : [
+          ...(hasPdf && hasText && !mapOn
+            ? [
+                {
+                  id: "read" as const,
+                  names: ["看", "读"] as const,
+                  what: "原件与读本",
+                  state: showPair
+                    ? { side: readBack.current, paired: true }
+                    : {
+                        side:
+                          mode === "doc"
+                            ? ("second" as const)
+                            : ("first" as const),
+                        paired: false,
+                      },
+                  pair: {
+                    reason: pairFits ? null : "窗口太窄，放不下两页",
+                  },
+                  onChange: (next: BallState) => {
+                    if (next.paired) {
+                      readBack.current = next.side;
+                      setPaired(true);
+                      if (mode === "doc") return;
+                    } else if (showPair) {
+                      setPaired(false);
+                      if (next.side === "second") return;
+                    }
+                    if (next.side === "first" && !next.paired)
+                      return changeMode("pdf");
+                    // The depth this paper was last read at; the full text the first time.
+                    const kept = annotated
+                      ? recallReading(catalog, id).layer
+                      : null;
+                    shell.openPaper(id, "doc", sourceParameters());
+                    if (kept === 0 || kept === 1)
+                      navigate(
+                        { layer: kept === 0 ? "overview" : "outline" },
+                        { replace: true },
+                      );
+                  },
+                },
+              ]
+            : []),
+          ...(hasText
+            ? [
+                {
+                  id: "translate" as const,
+                  names: ["原", "译"] as const,
+                  what: "原文与译文",
+                  state: languageState,
+                  disabled: translationKnown ? translationReason : "正在读取…",
+                  pair: mapOn ? undefined : { reason: null },
+                  status: pdfStatus,
+                  onChange: (next: BallState) => {
+                    languageBack.current = next.side;
+                    textModeChoice.set(
+                      next.paired
+                        ? "bilingual"
+                        : next.side === "second"
+                          ? "translation"
+                          : "original",
+                    );
+                  },
+                },
+              ]
+            : []),
+        ];
   const findDisabled = mode === "results" || (mode !== "know" && !ready);
   const toggleFind = () => setFindOpen((value) => !value);
   const toggleOutline = () =>
@@ -1376,6 +1793,59 @@ export default function Reader() {
       id: "view-pdf",
       run: () => void (viewValue !== "pdf" && changeMode("pdf")),
     },
+    // ADR 0071: what the balls do, without a double click.
+    views3 &&
+      views4 &&
+      !mapOn && {
+        id: "view-pair",
+        label: showPair ? "收回并排" : "PDF 与读本并排",
+        checked: showPair,
+        enabled: pairFits,
+        run: () => {
+          if (showPair) {
+            setPaired(false);
+            if (readBack.current === "first") changeMode("pdf");
+            return;
+          }
+          readBack.current = mode === "pdf" ? "first" : "second";
+          setPaired(true);
+          if (mode !== "doc") changeMode("doc");
+        },
+      },
+    mapOffered && {
+      id: "view-map",
+      label: mapOn ? "关闭导图" : "打开导图",
+      checked: mapOn,
+      run: toggleMap,
+    },
+    hasText &&
+      !translationReason &&
+      translationKnown && {
+        id: "text-translate",
+        label: shownText === "translation" ? "读原文" : "读译文",
+        checked: shownText === "translation",
+        run: () =>
+          textModeChoice.set(
+            shownText === "translation" ? "original" : "translation",
+          ),
+      },
+    hasText &&
+      !translationReason &&
+      translationKnown &&
+      !mapOn && {
+        id: "text-pair",
+        label: shownText === "bilingual" ? "收回对照" : "原文与译文对照",
+        checked: shownText === "bilingual",
+        run: () => {
+          if (shownText === "bilingual")
+            return textModeChoice.set(
+              languageBack.current === "second" ? "translation" : "original",
+            );
+          languageBack.current =
+            shownText === "translation" ? "second" : "first";
+          textModeChoice.set("bilingual");
+        },
+      },
     scalable && {
       id: "zoom-in",
       enabled: scale.can(1),
@@ -1645,6 +2115,28 @@ export default function Reader() {
           },
         ]
       : []),
+    // ADR 0071: every way of reading the paper, as the balls give them, in
+    // one item of its own so that the menu stays short on a narrow screen.
+    ...(() => {
+      const ways = [
+        ...item("view-pdf"),
+        ...item("view-doc"),
+        ...item("view-pair"),
+        ...item("view-map"),
+        ...item("text-translate"),
+        ...item("text-pair"),
+      ];
+      return ways.length
+        ? [
+            {
+              id: "reading-ways",
+              label: "阅读方式",
+              onAction: () => {},
+              submenu: ways,
+            },
+          ]
+        : [];
+    })(),
     ...group("paper", "这篇文献", [
       ...(maintenance && api.kind === "workspace"
         ? detail.data.collected === false
@@ -1907,37 +2399,29 @@ export default function Reader() {
    */
   const topBarTools = (
     <>
-      {bibliographyPage ? null : narrowBar ? (
-        <Menu
-          label={`视图：${views.find((v) => v.id === viewValue)?.label ?? "修改全文"}`}
+      {/* Reading-experience 1.3, ADR 0071: one button for the map, where
+          the views used to be; a summary, the results or the editor shows
+          as a tag that closes back to the paper. */}
+      {mapOffered ? (
+        <Button
           variant="text"
-          indicator
-          className="reader-view-menu"
-          items={views
-            .filter((v) => v.id !== viewValue)
-            .map((v) => ({
-              id: v.id,
-              label: v.label,
-              onAction: () => changeMode(v.id),
-            }))}
-        />
-      ) : (
-        <SegmentedControl
-          label="阅读视图"
-          value={viewValue}
-          onChange={changeMode}
-          items={views}
-        />
-      )}
-      {/* Reading-experience 9: the full text's three readings, beside the views. */}
-      {mode === "doc" && !bibliographyPage && !lacking && documentRef ? (
-        <TextModeControl
-          value={shownText}
-          reason={translationReason}
-          pending={!translationKnown}
-          narrow={narrowBar}
-          onChange={textModeChoice.set}
-        />
+          size="compact"
+          className="reader-map-button"
+          aria-pressed={mapOn}
+          onPress={toggleMap}
+        >
+          导图
+        </Button>
+      ) : null}
+      {mode === "know" || mode === "results" || mode === "edit" ? (
+        <Button
+          variant="text"
+          className="reader-aside-tag"
+          icon={<Icon name="close" />}
+          onPress={() => changeMode(mode === "edit" || !hasPdf ? "doc" : "pdf")}
+        >
+          {mode === "know" ? "总结" : mode === "results" ? "结果" : "修改全文"}
+        </Button>
       ) : null}
       {compactBar ? null : (
         <>
@@ -2040,14 +2524,6 @@ export default function Reader() {
         </AnimatedPanel>
       ) : tabShown === "translation" ? (
         <>
-          {/* Spec 1.3: the PDF's side-by-side translation is set here. */}
-          {mode === "pdf" && api.kind === "workspace" ? (
-            <FullTextControls
-              fullText={fullText}
-              summary={translationKnown ? translationSummary : null}
-              reason={translationReason}
-            />
-          ) : null}
           <TranslationPanel
             translation={translation}
             notify={notify}
@@ -2169,7 +2645,35 @@ export default function Reader() {
             className="reader-surface"
             ref={setDesk}
             onContextMenu={input.onContextMenu}
+            data-depth-bar={depthBar ? "true" : undefined}
+            data-paired={showPair ? "true" : undefined}
+            style={
+              showPair
+                ? ({ "--pair-left": `${pairLeft}%` } as CSSProperties)
+                : undefined
+            }
           >
+            <ReaderBalls balls={balls} />
+            {depthBar ? (
+              <div
+                className="reader-depth"
+                onWheel={(event) => {
+                  if (frame.current?.layerWheel?.(event.deltaY))
+                    event.stopPropagation();
+                }}
+              >
+                <SegmentedControl
+                  label="读到多细"
+                  value={layer === "full" ? "doc" : layer}
+                  onChange={changeMode}
+                  items={[
+                    { id: "overview", label: layerStrings.names[0] },
+                    { id: "outline", label: layerStrings.names[1] },
+                    { id: "doc", label: layerStrings.names[2] },
+                  ]}
+                />
+              </div>
+            ) : null}
             {sources.error && mode !== "know" && mode !== "results" ? (
               <ErrorNotice
                 message={errorMessage(sources.error)}
@@ -2189,6 +2693,48 @@ export default function Reader() {
               <TechDetails copyText={issue.detail}>
                 <p>{issue.detail}</p>
               </TechDetails>
+            ) : null}
+            {showPair ? (
+              <>
+                <div
+                  ref={companionBody}
+                  data-mode="pdf"
+                  className="reading-scroll reader-engine-body reader-beside"
+                  aria-label="原件"
+                />
+                <div
+                  className="reader-pair-handle"
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="左右两页的分界"
+                  aria-valuemin={30}
+                  aria-valuemax={70}
+                  aria-valuenow={pairLeft}
+                  tabIndex={0}
+                  onDoubleClick={() => setPairLeft(50)}
+                  onKeyDown={(event) => {
+                    if (event.key === "ArrowLeft") setPairLeft(pairLeft - 2);
+                    else if (event.key === "ArrowRight")
+                      setPairLeft(pairLeft + 2);
+                    else return;
+                    event.preventDefault();
+                  }}
+                  onPointerDown={(event) => {
+                    const surface = event.currentTarget.parentElement;
+                    if (!surface || event.button !== 0) return;
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                    const box = surface.getBoundingClientRect();
+                    const move = (e: PointerEvent) =>
+                      setPairLeft(((e.clientX - box.left) / box.width) * 100);
+                    const up = () => {
+                      removeEventListener("pointermove", move);
+                      removeEventListener("pointerup", up);
+                    };
+                    addEventListener("pointermove", move);
+                    addEventListener("pointerup", up);
+                  }}
+                />
+              </>
             ) : null}
             <div
               ref={body}

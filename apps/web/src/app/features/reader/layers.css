@@ -1039,6 +1039,187 @@
   .rl-ghost-p [data-keep] .rl-kt {
     color: var(--zhu) !important;
   }
+  /*
+   * The two balls and the depth bar (reading-experience 1.9, ADR 0071).
+   * Controls, so sans; they float over the desk and take no room of it.
+   */
+  .reader-balls {
+    position: absolute;
+    right: 16px;
+    bottom: 16px;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 10px;
+    pointer-events: none;
+  }
+  .reader-ball-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    pointer-events: auto;
+  }
+  .reader-ball {
+    min-width: 40px;
+    height: 40px;
+    padding: 0 9px;
+    border: 1px solid var(--line3);
+    border-radius: 20px;
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-1);
+    color: var(--fg);
+    font: 500 15px / 1 var(--sans);
+    cursor: pointer;
+    user-select: none;
+  }
+  .reader-ball:hover {
+    border-color: var(--fg2);
+  }
+  .reader-ball:focus-visible,
+  .reader-ball-pair:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+  .reader-ball[data-active] {
+    border-color: var(--fg);
+    background: var(--fg);
+    color: var(--bg);
+  }
+  .reader-ball[aria-disabled="true"] {
+    color: var(--fg-quiet);
+    box-shadow: none;
+    cursor: default;
+  }
+  .reader-ball-pair,
+  .reader-ball-status {
+    height: 26px;
+    padding: 0 10px;
+    border: 1px solid var(--line3);
+    border-radius: 13px;
+    background: var(--surface-raised);
+    color: var(--fg2);
+    font: 400 12.5px / 24px var(--sans);
+    white-space: nowrap;
+  }
+  .reader-ball-pair {
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--dur-1) var(--ease-out);
+  }
+  .reader-ball-row:hover .reader-ball-pair,
+  .reader-ball-row:focus-within .reader-ball-pair {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .reader-ball-pair:disabled {
+    color: var(--fg-quiet);
+    cursor: default;
+  }
+  .reader-ball-status button {
+    margin-left: 8px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--reader-pen);
+    font: inherit;
+    cursor: pointer;
+  }
+  .reader-depth {
+    position: absolute;
+    left: calc(var(--sheet-left) + var(--sheet-width) / 2);
+    bottom: 16px;
+    z-index: 5;
+    transform: translateX(-50%);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-1);
+  }
+  /* The last lines can be read above the bar. */
+  .reader-surface[data-depth-bar] .reading-scroll {
+    padding-bottom: 84px;
+  }
+  /*
+   * The PDF beside the reading copy (reading-experience 1.9): the left page
+   * is a scroll area of its own; between the two a handle to drag.
+   */
+  .reader-surface[data-paired] {
+    flex-direction: row;
+  }
+  .react-reader .reader-surface[data-paired] > .reader-beside {
+    flex: 0 0 auto;
+    width: calc(var(--pair-left, 50%) - 8px);
+  }
+  .react-reader
+    .reader-surface[data-paired]
+    > .reader-engine-body:not(.reader-beside) {
+    flex: 1 1 0;
+  }
+  .reader-pair-handle {
+    position: relative;
+    flex: 0 0 16px;
+    cursor: col-resize;
+    background: var(--reader-desk);
+    touch-action: none;
+  }
+  .reader-pair-handle::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 7.5px;
+    width: 1px;
+    background: var(--line2);
+  }
+  .reader-pair-handle:hover::before,
+  .reader-pair-handle:focus-visible::before {
+    left: 6.5px;
+    width: 3px;
+    background: var(--line3);
+  }
+  .reader-pair-handle:focus-visible {
+    outline: none;
+  }
+  .reader-surface[data-paired] .reader-depth {
+    left: calc(
+      var(--pair-left, 50%) + 8px + var(--sheet-left) + var(--sheet-width) / 2
+    );
+  }
+  /*
+   * Focus mode (reading-experience 1.7, 1.9): the balls and the depth bar
+   * pale away and come back when the pointer is near them.
+   */
+  [data-focus] .reader-balls,
+  [data-focus] .reader-depth {
+    opacity: 0;
+    transition: opacity var(--dur-2) var(--ease-out);
+  }
+  [data-focus] .reader-balls:hover,
+  [data-focus] .reader-balls:focus-within,
+  [data-focus] .reader-depth:hover,
+  [data-focus] .reader-depth:focus-within {
+    opacity: 1;
+  }
+  /* A narrow desk (reading-experience 1.9): smaller balls, the bar on the edge. */
+  @container reader-center (max-width: 639px) {
+    .reader-ball {
+      min-width: 36px;
+      height: 36px;
+      border-radius: 18px;
+      font-size: 14px;
+    }
+    .reader-depth {
+      left: 16px;
+      right: 16px;
+      bottom: 8px;
+      transform: none;
+    }
+  }
+  .react-reader .reader-map-button[aria-pressed="true"] {
+    background: var(--active);
+    color: var(--fg);
+    font-weight: 600;
+  }
   /* The reader's views in the top bar: 导图｜概览 · 脉络 · 全文｜PDF. */
   .ui-segmented .ui-tab[data-gap] {
     position: relative;

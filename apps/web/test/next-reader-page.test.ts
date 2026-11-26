@@ -6,6 +6,7 @@ import { openType, readerPanel, readerToLibrary } from "./reader-controls.js";
 import { missingId } from "./processor-workspace-fixture.js";
 import { nextWorkspace, libraryStatus } from "./next-workspace-fixture.js";
 import { syntheticReadingPdf } from "./reading-pdf-fixture.js";
+import { storedTranslation } from "./stored-translation.js";
 
 /**
  * Plan 25 block 30 (reading-experience 9.0): the bibliography page, the PDF
@@ -213,7 +214,7 @@ it("opens the PDF of a paper without full text, saying so under the page header 
     await w.page.getByRole("dialog").waitFor();
     await w.page.keyboard.press("Escape");
     // Even where the full text was last left, the PDF opens.
-    await w.page.getByRole("tab", { name: "全文", exact: true }).click();
+    await w.page.goto(`${w.origin}/?literature=${missingId}&reader=doc`);
     await w.page.locator(".reader-surface .ui-empty").waitFor();
     await w.page.goto(`${w.origin}/?literature=${missingId}`);
     await expect
@@ -230,34 +231,27 @@ it("puts the summary and the results in the views as a cell, on the sheet, with 
   try {
     const page = w.page,
       id = w.env.parseRequest.literature_id;
-    const views = page.getByRole("tablist", { name: "阅读视图" });
+    // ADR 0071: no views in the top bar; a summary or the results shows as a
+    // tag there that closes back to the paper.
+    const tag = page.locator(".reader-aside-tag");
     for (const [mode, label] of [
       ["know", "总结"],
       ["results", "结果"],
     ] as const) {
       await page.goto(`${w.origin}/?literature=${id}&reader=${mode}`);
-      await views.waitFor();
-      await expect
-        .poll(() => views.getByRole("tab").allInnerTexts())
-        .toEqual(["全文", "PDF", label]);
-      expect(
-        await views
-          .getByRole("tab", { name: label, exact: true })
-          .getAttribute("aria-selected"),
-      ).toBe("true");
+      await tag.waitFor();
+      expect((await tag.innerText()).trim()).toBe(label);
       // On the desk's sheet, as the full text is.
       const sheet = page.locator(".reader-plain-sheet");
       await sheet.waitFor();
       expect(
         await sheet.evaluate((el) => getComputedStyle(el).boxShadow),
       ).not.toBe("none");
-      await views.getByRole("tab", { name: "全文", exact: true }).click();
+      await tag.click();
       await expect
         .poll(() => new URL(page.url()).searchParams.get("reader"))
-        .toBe("doc");
-      await expect
-        .poll(() => views.getByRole("tab").allInnerTexts())
-        .toEqual(["全文", "PDF"]);
+        .toMatch(/^(pdf|doc)$/u);
+      await expect.poll(() => tag.count()).toBe(0);
     }
     expect(w.errors).toEqual([]);
   } finally {
@@ -515,6 +509,10 @@ it("shows translation only when asked, and not at all where it is not set up (bl
         )
           translated.push(request.url());
       });
+      // “翻译本段” and the 翻译 tab also come with the library's own
+      // translation (reading-experience 3.4.1): without a service, this
+      // paper has none, so that nothing at all is offered.
+      if (!translation) await storedTranslation(page, { state: "none" });
       // Whether translation is set up is read once, from its model list.
       const catalog = page.waitForResponse(
         (response) =>

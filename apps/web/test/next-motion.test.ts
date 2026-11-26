@@ -1,3 +1,4 @@
+import { readerView } from "./reader-controls.js";
 import { expect, it } from "vitest";
 import type { Page } from "playwright";
 import { nextWorkspace } from "./next-workspace-fixture.js";
@@ -100,7 +101,7 @@ it.each(["no-preference", "reduce"] as const)(
         )
         .dblclick();
       // A paper with text opens its full text (spec 6.4); this check reads the PDF.
-      await w.page.getByRole("tab", { name: "PDF", exact: true }).click();
+      await readerView(w.page, "pdf");
       await w.page
         .locator('.reading-pdf-page[data-rendered="true"]')
         .first()
@@ -220,14 +221,14 @@ it.each(["no-preference", "reduce"] as const)(
         await w.page
           .getByRole("button", { name: "收起信息", exact: true })
           .click();
-        await w.page.getByRole("tab", { name: "PDF", exact: true }).click();
+        await readerView(w.page, "pdf");
         await w.page
           .locator(
             '.reader-view[data-view="pdf"]:not([hidden]) .reading-pdf-page[data-rendered="true"]',
           )
           .first()
           .waitFor();
-        await w.page.getByRole("tab", { name: "全文", exact: true }).click();
+        await readerView(w.page, "doc");
       });
       const moving = seen.filter((a) =>
         /transform|translate|scale|rotate|clip-path|inset|left|top|width|height|margin/.test(

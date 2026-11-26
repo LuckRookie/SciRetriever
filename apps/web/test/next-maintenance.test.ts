@@ -1,3 +1,4 @@
+import { readerView } from "./reader-controls.js";
 import { showAllLibraryStatuses } from "./next-workspace-fixture.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -381,7 +382,7 @@ it("accepts a selected PDF in Chromium, reads the same fact, and reports rejecti
       .locator(".paper-open")
       .dblclick();
     // A paper with text opens its full text (spec 6.4); this check reads the PDF.
-    await page.getByRole("tab", { name: "PDF", exact: true }).click();
+    await readerView(page, "pdf");
     await page
       .locator('.reading-pdf-page[data-rendered="true"]')
       .first()

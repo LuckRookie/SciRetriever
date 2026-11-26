@@ -256,6 +256,23 @@ export interface ReaderFrame {
       instant?: boolean;
     },
   ) => void;
+  /**
+   * Set by the full-text engine: the reading anchor of the block holding a
+   * UTF-8 offset, as `anchor()` gives it for the reading line (its PDF page
+   * and region with it), so that a PDF beside the text can show it.
+   */
+  anchorAt?: (start: number) => ReadingAnchor | null;
+  /**
+   * Set by the full-text engine: while 概览 or 脉络 shows, where the note
+   * being read stands in the text (its first evidence); null on 全文.
+   */
+  layerStart?: () => number | null;
+  /**
+   * Set by the reader while a PDF stands beside the reading copy (ADR 0071):
+   * a note or one of its sentences was pressed; true when the PDF showed it,
+   * and the reading copy then stays on its layer.
+   */
+  onPick?: (start: number) => boolean;
   /** Set with `setLayer`: Alt and the wheel move the change by hand; true when taken. */
   layerWheel?: (deltaY: number) => boolean;
   setKeyTerms?: (on: boolean) => void;

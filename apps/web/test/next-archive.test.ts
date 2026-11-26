@@ -601,7 +601,7 @@ it("preserves summary reading position and presents evidence on demand across sc
       el.closest<HTMLElement>(".reading-scroll")!.scrollTop = 900;
     });
     await expect.poll(scroll).toBeGreaterThan(800);
-    await p.getByRole("tab", { name: "全文", exact: true }).click();
+    await readerView(p, "doc");
     await readerMore(p, "加工结果");
     await p.getByRole("button", { name: "阅读总结", exact: true }).click();
     await expect.poll(scroll).toBeGreaterThan(800);

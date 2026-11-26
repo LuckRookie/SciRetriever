@@ -4,7 +4,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { fullTextStrings } from "../src/app/strings.js";
 import { nextWorkspace } from "./next-workspace-fixture.js";
-import { readerPanel } from "./reader-controls.js";
+import { readerBall, readerLanguage, readerPanel } from "./reader-controls.js";
 import { storedTranslation } from "./stored-translation.js";
 
 /**
@@ -34,10 +34,9 @@ const TEXT = [
 ].join("\n\n");
 const KEY = "sciretriever:react:sciretriever:reader:text-mode:v1";
 const sheet = ".reader-view:not([hidden])[data-view='doc']";
-const readings = (page: Page) =>
-  page.getByRole("tablist", { name: fullTextStrings.readings });
-const reading = (page: Page, name: string) =>
-  readings(page).getByRole("tab", { name, exact: true });
+/** The 译 ball (reading-experience 1.9): 译 while the original shows, 原 while the translation does. */
+const ball = (page: Page) => readerBall(page, "translate");
+const says = async (page: Page) => (await ball(page).innerText()).trim();
 const section = (page: Page, text: string) =>
   page
     .locator(`${sheet} article > section[data-byte-start]`)
@@ -69,31 +68,18 @@ it("reads the full text in 原文, 译文 and 对照, keeps the place and the ch
     });
     await page.goto(`${w.origin}/?literature=${id}&reader=doc`);
     await page.locator('.react-reader[data-reading-ready="true"]').waitFor();
-    // The view is “全文”; its readings sit right of the views.
-    expect(
-      await page
-        .getByRole("tablist", { name: "阅读视图" })
-        .getByRole("tab")
-        .allInnerTexts(),
-    ).toEqual(["全文", "PDF"]);
-    expect(await readings(page).getByRole("tab").allInnerTexts()).toEqual([
-      "原文",
-      "译文",
-      "对照",
-    ]);
-    expect(await reading(page, "原文").getAttribute("aria-selected")).toBe(
-      "true",
-    );
+    // One ball minds the language: it can be pressed, and says where a click goes.
     await expect
-      .poll(() => reading(page, "译文").getAttribute("aria-disabled"))
-      .not.toBe("true");
+      .poll(() => ball(page).getAttribute("aria-disabled"))
+      .toBeNull();
+    expect(await says(page)).toBe("译");
     await shows(page, "original");
     expect(await page.locator(`${sheet} .reading-translation`).count()).toBe(0);
     await expect.poll(() => headerView(page).innerText()).toBe("全文 · 已校对");
 
     // 译文: translated paragraphs show their translation, the one left
     // untranslated its original with “未译”, the formula stays once.
-    await reading(page, "译文").click();
+    await readerLanguage(page, "translation");
     await shows(page, "translation");
     expect(await page.evaluate((key) => localStorage.getItem(key), KEY)).toBe(
       "translation",
@@ -137,12 +123,10 @@ it("reads the full text in 原文, 译文 and 对照, keeps the place and the ch
     await page.reload();
     await page.locator('.react-reader[data-reading-ready="true"]').waitFor();
     await shows(page, "translation");
-    expect(await reading(page, "译文").getAttribute("aria-selected")).toBe(
-      "true",
-    );
+    expect(await says(page)).toBe("原");
 
     // 对照 keeps the paragraph at the reading line where it was (spec 4.2).
-    await reading(page, "原文").click();
+    await readerLanguage(page, "original");
     await shows(page, "original");
     const target = section(page, "Paragraph 14:");
     const placeAtLine = () =>
@@ -161,7 +145,7 @@ it("reads the full text in 原文, 译文 and 对照, keeps the place and the ch
     const before = await target.evaluate(
       (el) => el.getBoundingClientRect().top,
     );
-    await reading(page, "对照").click();
+    await readerLanguage(page, "bilingual");
     await shows(page, "bilingual");
     await page.waitForTimeout(200);
     const after = await target.evaluate((el) => el.getBoundingClientRect().top);
@@ -214,7 +198,7 @@ it("reads the full text in 原文, 译文 and 对照, keeps the place and the ch
     await field.press("Enter");
     const status = page.locator(".reader-find [role='status']").first();
     await expect.poll(() => status.innerText()).toMatch(/第 1 \/ \d+ 处/u);
-    await reading(page, "原文").click();
+    await readerLanguage(page, "original");
     await shows(page, "original");
     await expect.poll(() => status.innerText()).toContain("没有匹配");
     await page.getByRole("button", { name: "查找…", exact: true }).click();
@@ -242,7 +226,7 @@ it("reads the full text in 原文, 译文 and 对照, keeps the place and the ch
     await expect
       .poll(() => page.evaluate(() => CSS.highlights.size))
       .toBeGreaterThan(0);
-    await reading(page, "译文").click();
+    await readerLanguage(page, "translation");
     await shows(page, "translation");
     const sign = section(page, "Paragraph 5:").locator(
       ".reading-translation-marks",
@@ -251,9 +235,7 @@ it("reads the full text in 原文, 译文 and 对照, keeps the place and the ch
     await shot(page, "translation-marks");
     await sign.click();
     await shows(page, "bilingual");
-    expect(await reading(page, "对照").getAttribute("aria-selected")).toBe(
-      "true",
-    );
+    expect(await ball(page).getAttribute("data-paired")).toBe("true");
     expect(await page.evaluate((key) => localStorage.getItem(key), KEY)).toBe(
       "bilingual",
     );
@@ -304,19 +286,12 @@ it("says why there is no translation, reads the original meanwhile without forge
       await page.reload();
       await page.locator('.react-reader[data-reading-ready="true"]').waitFor();
       await shows(page, "original");
+      // The ball is dimmed and says why.
       await expect
-        .poll(() => reading(page, "译文").getAttribute("aria-disabled"))
+        .poll(() => ball(page).getAttribute("aria-disabled"))
         .toBe("true");
-      expect(await reading(page, "对照").getAttribute("aria-disabled")).toBe(
-        "true",
-      );
-      expect(await reading(page, "原文").getAttribute("aria-selected")).toBe(
-        "true",
-      );
-      await reading(page, "对照").hover();
-      const tip = page.locator(".reader-text-mode-tip");
-      await expect.poll(() => tip.isVisible()).toBe(true);
-      expect(await tip.innerText()).toBe(reason);
+      expect(await says(page)).toBe("译");
+      expect(await ball(page).getAttribute("title")).toBe(reason);
       if (state === "none") await shot(page, "no-translation");
       // The choice stays: a paper with a translation opens in it.
       expect(await page.evaluate((key) => localStorage.getItem(key), KEY)).toBe(
@@ -333,15 +308,21 @@ it("says why there is no translation, reads the original meanwhile without forge
       await page.keyboard.press("Escape");
     }
 
-    // The PDF: 对照翻译 off with the same reason, no readings in the bar.
+    // The PDF: the same ball, dimmed with the same reason; the side panel
+    // has no switch for the translated pages any more.
     fake.state = "none";
     await page.goto(`${w.origin}/?literature=${id}&reader=pdf`);
     await page.locator('.react-reader[data-reading-ready="true"]').waitFor();
-    expect(await readings(page).count()).toBe(0);
+    await expect
+      .poll(() => ball(page).getAttribute("aria-disabled"))
+      .toBe("true");
+    expect(await ball(page).getAttribute("title")).toBe(parsedBefore);
     const panel = await readerPanel(page, "翻译");
-    const open = panel.getByRole("button", { name: "对照翻译", exact: true });
-    await expect.poll(() => open.isDisabled()).toBe(true);
-    await panel.getByText(parsedBefore).waitFor();
+    expect(
+      await panel
+        .getByRole("button", { name: "对照翻译", exact: true })
+        .count(),
+    ).toBe(0);
     expect(
       await panel
         .getByRole("button", { name: "翻译当前所在的节", exact: true })
@@ -349,7 +330,8 @@ it("says why there is no translation, reads the original meanwhile without forge
     ).toBe(0);
     await shot(page, "pdf-no-translation");
 
-    // With a stored translation it reads the pages: no confirmation, no model.
+    // With a stored translation the choice kept in this browser (译文) reads
+    // the pages at once: no confirmation, no model.
     const asked: string[] = [];
     page.on("request", (request) => {
       const path = new URL(request.url()).pathname;
@@ -357,19 +339,12 @@ it("says why there is no translation, reads the original meanwhile without forge
         asked.push(path);
     });
     fake.state = "complete";
-    await page.reload();
-    await page.locator('.react-reader[data-reading-ready="true"]').waitFor();
-    const again = await readerPanel(page, "翻译");
-    const enabled = again.getByRole("button", {
-      name: "对照翻译",
-      exact: true,
-    });
-    await expect.poll(() => enabled.isDisabled()).toBe(false);
     const pageRead = page.waitForRequest(
       (request) =>
         new URL(request.url()).pathname === "/api/translation/fulltext/page",
     );
-    await enabled.click();
+    await page.reload();
+    await page.locator('.react-reader[data-reading-ready="true"]').waitFor();
     const body = (await pageRead).postDataJSON() as {
       target_language: string;
       force: boolean;
@@ -380,6 +355,12 @@ it("says why there is no translation, reads the original meanwhile without forge
       0,
     );
     await page.locator(".ft-twin[data-state='ready']").first().waitFor();
+    expect(await says(page)).toBe("原");
+    // The pair: each page with its translated page beside it.
+    await readerLanguage(page, "bilingual");
+    await expect
+      .poll(() => ball(page).getAttribute("data-paired"))
+      .toBe("true");
     await shot(page, "pdf-bilingual");
     expect(asked).toEqual([]);
     expect(w.errors).toEqual([]);
@@ -402,8 +383,8 @@ it("shows the 翻译 tab for the library's translation where no translation serv
     await page.goto(`${w.origin}/?literature=${id}&reader=doc`);
     await page.locator('.react-reader[data-reading-ready="true"]').waitFor();
     await expect
-      .poll(() => reading(page, "译文").getAttribute("aria-disabled"))
-      .not.toBe("true");
+      .poll(() => ball(page).getAttribute("aria-disabled"))
+      .toBeNull();
     const panel = await readerPanel(page, "翻译");
     await panel.getByText(fullTextStrings.storedOnly).waitFor();
     expect(await panel.getByLabel("模型").count()).toBe(0);
@@ -420,13 +401,7 @@ it("shows the 翻译 tab for the library's translation where no translation serv
     // The PDF reads the same translation beside its pages.
     await page.goto(`${w.origin}/?literature=${id}&reader=pdf`);
     await page.locator('.react-reader[data-reading-ready="true"]').waitFor();
-    const pdfPanel = await readerPanel(page, "翻译");
-    const open = pdfPanel.getByRole("button", {
-      name: "对照翻译",
-      exact: true,
-    });
-    await expect.poll(() => open.isDisabled()).toBe(false);
-    await open.click();
+    await readerLanguage(page, "bilingual");
     await page.locator(".ft-twin[data-state='ready']").first().waitFor();
     expect(w.errors).toEqual([]);
   } finally {

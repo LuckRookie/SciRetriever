@@ -15,7 +15,7 @@ import {
   motionOptions,
   searchLibrary,
 } from "./next-workspace-fixture.js";
-import { readerToLibrary } from "./reader-controls.js";
+import { readerToLibrary, readerView } from "./reader-controls.js";
 import { readingAssets } from "./reading-assets-fixture.js";
 import { chromium, type Page } from "playwright";
 import { describe, expect, it } from "vitest";
@@ -429,7 +429,7 @@ describe("live workbench on the installed Cloak runtime", () => {
           .locator(".paper-open")
           .dblclick();
         // A paper with text opens its full text (spec 6.4); this check reads the PDF.
-        await desktop.getByRole("tab", { name: "PDF", exact: true }).click();
+        await readerView(desktop, "pdf");
         await desktop
           .locator('.reading-pdf-page[data-rendered="true"]')
           .first()
@@ -465,7 +465,7 @@ describe("live workbench on the installed Cloak runtime", () => {
         await searchLibrary(mobile, "Synthetic literature");
         await expect.poll(() => mobile.locator(".paper-row").count()).toBe(1);
         await mobile.locator(".paper-open").dblclick();
-        await mobile.getByRole("tab", { name: "PDF", exact: true }).click();
+        await readerView(mobile, "pdf");
         await mobile
           .locator('.reading-pdf-page[data-rendered="true"]')
           .first()

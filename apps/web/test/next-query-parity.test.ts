@@ -1,4 +1,4 @@
-import { readerPanel } from "./reader-controls.js";
+import { readerPanel, readerView } from "./reader-controls.js";
 import {
   showAllLibraryStatuses,
   searchLibrary,
@@ -389,7 +389,7 @@ it("reads, searches, follows references and downloads through the query-only pag
     await sourceResult.waitFor();
     await page.goForward();
     // The downloads below come from the PDF view.
-    await page.getByRole("tab", { name: "PDF", exact: true }).click();
+    await readerView(page, "pdf");
     await page
       .locator('.reading-pdf-page[data-rendered="true"]')
       .first()

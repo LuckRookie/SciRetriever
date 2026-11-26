@@ -26,7 +26,7 @@ import {
   startIntake,
 } from "../../server/src/literature/intake.js";
 import { syntheticReadingPdf } from "./reading-pdf-fixture.js";
-import { readerToLibrary } from "./reader-controls.js";
+import { readerToLibrary, readerView } from "./reader-controls.js";
 
 it("paginates a 30,000-record library, bounds rendered rows, restores scroll and selection, and explains over-limit actions", async () => {
   const started = Date.now();
@@ -427,28 +427,28 @@ it("opens a paper from its row in the view it has: remembered, else full text, P
     // (plan 25 block 30), closed by default (spec 1.4).
     expect(await w.page.locator(".reader-information").isVisible()).toBe(false);
     expect(await w.page.locator(".reading-pdf-page").count()).toBe(0);
-    // A paper with text opens its full text.
+    // A paper with a PDF opens its PDF, though it has a text (ADR 0071).
     await openRow("Synthetic literature workbench");
+    await w.page
+      .locator(
+        '.reader-view[data-view="pdf"]:not([hidden]) .reading-pdf-page[data-rendered="true"]',
+      )
+      .first()
+      .waitFor();
+    expect(view()).toBe("pdf");
+    // Read in the reading copy, and the next open from the row comes back to it.
+    await readerView(w.page, "doc");
     await w.page
       .locator(
         '.reader-view[data-view="doc"]:not([hidden]) section[data-byte-start]',
       )
       .first()
       .waitFor();
-    expect(view()).toBe("doc");
-    // Read in the PDF view, and the next open from the row comes back to it.
-    await w.page.getByRole("tab", { name: "PDF", exact: true }).click();
-    await w.page
-      .locator(
-        '.reader-view[data-view="pdf"]:not([hidden]) .reading-pdf-page[data-rendered="true"]',
-      )
-      .first()
-      .waitFor();
     await openRow("Synthetic literature workbench");
-    await expect.poll(view).toBe("pdf");
+    await expect.poll(view).toBe("doc");
     await w.page
       .locator(
-        '.reader-view[data-view="pdf"]:not([hidden]) .reading-pdf-page[data-rendered="true"]',
+        '.reader-view[data-view="doc"]:not([hidden]) section[data-byte-start]',
       )
       .first()
       .waitFor();
@@ -480,7 +480,13 @@ it("opens a PDF without text in the PDF view, and its full text says what is mis
       .first()
       .waitFor();
     expect(new URL(w.page.url()).searchParams.get("reader")).toBe("pdf");
-    await w.page.getByRole("tab", { name: "全文", exact: true }).click();
+    // No text: no 读 ball (ADR 0071); the empty full text is still at its address.
+    expect(
+      await w.page.locator('.reader-ball-row[data-ball="read"]').count(),
+    ).toBe(0);
+    await w.page.goto(
+      `${new URL(w.page.url()).origin}/?literature=${missingId}&reader=doc`,
+    );
     const empty = w.page.locator(".reader-surface .ui-empty");
     await empty
       .getByText("这份资料还没有可读的文本。", { exact: true })

@@ -14,6 +14,7 @@ import {
   readerToLibrary,
   readerType,
   readerPanel,
+  readerView,
 } from "./reader-controls.js";
 import { missingId } from "./processor-workspace-fixture.js";
 import { doubtfulDraft, draftPdf, formDraft } from "./draft-fixture.js";
@@ -87,7 +88,7 @@ it.each(["no-preference", "reduce"] as const)(
           .getByRole("button", { name: "显示信息", exact: true })
           .isVisible(),
       ).toBe(true);
-      await w.page.getByRole("tab", { name: "全文", exact: true }).click();
+      await readerView(w.page, "doc");
       await w.page.locator(".reader-engine-body .reading-article").waitFor();
       await expect
         .poll(() =>
@@ -145,9 +146,9 @@ it("switches between PDF and full text on one engine: one build, one PDF read an
     await w.page.goto(`${w.origin}/?literature=${id}&reader=pdf`);
     await pdf.first().waitFor();
     for (let n = 0; n < 3; n++) {
-      await w.page.getByRole("tab", { name: "全文", exact: true }).click();
+      await readerView(w.page, "doc");
       await text.first().waitFor();
-      await w.page.getByRole("tab", { name: "PDF", exact: true }).click();
+      await readerView(w.page, "pdf");
       await pdf.first().waitFor();
     }
     const counts = await w.page.evaluate(
@@ -172,12 +173,12 @@ it("switches between PDF and full text on one engine: one build, one PDF read an
     expect(counts!.workersStarted).toBe(1);
     // The hidden PDF view keeps at most the three canvases it showed (spec 5.3),
     // so coming back draws at once.
-    await w.page.getByRole("tab", { name: "全文", exact: true }).click();
+    await readerView(w.page, "doc");
     await text.first().waitFor();
     const kept = await w.page.locator(".reading-pdf-page canvas").count();
     expect(kept).toBeGreaterThan(0);
     expect(kept).toBeLessThanOrEqual(3);
-    await w.page.getByRole("tab", { name: "PDF", exact: true }).click();
+    await readerView(w.page, "pdf");
     expect(
       await w.page
         .locator('.reader-view[data-view="pdf"]:not([hidden]) canvas')
@@ -300,7 +301,24 @@ it("opens a paper in the view this browser remembers before the view its materia
   try {
     const id = w.env.parseRequest.literature_id;
     const view = () => new URL(w.page.url()).searchParams.get("reader");
-    // Nothing remembered: the paper has text, so its full text.
+    // Nothing remembered: a paper with a PDF opens on its PDF (ADR 0071),
+    // though it has a text too.
+    await w.page.goto(`${w.origin}/?literature=${id}`);
+    await w.page
+      .locator(
+        '.reader-view[data-view="pdf"]:not([hidden]) .reading-pdf-page[data-rendered="true"]',
+      )
+      .first()
+      .waitFor();
+    expect(view()).toBe("pdf");
+    // Left in the reading copy: opened again without a view, the reading copy.
+    await readerView(w.page, "doc");
+    await w.page
+      .locator(
+        '.reader-view[data-view="doc"]:not([hidden]) section[data-byte-start]',
+      )
+      .first()
+      .waitFor();
     await w.page.goto(`${w.origin}/?literature=${id}`);
     await w.page
       .locator(
@@ -309,7 +327,7 @@ it("opens a paper in the view this browser remembers before the view its materia
       .first()
       .waitFor();
     expect(view()).toBe("doc");
-    await w.page.getByRole("tab", { name: "PDF", exact: true }).click();
+    await readerView(w.page, "pdf");
     await w.page
       .locator(
         '.reader-view[data-view="pdf"]:not([hidden]) .reading-pdf-page[data-rendered="true"]',
@@ -416,7 +434,16 @@ it("shows the loading skeleton with its steps in order past 300 ms, and none whe
       true,
     );
     // Switching between views that are both ready shows no skeleton at all.
-    await w.page.getByRole("tab", { name: "全文", exact: true }).click();
+    // (This paper has no text, so no ball: its empty text is reached by the
+    // address, changed in place as the application does.)
+    const show = (mode: "pdf" | "doc") =>
+      w.page.evaluate((reader) => {
+        const url = new URL(location.href);
+        url.searchParams.set("reader", reader);
+        history.pushState(history.state, "", url);
+        dispatchEvent(new PopStateEvent("popstate", { state: history.state }));
+      }, mode);
+    await show("doc");
     await w.page
       .locator(".reader-surface .ui-empty")
       .getByText("这份资料还没有可读的文本。", { exact: true })
@@ -426,8 +453,8 @@ it("shows the loading skeleton with its steps in order past 300 ms, and none whe
         window as unknown as { preparing: { first: number | null } }
       ).preparing.first = null;
     });
-    for (const name of ["PDF", "全文", "PDF"] as const) {
-      await w.page.getByRole("tab", { name, exact: true }).click();
+    for (const mode of ["pdf", "doc", "pdf"] as const) {
+      await show(mode);
       await w.page.waitForTimeout(400);
     }
     expect(
@@ -581,7 +608,7 @@ it("keeps a 100-page PDF bounded over ten React reader switches and releases its
             );
           });
         // A paper with text opens its full text (spec 6.4); this check reads the PDF.
-        await w.page.getByRole("tab", { name: "PDF", exact: true }).click();
+        await readerView(w.page, "pdf");
       }
       await w.page
         .locator(
@@ -759,7 +786,7 @@ it("does not let a late PDF response overwrite a newer full-text view", async ()
       `${w.origin}/?literature=${w.env.parseRequest.literature_id}&reader=pdf`,
     );
     await expect.poll(() => intercepted, { timeout: 20_000 }).toBe(true);
-    await w.page.getByRole("tab", { name: "全文", exact: true }).click();
+    await readerView(w.page, "doc");
     await w.page.locator(".reading-article").waitFor();
     release!();
     await expect

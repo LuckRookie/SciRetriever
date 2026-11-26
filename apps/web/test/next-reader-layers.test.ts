@@ -14,10 +14,15 @@ const shot = async (page: Page, name: string) => {
   if (SHOTS) await page.screenshot({ path: join(SHOTS, `${name}.png`) });
 };
 const sheet = ".reader-view:not([hidden])[data-view='doc']";
+/** A stop of the depth bar under the reading copy. */
 const view = (page: Page, name: string) =>
   page
-    .getByRole("tablist", { name: "阅读视图" })
+    .getByRole("tablist", { name: "读到多细" })
     .getByRole("tab", { name, exact: true });
+const mapButton = (page: Page) =>
+  page.getByRole("button", { name: "导图", exact: true });
+const ball = (page: Page, id: "read" | "translate") =>
+  page.locator(`.reader-ball-row[data-ball="${id}"] .reader-ball`);
 const shows = (page: Page, layer: string) =>
   page.locator(`${sheet}[data-layer="${layer}"]`).waitFor();
 const settled = (page: Page) =>
@@ -90,8 +95,9 @@ it("shows the notes beside the full text and the other layers of an annotated co
     await settled(page);
     await shot(page, "04-back-to-full");
     // 导图
-    await view(page, "导图").click();
+    await mapButton(page).click();
     await shows(page, "map");
+    expect(await mapButton(page).getAttribute("aria-pressed")).toBe("true");
     await expect
       .poll(() => page.locator(`${sheet} .rl-mn-leaf`).count())
       .toBe(LAYERS_POINTS.length);
@@ -200,6 +206,124 @@ it("moves between layers by hand with Alt and the wheel, and puts notes under th
     await shows(page, "outline");
     await settled(page);
     await shot(page, "11-narrow-outline");
+  } finally {
+    await w.close();
+  }
+}, 180_000);
+
+it("opens on the PDF and swaps or pairs with the two balls (reading-experience 1.9, ADR 0071)", async () => {
+  const w = await nextWorkspace({
+    ready: "body",
+    setup: async (env) => env.setText(LAYERS_TEXT),
+  });
+  try {
+    const page = w.page,
+      id = w.env.parseRequest.literature_id;
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await storedLayers(page, { translated: true });
+    // No view in the address: a paper with a PDF opens on its PDF.
+    await page.goto(`${w.origin}/?literature=${id}`);
+    await page.locator('.react-reader[data-reading-ready="true"]').waitFor();
+    await expect.poll(() => page.url()).toContain("reader=pdf");
+    await expect.poll(() => ball(page, "read").textContent()).toBe("读");
+    expect(await page.getByRole("tablist", { name: "读到多细" }).count()).toBe(
+      0,
+    );
+    await shot(page, "12-pdf-first");
+    // 读: the reading copy at the full text, the depth bar under it; the ball says 看.
+    await ball(page, "read").click();
+    await shows(page, "full");
+    await expect.poll(() => ball(page, "read").textContent()).toBe("看");
+    await view(page, "全文").waitFor();
+    // 译: one click swaps to the translation, a double click pairs the two.
+    const mode = () =>
+      page
+        .locator(`${sheet} article.reading-article`)
+        .getAttribute("data-text-mode");
+    expect(await ball(page, "translate").textContent()).toBe("译");
+    await ball(page, "translate").click();
+    await expect.poll(mode).toBe("translation");
+    expect(await ball(page, "translate").textContent()).toBe("原");
+    await page.waitForTimeout(500);
+    await ball(page, "translate").dblclick();
+    await expect.poll(mode).toBe("bilingual");
+    expect(await ball(page, "translate").textContent()).toBe("原/译");
+    await shot(page, "13-balls-bilingual");
+    // One more click takes the pair back to what showed before it.
+    await page.waitForTimeout(500);
+    await ball(page, "translate").click();
+    await expect.poll(mode).toBe("translation");
+    // The depth is kept for the paper: 看, then 读 again, comes back to it.
+    await view(page, "脉络").click();
+    await shows(page, "outline");
+    await settled(page);
+    await ball(page, "read").click();
+    await expect.poll(() => page.url()).toContain("reader=pdf");
+    await ball(page, "read").click();
+    await shows(page, "outline");
+  } finally {
+    await w.close();
+  }
+}, 180_000);
+
+it("puts the PDF beside the reading copy with a double click on 读, each page following the other (reading-experience 1.9)", async () => {
+  const w = await nextWorkspace({
+    ready: "body",
+    setup: async (env) => env.setText(LAYERS_TEXT),
+  });
+  try {
+    const page = w.page,
+      id = w.env.parseRequest.literature_id;
+    await page.setViewportSize({ width: 1600, height: 900 });
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await storedLayers(page, { translated: false });
+    await page.goto(`${w.origin}/?literature=${id}&reader=pdf`);
+    await page.locator('.react-reader[data-reading-ready="true"]').waitFor();
+    await expect.poll(() => ball(page, "read").textContent()).toBe("读");
+    // A double click: the PDF on the left, the reading copy on the right.
+    await ball(page, "read").dblclick();
+    const left = page.locator(".reader-surface[data-paired] > .reader-beside");
+    await left.waitFor();
+    await left
+      .locator('.reading-pdf-page[data-rendered="true"]')
+      .first()
+      .waitFor();
+    await shows(page, "full");
+    expect(await ball(page, "read").textContent()).toBe("看/读");
+    const leftBox = await left.boundingBox();
+    const rightBox = await page
+      .locator(
+        ".reader-surface[data-paired] > .reader-engine-body:not(.reader-beside)",
+      )
+      .boundingBox();
+    expect(leftBox!.width).toBeGreaterThan(500);
+    expect(rightBox!.x).toBeGreaterThan(leftBox!.x + leftBox!.width - 1);
+    // The depth bar stands under the reading copy.
+    await view(page, "脉络").click();
+    await shows(page, "outline");
+    await settled(page);
+    await shot(page, "14-pair-outline");
+    // Pressing a sentence shows its place on the PDF; the reading copy stays.
+    await page.locator(`${sheet} .rl-mu-s`).first().click();
+    await page.locator(".reader-beside .reading-pdf-locator").waitFor();
+    await shows(page, "outline");
+    // The handle moves the edge, within 30 % to 70 %.
+    const handle = page.locator(".reader-pair-handle");
+    await handle.focus();
+    for (let i = 0; i < 20; i++) await page.keyboard.press("ArrowRight");
+    expect(await handle.getAttribute("aria-valuenow")).toBe("70");
+    await handle.dblclick();
+    expect(await handle.getAttribute("aria-valuenow")).toBe("50");
+    // The pair is kept for the paper.
+    await page.reload();
+    await left.waitFor();
+    // One more click takes the pair back to what showed before it: the PDF.
+    await page.waitForTimeout(500);
+    await ball(page, "read").click();
+    await expect.poll(() => page.url()).toContain("reader=pdf");
+    await expect.poll(() => left.count()).toBe(0);
+    expect(errors).toEqual([]);
   } finally {
     await w.close();
   }

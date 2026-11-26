@@ -19,6 +19,7 @@ import {
   readerType,
   readerTypeChoice,
   readerPanel,
+  readerBall,
 } from "./reader-controls.js";
 
 type Workspace = Awaited<ReturnType<typeof nextWorkspace>>;
@@ -662,16 +663,13 @@ it.each(["no-preference", "reduce"] as const)(
       await w.page.setViewportSize({ width: 720, height: 450 });
       await open(w);
       await ready(w);
-      const pdf = w.page.getByRole("tab", { name: "PDF", exact: true });
-      await pdf.focus();
-      await pdf.press("ArrowLeft");
-      await w.page.keyboard.press("Enter");
+      // The 读 ball is reached and pressed by keys (ADR 0071).
+      const read = readerBall(w.page, "read");
+      await read.focus();
+      if ((await read.innerText()).trim() === "读")
+        await w.page.keyboard.press("Enter");
       await w.page.locator(".reading-article").waitFor();
-      expect(
-        await w.page
-          .getByRole("tab", { name: "全文", exact: true })
-          .getAttribute("aria-selected"),
-      ).toBe("true");
+      await expect.poll(async () => (await read.innerText()).trim()).toBe("看");
       // Below 760 px “排版” is folded into “更多” (spec 1.3), reached by keys.
       const more = w.page.getByRole("button", { name: "更多", exact: true });
       await more.focus();

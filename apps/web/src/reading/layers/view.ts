@@ -42,6 +42,8 @@ export interface LayersView {
   wheel(deltaY: number): boolean;
   /** Whether stressed words are marked (排版 → 标出重点词). */
   setKeyTerms(on: boolean): void;
+  /** While 概览 or 脉络 shows: the first evidence of the note being read; else null. */
+  readingStart(): number | null;
   destroy(): void;
 }
 export interface LayersViewOptions {
@@ -52,6 +54,12 @@ export interface LayersViewOptions {
   onLayer(layer: ReadingLayer): void;
   /** Maps a segment id to its UTF-8 start. */
   offsetOf(segmentId: string): number | null;
+  /**
+   * A note or a sentence was pressed while a PDF stands beside the reading
+   * copy (ADR 0071): true when the PDF showed the place, and the reading
+   * copy then stays where it is.
+   */
+  onPick?(start: number): boolean;
 }
 
 const GAP = 18;
@@ -280,6 +288,15 @@ export function attachLayers(
         !!number && node.dataset.point === number,
       );
   };
+  /** Where a note stands in the text: its first evidence. */
+  const firstStart = (number: number): number | null => {
+    const p = model.byNumber.get(number);
+    const e = p?.evidence[0];
+    if (!e) return null;
+    return e.kind === "sentence"
+      ? e.start_utf8
+      : (port.figure(e.segment_id)?.start ?? options.offsetOf(e.segment_id));
+  };
   /** The note being read: the one nearest a third of the way down the desk. */
   const reading = (): number | null => {
     if (layer === "map") return map?.selected() ?? null;
@@ -435,10 +452,23 @@ export function attachLayers(
     // 全文: a note in the margin goes to its sentence; a sentence's number to its note.
     const note = t.closest<HTMLElement>(".rl-pi[data-point]");
     if (note && layer === "full") {
-      reveal(targetOf({ point: Number(note.dataset.point) }), true);
+      const number = Number(note.dataset.point);
+      reveal(targetOf({ point: number }), true);
+      // Beside a PDF, the PDF shows the note's place too.
+      const start = firstStart(number);
+      if (start !== null) options.onPick?.(start);
       return;
     }
     const sentence = t.closest<HTMLElement>(".rl-mu-s[data-start]");
+    if (sentence && options.onPick?.(Number(sentence.dataset.start))) return;
+    const pressed = t.closest<HTMLElement>(".rl-gang, .rl-pi[data-point]");
+    if (pressed && !getSelection()?.toString()) {
+      const start = firstStart(Number(pressed.dataset.point));
+      if (start !== null && options.onPick?.(start)) {
+        light(pressed.dataset.point ?? null);
+        return;
+      }
+    }
     if (sentence) {
       const gang = sentence.closest<HTMLElement>(".rl-gang");
       return setLayer("full", {
@@ -526,6 +556,11 @@ export function attachLayers(
     },
     setKeyTerms(on) {
       sheet.dataset.keyTerms = String(on);
+    },
+    readingStart() {
+      if (layer === "full" || layer === "map") return null;
+      const point = reading() ?? model.points[0]?.number ?? null;
+      return point === null ? null : firstStart(point);
     },
     destroy() {
       destroyed = true;

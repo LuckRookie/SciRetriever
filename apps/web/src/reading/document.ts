@@ -693,15 +693,17 @@ export async function renderDocument(
       ? (parts as [number, number, number, number])
       : null;
   };
-  frame.anchor = () => {
-    const at = rendered.findIndex(
-      (r) => Number(r.element.dataset.byteStart) === state.textOffset,
-    );
+  /** The anchor of the rendered block at `at`, `ratio` down it. */
+  const anchorOf = (
+    at: number,
+    start: number,
+    ratio: number,
+  ): ReadingAnchor => {
     const el = rendered[at]?.element;
     return {
       kind: "doc",
-      start: state.textOffset,
-      ratio: state.blockOffset,
+      start,
+      ratio,
       label: at >= 0 ? `¶${at + 1}` : "",
       page: el?.dataset.page ? Number(el.dataset.page) : null,
       region: regionOf(el),
@@ -720,6 +722,28 @@ export async function renderDocument(
             )
           : null,
     };
+  };
+  frame.anchor = () =>
+    anchorOf(
+      rendered.findIndex(
+        (r) => Number(r.element.dataset.byteStart) === state.textOffset,
+      ),
+      state.textOffset,
+      state.blockOffset,
+    );
+  frame.anchorAt = (offset) => {
+    const at = search((b) => Number(b.dataset.byteEnd) > offset);
+    const el = rendered[at]?.element;
+    if (!el) return null;
+    const start = Number(el.dataset.byteStart),
+      end = Number(el.dataset.byteEnd);
+    return anchorOf(
+      at,
+      start,
+      end > start
+        ? Math.min(1, Math.max(0, (offset - start) / (end - start)))
+        : 0,
+    );
   };
   frame.isVisible = (anchor) => {
     if (anchor.kind !== "doc" || hidden) return false;
@@ -1535,11 +1559,13 @@ export async function renderDocument(
       keyTerms: frame.keyTerms ?? true,
       onLayer: (shown) => frame.onLayer?.(shown),
       offsetOf: (id) => starts.get(id) ?? null,
+      onPick: (start) => frame.onPick?.(start) ?? false,
     });
     layersView = view;
     frame.setLayer = (next, target) => view.setLayer(next, target);
     frame.layerWheel = (deltaY) => view.wheel(deltaY);
     frame.setKeyTerms = (on) => view.setKeyTerms(on);
+    frame.layerStart = () => view.readingStart();
     ctx.signal.addEventListener("abort", () => view.destroy(), { once: true });
     frame.onLayers?.(true);
     frame.onLayer?.(view.layer());

@@ -599,14 +599,19 @@ it("puts the reader under one top bar: navigation in a drawer, the views, find, 
         exact: true,
       })
       .waitFor();
-    // Only what can be used: 全文 and PDF, no overview, flow or question box,
-    // not even disabled (no reading-layer or question capability here).
+    // Only what can be used (ADR 0071): no views in the top bar; without
+    // reading layers no map button and no depth bar; the 读 ball for a paper
+    // that has both a PDF and a text. No question box here.
     expect(
-      await w.page
-        .getByRole("tablist", { name: "阅读视图" })
-        .getByRole("tab")
-        .allInnerTexts(),
-    ).toEqual(["全文", "PDF"]);
+      await w.page.getByRole("tablist", { name: "阅读视图" }).count(),
+    ).toBe(0);
+    expect(
+      await w.page.getByRole("button", { name: "导图", exact: true }).count(),
+    ).toBe(0);
+    expect(
+      await w.page.getByRole("tablist", { name: "读到多细" }).count(),
+    ).toBe(0);
+    await w.page.locator('.reader-ball-row[data-ball="read"]').waitFor();
     expect(await w.page.getByPlaceholder("向这份资料提问").count()).toBe(0);
     expect(await w.page.getByRole("tab", { name: /概览|脉络/ }).count()).toBe(
       0,
@@ -685,7 +690,9 @@ it("puts the reader under one top bar: navigation in a drawer, the views, find, 
     expect(await headings()).toEqual(["这篇文献", "导出", "加工"]);
     const more = await menuItems("更多");
     // A paper in the library leaves it from here (ADR 0067).
-    expect(more).toEqual([
+    // The ways of reading come first, as one item with its own menu (ADR 0071).
+    expect(more[0]).toBe("阅读方式");
+    expect(more.slice(more.indexOf("移出文献库…"))).toEqual([
       "移出文献库…",
       "上传 PDF",
       "修改全文",
@@ -787,7 +794,7 @@ it("puts the reader under one top bar: navigation in a drawer, the views, find, 
       expect(compact.some((name) => name === item || name === "显示信息")).toBe(
         true,
       );
-    // Below 640 px: no tabs, the views as one button, the title in the page header.
+    // Below 640 px: no tabs, the 读 ball still at hand, the title in the page header.
     await w.page.setViewportSize({ width: 600, height: 900 });
     await expect
       .poll(() =>
@@ -796,9 +803,14 @@ it("puts the reader under one top bar: navigation in a drawer, the views, find, 
           .count(),
       )
       .toBe(0);
-    await w.page.getByRole("button", { name: "视图：全文" }).click();
-    expect(await w.page.getByRole("menuitem").allInnerTexts()).toEqual(["PDF"]);
-    await w.page.keyboard.press("Escape");
+    expect(await w.page.getByRole("button", { name: /^视图：/ }).count()).toBe(
+      0,
+    );
+    expect(
+      await w.page
+        .locator('.reader-ball-row[data-ball="read"] .reader-ball')
+        .isVisible(),
+    ).toBe(true);
     await expect
       .poll(() =>
         w.page

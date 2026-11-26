@@ -13,6 +13,91 @@ export async function readerMore(page: Page, item: string | RegExp) {
     )
     .click();
 }
+/** One of the reader's two floating balls (reading-experience 1.9, ADR 0071). */
+export const readerBall = (page: Page, id: "read" | "translate") =>
+  page.locator(`.reader-ball-row[data-ball="${id}"] .reader-ball`);
+/**
+ * Shows the PDF or the reading copy with the 读 ball: it says where one
+ * click goes (读 on the PDF, 看 on the reading copy).
+ */
+export async function readerView(
+  page: Page,
+  target: "pdf" | "doc" | "PDF" | "全文",
+) {
+  const pdf = target === "pdf" || target === "PDF";
+  const ball = readerBall(page, "read");
+  // A summary, the results or the editor shows as a tag in the top bar that
+  // closes back to the paper (ADR 0071): the editor to its text, the others
+  // to its PDF. Leaving the editor may ask first; that is the caller's.
+  const shown = new URL(page.url()).searchParams.get("reader");
+  if (shown === "know" || shown === "results" || shown === "edit") {
+    await page.locator(".reader-aside-tag").click();
+    if (shown === "edit" && !pdf) return;
+  }
+  // A paper with only one of the two has no ball: it already shows that one.
+  for (let i = 0; i < 100; i++) {
+    if (await ball.isVisible()) {
+      // Two presses close together are a double click (the pair, ADR 0071).
+      const last = Number((await ball.getAttribute("data-pressed")) ?? 0);
+      const wait = last + 450 - (await page.evaluate(() => performance.now()));
+      if (wait > 0) await page.waitForTimeout(wait);
+      const label = (await ball.innerText()).trim();
+      if (label === (pdf ? "看" : "读")) await ball.click();
+      // Settled: the address and the ball say the view asked for.
+      const want = pdf ? "pdf" : "doc",
+        says = pdf ? "读" : "看";
+      for (let j = 0; j < 100; j++) {
+        if (
+          new URL(page.url()).searchParams.get("reader") === want &&
+          (await ball.innerText()).trim() === says &&
+          // The view is on screen, its loading skeleton gone (spec 6.2).
+          (await page
+            .locator(`.reader-view[data-view="${want}"]:not([hidden])`)
+            .count()) > 0 &&
+          (await page.locator(".reader-preparing").count()) === 0
+        ) {
+          // A place restored on arrival scrolls once more; let it settle.
+          await page.waitForTimeout(300);
+          return;
+        }
+        await page.waitForTimeout(100);
+      }
+      throw new Error(`the reader did not show the ${want} view`);
+    }
+    const shown = new URL(page.url()).searchParams.get("reader");
+    if (shown === (pdf ? "pdf" : "doc") && i >= 15) return;
+    await page.waitForTimeout(200);
+  }
+  throw new Error(`the reader shows no ${pdf ? "PDF" : "reading copy"}`);
+}
+/**
+ * Reads in the original, the translation or both with the 译 ball: a click
+ * swaps, the tag beside it pairs the two or takes the pair back.
+ */
+export async function readerLanguage(
+  page: Page,
+  target: "original" | "translation" | "bilingual",
+) {
+  const ball = readerBall(page, "translate");
+  await ball.waitFor();
+  const row = page.locator('.reader-ball-row[data-ball="translate"]');
+  const paired = async () =>
+    (await ball.getAttribute("data-paired")) === "true";
+  if (target === "bilingual") {
+    if (!(await paired())) {
+      await row.hover();
+      await row.locator(".reader-ball-pair").click();
+    }
+    return;
+  }
+  if (await paired()) {
+    await row.hover();
+    await row.locator(".reader-ball-pair").click();
+  }
+  // 译 is written while the original shows, 原 while the translation does.
+  const label = (await ball.innerText()).trim();
+  if (label === (target === "translation" ? "译" : "原")) await ball.click();
+}
 /** The “排版” panel (plan 25 block 30), opened from its button or, below 760 px, from “更多”. */
 export async function openType(page: Page) {
   const panel = page.getByRole("dialog", { name: "排版", exact: true });
@@ -132,14 +217,6 @@ export async function readerPageNumber(page: Page) {
     )
     .innerText();
   return Number(/第\s*(\d+)/u.exec(text)?.[1] ?? Number.NaN);
-}
-/** Chooses a view: its tab, or below 640 px the views button's menu (spec 1.3). */
-export async function readerView(page: Page, name: "全文" | "PDF") {
-  const tab = page.getByRole("tab", { name, exact: true });
-  await page.getByRole("button", { name: "更多", exact: true }).waitFor();
-  if (await tab.isVisible()) return tab.click();
-  await page.getByRole("button", { name: /^视图：/ }).click();
-  await page.getByRole("menuitem", { name, exact: true }).click();
 }
 /**
  * The shown full text is loaded to its end: the row that loads more under the

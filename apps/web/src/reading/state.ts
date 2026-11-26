@@ -87,6 +87,8 @@ export interface ReadingMemory {
   sources: boolean | null;
   /** The reading layer last rested in (ADR 0069): 0 概览, 1 脉络, 2 全文. */
   layer: number | null;
+  /** The PDF and the reading copy were side by side (ADR 0071). */
+  pair: boolean | null;
 }
 export const READING_MEMORY_LIMIT = 300;
 const PREFIX = "sciretriever:reading:v1:";
@@ -102,6 +104,7 @@ const emptyMemory = (): ReadingMemory => ({
   keySentences: null,
   sources: null,
   layer: null,
+  pair: null,
 });
 type Store = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 /** Local storage, or null where the browser refuses it: reading still works, unremembered. */

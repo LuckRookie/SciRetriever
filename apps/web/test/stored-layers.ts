@@ -280,6 +280,16 @@ const DATA = [
 ];
 
 const utf8 = (s: string) => new TextEncoder().encode(s).length;
+/** A served reply after the page has closed is not an error of the test. */
+const safe =
+  <A extends unknown[]>(handler: (...args: A) => Promise<unknown>) =>
+  async (...args: A) => {
+    try {
+      await handler(...args);
+    } catch (error) {
+      if (!/disposed|closed|Target page/u.test(String(error))) throw error;
+    }
+  };
 interface Segment {
   segment_id: string;
   kind: string;
@@ -326,7 +336,7 @@ export async function storedLayers(page: Page, options: LayersOptions = {}) {
   ) =>
     page.route(
       (url) => url.pathname === `/api/v1/query/${name}`,
-      async (route) => {
+      safe(async (route) => {
         const body = route.request().postDataJSON() as {
           request: Record<string, unknown>;
         };
@@ -336,7 +346,7 @@ export async function storedLayers(page: Page, options: LayersOptions = {}) {
         const value = await response.json();
         if (value.result) take(value.result);
         await route.fulfill({ response, json: value });
-      },
+      }),
     );
   await capture("document-segments", (r) => {
     for (const s of r.segments as Segment[]) seen.segments.set(s.segment_id, s);
@@ -373,7 +383,7 @@ export async function storedLayers(page: Page, options: LayersOptions = {}) {
   };
   await page.route(
     (url) => url.pathname === "/api/v1/query/document-describe",
-    async (route) => {
+    safe(async (route) => {
       const response = await route.fetch();
       const value = await response.json();
       reading = value.result.document;
@@ -392,11 +402,11 @@ export async function storedLayers(page: Page, options: LayersOptions = {}) {
         reason: fake.state === "not-applicable" ? fake.reason : null,
       };
       await route.fulfill({ response, json: value });
-    },
+    }),
   );
   await page.route(
     (url) => url.pathname === "/api/v1/query/document-translation",
-    async (route) => {
+    safe(async (route) => {
       // Asked before the text is read: the units follow the paper's order.
       for (let i = 0; i < 200 && !seen.segments.size; i++)
         await new Promise((done) => setTimeout(done, 50));
@@ -434,11 +444,11 @@ export async function storedLayers(page: Page, options: LayersOptions = {}) {
           },
         },
       });
-    },
+    }),
   );
   await page.route(
     (url) => url.pathname === "/api/v1/query/document-layers",
-    async (route) => {
+    safe(async (route) => {
       const request = (
         route.request().postDataJSON() as {
           request: {
@@ -666,7 +676,7 @@ export async function storedLayers(page: Page, options: LayersOptions = {}) {
           },
         },
       });
-    },
+    }),
   );
   return fake;
 }

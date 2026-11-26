@@ -1,4 +1,4 @@
-import { readerNavigation } from "./reader-controls.js";
+import { readerNavigation, readerView } from "./reader-controls.js";
 import {
   openSavedViews,
   showAllLibraryStatuses,
@@ -251,7 +251,7 @@ describe("IP-address HTTP login and workspace", () => {
         .locator(".paper-open")
         .dblclick();
       // A paper with text opens its full text (spec 6.4); this check reads the PDF.
-      await page.getByRole("tab", { name: "PDF", exact: true }).click();
+      await readerView(page, "pdf");
       await page
         .locator('.reading-pdf-page[data-rendered="true"]')
         .first()

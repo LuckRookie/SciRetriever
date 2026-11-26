@@ -300,16 +300,6 @@
     cursor: help;
     user-select: none;
   }
-  .ft-controls {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-  }
-  .ft-status {
-    color: var(--fg2);
-    font-size: var(--text-secondary);
-    white-space: nowrap;
-  }
 
   @media (prefers-reduced-motion: reduce) {
     .translation-popover {
@@ -319,41 +309,5 @@
     .translation-spinner {
       animation: none;
     }
-  }
-}
-
-@layer pages {
-  /* Reading-experience 9: the full text's readings beside the views; the
-     reason two of them cannot be chosen shows under them as a hint does. */
-  .reader-text-mode {
-    position: relative;
-    display: flex;
-    flex-shrink: 0;
-    margin-inline-end: var(--space-2);
-  }
-  /* Drawn as the design core's hint (.ui-tooltip), but its own element:
-     it stays in the page as the readings' description. */
-  .reader-text-mode-tip {
-    position: absolute;
-    z-index: 100;
-    border-radius: var(--radius-lg);
-    background: var(--surface-raised);
-    box-shadow: var(--shadow-pop);
-    color: var(--fg);
-    top: calc(100% + var(--space-2));
-    right: 0;
-    display: none;
-    padding: var(--space-1) var(--space-2);
-    font-size: var(--text-caption);
-    line-height: 1.5;
-    white-space: nowrap;
-    pointer-events: none;
-  }
-  .reader-text-mode-tip[data-shown] {
-    display: block;
-  }
-  /* Without a stored translation the PDF's switch says why it is off. */
-  .ft-controls .ft-missing {
-    margin: 0;
   }
 }
