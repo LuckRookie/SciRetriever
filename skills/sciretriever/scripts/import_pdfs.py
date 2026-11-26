@@ -95,17 +95,29 @@ def items(client, batch):
 
 
 def summarize(preview, listed):
+    """Each file in exactly one class, by the preview's own counts.
+
+    The preview counts every admitted record once: new (created, of which
+    needs_metadata have no recognized bibliography), already in the library
+    (matched, restored), possible duplicate, conflict or rejected. The items
+    only add which new ones have candidates to pick from.
+    """
     files = [i for i in listed if i.get("origin") == "file"]
     records = (preview.get("summary") or {}).get("records") or {}
-    rejected = [i for i in files if i.get("disposition") == "rejected"]
+    count = lambda key: int(records.get(key) or 0)  # noqa: E731
+    rejected = [i for i in files if i.get("disposition") == "rejected" or i.get("reason")]
     state = lambda i: ((i.get("recognition") or {}).get("state"))  # noqa: E731
     return {
         "files": len(files),
-        "recognized": sum(1 for i in files if state(i) == "recognized"),
-        "existing": int(records.get("matched", 0)) + int(records.get("restored", 0)),
-        "candidates": sum(1 for i in files if state(i) == "candidates" and i.get("needs_decision")),
-        "duplicates": sum(1 for i in files if i.get("possible_duplicates") and i.get("needs_decision")),
-        "unrecognized": sum(1 for i in files if state(i) in ("unrecognized", "cancelled")),
+        "created": count("created"),
+        "needs_metadata": count("needs_metadata"),
+        "existing": count("matched") + count("restored"),
+        "duplicates": count("possible_duplicates"),
+        "conflicts": count("conflicts"),
+        # Among the new ones: no bibliography chosen yet among candidates.
+        "candidates": sum(1 for i in files if state(i) == "candidates" and i.get("needs_decision")
+                          and not i.get("possible_duplicates")),
+        "rejected_total": count("rejected"),
         "rejected": counters.Counter(i.get("reason") or "rejected" for i in rejected),
         "rejected_names": sorted(i.get("file_name") or "" for i in rejected),
         "decisions": sum(1 for i in files if i.get("needs_decision")),
@@ -173,8 +185,12 @@ def run(client, config_dir, paths, *, wait=DEFAULT_WAIT, confirm=False, output=s
         sleep(2)
     s = summarize(preview, items(client, batch))
     print(f"本次交了 {delivered} 个文件，批次里共 {s['files']} 个。", file=output)
-    print(f"认出 {s['recognized']} 个；已在库 {s['existing']} 篇；没认出 {s['unrecognized']} 个"
-          "（确认后照样入库，标为书目待补）。", file=output)
+    recognized = s["created"] - s["needs_metadata"]
+    print(f"确认后会入库 {s['created']} 篇：认出书目的 {recognized} 篇，书目待补 {s['needs_metadata']} 篇"
+          + (f"（其中 {s['candidates']} 篇有候选，可在网页上挑）" if s["candidates"] else "") + "。",
+          file=output)
+    print(f"已在库 {s['existing']} 篇；可能重复 {s['duplicates']} 个（不决定就不入库）；"
+          f"冲突 {s['conflicts']} 个；被拒绝 {s['rejected_total']} 个。", file=output)
     print(f"需要决定：可能是这一篇 {s['candidates']} 个，可能重复 {s['duplicates']} 个。", file=output)
     if s["rejected"]:
         print("被拒绝：" + "，".join(f"{k} {v}" for k, v in sorted(s["rejected"].items())), file=output)

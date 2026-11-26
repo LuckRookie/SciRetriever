@@ -70,16 +70,28 @@ class Library:
                         library.running_previews -= 1
                         return self.ok({"recognition": {"state": "running", "recognized": 0, "total": 1},
                                         "summary": {"records": {}}})
+                    # Like the server: each admitted file counted once.
+                    counts = dict.fromkeys(("created", "needs_metadata", "matched", "restored",
+                                            "possible_duplicates", "conflicts", "rejected"), 0)
                     for i in library.items:
                         if i["disposition"] == "rejected":
+                            counts["rejected"] += 1
                             continue
                         name = i["file_name"]
                         i["recognition"] = {"state": "candidates" if "twin" in name else
                                             "unrecognized" if "scan" in name else "recognized",
                                             "candidates": []}
-                        i["needs_decision"] = "twin" in name
+                        i["possible_duplicates"] = [{"literature_id": "x"}] if "dup" in name else []
+                        i["needs_decision"] = "twin" in name or "dup" in name
+                        if "dup" in name:
+                            counts["possible_duplicates"] += 1
+                        elif "two" in name:  # recognized and already in the library
+                            counts["matched"] += 1
+                        else:
+                            counts["created"] += 1
+                            counts["needs_metadata"] += i["recognition"]["state"] != "recognized"
                     return self.ok({"recognition": {"state": "done", "recognized": 1, "total": 1},
-                                    "summary": {"records": {"matched": 1, "restored": 0}}})
+                                    "summary": {"records": counts}})
                 if self.path == base + "/confirm":
                     library.confirmed, library.state = True, "running"
                     return self.ok({"batch": {"batch_id": BATCH, "state": "running"}})
@@ -118,7 +130,7 @@ class ImportPdfsTests(unittest.TestCase):
         self.library = Library(self.root)
         self.folder = self.root / "papers"
         (self.folder / "sub").mkdir(parents=True)
-        for name in ("sub/paper one.pdf", "sub/twin.pdf", "scan.PDF", "paper two.pdf"):
+        for name in ("sub/paper one.pdf", "sub/twin.pdf", "scan.PDF", "paper two.pdf", "dup.pdf"):
             (self.folder / name).write_bytes(PDF)
         (self.folder / "broken.pdf").write_bytes(b"not a pdf")
         (self.folder / "notes.txt").write_text("not collected")
@@ -146,10 +158,16 @@ class ImportPdfsTests(unittest.TestCase):
         self.assertEqual(self.library.created[0]["format"], "file")
         self.assertIsNone(self.library.created[0]["source"])
         self.assertEqual(sorted(i["relative"] for i in self.library.items),
-                         ["broken.pdf", "paper two.pdf", "scan.PDF", "sub/paper one.pdf", "sub/twin.pdf"])
+                         ["broken.pdf", "dup.pdf", "paper two.pdf", "scan.PDF", "sub/paper one.pdf",
+                          "sub/twin.pdf"])
         self.assertFalse(self.library.confirmed)
-        self.assertIn("认出 2 个；已在库 1 篇；没认出 1 个", text)
-        self.assertIn("可能是这一篇 1 个", text)
+        # paper one new and recognized; scan and twin new without bibliography
+        # (twin with candidates); paper two already in the library; dup a
+        # possible duplicate; broken rejected: six files, each counted once.
+        self.assertIn("确认后会入库 3 篇：认出书目的 1 篇，书目待补 2 篇（其中 1 篇有候选，可在网页上挑）。", text)
+        self.assertIn("已在库 1 篇；可能重复 1 个（不决定就不入库）；冲突 0 个；被拒绝 1 个。", text)
+        self.assertIn("需要决定：可能是这一篇 1 个，可能重复 1 个。", text)
+        self.assertNotIn("没认出", text)
         self.assertIn("被拒绝：pdf-invalid 1", text)
         self.assertIn("  broken.pdf", text)
         self.assertIn(BATCH, text)
@@ -175,19 +193,20 @@ class ImportPdfsTests(unittest.TestCase):
         code, text = self.main(str(self.folder))
         self.assertEqual(code, 0, text)
         self.assertEqual(len(self.library.created), 1)
-        self.assertEqual(len(self.library.items), 5)
-        self.assertEqual(len({i["relative"] for i in self.library.items}), 5)
+        self.assertEqual(len(self.library.items), 6)
+        self.assertEqual(len({i["relative"] for i in self.library.items}), 6)
         code, text = self.main(str(self.folder))
         self.assertIn("本次交了 0 个文件", text)
-        self.assertEqual(len(self.library.items), 5)
+        self.assertEqual(len(self.library.items), 6)
 
     def test_confirm_waits_for_decisions_and_confirms_without_them(self):
         code, text = self.main("--confirm", str(self.folder))
         self.assertEqual(code, 1)
         self.assertFalse(self.library.confirmed)
         self.assertIn("没有确认", text)
-        (self.folder / "sub" / "twin.pdf").unlink()
-        self.library.items = [i for i in self.library.items if i["file_name"] != "twin.pdf"]
+        for name in ("sub/twin.pdf", "dup.pdf"):
+            (self.folder / name).unlink()
+        self.library.items = [i for i in self.library.items if i["file_name"] not in ("twin.pdf", "dup.pdf")]
         code, text = self.main("--confirm", str(self.folder))
         self.assertEqual(code, 0, text)
         self.assertTrue(self.library.confirmed)
