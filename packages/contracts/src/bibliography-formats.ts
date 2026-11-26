@@ -21,11 +21,9 @@ export function isIntakeBibliographyFormat(
 }
 
 const EXTENSIONS: Readonly<Record<string, IntakeBibliographyFormat>> = {
-  bib: "bibtex",
   bibtex: "bibtex",
   biblatex: "biblatex",
   ris: "ris",
-  json: "csl-json",
   enw: "endnote-tagged",
   net: "noteexpress",
 };
@@ -64,6 +62,40 @@ function looksLikeEndnoteXml(text: string): boolean {
   const close = head.indexOf(">", i);
   return close > 0 && /^\s*<records[\s>]/u.test(head.slice(close + 1));
 }
+/**
+ * BibTeX or BibLaTeX: the first non-empty line that is not a `%` comment
+ * starts with `@` and an entry type; BibLaTeX when the first 64 KiB use one of
+ * its entry types or fields (the Web's former rule).
+ */
+function bibtexFlavour(text: string): "bibtex" | "biblatex" {
+  return /@(?:online|mvbook|thesis|report)\s*[{(]|\b(?:date|journaltitle|location)\s*=/iu.test(
+    text.slice(0, 65536),
+  )
+    ? "biblatex"
+    : "bibtex";
+}
+function looksLikeBibtex(text: string): boolean {
+  const source = text.slice(0, 65536).replace(/^\uFEFF/u, "");
+  for (const raw of source.split("\n")) {
+    const line = raw.trim();
+    if (!line || (line.startsWith("%") && !line.startsWith("%0 "))) continue;
+    return /^@[A-Za-z]+\s*[{(]/u.test(line);
+  }
+  return false;
+}
+/** A JSON array or object whose first 64 KiB name a CSL field. */
+function looksLikeCslJson(text: string): boolean {
+  const head = text
+    .slice(0, 65536)
+    .replace(/^\uFEFF/u, "")
+    .trimStart();
+  return (
+    (head.startsWith("[") || head.startsWith("{")) &&
+    /"(?:type|title|author|editor|issued|container-title|DOI|ISBN|ISSN|URL|page|volume|issue|publisher)"\s*:/u.test(
+      head,
+    )
+  );
+}
 /** Which format the content's beginning names, or null. */
 export function bibliographyFormatOfContent(
   text: string,
@@ -74,11 +106,15 @@ export function bibliographyFormatOfContent(
   if (line.trimStart().startsWith("<") && looksLikeEndnoteXml(text))
     return "endnote-xml";
   if (/^TY {2}-/u.test(line)) return "ris";
+  if (looksLikeBibtex(text)) return bibtexFlavour(text);
+  if (looksLikeCslJson(text)) return "csl-json";
   return null;
 }
 /**
  * 6.4.14 “认格式”: the extension first; `.txt`, `.xml` or an unknown
- * extension is decided by the content's beginning. null: not recognized.
+ * extension is decided by the content's beginning. `.bib` is BibTeX or
+ * BibLaTeX by its content; a `.json` that is not CSL JSON is not recognized,
+ * so the user chooses. null: not recognized.
  */
 export function detectBibliographyFormat(
   fileName: string | null,
@@ -87,6 +123,8 @@ export function detectBibliographyFormat(
   const extension = /\.([A-Za-z0-9]+)$/u
     .exec(fileName ?? "")?.[1]
     ?.toLowerCase();
+  if (extension === "bib") return bibtexFlavour(text);
+  if (extension === "json") return looksLikeCslJson(text) ? "csl-json" : null;
   const named = extension ? EXTENSIONS[extension] : undefined;
   return named ?? bibliographyFormatOfContent(text);
 }
