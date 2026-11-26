@@ -28,6 +28,10 @@ Agent 能代使用者走通每一条导入途径和与 PDF 有关的操作；Ski
   - [x] 只导入 PDF（2026-11-26）：新增固定程序 `skills/sciretriever/scripts/import_pdfs.py`（建只有文件的批次、交文件、等认篇、打印摘要后停下，默认不确认；重跑续传），`import.md` 增一节。被拒绝的文件条目现在带原因（`IntakeBatchItem.reason`）。Python 测试 5 条，另对真实服务端走通过一次。
   - [x] Zotero：见 [07](07-zotero-import-program.md)，`source-zotero.md` 已重写。
 - [ ] 4.5 核对：按 Skill 的写法，用一个 Agent 在样例库上各走一遍，记录走不通的地方并修正。
+  - 2026-11-26 走了一遍（临时库，没有书目来源、模型与解析服务；只按 `skills/sciretriever/` 的文件操作）。走通：换令牌、书目文件（BibTeX 带附件、RIS、知网式 EndNote 与 NoteExpress）、点名几篇、只导入 PDF、MCP 的读与整理、Zotero 程序在没有 Zotero 时的表现。没走到：有来源、模型或解析服务时的效果；解析之后的阅读（译文、概览与脉络）。
+  - 已改 Skill 的文字（同日）：`.xml` 的认法、`import_bibliography` 只在 stdio 版、`partial` 的含义、`--collection` 的写法、怎样判断没有全文、MCP 会话的上限、获取 PDF 预览的范围。
+  - 交后端修（进行中）：`import_pdfs.py` 摘要重复计数；接口说明里 `scope` 没写取值、缺“决定”的请求形状；MCP 会话 429 的重试时间与原因；没有书目来源时认篇没有原因；文件认篇不先对本库已有的标识。
+  - 待查清后定：`search_library` 带文字检索时默认两边都查，与说明不符；没有只读的办法列出可用的书目来源；换连接后批次经 MCP 读得到、经 HTTP 读不到。
 
 ## 4.1 的清点结果（2026-11-25）
 
