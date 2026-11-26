@@ -38,7 +38,9 @@ export interface LayersTranslationInput {
   readonly items: readonly {
     readonly id: string;
     readonly text: string;
-    readonly key_terms: readonly string[];
+    readonly key_terms?: readonly string[];
+    readonly label?: string;
+    readonly places?: readonly string[];
     readonly evidence?: readonly {
       readonly id: string;
       readonly unit: string;
@@ -64,34 +66,46 @@ export function layersParagraphs(input: string) {
   }));
 }
 /**
- * A valid layers answer: one point per paragraph (up to six) resting on its
- * first sentence, whose statement repeats that sentence's first words, so its
- * key term is found in it.
+ * A valid layers answer (spec 10.2.1): one point per paragraph (up to six)
+ * resting on its first sentence, whose statement repeats that sentence's
+ * first words, so its key term is found in it. The first three are the
+ * trunk, each with a basis quoting the sentence's first four words; each
+ * later point follows the one before it. One data row quotes paragraph 1's
+ * wavelength; the advice names the heading `s4`.
  */
 export function defaultLayersReply(input: string) {
   const paragraphs = layersParagraphs(input).slice(0, 6);
+  const first = paragraphs[0]?.sentences[0] ?? "";
+  const value = /\d+ nm/u.exec(first)?.[0] ?? "1 nm";
   return {
     digest: {
-      nature: {
-        text: "A synthetic study of spectra. Read the results first.",
-        not_given: null,
+      summary: {
+        text: "A synthetic study of spectra measured in water. It records each sample and concludes that the spectra are stable.",
         units: [paragraphs[0]?.id ?? "p1"],
         key_terms: ["synthetic study"],
       },
-      limits: {
-        text: null,
-        not_given: "The study states no limitation.",
-        units: [],
-        key_terms: [],
-      },
+      limits: [
+        {
+          text: "Only water was used as the medium.",
+          units: [paragraphs[0]?.id ?? "p1"],
+        },
+      ],
       advice: {
-        text: "Read the results closely.",
+        text: "Read Results for the spectra.",
         not_given: null,
         units: [],
-        key_terms: ["results"],
+        key_terms: ["spectra"],
+        places: [{ text: "Results", target: "s4" }],
       },
     },
-    points: paragraphs.map((p) => {
+    data: [
+      {
+        quantity: "Spectrum of the first sample",
+        value,
+        source: paragraphs[0]?.id ?? "p1",
+      },
+    ],
+    points: paragraphs.map((p, i) => {
       const words = p.sentences[0]!.replace(/[.!?]$/u, "").split(/\s+/u);
       return {
         statement: `The paper states that ${words.slice(0, 6).join(" ")}.`,
@@ -99,17 +113,28 @@ export function defaultLayersReply(input: string) {
         key_terms: [
           words.slice(0, 6).find((w) => /^[A-Za-z]{5,}$/u.test(w)) ?? words[0]!,
         ],
+        primary: i < 3,
+        label: words.slice(1, 4).join(" "),
+        kind: i === 0 ? "context" : "result",
+        relations: i ? [{ word: "follows", targets: [`k${i}`] }] : [],
+        basis:
+          i < 3
+            ? { evidence: `${p.id}.1`, quote: words.slice(0, 4).join(" ") }
+            : null,
       };
     }),
   };
 }
-/** Every item translated with a prefix, key terms kept, evidence on sentence 1. */
+/** Every item translated with a prefix, key terms, labels and places kept, evidence on sentence 1. */
 export function defaultLayersTranslationReply(input: LayersTranslationInput) {
   return {
     items: input.items.map((item) => ({
       id: item.id,
       translation: `译文：${item.text}`,
-      key_terms: item.key_terms.map((term) => ({ term, translation: term })),
+      key_terms:
+        item.key_terms?.map((term) => ({ term, translation: term })) ?? [],
+      label: item.label ? `译文：${item.label}` : null,
+      places: (item.places ?? []).map((text) => ({ text, translation: text })),
       evidence: (item.evidence ?? []).map((e) => ({
         id: e.id,
         sentences: [1],
@@ -353,7 +378,7 @@ export async function coreProcessingFixture(
       const systemText =
         typeof system === "string" ? system : (system?.[0]?.text ?? "");
       const userText = wire.messages[1]!.content[0]!.text;
-      const value = systemText.startsWith("You write two reading layers")
+      const value = systemText.startsWith("You write the reading layers")
         ? layersReply(userText)
         : systemText.startsWith("You translate the reading notes")
           ? layersTranslationReply(

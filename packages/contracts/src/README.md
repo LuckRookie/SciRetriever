@@ -22,7 +22,7 @@
 - [document-read.ts](document-read.ts)：固定文档与证据的有界读取；可选文本等级、初稿计数与角色覆盖说明按精确键解析，片段核对依据按等级分开校验。初稿差异使用独立审计请求/结果合同，规范 JSON 分片收齐后解析；不改变普通读取请求与游标的形状。
 - [sentence-split.ts](sentence-split.ts)：分句规则 `sentence-split-v1`（规格 3.5），服务端与网页共用的唯一实现：`splitSentences(text, {whole})` 返回 JavaScript 下标的句子范围，`splitSentencesUtf8` 与 `utf8Offset` 换成 UTF-8 字节，`sentenceNumbers` 给出一个范围碰到的句号（从 1 起）。
 - [key-terms.ts](key-terms.ts)：重点词匹配 `key-term-match-v1`（规格 10.7）：`matchKeyTerm(text, term)` 与 `markKeyTerms(text, terms)`（排好序、不重叠，先列的词优先），范围是 JavaScript 下标；拉丁等有词界的文字不分大小写、从词首匹配、词尾可多 `s` 或 `es`、不在词中间；中日韩文字逐字匹配。
-- [reading-layers.ts](reading-layers.ts)：阅读层文件 `DocumentLayersFile` 与 `describe.layers` 摘要的严格解析、提示词版本与各项上限（要点 3–40 个、`statement` 300 码点、提要文字 600 码点、重点词 40 码点且每项至多 2 个、依据每个要点 1–3 条且每条 1–4 句、提要段号至多 6 个、正文少于 3,000 码点不做）。
+- [reading-layers.ts](reading-layers.ts)：阅读层文件 `DocumentLayersFile`（`LAYERS_FILE_SCHEMA_VERSION` 2）与 `describe.layers` 摘要的严格解析、提示词版本、类别 `LAYERS_POINT_KINDS`（七种）与关系 `LAYERS_RELATION_WORDS`（六种）、短标签的规则 `layersLabelFits` 与各项上限（要点 3–40 个、主干 3–5 个、`statement` 300 码点、`summary` 400、局限至多 5 条各 200、精读建议 300、数据至多 8 行、重点词 40 码点且每项至多 2 个、依据每个要点 1–3 条且每条 1–4 句、提要段号至多 6 个、正文少于 3,000 码点不做）。
 - [reading-layers-read.ts](reading-layers-read.ts)：文档读取 `layers` 的请求与三种结果（`overview`、`outline`、`markdown`）的精确键解析，以及 Markdown 文首的机器说明。
 - [draft-document.ts](draft-document.ts)：两级文本、schema 3 初稿引用、初稿内容、差异与形成回执的严格合同；初稿用显式解析入口，原 `parseDocumentRef` 仍只接受 schema 2。片段核对依据按显式版本校验。
 - [form-drafts.ts](form-drafts.ts)：显式补形成初稿的预览、任务请求、互斥范围计数与逐部分回执合同；请求解析在 `operations.ts`，保存的范围由 `intake.ts` 共用解析。

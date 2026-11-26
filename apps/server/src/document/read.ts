@@ -880,10 +880,9 @@ export class DocumentReadService {
             .catch(() => null);
           check(signal);
           if (r.part === "overview") {
-            const digest = reader.digest(),
-              sections = reader.sections();
+            const sections = reader.sections();
             if (r.format === "markdown") {
-              let markdown = layersMarkdownHeader(title, digest, r.text);
+              let markdown = layersMarkdownHeader(title, reader, r.text);
               for (const section of sections) {
                 markdown += layersMarkdownSection(section.title);
                 for (const p of section.points)
@@ -902,7 +901,11 @@ export class DocumentReadService {
               ...common,
               format: "json" as const,
               title,
-              digest,
+              summary: reader.summary(),
+              primary: reader.primary(),
+              data: reader.data(),
+              limits: reader.limits(),
+              advice: reader.advice(),
               sections,
               ...marks(),
             };
@@ -921,7 +924,7 @@ export class DocumentReadService {
           let size = 0,
             markdown =
               r.format === "markdown" && start === 0
-                ? layersMarkdownHeader(title, reader.digest(), r.text)
+                ? layersMarkdownHeader(title, reader, r.text)
                 : "";
           // The digest (and its untranslated texts) is on the first Markdown page only.
           let section: string | null | undefined =

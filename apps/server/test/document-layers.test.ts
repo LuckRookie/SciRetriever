@@ -1,4 +1,10 @@
+import { createHash } from "node:crypto";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
+import { canonicalJsonBytes, parseArtifactRef } from "@sciretriever/contracts";
+import { DocumentLayersStore } from "../src/layers/document.js";
+import { artifactReference } from "../src/storage/artifact-layout.js";
 import type { ArchiveStepReceipt } from "@sciretriever/contracts";
 import { createQueryApplication } from "../src/bootstrap/application.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -115,7 +121,7 @@ it("produces, checks and publishes the layers; reads overview, outline, three te
     // The input: numbered paragraphs and sentences, headings as heading lines.
     const input = e.layersInputs[0]!;
     expect(input).toMatch(/^Maximum number of points: 40\n/u);
-    expect(input).toContain("# Introduction");
+    expect(input).toContain("# [s2] Introduction");
     expect(input).toMatch(/^\[p1\] <1> The abstract sample 1 showed/mu);
     expect(input).not.toContain("Example synthetic reference");
     const document_version_id = (await main(e)).document_version_id!;
@@ -132,21 +138,48 @@ it("produces, checks and publishes the layers; reads overview, outline, three te
       text: "original",
       state: "complete",
       machine_written: true,
-      prompt_version: "reading-layers-v1",
+      prompt_version: "reading-layers-v2",
     });
     expect(overview).not.toHaveProperty("machine_translation");
-    expect(overview.digest.map((d: { name: string }) => d.name)).toEqual([
-      "nature",
-      "limits",
-      "advice",
-    ]);
-    expect(overview.digest[1]).toMatchObject({
-      text: null,
-      not_given: "The study states no limitation.",
+    // ADR 0070: summary, trunk with its basis, data, limits and advice.
+    expect(overview.summary).toEqual({
+      text: "A synthetic study of spectra measured in water. It records each sample and concludes that the spectra are stable.",
+      key_terms: ["synthetic study"],
+      units: [{ unit_id: expect.any(String), paragraph: 2 }],
     });
-    expect(overview.digest[0].units).toEqual([
-      { unit_id: expect.any(String), paragraph: 2 },
+    expect(overview.limits).toEqual([
+      {
+        text: "Only water was used as the medium.",
+        units: [{ unit_id: expect.any(String), paragraph: 2 }],
+      },
     ]);
+    expect(overview.advice).toMatchObject({
+      text: "Read Results for the spectra.",
+      key_terms: ["spectra"],
+      places: [
+        {
+          text: "Results",
+          target: { kind: "section", title: "Results", paragraph: 9 },
+        },
+      ],
+    });
+    expect(overview.data).toEqual([
+      {
+        quantity: "Spectrum of the first sample",
+        value: "401 nm",
+        source: { kind: "unit", unit_id: expect.any(String), paragraph: 2 },
+      },
+    ]);
+    expect(overview.primary.map((p: { number: number }) => p.number)).toEqual([
+      1, 2, 3,
+    ]);
+    expect(overview.primary[1].basis).toMatchObject({
+      kind: "sentence",
+      text: "The introduction sample 10",
+      paragraph: 4,
+      sentences: [1],
+      fallback: false,
+    });
     // Points grouped under the author's headings, without evidence.
     expect(
       overview.sections.map((s: { title: string | null }) => s.title),
@@ -157,6 +190,10 @@ it("produces, checks and publishes the layers; reads overview, outline, three te
       key_terms: ["introduction"],
       section_id: overview.sections[1].section_id,
       section_title: "Introduction",
+      primary: true,
+      label: "introduction sample 10",
+      kind: "result",
+      relations: [{ word: "follows", targets: [{ kind: "point", number: 1 }] }],
     });
     // The outline pages by points; each evidence is the original sentence.
     const first = await layers(e, {
@@ -216,6 +253,7 @@ it("produces, checks and publishes the layers; reads overview, outline, three te
         "译文：The paper states that The introduction sample 10 showed a.",
       translated: true,
       key_terms: ["introduction"],
+      label: "译文：introduction sample 10",
     });
     // The fake translation is the unit's whole text prefixed: sentence 1 of it.
     expect(translated.points[1].evidence[0]).toMatchObject({
@@ -229,14 +267,26 @@ it("produces, checks and publishes the layers; reads overview, outline, three te
       part: "overview",
       text: "bilingual",
     });
-    expect(both.digest[0]).toMatchObject({
-      text: "A synthetic study of spectra. Read the results first.",
-      translation: {
-        text: "译文：A synthetic study of spectra. Read the results first.",
-        key_terms: ["synthetic study"],
-      },
+    expect(both.summary.translation).toEqual({
+      text: "译文：A synthetic study of spectra measured in water. It records each sample and concludes that the spectra are stable.",
+      key_terms: ["synthetic study"],
     });
-    expect(both.digest[1].translation).toEqual({ text: null, key_terms: [] });
+    expect(both.limits[0].translation).toEqual({
+      text: "译文：Only water was used as the medium.",
+    });
+    expect(both.advice.translation).toEqual({
+      text: "译文：Read Results for the spectra.",
+      key_terms: ["spectra"],
+      places: ["Results"],
+    });
+    // The quantity is translated; the value never is.
+    expect(both.data[0]).toMatchObject({
+      value: "401 nm",
+      translation: { quantity: "译文：Spectrum of the first sample" },
+    });
+    expect(both.primary[0].translation).toMatchObject({
+      label: "译文：abstract sample 1",
+    });
     // Markdown: the machine note first, the digest, headings and quoted evidence.
     const markdown = await layers(e, {
       document_version_id,
@@ -248,11 +298,26 @@ it("produces, checks and publishes the layers; reads overview, outline, three te
     expect(markdown.markdown.split("\n")[0]).toBe(
       "> 要点与提要由机器写成，不是证据；依据是原文里的句子与图表。",
     );
-    expect(markdown.markdown).toContain("## 提要");
+    for (const heading of [
+      "## 提要",
+      "## 主干",
+      "## 数据",
+      "## 局限",
+      "## 精读建议",
+    ])
+      expect(markdown.markdown).toContain(heading);
     expect(markdown.markdown).toContain(
-      "**局限与未决事项**：原文未给出。The study states no limitation.",
+      "| Spectrum of the first sample | 401 nm | ¶2 |",
     );
-    expect(markdown.markdown).toContain("## Introduction\n\n**2.** ");
+    expect(markdown.markdown).toContain(
+      "- Only water was used as the medium.（¶2）",
+    );
+    expect(markdown.markdown).toContain("去处：Results → ¶9");
+    expect(markdown.markdown).toContain(
+      "> The introduction sample 10\n> — ¶4·1",
+    );
+    expect(markdown.markdown).toContain("## Introduction\n\n**2.** 〔结果〕");
+    expect(markdown.markdown).toContain("（承接 1）");
     expect(markdown.markdown).toContain(
       "> The introduction sample 10 showed a stable synthetic spectrum near 410 nm in water.\n> — ¶4·1",
     );
@@ -303,34 +368,49 @@ it("drops evidence that names nothing, points without evidence and key terms not
       return {
         digest: {
           ...base.digest,
-          nature: { ...base.digest.nature, units: ["p1", "p99", "f1"] },
+          summary: { ...base.digest.summary, units: ["p1", "p99", "f1"] },
         },
-        points: [
-          {
-            statement:
-              "The paper states that The methods second sample 25 showed a.",
-            evidence: ["p5.1", "p999.1", "p5.9"],
-            key_terms: ["second sample", "absent term", "methods", "showed"],
-          },
-          {
-            statement: "Only evidence that names nothing.",
-            evidence: ["p1.1-5", "p1.1,3", "f1", "nonsense"],
-            key_terms: [],
-          },
-          {
-            statement:
-              "The paper states that The introduction sample 10 showed a.",
-            evidence: ["p2.1-2", "p2.1-2"],
-            key_terms: ["introduction"],
-          },
-          {
-            statement: "The paper states that The methods sample 22 showed a.",
-            evidence: ["p4.3"],
-            key_terms: ["sample 22"],
-          },
-          { statement: " ", evidence: ["p4.1"], key_terms: [] },
-          { statement: "x".repeat(301), evidence: ["p4.2"], key_terms: [] },
-        ],
+        data: [],
+        // Every point carries every field the schema asks for.
+        points: (
+          [
+            {
+              statement:
+                "The paper states that The methods second sample 25 showed a.",
+              evidence: ["p5.1", "p999.1", "p5.9"],
+              primary: true,
+              key_terms: ["second sample", "absent term", "methods", "showed"],
+            },
+            {
+              statement: "Only evidence that names nothing.",
+              evidence: ["p1.1-5", "p1.1,3", "f1", "nonsense"],
+              key_terms: [],
+            },
+            {
+              statement:
+                "The paper states that The introduction sample 10 showed a.",
+              evidence: ["p2.1-2", "p2.1-2"],
+              primary: true,
+              key_terms: ["introduction"],
+            },
+            {
+              statement:
+                "The paper states that The methods sample 22 showed a.",
+              evidence: ["p4.3"],
+              primary: true,
+              key_terms: ["sample 22"],
+            },
+            { statement: " ", evidence: ["p4.1"], key_terms: [] },
+            { statement: "x".repeat(301), evidence: ["p4.2"], key_terms: [] },
+          ] as Record<string, unknown>[]
+        ).map((p) => ({
+          primary: false,
+          label: null,
+          kind: null,
+          relations: [],
+          basis: null,
+          ...p,
+        })),
       };
     });
     await e.submit("layers-drops");
@@ -364,7 +444,7 @@ it("drops evidence that names nothing, points without evidence and key terms not
     // At most two key terms, each found in its statement.
     expect(outline.points[2].key_terms).toEqual(["second sample", "methods"]);
     const overview = await layers(e, { document_version_id, part: "overview" });
-    expect(overview.digest[0].units).toHaveLength(1);
+    expect(overview.summary.units).toHaveLength(1);
   } finally {
     await e.close();
   }
@@ -807,3 +887,104 @@ function pagesPdf(count: number) {
       `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`,
   );
 }
+
+it("fails the step when fewer than three primary points are left, the full text staying ready", async () => {
+  const e = await fixture();
+  try {
+    e.setLayers((input) => {
+      e.layersInputs.push(input);
+      const base = defaultLayersReply(input);
+      return {
+        ...base,
+        points: base.points.map((p, i) => ({ ...p, primary: i < 2 })),
+      };
+    });
+    await e.submit("layers-few-primary");
+    expect((await e.app.archive.status(e.id)).status).toBe("READY");
+    const failed = (await step(e))!;
+    expect(failed).toMatchObject({
+      status: "failed",
+      reason: "layers-incomplete",
+    });
+    expect(failed.output.layers).toMatchObject({ primary: 2, points: 6 });
+  } finally {
+    await e.close();
+  }
+}, 0);
+
+it("reads layers of an earlier file version as stale and redoes them on the next archive", async () => {
+  const e = await fixture();
+  try {
+    await e.submit("layers-current");
+    const part = await main(e);
+    const store = new DocumentLayersStore(e.app.database, e.app.files);
+    const key = {
+      literature_id: e.id,
+      asset_id: part.asset_id,
+      document_version_id: part.document_version_id!,
+      content_version: part.content_version!,
+    };
+    const row = (await store.row(key))!;
+    // A file as the earlier release wrote it: only its version differs here.
+    const old = { ...(await store.load(row)), schema_version: 1 };
+    const bytes = canonicalJsonBytes(old);
+    const ref = parseArtifactRef({
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      byte_size: bytes.length,
+      media_type: "application/json",
+    });
+    await e.app.files.withWrite(async () => {
+      const reference = artifactReference("document-layers", ref);
+      const stage = await e.app.files.stage({ maxBytes: bytes.length });
+      try {
+        await stage.write(bytes);
+        await e.app.files.publish(stage, reference);
+      } finally {
+        await stage.discard();
+      }
+      await e.app.database.archive("layers-publish", {
+        row: {
+          ...row,
+          artifact_reference: reference,
+          sha256: ref.sha256,
+          byte_size: ref.byte_size,
+        },
+      });
+    });
+    expect(await describe(e, key.document_version_id)).toEqual({
+      state: "stale",
+      points: 0,
+      target_language: null,
+      reason: null,
+    });
+    expect(
+      await layers(e, {
+        document_version_id: key.document_version_id,
+        part: "overview",
+      }),
+    ).toMatchObject({
+      code: "layers-unavailable",
+      details: { state: "stale" },
+    });
+    // A receipt of the earlier release has an input key without the file
+    // version, so archiving again redoes the layers as a whole.
+    await e.app.close();
+    const db = new DatabaseSync(join(e.home, "catalog.sqlite"));
+    try {
+      db.prepare(
+        "UPDATE archive_steps SET input_sha256=? WHERE step='layers'",
+      ).run("0".repeat(64));
+    } finally {
+      db.close();
+    }
+    await e.reopen();
+    await e.submit("layers-after-upgrade");
+    expect(e.layersInputs).toHaveLength(2);
+    expect((await step(e))!.output.layers).toMatchObject({ redone: "all" });
+    expect(await describe(e, key.document_version_id)).toMatchObject({
+      state: "complete",
+    });
+  } finally {
+    await e.close();
+  }
+}, 0);

@@ -13,9 +13,11 @@ import {
 } from "./document-read.js";
 import { parseTextLevel, type TextLevel } from "./draft-document.js";
 import {
-  LAYERS_DIGEST_ITEMS,
+  LAYERS_POINT_KINDS,
   LAYERS_POINTS_MAX,
-  type LayersDigestItemName,
+  LAYERS_RELATION_WORDS,
+  type LayersPointKind,
+  type LayersRelationWord,
 } from "./reading-layers.js";
 import {
   isTranslationLanguage,
@@ -43,15 +45,24 @@ export interface DocumentLayersRequest {
   readonly limit: number;
   readonly cursor: string | null;
 }
-export interface LayersReadDigestItem {
-  readonly name: LayersDigestItemName;
-  readonly text: string | null;
-  readonly not_given: string | null;
+export interface LayersReadUnitRef {
+  readonly unit_id: string;
+  /** The unit's first segment's number in this version, from 1. */
+  readonly paragraph: number;
+}
+type BlockKind = "figure" | "scheme" | "table";
+/** A figure, scheme or table as a read gives it. */
+export interface LayersReadBlockRef {
+  readonly kind: "block";
+  readonly segment_id: string;
+  readonly block_kind: BlockKind;
+  readonly paragraph: number;
+}
+/** The digest's summary (spec 10.2.1). */
+export interface LayersReadSummary {
+  readonly text: string;
   readonly key_terms: readonly string[];
-  readonly units: readonly {
-    readonly unit_id: string;
-    readonly paragraph: number;
-  }[];
+  readonly units: readonly LayersReadUnitRef[];
   /** `text: translation`: whether `text` is the translation. */
   readonly translated?: boolean;
   /** `text: bilingual`: the translation beside the original. */
@@ -60,16 +71,71 @@ export interface LayersReadDigestItem {
     readonly key_terms: readonly string[];
   };
 }
+export interface LayersReadLimit {
+  readonly text: string;
+  readonly units: readonly LayersReadUnitRef[];
+  readonly translated?: boolean;
+  readonly translation?: { readonly text: string | null };
+}
+/** A place the advice names; in `text: translation` the words are the translation's. */
+export interface LayersReadPlace {
+  readonly text: string;
+  readonly target:
+    | {
+        readonly kind: "section";
+        readonly segment_id: string;
+        readonly section_id: string | null;
+        readonly title: string | null;
+        readonly paragraph: number;
+      }
+    | LayersReadBlockRef;
+}
+export interface LayersReadAdvice {
+  readonly text: string | null;
+  readonly not_given: string | null;
+  readonly key_terms: readonly string[];
+  readonly units: readonly LayersReadUnitRef[];
+  readonly places: readonly LayersReadPlace[];
+  readonly translated?: boolean;
+  readonly translation?: {
+    readonly text: string | null;
+    readonly key_terms: readonly string[];
+    /** The rendering of each place's words, by index; null when not found. */
+    readonly places: readonly (string | null)[];
+  };
+}
+export interface LayersReadDataRow {
+  readonly quantity: string;
+  /** Never translated. */
+  readonly value: string;
+  readonly source:
+    | ({ readonly kind: "unit" } & LayersReadUnitRef)
+    | LayersReadBlockRef;
+  readonly translated?: boolean;
+  readonly translation?: { readonly quantity: string | null };
+}
+export type LayersReadRelationTarget =
+  | { readonly kind: "point"; readonly number: number }
+  | LayersReadBlockRef;
 export interface LayersReadPoint {
   readonly number: number;
   readonly statement: string;
   readonly key_terms: readonly string[];
   readonly section_id: string | null;
   readonly section_title: string | null;
+  readonly primary: boolean;
+  /** In `text: translation`, the translated label when there is one. */
+  readonly label: string | null;
+  readonly kind: LayersPointKind | null;
+  readonly relations: readonly {
+    readonly word: LayersRelationWord;
+    readonly targets: readonly LayersReadRelationTarget[];
+  }[];
   readonly translated?: boolean;
   readonly translation?: {
     readonly statement: string | null;
     readonly key_terms: readonly string[];
+    readonly label: string | null;
   };
 }
 export type LayersReadEvidence =
@@ -101,6 +167,30 @@ export type LayersReadEvidence =
       readonly caption: string | null;
       readonly paragraph: number;
     };
+/**
+ * What the overview shows under a primary point (spec 10.2.1): a part of a
+ * sentence evidence or a block evidence, always original text. `fallback`
+ * when the point had no basis and its first evidence stands in.
+ */
+export type LayersReadBasis = (
+  | {
+      readonly kind: "sentence";
+      readonly unit_id: string;
+      readonly segment_ids: readonly string[];
+      readonly start_utf8: number;
+      readonly end_utf8: number;
+      readonly paragraph: number;
+      readonly sentences: readonly number[];
+      readonly text: string;
+    }
+  | {
+      readonly kind: "block";
+      readonly segment_id: string;
+      readonly block_kind: BlockKind;
+      readonly caption: string | null;
+      readonly paragraph: number;
+    }
+) & { readonly fallback: boolean };
 interface LayersReadCommon {
   readonly text_level?: TextLevel;
   readonly document: DocumentReadingRef;
@@ -121,7 +211,14 @@ export interface DocumentLayersOverviewResult extends LayersReadCommon {
   readonly part: "overview";
   readonly format: "json";
   readonly title: string | null;
-  readonly digest: readonly LayersReadDigestItem[];
+  readonly summary: LayersReadSummary;
+  /** The 3 to 5 primary points, each with what it rests on. */
+  readonly primary: readonly (LayersReadPoint & {
+    readonly basis: LayersReadBasis;
+  })[];
+  readonly data: readonly LayersReadDataRow[];
+  readonly limits: readonly LayersReadLimit[];
+  readonly advice: LayersReadAdvice;
   readonly sections: readonly {
     readonly section_id: string | null;
     readonly title: string | null;
@@ -287,36 +384,92 @@ function modeKeys(mode: DocumentSliceText, translationKeys: string[]) {
       ? translationKeys
       : [];
 }
-function point(v: unknown, mode: DocumentSliceText, withEvidence: boolean) {
+function list<T>(v: unknown, item: (x: unknown) => T, max = 10_000): T[] {
+  if (!Array.isArray(v) || v.length > max) fail();
+  return v.map(item);
+}
+const blockKind = (v: unknown) => {
+  if (!["figure", "scheme", "table"].includes(String(v))) fail();
+  return v as BlockKind;
+};
+function unitRef(v: unknown): LayersReadUnitRef {
+  const x = exact(v, ["unit_id", "paragraph"]);
+  return { unit_id: id(x.unit_id), paragraph: count(x.paragraph, 1) };
+}
+function blockRef(v: unknown): LayersReadBlockRef {
+  const x = exact(v, ["kind", "segment_id", "block_kind", "paragraph"]);
+  if (x.kind !== "block") fail();
+  return {
+    kind: "block",
+    segment_id: id(x.segment_id),
+    block_kind: blockKind(x.block_kind),
+    paragraph: count(x.paragraph, 1),
+  };
+}
+/** The mode's fields of a translated item: `translated`, or `translation` of the given shape. */
+function modeFields<T>(
+  r: Record<string, unknown>,
+  mode: DocumentSliceText,
+  translation: (t: unknown) => T,
+): { translated?: boolean; translation?: T } {
+  return mode === "translation"
+    ? { translated: r.translated === true }
+    : mode === "bilingual"
+      ? { translation: translation(r.translation) }
+      : {};
+}
+function point(v: unknown, mode: DocumentSliceText, extra: readonly string[]) {
   const r = exact(v, [
     "number",
     "statement",
     "key_terms",
     "section_id",
     "section_title",
+    "primary",
+    "label",
+    "kind",
+    "relations",
     ...modeKeys(mode, ["translation"]),
-    ...(withEvidence ? ["evidence"] : []),
+    ...extra,
   ]);
+  if (
+    typeof r.primary !== "boolean" ||
+    (r.kind !== null && !LAYERS_POINT_KINDS.includes(r.kind as LayersPointKind))
+  )
+    fail();
   return {
     number: count(r.number, 1, LAYERS_POINTS_MAX),
     statement: string(r.statement),
     key_terms: strings(r.key_terms),
     section_id: nullableId(r.section_id),
     section_title: nullableString(r.section_title),
-    ...(mode === "translation"
-      ? { translated: r.translated === true }
-      : mode === "bilingual"
-        ? (() => {
-            const t = exact(r.translation, ["statement", "key_terms"]);
-            return {
-              translation: {
-                statement: nullableString(t.statement),
-                key_terms: strings(t.key_terms),
-              },
-            };
-          })()
-        : {}),
-    ...(withEvidence
+    primary: r.primary,
+    label: nullableString(r.label),
+    kind: r.kind as LayersPointKind | null,
+    relations: list(r.relations, (x) => {
+      const rel = exact(x, ["word", "targets"]);
+      if (!LAYERS_RELATION_WORDS.includes(rel.word as LayersRelationWord))
+        fail();
+      return {
+        word: rel.word as LayersRelationWord,
+        targets: list(rel.targets, (t): LayersReadRelationTarget => {
+          if (record(t).kind === "point") {
+            const o = exact(t, ["kind", "number"]);
+            return { kind: "point", number: count(o.number, 1) };
+          }
+          return blockRef(t);
+        }),
+      };
+    }),
+    ...modeFields(r, mode, (t) => {
+      const x = exact(t, ["statement", "key_terms", "label"]);
+      return {
+        statement: nullableString(x.statement),
+        key_terms: strings(x.key_terms),
+        label: nullableString(x.label),
+      };
+    }),
+    ...(extra.includes("evidence")
       ? {
           evidence: (() => {
             if (!Array.isArray(r.evidence) || !r.evidence.length) fail();
@@ -324,6 +477,126 @@ function point(v: unknown, mode: DocumentSliceText, withEvidence: boolean) {
           })(),
         }
       : {}),
+    ...(extra.includes("basis") ? { basis: readBasis(r.basis) } : {}),
+  };
+}
+function readBasis(v: unknown): LayersReadBasis {
+  const r = record(v);
+  if (typeof r.fallback !== "boolean") fail();
+  const { fallback, ...rest } = r;
+  return { ...readEvidence(rest, "original"), fallback } as LayersReadBasis;
+}
+function overviewParts(r: Record<string, unknown>, mode: DocumentSliceText) {
+  const s = exact(r.summary, [
+    "text",
+    "key_terms",
+    "units",
+    ...modeKeys(mode, ["translation"]),
+  ]);
+  const a = exact(r.advice, [
+    "text",
+    "not_given",
+    "key_terms",
+    "units",
+    "places",
+    ...modeKeys(mode, ["translation"]),
+  ]);
+  return {
+    summary: {
+      text: string(s.text),
+      key_terms: strings(s.key_terms),
+      units: list(s.units, unitRef),
+      ...modeFields(s, mode, (t) => {
+        const x = exact(t, ["text", "key_terms"]);
+        return {
+          text: nullableString(x.text),
+          key_terms: strings(x.key_terms),
+        };
+      }),
+    },
+    limits: list(r.limits, (v): LayersReadLimit => {
+      const l = exact(v, ["text", "units", ...modeKeys(mode, ["translation"])]);
+      return {
+        text: string(l.text),
+        units: list(l.units, unitRef),
+        ...modeFields(l, mode, (t) => ({
+          text: nullableString(exact(t, ["text"]).text),
+        })),
+      };
+    }),
+    advice: {
+      text: nullableString(a.text),
+      not_given: nullableString(a.not_given),
+      key_terms: strings(a.key_terms),
+      units: list(a.units, unitRef),
+      places: list(a.places, (v): LayersReadPlace => {
+        const p = exact(v, ["text", "target"]);
+        const t = record(p.target);
+        return {
+          text: string(p.text),
+          target:
+            t.kind === "section"
+              ? (() => {
+                  const x = exact(t, [
+                    "kind",
+                    "segment_id",
+                    "section_id",
+                    "title",
+                    "paragraph",
+                  ]);
+                  return {
+                    kind: "section" as const,
+                    segment_id: id(x.segment_id),
+                    section_id: nullableId(x.section_id),
+                    title: nullableString(x.title),
+                    paragraph: count(x.paragraph, 1),
+                  };
+                })()
+              : blockRef(t),
+        };
+      }),
+      ...modeFields(a, mode, (t) => {
+        const x = exact(t, ["text", "key_terms", "places"]);
+        return {
+          text: nullableString(x.text),
+          key_terms: strings(x.key_terms),
+          places: list(x.places, nullableString),
+        };
+      }),
+    },
+    data: list(r.data, (v): LayersReadDataRow => {
+      const d = exact(v, [
+        "quantity",
+        "value",
+        "source",
+        ...modeKeys(mode, ["translation"]),
+      ]);
+      const src = record(d.source);
+      return {
+        quantity: string(d.quantity),
+        value: string(d.value),
+        source:
+          src.kind === "unit"
+            ? (() => {
+                const x = exact(src, ["kind", "unit_id", "paragraph"]);
+                return {
+                  kind: "unit" as const,
+                  ...unitRef({ unit_id: x.unit_id, paragraph: x.paragraph }),
+                };
+              })()
+            : blockRef(src),
+        ...modeFields(d, mode, (t) => ({
+          quantity: nullableString(exact(t, ["quantity"]).quantity),
+        })),
+      };
+    }),
+    primary: list(
+      r.primary,
+      (p) =>
+        point(p, mode, ["basis"]) as LayersReadPoint & {
+          basis: LayersReadBasis;
+        },
+    ),
   };
 }
 function readEvidence(v: unknown, mode: DocumentSliceText): LayersReadEvidence {
@@ -409,43 +682,17 @@ export function parseDocumentLayersResult(
     });
   }
   if (request.part === "overview") {
-    const r = exact(value, [...keys, "title", "digest", "sections"]);
-    if (!Array.isArray(r.digest) || r.digest.length !== 3) fail();
-    const digest = r.digest.map((v, i): LayersReadDigestItem => {
-      const d = exact(v, [
-        "name",
-        "text",
-        "not_given",
-        "key_terms",
-        "units",
-        ...modeKeys(request.text, ["translation"]),
-      ]);
-      if (d.name !== LAYERS_DIGEST_ITEMS[i]) fail();
-      if (!Array.isArray(d.units)) fail();
-      return {
-        name: d.name as LayersDigestItemName,
-        text: nullableString(d.text),
-        not_given: nullableString(d.not_given),
-        key_terms: strings(d.key_terms),
-        units: d.units.map((u) => {
-          const x = exact(u, ["unit_id", "paragraph"]);
-          return { unit_id: id(x.unit_id), paragraph: count(x.paragraph, 1) };
-        }),
-        ...(request.text === "translation"
-          ? { translated: d.translated === true }
-          : request.text === "bilingual"
-            ? (() => {
-                const t = exact(d.translation, ["text", "key_terms"]);
-                return {
-                  translation: {
-                    text: nullableString(t.text),
-                    key_terms: strings(t.key_terms),
-                  },
-                };
-              })()
-            : {}),
-      };
-    });
+    const r = exact(value, [
+      ...keys,
+      "title",
+      "summary",
+      "primary",
+      "data",
+      "limits",
+      "advice",
+      "sections",
+    ]);
+    const parts = overviewParts(r, request.text);
     if (!Array.isArray(r.sections)) fail();
     const sections = r.sections.map((s) => {
       const x = exact(s, ["section_id", "title", "points"]);
@@ -453,7 +700,7 @@ export function parseDocumentLayersResult(
       return {
         section_id: nullableId(x.section_id),
         title: nullableString(x.title),
-        points: x.points.map((p) => point(p, request.text, false)),
+        points: x.points.map((p) => point(p, request.text, [])),
       };
     });
     return Object.freeze({
@@ -461,7 +708,7 @@ export function parseDocumentLayersResult(
       part: "overview" as const,
       format: "json" as const,
       title: nullableString(r.title),
-      digest,
+      ...parts,
       sections,
     });
   }
@@ -489,7 +736,7 @@ export function parseDocumentLayersResult(
     format: "json" as const,
     points: r.points.map(
       (p) =>
-        point(p, request.text, true) as LayersReadPoint & {
+        point(p, request.text, ["evidence"]) as LayersReadPoint & {
           evidence: LayersReadEvidence[];
         },
     ),

@@ -1,17 +1,14 @@
 import { createHash } from "node:crypto";
 import {
-  LAYERS_DIGEST_ITEMS,
-  LAYERS_DIGEST_TEXT_MAX,
-  LAYERS_DIGEST_UNITS,
-  LAYERS_EVIDENCE_PER_POINT,
-  LAYERS_EVIDENCE_SENTENCES,
+  LAYERS_FILE_SCHEMA_VERSION,
+  LAYERS_LABEL_MAX,
+  LAYERS_PLACE_TEXT_MAX,
+  LAYERS_PRIMARY_MIN,
+  documentLayersFileVersion,
   LAYERS_KEY_TERM_MAX,
-  LAYERS_KEY_TERMS_PER_ITEM,
   LAYERS_MIN_CODE_POINTS,
-  LAYERS_NOT_GIVEN_MAX,
   LAYERS_POINTS_MAX,
   LAYERS_POINTS_MIN,
-  LAYERS_STATEMENT_MAX,
   LAYERS_TRANSLATION_TEXT_MAX,
   READING_LAYERS_PROMPT_VERSION,
   READING_LAYERS_TRANSLATION_PROMPT_VERSION,
@@ -21,20 +18,12 @@ import {
   matchKeyTerm,
   parseArtifactRef,
   parseDocumentLayersFile,
-  splitSentences,
-  utf8Offset,
-  type DocumentLayout,
   type DocumentLayersFile,
   type DocumentLayersState,
   type DocumentLayersSummary,
   type DocumentRef,
   type DocumentTranslationFile,
-  type LayersDigest,
-  type LayersDigestItem,
-  type LayersDigestItemName,
-  type LayersEvidence,
   type LayersNotApplicableReason,
-  type LayersPoint,
   type LayersTranslationPart,
   type TranslationLanguage,
 } from "@sciretriever/contracts";
@@ -51,7 +40,6 @@ import type { SqliteWorker } from "../storage/sqlite/worker.js";
 import { SqliteAnnotationStorage } from "../storage/structure-annotations.js";
 import {
   documentUnits,
-  unitSpan,
   type DocumentTranslationStore,
 } from "../translation/document.js";
 import {
@@ -59,6 +47,15 @@ import {
   type TranslationService,
   type UnitTranslationUsage,
 } from "../translation/service.js";
+import {
+  LayersAnswerError,
+  checkLayersAnswer,
+  layersInput,
+  unitSentences,
+  type CheckedLayers,
+  type LayersInput,
+  type LayersStructure,
+} from "./check.js";
 import {
   LAYERS_SCHEMA,
   LAYERS_SYSTEM,
@@ -72,418 +69,20 @@ const sha = (bytes: Uint8Array | string) =>
 const codePoints = (s: string) => [...s].length;
 const flat = (s: string) => s.replace(/\s+/gu, " ").trim();
 
-interface Segment {
-  readonly segment_id: string;
-  readonly kind: string;
-  readonly start_utf8: number;
-  readonly end_utf8: number;
-  readonly section_id?: string | null;
-}
-interface Section {
-  readonly section_id: string;
-  readonly title: string | null;
-  readonly level: number;
-}
-interface Structure {
-  readonly segments: readonly Segment[];
-  readonly sections: readonly Section[];
-  readonly layout?: DocumentLayout;
-  readonly long_document?: unknown;
-}
-
-/** A paragraph of the first call's input: a translation unit that is not a heading. */
-export interface LayersUnit {
-  readonly short: string;
-  readonly unit_id: string;
-  readonly source: string;
-  /** UTF-8 position of the unit's text in the fixed Markdown. */
-  readonly start_utf8: number;
-  /** Sentences as JavaScript indices of `source` and UTF-8 offsets from `start_utf8`. */
-  readonly sentences: readonly {
-    readonly start: number;
-    readonly end: number;
-    readonly start_utf8: number;
-    readonly end_utf8: number;
-  }[];
-}
-export interface LayersFigure {
-  readonly short: string;
-  readonly segment_id: string;
-  readonly kind: "figure" | "scheme" | "table";
-  readonly start_utf8: number;
-  readonly caption: string | null;
-}
-export interface LayersInput {
-  readonly text: string;
-  readonly units: ReadonlyMap<string, LayersUnit>;
-  readonly figures: ReadonlyMap<string, LayersFigure>;
-  readonly body_code_points: number;
-}
-
-/** A figure group's captions as one line of text. */
-export function figureCaption(
-  markdown: Uint8Array,
-  group: DocumentLayout["figure_groups"][number],
-): string | null {
-  const text = group.captions
-    .map((c) => {
-      try {
-        return decoder.decode(markdown.subarray(c.start_utf8, c.end_utf8));
-      } catch {
-        return "";
-      }
-    })
-    .join(" ");
-  return flat(text) || null;
-}
-/** Sentences of a unit (spec 3.5); captions are one sentence. */
-export function unitSentences(source: string, kind: string) {
-  return splitSentences(source, { whole: kind === "caption" }).map((s) => ({
-    ...s,
-    start_utf8: utf8Offset(source, s.start),
-    end_utf8: utf8Offset(source, s.end),
-  }));
-}
-
-/**
- * The first call's input (spec 10.3): the readable content in order, each
- * paragraph with a short id and numbered sentences, each figure, scheme or
- * table one line with its caption, headings kept as heading lines. Units
- * are those of the translation (spec 9.2); a caption of a figure group is
- * given with its figure, not as a paragraph.
- */
-export function layersInput(
-  units: ReturnType<typeof documentUnits>["units"],
-  structure: Structure,
-  markdown: Uint8Array,
-  title: string | null,
-  maxPoints: number,
-): LayersInput {
-  const segments = new Map(structure.segments.map((s) => [s.segment_id, s]));
-  const sections = new Map(structure.sections.map((s) => [s.section_id, s]));
-  const groups = structure.layout?.figure_groups ?? [];
-  const captions = new Set(
-    groups.flatMap((g) => g.captions.map((c) => c.segment_id)),
-  );
-  type Item =
-    | { at: number; heading: string }
-    | { at: number; unit: Omit<LayersUnit, "short"> }
-    | { at: number; figure: Omit<LayersFigure, "short"> };
-  const items: Item[] = [];
-  let body = 0;
-  for (const u of units) {
-    const found = u.segment_ids.map((id) => segments.get(id)!);
-    const first = found[0]!;
-    const span = unitSpan(markdown, found, u.source_sha256);
-    if (!span) continue;
-    if (first.kind === "heading") {
-      const level = sections.get(first.section_id ?? "")?.level ?? 1;
-      items.push({
-        at: span.start,
-        heading: `${"#".repeat(Math.min(6, Math.max(1, level)))} ${flat(u.source)}`,
-      });
-      continue;
-    }
-    body += codePoints(u.source);
-    if (captions.has(u.unit_id)) continue;
-    items.push({
-      at: span.payload,
-      unit: {
-        unit_id: u.unit_id,
-        source: u.source,
-        start_utf8: span.payload,
-        sentences: unitSentences(u.source, first.kind),
-      },
-    });
-  }
-  for (const g of groups) {
-    const object = g.objects[0];
-    if (!object) continue;
-    items.push({
-      at: object.start_utf8,
-      figure: {
-        segment_id: object.segment_id,
-        kind: g.kind,
-        start_utf8: object.start_utf8,
-        caption: figureCaption(markdown, g),
-      },
-    });
-  }
-  items.sort((a, b) => a.at - b.at);
-  const unitMap = new Map<string, LayersUnit>(),
-    figureMap = new Map<string, LayersFigure>();
-  const lines = [
-    `Maximum number of points: ${maxPoints}`,
-    "",
-    `Title: ${title ? flat(title) : "(none)"}`,
-    "",
-  ];
-  for (const item of items) {
-    if ("heading" in item) lines.push("", item.heading, "");
-    else if ("unit" in item) {
-      const short = `p${unitMap.size + 1}`;
-      unitMap.set(short, { short, ...item.unit });
-      lines.push(
-        `[${short}] ${item.unit.sentences
-          .map(
-            (s, i) =>
-              `<${i + 1}> ${flat(item.unit.source.slice(s.start, s.end))}`,
-          )
-          .join(" ")}`,
-      );
-    } else {
-      const short = `f${figureMap.size + 1}`;
-      figureMap.set(short, { short, ...item.figure });
-      lines.push(
-        `[${short}] ${item.figure.kind}: ${item.figure.caption ?? "(no caption)"}`,
-      );
-    }
-  }
-  return {
-    text:
-      lines
-        .join("\n")
-        .replace(/\n{3,}/gu, "\n\n")
-        .trim() + "\n",
-    units: unitMap,
-    figures: figureMap,
-    body_code_points: body,
-  };
-}
-
-export class LayersAnswerError extends Error {
-  constructor() {
-    super("layers-answer-invalid");
-  }
-}
+type Structure = LayersStructure;
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === "object" && !Array.isArray(v);
-const strings = (v: unknown): string[] =>
-  Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
-
-/** Key terms kept: found in their text by key-term-match-v1, at most two. */
-function keepTerms(text: string, terms: readonly string[]) {
-  const kept: string[] = [];
-  for (const raw of terms) {
-    const term = raw.trim();
-    if (
-      !term ||
-      codePoints(term) > LAYERS_KEY_TERM_MAX ||
-      kept.some((k) => k.toLowerCase() === term.toLowerCase()) ||
-      !matchKeyTerm(text, term).length
-    )
-      continue;
-    if (kept.length < LAYERS_KEY_TERMS_PER_ITEM) kept.push(term);
-  }
-  return { kept, dropped: terms.length - kept.length };
-}
-/** Sentence numbers of "pN.S", "pN.S-T" or "pN.S,T": consecutive, 1 to 4. */
-function sentenceList(spec: string): number[] | null {
-  const numbers: number[] = [];
-  for (const part of spec.split(",")) {
-    const m = /^\s*(\d+)\s*(?:[-–]\s*(\d+))?\s*$/u.exec(part);
-    if (!m) return null;
-    const a = Number(m[1]),
-      b = m[2] === undefined ? a : Number(m[2]);
-    if (b < a || b - a > 10) return null;
-    for (let n = a; n <= b; n++) numbers.push(n);
-  }
-  return numbers;
-}
-export interface CheckedLayers {
-  readonly digest: LayersDigest;
-  readonly points: readonly LayersPoint[];
-  readonly given: number;
-  /** Points left before the cap of 40; the success rule compares this with `given`. */
-  readonly valid: number;
-  readonly dropped: DocumentLayersFile["dropped"];
-  readonly nature_missing: boolean;
-}
-
-/**
- * The program check of the first call's answer (spec 10.3): evidence that
- * names a missing paragraph, sentence or figure, or more than four or
- * non-consecutive sentences, is dropped; a point left without evidence, or
- * with an empty or overlong statement, is dropped; the rest are ordered by
- * their first evidence and numbered again. Throws LayersAnswerError when the
- * answer is not the structure asked for.
- */
-export function checkLayersAnswer(
-  value: unknown,
-  input: LayersInput,
-  segments: readonly Segment[],
-  titled: boolean,
-): CheckedLayers {
-  if (
-    !isRecord(value) ||
-    !isRecord(value.digest) ||
-    !Array.isArray(value.points)
-  )
-    throw new LayersAnswerError();
-  const answerDigest = value.digest;
-  if (!LAYERS_DIGEST_ITEMS.every((n) => isRecord(answerDigest[n])))
-    throw new LayersAnswerError();
-  let droppedEvidence = 0,
-    droppedTerms = 0,
-    droppedUnits = 0;
-  const digest = Object.fromEntries(
-    LAYERS_DIGEST_ITEMS.map(
-      (name): [LayersDigestItemName, LayersDigestItem] => {
-        const item = answerDigest[name] as Record<string, unknown>;
-        const raw = typeof item.text === "string" ? item.text.trim() : "";
-        const text =
-          raw && codePoints(raw) <= LAYERS_DIGEST_TEXT_MAX ? raw : null;
-        const notGiven =
-          typeof item.not_given === "string" ? item.not_given.trim() : "";
-        const unitIds: string[] = [];
-        const askedUnits = strings(item.units);
-        for (const short of askedUnits) {
-          const unit = input.units.get(short.trim());
-          if (
-            unit &&
-            !unitIds.includes(unit.unit_id) &&
-            unitIds.length < LAYERS_DIGEST_UNITS
-          )
-            unitIds.push(unit.unit_id);
-        }
-        droppedUnits += askedUnits.length - unitIds.length;
-        const askedTerms = strings(item.key_terms);
-        const terms = text
-          ? keepTerms(text, askedTerms)
-          : { kept: [], dropped: askedTerms.length };
-        droppedTerms += terms.dropped;
-        return [
-          name,
-          {
-            text,
-            not_given:
-              text === null &&
-              notGiven &&
-              codePoints(notGiven) <= LAYERS_NOT_GIVEN_MAX
-                ? notGiven
-                : null,
-            units: text === null ? [] : unitIds,
-            key_terms: terms.kept,
-          },
-        ];
-      },
-    ),
-  ) as unknown as LayersDigest;
-  const sorted = [...segments].sort((a, b) => a.start_utf8 - b.start_utf8);
-  const sectionAt = (at: number) => {
-    if (!titled) return null;
-    let found: Segment | undefined;
-    for (const s of sorted) {
-      if (s.start_utf8 > at) break;
-      found = s;
-    }
-    return found?.section_id ?? null;
-  };
-  const given = value.points.length;
-  const kept: (Omit<LayersPoint, "number"> & { at: number })[] = [];
-  for (const raw of value.points) {
-    if (!isRecord(raw) || typeof raw.statement !== "string")
-      throw new LayersAnswerError();
-    const statement = raw.statement.trim();
-    const asked = strings(raw.evidence);
-    const evidence: (LayersEvidence & { at: number })[] = [];
-    for (const spec of asked) {
-      const sentence = /^\s*(p\d+)\s*[.:·]\s*([\d,\s–-]+?)\s*$/iu.exec(spec);
-      const figure = /^\s*(f\d+)\s*$/iu.exec(spec);
-      let found: (LayersEvidence & { at: number }) | null = null;
-      if (sentence) {
-        const unit = input.units.get(sentence[1]!.toLowerCase());
-        const numbers = sentenceList(sentence[2]!);
-        if (
-          unit &&
-          numbers &&
-          numbers.length >= 1 &&
-          numbers.length <= LAYERS_EVIDENCE_SENTENCES &&
-          numbers.every((n, k) => k === 0 || n === numbers[k - 1]! + 1) &&
-          numbers[0]! >= 1 &&
-          numbers.at(-1)! <= unit.sentences.length
-        ) {
-          const a = unit.sentences[numbers[0]! - 1]!,
-            b = unit.sentences[numbers.at(-1)! - 1]!;
-          found = {
-            kind: "sentence",
-            unit_id: unit.unit_id,
-            start_utf8: unit.start_utf8 + a.start_utf8,
-            end_utf8: unit.start_utf8 + b.end_utf8,
-            at: unit.start_utf8 + a.start_utf8,
-          };
-        }
-      } else if (figure) {
-        const f = input.figures.get(figure[1]!.toLowerCase());
-        if (f)
-          found = { kind: "block", segment_id: f.segment_id, at: f.start_utf8 };
-      }
-      const identity = (e: LayersEvidence) =>
-        e.kind === "block"
-          ? `b:${e.segment_id}`
-          : `s:${e.start_utf8}:${e.end_utf8}`;
-      if (
-        !found ||
-        evidence.some((e) => identity(e) === identity(found)) ||
-        evidence.length >= LAYERS_EVIDENCE_PER_POINT
-      ) {
-        droppedEvidence++;
-        continue;
-      }
-      evidence.push(found);
-    }
-    if (
-      !evidence.length ||
-      !statement ||
-      codePoints(statement) > LAYERS_STATEMENT_MAX
-    ) {
-      // Evidence of a dropped point is not counted again.
-      continue;
-    }
-    evidence.sort((a, b) => a.at - b.at);
-    const terms = keepTerms(statement, strings(raw.key_terms));
-    droppedTerms += terms.dropped;
-    kept.push({
-      statement,
-      evidence: evidence.map(
-        (e): LayersEvidence =>
-          e.kind === "block"
-            ? { kind: "block", segment_id: e.segment_id }
-            : {
-                kind: "sentence",
-                unit_id: e.unit_id,
-                start_utf8: e.start_utf8,
-                end_utf8: e.end_utf8,
-              },
-      ),
-      key_terms: terms.kept,
-      section_id: sectionAt(evidence[0]!.at),
-      at: evidence[0]!.at,
-    });
-  }
-  kept.sort((a, b) => a.at - b.at);
-  const valid = kept.length;
-  const points = kept.slice(0, LAYERS_POINTS_MAX).map((p, i) => ({
-    number: i + 1,
-    statement: p.statement,
-    evidence: p.evidence,
-    key_terms: p.key_terms,
-    section_id: p.section_id,
-  }));
-  return {
-    digest,
-    points,
-    given,
-    valid,
-    dropped: {
-      evidence: droppedEvidence,
-      points: given - points.length,
-      key_terms: droppedTerms,
-      digest_units: droppedUnits,
-    },
-    nature_missing: digest.nature.text === null,
-  };
-}
+const records = (v: unknown): Record<string, unknown>[] =>
+  Array.isArray(v) ? v.filter(isRecord) : [];
+export {
+  LayersAnswerError,
+  checkLayersAnswer,
+  figureCaption,
+  layersInput,
+  unitSentences,
+  type CheckedLayers,
+  type LayersInput,
+} from "./check.js";
 
 export class LayersStepError extends Error {
   constructor(
@@ -532,10 +131,30 @@ export class DocumentLayersStore {
       return null;
     }
   }
-  async load(
-    row: DocumentLayersRow,
-    signal?: AbortSignal,
-  ): Promise<DocumentLayersFile> {
+  /** File versions by sha256: a stored file never changes. */
+  private readonly versions = new Map<string, number | null>();
+  /**
+   * Whether a complete row's file has the current layout. A file written by
+   * an earlier version reads as stale (spec 10.2.1, 10.6); it is not migrated.
+   */
+  async current(row: DocumentLayersRow, signal?: AbortSignal) {
+    if (row.status !== "complete" || !row.sha256) return true;
+    let version = this.versions.get(row.sha256);
+    if (version === undefined) {
+      try {
+        version = documentLayersFileVersion(
+          JSON.parse(decoder.decode(await this.bytes(row, signal))),
+        );
+      } catch (error) {
+        signal?.throwIfAborted();
+        throw error;
+      }
+      if (this.versions.size >= 4096) this.versions.clear();
+      this.versions.set(row.sha256, version);
+    }
+    return version === LAYERS_FILE_SCHEMA_VERSION;
+  }
+  private async bytes(row: DocumentLayersRow, signal?: AbortSignal) {
     if (row.status !== "complete" || !row.artifact_reference || !row.sha256)
       throw new Error("layers-integrity");
     const ref = parseArtifactRef({
@@ -556,6 +175,13 @@ export class DocumentLayersStore {
       },
       { maxBytes: row.byte_size!, ...(signal ? { signal } : {}) },
     );
+    return bytes;
+  }
+  async load(
+    row: DocumentLayersRow,
+    signal?: AbortSignal,
+  ): Promise<DocumentLayersFile> {
+    const bytes = await this.bytes(row, signal);
     const file = parseDocumentLayersFile(JSON.parse(decoder.decode(bytes)));
     if (
       file.literature_id !== row.literature_id ||
@@ -677,7 +303,10 @@ export class DocumentLayersStore {
       },
       signal,
     );
-    if (row) return { state: row.status, row, content_version };
+    if (row && (await this.current(row, signal)))
+      return { state: row.status, row, content_version };
+    // Layers of an earlier file version are stale, like another content version's.
+    if (row) return { state: "stale", row: null, content_version };
     const other = await this.latest(
       document.source_material_ref.literature_id,
       signal,
@@ -930,8 +559,10 @@ export class DocumentLayersService {
             translation: null,
           }),
         );
+      // The summary is required, and the trunk is 3 to 5 points (spec 10.2.1).
       const failed =
-        checked.nature_missing ||
+        checked.summary_missing ||
+        checked.primary < LAYERS_PRIMARY_MIN ||
         checked.valid < LAYERS_POINTS_MIN ||
         checked.valid * 2 < checked.given;
       const counts = {
@@ -947,13 +578,14 @@ export class DocumentLayersService {
             reason: null,
             redone,
             ...counts,
-            nature_missing: checked.nature_missing,
+            summary_missing: checked.summary_missing,
+            primary: checked.primary,
             sha256: null,
             translation: null,
           }),
         );
       file = {
-        schema_version: 1,
+        schema_version: LAYERS_FILE_SCHEMA_VERSION,
         literature_id: input.literature_id,
         asset_id: input.asset_id,
         document_version_id: version.document_version_id,
@@ -962,6 +594,7 @@ export class DocumentLayersService {
         sentence_rule: SENTENCE_SPLIT_RULE,
         digest: checked.digest,
         points: checked.points,
+        data: checked.data,
         model,
         prompt_version: READING_LAYERS_PROMPT_VERSION,
         dropped: checked.dropped,
@@ -1094,12 +727,37 @@ export class DocumentLayersService {
     }
     return {
       checked: {
-        digest: emptyDigest,
+        digest: {
+          summary: { text: "", units: [], key_terms: [] },
+          limits: [],
+          advice: {
+            text: null,
+            not_given: null,
+            units: [],
+            key_terms: [],
+            places: [],
+          },
+        },
         points: [],
+        data: [],
         given: 0,
         valid: 0,
-        dropped: { evidence: 0, points: 0, key_terms: 0, digest_units: 0 },
-        nature_missing: true,
+        dropped: {
+          evidence: 0,
+          points: 0,
+          key_terms: 0,
+          digest_units: 0,
+          kinds: 0,
+          labels: 0,
+          relations: 0,
+          basis: 0,
+          data: 0,
+          places: 0,
+          limits: 0,
+          primary: 0,
+        },
+        summary_missing: true,
+        primary: 0,
       },
       model,
       unavailable: !answered,
@@ -1140,12 +798,28 @@ export class DocumentLayersService {
       }
       return s;
     };
-    const items: Record<string, unknown>[] = [];
-    for (const name of LAYERS_DIGEST_ITEMS) {
-      const d = file.digest[name];
-      if (d.text !== null)
-        items.push({ id: `d-${name}`, text: d.text, key_terms: d.key_terms });
-    }
+    // Every text to translate is an item; labels, places and data
+    // quantities travel with their items (spec 10.2.1). Values are not sent.
+    const { summary: digestSummary, limits, advice } = file.digest;
+    const items: Record<string, unknown>[] = [
+      {
+        id: "d-summary",
+        text: digestSummary.text,
+        key_terms: digestSummary.key_terms,
+      },
+      ...limits.map((l, i) => ({ id: `d-limit-${i + 1}`, text: l.text })),
+      ...(advice.text !== null
+        ? [
+            {
+              id: "d-advice",
+              text: advice.text,
+              key_terms: advice.key_terms,
+              places: advice.places.map((p) => p.text),
+            },
+          ]
+        : []),
+      ...file.data.map((d, i) => ({ id: `q-${i + 1}`, text: d.quantity })),
+    ];
     let evidenceTotal = 0;
     for (const p of file.points) {
       const evidence: Record<string, unknown>[] = [];
@@ -1170,6 +844,7 @@ export class DocumentLayersService {
         id: `k${p.number}`,
         text: p.statement,
         key_terms: p.key_terms,
+        ...(p.label !== null ? { label: p.label } : {}),
         evidence,
       });
     }
@@ -1231,6 +906,7 @@ export class DocumentLayersService {
       }
     }
     let droppedTerms = 0,
+      droppedPlaces = 0,
       droppedEvidence = 0,
       aligned = 0,
       translated = 0;
@@ -1266,17 +942,40 @@ export class DocumentLayersService {
       });
       return { text, key_terms };
     };
-    const digest = Object.fromEntries(
-      LAYERS_DIGEST_ITEMS.map((name) => [
-        name,
-        file.digest[name].text === null
-          ? { text: null, key_terms: [] }
-          : translate(`d-${name}`, file.digest[name].key_terms),
-      ]),
-    ) as unknown as LayersTranslationPart["digest"];
+    /** A short text of an item (a label): translated, not longer than the cap. */
+    const side = (value: unknown, max: number) => {
+      const raw = typeof value === "string" ? value.trim() : "";
+      return raw && codePoints(raw) <= max ? raw : null;
+    };
+    const adviceText =
+      advice.text === null
+        ? { text: null, key_terms: [] }
+        : translate("d-advice", advice.key_terms);
+    const answeredPlaces = records(answer?.get("d-advice")?.places);
+    const digest: LayersTranslationPart["digest"] = {
+      summary: translate("d-summary", digestSummary.key_terms),
+      limits: limits.map((_, i) => translate(`d-limit-${i + 1}`, []).text),
+      advice: {
+        ...adviceText,
+        // A place's rendering counts only when it is in the advice's translation.
+        places: advice.places.map((p) => {
+          const hit = answeredPlaces.find(
+            (g) => typeof g.text === "string" && g.text.trim() === p.text,
+          );
+          const target = side(hit?.translation, LAYERS_PLACE_TEXT_MAX * 2);
+          if (adviceText.text && target && adviceText.text.includes(target))
+            return target;
+          droppedPlaces++;
+          return null;
+        }),
+      },
+    };
+    const data = file.data.map((_, i) => translate(`q-${i + 1}`, []).text);
     const points = file.points.map((p) => {
       const t = translate(`k${p.number}`, p.key_terms);
       const item = answer?.get(`k${p.number}`);
+      const label =
+        p.label === null ? null : side(item?.label, LAYERS_LABEL_MAX);
       const given = Array.isArray(item?.evidence) ? item.evidence : [];
       const evidence = p.evidence.map((e, i) => {
         if (e.kind !== "sentence" || !unitText.has(e.unit_id)) return null;
@@ -1305,7 +1004,7 @@ export class DocumentLayersService {
           end_utf8: sentences[numbers.at(-1)! - 1]!.end_utf8,
         };
       });
-      return { ...t, evidence };
+      return { ...t, label, evidence };
     });
     const total = items.length;
     const summary = {
@@ -1315,6 +1014,7 @@ export class DocumentLayersService {
       items: total,
       translated,
       key_terms_dropped: droppedTerms,
+      places_dropped: droppedPlaces,
       evidence: evidenceTotal,
       aligned,
       evidence_dropped: droppedEvidence,
@@ -1329,15 +1029,14 @@ export class DocumentLayersService {
         prompt_version: READING_LAYERS_TRANSLATION_PROMPT_VERSION,
         digest,
         points,
-        dropped: { key_terms: droppedTerms, evidence: droppedEvidence },
+        data,
+        dropped: {
+          key_terms: droppedTerms,
+          evidence: droppedEvidence,
+          places: droppedPlaces,
+        },
       },
       summary,
     };
   }
 }
-const emptyDigest = Object.fromEntries(
-  LAYERS_DIGEST_ITEMS.map((n) => [
-    n,
-    { text: null, not_given: null, units: [], key_terms: [] },
-  ]),
-) as unknown as LayersDigest;

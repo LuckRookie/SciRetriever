@@ -1,4 +1,5 @@
 import {
+  LAYERS_FILE_SCHEMA_VERSION,
   canonicalJsonBytes,
   sha256,
   type ArchivePart,
@@ -26,6 +27,9 @@ export function archiveStepKey(
         content: part.content_version,
         language,
         translation,
+        // A new file layout (spec 10.2.1) redoes layers written by an
+        // earlier one; prompt or model changes alone still do not.
+        layout: LAYERS_FILE_SCHEMA_VERSION,
       }),
     );
   // Translation depends on the content version and the language only (spec
