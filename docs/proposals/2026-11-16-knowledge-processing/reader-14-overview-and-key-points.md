@@ -13,7 +13,7 @@
 - 在原文与脉络之间切换落在对应的位置；书脊在脉络里有视窗，在概览里没有。
 - 没有做过加工、加工进行中、结果过时的资料按规格显示；第一次打开已经有概览的资料时进入概览。
 
-规格：[3.1 共同规则](../../architecture/web/reading-experience.md#31-共同规则)、[3.2 概览](../../architecture/web/reading-experience.md#32-概览)、[3.3 脉络](../../architecture/web/reading-experience.md#33-脉络)、[3.4 全文](../../architecture/web/reading-experience.md#34-全文)（要点标签）、[3.9 没有加工或材料不全](../../architecture/web/reading-experience.md#39-没有加工或材料不全)、[4.3 视图之间共用一个位置](../../architecture/web/reading-experience.md#43-视图之间共用一个位置)（脉络与概览三条）、[6.4 打开哪个视图](../../architecture/web/reading-experience.md#64-打开哪个视图)（第二条）、[1.5 书脊](../../architecture/web/reading-experience.md#15-书脊)（脉络的视窗、概览无视窗）。
+规格：[3.1 共同规则](../../architecture/web/reading-experience.md#31-共同规则)、[3.2 概览](../../architecture/web/reading-experience.md#32-概览)、[3.3 脉络](../../architecture/web/reading-experience.md#33-脉络)、[3.4 全文](../../architecture/web/reading-experience.md#34-全文)（要点标签）、[3.9 没有加工或材料不全](../../architecture/web/reading-experience.md#39-没有阅读层或材料不全)、[4.3 视图之间共用一个位置](../../architecture/web/reading-experience.md#43-视图之间共用一个位置)（脉络与概览三条）、[6.4 打开哪个视图](../../architecture/web/reading-experience.md#64-打开哪个视图)（第二条）、[1.5 书脊](../../architecture/web/reading-experience.md#15-书脊)（脉络的视窗、概览无视窗）。
 
 ## 进入条件
 

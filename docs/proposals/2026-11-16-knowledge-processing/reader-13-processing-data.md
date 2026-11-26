@@ -15,7 +15,7 @@
 - 阅读页依赖的数据：[阅读体验第 7 节](../../architecture/web/reading-experience.md#7-依赖的加工数据)；
 - 读取操作：[知识加工 8.12](../../architecture/technical/05-knowledge-processing.md#812-视图机器读取与导出)“按资料的阅读读取”；入口与能力报告：[8.13](../../architecture/technical/05-knowledge-processing.md#813-版本迁移与机器接口)；
 - HTTP：[统一产品接口 2.4](../../architecture/technical/01-product-interface.md#24-当前只读-api) 的 `POST /api/v1/query/material-reading` 与 `GET /api/v1/query/status`；
-- 结果的格式：[知识加工 8.16](../../architecture/technical/05-knowledge-processing.md#816-阅读层概览与脉络)。
+- 结果的格式：[知识加工 8.16](../../architecture/technical/05-knowledge-processing.md#816-阅读页上依赖加工的内容)。
 
 ## 进入条件
 

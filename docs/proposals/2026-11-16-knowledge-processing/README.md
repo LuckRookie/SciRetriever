@@ -12,6 +12,8 @@ created = "2026-11-16"
 
 ## 这份提案是什么
 
+2026-11-26：概览与脉络不再属于知识加工（[ADR 0069](../../architecture/decisions/0069-reading-layers-as-one-folded-page.md)），由[计划 28 的 09 块](../../plans/2026-11-25-import-and-pdf/09-layered-reading.md)实现。本目录的 `14-reading-layers.md` 与 `reader-13`、`reader-14`、`reader-17` 不再按原样实现；重新开工时，其余各篇里以脉络要点为前提的内容要按阅读层改写。
+
 Owner 2026-11-16 决定先把加工之前的部分做好（[计划 25](../../archive/2026-11-16-before-processing/README.md)），并把所有关于知识加工的计划内容收到这里。本目录不授权实施；重新开工时，由总设计师按当时的代码与规格把它改写成计划，经 Owner 同意后放进 `docs/plans/`。
 
 决定与规格不在这里：它们仍在各自的归属文档中，是现行的目标规格（尚未实现）：
