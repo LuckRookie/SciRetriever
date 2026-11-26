@@ -75,6 +75,61 @@ it("recognizes a checked identifier, rejects a cited title and falls back to exa
   expect(recognitionSimilarity("Ａ: Test!", "a test")).toBe(1);
   expect(recognitionSimilarity("", "")).toBe(0);
 });
+it("finds a paper already in the library by identifier first, only when its title is in the file", async () => {
+  const lookup = vi.fn(async () => [observation()]);
+  const service = new IntakeRecognitionService({
+    lookup,
+    search: async () => [],
+    configured: () => ({ lookup: false, search: false }),
+  });
+  const clues = {
+    identifiers: [{ namespace: "doi", value: "10.5555/recognition" }],
+    titles: ["Synthetic identity article"],
+    text: "Synthetic identity article by Tester",
+    corroboration: "",
+    fallback: "Synthetic identity article",
+  } as const;
+  const id = "00000000-0000-4000-8000-000000000042";
+  const known = (title: string) => async () => ({
+    literature_id: id,
+    metadata: {
+      ...EMPTY_METADATA,
+      title,
+      identifiers: [
+        { namespace: "doi" as const, value: "10.5555/recognition" },
+      ],
+    },
+  });
+  // In the library and the title is in the file: that paper, even with no source.
+  const found = await service.recognize(
+    clues,
+    new AbortController().signal,
+    false,
+    known("Synthetic identity article"),
+  );
+  expect(found.recognition).toEqual({
+    state: "recognized",
+    step: 2,
+    literature_id: id,
+    candidates: [],
+  });
+  expect(found.metadata.title).toBe("Synthetic identity article");
+  expect(lookup).not.toHaveBeenCalled();
+  // The DOI belongs to a cited paper: treated as not in the library, and the
+  // unchecked DOI is not written into the fallback bibliography.
+  const cited = await service.recognize(
+    clues,
+    new AbortController().signal,
+    false,
+    known("A cited synthetic reference"),
+  );
+  expect(cited.recognition).toMatchObject({
+    state: "unrecognized",
+    literature_id: null,
+    reason: "no-metadata-source",
+  });
+  expect(cited.metadata.identifiers).toEqual([]);
+});
 it("says no-metadata-source when nothing could be asked, and only then", async () => {
   const lookup = vi.fn(async () => []),
     search = vi.fn(async () => []);
@@ -230,6 +285,70 @@ it("does not merge different file hashes just because their temporary titles are
     await rm(root, { recursive: true, force: true });
   }
 }, 40000);
+it("matches a file to the library paper its DOI and title name, not to the paper a cited DOI names", async () => {
+  const root = await mkdtemp(join(tmpdir(), "sciretriever-intake-library-"));
+  const app = await createApplication(root, {
+    indexRefreshIntervalMs: null,
+    metadata: { lookup_ports: [], topic_search_ports: [] },
+  });
+  const file = async (name: string, text: string) => {
+    const batch = await app.importSessions.create(
+      { format: "file", source: null, scope: "Synthetic" },
+      { kind: "local", origin: "cli" },
+    );
+    await app.importSessions.receiveFileItem(
+      batch.batch_id,
+      name,
+      null,
+      bytes(recognitionPdf({ pages: [[{ text }]] })),
+    );
+    await vi.waitFor(
+      async () =>
+        expect(
+          (await app.importSessions.preview(batch.batch_id)).recognition.state,
+        ).toBe("done"),
+      { timeout: 20000, interval: 30 },
+    );
+    const [item] = (await app.importSessions.items(batch.batch_id)).items;
+    const preview = await app.importSessions.preview(batch.batch_id);
+    return { item: item!, records: preview.summary.records };
+  };
+  try {
+    const known = await app.importSessions.importBibliography(
+      Buffer.from(
+        "TY  - JOUR\nTI  - Synthetic tetrazole salt library paper\nDO  - 10.5555/synth.library\nPY  - 2024\nER  - \n",
+      ),
+      "ris",
+      null,
+      "cli",
+    );
+    const id = known.items[0]!.literature_id;
+    // Same DOI, title on the first page: already in the library, no source asked.
+    const same = await file(
+      "same.pdf",
+      "Synthetic tetrazole salt library paper doi:10.5555/synth.library",
+    );
+    expect(same.item.recognition).toMatchObject({
+      state: "recognized",
+      step: 2,
+      literature_id: id,
+    });
+    expect(same.records).toMatchObject({ matched: 1, created: 0 });
+    // Same DOI from a reference, another title: not that paper.
+    const cited = await file(
+      "other.pdf",
+      "A different synthetic furazan study cites doi:10.5555/synth.library",
+    );
+    expect(cited.item.recognition).toMatchObject({
+      state: "unrecognized",
+      literature_id: null,
+    });
+    expect(cited.records).toMatchObject({ matched: 0 });
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+}, 60000);
 it("stages one synthetic PDF, keeps preview read-only, admits it and deduplicates identical bytes", async () => {
   const root = await mkdtemp(join(tmpdir(), "sciretriever-intake-file-"));
   const app = await createApplication(root, {

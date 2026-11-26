@@ -6,6 +6,7 @@ import {
   type ImportFile,
   type IntakeBatchItem,
   type IntakeDecision,
+  type Identifier,
 } from "@sciretriever/contracts";
 import type { SqliteWorker } from "../storage/sqlite/worker.js";
 import type { FileStore } from "../storage/files/store.js";
@@ -23,6 +24,7 @@ import { clueArxiv, clueDois } from "../literature/import-clues.js";
 import {
   fileRecognitionClues,
   IntakeRecognitionService,
+  type RecognitionLibrary,
 } from "../literature/intake-recognition.js";
 import type {
   IntakeItemRead,
@@ -116,6 +118,15 @@ export class IntakeFileItems {
     string,
     { stop: AbortController; promise: Promise<void> }
   >();
+  /**
+   * The library paper an identifier names, by the same assessment as a
+   * `lookup` line (6.4.6 step 2, 6.4.12); set by the import session owner.
+   */
+  library?: (
+    s: StoredImportSession,
+    identifier: Identifier,
+    title: string,
+  ) => ReturnType<RecognitionLibrary>;
   constructor(
     private readonly database: SqliteWorker,
     files: FileStore,
@@ -438,7 +449,14 @@ export class IntakeFileItems {
           const input = fileRecognitionClues(clues);
           let result;
           try {
-            result = await this.recognition.recognize(input, stop.signal);
+            result = await this.recognition.recognize(
+              input,
+              stop.signal,
+              false,
+              this.library
+                ? (id) => this.library!(s, id, input.fallback)
+                : undefined,
+            );
           } catch (error) {
             if (stop.signal.aborted) break;
             result = this.recognition.fallback(input);

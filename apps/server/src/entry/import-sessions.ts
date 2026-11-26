@@ -25,6 +25,10 @@ import {
   type IntakeLookupResult,
   type IntakeLookupSummary,
   type MetadataObservation,
+  type Identifier,
+  type LiteratureMetadata,
+  EMPTY_METADATA,
+  parseLiteratureMetadata,
   ContractValidationError,
   decodeBibliographyBytes,
   detectBibliographyFormat,
@@ -510,6 +514,8 @@ export class ImportSessionService extends ImportSessionReadService {
       options.clueReader,
       this.now,
     );
+    this.fileItems.library = (s, identifier, title) =>
+      this.libraryMatchIdentifier(s, identifier, title);
     this.lookupItems = new IntakeLookupItems(
       this.fileItems,
       writes,
@@ -1485,7 +1491,45 @@ export class ImportSessionService extends ImportSessionReadService {
     s: StoredImportSession,
     work: NonNullable<StoredIntakeItem["work"]>,
   ) {
-    const record = { ...work.record!, metadata: lookupGiven(work) };
+    return this.libraryMatchRecord(s, {
+      ...work.record!,
+      metadata: lookupGiven(work),
+    });
+  }
+  /**
+   * The same assessment for one identifier a file carries (6.4.6 step 2).
+   * Only a DOI may stand without a title; other identifiers borrow the
+   * file's provisional title, which the caller then checks against the clues.
+   */
+  private async libraryMatchIdentifier(
+    s: StoredImportSession,
+    identifier: Identifier,
+    title: string,
+  ) {
+    let metadata: LiteratureMetadata;
+    try {
+      metadata = parseLiteratureMetadata({
+        ...EMPTY_METADATA,
+        identifiers: [identifier],
+        title: identifier.namespace === "doi" ? null : title || null,
+      });
+    } catch {
+      return null;
+    }
+    return this.libraryMatchRecord(s, {
+      external_id: "file-recognition",
+      metadata,
+      source_type: null,
+      groups: [],
+      user_tags: [],
+      files: [],
+      annotations: [],
+    });
+  }
+  private async libraryMatchRecord(
+    s: StoredImportSession,
+    record: ImportRecord,
+  ) {
     const assessed = await this.identity.preview(this.observation(s, record));
     if (
       (assessed.disposition !== "matched" &&

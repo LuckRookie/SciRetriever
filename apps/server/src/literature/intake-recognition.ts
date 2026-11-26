@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   EMPTY_METADATA,
+  parseLiteratureId,
   type Identifier,
   type IntakeRecognition,
   type LiteratureMetadata,
@@ -29,6 +30,11 @@ export interface RecognitionSources {
   /** Which kinds of source are configured; absent means both may answer. */
   configured?(): { readonly lookup: boolean; readonly search: boolean };
 }
+/** A paper of this library that carries the identifier, or null (6.4.6 step 2). */
+export type RecognitionLibrary = (identifier: Identifier) => Promise<{
+  readonly literature_id: string;
+  readonly metadata: LiteratureMetadata;
+} | null>;
 export interface RecognizedCandidate {
   readonly candidate_id: string;
   readonly observation: MetadataObservation;
@@ -81,6 +87,15 @@ function sameTitle(a: string, b: string) {
   return (
     (!!normalized(a) && normalized(a) === normalized(b)) ||
     recognitionSimilarity(a, b) >= 0.95
+  );
+}
+/** 6.4.6 step 2: the title can be found in the file's clues. */
+function titleInClues(title: string | null, clues: RecognitionClues): boolean {
+  return (
+    !!title &&
+    !!normalized(title) &&
+    (normalized(clues.text).includes(normalized(title)) ||
+      clues.titles.some((t) => sameTitle(t, title)))
   );
 }
 function identity(metadata: LiteratureMetadata) {
@@ -245,9 +260,30 @@ export class IntakeRecognitionService {
     clues: RecognitionClues,
     signal: AbortSignal,
     titleOnly = false,
+    /** File intake: a paper already here is checked first, sources or not. */
+    library?: RecognitionLibrary,
   ): Promise<RecognitionResult> {
     const check = () => signal.throwIfAborted();
     check();
+    if (library && !titleOnly)
+      for (const identifier of clues.identifiers) {
+        const known = await library(identifier);
+        check();
+        // A DOI from a cited reference names another paper: its title is
+        // not in this file, so it counts as not in the library.
+        if (known && titleInClues(known.metadata.title, clues))
+          return {
+            recognition: {
+              state: "recognized",
+              step: 2,
+              literature_id: parseLiteratureId(known.literature_id),
+              candidates: [],
+            },
+            metadata: known.metadata,
+            observation: null,
+            candidates: [],
+          };
+      }
     if (!this.sourcesConfigured()) return this.noSource(this.fallback(clues));
     if (!titleOnly && clues.identifiers.length) {
       let observations: readonly MetadataObservation[] = [];
@@ -260,7 +296,6 @@ export class IntakeRecognitionService {
       for (const observation of observations) {
         const title = observation.metadata.title;
         if (
-          title &&
           observation.metadata.identifiers.some((found) =>
             clues.identifiers.some(
               (wanted) =>
@@ -268,9 +303,7 @@ export class IntakeRecognitionService {
                 wanted.value === found.value,
             ),
           ) &&
-          normalized(title) &&
-          (normalized(clues.text).includes(normalized(title)) ||
-            clues.titles.some((t) => sameTitle(t, title)))
+          titleInClues(title, clues)
         )
           return this.accept(observation, 2);
       }
