@@ -1210,7 +1210,7 @@ Application 的 writes 为 FileStore 与 SQLite 提供同一短写入准入。�
 | ---------------------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------- |
 | `records`                                      | 已经整理成中性条目的数据                                                       | 数据分段                              |
 | `bibtex`、`biblatex`、`ris`、`csl-json`        | 导出文件                                                                       | 数据分段，`data` 为整份文本或其中一段 |
-| `endnote-tagged`、`endnote-xml`、`noteexpress` | 导出文件（[6.4.14](#6414-endnote-与-noteexpress-的导出文件)，目标）            | 数据分段，`data` 为整份文本           |
+| `endnote-tagged`、`endnote-xml`、`noteexpress` | 导出文件（[6.4.14](#6414-endnote-与-noteexpress-的导出文件)）                  | 数据分段，`data` 为整份文本           |
 | `web-page`                                     | 网页的书目标签（[6.4.5](#645-网页原始数据)）                                   | 单篇收藏，不经数据分段                |
 | `file`                                         | 文件本身                                                                       | 只有文件的条目                        |
 | `lookup`                                       | 使用者逐行给出的 DOI、网址或标题（[6.4.12](#6412-指定文献逐行给出标识或标题)） | 数据分段，`data` 为整份文本           |
@@ -1478,7 +1478,7 @@ Application 的 writes 为 FileStore 与 SQLite 提供同一短写入准入。�
 实现情况：
 
 - 已实现：格式 `zotero-api` 的适配器（“批次与分段”到“不导入的内容”各段）；导入程序 `skills/sciretriever/scripts/zotero_import.py`（“载体怎样读 Zotero”“文件”“续传”各段），只在合成的 Zotero 接口上验证过。
-- 目标，尚未实现：扩展里的“从 Zotero 导入”（计划 28 的 16 块）；批注（17 块）。
+- 目标，尚未实现：扩展里的“从 Zotero 导入”（计划 28 的 16 块）。批注的导入见 [6.4.13](#6413-从-zotero-导入批注)。
 - 标“待探测”的各项，以计划 28 的 14 块（Zotero 探测）结果为准。在此之前适配器按网络 API 的格式处理；读编号、链接与大小的代码集中在适配器的一处，探测结果不同时只改这一处。
 
 **两个载体，一套交法。**
@@ -1524,16 +1524,16 @@ Application 的 writes 为 FileStore 与 SQLite 提供同一短写入准入。�
 
 **不导入的内容。** 下列各项只按种类计入 `summary.excluded`，进入预览与报告：
 
-| 种类                        | 含义                                                       |
-| --------------------------- | ---------------------------------------------------------- |
-| `note`                      | 笔记                                                       |
-| `annotation`                | 批注（17 块实现后改为导入）                                |
-| `additional-file`           | 同一条目里首选附件以外的 PDF                               |
-| `non-pdf-file`              | 不是 PDF 的附件，如网页快照                                |
-| `linked-file`、`linked-url` | 链接附件                                                   |
-| `trashed-item`              | 回收站里的条目及其子条目（按 `data.deleted` 判断，待探测） |
-| `child-without-parent`      | 父条目不在这一段里的子条目                                 |
-| `invalid-file-reference`    | 附件没有可用的文件名                                       |
+| 种类                         | 含义                                                                                         |
+| ---------------------------- | -------------------------------------------------------------------------------------------- |
+| `note`                       | 笔记                                                                                         |
+| `annotation-standalone-file` | 独立 PDF 上的批注（首版不导入）；其余批注不在这张表里，见 [6.4.13](#6413-从-zotero-导入批注) |
+| `additional-file`            | 同一条目里首选附件以外的 PDF                                                                 |
+| `non-pdf-file`               | 不是 PDF 的附件，如网页快照                                                                  |
+| `linked-file`、`linked-url`  | 链接附件                                                                                     |
+| `trashed-item`               | 回收站里的条目及其子条目（按 `data.deleted` 判断，待探测）                                   |
+| `child-without-parent`       | 父条目不在这一段里的子条目                                                                   |
+| `invalid-file-reference`     | 附件没有可用的文件名                                                                         |
 
 **载体怎样读 Zotero。**
 
@@ -1762,7 +1762,7 @@ IntakeRestorePreview               # 整批恢复之前，不写库
 
 #### 6.4.13 从 Zotero 导入批注
 
-目标，尚未实现（计划 28 的 17 块）。依据 [ADR 0057](../decisions/0057-zotero-import-and-browser-capture.md) 第 3 节；批注本身的模型见[用户整理](09-user-organization.md)。Zotero 的批注数据结构只按公开的格式写成，没有在真实的 Zotero 上核对过。
+已实现（计划 28 的 17 块），只在合成数据与合成 PDF 上验证过。依据 [ADR 0057](../decisions/0057-zotero-import-and-browser-capture.md) 第 3 节；批注本身的模型见[用户整理](09-user-organization.md)。Zotero 的批注数据结构只按公开的格式写成，没有在真实的 Zotero 上核对过。
 
 - **从哪里来**：`zotero-api` 的数据里，批注是 `itemType` 为 `annotation` 的条目，`parentItem` 指向它所在的附件。适配器把它们收进所属条目的首选附件之下；挂在其他附件上的批注只计数（`annotation-other-file`）。独立 PDF（没有父条目的附件）上的批注首版不导入，在“不导入的内容”里计 `annotation-standalone-file`。
 - **什么时候导入**：只在 Zotero 的那个附件与本系统里这篇文献的主 PDF 逐字节相同时导入。判断用文件的 sha256：附件的文件交来并成为主 PDF，或交来的文件与已有主 PDF 的 sha256 相同。不同（`pdf-differs`）或文件没有交来（`file-missing`）时，这个附件上的批注全部不导入，只计数。
@@ -1785,7 +1785,7 @@ IntakeRestorePreview               # 整批恢复之前，不写库
 
 #### 6.4.14 EndNote 与 NoteExpress 的导出文件
 
-目标，尚未实现（计划 28 的 06 块）。三种格式按公开的格式说明写成，没有用真实的导出文件核对过；知网、万方、维普的“EndNote”“NoteExpress”导出就是前两种的文本格式。RefWorks 与知网 E-Study 的格式首版不做。
+已实现（计划 28 的 06 块）。三种格式按公开的格式说明写成，没有用真实的导出文件核对过；知网、万方、维普的“EndNote”“NoteExpress”导出就是前两种的文本格式。RefWorks 与知网 E-Study 的格式首版不做。
 
 | 格式名           | 文件                        | 怎样认出                                |
 | ---------------- | --------------------------- | --------------------------------------- |
