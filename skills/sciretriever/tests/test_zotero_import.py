@@ -223,7 +223,11 @@ class Library:
                     return self.ok({"items": [{"origin": "file", "file_name": f["name"]}
                                               for f in library.file_items], "next_cursor": None})
                 if self.path == base + "/preview":
-                    return self.ok({"batch": {}, "summary": {"records": {"created": 3}}})
+                    return self.ok({"batch": {}, "summary": {"records": {"created": 3},
+                                                             "annotations": library.annotations(True)}})
+                if self.path == base + "/report":
+                    return self.ok({"batch": {}, "estimated": False, "items": [], "next_cursor": None,
+                                    "summary": {"annotations": library.annotations(False)}})
                 if self.path == base + "/files":
                     cursor = request.get("cursor") or ""
                     items = [dict(f) for k, f in sorted(library.pending.items())
@@ -258,6 +262,16 @@ class Library:
         (self.config / "address").write_text("http://127.0.0.1:" + str(self.server.server_port))
         (self.config / "curl.conf").write_text('header = "Authorization: Bearer ' + self.secret + '"\n')
         (self.config / "curl.conf").chmod(0o600)
+
+    def annotations(self, estimated):
+        """summary.annotations as a zotero-api batch gives it (6.4.13)."""
+        reasons = dict.fromkeys(zi.ANNOTATION_REASONS, 0)
+        reasons.update({"unsupported-kind": 2, "comment-too-long": 1})
+        if not estimated:
+            reasons["position-invalid"] = 1
+        return {"supported": 4, "unsupported": 2, "imported": 0 if estimated else 2,
+                "deferred": 3 if estimated else 0, "importable": 3 if estimated else 2,
+                "by_reason": reasons}
 
     def confirm(self, attachments):
         """What the server's adapter lists as pending after the user confirms."""
@@ -349,12 +363,35 @@ class ZoteroImportTests(unittest.TestCase):
         self.assertIn(BATCH, text)
         self.assertIn("?view=disc", text)
         self.assertTrue(self.library.calls[-1].endswith("/preview"))
+        self.assertIn("批注：PDF 交来并与库里的主 PDF 相同时可导入 3 条；"
+                      "不导入：评论超过 20,000 字 1，便签、文字框或手绘 2。", text)
+        self.assertNotIn("只计数", text)
         self.assertEqual(self.state()["batch_id"], BATCH)
         # Running again resends the same data and no standalone PDF twice.
         code, text = self.main("import", "--library", "user", "--data-dir", str(self.data))
         self.assertEqual(code, 0, text)
         self.assertEqual(len(self.library.file_items), 2)
         self.assertTrue(all(method == "GET" for method, _ in self.zotero.requests))
+
+    def test_annotations_travel_with_their_attachment_s_parent_across_segments(self):
+        tops = [item(f"T{n:07d}", {"itemType": "journalArticle", "title": f"Synthetic {n}",
+                                    "abstractNote": "x" * 200000}) for n in range(60)]
+        pdfs = [item(f"P{n:07d}", {"itemType": "attachment", "linkMode": "imported_file",
+                                    "contentType": "application/pdf", "filename": f"p{n}.pdf"},
+                     parent=f"T{n:07d}") for n in range(60)]
+        notes = [item(f"A{n:07d}", {"itemType": "annotation", "annotationType": "highlight",
+                                     "annotationText": "synthetic",
+                                     "annotationPosition": json.dumps({"pageIndex": 0, "rects": [[1, 2, 3, 4]]})},
+                      parent=f"P{n:07d}") for n in range(60)]
+        # Annotations first: the order Zotero lists them must not matter.
+        parts, skipped = zi.segments(notes + pdfs + tops, [])
+        self.assertEqual(skipped, 0)
+        self.assertGreater(len(parts), 1)
+        for part in parts:
+            keys = {i["key"] for i in part["items"]}
+            for n in range(60):
+                if f"T{n:07d}" in keys:
+                    self.assertTrue({f"P{n:07d}", f"A{n:07d}"} <= keys)
 
     def test_import_of_chosen_collections_sends_them_with_ancestors_only(self):
         code, text = self.main("import", "--library", "user", "--collection", "COLL0002",
@@ -394,6 +431,10 @@ class ZoteroImportTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(len(self.library.uploads), 2)  # PDFA0001 (only PDF) and DDDD0004 (by name)
         self.assertIn("未交（按原因）：storage-ambiguous 1，storage-folder-missing 1", text)
+        # After the files: what the library imported, from the batch report.
+        self.assertIn("批注：已导入 2 条，还在等文件的 0 条；"
+                      "不导入：评论超过 20,000 字 1，位置换算不了 1，便签、文字框或手绘 2。", text)
+        self.assertTrue(self.library.calls[-1].endswith("/report"))
 
     def test_a_file_url_that_is_not_a_pdf_falls_back_to_the_data_folder(self):
         self.main("import", "--library", "user", "--data-dir", str(self.data))

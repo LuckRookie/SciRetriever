@@ -264,7 +264,12 @@ def _size(value):
 
 
 def segments(items, collections):
-    """Data segments: collections first, then each parent with all its children."""
+    """Data segments: collections first, then each parent with all its children.
+
+    Children are followed up the `parentItem` chain, so an annotation (whose
+    parent is the attachment it is on) travels with the attachment's parent
+    item, as the library needs to put it under the preferred PDF (6.4.13).
+    """
     parents = {_key(i): _data(i).get("parentItem") for i in items}
 
     def root(key):
@@ -299,6 +304,32 @@ def segments(items, collections):
     pack("items", [sorted(units[k], key=lambda i: (i is not units[k][0], str(_key(i))))
                    for k in sorted(units, key=str)])
     return out, skipped
+
+
+#: Why an annotation was not imported, as the library reports it (6.4.13).
+ANNOTATION_REASONS = {
+    "unsupported-kind": "便签、文字框或手绘",
+    "annotation-other-file": "在其他附件上",
+    "pdf-differs": "PDF 与库里的不同",
+    "file-missing": "文件没交来",
+    "position-invalid": "位置换算不了",
+    "comment-too-long": "评论超过 20,000 字",
+    "quote-invalid": "原文缺失或太长",
+    "already-imported": "以前导入过",
+}
+
+
+def annotation_line(summary, estimated):
+    """One line on the batch's annotations, or None when the batch has no counts."""
+    counts = summary.get("annotations") if isinstance(summary, dict) else None
+    if not isinstance(counts, dict) or not isinstance(counts.get("by_reason"), dict):
+        return None
+    reasons = [f"{ANNOTATION_REASONS.get(k, k)} {v}" for k, v in sorted(counts["by_reason"].items())
+               if isinstance(v, int) and v > 0]
+    head = (f"批注：PDF 交来并与库里的主 PDF 相同时可导入 {counts.get('importable', 0)} 条"
+            if estimated else
+            f"批注：已导入 {counts.get('imported', 0)} 条，还在等文件的 {counts.get('deferred', 0)} 条")
+    return head + ("；不导入：" + "，".join(reasons) if reasons else "") + "。"
 
 
 def standalone_pdfs(items):
@@ -491,6 +522,9 @@ def import_library(client, zotero, config_dir, library, chosen, data_dir, output
     print("预览（估计）：新增 {} 篇，已在库 {} 篇，未接纳 {} 条；认篇在后台继续。".format(
         records.get("created", 0), records.get("matched", 0) + records.get("restored", 0),
         records.get("rejected", 0)), file=output)
+    line = annotation_line(preview.get("summary"), True)
+    if line:
+        print(line, file=output)
     print(f"请在网页上预览并确认：{client.address}/?view=disc（找文献 → 批次记录，批次 {batch}）。", file=output)
     print("确认之后运行：zotero_import.py files", file=output)
     return 0
@@ -512,6 +546,18 @@ def files(client, zotero, config_dir, data_dir, output):
     if failures:
         reasons = counters.Counter(reason for _, reason in failures.values())
         print("未交（按原因）：" + "，".join(f"{k} {v}" for k, v in sorted(reasons.items())), file=output)
+    # Annotations are imported by the library as each PDF settles.
+    if result == 130:
+        return result
+    try:
+        report = client.call("/api/v1/intake/batches/" + state["batch_id"] + "/report", {"limit": 1})
+        line = annotation_line(report.get("summary"), False)
+        if line:
+            print(line, file=output)
+    except upload.ConnectionLost:
+        raise
+    except upload.RequestFailure:
+        pass
     return result
 
 
