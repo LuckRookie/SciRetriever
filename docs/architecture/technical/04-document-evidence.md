@@ -1049,6 +1049,31 @@ HTTP 使用 `protocol_version: 1` 封套与现有维护认证；任务进度与�
 - **重点词**：每个不超过 40 个码点，必须能按规则 `key-term-match-v1`（10.7）在所属的 `statement` 或 `text` 里标出。库里只存词，不存它出现的位置。
 - 要点的数目：全篇 3 到 40 个。上下限是初值，计划 28 的 09 块实测后调整。
 
+#### 10.2.1 ADR 0070 增加的内容
+
+目标，尚未实现。[ADR 0070](../decisions/0070-book-style-annotated-copy.md) 第 7 节：书本风格的四个视图需要下面这些，在分层这一步的同一次调用里给出；阅读层文件与提示词的版本因此上调，已有的阅读层按 10.6 标为过时。界面上把要点叫“批语”，这里的名字不变。
+
+- 每个要点另有：
+  - `primary`：是不是全篇主干。全篇 3 到 5 个为主干。
+  - `label`：短标签，导图用；不超过 6 个英文词或 12 个汉字，用文献自己的语言。
+  - `kind`：类别，取值只能是 `context`（背景）、`question`（问题）、`method`（方法）、`result`（结果）、`analysis`（分析）、`claim`（结论）、`limit`（局限）。
+  - `relations`：0 到 3 条关系，每条是 `word` 与 `targets`。`word` 只能是 `see`（见）、`follows`（承接）、`based_on`（依据）、`explains`（解释）、`sums_up`（总结）、`extends`（引申自）；`targets` 是别的要点的 `number`，或图表的片段编号。`see` 只指向图表。
+  - 主干要点另有 `basis`：概览里它下面那一行所据，一项：它的某条 `sentence` 依据里连续的一段（字节范围，落在那条依据之内），或它的某条 `block` 依据。
+- 提要 `digest` 的三项改为：
+  - `summary`：两三句，写研究对象、方法、结论；不超过 400 个码点；不能为 null。原来的 `nature` 不再产生。
+  - `limits`：由一段改为 0 到 5 条，每条有 `text`（不超过 200 个码点）与 `units`。
+  - `advice`：一段，不超过 300 个码点；另给它提到的去处 `places`：每个是文字里逐字出现的一段（如“2.2 节”“图 3”）与它指向的章节或图表的片段编号。
+- `data`：0 到 8 行关键数据，每行有 `quantity`（量，不超过 60 个码点）、`value`（数值，带单位）、`source`（一个单元编号，或一张表的片段编号）。
+- 这些内容的译文部分（10.5）：`label`、`summary`、`limits` 各条的 `text`、`advice` 及其 `places` 的文字、`data` 各行的 `quantity`。`value` 不翻译。
+- 核对，都由程序做；核对不过的那一项丢掉，要点本身不受影响，丢掉了多少记录在案：
+  - `kind`、`word` 不在取值里的丢掉；`kind` 丢掉后这个要点没有类别。
+  - `targets` 指向不存在的要点或图表的那一条关系丢掉；指向自己的丢掉。
+  - `basis` 的范围不在它所说的那条依据之内的丢掉；主干要点没有 `basis` 时，概览里取它的第一条依据。
+  - `data` 的 `value` 里的数字在 `source` 所指的单元或表的文字里逐字找不到的那一行丢掉。
+  - `places` 的文字在 `advice` 里逐字找不到、或所指不存在的那一个丢掉。
+  - `primary` 的要点不足 3 个时这一步按 10.3 的规则算失败（原因 `layers-incomplete`）；多于 5 个时按 `number` 的顺序只留前 5 个。
+- 读取（10.7）返回这些内容；`part: overview` 返回 `summary`、主干要点及其 `basis`、`data`、`limits`、`advice`。
+
 ### 10.3 作为建档的一步
 
 - 建档的步骤为 `arrange → proofread → render → translate → layers → metadata → references → tags`。`layers` 只在主 PDF 上执行，排在 `translate` 之后（10.5 要用库里的译文）。
