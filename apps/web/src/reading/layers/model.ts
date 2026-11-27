@@ -6,8 +6,6 @@ import {
   type LayersReadEvidence,
   type LayersReadPoint,
   type LayersRelationWord,
-  TRANSLATION_FIGURE_WORDS,
-  type TranslationLanguage,
 } from "@sciretriever/contracts";
 import type { DocumentTextMode } from "../contract.js";
 import { escape } from "../dom.js";
@@ -231,25 +229,17 @@ export function captionParts(caption: string | null): {
   return m ? { lead: m[1]!, rest: m[2]! } : { lead: null, rest: caption ?? "" };
 }
 /**
- * A figure's name in a reading. The original is named as printed (“Fig. 8”,
- * “Table 3”). A translation is named in its own language's way, from the
- * original's number (“图 8”, “表 3”): a machine translation keeps some leads
- * in English and writes others with or without a space, and one paper's
- * figures must not read “图 1” beside “Fig. 2”. Without a number, the
- * translated caption's own lead, else the original's.
+ * A figure's name in a reading, as its caption writes it: the original's
+ * lead (“Fig. 8”), or in a translated reading the translation's own
+ * (“图 8”). Nothing is rewritten: the translation prompt decides how a
+ * label reads (technical 04 §9); without a lead of its own, the original's.
  */
 export function figureNameIn(
-  kind: "figure" | "table" | "scheme",
   original: string | null,
   translated: string | null,
-  language: TranslationLanguage | null,
   mode: DocumentTextMode,
 ): string | null {
-  if (mode === "original") return original;
-  const number = /(S?\d+[a-z]?)\s*$/iu.exec(original ?? translated ?? "")?.[1];
-  if (language && number)
-    return `${TRANSLATION_FIGURE_WORDS[language][kind]} ${number}`;
-  return translated ?? original;
+  return mode === "original" ? original : (translated ?? original);
 }
 /** A figure's name as the reading shows it; without the figure, a name by kind. */
 export function figureName(

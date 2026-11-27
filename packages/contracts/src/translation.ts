@@ -174,8 +174,8 @@ export const DOCUMENT_TRANSLATION_PROMPT_VERSION = "document-translation-v2";
 /**
  * How each translation language writes the label of a figure, a table and a
  * scheme before its number (“图 8”, “表 3”), one space between. The document
- * translation prompt (v2) asks for these, in captions and in the text; the
- * reader names figures with them and puts right translations stored before.
+ * translation prompt (v2) asks for these, in captions and in the text. The
+ * reader shows what was stored and rewrites nothing.
  */
 export const TRANSLATION_FIGURE_WORDS: Readonly<
   Record<

@@ -146,32 +146,14 @@ it("takes a caption's lead, also after labels a parser ran into it", () => {
   expect(captionParts("In summary, see Fig. 2 for details.").lead).toBeNull();
 });
 
-it("names a figure one way per reading, from the original's number", () => {
-  // As printed in the original.
-  expect(figureNameIn("figure", "Fig. 8", "图 8", "zh-Hans", "original")).toBe(
-    "Fig. 8",
-  );
-  // A machine translation that kept the English lead, or wrote no space.
-  expect(
-    figureNameIn("figure", "Fig. 2", "Fig. 2", "zh-Hans", "translation"),
-  ).toBe("图 2");
-  expect(figureNameIn("figure", "Fig. 4", "图4", "zh-Hans", "bilingual")).toBe(
-    "图 4",
-  );
-  expect(
-    figureNameIn("table", "Table 1", "Table 1", "zh-Hans", "translation"),
-  ).toBe("表 1");
-  expect(figureNameIn("figure", "Fig. S3a", null, "ja", "translation")).toBe(
-    "図 S3a",
-  );
-  expect(figureNameIn("scheme", "Scheme 1", null, "de", "translation")).toBe(
-    "Schema 1",
-  );
-  // No number to go by: the translation's own lead, else the original's.
-  expect(figureNameIn("figure", null, "图 8", "zh-Hans", "translation")).toBe(
-    "图 8",
-  );
-  expect(figureNameIn("figure", null, null, null, "translation")).toBeNull();
+it("names a figure as its caption writes it, in the reading shown", () => {
+  // Nothing is rewritten: how a translation writes a label is its prompt's.
+  expect(figureNameIn("Fig. 8", "图 8", "original")).toBe("Fig. 8");
+  expect(figureNameIn("Fig. 8", "图 8", "translation")).toBe("图 8");
+  expect(figureNameIn("Fig. 2", "Fig. 2", "bilingual")).toBe("Fig. 2");
+  // A translation without a lead of its own: the original's.
+  expect(figureNameIn("Table 1", null, "translation")).toBe("Table 1");
+  expect(figureNameIn(null, null, "translation")).toBeNull();
   // Without the figure, a name by kind.
   expect(figureName(null, "table", "original")).toBe("表");
 });
