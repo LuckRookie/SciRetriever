@@ -170,7 +170,29 @@ export function parseFullTextPageRequest(value: unknown): FullTextPageRequest {
  * per literature, primary PDF, proofread content version and language; the
  * catalog registers its identity and counts only.
  */
-export const DOCUMENT_TRANSLATION_PROMPT_VERSION = "document-translation-v1";
+export const DOCUMENT_TRANSLATION_PROMPT_VERSION = "document-translation-v2";
+/**
+ * How each translation language writes the label of a figure, a table and a
+ * scheme before its number (“图 8”, “表 3”), one space between. The document
+ * translation prompt (v2) asks for these, in captions and in the text; the
+ * reader names figures with them and puts right translations stored before.
+ */
+export const TRANSLATION_FIGURE_WORDS: Readonly<
+  Record<
+    TranslationLanguage,
+    Readonly<Record<"figure" | "table" | "scheme", string>>
+  >
+> = {
+  "zh-Hans": { figure: "图", table: "表", scheme: "方案" },
+  "zh-Hant": { figure: "圖", table: "表", scheme: "方案" },
+  ja: { figure: "図", table: "表", scheme: "スキーム" },
+  ko: { figure: "그림", table: "표", scheme: "스킴" },
+  en: { figure: "Fig.", table: "Table", scheme: "Scheme" },
+  de: { figure: "Abb.", table: "Tab.", scheme: "Schema" },
+  fr: { figure: "Fig.", table: "Tableau", scheme: "Schéma" },
+  es: { figure: "Fig.", table: "Tabla", scheme: "Esquema" },
+  ru: { figure: "Рис.", table: "Таблица", scheme: "Схема" },
+};
 /** Initial batch limits (plan 28, 8.8 adjusts them after real papers). */
 export const TRANSLATION_BATCH_MAX_CODE_POINTS = 6000;
 export const TRANSLATION_BATCH_MAX_UNITS = 60;

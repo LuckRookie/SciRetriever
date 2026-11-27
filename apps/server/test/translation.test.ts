@@ -21,6 +21,7 @@ import {
 } from "../src/agents/protocol.js";
 import { TranslationCache } from "../src/translation/cache.js";
 import {
+  documentTranslationSystem,
   TRANSLATION_PROMPT_VERSION,
   TranslationService,
   normalizeTranslationText,
@@ -91,6 +92,16 @@ const ask = (text: string, extra: Record<string, unknown> = {}) => ({
   model: null,
   force: false,
   ...extra,
+});
+
+// Plan 28: a figure's label is written one way per language, in captions and
+// in the text, so the stored translation needs no matching afterwards.
+it("asks the full-text translation to write figure, table and scheme labels the target language's way", () => {
+  expect(documentTranslationSystem("zh-Hans")).toContain(
+    '"图 8", "表 3", "方案 1"',
+  );
+  expect(documentTranslationSystem("ja")).toContain('"図 8", "表 3"');
+  expect(documentTranslationSystem("en")).toContain('"Fig. 8", "Table 3"');
 });
 
 it("sends the built-in prompt with the passage once, then answers the same sentence from the cache", async () => {
@@ -324,7 +335,7 @@ const unit = (ids: string[], translation: string | null) => ({
   source_sha256: "0".repeat(64),
   translation,
   model: translation === null ? null : "p/a",
-  prompt_version: translation === null ? null : "document-translation-v1",
+  prompt_version: translation === null ? null : "document-translation-v2",
 });
 const storedFile = (units: ReturnType<typeof unit>[]) =>
   ({
