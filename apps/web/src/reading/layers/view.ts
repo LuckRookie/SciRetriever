@@ -1,6 +1,13 @@
 import type { DocumentTextMode } from "../contract.js";
 import { changeLayer, type LayerChange } from "./change.js";
-import { outlineLeaf, overviewLeaf, relationsHTML, rulesHTML } from "./leaf.js";
+import {
+  outlineItems,
+  outlineLeaf,
+  overviewLeaf,
+  paragraphOf,
+  relationsHTML,
+  rulesHTML,
+} from "./leaf.js";
 import { createMap, type LayersMap } from "./map.js";
 import {
   READING_LAYERS,
@@ -11,6 +18,7 @@ import {
   type ReadingLayer,
 } from "./model.js";
 import {
+  blockCopy,
   clearNotes,
   markSentence,
   notesSide,
@@ -80,11 +88,17 @@ export function attachLayers(
   data: ReadLayers,
   options: LayersViewOptions,
 ): LayersView {
-  const model: LayersModel = layersModel(data);
+  /** Where a note's paragraph starts in the text. */
+  const unitStart = (p: ReadLayersPoint) => options.offsetOf(p.unit_id);
+  // A note is named by its paragraph's number as the full text shows it.
+  const model: LayersModel = layersModel(data, (p) =>
+    paragraphOf(port, unitStart(p), p.paragraph),
+  );
   const sheet = port.sheet;
   let layer: ReadingLayer = "full",
     mode = options.text,
     placed: PlacedEvidence[] = [],
+    noteBlocks = new Map<number, HTMLElement>(),
     change: LayerChange | null = null,
     destroyed = false;
   const rule = el("div", "rl-rule"),
@@ -158,25 +172,23 @@ export function attachLayers(
   // ── 全文: the sentences, the strokes on the rule, the notes in the margin ──
   const relations = (number: number) => {
     const p = model.byNumber.get(number);
-    return p ? relationsHTML(p, port, mode) : "";
+    return p ? relationsHTML(model, p, port, mode) : "";
   };
   const renderFull = (notify = true) => {
-    placed = wrapNotes(model, port, mode);
+    ({ placed, blocks: noteBlocks } = wrapNotes(model, port, mode, unitStart));
     if (margin())
       side.innerHTML =
-        rulesHTML() + notesSide(model, port, mode, (p) => relations(p.number));
+        rulesHTML() + notesSide(model, mode, (p) => relations(p.number));
     else {
-      // A narrow sheet: each note under the paragraph of its first sentence.
+      // A narrow sheet: each note under its paragraph.
       side.innerHTML = "";
       const box = el("div", "rl-side-tmp");
-      box.innerHTML = notesSide(model, port, mode, (p) => relations(p.number));
+      box.innerHTML = notesSide(model, mode, (p) => relations(p.number));
       for (const note of [...box.children] as HTMLElement[]) {
-        const first = placed.find(
-          (e) => String(e.point) === note.dataset.point && e.block,
-        );
-        if (!first?.block) continue;
+        const block = noteBlocks.get(Number(note.dataset.point));
+        if (!block) continue;
         note.classList.add("rl-below");
-        let after: Element = first.block;
+        let after: Element = block;
         while (after.nextElementSibling?.classList.contains("rl-below"))
           after = after.nextElementSibling;
         after.after(note);
@@ -187,7 +199,13 @@ export function attachLayers(
   const renderLeaf = () => {
     const made =
       layer === "outline"
-        ? outlineLeaf(model, port, mode, margin())
+        ? outlineLeaf(
+            model,
+            port,
+            mode,
+            margin(),
+            outlineItems(model, port, mode, unitStart),
+          )
         : overviewLeaf(model, port, mode, options.offsetOf);
     column.innerHTML = made.column;
     side.innerHTML = margin() ? made.side : "";
@@ -231,7 +249,17 @@ export function attachLayers(
     const top0 = top();
     const first = new Map<string, number>();
     let st = "";
-    if (layer === "full")
+    if (layer === "full") {
+      // A note stands beside its paragraph's first line.
+      for (const [number, block] of noteBlocks) {
+        const line =
+          block
+            .querySelector(
+              ":scope > :not(.reading-block-source, .reading-doubt)",
+            )
+            ?.getClientRects()[0] ?? block.getBoundingClientRect();
+        if (line.height) first.set(String(number), line.top - top0);
+      }
       for (const e of placed) {
         let a: number, b: number;
         if (e.spans.length) {
@@ -248,8 +276,9 @@ export function attachLayers(
         } else continue;
         st += `<i class="rl-stroke" data-point="${e.point}" style="top:${Math.round(a + 6)}px;height:${Math.max(6, Math.round(b - a - 12))}px"></i>`;
         const key = String(e.point);
-        if (!first.has(key) || a < first.get(key)!) first.set(key, a);
+        if (!first.has(key)) first.set(key, a);
       }
+    }
     strokes.innerHTML = margin() ? st : "";
     const shown = layer === "full" ? port.article : column;
     const columnBox = shown.getBoundingClientRect();
@@ -290,7 +319,7 @@ export function attachLayers(
   /** A note, its sentences, its strokes and its numbers answer the pointer together. */
   const light = (number: string | null) => {
     for (const node of sheet.querySelectorAll<HTMLElement>(
-      ".rl-ev, .rl-pi, .rl-stroke, .rl-gang, .rl-oplate",
+      ".rl-ev, .rl-pi, .rl-stroke, .rl-gang, .rl-oplate, .reading-article > section[data-point]",
     ))
       node.classList.toggle(
         "rl-lit",
@@ -338,8 +367,8 @@ export function attachLayers(
       }
       if (target.point != null)
         return (
+          noteBlocks.get(target.point) ??
           port.article.querySelector(`.rl-ev[data-point="${target.point}"]`) ??
-          placed.find((e) => e.point === target.point)?.block ??
           null
         );
       return null;
@@ -388,14 +417,8 @@ export function attachLayers(
   ): HTMLElement | null => {
     const block = port.blockAt(start);
     if (!block || block.closest(".rl-leaf")) return null;
-    const copy = block.cloneNode(true) as HTMLElement;
-    clearNotes(copy);
-    for (const x of copy.querySelectorAll(
-      ".reading-block-source, .reading-doubt, .reading-margin-note-below, .reading-untranslated, .reading-translation-marks",
-    ))
-      x.remove();
     // The paragraph is the unit that opens: every note's sentences in it are
-    // marked, each with its own number, not only the one pressed.
+    // marked, not only the one pressed.
     const from = Number(block.dataset.byteStart),
       to = Number(block.dataset.byteEnd);
     const all: Opened[] = [...marks];
@@ -410,12 +433,9 @@ export function attachLayers(
           all.push({ p, i, e });
       });
     all.sort((a, b) => a.e.start_utf8 - b.e.start_utf8);
-    for (const m of all) markSentence(copy, m.p, m.i, m.e, mode);
-    const translation = copy.querySelector(":scope > .reading-translation");
-    if (mode === "original") translation?.remove();
-    else if (mode === "translation" && translation)
-      for (const child of [...copy.children])
-        if (child !== translation) child.remove();
+    const copy = blockCopy(block, mode, (c) => {
+      for (const m of all) markSentence(c, m.p, m.i, m.e, mode);
+    });
     const para = el("div", "rl-para");
     para.dataset.start = block.dataset.byteStart ?? String(start);
     const number = el("span", "rl-pn");

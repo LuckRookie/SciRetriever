@@ -9,9 +9,13 @@ import {
   headingHTML,
   langOf,
   numberHTML,
+  paragraphNo,
   pointLabel,
   pointWords,
+  reasonWords,
   richHTML,
+  sectionLabel,
+  sectionLine,
   sentenceWords,
   words,
   type LayersModel,
@@ -39,6 +43,8 @@ interface MapNode {
   kind: "root" | "sec" | "leaf";
   id: string;
   title?: string;
+  /** A section's line's label (节旨的题). */
+  label?: string | null;
   depth: number;
   point?: ReadLayersPoint;
   kids: MapNode[];
@@ -47,6 +53,8 @@ interface MapNode {
   el?: HTMLElement;
   w: number;
   h: number;
+  /** The height it takes, with a section's label under its rule. */
+  b: number;
   x: number;
   y: number;
   d: number;
@@ -97,6 +105,7 @@ export function createMap(
     i: 0,
     w: 0,
     h: 0,
+    b: 0,
     x: 0,
     y: 0,
     d: 0,
@@ -119,10 +128,11 @@ export function createMap(
       const title = (mode !== "original" && info?.translation) || s.title;
       const level = info?.level ?? 1;
       const id = s.section_id ?? `s${index}`;
+      const label = sectionLabel(s.line, mode);
       if (level <= 1 || !top) {
-        top = node("sec", id, 1, { title, kids: leaves });
+        top = node("sec", id, 1, { title, label, kids: leaves });
         root.kids.push(top);
-      } else top.kids.push(node("sec", id, 2, { title, kids: leaves }));
+      } else top.kids.push(node("sec", id, 2, { title, label, kids: leaves }));
     });
     // A section's own notes stand before its subsections.
     for (const sec of root.kids)
@@ -189,7 +199,7 @@ export function createMap(
           `<span>${RELATION_NAMES[r.word]} ${r.targets
             .map((t) =>
               t.kind === "point"
-                ? `<a data-side="${t.number}">${t.number}</a>`
+                ? `<a data-side="${t.number}">¶${paragraphNo(model, t.number, t.paragraph)}</a>`
                 : `<a data-zoom="${escape(t.segment_id)}">${escape(
                     figureName(port.figure(t.segment_id), t.block_kind, mode),
                   )}</a>`,
@@ -232,23 +242,34 @@ export function createMap(
         `<ul class="rl-ms-list">${model.primary
           .map((k) => {
             const w = pointWords(k, mode);
-            return `<li data-side="${k.number}">${numberHTML(k, "rl-gang-no")}<span lang="${langOf(w.text)}">${richHTML(w.text, w.terms)}</span></li>`;
+            return `<li data-side="${k.number}">${numberHTML(k, paragraphNo(model, k.number), "rl-gang-no")}<span lang="${langOf(w.text)}">${richHTML(w.text, w.terms)}</span></li>`;
           })
           .join("")}</ul>` +
-        `<p class="rl-ms-hint">指针移到一条批语上，这里显示它的全文、被批的句子和图表。</p>`;
+        `<p class="rl-ms-hint">指针移到一段上，这里显示它的批语、被批的句子和图表。</p>`;
       return;
     }
     const w = pointWords(p, mode);
+    const reason = reasonWords(p, mode);
+    const own = paragraphNo(model, p.number);
     const info = p.section_id ? port.section(p.section_id) : null;
     const where = (
       (mode !== "original" && info?.translation) ||
       p.section_title ||
       ""
     ).replace(/[.。]$/u, "");
+    const section = model.sections.find((s) => s.section_id === p.section_id);
+    const line = section ? sectionLine(section.line, mode) : null;
     const rel = relations(p);
     side.innerHTML =
-      `<div class="rl-ms-h">${numberHTML(p, "rl-gang-no")}${p.kind ? `<span>${KIND_NAMES[p.kind]}</span>` : ""}<span class="rl-where">${escape(where)}</span></div>` +
-      `<p class="rl-ms-t" lang="${langOf(w.text)}">${richHTML(w.text, w.terms)}</p>` +
+      `<div class="rl-ms-h">${numberHTML(p, own, "rl-gang-no")}${p.kind ? `<span>${KIND_NAMES[p.kind]}</span>` : ""}<span class="rl-where">${escape(where)}</span></div>` +
+      (line
+        ? `<p class="rl-ms-sl" lang="${langOf(line)}">${richHTML(line)}</p>`
+        : "") +
+      `<p class="rl-ms-t" lang="${langOf(w.text)}">${richHTML(w.text, w.terms)}` +
+      (reason
+        ? `<span class="rl-reason" lang="${langOf(reason)}">${richHTML(reason)}</span>`
+        : "") +
+      `</p>` +
       (rel ? `<p class="rl-ms-x">${rel}</p>` : "") +
       `<div class="rl-ms-mu">${p.evidence
         .map((e) => {
@@ -257,7 +278,8 @@ export function createMap(
           const terms = s.translated
             ? (p.translation?.key_terms ?? [])
             : p.key_terms;
-          return `<p lang="${langOf(s.text)}">${richHTML(s.text, terms)}<span class="rl-src">¶${paragraphOf(port, e.start_utf8, e.paragraph)}</span></p>`;
+          const n = paragraphOf(port, e.start_utf8, e.paragraph);
+          return `<p lang="${langOf(s.text)}">${richHTML(s.text, terms)}${n === own ? "" : `<span class="rl-src">¶${n}</span>`}</p>`;
         })
         .join("")}</div>` +
       p.evidence
@@ -298,14 +320,19 @@ export function createMap(
         html += `<div class="rl-mn rl-mn-root" data-mi="${n.i}" tabindex="0" role="button"><span class="rl-t" lang="${langOf(port.title ?? "")}">${richHTML(port.title ?? "未命名资料")}</span><span class="rl-meta">批语 ${model.points.length} 条</span></div>`;
       else if (n.kind === "sec") {
         const more = hiddenIn(n);
-        html += `<div class="rl-mn rl-mn-sec rl-d${n.depth}" data-mi="${n.i}" data-sec="${escape(n.id)}" tabindex="0" role="button" aria-expanded="${!more}" lang="${langOf(n.title ?? "")}">${headingHTML(n.title ?? "")}${more ? `<span class="rl-more">余 ${more} 条</span>` : ""}</div>`;
+        html +=
+          `<div class="rl-mn rl-mn-sec rl-d${n.depth}" data-mi="${n.i}" data-sec="${escape(n.id)}" tabindex="0" role="button" aria-expanded="${!more}" lang="${langOf(n.title ?? "")}">${headingHTML(n.title ?? "")}${more ? `<span class="rl-more">余 ${more} 段</span>` : ""}` +
+          (n.label
+            ? `<span class="rl-sl" lang="${langOf(n.label)}">${escape(n.label)}</span>`
+            : "") +
+          `</div>`;
       } else {
         const p = n.point!;
         const label = pointLabel(p, mode);
         html +=
           `<div class="rl-mn rl-mn-leaf${p.primary ? " rl-main" : ""}${M.here === p.number ? " rl-here" : ""}${M.side === p.number ? " rl-sel" : ""}" data-mi="${n.i}" data-leaf="${p.number}" tabindex="0" role="button" ` +
-          `aria-label="批语 ${p.number}${p.kind ? `（${KIND_NAMES[p.kind]}）` : ""}：${escape(pointWords(p, mode).text)}">` +
-          `<span class="rl-no">${p.number}</span><span class="rl-t" lang="${langOf(label)}">${escape(label)}</span>` +
+          `aria-label="¶${paragraphNo(model, p.number)}${p.kind ? `（${KIND_NAMES[p.kind]}）` : ""}：${escape(pointWords(p, mode).text)}">` +
+          `<span class="rl-no">¶${paragraphNo(model, p.number)}</span><span class="rl-t" lang="${langOf(label)}">${escape(label)}</span>` +
           (hasFigure(p) ? '<span class="rl-hasfig">图</span>' : "") +
           (p.kind ? `<span class="rl-kind">${KIND_NAMES[p.kind]}</span>` : "") +
           `</div>`;
@@ -322,6 +349,8 @@ export function createMap(
       for (const n of els) {
         n.w = n.el!.offsetWidth;
         n.h = n.el!.offsetHeight;
+        const label = n.el!.querySelector<HTMLElement>(":scope > .rl-sl");
+        n.b = label ? label.offsetTop + label.offsetHeight : n.h;
       }
       const GAP = Math.round(52 * mz),
         colW: number[] = [];
@@ -354,7 +383,7 @@ export function createMap(
         const kids = shownKids(n);
         if (!kids.length) {
           n.y = y;
-          return n.h;
+          return n.b;
         }
         let cy = y;
         kids.forEach((k, i) => {
@@ -370,7 +399,7 @@ export function createMap(
           n.y = y;
           cy += dy;
         }
-        return Math.max(cy, n.y + n.h) - y;
+        return Math.max(cy, n.y + n.b) - y;
       };
       return { W: x - GAP, H: put(root, 0) };
     };

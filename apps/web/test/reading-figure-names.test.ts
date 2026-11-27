@@ -14,9 +14,13 @@ const point = (
   relations: { id: string; kind: "figure" | "table" }[],
 ) => ({
   number,
+  unit_id: `p${number}`,
+  paragraph: number + 1,
+  section_id: null,
   primary: true,
   kind: "result",
   statement: `Note ${number}.`,
+  reason: null,
   label: null,
   key_terms: [],
   translation: null,
@@ -52,7 +56,14 @@ const model = {
   points,
   primary: points,
   byNumber: new Map(points.map((p) => [p.number, p])),
-  sections: [{ section_id: null, title: null, numbers: [1, 2] }],
+  sections: [
+    {
+      section_id: null,
+      title: null,
+      line: { section_id: null, title: null, statement: null, label: null },
+      numbers: [1, 2],
+    },
+  ],
   overview: {
     summary: { text: "Summary.", key_terms: [], translation: null },
     data: [],
@@ -73,6 +84,7 @@ const figure = (id: string, kind: "figure" | "table", lead: string) => ({
 const port = {
   title: null,
   section: () => null,
+  blocks: () => [],
   blockAt: () => undefined,
   figure: (id: string) =>
     id === "fig-8"

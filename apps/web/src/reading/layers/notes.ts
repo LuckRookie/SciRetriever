@@ -6,7 +6,6 @@ import {
   KIND_NAMES,
   langOf,
   markTerms,
-  numberHTML,
   pointWords,
   richHTML,
   type LayersModel,
@@ -15,14 +14,15 @@ import {
 import type { ReadLayersPoint } from "./read.js";
 
 /**
- * The notes on the full text (reading-experience 3.4, ADR 0070 section 3):
- * each sentence a note stands on is wrapped where it lies, its stressed
- * words set in the commentator's ink, the note's number at its end; the note
- * itself is written in the margin by the view.
+ * The notes on the full text (reading-experience 3.4, ADR 0070 section 3,
+ * ADR 0073 section 6): each sentence a note stands on is wrapped where it
+ * lies, its stressed words set in the commentator's ink; the note itself is
+ * written in the margin by the view, beside its paragraph, and is named by
+ * the paragraph's number in the left margin (no number at a sentence's end).
  *
  * The author's text is not changed: only elements are put around its text
- * nodes, and the number is drawn by CSS from an attribute, so what a reader
- * selects, copies or searches is the text as it was.
+ * nodes and attributes on its blocks, so what a reader selects, copies or
+ * searches is the text as it was.
  */
 const SIGNS =
   ".reading-block-source, .reading-doubt, .katex-mathml, .reading-margin-note-below, .rl-below";
@@ -43,6 +43,17 @@ const touched = (node: Node | null) => {
 };
 /** Takes the layers' elements out of the article; the text nodes join again. */
 export function clearNotes(article: HTMLElement): void {
+  // A paragraph's note and its main mark (ADR 0073) are attributes on its block.
+  const blocks = [
+    ...article.querySelectorAll<HTMLElement>("section[data-point]"),
+  ];
+  if (article.matches("section[data-point]")) blocks.push(article);
+  for (const block of blocks) {
+    delete block.dataset.point;
+    delete block.dataset.rlMain;
+    block.classList.remove("rl-lit");
+    if (!block.classList.length) block.removeAttribute("class");
+  }
   const parents = new Set<Node>();
   for (const el of article.querySelectorAll(".rl-kt, .rl-ev")) {
     const parent = el.parentNode;
@@ -157,17 +168,11 @@ function wrap(
     spans.push(span);
   }
   for (const span of spans) markTerms(span, terms);
-  const first = spans[0],
-    last = spans.at(-1);
+  const first = spans[0];
   if (first) {
     first.dataset.f = `ev:${p.number}:${i}`;
     first.dataset.startUtf8 = String(e.start_utf8);
     touched(first);
-  }
-  if (last) {
-    last.classList.add("rl-ev-end");
-    last.dataset.no = String(p.number);
-    if (p.primary) last.classList.add("rl-ring");
   }
   return spans;
 }
@@ -175,7 +180,7 @@ function wrap(
 /**
  * Marks one sentence of a note in a block of the full text, or in a copy of
  * one, as the reading shows it: the original's words, the translation's, or
- * both (the number at the original's end only).
+ * both (the place a change of layer moves from is the original's).
  */
 export function markSentence(
   block: HTMLElement,
@@ -200,30 +205,36 @@ export function markSentence(
       p.translation?.key_terms ?? [],
       SKIP_TRANSLATED,
     );
-    // 对照: both are marked; the number stands at the original's end only.
-    if (spans.length)
-      for (const span of more) {
-        span.classList.remove("rl-ev-end", "rl-ring");
-        delete span.dataset.no;
-        delete span.dataset.f;
-      }
+    // 对照: both are marked; a change of layer moves the original's.
+    if (spans.length) for (const span of more) delete span.dataset.f;
     else spans = more;
   }
   return spans;
 }
 
 /**
- * Wraps every sentence evidence in the text shown. A sentence that cannot be
- * found word for word (a formula written another way) is left unwrapped; its
- * note still stands beside its paragraph.
+ * Wraps every sentence evidence in the text shown, and names each note's
+ * paragraph: its block carries the note's number, a primary one a mark. A
+ * sentence that cannot be found word for word (a formula written another
+ * way) is left unwrapped; its note still stands beside its paragraph.
  */
 export function wrapNotes(
   model: LayersModel,
   port: LayersPort,
   mode: DocumentTextMode,
-): PlacedEvidence[] {
+  startOf: (p: ReadLayersPoint) => number | null,
+): { placed: PlacedEvidence[]; blocks: Map<number, HTMLElement> } {
   clearNotes(port.article);
   const placed: PlacedEvidence[] = [];
+  const blocks = new Map<number, HTMLElement>();
+  for (const p of model.points) {
+    const start = startOf(p);
+    const block = start === null ? undefined : port.blockAt(start);
+    if (!block || block.dataset.point) continue;
+    block.dataset.point = String(p.number);
+    if (p.primary) block.dataset.rlMain = "";
+    blocks.set(p.number, block);
+  }
   for (const p of model.points)
     p.evidence.forEach((e, i) => {
       if (e.kind !== "sentence") return;
@@ -237,14 +248,19 @@ export function wrapNotes(
           ) ?? null;
       const spans = block ? markSentence(block, p, i, e, mode) : [];
       placed.push({ point: p.number, index: i, spans, block });
+      if (block && !blocks.has(p.number)) blocks.set(p.number, block);
     });
-  return placed;
+  return { placed, blocks };
 }
 
-/** The margin of the full text: a note for each point, in the commentator's hand and ink. */
+/**
+ * The margin of the full text: a note for each paragraph, in the
+ * commentator's hand and ink: its kind (a filled ring before a primary
+ * one's), the note, its relations. Its number is its paragraph's, in the
+ * left margin.
+ */
 export function notesSide(
   model: LayersModel,
-  port: LayersPort,
   mode: DocumentTextMode,
   relations: (p: ReadLayersPoint) => string,
 ): string {
@@ -254,7 +270,7 @@ export function notesSide(
     const rel = relations(p);
     side +=
       `<aside class="rl-pi${p.primary ? " rl-main" : ""}" data-point="${p.number}"><div class="rl-pi-h">` +
-      numberHTML(p, "rl-pi-no", `no:${p.number}`) +
+      (p.primary ? '<span class="rl-dot" aria-hidden="true"></span>' : "") +
       (p.kind
         ? `<span class="rl-pi-kind" data-f="kind:${p.number}">${KIND_NAMES[p.kind]}</span>`
         : "") +
@@ -263,4 +279,29 @@ export function notesSide(
       `</aside>`;
   }
   return side;
+}
+
+/**
+ * A copy of a block of the full text as a reading shows it: the author's
+ * words without what the page and the layers put beside them; `mark` puts
+ * marks on the copy before the other reading's words are taken away.
+ */
+export function blockCopy(
+  block: HTMLElement,
+  mode: DocumentTextMode,
+  mark: (copy: HTMLElement) => void = () => {},
+): HTMLElement {
+  const copy = block.cloneNode(true) as HTMLElement;
+  clearNotes(copy);
+  for (const x of copy.querySelectorAll(
+    ".reading-block-source, .reading-doubt, .reading-margin-note-below, .reading-untranslated, .reading-translation-marks",
+  ))
+    x.remove();
+  mark(copy);
+  const translation = copy.querySelector(":scope > .reading-translation");
+  if (mode === "original") translation?.remove();
+  else if (mode === "translation" && translation)
+    for (const child of [...copy.children])
+      if (child !== translation) child.remove();
+  return copy;
 }

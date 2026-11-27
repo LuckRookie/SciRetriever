@@ -1,13 +1,15 @@
 import type { Page } from "playwright";
 
 /**
- * A paper with reading layers (technical 04 §10.7, ADR 0070) on served
- * replies, the way `stored-translation.ts` serves a stored translation:
- * `describe` says the layers' state, `document-layers` gives the overview and
- * the points with their evidence, and `document-translation` the paper's
- * translation. Evidence is found in the version's own text (which the reader
- * reads through `document-slice`), so its UTF-8 ranges are the version's.
- * The paper is synthetic: no real paper's text is in the repository.
+ * A paper with reading layers (technical 04 §10.7, ADR 0073: one note for
+ * every paragraph, one line for every section; layers file version 3) on
+ * served replies, the way `stored-translation.ts` serves a stored
+ * translation: `describe` says the layers' state, `document-layers` gives the
+ * overview and the notes with their evidence, and `document-translation` the
+ * paper's translation. Evidence is found in the version's own text (which the
+ * reader reads through `document-slice`), so its UTF-8 ranges are the
+ * version's. The paper is synthetic: no real paper's text is in the
+ * repository.
  */
 const P = (s: string) => s.replace(/\s+/gu, " ").trim();
 const PARAGRAPHS = {
@@ -17,6 +19,8 @@ const PARAGRAPHS = {
   a2: P(
     `The six salts share one anion and differ in the cation, which lets the cation's hydrogen bonding be compared directly. Crystal densities range from 1.71 to 1.86 g·cm⁻³. Denser salts are expected to release more energy per volume, but they are also more sensitive to impact. Whether density and stability can be raised together is the question this study asks.`,
   ),
+  /** Too short for a note (technical 04 §10.2): set as it is. */
+  b0: P(`All measurements were repeated three times.`),
   b1: P(
     `Thermogravimetric analysis showed a single sharp mass loss for four salts and two overlapping steps for the other two. The onset temperatures lie between 196 and 248 °C at a heating rate of 5 K·min⁻¹. The two salts with overlapping steps lose water first, which shows that their lattice holds solvent. After drying at 80 °C under vacuum the first step disappears.`,
   ),
@@ -30,28 +34,34 @@ const PARAGRAPHS = {
     `Hydrogen-bond networks, not density alone, decide the stability of these salts. A three-dimensional network raises the onset temperature by about 40 °C and lowers the impact sensitivity fivefold. The computed enthalpies overestimate the energy released, so the measured values should be used in further design. Long-term ageing was not studied and remains open.`,
   ),
 };
+type Body = keyof typeof PARAGRAPHS;
 const HEADINGS = [
   "1. Salts and their structures",
   "2. Thermal behaviour",
   "3. Conclusions",
 ] as const;
+type Heading = (typeof HEADINGS)[number];
+/** The paper in text order: each section's heading, then its paragraphs. */
+const ORDER: readonly (readonly [Heading, readonly Body[]])[] = [
+  [HEADINGS[0], ["a1", "a2"]],
+  [HEADINGS[1], ["b0", "b1", "b2", "b3"]],
+  [HEADINGS[2], ["c1"]],
+];
 /** The paper's text, as the test workspace is given it. */
-export const LAYERS_TEXT = [
-  `# ${HEADINGS[0]}`,
-  PARAGRAPHS.a1,
-  PARAGRAPHS.a2,
-  `# ${HEADINGS[1]}`,
-  PARAGRAPHS.b1,
-  PARAGRAPHS.b2,
-  PARAGRAPHS.b3,
-  `# ${HEADINGS[2]}`,
-  PARAGRAPHS.c1,
-].join("\n\n");
+export const LAYERS_TEXT = ORDER.flatMap(([heading, bodies]) => [
+  `# ${heading}`,
+  ...bodies.map((b) => PARAGRAPHS[b]),
+]).join("\n\n");
+/** The body paragraphs in text order. */
+export const LAYERS_PARAGRAPHS: readonly string[] = ORDER.flatMap(
+  ([, bodies]) => bodies.map((b) => PARAGRAPHS[b]),
+);
 const ZH: Record<string, string> = {
   [PARAGRAPHS.a1]:
     "富氮盐在大量 N–N 与 C–N 键中储存能量，它们的热行为决定了能否安全操作。此前的报道只测定了起始温度。本工作记录了六种三唑盐的完整分解曲线，并把放热量与计算值作了比较。这些盐由市售原料分两步制得。",
   [PARAGRAPHS.a2]:
     "六种盐的阴离子相同、阳离子不同，因此可以直接比较阳离子的氢键作用。晶体密度在 1.71 到 1.86 g·cm⁻³ 之间。密度较大的盐单位体积放出的能量预计更多，但对撞击也更敏感。密度与稳定性能否同时提高，正是本研究要回答的问题。",
+  [PARAGRAPHS.b0]: "所有测量都重复了三次。",
   [PARAGRAPHS.b1]:
     "热重分析显示，四种盐只有一个陡峭的失重台阶，另外两种有两个相互重叠的台阶。在 5 K·min⁻¹ 的升温速率下，起始温度在 196 到 248 °C 之间。有重叠台阶的两种盐先失去水分，说明它们的晶格中含有溶剂。在 80 °C 下真空干燥后，第一个台阶消失。",
   [PARAGRAPHS.b2]:
@@ -64,6 +74,33 @@ const ZH: Record<string, string> = {
   [HEADINGS[1]]: "2. 热行为",
   [HEADINGS[2]]: "3. 结论",
 };
+/** Each section's line (节旨) and its label. */
+export const LAYERS_SECTIONS: Record<
+  Heading,
+  { statement: string; zh: string; label: string; labelZh: string }
+> = {
+  [HEADINGS[0]]: {
+    statement:
+      "Six salts that differ only in the cation set up the question whether density and stability go together.",
+    zh: "只在阳离子上不同的六种盐，提出了密度与稳定性能否兼得的问题。",
+    label: "the question",
+    labelZh: "问题",
+  },
+  [HEADINGS[1]]: {
+    statement:
+      "The measurements show that the hydrogen-bond network, not density, sets the stability, and that the computed enthalpies run high.",
+    zh: "测量表明决定稳定性的是氢键网络而不是密度，且计算焓偏高。",
+    label: "hydrogen-bond network",
+    labelZh: "氢键网络",
+  },
+  [HEADINGS[2]]: {
+    statement:
+      "The paper concludes that networks decide stability and that measured enthalpies should replace computed ones.",
+    zh: "全文的结论是网络决定稳定性，设计应以实测焓代替计算焓。",
+    label: "networks decide",
+    labelZh: "网络决定",
+  },
+};
 type Kind =
   | "context"
   | "question"
@@ -73,26 +110,36 @@ type Kind =
   | "claim"
   | "limit";
 interface FixturePoint {
-  section: (typeof HEADINGS)[number];
+  /** The paragraph it annotates. */
+  unit: Body;
+  section: Heading;
   statement: string;
   zh: string;
+  reason: string;
+  reasonZh: string;
   label: string;
   labelZh: string;
   kind: Kind;
   primary?: boolean;
   terms: readonly (readonly [string, string])[];
-  evidence: readonly { text: string; zh: string }[];
+  /** Its sentences, with their numbers in the paragraph (technical 04 §3.5). */
+  evidence: readonly { text: string; zh: string; n: number }[];
   /** A part of the first evidence the overview shows (primary points). */
   basis?: string;
   relations?: readonly { word: string; points: readonly number[] }[];
 }
+/** One note for every paragraph long enough for one (all but `b0`). */
 export const LAYERS_POINTS: readonly FixturePoint[] = [
   {
+    unit: "a1",
     section: HEADINGS[0],
     statement:
       "Six triazole salts are compared over their whole decomposition curve, not only the onset temperature.",
     zh: "六种三唑盐按完整分解曲线比较，而不只看起始温度。",
-    label: "Whole decomposition curves",
+    reason:
+      "The onset alone says when a salt starts to break down, not how much heat it gives.",
+    reasonZh: "只看起始温度，说不出一种盐放出多少热。",
+    label: "decomposition curve",
     labelZh: "完整分解曲线",
     kind: "method",
     terms: [
@@ -103,19 +150,24 @@ export const LAYERS_POINTS: readonly FixturePoint[] = [
       {
         text: "Earlier reports measured only the onset temperature.",
         zh: "此前的报道只测定了起始温度。",
+        n: 2,
       },
       {
         text: "In this work we record the whole decomposition curve of six triazole salts and compare the heat released with the computed values.",
         zh: "本工作记录了六种三唑盐的完整分解曲线，并把放热量与计算值作了比较。",
+        n: 3,
       },
     ],
   },
   {
+    unit: "a2",
     section: HEADINGS[0],
     statement:
       "The study asks whether density and stability can be raised together.",
     zh: "本研究要回答：密度与稳定性能否同时提高。",
-    label: "Density versus stability",
+    reason: "Denser salts release more energy but are also more sensitive.",
+    reasonZh: "密度大的盐放能多，却也更敏感。",
+    label: "density and stability",
     labelZh: "密度与稳定性",
     kind: "question",
     primary: true,
@@ -127,16 +179,20 @@ export const LAYERS_POINTS: readonly FixturePoint[] = [
       {
         text: "Whether density and stability can be raised together is the question this study asks.",
         zh: "密度与稳定性能否同时提高，正是本研究要回答的问题。",
+        n: 4,
       },
     ],
     basis: "density and stability can be raised together",
   },
   {
+    unit: "b1",
     section: HEADINGS[1],
     statement:
       "Two salts hold solvent in their lattice and lose water before they decompose.",
     zh: "有两种盐的晶格含溶剂，分解之前先失水。",
-    label: "Solvent in the lattice",
+    reason: "Their first step goes away once they are dried under vacuum.",
+    reasonZh: "真空干燥后，它们的第一个台阶就消失了。",
+    label: "solvent",
     labelZh: "晶格含溶剂",
     kind: "result",
     terms: [["solvent", "溶剂"]],
@@ -144,16 +200,20 @@ export const LAYERS_POINTS: readonly FixturePoint[] = [
       {
         text: "The two salts with overlapping steps lose water first, which shows that their lattice holds solvent.",
         zh: "有重叠台阶的两种盐先失去水分，说明它们的晶格中含有溶剂。",
+        n: 3,
       },
     ],
   },
   {
+    unit: "b2",
     section: HEADINGS[1],
     statement:
       "Measured enthalpies fall 12 % below the computed ones, more so for larger cations.",
     zh: "实测焓比计算值低 12 %，阳离子越大差得越多。",
-    label: "Enthalpy below computed",
-    labelZh: "实测焓低于计算",
+    reason: "A larger cation stores less of its computed energy in practice.",
+    reasonZh: "阳离子越大，实际储存的能量越少于计算值。",
+    label: "below the computed",
+    labelZh: "实测焓",
     kind: "result",
     primary: true,
     terms: [
@@ -164,22 +224,28 @@ export const LAYERS_POINTS: readonly FixturePoint[] = [
       {
         text: "The measured values are on average 12 % below the computed ones, and the gap grows with the cation's size.",
         zh: "实测值平均比计算值低 12 %，且差距随阳离子增大而增大。",
+        n: 2,
       },
       // Mostly formula: found by its TeX, not by KaTeX's glyphs.
       {
         text: "Kissinger analysis gave $E_{\\mathrm{a}} = 138$ to $171\\,\\mathrm{kJ\\,mol^{-1}}$ at four heating rates.",
         zh: "用四种升温速率作 Kissinger 分析，得到 $E_{\\mathrm{a}} = 138$ 到 $171\\,\\mathrm{kJ\\,mol^{-1}}$。",
+        n: 4,
       },
     ],
     basis: "on average 12 % below the computed ones",
     relations: [{ word: "based_on", points: [1] }],
   },
   {
+    unit: "b3",
     section: HEADINGS[1],
     statement:
       "The two most stable salts both have a three-dimensional hydrogen-bond network.",
     zh: "最稳定的两种盐都有三维氢键网络。",
-    label: "3D hydrogen-bond network",
+    reason:
+      "Salts with layered networks are more sensitive although their densities are alike.",
+    reasonZh: "层状网络的盐密度相近，却更敏感。",
+    label: "hydrogen-bond network",
     labelZh: "三维氢键网络",
     kind: "result",
     primary: true,
@@ -188,22 +254,28 @@ export const LAYERS_POINTS: readonly FixturePoint[] = [
       {
         text: "The two most stable salts both form a three-dimensional hydrogen-bond network.",
         zh: "最稳定的两种盐都形成三维氢键网络。",
+        n: 2,
       },
       {
         text: "Salts with layered networks are markedly more sensitive, although their densities are similar.",
         zh: "具有层状网络的盐明显更敏感，尽管它们的密度相近。",
+        n: 4,
       },
     ],
     basis: "both form a three-dimensional hydrogen-bond network",
     relations: [{ word: "follows", points: [3] }],
   },
   {
+    unit: "c1",
     section: HEADINGS[2],
     statement:
       "Hydrogen-bond networks, not density alone, decide the stability of these salts.",
     zh: "决定这些盐稳定性的是氢键网络，而不仅是密度。",
-    label: "Networks decide stability",
-    labelZh: "氢键网络决定稳定性",
+    reason:
+      "A three-dimensional network raises the onset by about 40 °C; long-term ageing is left open.",
+    reasonZh: "三维网络使起始温度升高约 40 °C；长期老化仍未研究。",
+    label: "Hydrogen-bond networks",
+    labelZh: "氢键网络",
     kind: "claim",
     primary: true,
     terms: [
@@ -214,26 +286,17 @@ export const LAYERS_POINTS: readonly FixturePoint[] = [
       {
         text: "Hydrogen-bond networks, not density alone, decide the stability of these salts.",
         zh: "决定这些盐稳定性的是氢键网络，而不仅是密度。",
+        n: 1,
+      },
+      {
+        text: "Long-term ageing was not studied and remains open.",
+        zh: "长期老化没有研究，仍是未决问题。",
+        n: 4,
       },
     ],
     relations: [
       { word: "sums_up", points: [4, 5] },
       { word: "explains", points: [2] },
-    ],
-  },
-  {
-    section: HEADINGS[2],
-    statement: "Long-term ageing was not studied.",
-    zh: "长期老化没有研究。",
-    label: "Ageing not studied",
-    labelZh: "未研究长期老化",
-    kind: "limit",
-    terms: [["ageing", "老化"]],
-    evidence: [
-      {
-        text: "Long-term ageing was not studied and remains open.",
-        zh: "长期老化没有研究，仍是未决问题。",
-      },
     ],
   },
 ];
@@ -415,7 +478,7 @@ export async function storedLayers(page: Page, options: LayersOptions = {}) {
       // Asked before the text is read: the units follow the paper's order.
       for (let i = 0; i < 200 && !seen.segments.size; i++)
         await new Promise((done) => setTimeout(done, 50));
-      const paragraphs = Object.values(PARAGRAPHS);
+      const paragraphs = LAYERS_PARAGRAPHS;
       let heading = 0,
         text = 0;
       const list = [...seen.segments.values()]
@@ -558,7 +621,7 @@ export async function storedLayers(page: Page, options: LayersOptions = {}) {
       /** The fields a translated reading adds to an item. */
       const inReading = <T>(translation: T) =>
         tr ? { translated: true } : both ? { translation } : {};
-      const sentence = (e: { text: string; zh: string }) => {
+      const sentence = (e: { text: string; zh: string; n?: number }) => {
         const at = where(e.text);
         const s = segmentAt(at.start);
         return {
@@ -568,15 +631,29 @@ export async function storedLayers(page: Page, options: LayersOptions = {}) {
           start_utf8: at.start,
           end_utf8: at.end,
           paragraph: paragraph(s),
-          sentences: [1],
+          sentences: [e.n ?? 1],
           text: e.text,
+        };
+      };
+      /** A section's line (节旨) as the reading gives it. */
+      const line = (heading: Heading) => {
+        const section = sectionOf(heading);
+        const l = LAYERS_SECTIONS[heading];
+        return {
+          section_id: section?.section_id ?? null,
+          title: section?.title ?? null,
+          statement: tr ? l.zh : l.statement,
+          label: tr ? l.labelZh : l.label,
+          ...inReading({ statement: l.zh, label: l.labelZh }),
         };
       };
       const head = (p: FixturePoint, i: number) => {
         const section = sectionOf(p.section);
         return {
           number: i + 1,
+          ...unit(PARAGRAPHS[p.unit]),
           statement: tr ? p.zh : p.statement,
+          reason: tr ? p.reasonZh : p.reason,
           key_terms: terms(p.terms, tr),
           section_id: section?.section_id ?? null,
           section_title: section?.title ?? null,
@@ -585,10 +662,16 @@ export async function storedLayers(page: Page, options: LayersOptions = {}) {
           kind: p.kind,
           relations: (p.relations ?? []).map((r) => ({
             word: r.word,
-            targets: r.points.map((number) => ({ kind: "point", number })),
+            targets: r.points.map((number) => ({
+              kind: "point",
+              number,
+              paragraph: unit(PARAGRAPHS[LAYERS_POINTS[number - 1]!.unit])
+                .paragraph,
+            })),
           })),
           ...inReading({
             statement: p.zh,
+            reason: p.reasonZh,
             key_terms: terms(p.terms, true),
             label: p.labelZh,
           }),
@@ -601,7 +684,7 @@ export async function storedLayers(page: Page, options: LayersOptions = {}) {
         state: "complete",
         machine_written: true,
         model: "fixture-model",
-        prompt_version: "reading-layers-v2",
+        prompt_version: "reading-layers-v3",
         format: "json",
         ...(mode === "original"
           ? {}
@@ -612,22 +695,13 @@ export async function storedLayers(page: Page, options: LayersOptions = {}) {
             }),
       };
       if (request.part === "overview") {
-        const sections: {
-          section_id: string | null;
-          title: string | null;
-          points: unknown[];
-        }[] = [];
-        LAYERS_POINTS.forEach((p, i) => {
-          const h = head(p, i);
-          const last = sections.at(-1);
-          if (last && last.section_id === h.section_id) last.points.push(h);
-          else
-            sections.push({
-              section_id: h.section_id,
-              title: h.section_title,
-              points: [h],
-            });
-        });
+        // Every section in order, its line and all its notes.
+        const sections = HEADINGS.map((heading) => ({
+          ...line(heading),
+          points: LAYERS_POINTS.flatMap((p, i) =>
+            p.section === heading ? [head(p, i)] : [],
+          ),
+        }));
         return route.fulfill({
           json: {
             protocol_version: 1,
@@ -724,6 +798,11 @@ export async function storedLayers(page: Page, options: LayersOptions = {}) {
           result: {
             ...common,
             points: points.slice(from, from + limit),
+            sections: [
+              ...new Set(
+                LAYERS_POINTS.slice(from, from + limit).map((p) => p.section),
+              ),
+            ].map(line),
             evidence: [],
             total: points.length,
             next_cursor:

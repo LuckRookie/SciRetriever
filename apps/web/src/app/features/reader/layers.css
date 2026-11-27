@@ -2,9 +2,10 @@
   /*
    * The annotated copy (reading-experience 3, ADR 0070). What the author
    * printed is in ink, inside the text block. What the machine adds is in the
-   * commentator's second ink (朱) beside it: notes in the margin, a stroke on
-   * the column rule beside the sentence a note stands on, the words it
-   * stresses, the note's number at the sentence's end. Where the machine's
+   * commentator's second ink (朱) beside it: a note in the margin beside
+   * each paragraph, a stroke on the column rule beside the sentence a note
+   * stands on, the words it stresses; a note is named by its paragraph's
+   * number (ADR 0073), a primary one's in a filled ring. Where the machine's
    * words are the text themselves (脉络, 概览, 导图) they are in ink, in the
    * commentator's hand. Nothing says what it is by a label.
    */
@@ -88,38 +89,44 @@
     font-weight: inherit;
     text-decoration: none;
   }
-  .rl-ev-end::after,
+  /* A note's name is its paragraph's number, “¶41”, as the left margin
+     writes it; a primary paragraph's stands in a filled ring of 朱. */
   .rl-nm,
-  .rl-pi-no,
   .rl-gang-no {
     box-sizing: border-box;
     display: inline-block;
-    min-width: 1.5em;
-    height: 1.5em;
-    padding: 0 0.18em;
-    border: 1px solid var(--zhu);
-    border-radius: 0.75em;
-    color: var(--zhu);
-    font: 600 12px / calc(1.5em - 2px) var(--sans);
+    color: var(--fg3);
+    font: 400 12px / 1.45 var(--sans);
     font-variant-numeric: tabular-nums;
     letter-spacing: 0;
     text-align: center;
     text-indent: 0;
+    white-space: nowrap;
   }
-  .rl-ev-end::after {
-    content: attr(data-no);
-    margin: 0 0.14em 0 0.2em;
-    font-size: 0.6em;
-    vertical-align: 0.62em;
-    font-weight: 600;
-    font-style: normal;
-  }
-  .rl-ring.rl-ev-end::after,
   .rl-nm.rl-ring,
-  .rl-pi-no.rl-ring,
-  .rl-gang-no.rl-ring {
+  .rl-gang-no.rl-ring,
+  .react-reader
+    .reader-view[data-view="doc"]
+    .reading-article
+    section[data-paragraph][data-rl-main]::before {
+    padding: 0 0.5em;
+    border-radius: 0.8em;
     background: var(--zhu);
     color: var(--reader-sheet);
+    font-weight: 600;
+    line-height: 1.5;
+  }
+  .react-reader
+    .reader-view[data-view="doc"]
+    .reading-article
+    section[data-paragraph][data-rl-main]::before {
+    top: calc(0.45em - 0.5px);
+  }
+  /* 全文: a note and its paragraph answer the pointer together. */
+  .reading-article > section[data-point].rl-lit {
+    background: color-mix(in srgb, var(--zhu) 4.5%, transparent);
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--zhu) 4.5%, transparent);
+    border-radius: 2px;
   }
   .rl-ev.rl-lit {
     background: color-mix(in srgb, var(--zhu) 9%, transparent);
@@ -153,6 +160,14 @@
   }
   .rl-pi-kind {
     font-weight: 500;
+  }
+  /* Before a primary paragraph's note: a filled ring of 朱. */
+  .rl-dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--zhu);
   }
   .rl-pi-t {
     margin: 2px 0 0;
@@ -294,6 +309,9 @@
     font-size: 0.9em;
     line-height: 1.5;
   }
+  .rl-col h3.rl-h + .rl-sline {
+    margin-top: 0.35em;
+  }
   .rl-col .rl-h:lang(zh-Hans) {
     font-weight: 700;
     letter-spacing: 0.08em;
@@ -313,8 +331,61 @@
   }
   .rl-gang > .rl-gang-no {
     position: absolute;
-    left: -42px;
-    top: 0.5em;
+    right: calc(100% + 14px);
+    top: 0.62em;
+  }
+  .rl-gang > .rl-gang-no.rl-ring {
+    top: 0.58em;
+  }
+  /* 节旨: under its heading, in the commentator's hand, the text's size. */
+  .rl-sline {
+    margin: -0.25em 0 1.1em;
+    font: 400 1em / 1.75 var(--kai);
+    color: var(--fg);
+    text-wrap: pretty;
+  }
+  .rl-sline:lang(en) {
+    font-size: 0.94em;
+    line-height: 1.55;
+  }
+  .rl-col > .rl-title-end + .rl-sline {
+    margin-top: 0;
+  }
+  /* 理由: after the note in the same paragraph, lighter, the text's size. */
+  .rl-reason {
+    margin-left: 0.35em;
+    font-size: var(--reading-font-size, 20px);
+    color: var(--fg2);
+  }
+  .rl-reason:lang(en) {
+    font-size: calc(var(--reading-font-size, 20px) * 0.92);
+  }
+  /* A paragraph without a note (a label, a very short one), as it is. */
+  .rl-plain {
+    position: relative;
+    margin: 1.2em 0 0;
+    font-size: 0.92em;
+    line-height: 1.7;
+    color: var(--fg);
+    overflow-wrap: break-word;
+  }
+  .rl-plain > .rl-pn {
+    right: calc(100% + 14px);
+  }
+  .rl-plain-t :is(p, ul, ol) {
+    margin: 0;
+    text-indent: 0;
+    font-size: inherit;
+  }
+  .rl-plain-t > * + * {
+    margin-top: 0.15em;
+  }
+  .rl-plain-t .reading-translation {
+    color: var(--fg2);
+  }
+  .rl-plain:has(:lang(zh)),
+  .rl-plain:has(.reading-translation) {
+    line-height: 1.85;
   }
   .rl-gang-t {
     margin: 0;
@@ -378,6 +449,15 @@
     content: "…";
     color: var(--fg3);
   }
+  /* Between two sentences that do not follow one another: a faint “…”. */
+  .rl-mu-s.rl-gap::before {
+    content: "…";
+    display: block;
+    margin: -0.15em 0 0.05em;
+    line-height: 1.2;
+    color: var(--fg3);
+    letter-spacing: 0.15em;
+  }
   /* 概览, 脉络: a click opens in place (reading-experience 3.2, 3.3). A
      sentence becomes its whole paragraph: what the ellipses held is filled
      in, in a lighter ink, the sentence itself in ink with its number. */
@@ -413,9 +493,6 @@
   .rl-para .rl-flying,
   .rl-para .rl-flying * {
     color: transparent !important;
-  }
-  .rl-para .rl-flying.rl-ev-end::after {
-    visibility: hidden;
   }
   .rl-para-t :is(p, ul, ol, h1, h2, h3, h4, h5, h6) {
     margin: 0;
@@ -594,10 +671,32 @@
     border-color: var(--zhu);
   }
   .rl-osec .rl-gang {
-    margin-top: 1.15em;
+    margin-top: 0.75em;
   }
-  .rl-osec .rl-onote + .rl-gang {
-    margin-top: 0.8em;
+  /* 纲目: a section's number and title, then its line; its primary notes under it. */
+  .rl-osl {
+    margin: 1.5em 0 0;
+    font: 400 1em / 1.75 var(--kai);
+    color: var(--fg);
+    text-wrap: pretty;
+  }
+  .rl-osl:lang(en),
+  .rl-osl:has(> .rl-osl-t:lang(en)) {
+    line-height: 1.55;
+  }
+  .rl-osec .rl-onote + .rl-osl {
+    margin-top: 0.9em;
+  }
+  .rl-osl-h {
+    margin-right: 0.7em;
+    font: 650 0.86em / 1 var(--serif);
+    letter-spacing: 0.02em;
+  }
+  .rl-osl-h .rl-hno {
+    margin-right: 0.4em;
+  }
+  .rl-osl-t:lang(en) {
+    font-size: 0.94em;
   }
   .rl-ol {
     margin: 0;
@@ -705,7 +804,7 @@
   }
   .rl-oplate figcaption .rl-gang-no {
     margin-right: 6px;
-    font-size: 10.5px;
+    font-size: 11px;
     vertical-align: 1px;
   }
   .rl-oplate.rl-lit img {
@@ -882,6 +981,20 @@
     border-bottom-color: var(--line3);
     font-size: calc(14.5px * var(--mz));
   }
+  /* Under a section's rule: its line's label, small and faint. */
+  .rl-mn-sec .rl-sl {
+    position: absolute;
+    left: calc(2px * var(--mz));
+    top: calc(100% + 3px * var(--mz));
+    width: max-content;
+    max-width: calc(180px * var(--mz));
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font: 400 calc(12px * var(--mz)) / 1.35 var(--kai);
+    color: var(--fg3);
+    white-space: nowrap;
+    letter-spacing: 0.02em;
+  }
   .rl-mn-sec .rl-more {
     position: absolute;
     left: calc(100% + 8px * var(--mz));
@@ -913,19 +1026,17 @@
   .rl-mn-leaf .rl-no {
     flex: none;
     box-sizing: border-box;
-    min-width: 1.5em;
-    height: 1.5em;
-    padding: 0 0.18em;
-    border: 1px solid var(--zhu);
-    border-radius: 0.75em;
-    color: var(--zhu);
-    font: 600 calc(10.5px * var(--mz)) / calc(1.5em - 2px) var(--sans);
+    padding: 0 0.45em;
+    color: var(--fg3);
+    font: 400 calc(11.5px * var(--mz)) / 1.5 var(--sans);
     text-align: center;
     font-variant-numeric: tabular-nums;
   }
   .rl-mn-leaf.rl-main .rl-no {
+    border-radius: 0.8em;
     background: var(--zhu);
     color: var(--reader-sheet);
+    font-weight: 600;
   }
   .rl-mn-leaf .rl-kind {
     flex: none;
@@ -985,6 +1096,14 @@
   .rl-ms-t:lang(en) {
     font-size: 18px;
     line-height: 1.5;
+  }
+  .rl-ms-t .rl-reason {
+    font-size: 15.5px;
+  }
+  .rl-ms-sl {
+    margin: 6px 0 0;
+    font: 400 14px / 1.65 var(--kai);
+    color: var(--fg2);
   }
   .rl-ms-x {
     margin: 4px 0 0;
@@ -1057,14 +1176,15 @@
   }
   .rl-ms-list li {
     display: grid;
-    grid-template-columns: 22px minmax(0, 1fr);
+    grid-template-columns: 34px minmax(0, 1fr);
     gap: 8px;
     align-items: baseline;
     font: 400 16px / 1.6 var(--kai);
     cursor: pointer;
   }
   .rl-ms-list .rl-gang-no {
-    font-size: 10.5px;
+    justify-self: end;
+    font-size: 11px;
   }
   .rl-ms-hint {
     margin: 16px 0 0;
@@ -1115,9 +1235,6 @@
   .rl-away,
   .rl-away * {
     color: transparent !important;
-  }
-  .rl-away.rl-ev-end::after {
-    visibility: hidden;
   }
   .rl-ghost-p,
   .rl-ghost-p * {

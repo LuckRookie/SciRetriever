@@ -15,14 +15,20 @@ import {
   headingHTML,
   langOf,
   numberHTML,
+  paragraphNo,
   pointWords,
+  reasonWords,
   richHTML,
+  sectionLine,
   sentenceWords,
   words,
   type LayerFigure,
   type LayersModel,
+  type LayersModelSection,
   type LayersPort,
 } from "./model.js";
+import { blockCopy } from "./notes.js";
+import type { ReadLayersPoint } from "./read.js";
 
 /**
  * The two leaves that are not the full text (reading-experience 3.2, 3.3):
@@ -48,7 +54,9 @@ export function paragraphOf(
     start === null ? undefined : port.blockAt(start)?.dataset.paragraph;
   return shown ? Number(shown) : fallback;
 }
+/** A note's relations: to another paragraph's note by its number (“承接 ¶41”), to a figure by its name. */
 export const relationsHTML = (
+  model: LayersModel,
   p: LayersReadPoint,
   port: LayersPort,
   mode: DocumentTextMode,
@@ -67,7 +75,7 @@ export const relationsHTML = (
         `<span>${RELATION_NAMES[r.word]} ${r.targets
           .map((t) =>
             t.kind === "point"
-              ? `<a data-point="${t.number}">${t.number}</a>`
+              ? `<a data-point="${t.number}">¶${paragraphNo(model, t.number, t.paragraph)}</a>`
               : `<a data-fig="${escape(t.segment_id)}">${escape(
                   figureName(port.figure(t.segment_id), t.block_kind, mode),
                 )}</a>`,
@@ -83,21 +91,45 @@ export const rulesHTML = () =>
   `<div class="rl-rules" data-f="rules"><h3>凡例</h3><dl>` +
   `<dt class="rl-ink">宋体</dt><dd>作者原文</dd>` +
   `<dt>楷体</dt><dd>机器所写；批在页边时用朱色</dd>` +
-  `<dt class="rl-zhu"><span class="rl-nm">7</span><span class="rl-nm rl-ring">8</span></dt><dd>批语的编号；实心的是全篇主干</dd>` +
+  `<dt class="rl-zhu"><span class="rl-nm rl-ring">¶8</span></dt><dd>实心朱圈里的段号是全篇主干</dd>` +
   `<dt><b class="rl-kt">朱字</b></dt><dd>被批句子里的要紧字词</dd>` +
   `<dt class="rl-lan">蓝字</dt><dd>读者自己的批注</dd></dl></div>`;
 export const endHTML = (model: LayersModel, figures: number) =>
   `<div class="rl-end"><p>批语 ${model.points.length} 条${figures ? `\u3000图表 ${figures} 件` : ""}</p></div>`;
-const gangHTML = (p: LayersReadPoint, mode: DocumentTextMode, body: string) => {
+/**
+ * A note as a 纲 (ADR 0073): its paragraph's number in the left margin (in a
+ * filled ring for a primary one), the note, and in 脉络 its reason after it
+ * in the same paragraph; its 目 under it.
+ */
+const gangHTML = (
+  model: LayersModel,
+  p: LayersReadPoint,
+  mode: DocumentTextMode,
+  body: string,
+  withReason = true,
+) => {
   const w = pointWords(p, mode);
+  const reason = withReason ? reasonWords(p, mode) : null;
   return (
     `<section class="rl-gang${p.primary ? " rl-main" : ""}" data-point="${p.number}">` +
-    numberHTML(p, "rl-gang-no", `no:${p.number}`) +
-    `<p class="rl-gang-t" data-f="note:${p.number}" lang="${langOf(w.text)}">${richHTML(w.text, w.terms)}</p>` +
-    `<div class="rl-mu">${body}</div></section>`
+    numberHTML(
+      p,
+      paragraphNo(model, p.number),
+      "rl-gang-no",
+      `no:${p.number}`,
+    ) +
+    `<p class="rl-gang-t" data-f="note:${p.number}" lang="${langOf(w.text)}">${richHTML(w.text, w.terms)}` +
+    (reason
+      ? `<span class="rl-reason" lang="${langOf(reason)}">${richHTML(reason)}</span>`
+      : "") +
+    `</p><div class="rl-mu">${body}</div></section>`
   );
 };
-/** A sentence evidence as a 目: the author's words, its paragraph in the left margin. */
+/**
+ * A sentence evidence as a 目: the author's words. Its paragraph's number
+ * stands in the left margin when it is not the note's own; `gap` puts a
+ * faint “…” before it (not the sentence after the one before).
+ */
 function sentenceHTML(
   e: Extract<LayersReadEvidence | LayersReadBasis, { kind: "sentence" }>,
   key: string,
@@ -105,6 +137,8 @@ function sentenceHTML(
   port: LayersPort,
   mode: DocumentTextMode,
   cut = false,
+  own: number | null = null,
+  gap = false,
 ): string {
   const n = paragraphOf(port, e.start_utf8, e.paragraph);
   const original = `<span lang="${langOf(e.text)}">${richHTML(e.text, terms.original)}</span>`;
@@ -122,10 +156,18 @@ function sentenceHTML(
         ? `${original}<span class="rl-mu-tr" lang="${langOf(t.text)}">${richHTML(t.text, terms.translation)}</span>`
         : original;
   return (
-    `<p class="rl-mu-s${cut ? " rl-cut" : ""}" data-ev="${key}" data-f="ev:${key}" ` +
-    `data-start="${e.start_utf8}"><span class="rl-pn"><i>¶${n}</i></span>${body}</p>`
+    `<p class="rl-mu-s${cut ? " rl-cut" : ""}${gap ? " rl-gap" : ""}" data-ev="${key}" data-f="ev:${key}" ` +
+    `data-start="${e.start_utf8}">${n === own ? "" : `<span class="rl-pn"><i>¶${n}</i></span>`}${body}</p>`
   );
 }
+/** Whether a sentence evidence follows the one before it in its paragraph. */
+const follows = (
+  before: LayersReadEvidence | undefined,
+  e: Extract<LayersReadEvidence, { kind: "sentence" }>,
+) =>
+  before?.kind === "sentence" &&
+  before.unit_id === e.unit_id &&
+  (e.sentences[0] ?? 0) === (before.sentences.at(-1) ?? -1) + 1;
 /** A figure a note stands on: a plate under the sentences; a table as its name and one line. */
 function figureHTML(
   f: LayerFigure | null,
@@ -225,62 +267,222 @@ const termsOf = (p: LayersReadPoint) => ({
 });
 
 /**
- * 脉络: every note as a 纲, the author's sentences it stands on as its 目.
- * Its figures stand in the margin beside it, in place of their names among
- * its relations (“见 图 8”); a sheet without a margin sets them under the
- * sentences. Each figure once, beside the first note that names it.
+ * What 脉络 sets, in the full text's order (ADR 0073): a section's heading
+ * with its line, a paragraph's note, or a paragraph without one, set as it
+ * is.
+ */
+export type OutlineItem =
+  | { readonly kind: "heading"; readonly section: LayersModelSection }
+  | { readonly kind: "line"; readonly section: LayersModelSection }
+  | { readonly kind: "note"; readonly number: number }
+  | {
+      readonly kind: "plain";
+      readonly start: number;
+      readonly paragraph: number;
+      readonly html: string;
+    };
+/** A block's own element (the page may put a control before it). */
+const own = (b: HTMLElement, tags: string) =>
+  b.querySelector(`:scope > :is(${tags})`);
+/** A block that is a paragraph of the author's text: a paragraph, a list, a caption. */
+const isParagraph = (b: HTMLElement) =>
+  !b.matches(".reading-article-info, .reading-footnote") &&
+  (b.dataset.paragraph !== undefined ||
+    !!own(b, "ul, ol") ||
+    b.matches(".reading-figure-caption"));
+/**
+ * Walks the full text's blocks (reading-experience 3.3): each listed
+ * section's heading, each note at its paragraph, and the paragraphs without
+ * a note in the sections listed. A section the layers do not list (no note,
+ * no line: the references, say) is left out with its paragraphs. Without
+ * the blocks, the sections and their notes in order.
+ */
+export function outlineItems(
+  model: LayersModel,
+  port: LayersPort,
+  mode: DocumentTextMode,
+  startOf: (p: ReadLayersPoint) => number | null,
+): OutlineItem[] {
+  const blocks = port.blocks?.() ?? [];
+  const items: { item: OutlineItem; section: string | null }[] = [];
+  const untitled = model.sections.find((s) => s.title === null);
+  if (untitled && sectionLine(untitled.line, mode))
+    items.push({ item: { kind: "line", section: untitled }, section: null });
+  if (!blocks.length) {
+    for (const s of model.sections) {
+      if (s.title !== null)
+        items.push({ item: { kind: "heading", section: s }, section: null });
+      for (const number of s.numbers)
+        items.push({ item: { kind: "note", number }, section: null });
+    }
+    return items.map((x) => x.item);
+  }
+  const headings = new Map<HTMLElement, LayersModelSection>();
+  for (const s of model.sections) {
+    const info = s.section_id && s.title !== null && port.section(s.section_id);
+    const block = info ? port.blockAt(info.start) : undefined;
+    if (block) headings.set(block, s);
+  }
+  const notes = new Map<HTMLElement, number[]>();
+  const placed = new Set<number>();
+  for (const p of model.points) {
+    const start = startOf(p);
+    const block = start === null ? undefined : port.blockAt(start);
+    if (!block) continue;
+    notes.set(block, [...(notes.get(block) ?? []), p.number]);
+    placed.add(p.number);
+  }
+  // Before the first heading, the paragraphs outside the sections.
+  let listed = !!untitled || !headings.size,
+    current: string | null = null;
+  for (const block of blocks) {
+    const section = headings.get(block);
+    if (section) {
+      items.push({ item: { kind: "heading", section }, section: null });
+      listed = true;
+      current = section.section_id;
+      continue;
+    }
+    const heading = own(block, "h1, h2, h3, h4, h5, h6");
+    if (heading && !heading.matches(".reading-document-title")) {
+      listed = false;
+      current = null;
+      continue;
+    }
+    const here = notes.get(block);
+    if (here) {
+      for (const number of here)
+        items.push({ item: { kind: "note", number }, section: current });
+      continue;
+    }
+    if (!listed || !isParagraph(block)) continue;
+    const start = Number(block.dataset.byteStart);
+    const copy = blockCopy(block, mode);
+    items.push({
+      item: {
+        kind: "plain",
+        start,
+        paragraph: paragraphOf(port, start, 0),
+        html: copy.innerHTML,
+      },
+      section: current,
+    });
+  }
+  // A note whose paragraph was not found stands at the end of its section.
+  for (const p of model.points) {
+    if (placed.has(p.number)) continue;
+    let at = items.length;
+    for (let i = items.length - 1; i >= 0; i--)
+      if (
+        items[i]!.section === p.section_id ||
+        (items[i]!.item.kind === "heading" &&
+          (items[i]!.item as { section: LayersModelSection }).section
+            .section_id === p.section_id)
+      ) {
+        at = i + 1;
+        break;
+      }
+    items.splice(at, 0, {
+      item: { kind: "note", number: p.number },
+      section: p.section_id,
+    });
+  }
+  return items.map((x) => x.item);
+}
+
+/**
+ * 脉络 (ADR 0073): the full text pressed one step. The author's headings,
+ * each with its section's line; every paragraph as its note (a 纲, with its
+ * reason) and the sentences it stands on as its 目; a paragraph without a
+ * note as it is. A note's figures stand in the margin beside it, in place of
+ * their names among its relations (“见 图 8”); a sheet without a margin
+ * sets them under the sentences. Each figure once, beside the first note
+ * that names it.
  */
 export function outlineLeaf(
   model: LayersModel,
   port: LayersPort,
   mode: DocumentTextMode,
   inMargin = false,
+  items: readonly OutlineItem[] = outlineItems(model, port, mode, () => null),
 ): Leaf {
   let column = titleHTML(port),
     side = rulesHTML();
   const figures = new Set<string>();
-  for (const section of model.sections) {
-    if (section.title !== null) {
+  const lineHTML = (s: LayersModelSection) => {
+    const line = sectionLine(s.line, mode);
+    return line
+      ? `<p class="rl-sline" data-f="sline:${escape(s.section_id ?? "")}" lang="${langOf(line)}">${richHTML(line)}</p>`
+      : "";
+  };
+  for (const item of items) {
+    if (item.kind === "line") {
+      column += lineHTML(item.section);
+      continue;
+    }
+    if (item.kind === "heading") {
+      const section = item.section;
       const info = section.section_id ? port.section(section.section_id) : null;
-      const title = (mode !== "original" && info?.translation) || section.title;
+      const title =
+        (mode !== "original" && info?.translation) || section.title || "";
       const tag = (info?.level ?? 1) <= 1 ? "h2" : "h3";
-      column += `<${tag} class="rl-h" data-f="sec:${escape(section.section_id ?? "")}" data-part="${escape(title)}" lang="${langOf(title)}">${headingHTML(title)}</${tag}>`;
+      column +=
+        `<${tag} class="rl-h" data-f="sec:${escape(section.section_id ?? "")}" data-part="${escape(title)}" lang="${langOf(title)}">${headingHTML(title)}</${tag}>` +
+        lineHTML(section);
+      continue;
     }
-    for (const number of section.numbers) {
-      const p = model.byNumber.get(number);
-      if (!p) continue;
-      let body = "",
-        plates = "";
-      p.evidence.forEach((e, i) => {
-        if (e.kind === "sentence")
-          body += sentenceHTML(e, `${p.number}:${i}`, termsOf(p), port, mode);
-      });
-      const drawn = new Set<string>();
-      for (const n of namedFigures(
-        p,
-        p.evidence.flatMap((e) => (e.kind === "block" ? [e] : [])),
-      )) {
-        if (figures.has(n.id)) continue;
-        const f = port.figure(n.id);
-        if (inMargin && n.kind !== "table") {
-          plates += marginPlateHTML(f, n, mode, "rl-mplate", "", "");
-          drawn.add(n.id);
-        } else if (!n.pointed || !inMargin)
-          // A table the note stands on keeps its line under the sentences;
-          // one it only points to stays a name among its relations.
-          body += figureHTML(f, n.id, n.kind, n.caption, mode, true);
-        else continue;
-        figures.add(n.id);
-      }
-      column += gangHTML(p, mode, body);
-      const rel = relationsHTML(p, port, mode, drawn);
-      side +=
-        `<aside class="rl-pi rl-rel" data-point="${p.number}"><div class="rl-pi-h">` +
-        (p.kind
-          ? `<span class="rl-pi-kind" data-f="kind:${p.number}">${KIND_NAMES[p.kind]}</span>`
+    if (item.kind === "plain") {
+      column +=
+        `<div class="rl-plain" data-start="${item.start}">` +
+        (item.paragraph
+          ? `<span class="rl-pn"><i>¶${item.paragraph}</i></span>`
           : "") +
-        `</div>${rel ? `<p class="rl-pi-x" data-f="rel:${p.number}">${rel}</p>` : ""}${plates}</aside>`;
+        `<div class="rl-plain-t">${item.html}</div></div>`;
+      continue;
     }
+    const p = model.byNumber.get(item.number);
+    if (!p) continue;
+    const own = paragraphNo(model, p.number);
+    let body = "",
+      plates = "";
+    p.evidence.forEach((e, i) => {
+      if (e.kind === "sentence")
+        body += sentenceHTML(
+          e,
+          `${p.number}:${i}`,
+          termsOf(p),
+          port,
+          mode,
+          false,
+          own,
+          i > 0 && !follows(p.evidence[i - 1], e),
+        );
+    });
+    const drawn = new Set<string>();
+    for (const n of namedFigures(
+      p,
+      p.evidence.flatMap((e) => (e.kind === "block" ? [e] : [])),
+    )) {
+      if (figures.has(n.id)) continue;
+      const f = port.figure(n.id);
+      if (inMargin && n.kind !== "table") {
+        plates += marginPlateHTML(f, n, mode, "rl-mplate", "", "");
+        drawn.add(n.id);
+      } else if (!n.pointed || !inMargin)
+        // A table the note stands on keeps its line under the sentences;
+        // one it only points to stays a name among its relations.
+        body += figureHTML(f, n.id, n.kind, n.caption, mode, true);
+      else continue;
+      figures.add(n.id);
+    }
+    column += gangHTML(model, p, mode, body);
+    const rel = relationsHTML(model, p, port, mode, drawn);
+    side +=
+      `<aside class="rl-pi rl-rel" data-point="${p.number}"><div class="rl-pi-h">` +
+      (p.kind
+        ? `<span class="rl-pi-kind" data-f="kind:${p.number}">${KIND_NAMES[p.kind]}</span>`
+        : "") +
+      `</div>${rel ? `<p class="rl-pi-x" data-f="rel:${p.number}">${rel}</p>` : ""}${plates}</aside>`;
   }
   return { column: column + endHTML(model, figures.size), side };
 }
@@ -332,9 +534,10 @@ function adviceHTML(
 }
 
 /**
- * 概览: the 提要, the main notes with the line or the plate each stands on
- * (plates in the margin), the figures the text gives, what the notes hold
- * back, and where to begin reading.
+ * 概览: the 提要; the 纲目, each section with its line and its main notes,
+ * each note with the line or the plate it stands on (plates in the margin);
+ * the figures the text gives, what the notes hold back, and where to begin
+ * reading.
  */
 export function overviewLeaf(
   model: LayersModel,
@@ -360,9 +563,9 @@ export function overviewLeaf(
     `<p class="rl-ti" lang="${langOf(summary.text)}">${richHTML(summary.text, summary.terms)}</p>`,
   );
   const plates = new Set<string>();
-  let notes = `<p class="rl-onote">全文共 ${model.points.length} 条批语，这里是其中 ${model.primary.length} 条主干。<a data-layer-go="outline">看全部</a></p>`;
-  for (const p of model.primary) {
+  const primaryHTML = (p: (typeof model.primary)[number]) => {
     let body = "";
+    const own = paragraphNo(model, p.number);
     const basis = p.basis;
     // In a translated reading the line is the translation of the sentence
     // the excerpt lies in (cut from the full text's own translation); the
@@ -386,6 +589,8 @@ export function overviewLeaf(
         termsOf(p),
         port,
         mode,
+        false,
+        own,
       );
     else if (basis.kind === "sentence")
       body = sentenceHTML(
@@ -395,6 +600,7 @@ export function overviewLeaf(
         port,
         "original",
         true,
+        own,
       );
     else {
       const f = port.figure(basis.segment_id);
@@ -418,12 +624,37 @@ export function overviewLeaf(
         mode,
         "rl-oplate",
         ` data-point="${p.number}"`,
-        numberHTML(p, "rl-gang-no"),
+        numberHTML(p, own, "rl-gang-no"),
       );
     }
-    notes += gangHTML(p, mode, body);
+    return gangHTML(model, p, mode, body, false);
+  };
+  // 纲目 (ADR 0073): each section's number, title and line, its main notes under it.
+  let notes = `<p class="rl-onote">全文 ${model.points.length} 段，每段一条批语；主干 ${model.primary.length} 段。<a data-layer-go="outline">看全部</a></p>`;
+  const shown = new Set<number>();
+  for (const s of model.sections) {
+    const main = model.primary.filter((p) => p.section_id === s.section_id);
+    const info = s.section_id ? port.section(s.section_id) : null;
+    const title = (mode !== "original" && info?.translation) || s.title;
+    const line = sectionLine(s.line, mode);
+    if (!title && !line && !main.length) continue;
+    notes +=
+      `<p class="rl-osl">` +
+      (title
+        ? `<span class="rl-osl-h" lang="${langOf(title)}">${headingHTML(title)}</span>`
+        : "") +
+      (line
+        ? `<span class="rl-osl-t" lang="${langOf(line)}">${richHTML(line)}</span>`
+        : "") +
+      `</p>`;
+    for (const p of main) {
+      notes += primaryHTML(p);
+      shown.add(p.number);
+    }
   }
-  column += section("要点", notes);
+  for (const p of model.primary)
+    if (!shown.has(p.number)) notes += primaryHTML(p);
+  column += section("纲目", notes);
   column += section(
     "数据",
     ov.data.length

@@ -3,12 +3,19 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { nextWorkspace } from "./next-workspace-fixture.js";
 import { readerToLibrary, reopenPaper } from "./reader-controls.js";
-import { LAYERS_POINTS, LAYERS_TEXT, storedLayers } from "./stored-layers.js";
+import {
+  LAYERS_PARAGRAPHS,
+  LAYERS_POINTS,
+  LAYERS_SECTIONS,
+  LAYERS_TEXT,
+  storedLayers,
+} from "./stored-layers.js";
 
 /**
- * Plan 28 block 09 (reading-experience 3, ADR 0070): the annotated copy over
- * served replies: the notes on the full text, 脉络, 概览, 导图 and going
- * between them. Screenshots go to SCIRETRIEVER_LAYERS_SHOTS when it is set.
+ * Plan 28 block 09 (reading-experience 3, ADR 0070, 0073): the annotated copy
+ * over served replies, one note for every paragraph and one line for every
+ * section: the notes on the full text, 脉络, 概览, 导图 and going between
+ * them. Screenshots go to SCIRETRIEVER_LAYERS_SHOTS when it is set.
  */
 const SHOTS = process.env.SCIRETRIEVER_LAYERS_SHOTS;
 const shot = async (page: Page, name: string) => {
@@ -50,15 +57,67 @@ it("shows the notes beside the full text and the other layers of an annotated co
     await page.goto(`${w.origin}/?literature=${id}&reader=doc`);
     await page.locator('.react-reader[data-reading-ready="true"]').waitFor();
     await shows(page, "full");
-    // 全文: every note in the margin, its sentences wrapped where they lie.
+    // 全文: every paragraph's note in the margin, its sentences wrapped
+    // where they lie, a stroke on the rule beside each.
     await expect
       .poll(() => page.locator(`${sheet} .rl-side .rl-pi`).count())
       .toBe(LAYERS_POINTS.length);
     const evidence = LAYERS_POINTS.reduce((n, p) => n + p.evidence.length, 0);
-    expect(await page.locator(`${sheet} .rl-ev.rl-ev-end`).count()).toBe(
+    const primary = LAYERS_POINTS.filter((p) => p.primary).length;
+    expect(await page.locator(`${sheet} .rl-ev[data-f^="ev:"]`).count()).toBe(
       evidence,
     );
     expect(await page.locator(`${sheet} .rl-stroke`).count()).toBe(evidence);
+    // A note is named by its paragraph's ¶n in the left margin: no number
+    // at a sentence's end; a primary paragraph's ¶n and note have a filled ring.
+    expect(await page.locator(`${sheet} .rl-ev[data-no]`).count()).toBe(0);
+    expect(
+      await page
+        .locator(`${sheet} .rl-ev`)
+        .evaluateAll((els) =>
+          els.filter(
+            (el) => getComputedStyle(el, "::after").content !== "none",
+          ),
+        )
+        .then((found) => found.length),
+    ).toBe(0);
+    expect(
+      await page.locator(`${sheet} article > section[data-point]`).count(),
+    ).toBe(LAYERS_POINTS.length);
+    expect(
+      await page.locator(`${sheet} article > section[data-rl-main]`).count(),
+    ).toBe(primary);
+    expect(await page.locator(`${sheet} .rl-side .rl-pi .rl-dot`).count()).toBe(
+      primary,
+    );
+    // Relations name a paragraph: “依据 ¶2”, “承接 ¶6”.
+    const relations = await page
+      .locator(`${sheet} .rl-side .rl-pi-x`)
+      .allTextContents();
+    expect(relations.join(" ")).toContain("依据 ¶2");
+    expect(relations.join(" ")).toContain("承接 ¶6");
+    expect(relations.join(" ")).not.toMatch(/(?:依据|承接|总结|解释) \d/u);
+    // Each note stands beside its paragraph's first line, or below it when
+    // the note before takes that place; never above it.
+    const offsets = await page
+      .locator(`${sheet} .rl-side .rl-pi`)
+      .evaluateAll((notes) =>
+        notes.map((n) => {
+          const block = document.querySelector<HTMLElement>(
+            `.reading-article > section[data-point="${(n as HTMLElement).dataset.point}"]`,
+          )!;
+          return (
+            n.getBoundingClientRect().top - block.getBoundingClientRect().top
+          );
+        }),
+      );
+    expect(offsets.every((d) => d > -4)).toBe(true);
+    expect(Math.abs(offsets.at(-1)!)).toBeLessThan(16);
+    // A paragraph and its note light together.
+    await page.locator(`${sheet} article > section[data-point]`).nth(2).hover();
+    await expect
+      .poll(() => page.locator(`${sheet} .rl-side .rl-pi.rl-lit`).count())
+      .toBe(1);
     // The author's text is unchanged.
     const first = await page
       .locator(`${sheet} article > section[data-byte-start]`)
@@ -69,22 +128,100 @@ it("shows the notes beside the full text and the other layers of an annotated co
     );
     expect(first).not.toMatch(/\d\s*$/u);
     await shot(page, "01-full");
-    // 脉络: every note as a 纲 with its sentences.
+    // 脉络: every body paragraph, as its 纲 (with its reason) and 目, or as
+    // it is; every section's line under its heading.
     await view(page, "脉络").click();
     await shows(page, "outline");
     await settled(page);
     expect(await page.locator(`${sheet} .rl-gang`).count()).toBe(
       LAYERS_POINTS.length,
     );
+    expect(await page.locator(`${sheet} .rl-plain`).count()).toBe(
+      LAYERS_PARAGRAPHS.length - LAYERS_POINTS.length,
+    );
+    expect(
+      await page.locator(`${sheet} .rl-col > :is(.rl-gang, .rl-plain)`).count(),
+    ).toBe(LAYERS_PARAGRAPHS.length);
+    expect(
+      (await page.locator(`${sheet} .rl-plain`).first().textContent())?.trim(),
+    ).toBe("¶5All measurements were repeated three times.");
+    expect(await page.locator(`${sheet} .rl-reason`).count()).toBe(
+      LAYERS_POINTS.length,
+    );
+    const lines = await page.locator(`${sheet} .rl-sline`).allTextContents();
+    expect(lines).toEqual(
+      Object.values(LAYERS_SECTIONS).map((s) => s.statement),
+    );
+    expect(await page.locator(`${sheet} .rl-h + .rl-sline`).count()).toBe(
+      lines.length,
+    );
     expect(await page.locator(`${sheet} .rl-mu-s`).count()).toBe(evidence);
+    // Sentences that do not follow one another have a “…” between them.
+    expect(await page.locator(`${sheet} .rl-mu-s.rl-gap`).count()).toBe(
+      LAYERS_POINTS.reduce(
+        (n, p) =>
+          n +
+          p.evidence.filter((e, i) => i > 0 && e.n !== p.evidence[i - 1]!.n + 1)
+            .length,
+        0,
+      ),
+    );
+    const numbers = await page
+      .locator(`${sheet} .rl-gang > .rl-gang-no`)
+      .allTextContents();
+    expect(numbers.every((n) => /^¶\d+$/u.test(n))).toBe(true);
+    expect(
+      await page.locator(`${sheet} .rl-gang > .rl-gang-no.rl-ring`).count(),
+    ).toBe(primary);
     expect(page.url()).toContain("layer=outline");
     await shot(page, "02-outline");
-    // 概览: the summary, the main notes, the data.
+    await page
+      .locator(`${sheet} .rl-mu-s.rl-gap`)
+      .first()
+      .scrollIntoViewIfNeeded();
+    await shot(page, "02-outline-gap");
+    // 概览: the summary; 纲目, each section with its line and its main
+    // notes, each with the line it rests on; the data.
     await view(page, "概览").click();
     await shows(page, "overview");
     await settled(page);
-    const primary = LAYERS_POINTS.filter((p) => p.primary).length;
     expect(await page.locator(`${sheet} .rl-gang`).count()).toBe(primary);
+    expect(await page.locator(`${sheet} .rl-oh`).allTextContents()).toEqual([
+      "提要",
+      "纲目",
+      "数据",
+      "局限",
+      "精读建议",
+    ]);
+    expect(await page.locator(`${sheet} .rl-onote`).textContent()).toBe(
+      `全文 ${LAYERS_POINTS.length} 段，每段一条批语；主干 ${primary} 段。看全部`,
+    );
+    const outlineRows = await page
+      .locator(`${sheet} .rl-osl`)
+      .allTextContents();
+    expect(outlineRows).toHaveLength(3);
+    Object.values(LAYERS_SECTIONS).forEach((s, i) =>
+      expect(outlineRows[i]).toContain(s.statement),
+    );
+    expect(outlineRows[1]).toContain("Thermal behaviour");
+    // Under “2. Thermal behaviour”, its two primary notes, each with its line.
+    const second = await page
+      .locator(`${sheet} .rl-osl`)
+      .nth(1)
+      .evaluate((row) => {
+        const out: string[] = [];
+        for (
+          let n = row.nextElementSibling;
+          n && !n.matches(".rl-osl");
+          n = n.nextElementSibling
+        )
+          if (n.matches(".rl-gang"))
+            out.push(
+              n.querySelectorAll(".rl-mu-s").length + ":" + n.dataset.point,
+            );
+        return out;
+      });
+    expect(second).toEqual(["1:4", "1:5"]);
     expect(await page.locator(`${sheet} .rl-dt tbody tr`).count()).toBe(3);
     await shot(page, "03-overview");
     // A click opens more in place (reading-experience 3.2, 3.3): a main note
@@ -101,6 +238,8 @@ it("shows the notes beside the full text and the other layers of an annotated co
     await shows(page, "outline");
     await settled(page);
     const line = page.locator(`${sheet} .rl-mu-s[data-start]`).nth(3);
+    // On screen first: the click must not scroll the page under it.
+    await line.scrollIntoViewIfNeeded();
     const top = await line.evaluate((n) => n.getBoundingClientRect().top);
     await line.click();
     const para = page.locator(`${sheet} .rl-para`);
@@ -138,11 +277,38 @@ it("shows the notes beside the full text and the other layers of an annotated co
     await expect
       .poll(() => page.locator(`${sheet} .rl-mn-leaf`).count())
       .toBe(LAYERS_POINTS.length);
+    // A node per paragraph, “¶n” and its label; each section its line's label.
+    const nodes = await page
+      .locator(`${sheet} .rl-mn-leaf .rl-no`)
+      .allTextContents();
+    expect(nodes.every((n) => /^¶\d+$/u.test(n))).toBe(true);
+    expect(await page.locator(`${sheet} .rl-mn-leaf.rl-main`).count()).toBe(
+      primary,
+    );
+    expect(
+      await page.locator(`${sheet} .rl-mn-sec .rl-sl`).allTextContents(),
+    ).toEqual(Object.values(LAYERS_SECTIONS).map((s) => s.label));
     await page.locator(`${sheet} .rl-mn-leaf`).nth(4).hover();
     await page.locator(`${sheet} .rl-ms-t`).waitFor();
+    await expect
+      .poll(() => page.locator(`${sheet} .rl-ms-sl`).textContent())
+      .toBe(LAYERS_SECTIONS["2. Thermal behaviour"].statement);
+    expect(await page.locator(`${sheet} .rl-ms-t .rl-reason`).count()).toBe(1);
+    expect(
+      await page.locator(`${sheet} .rl-ms-h .rl-gang-no`).textContent(),
+    ).toMatch(/^¶\d+$/u);
     // One engine for the paper, whatever layer it shows.
     expect(await page.locator(".rl-map").count()).toBe(1);
     await shot(page, "05-map");
+    // A collapsed section says how many paragraphs it holds.
+    const lastSection = page.locator(`${sheet} .rl-mn-sec`).last();
+    await lastSection.click();
+    await expect
+      .poll(() => lastSection.locator(".rl-more").textContent())
+      .toBe("余 1 段");
+    await shot(page, "05-map-collapsed");
+    await lastSection.click();
+    await expect.poll(() => lastSection.locator(".rl-more").count()).toBe(0);
     await page.locator(`${sheet} .rl-mn-leaf`).nth(4).click();
     await shows(page, "outline");
     await view(page, "全文").click();
@@ -177,10 +343,23 @@ it("reads an annotated copy in translation (reading-experience 3.3.2, 9)", async
     await expect
       .poll(() => page.locator(`${sheet} .rl-gang-t`).first().textContent())
       .toContain("六种三唑盐");
+    // The line, the reason and the plain paragraph in the translation.
+    expect(await page.locator(`${sheet} .rl-sline`).first().textContent()).toBe(
+      LAYERS_SECTIONS["1. Salts and their structures"].zh,
+    );
+    expect(
+      await page.locator(`${sheet} .rl-gang .rl-reason`).first().textContent(),
+    ).toBe(LAYERS_POINTS[0]!.reasonZh);
+    expect(
+      await page.locator(`${sheet} .rl-plain`).first().textContent(),
+    ).toContain("所有测量都重复了三次。");
     await shot(page, "06-outline-translation");
     await view(page, "概览").click();
     await shows(page, "overview");
     await settled(page);
+    expect(
+      await page.locator(`${sheet} .rl-osl`).first().textContent(),
+    ).toContain(LAYERS_SECTIONS["1. Salts and their structures"].zh);
     await shot(page, "07-overview-translation");
     await view(page, "全文").click();
     await shows(page, "full");

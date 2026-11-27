@@ -5,6 +5,7 @@ import {
   type LayersReadBasis,
   type LayersReadEvidence,
   type LayersReadPoint,
+  type LayersReadSection,
   type LayersRelationWord,
 } from "@sciretriever/contracts";
 import type { DocumentTextMode } from "../contract.js";
@@ -91,22 +92,34 @@ export interface LayersPort {
   reducedMotion(): boolean;
 }
 
+/** A section as the views show it: its title, its line (节旨) and its notes' numbers. */
+export interface LayersModelSection {
+  readonly section_id: string | null;
+  readonly title: string | null;
+  readonly line: LayersReadSection;
+  readonly numbers: readonly number[];
+}
 export interface LayersModel {
   readonly data: ReadLayers;
   readonly overview: DocumentLayersOverviewResult;
   readonly points: readonly ReadLayersPoint[];
   readonly byNumber: ReadonlyMap<number, ReadLayersPoint>;
   readonly primary: readonly (LayersReadPoint & { basis: LayersReadBasis })[];
-  /** Sections in text order, each with its points' numbers. */
-  readonly sections: readonly {
-    readonly section_id: string | null;
-    readonly title: string | null;
-    readonly numbers: readonly number[];
-  }[];
+  /** Sections in text order (ADR 0073: every one with a note or a line). */
+  readonly sections: readonly LayersModelSection[];
   /** Whether the layers carry a translation part. */
   readonly translated: boolean;
+  /**
+   * The paragraph number a note is named by (“¶41”, ADR 0073), keyed by the
+   * note's number: the one the full text shows beside its paragraph, else
+   * the read's own.
+   */
+  readonly paragraphs?: ReadonlyMap<number, number>;
 }
-export function layersModel(data: ReadLayers): LayersModel {
+export function layersModel(
+  data: ReadLayers,
+  shown?: (p: ReadLayersPoint) => number,
+): LayersModel {
   const byNumber = new Map(data.points.map((p) => [p.number, p]));
   return {
     data,
@@ -114,13 +127,59 @@ export function layersModel(data: ReadLayers): LayersModel {
     points: data.points,
     byNumber,
     primary: data.overview.primary,
-    sections: data.overview.sections.map((s) => ({
-      section_id: s.section_id,
-      title: s.title,
-      numbers: s.points.map((p) => p.number),
+    sections: data.overview.sections.map(({ points, ...line }) => ({
+      section_id: line.section_id,
+      title: line.title,
+      line,
+      numbers: points.map((p) => p.number),
     })),
     translated: data.text === "bilingual",
+    ...(shown
+      ? { paragraphs: new Map(data.points.map((p) => [p.number, shown(p)])) }
+      : {}),
   };
+}
+/** The paragraph number of a note (by its number), as the views write it. */
+export function paragraphNo(
+  model: LayersModel,
+  number: number,
+  fallback?: number,
+): number {
+  return (
+    model.paragraphs?.get(number) ??
+    model.byNumber.get(number)?.paragraph ??
+    fallback ??
+    number
+  );
+}
+/** A note's reason in the reading shown: the translation's beside a translated note. */
+export function reasonWords(
+  p: LayersReadPoint,
+  mode: DocumentTextMode,
+): string | null {
+  return mode !== "original" && p.translation?.statement
+    ? (p.translation.reason ?? null)
+    : p.reason;
+}
+/** A section's line (节旨) in the reading shown; null when it has none. */
+export function sectionLine(
+  s: LayersReadSection,
+  mode: DocumentTextMode,
+): string | null {
+  return (mode !== "original" && s.translation?.statement) || s.statement;
+}
+/** A section line's label (导图). */
+export function sectionLabel(
+  s: LayersReadSection,
+  mode: DocumentTextMode,
+): string | null {
+  return (
+    (mode !== "original" && s.translation?.statement
+      ? s.translation.label
+      : null) ??
+    s.label ??
+    null
+  );
 }
 
 /** A machine text in the reading shown: the translation when there is one. */
@@ -199,15 +258,19 @@ export function markTerms(
     }
   }
 }
-/** A note's number in its ring; a primary note's ring is filled. */
+/**
+ * A note's name, its paragraph's number (“¶41”, ADR 0073); a primary note's
+ * stands in a filled ring.
+ */
 export const numberHTML = (
   p: { number: number; primary: boolean },
+  paragraph: number,
   cls: string,
   piece = "",
 ) =>
   `<span class="${cls}${p.primary ? " rl-ring" : ""}" data-point="${p.number}"${
     piece ? ` data-f="${piece}"` : ""
-  }>${p.number}</span>`;
+  }>¶${paragraph}</span>`;
 const LEAD = String.raw`(?:表|图|式|方案|Table|Fig\.?|Figure|Scheme|Chart)\s*S?\d+[a-z]?`;
 const AT_START = new RegExp(
   String.raw`^\s*(${LEAD})\s*[.:：。]?\s*([\s\S]*)$`,
