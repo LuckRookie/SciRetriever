@@ -414,6 +414,101 @@ export function attachLayers(
     para.append(number, text);
     return para;
   };
+  // ── how what opens moves (reading-experience 3.3.5): it grows from the
+  //    line it stands for to its whole height, its text sliding so the
+  //    marked sentence starts where the line did, the rest of its ink coming
+  //    in around it; closing plays it back. The place pressed stays put on
+  //    every frame, and what stands in the margin follows. ──
+  const OPEN_MS = 340,
+    CLOSE_MS = 260,
+    EASE = "cubic-bezier(0.2, 0, 0, 1)";
+  let moving = 0,
+    held: { el: Element; top: number } | null = null,
+    anchoring: string | null = null;
+  /** The browser's own scroll anchoring is held off while things move: it would pick its own anchor (spec 4.2). */
+  const anchorOff = () => {
+    if (anchoring !== null) return;
+    anchoring = port.body.style.overflowAnchor;
+    port.body.style.overflowAnchor = "none";
+  };
+  const anchorBack = () => {
+    if (anchoring === null) return;
+    port.body.style.overflowAnchor = anchoring;
+    anchoring = null;
+  };
+  const hold = () => {
+    if (!held?.el.isConnected) return;
+    const drift = held.el.getBoundingClientRect().top - held.top;
+    if (Math.abs(drift) > 0.5) port.body.scrollTop += drift;
+  };
+  const follow = () => {
+    if (destroyed) return;
+    hold();
+    place();
+    if (moving > 0) requestAnimationFrame(follow);
+    else {
+      held = null;
+      anchorBack();
+    }
+  };
+  /**
+   * Moves `box` between `line` px high (what it stands for) and its whole
+   * height. Resolves once it has; an opening leaves no trace of the motion, a
+   * closing keeps its last frame for the caller to take it away.
+   */
+  const motion = (
+    box: HTMLElement,
+    line: number,
+    closing: boolean,
+  ): Promise<void> => {
+    if (port.reducedMotion() || !box.isConnected) return Promise.resolve();
+    const whole = box.getBoundingClientRect();
+    const text = box.querySelector<HTMLElement>(":scope > .rl-para-t");
+    const mark = text?.querySelector(".rl-ev")?.getBoundingClientRect();
+    const lift = mark ? Math.max(0, mark.top - whole.top) : 0;
+    const order = <T>(frames: T[]) => (closing ? frames.reverse() : frames);
+    const options: KeyframeAnimationOptions = {
+      duration: closing ? CLOSE_MS : OPEN_MS,
+      easing: EASE,
+      fill: "both",
+    };
+    box.style.overflow = "hidden";
+    const runs = text
+      ? [
+          box.animate(
+            order([{ height: `${line}px` }, { height: `${whole.height}px` }]),
+            options,
+          ),
+          text.animate(
+            order([
+              { transform: `translateY(${-lift}px)`, color: "transparent" },
+              { transform: "none", color: getComputedStyle(text).color },
+            ]),
+            options,
+          ),
+        ]
+      : [
+          box.animate(
+            order([
+              { height: `${line}px`, opacity: 0 },
+              { height: `${whole.height}px`, opacity: 1 },
+            ]),
+            options,
+          ),
+        ];
+    anchorOff();
+    if (moving++ === 0) requestAnimationFrame(follow);
+    return Promise.all(runs.map((r) => r.finished))
+      .catch(() => undefined)
+      .then(() => {
+        moving--;
+        if (!closing) {
+          for (const r of runs) r.cancel();
+          box.style.overflow = "";
+        }
+      });
+  };
+
   /** Opens a 目 line to its paragraph; the note's other lines in that paragraph open with it. */
   const openLine = (line: HTMLElement): HTMLElement | null => {
     const s = lineSentence(line);
@@ -438,14 +533,17 @@ export function attachLayers(
       lines.map(lineSentence).filter((x): x is Opened => !!x),
     );
     if (!para) return null;
+    const height = lines[0]!.getBoundingClientRect().height;
     para.dataset.lines = lines.map((l) => l.dataset.ev).join(" ");
+    para.dataset.line = String(height);
     lines[0]!.before(para);
     for (const l of lines) l.classList.add("rl-open");
     fillImages(para);
+    void motion(para, height, false);
     return para;
   };
-  /** Closes an opened paragraph; gives back the first line it stood for, if any. */
-  const closePara = (para: HTMLElement): Element | null => {
+  /** Takes an opened paragraph away at once; gives back the first line it stood for, if any. */
+  const removePara = (para: HTMLElement): Element | null => {
     const box = para.parentElement;
     let first: Element | null = null;
     for (const key of (para.dataset.lines ?? "").split(" ").filter(Boolean)) {
@@ -460,6 +558,32 @@ export function attachLayers(
     (row ?? para).remove();
     return first ?? host;
   };
+  /**
+   * Closes an opened paragraph: it shrinks back to its line, then the line
+   * takes its place. Gives back what stands there meanwhile.
+   */
+  const closePara = (para: HTMLElement): Element | null => {
+    if (para.dataset.closing) return para;
+    if (port.reducedMotion()) return removePara(para);
+    para.dataset.closing = "true";
+    void motion(para, Number(para.dataset.line) || 0, true).then(() =>
+      removePara(para),
+    );
+    return para;
+  };
+  /** Closes what opened without a line under it (a ¶n's paragraph, a note's sentences). */
+  const closeBox = (box: HTMLElement, done: () => void) => {
+    if (box.dataset.closing) return;
+    box.dataset.closing = "true";
+    const moved = box.matches(".rl-para-row")
+      ? box.querySelector<HTMLElement>(".rl-para")
+      : box;
+    void (
+      moved
+        ? motion(moved, Number(moved.dataset.line) || 0, true)
+        : Promise.resolve()
+    ).then(done);
+  };
   /** 概览: a ¶n after a datum or a limit opens that paragraph under it. */
   const toggleSource = (a: HTMLElement): Element | null => {
     const start = Number(a.dataset.start);
@@ -468,15 +592,18 @@ export function attachLayers(
     if (!item || !Number.isFinite(start)) return null;
     const open = row
       ? row.nextElementSibling?.matches(`.rl-para-row[data-from="${start}"]`)
-        ? row.nextElementSibling
+        ? (row.nextElementSibling as HTMLElement)
         : null
-      : item.querySelector(`:scope > .rl-para[data-from="${start}"]`);
+      : item.querySelector<HTMLElement>(
+          `:scope > .rl-para[data-from="${start}"]`,
+        );
     if (open) {
-      open.remove();
+      closeBox(open, () => open.remove());
       return item;
     }
     const para = paragraph(start, []);
     if (!para) return null;
+    para.dataset.line = "0";
     if (row) {
       const tr = el("tr", "rl-para-row");
       tr.dataset.from = String(start);
@@ -490,6 +617,7 @@ export function attachLayers(
       item.append(para);
     }
     fillImages(para);
+    void motion(para, 0, false);
     return item;
   };
   /** A note pressed: 脉络 opens (or closes) all its sentences; 概览 opens it to its sentences. */
@@ -514,13 +642,16 @@ export function attachLayers(
       return;
     }
     // Anything open under the note: this click closes it all.
-    const more = box.querySelector(":scope > .rl-more");
+    const more = box.querySelector<HTMLElement>(":scope > .rl-more");
     const paras = box.querySelectorAll<HTMLElement>(":scope > .rl-para");
     const ground = box.querySelector<HTMLElement>(":scope > .rl-mu-s.rl-cut");
     if (more || paras.length) {
       for (const para of paras) closePara(para);
-      more?.remove();
-      ground?.classList.remove("rl-hid");
+      if (more)
+        closeBox(more, () => {
+          more.remove();
+          ground?.classList.remove("rl-hid");
+        });
       return;
     }
     const p = model.byNumber.get(Number(gang.dataset.point));
@@ -533,32 +664,35 @@ export function attachLayers(
     }
     const div = el("div", "rl-more");
     div.innerHTML = noteSentencesHTML(p, port, mode);
+    const height = ground?.getBoundingClientRect().height ?? 0;
+    div.dataset.line = String(height);
     if (ground) {
       ground.after(div);
       ground.classList.add("rl-hid");
     } else box.prepend(div);
+    void motion(div, height, false);
   };
-  /**
-   * Changes what is open while the place pressed stays where it was on the
-   * screen. The browser's own scroll anchoring is held off meanwhile: it
-   * would move the desk by its own choice of anchor (spec 4.2).
-   */
+  /** Changes what is open while the place pressed stays where it was on the screen, on every frame. */
   const keepPlace = (at: Element, change: () => Element | null | void) => {
     const before = at.getBoundingClientRect().top;
-    const anchoring = port.body.style.overflowAnchor;
-    port.body.style.overflowAnchor = "none";
+    anchorOff();
     const after = change() || at;
-    if (after.isConnected)
-      port.body.scrollTop += after.getBoundingClientRect().top - before;
-    port.body.style.overflowAnchor = anchoring;
+    held = { el: after.isConnected ? after : at, top: before };
+    hold();
     place();
+    if (moving === 0) {
+      held = null;
+      anchorBack();
+    }
   };
   /** The opened paragraph nearest the reading line: where 全文 opens from here. */
   const openedStart = (): number | null => {
     const y = third();
     let best: number | null = null,
       distance = Infinity;
-    for (const para of column.querySelectorAll<HTMLElement>(".rl-para")) {
+    for (const para of column.querySelectorAll<HTMLElement>(
+      ".rl-para:not([data-closing])",
+    )) {
       const r = para.getBoundingClientRect();
       const d = y < r.top ? r.top - y : y > r.bottom ? y - r.bottom : 0;
       if (d < distance && Number.isFinite(Number(para.dataset.start))) {
@@ -570,7 +704,11 @@ export function attachLayers(
   };
   const fold = (): boolean => {
     if (layer !== "overview" && layer !== "outline") return false;
-    const opened = column.querySelectorAll(".rl-para, .rl-more, .rl-para-row");
+    const opened = [
+      ...column.querySelectorAll<HTMLElement>(
+        ":is(.rl-para, .rl-more, .rl-para-row):not([data-closing])",
+      ),
+    ].filter((x) => !x.parentElement?.closest(".rl-para-row, .rl-more"));
     if (!opened.length) return false;
     const point = reading();
     const at =
@@ -579,12 +717,16 @@ export function attachLayers(
       opened[0]!.closest(".rl-gang") ||
       column;
     keepPlace(at, () => {
-      for (const x of column.querySelectorAll(
-        ".rl-para-row, .rl-more, .rl-para",
-      ))
-        x.remove();
-      for (const x of column.querySelectorAll(".rl-open, .rl-hid"))
-        x.classList.remove("rl-open", "rl-hid");
+      for (const x of opened)
+        if (x.matches(".rl-para")) closePara(x);
+        else
+          closeBox(x, () => {
+            const ground = x.matches(".rl-more")
+              ? x.parentElement?.querySelector(":scope > .rl-mu-s.rl-hid")
+              : null;
+            x.remove();
+            ground?.classList.remove("rl-hid");
+          });
     });
     return true;
   };

@@ -94,7 +94,7 @@ it("shows the notes beside the full text and the other layers of an annotated co
     await page.locator(opened).first().waitFor();
     expect(page.url()).toContain("layer=overview");
     await page.locator(`${sheet} .rl-gang-t`).nth(1).click();
-    expect(await page.locator(opened).count()).toBe(0);
+    await expect.poll(() => page.locator(opened).count()).toBe(0);
     // 脉络: a sentence opens to its whole paragraph, marked; a click on it
     // closes it; Esc closes everything opened.
     await view(page, "脉络").click();
@@ -115,16 +115,16 @@ it("shows the notes beside the full text and the other layers of an annotated co
     ).toBeLessThan(2);
     await shot(page, "04-opened-in-place");
     await para.first().click();
-    expect(await para.count()).toBe(0);
+    await expect.poll(() => para.count()).toBe(0);
     await line.click();
     await para.first().waitFor();
     await page.keyboard.press("Escape");
-    expect(await para.count()).toBe(0);
+    await expect.poll(() => para.count()).toBe(0);
     // Opened, then 全文 by the bar: the full text at that paragraph.
     await line.click();
     await para.first().waitFor();
     await view(page, "脉络").click();
-    expect(await para.count()).toBe(0);
+    await expect.poll(() => para.count()).toBe(0);
     await line.click();
     await para.first().waitFor();
     await view(page, "全文").click();
