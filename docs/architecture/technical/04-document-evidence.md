@@ -1001,6 +1001,16 @@ HTTP 使用 `protocol_version: 1` 封套与现有维护认证；任务进度与�
 - 没有译文（`none`、`stale`）时，`translation` 操作的各单元译文为 null，`slice` 的后两种取值返回 `translation-unavailable`（HTTP 409），不退回原文冒充。
 - PDF 视图的对照翻译读同一份译文，不再请求模型。一个单元跨几个页面区域时，译文按各区域原文的字数比例、在最近的标点处分开（比例位置前后各半段平均长度内找标点，找不到就按比例切），依次放进这些区域。原有的两个接口 `/api/translation/fulltext` 与 `/fulltext/page` 字段不变，多一项 `state`；`force` 照收，不再触发翻译。
 
+### 9.6.1 读者选的语言与当场翻译
+
+目标，尚未实现（[ADR 0072](../decisions/0072-reader-chooses-translation-language.md)）。
+
+- **库的默认语言**：`[translation].target_language` 是库的默认语言：建档的 `translate` 一步翻译成它，读取不指明语言时读它。
+- **读取时指明语言**：`describe`、`translation`、`slice`（`text` 为 `translation` 或 `bilingual` 时）、`layers`（`text` 为 `translation` 或 `bilingual` 时）与 PDF 的两个译文接口（`/api/translation/fulltext`、`/fulltext/page`）都接受可选的 `target_language`（九种之一），不给时用库的默认语言。结果里的 `target_language` 是实际读的那一种。`describe` 的 `translation` 按请求的语言给出；另加一项 `translation_languages`：这一版内容已有译文的语言（`complete`、`partial`、`same-language` 的那些），按语言代码排序。
+- **阅读层**：阅读层的译文部分只有一种语言（10.5）。请求的语言与它不同时，`layers` 的 `translation`、`bilingual` 返回 `translation-unavailable`，阅读页改读原文的阅读层。
+- **当场翻译**：新增一种操作“把一篇文献翻译成某种语言”：请求 `{literature_id, target_language}`。它只执行 9.3 的 `translate` 一步，用指定的语言、这篇文献当前的校订稿内容版本，作为任务运行，与建档共用模型名额；输入、沿用、分批、重试、结果、发布与问题都按 9.3、9.4。已经有这种语言的完整译文时这一步跳过。没有已校对的全文时不能发起，返回原因。预估用量同建档的翻译一步。HTTP、CLI 与 MCP 都有；需要维护权限。
+- **库结构**：不变。登记表本来按语言分行；步骤记录的步骤名不受取值限制（9.4）。
+
 ### 9.7 检索
 
 - 全文索引（[查询 4.9](06-retrieval-context.md#49-材料-context-的实现边界)）收入译文：默认校订稿、当前内容版本、当前译文语言的每个已译单元一条，范围、章节与序号取原文单元的，正文是译文。索引仍是可重建的投影。

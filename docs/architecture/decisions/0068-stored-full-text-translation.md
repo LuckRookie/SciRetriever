@@ -2,7 +2,7 @@
 
 类型：决策（ADR）
 负责：全文的译文什么时候产生、翻什么、存在哪里、文本变化后怎么办；译文给谁用（阅读页、导出、检索、Agent）；阅读页“全文”的三种读法与用词
-状态：Accepted（2026-11-25，Owner 决定）；读法切换的位置与 PDF 对照翻译的入口被 [ADR 0071](0071-pdf-first-reader-two-floating-balls.md) 取代
+状态：Accepted（2026-11-25，Owner 决定）；读法切换的位置与 PDF 对照翻译的入口被 [ADR 0071](0071-pdf-first-reader-two-floating-balls.md) 取代；译文语言由部署配置改为读者选择，被 [ADR 0072](0072-reader-chooses-translation-language.md) 修订
 
 - Date: 2026-11-25
 - 依据：Owner 2026-11-25 的原话：
