@@ -373,6 +373,30 @@ export async function renderDocument(
     el.append(sign);
   };
   /**
+   * A caption's translation names its figure as the layers do: from the
+   * original's number in the reading language's way (layers/model.ts
+   * `figureNameIn`). A machine translation keeps some leads in English
+   * (“Fig. 2.”) and writes others with or without a space (“图4.”); only
+   * that lead is rewritten, as shown. The stored translation is unchanged.
+   */
+  const captionTranslation = (el: HTMLElement, translation: string) => {
+    if (!layout || !language) return translation;
+    const start = Number(el.dataset.byteStart),
+      end = Number(el.dataset.byteEnd);
+    const group = layout.figure_groups.find((g) =>
+      g.captions.some((c) => c.start_utf8 < end && c.end_utf8 > start),
+    );
+    if (!group) return translation;
+    const lead = captionParts(blockSourceText(el, false)).lead;
+    const own = captionParts(translation).lead;
+    const name = figureNameIn(group.kind, lead, own, language, "translation");
+    if (!own || !name || own === name) return translation;
+    const at = translation.indexOf(own);
+    return at < 0
+      ? translation
+      : translation.slice(0, at) + name + translation.slice(at + own.length);
+  };
+  /**
    * Spec 9: a block's translation below its own text. Which of the two shows
    * is the article's reading (CSS); a translatable block without its
    * translation is marked “未译”, what is never translated stays as it is.
@@ -414,7 +438,7 @@ export async function renderDocument(
             } else
               box.insertAdjacentHTML(
                 "beforeend",
-                plainMarkdown.parse(unit.translation!, {
+                plainMarkdown.parse(captionTranslation(el, unit.translation!), {
                   async: false,
                 }) as string,
               );
