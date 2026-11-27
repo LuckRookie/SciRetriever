@@ -89,20 +89,32 @@ function marksIn(
     }),
   );
 }
-/** Shrink the type until the translation fits its block, down to `min`. */
+/**
+ * The largest type, in page points, at which the translation fits its block,
+ * between `min` and `start`. The size is written in page points times the
+ * page's scale (`--ft-scale` on the twin), so a page drawn wider or narrower
+ * later keeps the same lines instead of spilling out of its box. A halving
+ * search: a handful of layouts per block, not one per step.
+ */
 function fit(el: HTMLElement, start: number, min: number) {
-  let size = start;
-  const step = Math.max(0.25, start / 40);
-  el.style.fontSize = `${size}px`;
-  while (
-    size > min &&
-    (el.scrollHeight > el.clientHeight + 1 ||
-      el.scrollWidth > el.clientWidth + 1)
-  ) {
-    size = Math.max(min, size - step);
-    el.style.fontSize = `${size}px`;
+  const set = (pt: number) => {
+    el.style.fontSize = `calc(${pt.toFixed(2)}px * var(--ft-scale, 1))`;
+  };
+  const fits = () =>
+    el.scrollHeight <= el.clientHeight + 1 &&
+    el.scrollWidth <= el.clientWidth + 1;
+  set(start);
+  if (fits()) return;
+  let low = min,
+    high = start;
+  for (let i = 0; i < 7 && high - low > 0.15; i++) {
+    const mid = (low + high) / 2;
+    set(mid);
+    if (fits()) low = mid;
+    else high = mid;
   }
-  if (el.scrollHeight > el.clientHeight + 1) el.dataset.overflow = "true";
+  set(low);
+  if (!fits()) el.dataset.overflow = "true";
 }
 
 /**
@@ -115,11 +127,15 @@ export function createFullTextLayer(
   onMark: (markId: string) => void,
 ) {
   const views = new Map<number, PdfPageView>(),
-    data = new Map<number, FullTextPage>();
+    data = new Map<number, FullTextPage>(),
+    /** The page data each twin was last laid out from. */
+    drawn = new Map<number, FullTextPage | undefined>();
   let marks: readonly ReadingMark[] = [],
     mode: FullTextMode = "off";
-  const clear = (view: PdfPageView) =>
+  const clear = (view: PdfPageView) => {
     view.element.querySelector(":scope > .ft-twin")?.remove();
+    drawn.delete(view.page);
+  };
   const draw = (n: number) => {
     const view = views.get(n);
     if (!view || !view.element.isConnected) return;
@@ -152,19 +168,29 @@ export function createFullTextLayer(
       el.remove();
     const page = data.get(n);
     twin.dataset.state = page ? "ready" : "pending";
+    drawn.set(n, page);
     if (!page) return;
     const scale = view.element.clientWidth / view.width,
-      min = Math.max(3, MIN_PT * scale),
       unplaced: FullTextBlock[] = [];
+    twin.style.setProperty("--ft-scale", String(scale));
     const pageMarks = marks.filter((m) => m.pdf?.page === n);
+    // Every place is read before anything is written, so the text layer is
+    // measured once rather than after each block.
+    const placed: {
+      block: FullTextBlock;
+      translation: string;
+      region: readonly [number, number, number, number];
+    }[] = [];
     for (const block of page.blocks) {
-      if (!block.translation) continue;
+      const translation = block.translation;
+      if (!translation) continue;
       const region =
         block.placement === "region" ? block.region : locate(block, view);
-      if (!region) {
-        unplaced.push(block);
-        continue;
-      }
+      if (region) placed.push({ block, translation, region });
+      else unplaced.push(block);
+    }
+    const fitting: { el: HTMLElement; start: number }[] = [];
+    for (const { block, translation, region } of placed) {
       const [x0, y0, x1, y1] = region,
         el = document.createElement("div");
       el.className = "ft-block";
@@ -176,10 +202,10 @@ export function createFullTextLayer(
         width: `${(x1 - x0) / 10}%`,
         height: `${(y1 - y0) / 10}%`,
       });
-      el.innerHTML = markdown.parseInline(block.translation, {
+      el.innerHTML = markdown.parseInline(translation, {
         async: false,
       }) as string;
-      el.title = block.translation;
+      el.title = translation;
       const inside = marksIn(region, pageMarks, view);
       if (inside.length) {
         const latest = inside.reduce((a, b) =>
@@ -202,8 +228,20 @@ export function createFullTextLayer(
         };
       }
       twin.append(el);
-      fit(el, (block.type === "title" ? TITLE_PT : START_PT) * scale, min);
+      fitting.push({ el, start: block.type === "title" ? TITLE_PT : START_PT });
     }
+    for (const { el, start } of fitting) fit(el, start, MIN_PT);
+    // A face still on its way measures with the fallback's widths: fit again
+    // once the page's fonts are in.
+    if (document.fonts && document.fonts.status !== "loaded")
+      void document.fonts.ready.then(() => {
+        if (twin?.isConnected && drawn.get(n) === page)
+          for (const { el, start } of fitting)
+            if (el.isConnected) {
+              delete el.dataset.overflow;
+              fit(el, start, MIN_PT);
+            }
+      });
     // Region marks keep their box on the translated page.
     for (const m of pageMarks)
       if (m.kind === "region" && m.pdf)
@@ -242,13 +280,17 @@ export function createFullTextLayer(
     setPages(pages: ReadonlyMap<number, FullTextPage>) {
       data.clear();
       for (const [index, page] of pages) data.set(index + 1, page);
-      for (const n of views.keys()) draw(n);
+      // Pages come back one by one: only a page whose translation changed is
+      // laid out again, not every page drawn so far.
+      for (const n of views.keys())
+        if (drawn.get(n) !== data.get(n) || !drawn.has(n)) draw(n);
     },
     setMarks(next: readonly ReadingMark[]) {
       marks = next;
       if (mode !== "off") for (const n of views.keys()) draw(n);
     },
     setMode(next: FullTextMode) {
+      if (next === mode) return;
       mode = next;
       const root = container();
       if (root) {
@@ -261,6 +303,7 @@ export function createFullTextLayer(
       for (const view of views.values()) clear(view);
       views.clear();
       data.clear();
+      drawn.clear();
       const root = container();
       if (root) delete root.dataset.fulltext;
     },
