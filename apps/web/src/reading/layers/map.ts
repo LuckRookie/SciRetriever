@@ -265,7 +265,9 @@ export function createMap(
           if (e.kind !== "block" || e.block_kind === "table") return "";
           const f = port.figure(e.segment_id);
           const parts = captionParts(f?.caption(mode) ?? e.caption);
-          const name = parts.lead ?? figureName(f, e.block_kind, mode);
+          const name = f
+            ? figureName(f, e.block_kind, mode)
+            : (parts.lead ?? figureName(null, e.block_kind, mode));
           const id = escape(e.segment_id);
           return `<figure class="rl-ms-plate"><img alt="${escape(name)}" data-image="${id}" data-zoom="${id}"><figcaption>${captionHTML(name, parts.rest)}</figcaption></figure>`;
         })

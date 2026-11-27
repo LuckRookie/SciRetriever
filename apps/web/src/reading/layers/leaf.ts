@@ -136,7 +136,9 @@ function figureHTML(
   plate: boolean,
 ): string {
   const parts = captionParts(f?.caption(mode) ?? caption);
-  const name = parts.lead ?? figureName(f, kind, mode);
+  const name = f
+    ? figureName(f, kind, mode)
+    : (parts.lead ?? figureName(null, kind, mode));
   const id = escape(segmentId);
   if (!plate || kind === "table")
     return `<p class="rl-mu-s rl-fig"><a data-fig="${id}">${escape(name)}</a><span>${richHTML(parts.rest)}</span></p>`;
@@ -200,7 +202,9 @@ function marginPlateHTML(
   lead: string,
 ): string {
   const parts = captionParts(f?.caption(mode) ?? n.caption);
-  const name = parts.lead ?? figureName(f, n.kind, mode);
+  const name = f
+    ? figureName(f, n.kind, mode)
+    : (parts.lead ?? figureName(null, n.kind, mode));
   const id = escape(n.id);
   const images = (f?.panels.length ? f.panels : [n.id])
     .map((panel) => {

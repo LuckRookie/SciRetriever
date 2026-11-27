@@ -37,6 +37,7 @@ import {
 import { blockSourceText } from "./block-text.js";
 import {
   captionParts,
+  figureNameIn,
   type LayerFigure,
   type LayersPort,
 } from "./layers/model.js";
@@ -1526,6 +1527,21 @@ export async function renderDocument(
                 : "图"),
           caption: (mode) =>
             mode === "original" ? captionText || null : translated,
+          // One way to name a figure per reading (layers/model.ts).
+          name: (mode) =>
+            figureNameIn(
+              group.kind,
+              lead,
+              captionParts(translated).lead,
+              language,
+              mode,
+            ) ??
+            lead ??
+            (group.kind === "table"
+              ? "表"
+              : group.kind === "scheme"
+                ? "方案"
+                : "图"),
           start: object.start_utf8,
           image: async () => {
             if (group.kind === "table") return null;

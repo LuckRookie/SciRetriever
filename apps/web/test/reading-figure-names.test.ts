@@ -3,7 +3,7 @@ import { outlineLeaf, overviewLeaf } from "../src/reading/layers/leaf.js";
 import {
   captionParts,
   figureName,
-  type LayerFigure,
+  figureNameIn,
   type LayersModel,
   type LayersPort,
 } from "../src/reading/layers/model.js";
@@ -66,6 +66,7 @@ const figure = (id: string, kind: "figure" | "table", lead: string) => ({
   label: lead,
   panels: id === "fig-8" ? ["fig-8", "fig-8b"] : [id],
   caption: () => `${lead}. Its caption.`,
+  name: () => lead,
   start: 0,
   image: async () => null,
 });
@@ -145,25 +146,33 @@ it("takes a caption's lead, also after labels a parser ran into it", () => {
   expect(captionParts("In summary, see Fig. 2 for details.").lead).toBeNull();
 });
 
-it("names a figure in the reading's language, else by the engine's label", () => {
-  const figure = (
-    original: string,
-    translation: string | null,
-  ): LayerFigure => ({
-    segment_id: "s",
-    kind: "figure",
-    label: "Fig. 8",
-    panels: ["s"],
-    caption: (mode) => (mode === "original" ? original : translation),
-    start: 0,
-    image: async () => null,
-  });
-  const f = figure("Fig. 8. Nyquist plots.", "图 8. Nyquist 图。");
-  expect(figureName(f, "figure", "original")).toBe("Fig. 8");
-  expect(figureName(f, "figure", "translation")).toBe("图 8");
+it("names a figure one way per reading, from the original's number", () => {
+  // As printed in the original.
+  expect(figureNameIn("figure", "Fig. 8", "图 8", "zh-Hans", "original")).toBe(
+    "Fig. 8",
+  );
+  // A machine translation that kept the English lead, or wrote no space.
   expect(
-    figureName(figure("Fig. 8. Nyquist plots.", null), "figure", "translation"),
-  ).toBe("Fig. 8");
+    figureNameIn("figure", "Fig. 2", "Fig. 2", "zh-Hans", "translation"),
+  ).toBe("图 2");
+  expect(figureNameIn("figure", "Fig. 4", "图4", "zh-Hans", "bilingual")).toBe(
+    "图 4",
+  );
+  expect(
+    figureNameIn("table", "Table 1", "Table 1", "zh-Hans", "translation"),
+  ).toBe("表 1");
+  expect(figureNameIn("figure", "Fig. S3a", null, "ja", "translation")).toBe(
+    "図 S3a",
+  );
+  expect(figureNameIn("scheme", "Scheme 1", null, "de", "translation")).toBe(
+    "Schema 1",
+  );
+  // No number to go by: the translation's own lead, else the original's.
+  expect(figureNameIn("figure", null, "图 8", "zh-Hans", "translation")).toBe(
+    "图 8",
+  );
+  expect(figureNameIn("figure", null, null, null, "translation")).toBeNull();
+  // Without the figure, a name by kind.
   expect(figureName(null, "table", "original")).toBe("表");
 });
 

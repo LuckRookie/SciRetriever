@@ -6,6 +6,7 @@ import {
   type LayersReadEvidence,
   type LayersReadPoint,
   type LayersRelationWord,
+  type TranslationLanguage,
 } from "@sciretriever/contracts";
 import type { DocumentTextMode } from "../contract.js";
 import { escape } from "../dom.js";
@@ -52,6 +53,8 @@ export interface LayerFigure {
   readonly panels: readonly string[];
   /** The caption without its lead, in the reading's language when it has one. */
   caption(mode: DocumentTextMode): string | null;
+  /** Its name as the reading writes it (`figureNameIn`): “Fig. 8” as printed, “图 8” in Chinese. */
+  name(mode: DocumentTextMode): string;
   /** UTF-8 start of the object in the text. */
   readonly start: number;
   /** An object URL of the picture; null for a table or a picture not kept. */
@@ -226,19 +229,49 @@ export function captionParts(caption: string | null): {
   const m = AT_START.exec(caption ?? "") ?? AFTER_LABELS.exec(caption ?? "");
   return m ? { lead: m[1]!, rest: m[2]! } : { lead: null, rest: caption ?? "" };
 }
+/** How each translation language writes a figure's, a table's and a scheme's name, before its number. */
+const FIGURE_WORDS: Record<
+  TranslationLanguage,
+  Record<"figure" | "table" | "scheme", string>
+> = {
+  "zh-Hans": { figure: "图", table: "表", scheme: "方案" },
+  "zh-Hant": { figure: "圖", table: "表", scheme: "方案" },
+  ja: { figure: "図", table: "表", scheme: "スキーム" },
+  ko: { figure: "그림", table: "표", scheme: "스킴" },
+  en: { figure: "Fig.", table: "Table", scheme: "Scheme" },
+  de: { figure: "Abb.", table: "Tab.", scheme: "Schema" },
+  fr: { figure: "Fig.", table: "Tableau", scheme: "Schéma" },
+  es: { figure: "Fig.", table: "Tabla", scheme: "Esquema" },
+  ru: { figure: "Рис.", table: "Таблица", scheme: "Схема" },
+};
 /**
- * A figure's name as the reading shows it: its caption's own lead in the
- * reading's language (“图 8” beside a translation, “Fig. 8” beside the
- * original), else the engine's label, else a name by kind.
+ * A figure's name in a reading. The original is named as printed (“Fig. 8”,
+ * “Table 3”). A translation is named in its own language's way, from the
+ * original's number (“图 8”, “表 3”): a machine translation keeps some leads
+ * in English and writes others with or without a space, and one paper's
+ * figures must not read “图 1” beside “Fig. 2”. Without a number, the
+ * translated caption's own lead, else the original's.
  */
+export function figureNameIn(
+  kind: "figure" | "table" | "scheme",
+  original: string | null,
+  translated: string | null,
+  language: TranslationLanguage | null,
+  mode: DocumentTextMode,
+): string | null {
+  if (mode === "original") return original;
+  const number = /(S?\d+[a-z]?)\s*$/iu.exec(original ?? translated ?? "")?.[1];
+  if (language && number) return `${FIGURE_WORDS[language][kind]} ${number}`;
+  return translated ?? original;
+}
+/** A figure's name as the reading shows it; without the figure, a name by kind. */
 export function figureName(
   f: LayerFigure | null,
   kind: string,
   mode: DocumentTextMode,
 ): string {
   return (
-    (f ? captionParts(f.caption(mode)).lead : null) ??
-    f?.label ??
+    f?.name(mode) ??
     (kind === "table" ? "表" : kind === "scheme" ? "方案" : "图")
   );
 }
