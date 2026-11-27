@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import {
   parseArchiveBuildRequest,
   parseArchiveIssueCount,
+  parseDocumentTranslateRequest,
+  type DocumentTranslateResult,
   parseLibraryQuery,
   parseLiteratureId,
   tagInteger,
@@ -13,7 +15,12 @@ import {
 import type { SqliteWorker } from "../storage/sqlite/worker.js";
 import type { ProcessingTaskService } from "../application/jobs/processing.js";
 import type { LiteratureQueryService } from "../literature/query.js";
-import { ArchiveError, type ArchiveStatus } from "./orchestrator.js";
+import {
+  ArchiveError,
+  translationRefusal,
+  type ArchiveStatus,
+} from "./orchestrator.js";
+import type { DocumentTranslationRow } from "../storage/sqlite/document-translation-engine.js";
 export class ArchiveReader {
   constructor(protected readonly database: SqliteWorker) {}
   status(id: string, signal?: AbortSignal) {
@@ -191,6 +198,57 @@ export class ArchiveService extends ArchiveReader {
     });
     await this.tasks.start(job.job_id);
     return { job, members: selected.items.length };
+  }
+  /**
+   * Translate one paper into a language on request (ADR 0072, spec 9.6.1):
+   * refused without a proofread full text or while archiving runs; skipped
+   * when this content already has the language; otherwise a task that runs
+   * only the `translate` step.
+   */
+  async translate(
+    value: unknown,
+    signal?: AbortSignal,
+  ): Promise<DocumentTranslateResult> {
+    if (!this.tasks) throw new ArchiveError("archive-task-unavailable");
+    const r = parseDocumentTranslateRequest(value),
+      state = await this.status(r.literature_id, signal);
+    const refusal = translationRefusal(state);
+    if (refusal) throw new ArchiveError(refusal);
+    const main = state.parts.find((p) => p.part === "main")!;
+    const row = await this.database.archive<DocumentTranslationRow | null>(
+      "translation",
+      {
+        document_version_id: main.document_version_id,
+        content_version: main.content_version,
+        target_language: r.target_language,
+      },
+      signal,
+    );
+    const base = {
+      literature_id: r.literature_id,
+      target_language: r.target_language,
+    };
+    if (row?.status === "complete" || row?.status === "same-language")
+      return { ...base, outcome: "skipped", state: row.status, job: null };
+    if (signal?.aborted) throw new ArchiveError("archive-cancelled");
+    const job = await this.tasks.submit({
+      schema_version: 1,
+      idempotency_key: `translate-${randomUUID()}`,
+      operations: [
+        {
+          operation: "build-archive",
+          request: parseArchiveBuildRequest({
+            schema_version: 2,
+            literature_id: r.literature_id,
+            mode: state.mode,
+            from_step: null,
+            translate_only: r.target_language,
+          }),
+        },
+      ],
+    });
+    await this.tasks.start(job.job_id);
+    return { ...base, outcome: "queued", state: null, job };
   }
   async resume(id: string, signal?: AbortSignal) {
     const current = await this.status(id, signal);

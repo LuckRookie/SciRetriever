@@ -117,6 +117,7 @@ export const MAINTENANCE_OPERATIONS = [
   "library-trash",
   "archive",
   "archive-arrangement-edit",
+  "document-translate",
   "tags",
   "archive-references",
   "metadata-edit",
@@ -283,6 +284,9 @@ async function performMaintenance(
     }
     throw new ContractValidationError();
   }
+  // Translate one paper into a language on request (ADR 0072, spec 9.6.1).
+  if (operation === "document-translate")
+    return app.archive.translate(input, signal);
   if (operation === "tags") return manageTags(app.tags, input, signal);
   if (operation === "archive-references")
     return app.archiveReferences.build(input, signal, true);

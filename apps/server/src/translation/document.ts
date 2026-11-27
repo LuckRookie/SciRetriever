@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   DOCUMENT_TRANSLATION_PROMPT_VERSION,
   TRANSLATION_BATCH_MAX_CODE_POINTS,
+  isTranslationLanguage,
   TRANSLATION_BATCH_MAX_UNITS,
   archiveContentVersion,
   canonicalJsonBytes,
@@ -273,6 +274,23 @@ export class DocumentTranslationStore {
       signal,
     );
   }
+  /**
+   * Languages this content version has a translation in (complete, partial
+   * or same-language), sorted by code (ADR 0072).
+   */
+  async languages(
+    document_version_id: string,
+    content_version: string,
+    signal?: AbortSignal,
+  ): Promise<TranslationLanguage[]> {
+    return (
+      await this.database.archive<string[]>(
+        "translation-languages",
+        { document_version_id, content_version },
+        signal,
+      )
+    ).filter(isTranslationLanguage);
+  }
   async latest(
     literature_id: string,
     target_language: TranslationLanguage = this.language,
@@ -441,6 +459,8 @@ export interface TranslateStepInput {
   readonly annotation_id: string;
   /** `from_step: translate`: translate every unit again, cache included. */
   readonly force: boolean;
+  /** The language to translate into; absent is the library default (ADR 0072). */
+  readonly target_language?: TranslationLanguage;
 }
 
 /** The archive step `translate` (ADR 0068, spec 9.3). */
@@ -469,9 +489,27 @@ export class DocumentTranslationService {
   get language() {
     return this.options.store.language;
   }
+  /** The stored translation's status for a content version in a language, or null. */
+  async existing(
+    document_version_id: string,
+    content_version: string,
+    language: TranslationLanguage,
+    signal?: AbortSignal,
+  ): Promise<DocumentTranslationFile["status"] | null> {
+    return (
+      (
+        await this.options.store.row(
+          document_version_id,
+          content_version,
+          language,
+          signal,
+        )
+      )?.status ?? null
+    );
+  }
   async build(input: TranslateStepInput, signal?: AbortSignal) {
     const { database, files, store } = this.options,
-      language = store.language;
+      language = input.target_language ?? store.language;
     const fixed = await new SqliteDocumentStorage(
       database,
       files,

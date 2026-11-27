@@ -1,4 +1,4 @@
-import { ContractValidationError } from "./index.js";
+import { ContractValidationError, parseLiteratureId } from "./index.js";
 
 /** Reader translation (ADR 0049): request, result and the closed language list. */
 export const TRANSLATION_LANGUAGES = [
@@ -127,7 +127,8 @@ export interface FullTextSummary {
 export interface FullTextPageRequest {
   readonly literature_id: string;
   readonly page_index: number;
-  readonly target_language: TranslationLanguage;
+  /** Absent reads the library default language (ADR 0072). */
+  readonly target_language?: TranslationLanguage;
   readonly model: string | null;
   readonly force: boolean;
 }
@@ -136,15 +137,18 @@ export function parseFullTextPageRequest(value: unknown): FullTextPageRequest {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new TranslationInputError();
   const r = value as Record<string, unknown>;
+  const languaged = Object.hasOwn(r, "target_language");
   if (
     Object.keys(r).sort().join() !==
-      "force,literature_id,model,page_index,target_language" ||
+      (languaged
+        ? "force,literature_id,model,page_index,target_language"
+        : "force,literature_id,model,page_index") ||
     typeof r.literature_id !== "string" ||
     !UUID.test(r.literature_id) ||
     !Number.isSafeInteger(r.page_index) ||
     (r.page_index as number) < 0 ||
     (r.page_index as number) > 10000 ||
-    !isTranslationLanguage(r.target_language) ||
+    (languaged && !isTranslationLanguage(r.target_language)) ||
     (r.model !== null &&
       (typeof r.model !== "string" || !r.model || r.model.length > 256)) ||
     typeof r.force !== "boolean"
@@ -153,7 +157,9 @@ export function parseFullTextPageRequest(value: unknown): FullTextPageRequest {
   return {
     literature_id: r.literature_id,
     page_index: r.page_index as number,
-    target_language: r.target_language,
+    ...(languaged
+      ? { target_language: r.target_language as TranslationLanguage }
+      : {}),
     model: r.model as string | null,
     force: r.force,
   };
@@ -310,5 +316,36 @@ export function parseDocumentTranslationFile(
     target_language: r.target_language,
     status: r.status as DocumentTranslationStatus,
     units: Object.freeze(units),
+  });
+}
+
+/**
+ * Translate one paper into a language on request (ADR 0072, document spec
+ * 9.6.1): maintenance operation `document-translate`. It runs only the
+ * archive `translate` step, as a task.
+ */
+export interface DocumentTranslateRequest {
+  readonly literature_id: string;
+  readonly target_language: TranslationLanguage;
+}
+export interface DocumentTranslateResult {
+  readonly literature_id: string;
+  readonly target_language: TranslationLanguage;
+  /** `skipped`: this content already has the language (complete or same-language). */
+  readonly outcome: "queued" | "skipped";
+  /** The state of the stored translation in the language when skipped. */
+  readonly state: DocumentTranslationState | null;
+  /** The queued task (a `build-archive` task with `translate_only`), or null when skipped. */
+  readonly job: { readonly job_id: string } | null;
+}
+export function parseDocumentTranslateRequest(
+  value: unknown,
+): DocumentTranslateRequest {
+  const r = exactRecord(value, ["literature_id", "target_language"]);
+  if (!isTranslationLanguage(r.target_language))
+    throw new ContractValidationError();
+  return Object.freeze({
+    literature_id: String(parseLiteratureId(r.literature_id)),
+    target_language: r.target_language,
   });
 }

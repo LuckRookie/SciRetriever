@@ -2596,6 +2596,7 @@ const ARCHIVE_HTTP_WRITES = [
   "library-trash",
   "snapshot-rename",
   "archive",
+  "document-translate",
   "tags",
   "snapshots",
   "metadata-edit",

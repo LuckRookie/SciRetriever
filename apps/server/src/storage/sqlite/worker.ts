@@ -2067,6 +2067,7 @@ export class SqliteWorker {
       "revision",
       "translation",
       "translation-latest",
+      "translation-languages",
       "layers",
       "layers-latest",
     ].includes(action);

@@ -158,7 +158,11 @@ export interface DocumentReadRequestMap {
     readonly asset_id: string;
     readonly asset_sha256: string;
   };
-  describe: { readonly document_version_id: string };
+  describe: {
+    readonly document_version_id: string;
+    /** The translation to describe (ADR 0072); absent means the library default. */
+    readonly target_language?: TranslationLanguage;
+  };
   outline: {
     readonly annotation_id?: string | null;
     readonly document_version_id: string;
@@ -185,6 +189,8 @@ export interface DocumentReadRequestMap {
     readonly continuation: string | null;
     /** Stored machine translation (ADR 0068); absent means original. */
     readonly text?: DocumentSliceText;
+    /** The translation's language (ADR 0072); absent means the library default. */
+    readonly target_language?: TranslationLanguage;
   };
   resource: {
     readonly document_version_id: string;
@@ -207,6 +213,21 @@ export const DOCUMENT_SLICE_TEXTS = [
   "bilingual",
 ] as const;
 export type DocumentSliceText = (typeof DOCUMENT_SLICE_TEXTS)[number];
+/** The optional `target_language` key of a read request (ADR 0072). */
+function optionalTranslationLanguage(value: unknown): string[] {
+  return value &&
+    typeof value === "object" &&
+    Object.hasOwn(value, "target_language")
+    ? ["target_language"]
+    : [];
+}
+function translationLanguage(r: Record<string, unknown>): {
+  readonly target_language?: TranslationLanguage;
+} {
+  if (!Object.hasOwn(r, "target_language")) return {};
+  if (!isTranslationLanguage(r.target_language)) fail();
+  return { target_language: r.target_language };
+}
 export function parseDocumentReadRequest<K extends DocumentReadOperation>(
   kind: K,
   value: unknown,
@@ -223,8 +244,14 @@ export function parseDocumentReadRequest<K extends DocumentReadOperation>(
       break;
     }
     case "describe": {
-      const r = object(value, ["document_version_id"]);
-      result = { document_version_id: uuid(r.document_version_id) };
+      const r = object(value, [
+        "document_version_id",
+        ...optionalTranslationLanguage(value),
+      ]);
+      result = {
+        document_version_id: uuid(r.document_version_id),
+        ...translationLanguage(r),
+      };
       break;
     }
     case "outline":
@@ -300,6 +327,7 @@ export function parseDocumentReadRequest<K extends DocumentReadOperation>(
         "max_bytes",
         "continuation",
         ...(texted ? ["text"] : []),
+        ...optionalTranslationLanguage(value),
       ]);
       if (texted && !DOCUMENT_SLICE_TEXTS.includes(r.text as DocumentSliceText))
         fail();
@@ -309,6 +337,7 @@ export function parseDocumentReadRequest<K extends DocumentReadOperation>(
         max_bytes: count(r.max_bytes, DOCUMENT_READ_MAX_BYTES),
         continuation: cursor(r.continuation),
         ...(texted ? { text: r.text as DocumentSliceText } : {}),
+        ...translationLanguage(r),
       };
       break;
     }
@@ -762,8 +791,14 @@ export interface DocumentReadResultMap {
     readonly capabilities: DocumentReadCapabilities;
     readonly gaps: readonly DocumentReadGap[];
     readonly layout?: DocumentLayout;
-    /** Stored machine translation of this version (ADR 0068). */
+    /** Stored machine translation of this version (ADR 0068), in the requested language. */
     readonly translation?: DocumentTranslationSummary;
+    /**
+     * Languages this version's content has a translation in (complete,
+     * partial or same-language), sorted by code; present with `translation`
+     * (ADR 0072). Empty for a draft.
+     */
+    readonly translation_languages?: readonly TranslationLanguage[];
     /** Stored reading layers of this version (ADR 0069). */
     readonly layers?: DocumentLayersSummary;
     readonly section_count: number;
@@ -904,6 +939,11 @@ function parseResult<K extends DocumentReadOperation>(
         ...(value && typeof value === "object" && "translation" in value
           ? ["translation"]
           : []),
+        ...(value &&
+        typeof value === "object" &&
+        "translation_languages" in value
+          ? ["translation_languages"]
+          : []),
         ...(value && typeof value === "object" && "layers" in value
           ? ["layers"]
           : []),
@@ -953,6 +993,15 @@ function parseResult<K extends DocumentReadOperation>(
           : {
               translation: translationSummary(
                 r.translation,
+                level.text_level === "draft",
+                (req as DocumentReadRequestMap["describe"]).target_language,
+              ),
+            }),
+        ...(r.translation_languages === undefined
+          ? {}
+          : {
+              translation_languages: translationLanguages(
+                r.translation_languages,
                 level.text_level === "draft",
               ),
             }),
@@ -1076,6 +1125,8 @@ function parseResult<K extends DocumentReadOperation>(
         translated &&
         (typeof r.machine_translation !== "boolean" ||
           !isTranslationLanguage(r.target_language) ||
+          (request.target_language !== undefined &&
+            r.target_language !== request.target_language) ||
           evidence.length !== 0)
       )
         fail();
@@ -1317,6 +1368,8 @@ export interface DocumentTranslationRequest {
   readonly section_id: string | null;
   readonly limit: number;
   readonly cursor: string | null;
+  /** The translation's language (ADR 0072); absent means the library default. */
+  readonly target_language?: TranslationLanguage;
 }
 export interface DocumentTranslationResult {
   readonly text_level?: TextLevel;
@@ -1340,12 +1393,14 @@ export function parseDocumentTranslationRequest(
     "section_id",
     "limit",
     "cursor",
+    ...optionalTranslationLanguage(value),
   ]);
   return Object.freeze({
     document_version_id: uuid(r.document_version_id),
     section_id: r.section_id === null ? null : token(r.section_id),
     limit: count(r.limit, DOCUMENT_READ_MAX_ITEMS),
     cursor: cursor(r.cursor),
+    ...translationLanguage(r),
   });
 }
 export function parseDocumentTranslationResult(
@@ -1368,6 +1423,8 @@ export function parseDocumentTranslationResult(
   if (
     r.machine_translation !== true ||
     !isTranslationLanguage(r.target_language) ||
+    (request.target_language !== undefined &&
+      r.target_language !== request.target_language) ||
     !TRANSLATION_STATES.includes(r.state as DocumentTranslationState) ||
     !Array.isArray(r.units) ||
     r.units.length > request.limit ||
@@ -1416,10 +1473,12 @@ const TRANSLATION_STATES: readonly DocumentTranslationState[] = [
 function translationSummary(
   value: unknown,
   draft: boolean,
+  requested?: TranslationLanguage,
 ): DocumentTranslationSummary {
   const r = object(value, ["target_language", "state", "units", "translated"]);
   if (
     !isTranslationLanguage(r.target_language) ||
+    (requested !== undefined && r.target_language !== requested) ||
     !TRANSLATION_STATES.includes(r.state as DocumentTranslationState) ||
     (draft && r.state !== "none")
   )
@@ -1433,6 +1492,20 @@ function translationSummary(
     units,
     translated,
   });
+}
+function translationLanguages(
+  value: unknown,
+  draft: boolean,
+): readonly TranslationLanguage[] {
+  if (
+    !Array.isArray(value) ||
+    (draft && value.length) ||
+    value.some(
+      (v, i) => !isTranslationLanguage(v) || (i > 0 && value[i - 1] >= v),
+    )
+  )
+    fail();
+  return Object.freeze([...(value as TranslationLanguage[])]);
 }
 /** Truncate only the read projection; the published structure hash is unchanged. */
 export function documentReadTitle(title: string | null): {

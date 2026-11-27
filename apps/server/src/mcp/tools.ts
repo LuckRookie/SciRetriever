@@ -2,6 +2,7 @@ import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import {
   METADATA_FIELDS,
   DRAFT_FACT_SORTS,
+  TRANSLATION_LANGUAGES,
   type DevicePurpose,
 } from "@sciretriever/contracts";
 
@@ -295,7 +296,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "usage_estimate",
-    "Read historical median–P90 token estimates without models or writes. kind=processor with a ProcessorBatchRequest, archive with {selector:SnapshotDefinition}, or tags with {operation:backfill|consolidate,tag_ids?}. No history returns unknown; no cost or hard budget is imposed.",
+    "Read historical median–P90 token estimates without models or writes. kind=processor with a ProcessorBatchRequest, archive with {selector:SnapshotDefinition}, document-translate with {literature_id,target_language} (the translate step only), or tags with {operation:backfill|consolidate,tag_ids?}. No history returns unknown; no cost or hard budget is imposed.",
     object(
       {
         kind: {
@@ -307,6 +308,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
             "synthesis",
             "archive-issues",
             "processing",
+            "document-translate",
           ],
         },
         request: { type: "object" },
@@ -670,7 +672,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "document_read",
-    "Read existing fixed document versions with text_level=draft|proofread, determined by the version, not the current default. Describe adds draft_summary={differs_segments,differences,image_only_pages} only for drafts. Draft segment/slice/evidence locations carry basis=text-layer-match|text-layer-differs|no-text-layer; corrected versions keep their existing basis. Draft outline roles are null; requesting roles on draft segments returns the whole draft with coverage_note. Read figures/reference-texts with {document_version_id,annotation_id,max_bytes,continuation} as bounded JSON. Read parts with {literature_id,offset,limit}; corrections with {document_version_id,segment_id,max_bytes,continuation} is corrected-only. draft-differences uses that request on a draft and returns its saved differences as json-utf8; collect every continuation before parsing JSON. Describe optionally returns layout ranges in UTF-8 bytes. Outline titles are null without a heading. Corrected outline/segments accept annotation_id to pin roles, and segments accepts roles to filter corrected blocks. Read raw parsing status with parsing-status and {literature_id,asset_id}. Stored machine translation: describe adds translation={target_language,state,units,translated}, state none|stale|complete|partial|same-language; translation with {document_version_id,section_id,limit,cursor} returns units {unit_id,segment_ids,translation|null}; slice accepts text=original|translation|bilingual and then returns machine_translation, target_language and untranslated_units; ranges stay original UTF-8 positions, translated text carries no evidence and none/stale returns translation-unavailable. Stored reading layers (machine-written points and digest, never evidence; their evidence is the original): describe adds layers={state,points,target_language,reason}, state none|stale|complete|not-applicable, reason long-document|too-short; layers with {document_version_id,part:overview|outline,text?,format?:json|markdown,limit?,cursor?} returns the overview (summary, the 3-5 primary points each with basis, data rows {quantity,value,source}, limits, advice with places, and all points by section, no evidence) in one page, or outline points (limit<=50); every point has primary, label, kind (context|question|method|result|analysis|claim|limit) and relations {word: see|follows|based_on|explains|sums_up|extends, targets}; outline points have evidence {kind:sentence,unit_id,segment_ids,start_utf8,end_utf8,paragraph,sentences,text}|{kind:block,segment_id,block_kind,caption,paragraph} and resolvable evidence references; text=translation|bilingual needs the translation part (else translation-unavailable); format=markdown exports the same as Markdown; no layers returns layers-unavailable with state and reason. Read overview first, then outline, then slices. request follows the operation's closed document-read contract. Bounded and read-only; never parses, forms a draft or downloads. Devices use this tool over HTTP MCP /mcp with purpose read, not query HTTP routes.",
+    "Read existing fixed document versions with text_level=draft|proofread, determined by the version, not the current default. Describe adds draft_summary={differs_segments,differences,image_only_pages} only for drafts. Draft segment/slice/evidence locations carry basis=text-layer-match|text-layer-differs|no-text-layer; corrected versions keep their existing basis. Draft outline roles are null; requesting roles on draft segments returns the whole draft with coverage_note. Read figures/reference-texts with {document_version_id,annotation_id,max_bytes,continuation} as bounded JSON. Read parts with {literature_id,offset,limit}; corrections with {document_version_id,segment_id,max_bytes,continuation} is corrected-only. draft-differences uses that request on a draft and returns its saved differences as json-utf8; collect every continuation before parsing JSON. Describe optionally returns layout ranges in UTF-8 bytes. Outline titles are null without a heading. Corrected outline/segments accept annotation_id to pin roles, and segments accepts roles to filter corrected blocks. Read raw parsing status with parsing-status and {literature_id,asset_id}. Stored machine translation: describe adds translation={target_language,state,units,translated}, state none|stale|complete|partial|same-language, and translation_languages (languages this content has a translation in, sorted); describe, translation, slice and layers accept optional target_language (default: the library language), and layers in another language than its translation part returns translation-unavailable; translation with {document_version_id,section_id,limit,cursor} returns units {unit_id,segment_ids,translation|null}; slice accepts text=original|translation|bilingual and then returns machine_translation, target_language and untranslated_units; ranges stay original UTF-8 positions, translated text carries no evidence and none/stale returns translation-unavailable. Stored reading layers (machine-written points and digest, never evidence; their evidence is the original): describe adds layers={state,points,target_language,reason}, state none|stale|complete|not-applicable, reason long-document|too-short; layers with {document_version_id,part:overview|outline,text?,format?:json|markdown,limit?,cursor?} returns the overview (summary, the 3-5 primary points each with basis, data rows {quantity,value,source}, limits, advice with places, and all points by section, no evidence) in one page, or outline points (limit<=50); every point has primary, label, kind (context|question|method|result|analysis|claim|limit) and relations {word: see|follows|based_on|explains|sums_up|extends, targets}; outline points have evidence {kind:sentence,unit_id,segment_ids,start_utf8,end_utf8,paragraph,sentences,text}|{kind:block,segment_id,block_kind,caption,paragraph} and resolvable evidence references; text=translation|bilingual needs the translation part (else translation-unavailable); format=markdown exports the same as Markdown; no layers returns layers-unavailable with state and reason. Read overview first, then outline, then slices. request follows the operation's closed document-read contract. Bounded and read-only; never parses, forms a draft or downloads. Devices use this tool over HTTP MCP /mcp with purpose read, not query HTTP routes.",
     object({
       operation: {
         enum: [
@@ -1061,6 +1063,15 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
     object({
       operation: { enum: ["build", "resume", "resolve"] },
       request: { type: "object" },
+    }),
+    false,
+  ),
+  tool(
+    "translate_document",
+    "Translate one paper's proofread full text into a language on request: queues a task that runs only the archive translate step on the current content version, reusing earlier units of the same language, and calls the configured translation model. Returns {literature_id,target_language,outcome:queued|skipped,state,job}; skipped when that content already has a complete or same-language translation; refused with translation-needs-proofread without a proofread full text, or archive-busy while archiving runs. Estimate first with usage_estimate kind=document-translate. Follow the job with task_run; failures are translate issues that never affect readiness.",
+    object({
+      literature_id: id,
+      target_language: { enum: TRANSLATION_LANGUAGES.map((l) => l.code) },
     }),
     false,
   ),

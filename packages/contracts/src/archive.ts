@@ -8,6 +8,10 @@ import {
   tagInteger,
   tagRecord,
 } from "./index.js";
+import {
+  isTranslationLanguage,
+  type TranslationLanguage,
+} from "./translation.js";
 
 export const ARCHIVE_STEPS = [
   "arrange",
@@ -33,6 +37,12 @@ export interface ArchiveBuildRequest {
   readonly literature_id: string;
   readonly mode: ArchiveMode;
   readonly from_step: ArchiveStep | null;
+  /**
+   * Run only the `translate` step, into this language (ADR 0072, document
+   * spec 9.6.1): the on-request translation of one paper. Absent for a
+   * normal build.
+   */
+  readonly translate_only?: TranslationLanguage;
 }
 export interface ArchiveStepReceipt {
   readonly schema_version?: 2;
@@ -155,8 +165,13 @@ export function parseArchiveBuildRequest(value: unknown): ArchiveBuildRequest {
           "mode",
           "from_step",
           "retry_page_indexes",
+          "translate_only",
         ].includes(k),
     ) ||
+    (r.translate_only !== undefined &&
+      (!isTranslationLanguage(r.translate_only) ||
+        (r.from_step ?? null) !== null ||
+        (r.retry_page_indexes ?? null) !== null)) ||
     (r.mode !== undefined &&
       !["full", "legacy-vlm-markdown"].includes(String(r.mode))) ||
     (r.from_step !== undefined &&
@@ -180,6 +195,9 @@ export function parseArchiveBuildRequest(value: unknown): ArchiveBuildRequest {
     literature_id: parseLiteratureId(r.literature_id),
     mode: (r.mode ?? "full") as ArchiveMode,
     from_step: (r.from_step ?? null) as ArchiveStep | null,
+    ...(r.translate_only !== undefined
+      ? { translate_only: r.translate_only as TranslationLanguage }
+      : {}),
   });
 }
 export const archiveContentVersion = (

@@ -44,6 +44,12 @@ export interface DocumentLayersRequest {
   /** Points per outline page (and per Markdown page of the outline), 1 to 50. */
   readonly limit: number;
   readonly cursor: string | null;
+  /**
+   * The language asked for with `text: translation | bilingual` (ADR 0072);
+   * absent means the library default. A translation part in another language
+   * reads as `translation-unavailable`.
+   */
+  readonly target_language?: TranslationLanguage;
 }
 export interface LayersReadUnitRef {
   readonly unit_id: string;
@@ -290,7 +296,7 @@ export function parseDocumentLayersRequest(
   value: unknown,
 ): DocumentLayersRequest {
   const r = record(value);
-  const optional = ["text", "format", "limit", "cursor"];
+  const optional = ["text", "format", "limit", "cursor", "target_language"];
   if (
     !Object.hasOwn(r, "document_version_id") ||
     !Object.hasOwn(r, "part") ||
@@ -312,6 +318,10 @@ export function parseDocumentLayersRequest(
   const next = cursor(r.cursor ?? null);
   // The overview is one page.
   if (part === "overview" && next !== null) fail();
+  const language = Object.hasOwn(r, "target_language")
+    ? r.target_language
+    : undefined;
+  if (language !== undefined && !isTranslationLanguage(language)) fail();
   return Object.freeze({
     document_version_id: String(parseAssetId(r.document_version_id)),
     part,
@@ -319,6 +329,7 @@ export function parseDocumentLayersRequest(
     format,
     limit,
     cursor: next,
+    ...(language !== undefined ? { target_language: language } : {}),
   });
 }
 
@@ -336,7 +347,9 @@ function common(
     r.machine_written !== true ||
     (translated &&
       (r.machine_translation !== true ||
-        !isTranslationLanguage(r.target_language)))
+        !isTranslationLanguage(r.target_language) ||
+        (request.target_language !== undefined &&
+          r.target_language !== request.target_language)))
   )
     fail();
   return {

@@ -208,6 +208,7 @@ function usage(options: CliOptions): CliResult {
     "  browser session --workbench-url URL --request FILE|- [--maintenance] # NDJSON connection\n" +
     "  jobs runtime --workbench-url URL --request FILE|- [--maintenance] # operate in the Web owner\n" +
     "  archive build IDS [--mode full|legacy-vlm-markdown] [--from-step STEP]; archive status|resume ID; archive issues|issue-count|stats|events; archive resolve --request FILE\n" +
+    "  archive translate ID --target-language LANG  # translate one paper's proofread full text into a language (translate step only; calls the model)\n" +
     "  tags list|search|show|changes|consolidate|backfill; tags edit|undo --request FILE; literature tags ID / set|lock --request FILE\n" +
     "  filters list|export|create|rename|update|delete|import --request FILE  # export, save and manage library query conditions\n" +
     "  folders list|delete-preview|export|create|rename|move|delete|add|remove --request FILE  # export, list and manage folders and paper membership\n" +
@@ -986,17 +987,33 @@ async function execute(
                       argument(args, "--idempotency-key") ??
                       `archive-${randomUUID()}`,
                   }
-                : invalidInput();
+                : command === "translate" &&
+                    args[2] &&
+                    !args[2].startsWith("--")
+                  ? {
+                      literature_id: args[2],
+                      target_language:
+                        argument(args, "--target-language") ?? invalidInput(),
+                    }
+                  : invalidInput();
     const envelope = { operation: command, request };
-    if (["build", "resume", "resolve"].includes(command ?? ""))
+    if (["build", "resume", "resolve", "translate"].includes(command ?? ""))
       return output(
         await withApplication(options, async (app) => {
-          const result = await executeMaintenance(
-            app,
-            "archive",
-            envelope,
-            options.signal,
-          );
+          const result =
+            command === "translate"
+              ? await executeMaintenance(
+                  app,
+                  "document-translate",
+                  request,
+                  options.signal,
+                )
+              : await executeMaintenance(
+                  app,
+                  "archive",
+                  envelope,
+                  options.signal,
+                );
           const job = (result as { job?: { job_id: string } })?.job;
           if (job && app.processingTasks) {
             await app.processingTasks.run(job.job_id, options.signal);

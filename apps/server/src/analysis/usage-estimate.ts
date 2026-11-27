@@ -11,6 +11,7 @@ import {
   type ProcessorInvocation,
   type ProcessorObject,
   ARCHIVE_STEPS,
+  parseDocumentTranslateRequest,
   type ArchiveState,
   type ArchiveEstimateComponent,
   type EstimateRange,
@@ -21,6 +22,7 @@ import type { SqliteWorker } from "../storage/sqlite/worker.js";
 import type { LiteratureQueryService } from "../literature/query.js";
 import type { SqliteRawParseStorage } from "../storage/raw-parsing.js";
 import type { TagService } from "../tags/service.js";
+import { translationRefusal } from "../archive/orchestrator.js";
 
 type Component =
   | ({ kind: string } & ReturnType<typeof range>)
@@ -90,6 +92,86 @@ export class UsageEstimator {
       signal: AbortSignal,
     ) => Promise<boolean>,
   ) {}
+  /**
+   * One archive step's estimate from matching history: the per-unit median
+   * and P90 of successful attempts, times the units still to do.
+   */
+  private archiveComponent(
+    step: (typeof ARCHIVE_STEPS)[number],
+    unit: ArchiveEstimateComponent["unit"],
+    units: number | null,
+    history: readonly (Usage & {
+      step: string;
+      stats: Record<string, unknown>;
+    })[],
+  ): ArchiveEstimateComponent & { kind: string } {
+    const deterministic = step === "render" || step === "references";
+    const samples = history
+      .filter(
+        (s) =>
+          s.step === step &&
+          s.stats.workflow === "arranged-v2" &&
+          s.stats.status === "done" &&
+          s.stats.usage_complete === true &&
+          this.archiveMethod !== null &&
+          s.stats.method_sha256 === this.archiveMethod,
+      )
+      .flatMap((s) => {
+        // Translation history counts per page of papers that asked the model.
+        if (step === "translate" && !Number(s.stats.requested_units ?? 0))
+          return [];
+        // Layers history counts per paper that asked the model.
+        if (step === "layers" && s.stats.requested !== true) return [];
+        const n =
+          step === "proofread"
+            ? Number(s.stats.executed_pages ?? 0)
+            : step === "translate"
+              ? Number(s.stats.pages ?? 0)
+              : 1;
+        return n > 0
+          ? [
+              {
+                calls: s.calls / n,
+                input_tokens: s.input_tokens / n,
+                output_tokens: s.output_tokens / n,
+              },
+            ]
+          : [];
+      });
+    const estimate = (key: keyof Usage): EstimateRange | null => {
+      if (deterministic || units === 0) return { median: 0, p90: 0 };
+      if (units === null || !samples.length) return null;
+      const sorted = samples.map((s) => s[key]).sort((a, b) => a - b),
+        q = (p: number) =>
+          Math.ceil(
+            sorted[Math.max(0, Math.ceil(sorted.length * p) - 1)]! * units,
+          );
+      return { median: q(0.5), p90: q(0.9) };
+    };
+    return {
+      kind: step,
+      step,
+      unit,
+      units,
+      sample_count: samples.length,
+      basis: deterministic
+        ? "deterministic"
+        : samples.length
+          ? "matching-history"
+          : "unknown",
+      calls: estimate("calls"),
+      input_tokens: estimate("input_tokens"),
+      output_tokens: estimate("output_tokens"),
+      unknown_code:
+        deterministic || units === 0
+          ? null
+          : units === null
+            ? "pages-unknown"
+            : samples.length
+              ? null
+              : "no-matching-history",
+    };
+  }
   async estimate(
     value: unknown,
     signal?: AbortSignal,
@@ -181,6 +263,66 @@ export class UsageEstimator {
         stop,
       );
     }
+    if (r.kind === "document-translate") {
+      // Translate one paper on request (ADR 0072, spec 9.6.1): the translate
+      // step alone, by the main PDF's pages and the same history.
+      const request = parseDocumentTranslateRequest(r.request);
+      const state = await this.planner.archiveSource.archive.status(
+          request.literature_id,
+          stop,
+        ),
+        main = state.parts.find((p) => p.part === "main"),
+        refusal = translationRefusal(state);
+      const existing =
+        !refusal && main
+          ? ((
+              await this.db.archive<{ status: string } | null>(
+                "translation",
+                {
+                  document_version_id: main.document_version_id,
+                  content_version: main.content_version,
+                  target_language: request.target_language,
+                },
+                stop,
+              )
+            )?.status ?? null)
+          : null;
+      const skipped = existing === "complete" || existing === "same-language",
+        work =
+          main && this.archiveTextWork
+            ? await this.archiveTextWork(main, stop)
+            : null,
+        pdfPages = work?.total_pdf_pages ?? null;
+      const history = await this.db.review<
+        (Usage & { step: string; stats: Record<string, unknown> })[]
+      >("usage-history", { kind: "archive" });
+      const component = this.archiveComponent(
+        "translate",
+        "page",
+        refusal || skipped ? 0 : pdfPages,
+        history,
+      );
+      return {
+        schema_version: 2,
+        kind: "document-translate",
+        literature_id: request.literature_id,
+        target_language: request.target_language,
+        refusal,
+        state: existing,
+        count: 1,
+        reused_count: skipped ? 1 : 0,
+        total_pdf_pages: pdfPages,
+        components: [component],
+        total: {
+          calls: component.calls,
+          input_tokens: component.input_tokens,
+          output_tokens: component.output_tokens,
+        },
+        estimate_method: "archive-v2-matched-success-per-unit-v1",
+        available: component.input_tokens !== null,
+        no_hard_limit: true,
+      };
+    }
     if (r.kind === "processing") {
       const task = await parseProcessingTaskRequest(r.request);
       const components: Component[] = [];
@@ -195,6 +337,17 @@ export class UsageEstimator {
             {
               kind: "tags",
               request: { operation: "backfill", tag_ids: op.request.tag_ids },
+            },
+            stop,
+          );
+        else if (op.operation === "build-archive" && op.request.translate_only)
+          estimate = await this.estimate(
+            {
+              kind: "document-translate",
+              request: {
+                literature_id: op.request.literature_id,
+                target_language: op.request.translate_only,
+              },
             },
             stop,
           );
@@ -319,73 +472,7 @@ export class UsageEstimator {
                   : step === "arrange"
                     ? workParts
                     : ids.length - reused;
-          const deterministic = step === "render" || step === "references";
-          const samples = history
-            .filter(
-              (s) =>
-                s.step === step &&
-                s.stats.workflow === "arranged-v2" &&
-                s.stats.status === "done" &&
-                s.stats.usage_complete === true &&
-                this.archiveMethod !== null &&
-                s.stats.method_sha256 === this.archiveMethod,
-            )
-            .flatMap((s) => {
-              // Translation history counts per page of papers that asked the model.
-              if (step === "translate" && !Number(s.stats.requested_units ?? 0))
-                return [];
-              // Layers history counts per paper that asked the model.
-              if (step === "layers" && s.stats.requested !== true) return [];
-              const n =
-                step === "proofread"
-                  ? Number(s.stats.executed_pages ?? 0)
-                  : step === "translate"
-                    ? Number(s.stats.pages ?? 0)
-                    : 1;
-              return n > 0
-                ? [
-                    {
-                      calls: s.calls / n,
-                      input_tokens: s.input_tokens / n,
-                      output_tokens: s.output_tokens / n,
-                    },
-                  ]
-                : [];
-            });
-          const estimate = (key: keyof Usage): EstimateRange | null => {
-            if (deterministic || units === 0) return { median: 0, p90: 0 };
-            if (units === null || !samples.length) return null;
-            const sorted = samples.map((s) => s[key]).sort((a, b) => a - b),
-              q = (p: number) =>
-                Math.ceil(
-                  sorted[Math.max(0, Math.ceil(sorted.length * p) - 1)]! *
-                    units,
-                );
-            return { median: q(0.5), p90: q(0.9) };
-          };
-          return {
-            kind: step,
-            step,
-            unit,
-            units,
-            sample_count: samples.length,
-            basis: deterministic
-              ? "deterministic"
-              : samples.length
-                ? "matching-history"
-                : "unknown",
-            calls: estimate("calls"),
-            input_tokens: estimate("input_tokens"),
-            output_tokens: estimate("output_tokens"),
-            unknown_code:
-              deterministic || units === 0
-                ? null
-                : units === null
-                  ? "pages-unknown"
-                  : samples.length
-                    ? null
-                    : "no-matching-history",
-          };
+          return this.archiveComponent(step, unit, units, history);
         },
       );
       const total = (

@@ -122,8 +122,18 @@ export class FullTextTranslation {
         signal?: AbortSignal,
       ) => Promise<FullTextSource | null>;
       readonly stored: StoredTranslation;
+      /** The library default language, read when a request names none (ADR 0072). */
+      readonly language?: TranslationLanguage;
     },
   ) {}
+  private language(value: unknown): TranslationLanguage {
+    if (value === null || value === undefined) {
+      if (!this.options.language) throw new TranslationInputError();
+      return this.options.language;
+    }
+    if (!isTranslationLanguage(value)) throw new TranslationInputError();
+    return value;
+  }
   private async load(literatureId: string, signal?: AbortSignal) {
     const source = await this.options.source(literatureId, signal);
     if (!source) throw new TranslationError("translation-not-archived");
@@ -172,13 +182,13 @@ export class FullTextTranslation {
     language: unknown,
     signal?: AbortSignal,
   ): Promise<FullTextSummary> {
-    if (typeof literatureId !== "string" || !isTranslationLanguage(language))
-      throw new TranslationInputError();
+    if (typeof literatureId !== "string") throw new TranslationInputError();
+    const target = this.language(language);
     const source = await this.load(literatureId, signal),
-      stored = await this.pieces(source, language, signal);
+      stored = await this.pieces(source, target, signal);
     return {
       literature_id: literatureId,
-      target_language: language,
+      target_language: target,
       page_count: source.page_count,
       pages: Array.from({ length: source.page_count }, (_, page) => {
         const blocks = this.blocks(source, page, stored);
@@ -192,7 +202,8 @@ export class FullTextTranslation {
     };
   }
   async page(value: unknown, signal?: AbortSignal): Promise<FullTextPage> {
-    const request = parseFullTextPageRequest(value);
+    const request = parseFullTextPageRequest(value),
+      language = this.language(request.target_language);
     const source = await this.load(request.literature_id, signal);
     if (request.page_index >= source.page_count)
       throw new TranslationInputError();
@@ -201,12 +212,12 @@ export class FullTextTranslation {
         ? [b.region]
         : [],
     );
-    const stored = await this.pieces(source, request.target_language, signal),
+    const stored = await this.pieces(source, language, signal),
       blocks = this.blocks(source, request.page_index, stored);
     return {
       literature_id: request.literature_id,
       page_index: request.page_index,
-      target_language: request.target_language,
+      target_language: language,
       model: stored.model,
       saved: blocks.every((b) => stored.pieces.get(b.leaf_id) != null),
       blocks: blocks.map((b) => ({

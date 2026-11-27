@@ -53,6 +53,7 @@ const { readDefaultTextFacts }: typeof DraftFacts = await import(
 const {
   publishDocumentTranslation,
   readDocumentTranslation,
+  readDocumentTranslationLanguages,
   readLatestDocumentTranslation,
 }: typeof import("./document-translation-engine.js") = await import(
   new URL(
@@ -97,6 +98,7 @@ export type ArchiveStorageAction =
   | "parse"
   | "translation"
   | "translation-latest"
+  | "translation-languages"
   | "translation-publish"
   | "layers"
   | "layers-latest"
@@ -110,6 +112,7 @@ export const ARCHIVE_READ_ACTIONS: readonly ArchiveStorageAction[] = [
   "revision",
   "translation",
   "translation-latest",
+  "translation-languages",
   "layers",
   "layers-latest",
 ];
@@ -534,6 +537,8 @@ export function runArchiveStorage(
     if (action === "translation") return readDocumentTranslation(db, r);
     if (action === "translation-latest")
       return readLatestDocumentTranslation(db, r);
+    if (action === "translation-languages")
+      return readDocumentTranslationLanguages(db, r);
     if (action === "translation-publish")
       return publishDocumentTranslation(db, r);
     if (action === "layers") return readDocumentLayers(db, r);

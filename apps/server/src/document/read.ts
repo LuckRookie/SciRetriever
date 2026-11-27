@@ -47,6 +47,8 @@ import {
   type DocumentTranslationFile,
   type DocumentTranslationSummary,
   type DocumentTranslationResult,
+  type TranslationLanguage,
+  archiveContentVersion,
 } from "@sciretriever/contracts";
 import type { SqliteWorker } from "../storage/sqlite/worker.js";
 import type { FileRangeChunks } from "../storage/files/reader.js";
@@ -323,13 +325,18 @@ export class DocumentReadService {
       signal,
     );
   }
-  /** The configured language's translation of a fixed version (spec 9.6). */
+  /**
+   * The translation of a fixed version in a language (spec 9.6, 9.6.1): the
+   * requested one, else the library default.
+   */
   private async translationOf(
     document: DocumentRef,
     signal?: AbortSignal,
     withFile = true,
+    requested?: TranslationLanguage,
   ) {
     if (!this.translations) return null;
+    const language = requested ?? this.translations.language;
     const annotation =
       document.schema_version === 2 && this.annotations
         ? await this.annotations.current(document.document_version_id, signal)
@@ -338,6 +345,7 @@ export class DocumentReadService {
       document,
       annotation?.annotation_id ?? null,
       signal,
+      language,
     );
     let file: DocumentTranslationFile | null = null;
     if (found.row && withFile) {
@@ -348,12 +356,25 @@ export class DocumentReadService {
       }
     }
     const summary: DocumentTranslationSummary = {
-      target_language: this.translations.language,
+      target_language: language,
       state: found.state,
       units: found.row?.unit_count ?? 0,
       translated: found.row?.translated_count ?? 0,
     };
-    return { summary, file };
+    // Languages of this content version that have a translation (spec 9.6.1);
+    // only describe lists them.
+    const languages =
+      !withFile && document.schema_version === 2 && annotation
+        ? await this.translations.languages(
+            document.document_version_id,
+            await archiveContentVersion(
+              document.document_version_id,
+              annotation.annotation_id,
+            ),
+            signal,
+          )
+        : [];
+    return { summary, file, languages };
   }
 
   close(): Promise<void> {
@@ -693,10 +714,15 @@ export class DocumentReadService {
           ? { layout: structure.layout }
           : {}),
         ...(this.translations
-          ? {
-              translation: (await this.translationOf(document, signal, false))!
-                .summary,
-            }
+          ? await this.translationOf(
+              document,
+              signal,
+              false,
+              r.target_language,
+            ).then((found) => ({
+              translation: found!.summary,
+              translation_languages: found!.languages,
+            }))
           : {}),
         ...(this.layerStore
           ? { layers: await this.layersSummary(document, signal) }
@@ -731,7 +757,12 @@ export class DocumentReadService {
             !structure.sections.some((s) => s.section_id === r.section_id)
           )
             invalid();
-          const found = (await this.translationOf(document, signal))!;
+          const found = (await this.translationOf(
+            document,
+            signal,
+            true,
+            r.target_language,
+          ))!;
           const sections = new Map(
             structure.segments.map((s) => [s.segment_id, s.section_id]),
           );
@@ -741,7 +772,10 @@ export class DocumentReadService {
                 r.section_id === null ||
                 sections.get(u.unit_id) === r.section_id,
             ) ?? [];
-          const selector = { section_id: r.section_id };
+          const selector = {
+            section_id: r.section_id,
+            target_language: found.summary.target_language,
+          };
           const start = cursorPosition(
             r.cursor,
             "translation",
@@ -824,7 +858,16 @@ export class DocumentReadService {
             throw new DocumentReadError("document-integrity", { cause: error });
           }
           const part = file.translation;
-          if (r.text !== "original" && !part)
+          // The translation part has one language (spec 10.5, 9.6.1); asked
+          // for another, the translated readings are unavailable.
+          const requested =
+            r.target_language ??
+            this.translations?.language ??
+            part?.target_language;
+          if (
+            r.text !== "original" &&
+            (!part || part.target_language !== requested)
+          )
             throw new DocumentReadError("translation-unavailable");
           // Evidence translations come from the stored translation in the
           // part's language; its positions count only on the same file.
@@ -910,7 +953,12 @@ export class DocumentReadService {
               ...marks(),
             };
           }
-          const selector = { part: r.part, text: r.text, format: r.format };
+          const selector = {
+            part: r.part,
+            text: r.text,
+            format: r.format,
+            ...(r.text === "original" ? {} : { target_language: requested }),
+          };
           const start = cursorPosition(
             r.cursor,
             "layers",
@@ -1238,7 +1286,12 @@ export class DocumentReadService {
           mode === "original"
             ? null
             : this.translations
-              ? (await this.translationOf(document, signal))!
+              ? (await this.translationOf(
+                  document,
+                  signal,
+                  true,
+                  r.target_language,
+                ))!
               : null;
         if (
           mode !== "original" &&
@@ -1424,7 +1477,11 @@ export class DocumentReadService {
     resource: DocumentResource | undefined,
     signal?: AbortSignal,
   ) {
-    const state = { selector, text: mode };
+    const state = {
+      selector,
+      text: mode,
+      target_language: marks.target_language,
+    };
     const start = cursorPosition(
       r.continuation,
       "slice-translation",

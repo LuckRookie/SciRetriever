@@ -11,6 +11,7 @@ import {
   type ArchiveStepReceipt,
   type LiteratureStatus,
   type ParseDocumentReceipt,
+  type TranslationLanguage,
 } from "@sciretriever/contracts";
 import type { SqliteWorker } from "../storage/sqlite/worker.js";
 import type { ProofreadService } from "../proofread/service.js";
@@ -47,7 +48,7 @@ export interface ArchiveRuntime {
    */
   readonly translate?: Pick<
     import("../translation/document.js").DocumentTranslationService,
-    "build" | "language"
+    "build" | "language" | "existing"
   >;
   /**
    * The `layers` step (ADR 0069). A runtime without it, as in focused tests
@@ -81,6 +82,26 @@ export type ArchiveStatus = ArchiveState & {
   status: LiteratureStatus;
   missing_step: string | null;
 };
+/**
+ * Why a paper cannot be translated on request (spec 9.6.1): no primary PDF
+ * with a proofread, rendered full text, or archiving already running. null
+ * when it can.
+ */
+export function translationRefusal(
+  state: ArchiveState,
+): "translation-needs-proofread" | "archive-busy" | null {
+  const main = state.parts.find((p) => p.part === "main");
+  if (
+    !main ||
+    main.text_level !== "proofread" ||
+    main.format !== "arranged-v2" ||
+    !main.document_version_id ||
+    !main.structure_annotation_id ||
+    !main.content_version
+  )
+    return "translation-needs-proofread";
+  return state.running ? "archive-busy" : null;
+}
 export class ArchiveOrchestrator {
   constructor(
     private readonly database: SqliteWorker,
@@ -99,8 +120,10 @@ export class ArchiveOrchestrator {
     jobId: string | null = null,
   ): Promise<Record<string, unknown>> {
     const request = parseArchiveBuildRequest(value),
-      id = request.literature_id,
-      initial = await this.status(id, signal),
+      id = request.literature_id;
+    if (request.translate_only)
+      return this.translateOnly(request, request.translate_only, signal, jobId);
+    const initial = await this.status(id, signal),
       main = initial.parts.find((p) => p.part === "main");
     if (!main) return { outcome: "needs-pdf", literature_id: id };
     const profiles =
@@ -300,11 +323,85 @@ export class ArchiveOrchestrator {
       vocabulary_through: after,
     };
   }
+  /**
+   * Translate one paper into a language on request (ADR 0072, spec 9.6.1):
+   * only the `translate` step, on the current proofread content version, in a
+   * run of its own so attempts, usage, task progress and issues are recorded
+   * as for archiving. A complete (or same-language) translation is skipped.
+   */
+  private async translateOnly(
+    request: ArchiveBuildRequest,
+    language: TranslationLanguage,
+    signal?: AbortSignal,
+    jobId: string | null = null,
+  ): Promise<Record<string, unknown>> {
+    const id = request.literature_id,
+      translate = this.runtime.translate;
+    if (!translate) throw new ArchiveError("archive-runtime-unavailable");
+    const state = await this.status(id, signal),
+      main = state.parts.find((p) => p.part === "main"),
+      base = { literature_id: id, target_language: language };
+    const refusal = translationRefusal(state);
+    if (refusal || !main) return { ...base, outcome: refusal };
+    const existing = await translate.existing(
+      main.document_version_id!,
+      main.content_version!,
+      language,
+      signal,
+    );
+    if (existing === "complete" || existing === "same-language")
+      return { ...base, outcome: "skipped", state: existing };
+    const runId = randomUUID();
+    await this.database.archive(
+      "begin",
+      {
+        literature_id: id,
+        asset_id: main.asset_id,
+        mode: state.mode,
+        run_id: runId,
+        job_id: jobId,
+      },
+      signal,
+    );
+    let interrupted = false,
+      failed = false;
+    try {
+      await withActivity(
+        { operation: "archive-translate", literature_id: id },
+        () => this.step(runId, request, main, "translate", signal, language),
+      );
+    } catch (error) {
+      if (signal?.aborted) {
+        interrupted = true;
+        throw error;
+      }
+      failed = true;
+    } finally {
+      await this.database.archive("finish", {
+        literature_id: id,
+        run_id: runId,
+        interrupted,
+      });
+    }
+    const after = await this.status(id),
+      receipt = after.parts
+        .find((p) => p.asset_id === main.asset_id)
+        ?.steps.find((s) => s.step === "translate");
+    return {
+      ...base,
+      outcome: failed ? "failed" : "translated",
+      translation: receipt?.output.translation ?? null,
+      issues: after.issues.filter(
+        (i) => i.step === "translate" && i.resolution === null,
+      ),
+    };
+  }
   private async input(
     request: ArchiveBuildRequest,
     part: ArchivePart,
     step: ArchiveStep,
     signal?: AbortSignal,
+    language?: TranslationLanguage,
   ) {
     const state = await this.status(request.literature_id, signal),
       current = state.parts.find((p) => p.asset_id === part.asset_id);
@@ -329,7 +426,7 @@ export class ArchiveOrchestrator {
         metadata,
         assignment?.assignment_sha256 ?? null,
         step === "translate"
-          ? (this.runtime.translate?.language ?? null)
+          ? (language ?? this.runtime.translate?.language ?? null)
           : step === "layers"
             ? (this.runtime.layers?.language ?? null)
             : null,
@@ -352,10 +449,12 @@ export class ArchiveOrchestrator {
     part: ArchivePart,
     step: ArchiveStep,
     signal?: AbortSignal,
+    /** The translate step's language when not the library default (ADR 0072). */
+    language?: TranslationLanguage,
   ) {
     if (signal?.aborted) throw new ArchiveError("archive-cancelled");
     const id = request.literature_id,
-      input = await this.input(request, part, step, signal),
+      input = await this.input(request, part, step, signal, language),
       prior = input.current.steps.find((s) => s.step === step),
       // Only `from_step: translate` translates every unit again; an earlier
       // from_step keeps reusing unchanged units (spec 9.3).
@@ -478,6 +577,7 @@ export class ArchiveOrchestrator {
                 document_version_id: reference.document_version_id,
                 annotation_id: reference.annotation_id,
                 force,
+                ...(language ? { target_language: language } : {}),
               },
               signal,
             )),
@@ -525,7 +625,7 @@ export class ArchiveOrchestrator {
         }
       }
       // Record a successfully committed step even if cancellation arrived just after publication.
-      const after = await this.input(request, part, step);
+      const after = await this.input(request, part, step, undefined, language);
       await this.save(
         runId,
         id,

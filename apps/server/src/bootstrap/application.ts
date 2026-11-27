@@ -2253,6 +2253,7 @@ async function createApplicationOwned(
       ),
       translation,
       fullTextTranslation: new FullTextTranslation({
+        language: configuration.translation.target_language,
         stored: async (document, language, signal) => {
           const annotation =
             document.schema_version === 2

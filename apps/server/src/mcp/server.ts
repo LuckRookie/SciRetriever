@@ -277,6 +277,7 @@ export function createMcpServer(options: McpOptions = {}) {
       recognize_literatures: "literature-recognize",
       library_trash_manage: "library-trash",
       archive_manage: "archive",
+      translate_document: "document-translate",
       archive_arrangement_edit: "archive-arrangement-edit",
       tags_manage: "tags",
       archive_references: "archive-references",

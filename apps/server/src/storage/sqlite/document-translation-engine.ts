@@ -53,6 +53,22 @@ export function readDocumentTranslation(
       ),
   );
 }
+/**
+ * Languages a content version of a fixed version has a translation in, sorted
+ * by code (ADR 0072). The version index is ordered by language; the content
+ * version filters its few rows.
+ */
+export function readDocumentTranslationLanguages(
+  db: DatabaseSync,
+  r: Record<string, unknown>,
+): string[] {
+  return db
+    .prepare(
+      "SELECT target_language FROM document_translations INDEXED BY document_translations_version WHERE document_version_id=? AND content_version=? ORDER BY target_language",
+    )
+    .all(String(r.document_version_id), String(r.content_version))
+    .map((row) => String(row.target_language));
+}
 /** The most recent translation of the literature in a language (reuse and `stale`). */
 export function readLatestDocumentTranslation(
   db: DatabaseSync,

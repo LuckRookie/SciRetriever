@@ -632,6 +632,13 @@ export class ProcessingTaskService {
               ["blocked", "needs-parse", "needs-pdf", "excluded"].includes(
                 String(result.outcome),
               ) ||
+              // A translation on request that had nothing to do (spec 9.6.1).
+              (operation.operation === "build-archive" &&
+                [
+                  "skipped",
+                  "translation-needs-proofread",
+                  "archive-busy",
+                ].includes(String(result.outcome))) ||
               (operation.operation === "recognize-literature" &&
                 result.outcome === "skipped")
                 ? ("skipped" as const)
