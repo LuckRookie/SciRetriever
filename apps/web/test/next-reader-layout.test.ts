@@ -691,7 +691,7 @@ it("puts the reader under one top bar: navigation in a drawer, the views, find, 
     const more = await menuItems("更多");
     // A paper in the library leaves it from here (ADR 0067).
     // The ways of reading come first, as one item with its own menu (ADR 0071).
-    expect(more[0]).toBe("阅读方式");
+    expect(more.slice(0, 2)).toEqual(["阅读方式", "译文语言"]);
     expect(more.slice(more.indexOf("移出文献库…"))).toEqual([
       "移出文献库…",
       "上传 PDF",

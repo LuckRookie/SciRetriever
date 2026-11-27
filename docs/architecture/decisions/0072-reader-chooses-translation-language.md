@@ -2,7 +2,7 @@
 
 类型：决策（ADR）
 负责：读译文时用哪种语言、在哪里选、一篇文献没有这种语言的译文时怎么办；PDF 与读本并排时“原/译”落在哪一边
-状态：Accepted（2026-11-27，Owner 定方向，细节由总设计师补全）
+状态：Accepted（2026-11-27，Owner 定方向，细节由总设计师补全）；已实现（2026-11-27）
 
 - Date: 2026-11-27
 - 修订：[ADR 0068](0068-stored-full-text-translation.md) 里“译文语言是部署的一项配置（`[translation].target_language`），所有文献共用”一句，改为“这一项是库的默认语言”；[ADR 0071](0071-pdf-first-reader-two-floating-balls.md) 第 2 节“PDF 一旦和读本并排，左页始终是原件，‘译’只管右边”一句。ADR 0068、0071 其余各节不变。

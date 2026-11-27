@@ -1003,13 +1003,16 @@ HTTP 使用 `protocol_version: 1` 封套与现有维护认证；任务进度与�
 
 ### 9.6.1 读者选的语言与当场翻译
 
-目标，尚未实现（[ADR 0072](../decisions/0072-reader-chooses-translation-language.md)）。
+已实现（2026-11-27，[ADR 0072](../decisions/0072-reader-chooses-translation-language.md)）。
 
 - **库的默认语言**：`[translation].target_language` 是库的默认语言：建档的 `translate` 一步翻译成它，读取不指明语言时读它。
 - **读取时指明语言**：`describe`、`translation`、`slice`（`text` 为 `translation` 或 `bilingual` 时）、`layers`（`text` 为 `translation` 或 `bilingual` 时）与 PDF 的两个译文接口（`/api/translation/fulltext`、`/fulltext/page`）都接受可选的 `target_language`（九种之一），不给时用库的默认语言。结果里的 `target_language` 是实际读的那一种。`describe` 的 `translation` 按请求的语言给出；另加一项 `translation_languages`：这一版内容已有译文的语言（`complete`、`partial`、`same-language` 的那些），按语言代码排序。
 - **阅读层**：阅读层的译文部分只有一种语言（10.5）。请求的语言与它不同时，`layers` 的 `translation`、`bilingual` 返回 `translation-unavailable`，阅读页改读原文的阅读层。
 - **当场翻译**：新增一种操作“把一篇文献翻译成某种语言”：请求 `{literature_id, target_language}`。它只执行 9.3 的 `translate` 一步，用指定的语言、这篇文献当前的校订稿内容版本，作为任务运行，与建档共用模型名额；输入、沿用、分批、重试、结果、发布与问题都按 9.3、9.4。已经有这种语言的完整译文时这一步跳过。没有已校对的全文时不能发起，返回原因。预估用量同建档的翻译一步。HTTP、CLI 与 MCP 都有；需要维护权限。
-- **库结构**：不变。登记表本来按语言分行；步骤记录的步骤名不受取值限制（9.4）。
+- **入口**：维护操作 `document-translate`（HTTP `POST /api/v1/maintenance/document-translate`，CLI `archive translate <文献> --target-language <语言>`，MCP `translate_document`）。结果是 `{literature_id, target_language, outcome, state, job}`：`outcome` 为 `queued`（建了任务）或 `skipped`（这种语言已有完整译文，或原文就是这种语言，不建任务）。没有已校对的全文返回 `translation-needs-proofread`（422），正在建档返回 `archive-busy`（409）。任务是一个只含翻译一步的建档任务（请求里 `translate_only` 写语言），进度与问题的看法和建档相同；运行期间文献的状态是 `ARCHIVING`。
+- **预估**：`usage-estimate` 的 `kind: "document-translate"`，请求同上，只算翻译一步，按主 PDF 的页数与翻译一步的历史（当场翻译的历史也算样本）；另给 `refusal` 与这种语言已有译文的 `state`。
+- **步骤记录按语言分开**：翻译成库默认语言的记在 `translate`；当场翻译成别的语言的记在 `translate-<语言代码的小写>`（如 `translate-ja`、`translate-zh-hant`）。因此再建档时 `translate` 不受当场翻译影响；建档预估不因当场翻译把这篇算作待翻译；各语言的问题各自关闭。
+- **库结构**：不变。登记表本来按语言分行；步骤记录的步骤名只检查格式（9.4）。
 
 ### 9.7 检索
 

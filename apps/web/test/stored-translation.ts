@@ -76,27 +76,53 @@ export async function storedTranslation(
       const value = await response.json();
       reading = value.result.document;
       const all = units();
+      // ADR 0072: the language asked for; this paper has only `fake.language`.
+      const asked =
+        (
+          route.request().postDataJSON() as {
+            request: { target_language?: string };
+          }
+        ).request.target_language ?? fake.language;
+      const has = asked === fake.language;
       value.result.translation = {
-        target_language: fake.language,
-        state: fake.state,
+        target_language: asked,
+        state: has ? fake.state : "none",
         units: all.length,
-        translated: listed().filter((u) => u.translation !== null).length,
+        translated: has
+          ? listed().filter((u) => u.translation !== null).length
+          : 0,
       };
+      if ("translation_languages" in value.result)
+        value.result.translation_languages =
+          fake.state === "complete" ||
+          fake.state === "partial" ||
+          fake.state === "same-language"
+            ? [fake.language]
+            : [];
       await route.fulfill({ response, json: value });
     },
   );
   await page.route(
     (url) => url.pathname === "/api/v1/query/document-translation",
     async (route) => {
-      const list = listed();
+      const asked =
+        (
+          route.request().postDataJSON() as {
+            request: { target_language?: string };
+          }
+        ).request.target_language ?? fake.language;
+      const has = asked === fake.language;
+      const list = has
+        ? listed()
+        : units().map((u) => ({ ...u, translation: null }));
       await route.fulfill({
         json: {
           protocol_version: 1,
           result: {
             document: reading,
             machine_translation: true,
-            target_language: fake.language,
-            state: fake.state,
+            target_language: asked,
+            state: has ? fake.state : "none",
             units: list,
             total: list.length,
             next_cursor: null,

@@ -950,7 +950,8 @@
     border-bottom: 1.75px solid var(--blue);
     transform: rotate(-45deg);
   }
-  .ui-option[data-selected]:has(.ui-description)::after {
+  .ui-option[data-selected]:has(.ui-description)::after,
+  .ui-menu-item[data-checked]:has(.ui-description)::after {
     top: 17px;
   }
   .ui-option[data-disabled],

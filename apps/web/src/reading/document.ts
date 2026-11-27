@@ -119,10 +119,14 @@ export async function renderDocument(
       resources.set(resource.reference, resource);
     cursor = page.next_cursor;
   } while (cursor);
+  const askedLanguage = frame.translationLanguage ?? null;
   const described: DocumentReadResultMap["describe"] = await readDocument(
     ctx,
     "describe",
-    { document_version_id: docId },
+    {
+      document_version_id: docId,
+      ...(askedLanguage ? { target_language: askedLanguage } : {}),
+    },
   );
   bound(described);
   const layout: DocumentLayout | null = described.layout ?? null;
@@ -297,7 +301,12 @@ export async function renderDocument(
   /** Reads the version's translation once; false when it could not be read. */
   const ensureUnits = () => {
     if (units) return Promise.resolve(true);
-    unitsLoading ??= readDocumentTranslation(ctx, docId).then(
+    unitsLoading ??= readDocumentTranslation(
+      ctx,
+      docId,
+      undefined,
+      askedLanguage,
+    ).then(
       (list) => {
         const map = new Map<string, Unit>();
         for (const unit of list)
@@ -1475,7 +1484,15 @@ export async function renderDocument(
   // end first; a version with layers is never a long document.
   if (described.layers?.state !== "complete" || level === "draft") return;
   try {
-    const data = await readLayers(ctx, docId, described.layers);
+    // The layers' translation part has one language (spec 10.5): in another
+    // language the notes are read in the paper's own (ADR 0072).
+    const layersSummary =
+      askedLanguage &&
+      described.layers.target_language &&
+      described.layers.target_language !== askedLanguage
+        ? { ...described.layers, target_language: null }
+        : described.layers;
+    const data = await readLayers(ctx, docId, layersSummary);
     while (!finished && !ctx.signal.aborted) await load();
     ctx.signal.throwIfAborted();
     if (data.text !== "original") await ensureUnits();

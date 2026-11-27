@@ -408,3 +408,89 @@ it("shows the 翻译 tab for the library's translation where no translation serv
     await w.close();
   }
 }, 180000);
+
+it("reads translations in the language chosen in 更多 → 译文语言, and offers to translate a paper that lacks it (ADR 0072)", async () => {
+  const w = await nextWorkspace({
+    ready: "body",
+    setup: async (env) => env.setText(TEXT),
+  });
+  try {
+    const page = w.page,
+      id = w.env.parseRequest.literature_id;
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await storedTranslation(page, { state: "complete" });
+    const asked: unknown[] = [];
+    await page.route(
+      (url) => url.pathname === "/api/v1/maintenance/document-translate",
+      async (route) => {
+        const request = (route.request().postDataJSON() as { request: unknown })
+          .request;
+        asked.push(request);
+        await route.fulfill({
+          json: {
+            protocol_version: 1,
+            result: {
+              literature_id: id,
+              target_language: "ja",
+              outcome: "queued",
+              state: null,
+              job: { job_id: "fixture-job" },
+            },
+          },
+        });
+      },
+    );
+    await page.goto(`${w.origin}/?literature=${id}&reader=doc`);
+    await page.locator('.react-reader[data-reading-ready="true"]').waitFor();
+    await readerLanguage(page, "translation");
+    await shows(page, "translation");
+    // 更多 → 译文语言: the nine languages, the one read now checked.
+    await page.getByRole("button", { name: "更多", exact: true }).click();
+    await page.getByRole("menuitem", { name: /^译文语言/u }).click();
+    const items = page.locator(".ui-menu").last().getByRole("menuitem");
+    await expect.poll(() => items.count()).toBeGreaterThanOrEqual(9);
+    expect(
+      await page
+        .locator(".ui-menu")
+        .last()
+        .locator('[data-checked="true"]')
+        .innerText(),
+    ).toContain("简体中文");
+    await shot(page, "language-menu");
+    await page
+      .locator(".ui-menu")
+      .last()
+      .getByRole("menuitem", { name: /日本語/u })
+      .click();
+    // This paper has no Japanese: the ball says why, the line under the header offers it.
+    await expect
+      .poll(() => ball(page).getAttribute("title"))
+      .toContain("日本語");
+    const offer = page.getByRole("button", { name: "翻译这一篇", exact: true });
+    await offer.waitFor();
+    await shot(page, "language-missing");
+    await offer.click();
+    const dialog = page.getByRole("dialog", { name: "把这一篇翻译成日本語" });
+    await dialog.waitFor();
+    await dialog
+      .getByRole("button", { name: "翻译成日本語", exact: true })
+      .click();
+    await expect.poll(() => asked.length).toBe(1);
+    expect(asked[0]).toEqual({ literature_id: id, target_language: "ja" });
+    await page.getByText("正在翻译成日本語", { exact: true }).waitFor();
+    // Back to the library's language: its translation reads again.
+    await page.getByRole("button", { name: "更多", exact: true }).click();
+    await page.getByRole("menuitem", { name: /^译文语言/u }).click();
+    await page
+      .locator(".ui-menu")
+      .last()
+      .getByRole("menuitem", { name: /简体中文/u })
+      .click();
+    await expect
+      .poll(() => ball(page).getAttribute("aria-disabled"))
+      .toBeNull();
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 180000);

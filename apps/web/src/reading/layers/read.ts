@@ -38,7 +38,7 @@ export function readLayers(
   const text: DocumentSliceText = summary.target_language
     ? "bilingual"
     : "original";
-  const key = `${versionId}|${text}`;
+  const key = `${versionId}|${text}|${summary.target_language ?? ""}`;
   const known = kept.get(key);
   if (known) {
     kept.delete(key);
@@ -54,6 +54,10 @@ export function readLayers(
         format: "json",
         limit: LAYERS_OUTLINE_MAX_LIMIT,
         ...(cursor === null ? {} : { cursor }),
+        // The translation part's own language (ADR 0072).
+        ...(text !== "original" && summary.target_language
+          ? { target_language: summary.target_language }
+          : {}),
       });
       return parseDocumentLayersResult(
         (await ctx.api.query("document-layers", request, ctx.signal)).result,

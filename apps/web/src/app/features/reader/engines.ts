@@ -1,3 +1,4 @@
+import type { TranslationLanguage } from "@sciretriever/contracts";
 import type { ReadingLayer } from "../../../reading/layers/model.js";
 import { pdfZoom } from "./input/scale.js";
 import {
@@ -209,6 +210,8 @@ export interface ReaderBindings {
   textMode(): DocumentTextMode;
   /** The full text switched its reading itself (a marked paragraph's sign). */
   textModeChanged(mode: DocumentTextMode): void;
+  /** The language the reader reads translations in (ADR 0072); null is the library's own. */
+  translationLanguage(): TranslationLanguage | null;
   /** The reading layer the address asks for (reading-experience 3.3.1). */
   layer(): ReadingLayer;
   /** The sheet shows another layer (a note pressed, the wheel with Alt). */
@@ -668,6 +671,7 @@ function build(
         if (shows(view)) b.textModeChanged(mode);
       },
       readingLayer: b.layer(),
+      translationLanguage: b.translationLanguage(),
       onLayer: (shown) => {
         if (shows(view)) b.layerChanged(shown);
       },

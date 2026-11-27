@@ -1,3 +1,4 @@
+import type { TranslationLanguage } from "@sciretriever/contracts";
 import {
   parseDocumentDraftDifferencesRequest,
   parseDocumentDraftDifferencesResult,
@@ -321,6 +322,8 @@ export async function readDocumentTranslation(
   ctx: ReadingContext,
   documentVersionId: string,
   onPage?: (page: DocumentTranslationResult) => void,
+  /** The reader's language (ADR 0072); absent reads the library's own. */
+  language?: TranslationLanguage | null,
 ): Promise<DocumentTranslationResult["units"]> {
   const units: DocumentTranslationResult["units"][number][] = [];
   let cursor: string | null = null;
@@ -330,6 +333,7 @@ export async function readDocumentTranslation(
       section_id: null,
       limit: 200,
       cursor,
+      ...(language ? { target_language: language } : {}),
     });
     const reply = await ctx.api.query(
       "document-translation",

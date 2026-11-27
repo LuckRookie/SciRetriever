@@ -1,3 +1,4 @@
+import type { TranslationLanguage } from "@sciretriever/contracts";
 import type { ReadingLayer } from "./layers/model.js";
 import type { ReadingPosition } from "./state.js";
 
@@ -244,6 +245,11 @@ export interface ReaderFrame {
   readingLayer?: ReadingLayer;
   /** Whether stressed words are marked (排版 → 标出重点词). */
   keyTerms?: boolean;
+  /**
+   * The language the reader reads translations in (ADR 0072); absent or
+   * null reads the library's own language.
+   */
+  translationLanguage?: TranslationLanguage | null;
   /**
    * Set by the full-text engine once the layers are on the sheet: shows a
    * layer, arriving at a note or at a place of the full text.

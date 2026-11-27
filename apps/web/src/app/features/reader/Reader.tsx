@@ -87,6 +87,15 @@ import { download, OperationDialog } from "../library/OperationDialog.js";
 import { useLibraryRemoval } from "../library/Uncollect.js";
 import { ReaderInformation, ReaderRelations } from "./ReaderInformation.js";
 import { RunOperatorDialog } from "../processing/RunOperator.js";
+import {
+  languageName,
+  translationLanguage,
+} from "./input/translation-language.js";
+import { TranslateDialog } from "./translation/TranslateDialog.js";
+import {
+  TRANSLATION_LANGUAGES,
+  type TranslationLanguage,
+} from "@sciretriever/contracts";
 import "./layers.css";
 import type { ReadingLayer } from "../../../reading/layers/model.js";
 import "./reading.css";
@@ -331,16 +340,26 @@ export default function Reader() {
   // Reading-experience 9: whether this full text has a translation to read,
   // asked anew on opening (a version's translation is published after it).
   const documentRef = sources.data?.document ?? null;
+  // ADR 0072: the language this browser reads translations in.
+  const chosenLanguage = useSyncExternalStore(
+    translationLanguage.subscribe,
+    translationLanguage.get,
+    translationLanguage.get,
+  );
   const translationQuery = useQuery({
     queryKey: [
       "document",
       "translation-summary",
       documentRef?.document_version_id ?? null,
+      chosenLanguage,
     ],
     enabled: !!documentRef,
     retry: false,
     queryFn: async ({ signal }) => {
-      const request = { document_version_id: documentRef!.document_version_id };
+      const request = {
+        document_version_id: documentRef!.document_version_id,
+        ...(chosenLanguage ? { target_language: chosenLanguage } : {}),
+      };
       const reply = await api.query("document-describe", request, signal);
       const described = parseDocumentReadResult(
         "describe",
@@ -351,6 +370,7 @@ export default function Reader() {
         translation: described.translation ?? null,
         level: described.text_level ?? ("proofread" as const),
         layers: described.layers ?? null,
+        languages: described.translation_languages ?? [],
       };
     },
   });
@@ -380,13 +400,46 @@ export default function Reader() {
     !documentRef || translationQuery.isSuccess || translationQuery.isError;
   // Why there is nothing to read in translation: by the state, and for none
   // by the text — a proofread text was parsed before translating was a step.
-  const translationReason = translationKnown
-    ? translationUnavailable(
-        translationSummary?.state ?? null,
-        translationSummary?.target_language ?? "zh-Hans",
-        translationQuery.data?.level ?? null,
+  const translationReason = !translationKnown
+    ? null
+    : chosenLanguage &&
+        translationSummary?.state === "none" &&
+        translationQuery.data?.level === "proofread"
+      ? `这一篇还没有${languageName(chosenLanguage)}译文；可以在“更多 → 译文语言”里翻译这一篇`
+      : translationUnavailable(
+          translationSummary?.state ?? null,
+          translationSummary?.target_language ?? "zh-Hans",
+          translationQuery.data?.level ?? null,
+        );
+  const [translateTo, setTranslateTo] = useState<TranslationLanguage | null>(
+    null,
+  );
+  // A translation asked for here: until it can be read, the paper's
+  // translation state is read again now and then.
+  const [translating, setTranslating] = useState<string | null>(null);
+  // Another language: the text is read again in it, the PDF's pages too.
+  const languageSeen = useRef(chosenLanguage);
+  useEffect(() => {
+    if (languageSeen.current === chosenLanguage) return;
+    languageSeen.current = chosenLanguage;
+    retry((value) => value + 1);
+  }, [chosenLanguage]);
+  useEffect(() => {
+    if (!translating) return;
+    const timer = setInterval(() => void translationQuery.refetch(), 5000);
+    return () => clearInterval(timer);
+    // `translationQuery` is a new object each render; its refetch is stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [translating]);
+  useEffect(() => {
+    if (
+      translating &&
+      translationQuery.data?.languages.includes(
+        translating as TranslationLanguage,
       )
-    : null;
+    )
+      setTranslating(null);
+  }, [translating, translationQuery.data]);
   // The 翻译 tab and “翻译本段”: a translation service, or the library's translation.
   const storedTranslation = hasTranslation(translationSummary);
   // One choice in this browser; a paper without a translation reads its original.
@@ -544,7 +597,9 @@ export default function Reader() {
   });
   const fullText = useFullTextTranslation(
     id,
-    translationSummary?.target_language ?? translation.settings.language,
+    chosenLanguage ??
+      translationSummary?.target_language ??
+      translation.settings.language,
     notify,
   );
   const fullTextLayer = useRef<FullTextLayer | null>(null),
@@ -654,6 +709,7 @@ export default function Reader() {
       fontSize: () => fontSizeRef.current,
       textMode: () => "original",
       textModeChanged: none,
+      translationLanguage: () => translationLanguage.get(),
       layer: () => "full",
       layerChanged: none,
       layersReady: none,
@@ -713,6 +769,7 @@ export default function Reader() {
       fontSize: () => fontSizeRef.current,
       textMode: () => textModeChoice.get(),
       textModeChanged: (value) => textModeChoice.set(value),
+      translationLanguage: () => translationLanguage.get(),
       layer: () => routeLayer.current,
       layerChanged: (shown) => {
         if (shown !== routeLayer.current)
@@ -950,6 +1007,16 @@ export default function Reader() {
   const withoutText =
     mode === "pdf" && !!sources.data?.material && !sources.data.document;
   const canArchive = !!api.workspace.capabilities.maintenance;
+  // ADR 0072: the reader asked for a translation this paper lacks, in a
+  // language it can be translated into.
+  const missingLanguage =
+    chosenLanguage &&
+    chosenText !== "original" &&
+    translationSummary?.state === "none" &&
+    translationQuery.data?.level === "proofread" &&
+    (mode === "doc" || mode === "pdf")
+      ? chosenLanguage
+      : null;
   const headerLine = useMemo(
     (): HeaderLine | null =>
       note
@@ -966,21 +1033,46 @@ export default function Reader() {
                 text: `正在查看固定来源，阅读不会修改材料。${evidenceNote ? `${evidenceNote}。` : ""}`,
                 action: { label: fromWhere, run: () => backRef.current() },
               }
-            : withoutText
+            : missingLanguage
               ? {
                   transient: false,
-                  text: "还没有全文",
-                  ...(canArchive
+                  text:
+                    translating === missingLanguage
+                      ? `正在翻译成${languageName(missingLanguage)}`
+                      : `这一篇还没有${languageName(missingLanguage)}译文。`,
+                  ...(canArchive && translating !== missingLanguage
                     ? {
                         action: {
-                          label: "解析全文",
-                          run: () => setOperation("archive"),
+                          label: "翻译这一篇",
+                          run: () => setTranslateTo(missingLanguage),
                         },
                       }
                     : {}),
                 }
-              : null,
-    [note, update, fromWhere, evidenceNote, withoutText, canArchive],
+              : withoutText
+                ? {
+                    transient: false,
+                    text: "还没有全文",
+                    ...(canArchive
+                      ? {
+                          action: {
+                            label: "解析全文",
+                            run: () => setOperation("archive"),
+                          },
+                        }
+                      : {}),
+                  }
+                : null,
+    [
+      note,
+      update,
+      fromWhere,
+      evidenceNote,
+      withoutText,
+      canArchive,
+      missingLanguage,
+      translating,
+    ],
   );
   useLayoutEffect(() => {
     const material = sources.data;
@@ -1482,7 +1574,8 @@ export default function Reader() {
   // On the PDF it is the stored translation's pages: beside each page, or
   // in its place. Asked once per choice, so a read that failed is not
   // asked again by itself.
-  const pdfAsked = useRef("");
+  const pdfAsked = useRef(""),
+    pdfLanguage = useRef(chosenLanguage);
   useEffect(() => {
     if (api.kind !== "workspace" || !translationKnown) return;
     // Beside the reading copy (ADR 0072) the left PDF shows the translated
@@ -1497,14 +1590,19 @@ export default function Reader() {
         : shownText === "translation"
           ? "only"
           : "pair";
-    const key = `${id}|${want}`;
+    const key = `${id}|${want}|${chosenLanguage ?? ""}`;
     if (pdfAsked.current === key) return;
     pdfAsked.current = key;
     if (want === "off") {
       if (fullText.mode !== "off") fullText.close();
       return;
     }
-    if (fullText.mode === "off") void fullText.open();
+    // Another language reads its own pages from the start.
+    if (fullText.mode !== "off" && pdfLanguage.current !== chosenLanguage)
+      fullText.close();
+    pdfLanguage.current = chosenLanguage;
+    if (fullText.mode === "off" || pdfLanguage.current !== chosenLanguage)
+      void fullText.open();
     fullText.setMode(want);
     // `fullText` is a new object each render; its mode is what matters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2176,6 +2274,48 @@ export default function Reader() {
           ]
         : [];
     })(),
+    // ADR 0072: the language translations are read in, with what this paper has.
+    ...(onPaper && hasText && !bibliographyPage
+      ? [
+          {
+            id: "translation-language",
+            label: "译文语言",
+            onAction: () => {},
+            submenu: [
+              ...TRANSLATION_LANGUAGES.map((l) => {
+                const current =
+                  (chosenLanguage ?? translationSummary?.target_language) ===
+                  l.code;
+                const has = translationQuery.data?.languages.includes(l.code);
+                return {
+                  id: `language-${l.code}`,
+                  label: l.label,
+                  checked: current,
+                  description: has
+                    ? "已有译文"
+                    : translating === l.code
+                      ? "正在翻译"
+                      : canArchive
+                        ? "选了可以翻译这一篇"
+                        : "这一篇没有这种语言的译文",
+                  onAction: () => translationLanguage.set(l.code),
+                };
+              }),
+              ...(missingLanguage &&
+              canArchive &&
+              translating !== missingLanguage
+                ? [
+                    {
+                      id: "translate-paper",
+                      label: `把这一篇翻译成${languageName(missingLanguage)}…`,
+                      onAction: () => setTranslateTo(missingLanguage),
+                    },
+                  ]
+                : []),
+            ],
+          },
+        ]
+      : []),
     ...group("paper", "这篇文献", [
       ...(maintenance && api.kind === "workspace"
         ? detail.data.collected === false
@@ -2976,6 +3116,23 @@ export default function Reader() {
         />
       ) : null}
       {removal.dialog}
+      {translateTo ? (
+        <TranslateDialog
+          literatureId={id}
+          language={translateTo}
+          onClose={() => setTranslateTo(null)}
+          onStarted={(outcome) => {
+            const language = translateTo;
+            setTranslateTo(null);
+            if (outcome === "skipped") {
+              void translationQuery.refetch();
+              return;
+            }
+            setTranslating(language);
+            notify(`已开始翻译成${languageName(language)}，翻好后“译”就读它。`);
+          }}
+        />
+      ) : null}
       {operation && (
         <OperationDialog
           kind={operation}
