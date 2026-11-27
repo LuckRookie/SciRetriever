@@ -1,12 +1,6 @@
 import type { DocumentTextMode } from "../contract.js";
 import { changeLayer, type LayerChange } from "./change.js";
-import {
-  noteSentencesHTML,
-  outlineLeaf,
-  overviewLeaf,
-  relationsHTML,
-  rulesHTML,
-} from "./leaf.js";
+import { outlineLeaf, overviewLeaf, relationsHTML, rulesHTML } from "./leaf.js";
 import { createMap, type LayersMap } from "./map.js";
 import {
   READING_LAYERS,
@@ -25,6 +19,7 @@ import {
   type PlacedEvidence,
 } from "./notes.js";
 import type { ReadLayers, ReadLayersPoint } from "./read.js";
+import { canon } from "../mark-locate.js";
 
 /**
  * The reading layers on the sheet (reading-experience 3, ADR 0070): 全文 is
@@ -399,7 +394,23 @@ export function attachLayers(
       ".reading-block-source, .reading-doubt, .reading-margin-note-below, .reading-untranslated, .reading-translation-marks",
     ))
       x.remove();
-    for (const m of marks) markSentence(copy, m.p, m.i, m.e, mode);
+    // The paragraph is the unit that opens: every note's sentences in it are
+    // marked, each with its own number, not only the one pressed.
+    const from = Number(block.dataset.byteStart),
+      to = Number(block.dataset.byteEnd);
+    const all: Opened[] = [...marks];
+    for (const p of model.points)
+      p.evidence.forEach((e, i) => {
+        if (
+          e.kind === "sentence" &&
+          e.start_utf8 < to &&
+          e.end_utf8 > from &&
+          !all.some((m) => m.p === p && m.i === i)
+        )
+          all.push({ p, i, e });
+      });
+    all.sort((a, b) => a.e.start_utf8 - b.e.start_utf8);
+    for (const m of all) markSentence(copy, m.p, m.i, m.e, mode);
     const translation = copy.querySelector(":scope > .reading-translation");
     if (mode === "original") translation?.remove();
     else if (mode === "translation" && translation)
@@ -414,17 +425,20 @@ export function attachLayers(
     para.append(number, text);
     return para;
   };
-  // ── how what opens moves (reading-experience 3.3.5): it grows from the
-  //    line it stands for to its whole height, its text sliding so the
-  //    marked sentence starts where the line did, the rest of its ink coming
-  //    in around it; closing plays it back. The place pressed stays put on
-  //    every frame, and what stands in the margin follows. ──
-  const OPEN_MS = 340,
-    CLOSE_MS = 260,
+  // ── how what opens moves (reading-experience 3.3.5), after TextFold: the
+  //    words already on the page stay and move. The sentence's words fly one
+  //    by one from the line to their places in the paragraph; the rest of
+  //    the paragraph's ink comes in around them once they are on the way;
+  //    the slip it lies on grows from the line's height to its own, so what
+  //    follows makes room smoothly. Closing plays it back. The place pressed
+  //    stays put on every frame, and what stands in the margin follows. ──
+  const DUR = 560,
     EASE = "cubic-bezier(0.2, 0, 0, 1)";
   let moving = 0,
     held: { el: Element; top: number } | null = null,
     anchoring: string | null = null;
+  /** Motions waiting for the place pressed to be held (they measure where things end up). */
+  let queued: (() => void)[] = [];
   /** The browser's own scroll anchoring is held off while things move: it would pick its own anchor (spec 4.2). */
   const anchorOff = () => {
     if (anchoring !== null) return;
@@ -451,61 +465,338 @@ export function attachLayers(
       anchorBack();
     }
   };
-  /**
-   * Moves `box` between `line` px high (what it stands for) and its whole
-   * height. Resolves once it has; an opening leaves no trace of the motion, a
-   * closing keeps its last frame for the caller to take it away.
-   */
-  const motion = (
-    box: HTMLElement,
-    line: number,
-    closing: boolean,
-  ): Promise<void> => {
-    if (port.reducedMotion() || !box.isConnected) return Promise.resolve();
-    const whole = box.getBoundingClientRect();
-    const text = box.querySelector<HTMLElement>(":scope > .rl-para-t");
-    const mark = text?.querySelector(".rl-ev")?.getBoundingClientRect();
-    const lift = mark ? Math.max(0, mark.top - whole.top) : 0;
-    const order = <T>(frames: T[]) => (closing ? frames.reverse() : frames);
-    const options: KeyframeAnimationOptions = {
-      duration: closing ? CLOSE_MS : OPEN_MS,
-      easing: EASE,
-      fill: "both",
-    };
-    box.style.overflow = "hidden";
-    const runs = text
-      ? [
-          box.animate(
-            order([{ height: `${line}px` }, { height: `${whole.height}px` }]),
-            options,
-          ),
-          text.animate(
-            order([
-              { transform: `translateY(${-lift}px)`, color: "transparent" },
-              { transform: "none", color: getComputedStyle(text).color },
-            ]),
-            options,
-          ),
-        ]
-      : [
-          box.animate(
-            order([
-              { height: `${line}px`, opacity: 0 },
-              { height: `${whole.height}px`, opacity: 1 },
-            ]),
-            options,
-          ),
-        ];
+  const begin = () => {
     anchorOff();
     if (moving++ === 0) requestAnimationFrame(follow);
+  };
+  const end = () => {
+    moving = Math.max(0, moving - 1);
+  };
+
+  /** A word, a CJK character or a whole formula, where it stands on the screen. */
+  type Token = {
+    key: string;
+    r: DOMRect;
+    text: string | null;
+    from: Element;
+  };
+  const WORD =
+    /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}|[^\s\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu;
+  /** The words under `root` (those `keep` accepts), in reading order. */
+  const tokensOf = (
+    root: Element,
+    keep: (el: Element) => boolean = () => true,
+  ): Token[] => {
+    const out: Token[] = [];
+    const formulas = new Set<Element>();
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (
+      let n = walker.nextNode() as Text | null;
+      n;
+      n = walker.nextNode() as Text | null
+    ) {
+      const parent = n.parentElement;
+      if (!parent || !keep(parent) || parent.closest(".rl-pn")) continue;
+      const formula = parent.closest(".katex");
+      if (formula) {
+        if (formulas.has(formula)) continue;
+        formulas.add(formula);
+        const tex =
+          formula.querySelector('annotation[encoding="application/x-tex"]')
+            ?.textContent ?? formula.textContent;
+        out.push({
+          key: `$${canon(tex ?? "")}`,
+          r: formula.getBoundingClientRect(),
+          text: null,
+          from: formula,
+        });
+        continue;
+      }
+      for (const m of n.data.matchAll(WORD)) {
+        const key = canon(m[0]);
+        if (!key) continue;
+        const range = document.createRange();
+        range.setStart(n, m.index);
+        range.setEnd(n, m.index + m[0].length);
+        const r = range.getClientRects()[0] ?? range.getBoundingClientRect();
+        if (!r.width && !r.height) continue;
+        out.push({ key, r, text: m[0], from: parent });
+      }
+    }
+    return out;
+  };
+  /** The same words in two readings of a sentence, paired in order (the longest common run). */
+  const pair = (a: Token[], b: Token[]): [Token, Token][] => {
+    const n = a.length,
+      m = b.length;
+    if (!n || !m || n * m > 600_000) return [];
+    const w = m + 1,
+      dp = new Uint16Array((n + 1) * w);
+    for (let i = n - 1; i >= 0; i--)
+      for (let j = m - 1; j >= 0; j--)
+        dp[i * w + j] =
+          a[i]!.key === b[j]!.key
+            ? dp[(i + 1) * w + j + 1]! + 1
+            : Math.max(dp[(i + 1) * w + j]!, dp[i * w + j + 1]!);
+    const out: [Token, Token][] = [];
+    for (let i = 0, j = 0; i < n && j < m; )
+      if (a[i]!.key === b[j]!.key) out.push([a[i++]!, b[j++]!]);
+      else if (dp[(i + 1) * w + j]! >= dp[i * w + j + 1]!) i++;
+      else j++;
+    return out;
+  };
+  /** A copy of a word drawn over the page where it stood, to move or fade. */
+  const ghostOf = (t: Token): HTMLElement => {
+    const style = getComputedStyle(
+      t.text === null ? t.from.parentElement! : t.from,
+    );
+    let g: HTMLElement;
+    if (t.text === null) g = t.from.cloneNode(true) as HTMLElement;
+    else {
+      g = document.createElement("span");
+      g.textContent = t.text;
+    }
+    g.classList.add("rl-ghost");
+    Object.assign(g.style, {
+      position: "absolute",
+      left: `${t.r.left}px`,
+      top: `${t.r.top}px`,
+      margin: "0",
+      whiteSpace: "pre",
+      lineHeight: "normal",
+      font: style.font,
+      letterSpacing: style.letterSpacing,
+      color: style.color,
+    });
+    stage.append(g);
+    return g;
+  };
+  /**
+   * The words of `from` fly to their places in `to`; those without a place
+   * fade where they were. Resolves when they have arrived.
+   */
+  const fly = (from: Token[], to: Token[]): Promise<void> => {
+    const pairs = pair(from, to);
+    const moved = new Set(pairs.map(([a]) => a));
+    const runs: Animation[] = [];
+    for (const [a, b] of pairs) {
+      const g = ghostOf(a);
+      runs.push(
+        g.animate(
+          [
+            { transform: "none" },
+            {
+              transform: `translate(${b.r.left - a.r.left}px, ${b.r.top - a.r.top}px)`,
+            },
+          ],
+          { duration: DUR, easing: EASE, fill: "forwards" },
+        ),
+      );
+    }
+    for (const a of from)
+      if (!moved.has(a))
+        runs.push(
+          ghostOf(a).animate([{ opacity: 1 }, { opacity: 0 }], {
+            duration: DUR * 0.45,
+            easing: "ease-in",
+            fill: "forwards",
+          }),
+        );
     return Promise.all(runs.map((r) => r.finished))
       .catch(() => undefined)
       .then(() => {
-        moving--;
-        if (!closing) {
-          for (const r of runs) r.cancel();
-          box.style.overflow = "";
-        }
+        for (const r of runs) (r.effect as KeyframeEffect).target?.remove();
+      });
+  };
+  /** The words of an opened paragraph that belong to the lines it stands for. */
+  const markedTokens = (para: HTMLElement) => {
+    const keys = new Set((para.dataset.lines ?? "").split(" ").filter(Boolean));
+    return tokensOf(para, (el) => {
+      const ev = el.closest<HTMLElement>(".rl-ev");
+      return !!ev?.dataset.ev && keys.has(ev.dataset.ev);
+    });
+  };
+  /** While its sentences' words fly, the paragraph's own copies of them are hidden; they show when the words arrive. */
+  const flying = (para: HTMLElement, on: boolean) => {
+    const keys = new Set((para.dataset.lines ?? "").split(" ").filter(Boolean));
+    for (const ev of para.querySelectorAll<HTMLElement>(".rl-ev"))
+      if (ev.dataset.ev && keys.has(ev.dataset.ev))
+        ev.classList.toggle("rl-flying", on);
+  };
+  /** The words of a 目 line as they show (its paragraph number aside). */
+  const lineTokens = (lines: readonly Element[]) =>
+    lines.flatMap((l) => tokensOf(l));
+
+  /**
+   * A paragraph opening on its slip: grows from `line` px high, the line's
+   * words flying in, the rest of the ink coming in once they are on the way.
+   */
+  const grow = (para: HTMLElement, line: number, from: Token[]) => {
+    if (port.reducedMotion() || !para.isConnected) return;
+    const whole = para.getBoundingClientRect().height;
+    const to = markedTokens(para);
+    const text = para.querySelector<HTMLElement>(":scope > .rl-para-t");
+    const slip = getComputedStyle(para);
+    flying(para, true);
+    para.style.overflow = "hidden";
+    begin();
+    const runs = [
+      para.animate(
+        [
+          {
+            height: `${line}px`,
+            backgroundColor: "transparent",
+            borderColor: "transparent",
+          },
+          {
+            height: `${whole}px`,
+            backgroundColor: slip.backgroundColor,
+            borderColor: slip.borderTopColor,
+          },
+        ],
+        { duration: DUR, easing: EASE },
+      ),
+    ];
+    if (text)
+      runs.push(
+        text.animate(
+          [{ color: "transparent" }, { color: getComputedStyle(text).color }],
+          {
+            duration: DUR * 0.55,
+            delay: DUR * 0.4,
+            easing: "ease-out",
+            fill: "backwards",
+          },
+        ),
+      );
+    void Promise.all([
+      fly(from, to),
+      ...runs.map((r) => r.finished.catch(() => undefined)),
+    ]).then(() => {
+      flying(para, false);
+      para.style.overflow = "";
+      end();
+    });
+  };
+  /**
+   * A paragraph closing: its marked words fly back to the line, the rest of
+   * its ink goes, the slip shrinks to the line's height; then the line is
+   * there again.
+   */
+  const shrink = (para: HTMLElement, done: () => void) => {
+    if (port.reducedMotion() || !para.isConnected) return done();
+    const box = para.parentElement;
+    const lines = linesOf(para);
+    const own = lines.filter((l) => l.parentElement === box),
+      others = lines.filter((l) => l.parentElement !== box);
+    const from = markedTokens(para);
+    // Where the lines' words will stand once they are back: measured as
+    // they will be, then put away again before anything is painted.
+    para.style.display = "none";
+    for (const l of lines) l.classList.remove("rl-open");
+    const to = lineTokens(lines);
+    const line = own[0]?.getBoundingClientRect().height ?? 0;
+    const heights = others.map((l) => l.getBoundingClientRect().height);
+    for (const l of own) l.classList.add("rl-open");
+    para.style.display = "";
+    // Another note's lines grow back where they were while their words fly home.
+    others.forEach((l, i) => land(l, heights[i]!, false));
+    const whole = para.getBoundingClientRect().height;
+    const text = para.querySelector<HTMLElement>(":scope > .rl-para-t");
+    const slip = getComputedStyle(para);
+    flying(para, true);
+    para.style.overflow = "hidden";
+    begin();
+    const runs = [
+      para.animate(
+        [
+          {
+            height: `${whole}px`,
+            backgroundColor: slip.backgroundColor,
+            borderColor: slip.borderTopColor,
+          },
+          {
+            height: `${line}px`,
+            backgroundColor: "transparent",
+            borderColor: "transparent",
+          },
+        ],
+        { duration: DUR, easing: EASE, fill: "forwards" },
+      ),
+    ];
+    if (text)
+      runs.push(
+        text.animate(
+          [{ color: getComputedStyle(text).color }, { color: "transparent" }],
+          { duration: DUR * 0.45, easing: "ease-in", fill: "forwards" },
+        ),
+      );
+    void Promise.all([
+      fly(from, to),
+      ...runs.map((r) => r.finished.catch(() => undefined)),
+    ]).then(() => {
+      for (const l of others) l.classList.remove("rl-landing");
+      done();
+      end();
+    });
+  };
+  /**
+   * Another note's line in the paragraph that opened: its words fly into
+   * the paragraph while its place closes up (or, closing, opens again).
+   */
+  const land = (line: HTMLElement, height: number, leaving: boolean) => {
+    line.classList.add("rl-landing");
+    line.style.overflow = "hidden";
+    const frames = [
+      { height: `${height}px`, marginTop: getComputedStyle(line).marginTop },
+      { height: "0px", marginTop: "0px" },
+    ];
+    begin();
+    void line
+      .animate(leaving ? frames : frames.reverse(), {
+        duration: DUR,
+        easing: EASE,
+      })
+      .finished.catch(() => undefined)
+      .then(() => {
+        line.style.overflow = "";
+        if (leaving) line.classList.add("rl-open");
+        else line.classList.remove("rl-landing");
+        end();
+      });
+  };
+  /** The 目 lines an opened paragraph stands for, wherever they are on the leaf. */
+  const linesOf = (para: HTMLElement): HTMLElement[] =>
+    (para.dataset.from ?? "")
+      .split(" ")
+      .filter(Boolean)
+      .map((key) =>
+        column.querySelector<HTMLElement>(
+          `.rl-mu-s[data-ev="${CSS.escape(key)}"]`,
+        ),
+      )
+      .filter((l): l is HTMLElement => !!l);
+  /** Something without a line under it (a ¶n's paragraph) opens or closes on its slip, by its ink alone. */
+  const fade = (para: HTMLElement, closing: boolean, done?: () => void) => {
+    if (port.reducedMotion() || !para.isConnected) return done?.();
+    const whole = para.getBoundingClientRect().height;
+    para.style.overflow = "hidden";
+    begin();
+    const frames = [
+      { height: "0px", opacity: 0 },
+      { height: `${whole}px`, opacity: 1 },
+    ];
+    void para
+      .animate(closing ? frames.reverse() : frames, {
+        duration: closing ? DUR * 0.7 : DUR,
+        easing: EASE,
+        fill: closing ? "forwards" : "none",
+      })
+      .finished.catch(() => undefined)
+      .then(() => {
+        if (!closing) para.style.overflow = "";
+        done?.();
+        end();
       });
   };
 
@@ -517,72 +808,72 @@ export function attachLayers(
     if (!s || !block || !box) return null;
     const from = Number(block.dataset.byteStart),
       to = Number(block.dataset.byteEnd);
+    // Every 目 line on the leaf whose sentence lies in this paragraph goes
+    // into it, whichever note it is under: the paragraph shows each once.
     const lines = [
-      ...box.querySelectorAll<HTMLElement>(
-        ":scope > .rl-mu-s[data-ev]:not(.rl-open, .rl-hid)",
+      ...column.querySelectorAll<HTMLElement>(
+        ".rl-mu-s[data-ev]:not(.rl-open, .rl-landing)",
       ),
     ].filter((l) => {
       const x = lineSentence(l);
-      return (
-        !!x && x.p === s.p && x.e.start_utf8 >= from && x.e.start_utf8 < to
-      );
+      return !!x && x.e.start_utf8 >= from && x.e.start_utf8 < to;
     });
     if (!lines.includes(line)) lines.unshift(line);
+    const own = lines.filter((l) => l.parentElement === box),
+      others = lines.filter((l) => l.parentElement !== box);
     const para = paragraph(
       s.e.start_utf8,
       lines.map(lineSentence).filter((x): x is Opened => !!x),
     );
     if (!para) return null;
-    const height = lines[0]!.getBoundingClientRect().height;
-    para.dataset.lines = lines.map((l) => l.dataset.ev).join(" ");
-    para.dataset.line = String(height);
-    lines[0]!.before(para);
-    for (const l of lines) l.classList.add("rl-open");
+    const words = lineTokens(lines);
+    const height = own[0]!.getBoundingClientRect().height;
+    const heights = others.map((l) => l.getBoundingClientRect().height);
+    para.dataset.lines = lines
+      .map((l) => {
+        const x = lineSentence(l)!;
+        return `${x.p.number}:${x.i}`;
+      })
+      .join(" ");
+    para.dataset.from = lines.map((l) => l.dataset.ev).join(" ");
+    own[0]!.before(para);
+    for (const l of own) l.classList.add("rl-open");
     fillImages(para);
-    void motion(para, height, false);
+    queued.push(() => {
+      grow(para, height, words);
+      others.forEach((l, i) =>
+        port.reducedMotion()
+          ? l.classList.add("rl-open")
+          : land(l, heights[i]!, true),
+      );
+    });
     return para;
   };
   /** Takes an opened paragraph away at once; gives back the first line it stood for, if any. */
   const removePara = (para: HTMLElement): Element | null => {
     const box = para.parentElement;
     let first: Element | null = null;
-    for (const key of (para.dataset.lines ?? "").split(" ").filter(Boolean)) {
-      const line = box?.querySelector(
-        `:scope > .rl-mu-s[data-ev="${CSS.escape(key)}"]`,
-      );
-      line?.classList.remove("rl-open");
-      first ??= line ?? null;
+    for (const line of linesOf(para)) {
+      line.classList.remove("rl-open", "rl-landing");
+      if (line.parentElement === box) first ??= line;
     }
     const row = para.closest(".rl-para-row");
     const host = row?.previousElementSibling ?? null;
     (row ?? para).remove();
     return first ?? host;
   };
-  /**
-   * Closes an opened paragraph: it shrinks back to its line, then the line
-   * takes its place. Gives back what stands there meanwhile.
-   */
+  /** Closes an opened paragraph back into its lines; gives back what stands there meanwhile. */
   const closePara = (para: HTMLElement): Element | null => {
     if (para.dataset.closing) return para;
     if (port.reducedMotion()) return removePara(para);
     para.dataset.closing = "true";
-    void motion(para, Number(para.dataset.line) || 0, true).then(() =>
-      removePara(para),
+    const lined = !!para.dataset.from;
+    queued.push(() =>
+      lined
+        ? shrink(para, () => removePara(para))
+        : fade(para, true, () => removePara(para)),
     );
     return para;
-  };
-  /** Closes what opened without a line under it (a ¶n's paragraph, a note's sentences). */
-  const closeBox = (box: HTMLElement, done: () => void) => {
-    if (box.dataset.closing) return;
-    box.dataset.closing = "true";
-    const moved = box.matches(".rl-para-row")
-      ? box.querySelector<HTMLElement>(".rl-para")
-      : box;
-    void (
-      moved
-        ? motion(moved, Number(moved.dataset.line) || 0, true)
-        : Promise.resolve()
-    ).then(done);
   };
   /** 概览: a ¶n after a datum or a limit opens that paragraph under it. */
   const toggleSource = (a: HTMLElement): Element | null => {
@@ -591,86 +882,56 @@ export function attachLayers(
       item = row ?? a.closest("li, p");
     if (!item || !Number.isFinite(start)) return null;
     const open = row
-      ? row.nextElementSibling?.matches(`.rl-para-row[data-from="${start}"]`)
-        ? (row.nextElementSibling as HTMLElement)
+      ? row.nextElementSibling?.matches(`.rl-para-row[data-at="${start}"]`)
+        ? row.nextElementSibling.querySelector<HTMLElement>(".rl-para")
         : null
       : item.querySelector<HTMLElement>(
-          `:scope > .rl-para[data-from="${start}"]`,
+          `:scope > .rl-para[data-at="${start}"]`,
         );
     if (open) {
-      closeBox(open, () => open.remove());
+      closePara(open);
       return item;
     }
     const para = paragraph(start, []);
     if (!para) return null;
-    para.dataset.line = "0";
     if (row) {
       const tr = el("tr", "rl-para-row");
-      tr.dataset.from = String(start);
+      tr.dataset.at = String(start);
       const td = el("td", "") as HTMLTableCellElement;
       td.colSpan = row.children.length;
       td.append(para);
       tr.append(td);
       row.after(tr);
-    } else {
-      para.dataset.from = String(start);
-      item.append(para);
-    }
+    } else item.append(para);
+    para.dataset.at = String(start);
     fillImages(para);
-    void motion(para, 0, false);
+    queued.push(() => fade(para, false));
     return item;
   };
-  /** A note pressed: 脉络 opens (or closes) all its sentences; 概览 opens it to its sentences. */
+  /**
+   * A note pressed: in 脉络 all its sentences open (or close) to their
+   * paragraphs; in 概览 a main note opens to the paragraph it stands on.
+   */
   const toggleNote = (gang: HTMLElement): void => {
     const box = gang.querySelector<HTMLElement>(":scope > .rl-mu");
     if (!box) return;
-    if (layer === "outline") {
-      const shut = [
-        ...box.querySelectorAll<HTMLElement>(
-          ":scope > .rl-mu-s[data-ev]:not(.rl-open)",
-        ),
-      ];
-      if (!shut.length)
-        for (const para of box.querySelectorAll<HTMLElement>(
-          ":scope > .rl-para",
-        ))
-          closePara(para);
-      else
-        for (const line of shut)
-          if (line.isConnected && !line.classList.contains("rl-open"))
-            openLine(line);
+    const open = [
+      ...box.querySelectorAll<HTMLElement>(
+        ":scope > .rl-para:not([data-closing])",
+      ),
+    ];
+    const shut = [
+      ...box.querySelectorAll<HTMLElement>(
+        ":scope > .rl-mu-s[data-ev]:not(.rl-open)",
+      ),
+    ];
+    if (layer === "overview" ? open.length > 0 : !shut.length) {
+      for (const para of open) closePara(para);
       return;
     }
-    // Anything open under the note: this click closes it all.
-    const more = box.querySelector<HTMLElement>(":scope > .rl-more");
-    const paras = box.querySelectorAll<HTMLElement>(":scope > .rl-para");
-    const ground = box.querySelector<HTMLElement>(":scope > .rl-mu-s.rl-cut");
-    if (more || paras.length) {
-      for (const para of paras) closePara(para);
-      if (more)
-        closeBox(more, () => {
-          more.remove();
-          ground?.classList.remove("rl-hid");
-        });
-      return;
-    }
-    const p = model.byNumber.get(Number(gang.dataset.point));
-    if (!p) return;
-    const sentences = p.evidence.filter((e) => e.kind === "sentence").length;
-    // One sentence: the note opens straight to its paragraph.
-    if (sentences <= 1 && ground) {
-      openLine(ground);
-      return;
-    }
-    const div = el("div", "rl-more");
-    div.innerHTML = noteSentencesHTML(p, port, mode);
-    const height = ground?.getBoundingClientRect().height ?? 0;
-    div.dataset.line = String(height);
-    if (ground) {
-      ground.after(div);
-      ground.classList.add("rl-hid");
-    } else box.prepend(div);
-    void motion(div, height, false);
+    for (const line of layer === "overview" ? shut.slice(0, 1) : shut)
+      if (line.isConnected && !line.classList.contains("rl-open"))
+        openLine(line);
   };
   /** Changes what is open while the place pressed stays where it was on the screen, on every frame. */
   const keepPlace = (at: Element, change: () => Element | null | void) => {
@@ -680,6 +941,9 @@ export function attachLayers(
     held = { el: after.isConnected ? after : at, top: before };
     hold();
     place();
+    const motions = queued;
+    queued = [];
+    for (const m of motions) m();
     if (moving === 0) {
       held = null;
       anchorBack();
@@ -705,10 +969,8 @@ export function attachLayers(
   const fold = (): boolean => {
     if (layer !== "overview" && layer !== "outline") return false;
     const opened = [
-      ...column.querySelectorAll<HTMLElement>(
-        ":is(.rl-para, .rl-more, .rl-para-row):not([data-closing])",
-      ),
-    ].filter((x) => !x.parentElement?.closest(".rl-para-row, .rl-more"));
+      ...column.querySelectorAll<HTMLElement>(".rl-para:not([data-closing])"),
+    ];
     if (!opened.length) return false;
     const point = reading();
     const at =
@@ -717,16 +979,7 @@ export function attachLayers(
       opened[0]!.closest(".rl-gang") ||
       column;
     keepPlace(at, () => {
-      for (const x of opened)
-        if (x.matches(".rl-para")) closePara(x);
-        else
-          closeBox(x, () => {
-            const ground = x.matches(".rl-more")
-              ? x.parentElement?.querySelector(":scope > .rl-mu-s.rl-hid")
-              : null;
-            x.remove();
-            ground?.classList.remove("rl-hid");
-          });
+      for (const para of opened) closePara(para);
     });
     return true;
   };

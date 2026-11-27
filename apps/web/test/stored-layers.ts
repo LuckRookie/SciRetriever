@@ -21,7 +21,7 @@ const PARAGRAPHS = {
     `Thermogravimetric analysis showed a single sharp mass loss for four salts and two overlapping steps for the other two. The onset temperatures lie between 196 and 248 °C at a heating rate of 5 K·min⁻¹. The two salts with overlapping steps lose water first, which shows that their lattice holds solvent. After drying at 80 °C under vacuum the first step disappears.`,
   ),
   b2: P(
-    `Differential scanning calorimetry gave decomposition enthalpies from 1.9 to 2.6 kJ·g⁻¹. The measured values are on average 12 % below the computed ones, and the gap grows with the cation's size. A larger cation therefore stores less of its computed energy in practice. Kissinger analysis at four heating rates gave activation energies between 138 and 171 kJ·mol⁻¹.`,
+    `Differential scanning calorimetry gave decomposition enthalpies from 1.9 to 2.6 kJ·g⁻¹. The measured values are on average 12 % below the computed ones, and the gap grows with the cation's size. A larger cation therefore stores less of its computed energy in practice. Kissinger analysis gave $E_{\\mathrm{a}} = 138$ to $171\\,\\mathrm{kJ\\,mol^{-1}}$ at four heating rates.`,
   ),
   b3: P(
     `Impact sensitivities were measured with a drop hammer and range from 8 to more than 40 J. The two most stable salts both form a three-dimensional hydrogen-bond network. In these salts each cation donates four hydrogen bonds to neighbouring anions. Salts with layered networks are markedly more sensitive, although their densities are similar.`,
@@ -55,7 +55,7 @@ const ZH: Record<string, string> = {
   [PARAGRAPHS.b1]:
     "热重分析显示，四种盐只有一个陡峭的失重台阶，另外两种有两个相互重叠的台阶。在 5 K·min⁻¹ 的升温速率下，起始温度在 196 到 248 °C 之间。有重叠台阶的两种盐先失去水分，说明它们的晶格中含有溶剂。在 80 °C 下真空干燥后，第一个台阶消失。",
   [PARAGRAPHS.b2]:
-    "差示扫描量热给出的分解焓在 1.9 到 2.6 kJ·g⁻¹ 之间。实测值平均比计算值低 12 %，且差距随阳离子增大而增大。因此阳离子越大，实际放出的能量越少于计算值。用四种升温速率作 Kissinger 分析，得到的活化能在 138 到 171 kJ·mol⁻¹ 之间。",
+    "差示扫描量热给出的分解焓在 1.9 到 2.6 kJ·g⁻¹ 之间。实测值平均比计算值低 12 %，且差距随阳离子增大而增大。因此阳离子越大，实际放出的能量越少于计算值。用四种升温速率作 Kissinger 分析，得到 $E_{\\mathrm{a}} = 138$ 到 $171\\,\\mathrm{kJ\\,mol^{-1}}$。",
   [PARAGRAPHS.b3]:
     "用落锤测定的撞击感度在 8 J 到 40 J 以上。最稳定的两种盐都形成三维氢键网络。在这些盐中，每个阳离子向相邻阴离子提供四个氢键。具有层状网络的盐明显更敏感，尽管它们的密度相近。",
   [PARAGRAPHS.c1]:
@@ -164,6 +164,11 @@ export const LAYERS_POINTS: readonly FixturePoint[] = [
       {
         text: "The measured values are on average 12 % below the computed ones, and the gap grows with the cation's size.",
         zh: "实测值平均比计算值低 12 %，且差距随阳离子增大而增大。",
+      },
+      // Mostly formula: found by its TeX, not by KaTeX's glyphs.
+      {
+        text: "Kissinger analysis gave $E_{\\mathrm{a}} = 138$ to $171\\,\\mathrm{kJ\\,mol^{-1}}$ at four heating rates.",
+        zh: "用四种升温速率作 Kissinger 分析，得到 $E_{\\mathrm{a}} = 138$ 到 $171\\,\\mathrm{kJ\\,mol^{-1}}$。",
       },
     ],
     basis: "on average 12 % below the computed ones",

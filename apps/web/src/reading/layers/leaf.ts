@@ -23,7 +23,6 @@ import {
   type LayersModel,
   type LayersPort,
 } from "./model.js";
-import type { ReadLayersPoint } from "./read.js";
 
 /**
  * The two leaves that are not the full text (reading-experience 3.2, 3.3):
@@ -220,19 +219,6 @@ const termsOf = (p: LayersReadPoint) => ({
   original: p.key_terms,
   translation: p.translation?.key_terms ?? [],
 });
-/** A note's sentences as 脉络 sets them: what a main note opens to in place in 概览. */
-export function noteSentencesHTML(
-  p: ReadLayersPoint,
-  port: LayersPort,
-  mode: DocumentTextMode,
-): string {
-  let out = "";
-  p.evidence.forEach((e, i) => {
-    if (e.kind === "sentence")
-      out += sentenceHTML(e, `${p.number}:${i}`, termsOf(p), port, mode);
-  });
-  return out;
-}
 
 /**
  * 脉络: every note as a 纲, the author's sentences it stands on as its 目.
@@ -374,7 +360,30 @@ export function overviewLeaf(
   for (const p of model.primary) {
     let body = "";
     const basis = p.basis;
-    if (basis.kind === "sentence")
+    // In a translated reading the line is the translation of the sentence
+    // the excerpt lies in (cut from the full text's own translation); the
+    // original keeps the excerpt.
+    const evidence = model.byNumber.get(p.number)?.evidence ?? [];
+    const whole =
+      basis.kind === "sentence" && mode !== "original"
+        ? evidence.findIndex(
+            (e) =>
+              e.kind === "sentence" &&
+              e.start_utf8 <= basis.start_utf8 &&
+              e.end_utf8 >= basis.end_utf8 &&
+              ("translation" in e ? !!e.translation?.text : !!e.translated),
+          )
+        : -1;
+    const sentence = evidence[whole];
+    if (sentence?.kind === "sentence")
+      body = sentenceHTML(
+        sentence,
+        `${p.number}:${whole}`,
+        termsOf(p),
+        port,
+        mode,
+      );
+    else if (basis.kind === "sentence")
       body = sentenceHTML(
         basis,
         `${p.number}:basis`,

@@ -384,21 +384,39 @@
   .rl-leaf .rl-mu-s[data-start] {
     cursor: pointer;
   }
-  .rl-mu-s.rl-open,
-  .rl-mu-s.rl-hid {
+  .rl-mu-s.rl-open {
     display: none;
   }
+  /* The opened paragraph lies on a slip of paper laid into the book: a
+     faintly deeper paper, a fine edge, no shadow. */
   .rl-para {
     position: relative;
-    margin: 0.3em 0 0;
+    margin: 0.4em -0.9em 0.5em;
+    padding: 0.45em 0.9em;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--fg) 3.5%, var(--reader-sheet));
     line-height: 1.7;
     text-align: justify;
     color: var(--fg2);
     overflow-wrap: break-word;
     cursor: pointer;
   }
-  /* The paragraph's own parts (its translation's too) sit tight: no browser
-     margins, so it opens where its sentence stood. */
+  .rl-para > .rl-pn {
+    top: calc(0.45em + 0.38em);
+    right: calc(100% + 14px + 2.2em - 0.9em);
+  }
+  /* While its words are on the way they are drawn over the page; the
+     paragraph's own appear when they arrive. */
+  .rl-mu-s.rl-landing,
+  .rl-mu-s.rl-landing *,
+  .rl-para .rl-flying,
+  .rl-para .rl-flying * {
+    color: transparent !important;
+  }
+  .rl-para .rl-flying.rl-ev-end::after {
+    visibility: hidden;
+  }
   .rl-para-t :is(p, ul, ol, h1, h2, h3, h4, h5, h6) {
     margin: 0;
     text-indent: 0;

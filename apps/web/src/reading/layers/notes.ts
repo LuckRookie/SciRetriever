@@ -73,16 +73,17 @@ function pieces(range: Range, skip: string): (Range | HTMLElement)[] {
   ) {
     if (!range.intersectsNode(n) || !n.data.length) continue;
     const parent = n.parentElement;
-    if (parent?.closest(skip)) continue;
-    // A formula is taken whole: its inner spans are KaTeX's to lay out.
+    // A formula is taken whole: its inner spans are KaTeX's to lay out. It
+    // is found by its TeX, which KaTeX keeps out of sight.
     const formula = parent?.closest<HTMLElement>(".katex");
     if (formula) {
-      if (!formulas.has(formula)) {
+      if (!formula.closest(skip) && !formulas.has(formula)) {
         formulas.add(formula);
         out.push(formula);
       }
       continue;
     }
+    if (parent?.closest(skip)) continue;
     const start = n === range.startContainer ? range.startOffset : 0,
       end = n === range.endContainer ? range.endOffset : n.data.length;
     if (end <= start) continue;
@@ -107,6 +108,22 @@ export interface PlacedEvidence {
 export type MarkedSentence = Pick<Sentence, "start_utf8" | "text"> & {
   readonly translation?: Sentence["translation"];
 };
+/**
+ * Whether a text node is left out when a sentence is looked for. A formula is
+ * read as its TeX (KaTeX keeps it in an annotation), as the layers write it:
+ * its drawn glyphs ("400nm") would never match "$400\mathrm{nm}$".
+ */
+function skipped(node: Text, skip: string): boolean {
+  const el = node.parentElement;
+  if (!el) return false;
+  const formula = el.closest(".katex");
+  if (formula)
+    return (
+      !el.closest('annotation[encoding="application/x-tex"]') ||
+      !!formula.closest(skip)
+    );
+  return !!el.closest(skip);
+}
 /** Puts the note's marks around one sentence's words under `root`; empty when not found word for word. */
 function wrap(
   p: ReadLayersPoint,
@@ -117,7 +134,7 @@ function wrap(
   terms: readonly string[],
   skip: string,
 ): HTMLElement[] {
-  const index = indexText(root, (node) => !!node.parentElement?.closest(skip));
+  const index = indexText(root, (node) => skipped(node, skip));
   const found = locate(canon(text), index.text);
   if (!found || found.sim < PLACE) return [];
   const range = rangeOf(index, found.start, found.end);
