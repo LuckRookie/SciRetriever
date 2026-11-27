@@ -1091,6 +1091,14 @@
     pointer-events: none;
     overflow: hidden;
   }
+  /* A word on its way when a paragraph opens in place (3.3.5): many small
+     copies, so no layer of its own is asked for ahead. */
+  .rl-word {
+    position: absolute;
+    margin: 0;
+    white-space: pre;
+    line-height: normal;
+  }
   .rl-ghost {
     will-change: transform, opacity;
     pointer-events: none;
