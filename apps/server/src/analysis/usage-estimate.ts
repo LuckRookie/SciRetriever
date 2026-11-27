@@ -12,6 +12,7 @@ import {
   type ProcessorObject,
   ARCHIVE_STEPS,
   parseDocumentTranslateRequest,
+  isArchiveTranslationStep,
   type ArchiveState,
   type ArchiveEstimateComponent,
   type EstimateRange,
@@ -109,7 +110,9 @@ export class UsageEstimator {
     const samples = history
       .filter(
         (s) =>
-          s.step === step &&
+          // On-request translations into another language cost the same per page.
+          (s.step === step ||
+            (step === "translate" && isArchiveTranslationStep(s.step))) &&
           s.stats.workflow === "arranged-v2" &&
           s.stats.status === "done" &&
           s.stats.usage_complete === true &&

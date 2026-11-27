@@ -9,6 +9,7 @@ import {
   tagRecord,
 } from "./index.js";
 import {
+  TRANSLATION_LANGUAGES,
   isTranslationLanguage,
   type TranslationLanguage,
 } from "./translation.js";
@@ -24,6 +25,38 @@ export const ARCHIVE_STEPS = [
   "tags",
 ] as const;
 export type ArchiveStep = (typeof ARCHIVE_STEPS)[number];
+/**
+ * The step record of an on-request translation into a language other than
+ * the library default (ADR 0072, spec 9.6.1): `translate-` and the language
+ * code in lower case (`translate-ja`, `translate-zh-hant`), since a step name
+ * holds only lower-case letters and hyphens. The library default's
+ * translation stays in `translate`.
+ */
+export type ArchiveTranslationStep = `translate-${string}`;
+/** The step record for a translation into `language`. */
+export function archiveTranslationStep(
+  language: TranslationLanguage,
+  libraryDefault: TranslationLanguage,
+): "translate" | ArchiveTranslationStep {
+  return language === libraryDefault
+    ? "translate"
+    : `translate-${language.toLowerCase()}`;
+}
+/** The language of a `translate-<code>` step record, or null. */
+export function archiveTranslationStepLanguage(
+  step: unknown,
+): TranslationLanguage | null {
+  return (
+    TRANSLATION_LANGUAGES.find(
+      (l) => step === `translate-${l.code.toLowerCase()}`,
+    )?.code ?? null
+  );
+}
+export function isArchiveTranslationStep(
+  step: unknown,
+): step is ArchiveTranslationStep {
+  return archiveTranslationStepLanguage(step) !== null;
+}
 export type ArchiveMode = "full" | "legacy-vlm-markdown";
 export type ArchiveStepStatus =
   | "pending"
@@ -66,7 +99,11 @@ export interface ArchiveStepReceipt {
   } | null;
   readonly literature_id: string;
   readonly asset_id: string;
-  readonly step: ArchiveStep | "document" | "structure";
+  readonly step:
+    | ArchiveStep
+    | ArchiveTranslationStep
+    | "document"
+    | "structure";
   readonly status: ArchiveStepStatus;
   readonly input_sha256: string;
   readonly output: Readonly<Record<string, unknown>>;
@@ -99,7 +136,11 @@ export interface ArchiveIssue {
   readonly literature_id: string;
   readonly asset_id: string;
   readonly part: "main" | "supplementary";
-  readonly step: ArchiveStep | "document" | "structure";
+  readonly step:
+    | ArchiveStep
+    | ArchiveTranslationStep
+    | "document"
+    | "structure";
   readonly reason: string;
   readonly detail: Readonly<Record<string, unknown>>;
   readonly affects_readiness: boolean;

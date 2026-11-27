@@ -22,6 +22,7 @@ import { createHash } from "node:crypto";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
   ARCHIVE_STEPS,
+  isArchiveTranslationStep,
   parseLongDocumentInfo,
   type LongDocumentInfo,
   canonicalJsonBytes,
@@ -124,8 +125,10 @@ const version = (v: unknown): string | null =>
   typeof v === "string" ? hash(JSON.parse(v)) : null;
 const rows = (db: DatabaseSync, sql: string, ...args: SQLInputValue[]) =>
   db.prepare(sql).all(...args);
+/** A pipeline step, or an on-request translation's own record (spec 9.6.1). */
 const currentStep = (step: unknown) =>
-  (ARCHIVE_STEPS as readonly unknown[]).includes(step);
+  (ARCHIVE_STEPS as readonly unknown[]).includes(step) ||
+  isArchiveTranslationStep(step);
 function fail(code: string): never {
   throw Object.assign(new Error("archive storage refused"), { code });
 }
@@ -160,6 +163,7 @@ function projectArchiveIssue(
       part === "main" &&
       step !== "references" &&
       step !== "translate" &&
+      !isArchiveTranslationStep(step) &&
       step !== "layers" &&
       reason !== "page-content-missing" &&
       !(arranged && (step === "document" || step === "structure")),
@@ -735,7 +739,10 @@ export function runArchiveStorage(
       const s = r.receipt as unknown as ArchiveStepReceipt,
         now = new Date().toISOString();
       // The table checks only the form of a name; the valid names are here.
-      if (!ARCHIVE_STEPS.includes(s.step as (typeof ARCHIVE_STEPS)[number]))
+      if (
+        !ARCHIVE_STEPS.includes(s.step as (typeof ARCHIVE_STEPS)[number]) &&
+        !isArchiveTranslationStep(s.step)
+      )
         fail("archive-step-invalid");
       if (
         !db

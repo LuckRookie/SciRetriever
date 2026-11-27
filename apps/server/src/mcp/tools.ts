@@ -1068,7 +1068,7 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
   ),
   tool(
     "translate_document",
-    "Translate one paper's proofread full text into a language on request: queues a task that runs only the archive translate step on the current content version, reusing earlier units of the same language, and calls the configured translation model. Returns {literature_id,target_language,outcome:queued|skipped,state,job}; skipped when that content already has a complete or same-language translation; refused with translation-needs-proofread without a proofread full text, or archive-busy while archiving runs. Estimate first with usage_estimate kind=document-translate. Follow the job with task_run; failures are translate issues that never affect readiness.",
+    "Translate one paper's proofread full text into a language on request: queues a task that runs only the archive translate step on the current content version, reusing earlier units of the same language, and calls the configured translation model. Returns {literature_id,target_language,outcome:queued|skipped,state,job}; skipped when that content already has a complete or same-language translation; refused with translation-needs-proofread without a proofread full text, or archive-busy while archiving runs. Estimate first with usage_estimate kind=document-translate. Follow the job with task_run. A language other than the library default is recorded as its own step translate-<code in lower case> (e.g. translate-ja, translate-zh-hant), with its own issues that never affect readiness; the library default stays in translate.",
     object({
       literature_id: id,
       target_language: { enum: TRANSLATION_LANGUAGES.map((l) => l.code) },

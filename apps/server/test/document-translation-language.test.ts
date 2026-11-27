@@ -255,15 +255,20 @@ it("reads the language asked for, translates a paper into another on request, th
     expect(e.modelCalls - calls).toBe(1);
     const state = await e.app.archive.status(e.id);
     expect(state.status).toBe("READY");
-    const receipt = state.parts
-      .find((p) => p.part === "main")!
-      .steps.find((s) => s.step === "translate") as ArchiveStepReceipt;
+    // The Japanese translation keeps its own record; the default's is untouched.
+    const steps = state.parts.find((p) => p.part === "main")!.steps;
+    const receipt = steps.find(
+      (s) => s.step === "translate-ja",
+    ) as ArchiveStepReceipt;
     expect(receipt).toMatchObject({ status: "done", reason: null });
     expect(receipt.output).toMatchObject({
       target_language: "ja",
       translation: { status: "complete", missing: 0 },
     });
     expect(receipt.calls).toBe(1);
+    expect(steps.find((s) => s.step === "translate")!.output).toMatchObject({
+      target_language: "zh-Hans",
+    });
     // Now readable in Japanese; the default is unchanged.
     expect(
       await query(e, "document-describe", {
@@ -331,6 +336,105 @@ it("reads the language asked for, translates a paper into another on request, th
       reused_count: 1,
     });
     expect(e.modelCalls - calls).toBe(1);
+  } finally {
+    await e.close();
+  }
+}, 0);
+
+it("keeps an on-request translation apart: archiving again skips translate and leaves the Japanese issue open", async () => {
+  const e = await fixture();
+  try {
+    prefix(e, "译文：");
+    await e.submit("archive-default");
+    const document_version_id = (await main(e)).document_version_id!;
+    // Japanese, with one unit missing: the translate-ja record fails with an issue.
+    e.setTranslation((input) => ({
+      translations: input.units
+        .filter((u) => !u.text.startsWith("The abstract sample 1 "))
+        .map((u) => ({ id: u.id, translation: `訳：${u.text}` })),
+    }));
+    const first = await translate(e, "ja");
+    await e.app.processingTasks!.run(first.job.job_id);
+    const failed = (await e.app.processingTasks!.read(
+      first.job.job_id,
+    )) as Loose;
+    expect(JSON.stringify(failed)).toContain('"outcome":"failed"');
+    const issue = (state: Loose) =>
+      state.issues.find((i: Loose) => i.step === "translate-ja");
+    let state = await e.app.archive.status(e.id);
+    expect(state.status).toBe("READY");
+    expect(issue(state)).toMatchObject({
+      reason: "translation-incomplete",
+      affects_readiness: false,
+      resolution: null,
+    });
+    expect(
+      state.issues.some((i) => i.step === "translate" && i.resolution === null),
+    ).toBe(false);
+    expect(
+      await query(e, "document-describe", {
+        document_version_id,
+        target_language: "ja",
+      }),
+    ).toMatchObject({
+      translation: { state: "partial" },
+      translation_languages: ["ja", "zh-Hans"],
+    });
+    // The archive estimate does not count the paper's translation again.
+    const archive = await query(e, "usage-estimate", {
+      kind: "archive",
+      request: { selector: { kind: "literatures", literature_ids: [e.id] } },
+    });
+    expect(
+      archive.components.find((c: Loose) => c.step === "translate"),
+    ).toMatchObject({ units: 0 });
+    // Archiving again: translate is skipped (no model call) and the
+    // default's success does not close the Japanese issue.
+    const calls = e.modelCalls;
+    await e.submit("archive-again");
+    expect(e.modelCalls).toBe(calls);
+    state = await e.app.archive.status(e.id);
+    const steps = state.parts.find((p) => p.part === "main")!.steps;
+    expect(steps.find((s) => s.step === "translate")).toMatchObject({
+      status: "done",
+      output: { target_language: "zh-Hans", usage: { calls: 0 } },
+    });
+    expect(issue(state)).toMatchObject({ resolution: null });
+    // Japanese again: only the missing unit is asked; its success closes the issue.
+    const asked: string[][] = [];
+    e.setTranslation((input) => {
+      asked.push(input.units.map((u) => u.text));
+      return {
+        translations: input.units.map((u) => ({
+          id: u.id,
+          translation: `訳：${u.text}`,
+        })),
+      };
+    });
+    const second = await translate(e, "ja");
+    expect(second.outcome).toBe("queued");
+    await e.app.processingTasks!.run(second.job.job_id);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toHaveLength(1);
+    expect(asked[0]![0]).toMatch(/^The abstract sample 1 /u);
+    state = await e.app.archive.status(e.id);
+    expect(issue(state)).toMatchObject({ resolution: "continue" });
+    expect(
+      state.parts
+        .find((p) => p.part === "main")!
+        .steps.find((s) => s.step === "translate-ja"),
+    ).toMatchObject({
+      status: "done",
+      output: {
+        translation: { status: "complete", reused: expect.any(Number) },
+      },
+    });
+    // Into the library default on request: it is the translate record, and
+    // already complete, so skipped.
+    expect(await translate(e, "zh-Hans")).toMatchObject({
+      outcome: "skipped",
+      state: "complete",
+    });
   } finally {
     await e.close();
   }

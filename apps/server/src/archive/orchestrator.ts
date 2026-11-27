@@ -3,6 +3,7 @@ import { activityContext, withActivity } from "../logging/activity.js";
 import { randomUUID } from "node:crypto";
 import {
   ARCHIVE_STEPS,
+  archiveTranslationStep,
   parseArchiveBuildRequest,
   type ArchiveBuildRequest,
   type ArchiveState,
@@ -383,16 +384,17 @@ export class ArchiveOrchestrator {
         interrupted,
       });
     }
-    const after = await this.status(id),
+    const record = archiveTranslationStep(language, translate.language),
+      after = await this.status(id),
       receipt = after.parts
         .find((p) => p.asset_id === main.asset_id)
-        ?.steps.find((s) => s.step === "translate");
+        ?.steps.find((s) => s.step === record);
     return {
       ...base,
       outcome: failed ? "failed" : "translated",
       translation: receipt?.output.translation ?? null,
       issues: after.issues.filter(
-        (i) => i.step === "translate" && i.resolution === null,
+        (i) => i.step === record && i.resolution === null,
       ),
     };
   }
@@ -455,7 +457,12 @@ export class ArchiveOrchestrator {
     if (signal?.aborted) throw new ArchiveError("archive-cancelled");
     const id = request.literature_id,
       input = await this.input(request, part, step, signal, language),
-      prior = input.current.steps.find((s) => s.step === step),
+      // An on-request translation into another language keeps its own record (spec 9.6.1).
+      record =
+        step === "translate" && language && this.runtime.translate
+          ? archiveTranslationStep(language, this.runtime.translate.language)
+          : step,
+      prior = input.current.steps.find((s) => s.step === record),
       // Only `from_step: translate` translates every unit again; an earlier
       // from_step keeps reusing unchanged units (spec 9.3).
       force =
@@ -477,7 +484,7 @@ export class ArchiveOrchestrator {
         runId,
         id,
         part,
-        step,
+        record,
         "done",
         input.sha256,
         {
@@ -496,7 +503,7 @@ export class ArchiveOrchestrator {
       runId,
       id,
       part,
-      step,
+      record,
       "running",
       input.sha256,
       {},
@@ -630,7 +637,7 @@ export class ArchiveOrchestrator {
         runId,
         id,
         part,
-        step,
+        record,
         "done",
         after.sha256,
         output,
@@ -701,7 +708,7 @@ export class ArchiveOrchestrator {
         runId,
         id,
         part,
-        step,
+        record,
         signal?.aborted
           ? "pending"
           : part.part === "main"
@@ -720,7 +727,7 @@ export class ArchiveOrchestrator {
     run: string,
     id: string,
     part: ArchivePart,
-    step: ArchiveStep,
+    step: ArchiveStepReceipt["step"],
     status: ArchiveStepReceipt["status"],
     input: string,
     output: Record<string, unknown>,

@@ -1,7 +1,8 @@
-import type {
-  ArchiveState,
-  LiteratureStatus,
-  MissingStep,
+import {
+  isArchiveTranslationStep,
+  type ArchiveState,
+  type LiteratureStatus,
+  type MissingStep,
 } from "@sciretriever/contracts";
 
 /** Current evidence, never the presence of an old summary, defines readiness. */
@@ -52,9 +53,15 @@ export function deriveCurrentState(
       i.affects_readiness &&
       i.resolution !== "continue" &&
       i.step !== "translate" &&
+      !isArchiveTranslationStep(i.step) &&
       i.step !== "layers",
   );
-  if (failure && failure.step !== "translate" && failure.step !== "layers")
+  if (
+    failure &&
+    failure.step !== "translate" &&
+    !isArchiveTranslationStep(failure.step) &&
+    failure.step !== "layers"
+  )
     return { status: "ARCHIVE_FAILED", missing_step: failure.step };
   return { status: missing ? "ASSET_READY" : "READY", missing_step: missing };
 }
