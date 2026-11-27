@@ -277,7 +277,7 @@ it("puts the PDF beside the reading copy with a double click on 读, each page f
     await page.setViewportSize({ width: 1600, height: 900 });
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    await storedLayers(page, { translated: false });
+    await storedLayers(page, { translated: true });
     await page.goto(`${w.origin}/?literature=${id}&reader=pdf`);
     await page.locator('.react-reader[data-reading-ready="true"]').waitFor();
     await expect.poll(() => ball(page, "read").textContent()).toBe("读");
@@ -308,6 +308,37 @@ it("puts the PDF beside the reading copy with a double click on 读, each page f
     await page.locator(`${sheet} .rl-mu-s`).first().click();
     await page.locator(".reader-beside .reading-pdf-locator").waitFor();
     await shows(page, "outline");
+    // 译 beside the PDF (ADR 0072): both pages in translation; 原/译 keeps
+    // the original on the left and the translation on the right.
+    const text = () =>
+      page
+        .locator(`${sheet} article.reading-article`)
+        .getAttribute("data-text-mode");
+    const twin = left.locator(".ft-twin[data-state='ready']");
+    await page.waitForTimeout(500);
+    await ball(page, "translate").click();
+    await expect.poll(text).toBe("translation");
+    await twin.first().waitFor();
+    await shot(page, "15-pair-translation");
+    await page.waitForTimeout(500);
+    const row = page.locator('.reader-ball-row[data-ball="translate"]');
+    await row.hover();
+    await row.locator(".reader-ball-pair").click();
+    await expect
+      .poll(() => ball(page, "translate").textContent())
+      .toBe("原/译");
+    await expect.poll(() => twin.count()).toBe(0);
+    expect(await text()).toBe("translation");
+    await shot(page, "16-pair-original-left-translation-right");
+    await row.locator(".reader-ball-pair").click();
+    await expect
+      .poll(() => ball(page, "translate").textContent())
+      .not.toBe("原/译");
+    if ((await ball(page, "translate").textContent()) === "原") {
+      await page.waitForTimeout(500);
+      await ball(page, "translate").click();
+    }
+    await expect.poll(text).toBe("original");
     // The handle moves the edge, within 30 % to 70 %.
     const handle = page.locator(".reader-pair-handle");
     await handle.focus();

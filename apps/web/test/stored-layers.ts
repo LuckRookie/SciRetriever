@@ -446,6 +446,56 @@ export async function storedLayers(page: Page, options: LayersOptions = {}) {
       });
     }),
   );
+  // The PDF's translated pages (ADR 0051, 0068): one block on the first page.
+  const block = {
+    leaf_id: "fixture-title",
+    type: "title",
+    role: "title",
+    region: [80, 60, 920, 120],
+    placement: "region",
+    source: "Synthetic literature workbench",
+    translation: "合成文献工作台",
+  };
+  await page.route(
+    (url) => url.pathname === "/api/translation/fulltext",
+    safe(async (route) => {
+      await route.fulfill({
+        json: {
+          summary: {
+            literature_id: new URL(route.request().url()).searchParams.get(
+              "literature_id",
+            ),
+            target_language: "zh-Hans",
+            page_count: 1,
+            pages: [{ page_index: 0, blocks: 1, saved: true }],
+            state: fake.translated ? "complete" : "none",
+          },
+        },
+      });
+    }),
+  );
+  await page.route(
+    (url) => url.pathname === "/api/translation/fulltext/page",
+    safe(async (route) => {
+      const request = route.request().postDataJSON() as {
+        literature_id: string;
+        page_index: number;
+      };
+      await route.fulfill({
+        json: {
+          page: {
+            literature_id: request.literature_id,
+            page_index: request.page_index,
+            target_language: "zh-Hans",
+            model: null,
+            saved: true,
+            blocks: [block],
+            state: fake.translated ? "complete" : "none",
+          },
+        },
+      });
+    }),
+  );
   await page.route(
     (url) => url.pathname === "/api/v1/query/document-layers",
     safe(async (route) => {

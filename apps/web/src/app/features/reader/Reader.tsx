@@ -601,7 +601,10 @@ export default function Reader() {
   const coverRef = useRef<() => void>(() => {});
   // ADR 0071: the PDF beside the reading copy is an engine of its own, in a
   // scroll area of its own; it reads the same material and shows its PDF.
-  const companionFrame = useRef<ReaderFrame | null>(null);
+  const companionFrame = useRef<ReaderFrame | null>(null),
+    companionTwins = useRef<FullTextLayer | null>(null),
+    companionApplied = useRef(new WeakMap<FullTextLayer, string>());
+  const [companionToken, setCompanionToken] = useState(0);
   const [companion] = useState(() => {
     const none = () => {};
     return createReaderEngines({
@@ -625,9 +628,10 @@ export default function Reader() {
         header: none,
       },
       frame: companionFrame,
-      twins: { current: null },
-      appliedMode: new WeakMap(),
-      fullTextMode: () => "off",
+      twins: companionTwins,
+      appliedMode: companionApplied.current,
+      fullTextMode: () =>
+        companionApplied.current.get(companionTwins.current!) ?? "off",
       marksActive: () => false,
       attachMarks: () => {
         throw new Error("no marks beside the reading copy");
@@ -642,7 +646,7 @@ export default function Reader() {
         readerActions.current.openPaper(paper, value, parameters),
       notify: (message) => readerActions.current.notify(message),
       retry: none,
-      viewChanged: none,
+      viewChanged: () => setCompanionToken((value) => value + 1),
       offer: none,
       note: none,
       history: none,
@@ -752,31 +756,6 @@ export default function Reader() {
   useEffect(() => {
     frame.current?.setKeyTerms?.(keyTerms);
   }, [keyTerms, viewToken, layersToken]);
-  // ADR 0071: one choice of language for the reading copy and for the PDF.
-  // On the PDF it is the stored translation's pages: beside each page, or
-  // in its place. Asked once per choice, so a read that failed is not
-  // asked again by itself.
-  const pdfAsked = useRef("");
-  useEffect(() => {
-    if (mode !== "pdf" || api.kind !== "workspace" || !translationKnown) return;
-    const want =
-      shownText === "original"
-        ? "off"
-        : shownText === "translation"
-          ? "only"
-          : "pair";
-    const key = `${id}|${want}`;
-    if (pdfAsked.current === key) return;
-    pdfAsked.current = key;
-    if (want === "off") {
-      if (fullText.mode !== "off") fullText.close();
-      return;
-    }
-    if (fullText.mode === "off") void fullText.open();
-    fullText.setMode(want);
-    // `fullText` is a new object each render; its mode is what matters.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, shownText, translationKnown, id, api.kind, fullText.mode]);
   // ADR 0071: the PDF or the reading copy is remembered for the paper as it
   // shows, however it was reached (a ball, the address, a link), so that
   // opening it again without a view comes back to it.
@@ -1099,24 +1078,8 @@ export default function Reader() {
   // text now shown, without moving.
   const findAgain = useRef<string | null>(null);
   findAgain.current = findOpen && search ? search : null;
-  useEffect(() => {
-    if (mode !== "doc" || !translationKnown) return;
-    const current = frame.current;
-    if (!current?.setTextMode) return;
-    void current.setTextMode(shownText).then((changed) => {
-      const query = findAgain.current;
-      if (changed && query && frame.current === current)
-        void Promise.resolve(current.onFind(query, true)).catch(() => {});
-    });
-  }, [mode, shownText, translationKnown, ready, viewToken]);
   // The translation reading's signs beside paragraphs with marks.
   const blockCounts = marks.blockCounts;
-  useEffect(() => {
-    if (mode !== "doc") return;
-    frame.current?.markBlocks?.(
-      shownText === "translation" ? blockCounts() : new Map(),
-    );
-  }, [mode, shownText, blockCounts, ready, viewToken]);
   // The side panel tab and the evidence switch are kept per paper (spec 4.5).
   useLayoutEffect(() => {
     const memory = recallReading(catalog, id);
@@ -1500,6 +1463,82 @@ export default function Reader() {
       if (text) delete text.onPick;
     };
   }, [showPair, viewToken, layersToken, companion]);
+  // ADR 0072: beside the PDF, 原/译 is the original on the left and the
+  // translation on the right, so the reading copy reads the translation.
+  const readingText: DocumentTextMode =
+    showPair && shownText === "bilingual" ? "translation" : shownText;
+  // The full text's reading (reading-experience 9, ADR 0071): the copy shows
+  useEffect(() => {
+    if (mode !== "doc" || !translationKnown) return;
+    const current = frame.current;
+    if (!current?.setTextMode) return;
+    void current.setTextMode(readingText).then((changed) => {
+      const query = findAgain.current;
+      if (changed && query && frame.current === current)
+        void Promise.resolve(current.onFind(query, true)).catch(() => {});
+    });
+  }, [mode, readingText, translationKnown, ready, viewToken]);
+  // ADR 0071: one choice of language for the reading copy and for the PDF.
+  // On the PDF it is the stored translation's pages: beside each page, or
+  // in its place. Asked once per choice, so a read that failed is not
+  // asked again by itself.
+  const pdfAsked = useRef("");
+  useEffect(() => {
+    if (api.kind !== "workspace" || !translationKnown) return;
+    // Beside the reading copy (ADR 0072) the left PDF shows the translated
+    // pages only when the reading is 译; 原/译 keeps the original there.
+    if (mode !== "pdf" && !showPair) return;
+    const want = showPair
+      ? shownText === "translation"
+        ? "only"
+        : "off"
+      : shownText === "original"
+        ? "off"
+        : shownText === "translation"
+          ? "only"
+          : "pair";
+    const key = `${id}|${want}`;
+    if (pdfAsked.current === key) return;
+    pdfAsked.current = key;
+    if (want === "off") {
+      if (fullText.mode !== "off") fullText.close();
+      return;
+    }
+    if (fullText.mode === "off") void fullText.open();
+    fullText.setMode(want);
+    // `fullText` is a new object each render; its mode is what matters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    mode,
+    showPair,
+    shownText,
+    translationKnown,
+    id,
+    api.kind,
+    fullText.mode,
+  ]);
+  useEffect(() => {
+    if (mode !== "doc") return;
+    frame.current?.markBlocks?.(
+      readingText === "translation" ? blockCounts() : new Map(),
+    );
+  }, [mode, readingText, blockCounts, ready, viewToken]);
+  // The left page's translated pages, from the same read as the PDF view's.
+  useEffect(() => {
+    if (!showPair) return;
+    const twins = companionTwins.current,
+      left = companionFrame.current;
+    if (!twins || !left) return;
+    twins.setPages(fullText.pages);
+    twins.setMarks([]);
+    const want = fullText.mode === "only" ? "only" : "off";
+    if (companionApplied.current.get(twins) === want) return;
+    companionApplied.current.set(twins, want);
+    const restore = left.beforeLayout();
+    left.pdfColumns = 1;
+    twins.setMode(want);
+    requestAnimationFrame(restore);
+  }, [showPair, fullText.pages, fullText.mode, companionToken]);
   const invalidMetadata =
     source.value?.kind === "metadata" &&
     detail.data &&
@@ -1734,7 +1773,7 @@ export default function Reader() {
   const canMark = marks.active && !fromSummary && !route.parameters.has("from");
   // Reading-experience 9: the translation reading takes no marks; the
   // marking tools stay where they are, disabled (spec 1.8).
-  const translationReading = mode === "doc" && shownText === "translation";
+  const translationReading = mode === "doc" && readingText === "translation";
   /** Opens the find bar, with a short selection in one block as the term (spec 1.8.5). */
   const openFind = () => {
     if (findDisabled) return;
@@ -2816,7 +2855,7 @@ export default function Reader() {
                     narrow={barWidth > 0 ? narrowBar : narrowTop}
                     pdf={pdf}
                     level={textLevel}
-                    reading={shown.kind === "doc" ? shownText : "original"}
+                    reading={shown.kind === "doc" ? readingText : "original"}
                     back={
                       historyBack
                         ? { label: historyBack.label, go: () => engines.back() }
