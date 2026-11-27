@@ -1,7 +1,13 @@
 import { expect, it } from "vitest";
 import {
+  documentLayersFileVersion,
+  layersLabelFits,
+  layersLabelInStatement,
+  layersReasonFits,
+  layersStatementFits,
   markKeyTerms,
   matchKeyTerm,
+  parseDocumentLayersFile,
   sentenceNumbers,
   splitSentences,
   splitSentencesUtf8,
@@ -123,4 +129,137 @@ it("matches key terms by key-term-match-v1", () => {
       "stability",
     ]),
   ).toEqual([{ start: 0, end: 17, term: 0 }]);
+});
+
+const D = "a".repeat(64);
+const note = (number: number, extra: Record<string, unknown> = {}) => ({
+  number,
+  unit_id: `u${number}`,
+  statement: `Sample ${number} showed a peak near 401 nm.`,
+  reason: null,
+  evidence: [
+    { kind: "sentence", unit_id: `u${number}`, start_utf8: 0, end_utf8: 10 },
+  ],
+  key_terms: [],
+  section_id: null,
+  primary: number <= 3,
+  label: `sample ${number}`,
+  kind: "result",
+  relations: [],
+  basis:
+    number <= 3
+      ? { kind: "sentence", unit_id: `u${number}`, start_utf8: 0, end_utf8: 10 }
+      : null,
+  ...extra,
+});
+const DROPPED = [
+  "unanswered",
+  "points",
+  "evidence",
+  "key_terms",
+  "kinds",
+  "labels",
+  "reasons",
+  "see",
+  "sections",
+  "relations",
+  "primary",
+  "digest_units",
+  "data",
+  "places",
+  "limits",
+];
+const file = (extra: Record<string, unknown> = {}) => ({
+  schema_version: 3,
+  literature_id: "lit-1",
+  asset_id: "asset-1",
+  document_version_id: "doc-1",
+  annotation_id: D,
+  content_version: D,
+  sentence_rule: "sentence-split-v1",
+  digest: {
+    summary: { text: "Four samples.", units: [], key_terms: [] },
+    limits: [],
+    advice: {
+      text: null,
+      not_given: null,
+      units: [],
+      key_terms: [],
+      places: [],
+    },
+  },
+  sections: [
+    {
+      section_id: null,
+      statement: "Four samples peak near 401 nm.",
+      label: "Four samples",
+    },
+  ],
+  points: [1, 2, 3, 4].map((n) => note(n)),
+  data: [],
+  model: "fixture/model",
+  prompt_version: "reading-layers-v3",
+  dropped: Object.fromEntries(DROPPED.map((k) => [k, 0])),
+  translation: null,
+  ...extra,
+});
+
+it("parses a version 3 layers file: one note per paragraph, its basis its first evidence", () => {
+  expect(parseDocumentLayersFile(file()).points).toHaveLength(4);
+  expect(documentLayersFileVersion(file({ schema_version: 2 }))).toBe(2);
+  // Version 2 is not the current layout: it reads as stale, never parsed.
+  expect(() => parseDocumentLayersFile(file({ schema_version: 2 }))).toThrow();
+  const four = [1, 2, 3, 4].map((n) => note(n));
+  const bad = (points: unknown[]) => () =>
+    parseDocumentLayersFile(file({ points }));
+  // A note's sentence evidence lies in its own paragraph.
+  const elsewhere = {
+    kind: "sentence",
+    unit_id: "u9",
+    start_utf8: 0,
+    end_utf8: 10,
+  };
+  expect(
+    bad([
+      note(1, { evidence: [elsewhere], basis: elsewhere }),
+      ...four.slice(1),
+    ]),
+  ).toThrow();
+  // A primary note's basis is its first evidence; others have none.
+  expect(bad([note(1, { basis: null }), ...four.slice(1)])).toThrow();
+  // Two notes on one paragraph, a label not in its statement, an overlong statement.
+  expect(bad([...four.slice(0, 3), note(4, { unit_id: "u1" })])).toThrow();
+  expect(bad([...four.slice(0, 3), note(4, { label: "elsewhere" })])).toThrow();
+  expect(
+    bad([
+      ...four.slice(0, 3),
+      note(4, { statement: Array(21).fill("w").join(" ") }),
+    ]),
+  ).toThrow();
+  // `see` names figures only; the other words name notes only.
+  expect(
+    bad([
+      ...four.slice(0, 3),
+      note(4, {
+        relations: [
+          { word: "follows", targets: [{ kind: "block", segment_id: "f" }] },
+        ],
+      }),
+    ]),
+  ).toThrow();
+});
+
+it("measures notes, reasons and labels by CJK characters or words, and finds a label in its statement", () => {
+  expect(layersStatementFits("图".repeat(40))).toBe(true);
+  expect(layersStatementFits("图".repeat(41))).toBe(false);
+  expect(layersStatementFits(Array(21).fill("w").join(" "))).toBe(false);
+  expect(layersReasonFits(Array(30).fill("w").join(" "))).toBe(true);
+  expect(layersLabelFits("热稳定性与密度")).toBe(true);
+  expect(layersLabelFits("thermal stability of salts")).toBe(false);
+  expect(
+    layersLabelInStatement("Thermal  stability rises.", "thermal stability"),
+  ).toBe(true);
+  expect(
+    layersLabelInStatement("Thermal stability rises.", "stability falls"),
+  ).toBe(false);
 });

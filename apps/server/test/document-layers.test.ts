@@ -18,10 +18,10 @@ import { archiveFixture } from "./archive-fixture.js";
 import {
   defaultLayersReply,
   defaultLayersTranslationReply,
-  type LayersTranslationInput,
+  type LayersCall,
 } from "./core-processing-fixture.js";
 
-// Spec 10.8: the layers step and its reads, with the fake model only.
+// Spec 10.8: the layers step written paragraph by paragraph and its reads, with the fake model only.
 const sentences = (topic: string, from: number) =>
   Array.from(
     { length: 5 },
@@ -29,7 +29,11 @@ const sentences = (topic: string, from: number) =>
       `The ${topic} sample ${from + i} showed a stable synthetic spectrum near ${400 + from + i} nm in water.`,
   ).join(" ");
 const SECTIONS = ["Introduction", "Methods", "Results", "Conclusion"];
-/** About 3,400 code points of body text: enough for reading layers. */
+/**
+ * About 3,400 code points of body text: enough for reading layers. Nine
+ * paragraphs p1 to p9 (the abstract, then two per section); headings s1
+ * (Abstract) to s5 (Conclusion), s6 the references.
+ */
 export const LONG_TEXT =
   "# Abstract\n\n" +
   sentences("abstract", 1) +
@@ -41,13 +45,16 @@ export const LONG_TEXT =
   "\n\n# References\n\n[1] Example synthetic reference.\n";
 
 type Fixture = Awaited<ReturnType<typeof archiveFixture>>;
+type Reply = (call: LayersCall) => unknown;
+/** Calls of the layers step, recorded; `answer` overrides some, the rest get the default. */
 async function fixture(
   options: Parameters<typeof archiveFixture>[0] = {},
   text = LONG_TEXT,
 ): Promise<
   Fixture & {
-    layersInputs: string[];
-    translationInputs: LayersTranslationInput[];
+    calls: LayersCall[];
+    answer: (reply: (call: LayersCall) => unknown) => void;
+    count: (kind: LayersCall["kind"], section?: string) => number;
   }
 > {
   const e = await archiveFixture({ offline: true, ...options });
@@ -56,18 +63,33 @@ async function fixture(
     "http://127.0.0.1:9/v1",
   );
   e.setText(text);
-  const layersInputs: string[] = [],
-    translationInputs: LayersTranslationInput[] = [];
-  e.setLayers((input) => {
-    layersInputs.push(input);
-    return defaultLayersReply(input);
+  const calls: LayersCall[] = [];
+  let override: Reply = () => undefined;
+  const reply = (fallback: Reply) => (call: LayersCall) => {
+    calls.push(call);
+    return override(call) ?? fallback(call);
+  };
+  e.setLayers(reply(defaultLayersReply));
+  e.setLayersTranslation(reply(defaultLayersTranslationReply));
+  return Object.assign(e, {
+    calls,
+    answer: (r: Reply) => {
+      override = r;
+    },
+    count: (kind: LayersCall["kind"], section?: string) =>
+      calls.filter(
+        (c) =>
+          c.kind === kind && (section === undefined || inSection(c, section)),
+      ).length,
   });
-  e.setLayersTranslation((input) => {
-    translationInputs.push(input);
-    return defaultLayersTranslationReply(input);
-  });
-  return Object.assign(e, { layersInputs, translationInputs });
 }
+/** Whether a call is about the section of that heading. */
+const inSection = (call: LayersCall, heading: string) =>
+  typeof call.input === "string"
+    ? new RegExp(`^This section: (?:\\[s\\d+\\] )?${heading}$`, "mu").test(
+        call.input,
+      )
+    : "section" in call.input && call.input.section === `译文：${heading}`;
 const main = async (e: Fixture) =>
   (await e.app.archive.status(e.id)).parts.find((p) => p.part === "main")!;
 const step = async (e: Fixture) =>
@@ -99,8 +121,9 @@ const describe = async (e: Fixture, document_version_id: string) =>
       document_version_id,
     })
   ).layers;
+const numbers = (points: { number: number }[]) => points.map((p) => p.number);
 
-it("produces, checks and publishes the layers; reads overview, outline, three texts and Markdown", async () => {
+it("writes a note per paragraph, a line per section and the digest once; reads overview, outline, three texts and Markdown", async () => {
   const e = await fixture();
   try {
     await e.submit("layers-all");
@@ -110,24 +133,84 @@ it("produces, checks and publishes the layers; reads overview, outline, three te
     expect(receipt.output.layers).toMatchObject({
       status: "complete",
       redone: "all",
-      given: 6,
-      points: 6,
-      translation: { status: "done", target_language: "zh-Hans" },
+      annotatable: 9,
+      points: 9,
+      sections: 5,
+      primary: 3,
+      translation: {
+        status: "done",
+        target_language: "zh-Hans",
+        translated_points: 9,
+        translated_sections: 5,
+        aligned: 9,
+      },
     });
-    // Two calls: the layers and their translation part.
-    expect(receipt.calls).toBe(2);
-    expect(e.layersInputs).toHaveLength(1);
-    expect(e.translationInputs).toHaveLength(1);
-    // The input: numbered paragraphs and sentences, headings as heading lines.
-    const input = e.layersInputs[0]!;
-    expect(input).toMatch(/^Maximum number of points: 40\n/u);
-    expect(input).toContain("# [s2] Introduction");
-    expect(input).toMatch(/^\[p1\] <1> The abstract sample 1 showed/mu);
-    expect(input).not.toContain("Example synthetic reference");
+    // One call per section, one for the whole document, the same for the translation part.
+    expect(
+      [
+        "section",
+        "line",
+        "document",
+        "translation-section",
+        "translation-document",
+      ].map((k) => e.count(k as LayersCall["kind"])),
+    ).toEqual([5, 0, 1, 5, 1]);
+    expect(receipt.calls).toBe(12);
+    // A section call: title, abstract, outline with this section marked, its paragraphs with numbered sentences.
+    const methods = e.calls.find(
+      (c) => c.kind === "section" && inSection(c, "Methods"),
+    )!.input as string;
+    expect(methods).toContain(
+      "Abstract, for context:\nThe abstract sample 1 showed",
+    );
+    expect(methods).toContain("▶ [s3] Methods");
+    expect(methods).toContain("\n[s2] Introduction\n");
+    expect(methods).toMatch(
+      /^\[p4\] paragraph\n<1> The methods sample 20 showed a stable synthetic spectrum near 420 nm in water\.\n<2> The methods sample 21/mu,
+    );
+    expect(methods).not.toContain("[p2]");
+    expect(methods).not.toContain("Example synthetic reference");
+    // The whole-document call sees titles, lines and notes, never the full text.
+    const whole = e.calls.find((c) => c.kind === "document")!.input as string;
+    expect(whole).toContain(
+      "[s3] Methods: The Methods section establishes stable spectra.",
+    );
+    expect(whole).toContain(
+      "[p4] result: The methods sample 20 showed a stable synthetic spectrum near 420 nm in water.",
+    );
+    expect(whole).not.toContain("methods sample 21");
+    // The translation part is written from the stored translation, with the original evidence.
+    const translated = e.calls.find(
+      (c) => c.kind === "translation-section" && inSection(c, "Methods"),
+    )!;
+    expect(translated.input).toMatchObject({
+      section: "译文：Methods",
+      part: null,
+      paragraphs: [
+        {
+          id: "p4",
+          kind: "result",
+          sentences: expect.arrayContaining([
+            {
+              n: 1,
+              text: "译文：The methods sample 20 showed a stable synthetic spectrum near 420 nm in water.",
+            },
+          ]),
+          evidence: [
+            {
+              id: "e1",
+              original:
+                "The methods sample 20 showed a stable synthetic spectrum near 420 nm in water.",
+            },
+          ],
+        },
+        expect.objectContaining({ id: "p5" }),
+      ],
+    });
     const document_version_id = (await main(e)).document_version_id!;
     expect(await describe(e, document_version_id)).toEqual({
       state: "complete",
-      points: 6,
+      points: 9,
       target_language: "zh-Hans",
       reason: null,
     });
@@ -138,10 +221,9 @@ it("produces, checks and publishes the layers; reads overview, outline, three te
       text: "original",
       state: "complete",
       machine_written: true,
-      prompt_version: "reading-layers-v2",
+      prompt_version: "reading-layers-v3",
     });
     expect(overview).not.toHaveProperty("machine_translation");
-    // ADR 0070: summary, trunk with its basis, data, limits and advice.
     expect(overview.summary).toEqual({
       text: "A synthetic study of spectra measured in water. It records each sample and concludes that the spectra are stable.",
       key_terms: ["synthetic study"],
@@ -155,7 +237,6 @@ it("produces, checks and publishes the layers; reads overview, outline, three te
     ]);
     expect(overview.advice).toMatchObject({
       text: "Read Results for the spectra.",
-      key_terms: ["spectra"],
       places: [
         {
           text: "Results",
@@ -170,41 +251,89 @@ it("produces, checks and publishes the layers; reads overview, outline, three te
         source: { kind: "unit", unit_id: expect.any(String), paragraph: 2 },
       },
     ]);
-    expect(overview.primary.map((p: { number: number }) => p.number)).toEqual([
-      1, 2, 3,
-    ]);
+    // The trunk marks three notes; the basis is each one's first evidence.
+    expect(numbers(overview.primary)).toEqual([1, 2, 3]);
     expect(overview.primary[1].basis).toMatchObject({
       kind: "sentence",
-      text: "The introduction sample 10",
+      text: "The introduction sample 10 showed a stable synthetic spectrum near 410 nm in water.",
       paragraph: 4,
       sentences: [1],
       fallback: false,
     });
-    // Points grouped under the author's headings, without evidence.
+    // Every section with its line and all its notes, in the author's order.
     expect(
-      overview.sections.map((s: { title: string | null }) => s.title),
-    ).toEqual(["Abstract", "Introduction", "Methods", "Results"]);
+      overview.sections.map((s: Loose) => [
+        s.title,
+        s.statement,
+        s.label,
+        s.points.length,
+      ]),
+    ).toEqual([
+      [
+        "Abstract",
+        "The Abstract section establishes stable spectra.",
+        "stable spectra",
+        1,
+      ],
+      [
+        "Introduction",
+        "The Introduction section establishes stable spectra.",
+        "stable spectra",
+        2,
+      ],
+      [
+        "Methods",
+        "The Methods section establishes stable spectra.",
+        "stable spectra",
+        2,
+      ],
+      [
+        "Results",
+        "The Results section establishes stable spectra.",
+        "stable spectra",
+        2,
+      ],
+      [
+        "Conclusion",
+        "The Conclusion section establishes stable spectra.",
+        "stable spectra",
+        2,
+      ],
+    ]);
     expect(overview.sections[1].points[0]).toEqual({
       number: 2,
-      statement: "The paper states that The introduction sample 10 showed a.",
+      unit_id: expect.any(String),
+      paragraph: 4,
+      statement:
+        "The introduction sample 10 showed a stable synthetic spectrum near 410 nm in water.",
+      reason:
+        "The introduction sample 11 showed a stable synthetic spectrum near 411 nm in water.",
       key_terms: ["introduction"],
       section_id: overview.sections[1].section_id,
       section_title: "Introduction",
       primary: true,
       label: "introduction sample 10",
       kind: "result",
-      relations: [{ word: "follows", targets: [{ kind: "point", number: 1 }] }],
+      relations: [
+        {
+          word: "follows",
+          targets: [{ kind: "point", number: 1, paragraph: 2 }],
+        },
+      ],
     });
-    // The outline pages by points; each evidence is the original sentence.
+    // The outline pages by notes, each page with its sections' lines.
     const first = await layers(e, {
       document_version_id,
       part: "outline",
       limit: 4,
     });
-    expect(first.points.map((p: { number: number }) => p.number)).toEqual([
-      1, 2, 3, 4,
+    expect(numbers(first.points)).toEqual([1, 2, 3, 4]);
+    expect(first.total).toBe(9);
+    expect(first.sections.map((s: Loose) => s.title)).toEqual([
+      "Abstract",
+      "Introduction",
+      "Methods",
     ]);
-    expect(first.total).toBe(6);
     const evidence = first.points[1].evidence[0];
     expect(evidence).toMatchObject({
       kind: "sentence",
@@ -221,10 +350,15 @@ it("produces, checks and publishes the layers; reads overview, outline, three te
       limit: 4,
       cursor: first.next_cursor,
     });
-    expect(second.points.map((p: { number: number }) => p.number)).toEqual([
-      5, 6,
-    ]);
-    expect(second.next_cursor).toBeNull();
+    expect(numbers(second.points)).toEqual([5, 6, 7, 8]);
+    const third = await layers(e, {
+      document_version_id,
+      part: "outline",
+      limit: 4,
+      cursor: second.next_cursor,
+    });
+    expect(numbers(third.points)).toEqual([9]);
+    expect(third.next_cursor).toBeNull();
     // Each evidence reference resolves to the original text like a slice's.
     const ref = first.evidence.find(
       (r: { locator: { segment_id: string } }) =>
@@ -236,27 +370,36 @@ it("produces, checks and publishes the layers; reads overview, outline, three te
       continuation: null,
     });
     expect(resolved.text).toContain(evidence.text);
-    // Translation: statements, key terms and evidence from the stored translation.
-    const translated = await layers(e, {
+    // Translation: notes, reasons, labels, lines and evidence of the version in the target language.
+    const outline = await layers(e, {
       document_version_id,
       part: "outline",
       text: "translation",
       limit: 2,
     });
-    expect(translated).toMatchObject({
+    expect(outline).toMatchObject({
       machine_translation: true,
       target_language: "zh-Hans",
       untranslated: 0,
     });
-    expect(translated.points[1]).toMatchObject({
+    expect(outline.points[1]).toMatchObject({
       statement:
-        "译文：The paper states that The introduction sample 10 showed a.",
-      translated: true,
+        "译文：The introduction sample 10 showed a stable synthetic spectrum near 410 nm in water.",
+      reason:
+        "The introduction sample 11 showed a stable synthetic spectrum near 411 nm in water.",
+      label: "译文：The introduction sample",
       key_terms: ["introduction"],
-      label: "译文：introduction sample 10",
+      kind: "result",
+      translated: true,
     });
-    // The fake translation is the unit's whole text prefixed: sentence 1 of it.
-    expect(translated.points[1].evidence[0]).toMatchObject({
+    expect(outline.sections[1]).toMatchObject({
+      title: "Introduction",
+      statement: "译文：译文：Introduction一节确立了稳定的光谱。",
+      label: "稳定的光谱",
+      translated: true,
+    });
+    // The stored translation is the unit's whole text prefixed: its sentence 1.
+    expect(outline.points[1].evidence[0]).toMatchObject({
       start_utf8: evidence.start_utf8,
       translated: true,
       aligned: true,
@@ -279,15 +422,22 @@ it("produces, checks and publishes the layers; reads overview, outline, three te
       key_terms: ["spectra"],
       places: ["Results"],
     });
-    // The quantity is translated; the value never is.
+    // The quantity has a version; the value never has.
     expect(both.data[0]).toMatchObject({
       value: "401 nm",
       translation: { quantity: "译文：Spectrum of the first sample" },
     });
-    expect(both.primary[0].translation).toMatchObject({
-      label: "译文：abstract sample 1",
+    expect(both.sections[0].translation).toEqual({
+      statement: "译文：译文：Abstract一节确立了稳定的光谱。",
+      label: "稳定的光谱",
     });
-    // Markdown: the machine note first, the digest, headings and quoted evidence.
+    expect(both.sections[0].points[0].translation).toMatchObject({
+      statement:
+        "译文：The abstract sample 1 showed a stable synthetic spectrum near 401 nm in water.",
+      reason:
+        "The abstract sample 2 showed a stable synthetic spectrum near 402 nm in water.",
+    });
+    // Markdown: the machine note first, the digest, then each section's line and each note by its paragraph.
     const markdown = await layers(e, {
       document_version_id,
       part: "outline",
@@ -296,15 +446,9 @@ it("produces, checks and publishes the layers; reads overview, outline, three te
     });
     expect(markdown.format).toBe("markdown");
     expect(markdown.markdown.split("\n")[0]).toBe(
-      "> 要点与提要由机器写成，不是证据；依据是原文里的句子与图表。",
+      "> 批语与提要由机器写成，不是证据；依据是原文里的句子与图表。",
     );
-    for (const heading of [
-      "## 提要",
-      "## 主干",
-      "## 数据",
-      "## 局限",
-      "## 精读建议",
-    ])
+    for (const heading of ["## 提要", "## 数据", "## 局限", "## 精读建议"])
       expect(markdown.markdown).toContain(heading);
     expect(markdown.markdown).toContain(
       "| Spectrum of the first sample | 401 nm | ¶2 |",
@@ -314,13 +458,14 @@ it("produces, checks and publishes the layers; reads overview, outline, three te
     );
     expect(markdown.markdown).toContain("去处：Results → ¶9");
     expect(markdown.markdown).toContain(
-      "> The introduction sample 10\n> — ¶4·1",
+      "## Introduction\n\n*节旨：The Introduction section establishes stable spectra.*\n\n**¶4** ● 〔结果〕The introduction sample 10 showed a stable synthetic spectrum near 410 nm in water. The introduction sample 11 showed",
     );
-    expect(markdown.markdown).toContain("## Introduction\n\n**2.** 〔结果〕");
-    expect(markdown.markdown).toContain("（承接 1）");
+    expect(markdown.markdown).toContain("（承接 ¶2）");
     expect(markdown.markdown).toContain(
       "> The introduction sample 10 showed a stable synthetic spectrum near 410 nm in water.\n> — ¶4·1",
     );
+    // A note outside the trunk has no mark.
+    expect(markdown.markdown).toContain("**¶7** 〔结果〕");
     const bilingual = await layers(e, {
       document_version_id,
       part: "outline",
@@ -331,6 +476,15 @@ it("produces, checks and publishes the layers; reads overview, outline, three te
     expect(bilingual.markdown).toContain(
       "\n>\n> 译文：The introduction sample 10 showed",
     );
+    const overviewMarkdown = await layers(e, {
+      document_version_id,
+      part: "overview",
+      format: "markdown",
+    });
+    expect(overviewMarkdown.markdown).toContain(
+      "*节旨：The Results section establishes stable spectra.*",
+    );
+    expect(overviewMarkdown.markdown).not.toContain("> — ¶");
     // The same contract through the CLI.
     let out = "";
     const cli = await runCli(["document", "layers", "--request", "-"], {
@@ -346,7 +500,7 @@ it("produces, checks and publishes the layers; reads overview, outline, three te
     });
     expect(cli.code).toBe(0);
     expect(JSON.parse(out).result).toMatchObject({
-      total: 6,
+      total: 9,
       points: [first.points[0]],
     });
     // Archiving again with the same input skips the step: no model call.
@@ -359,110 +513,108 @@ it("produces, checks and publishes the layers; reads overview, outline, three te
   }
 }, 0);
 
-it("drops evidence that names nothing, points without evidence and key terms not in the statement, and numbers again", async () => {
+it("drops what fails the checks and counts it; a note without evidence is no note", async () => {
   const e = await fixture();
   try {
-    e.setLayers((input) => {
-      e.layersInputs.push(input);
-      const base = defaultLayersReply(input);
+    e.answer((call) => {
+      if (call.kind !== "section" || !inSection(call, "Methods")) return;
+      const base = defaultLayersReply(call) as Loose;
+      const [p4, p5] = base.units;
       return {
-        digest: {
-          ...base.digest,
-          summary: { ...base.digest.summary, units: ["p1", "p99", "f1"] },
-        },
-        data: [],
-        // Every point carries every field the schema asks for.
-        points: (
-          [
-            {
-              statement:
-                "The paper states that The methods second sample 25 showed a.",
-              evidence: ["p5.1", "p999.1", "p5.9"],
-              primary: true,
-              key_terms: ["second sample", "absent term", "methods", "showed"],
-            },
-            {
-              statement: "Only evidence that names nothing.",
-              evidence: ["p1.1-5", "p1.1,3", "f1", "nonsense"],
-              key_terms: [],
-            },
-            {
-              statement:
-                "The paper states that The introduction sample 10 showed a.",
-              evidence: ["p2.1-2", "p2.1-2"],
-              primary: true,
-              key_terms: ["introduction"],
-            },
-            {
-              statement:
-                "The paper states that The methods sample 22 showed a.",
-              evidence: ["p4.3"],
-              primary: true,
-              key_terms: ["sample 22"],
-            },
-            { statement: " ", evidence: ["p4.1"], key_terms: [] },
-            { statement: "x".repeat(301), evidence: ["p4.2"], key_terms: [] },
-          ] as Record<string, unknown>[]
-        ).map((p) => ({
-          primary: false,
-          label: null,
-          kind: null,
-          relations: [],
-          basis: null,
-          ...p,
-        })),
+        ...base,
+        units: [
+          {
+            ...p4,
+            // 9 names no sentence; 1 twice is once; 3 and 4 join, 1 stands apart.
+            evidence: [9, 1, 3, 4, 1],
+            key_terms: ["absent term", "methods"],
+            label: "not in the note",
+            kind: "bogus",
+            reason: "x ".repeat(40).trim(),
+            see: ["f9"],
+          },
+          // Every sentence number is out of range: no evidence, no note.
+          { ...p5, evidence: [0, 7] },
+        ],
       };
     });
     await e.submit("layers-drops");
     const receipt = (await step(e))!;
     expect(receipt).toMatchObject({ status: "done" });
     expect(receipt.output.layers).toMatchObject({
-      given: 6,
-      points: 3,
-      dropped: { evidence: 7, points: 3, key_terms: 2, digest_units: 2 },
+      points: 8,
+      dropped: {
+        points: 1,
+        evidence: 5,
+        key_terms: 1,
+        labels: 1,
+        kinds: 1,
+        reasons: 1,
+        see: 1,
+        unanswered: 0,
+      },
     });
     const document_version_id = (await main(e)).document_version_id!;
     const outline = await layers(e, { document_version_id, part: "outline" });
-    // Ordered by their first evidence and numbered again.
-    expect(
-      outline.points.map((p: { number: number; statement: string }) => [
-        p.number,
-        p.statement,
-      ]),
-    ).toEqual([
-      [1, "The paper states that The introduction sample 10 showed a."],
-      [2, "The paper states that The methods sample 22 showed a."],
-      [3, "The paper states that The methods second sample 25 showed a."],
-    ]);
-    expect(outline.points[0].evidence).toEqual([
-      expect.objectContaining({ sentences: [1, 2], paragraph: 4 }),
-    ]);
-    expect(outline.points[1].evidence[0]).toMatchObject({
-      sentences: [3],
-      text: "The methods sample 22 showed a stable synthetic spectrum near 422 nm in water.",
+    const p4 = outline.points.find((p: Loose) => p.paragraph === 7);
+    expect(p4).toMatchObject({
+      kind: null,
+      label: null,
+      reason: null,
+      key_terms: ["methods"],
+      relations: [{ word: "follows" }],
     });
-    // At most two key terms, each found in its statement.
-    expect(outline.points[2].key_terms).toEqual(["second sample", "methods"]);
-    const overview = await layers(e, { document_version_id, part: "overview" });
-    expect(overview.summary.units).toHaveLength(1);
+    // Up to two sentences in a paragraph of five: 1 and 3; non-consecutive ones are two evidence.
+    expect(p4.evidence.map((x: Loose) => x.sentences)).toEqual([[1], [3]]);
+    // The Methods section's second paragraph has no note.
+    expect(outline.points.some((p: Loose) => p.paragraph === 8)).toBe(false);
+    expect(numbers(outline.points)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
   } finally {
     await e.close();
   }
 }, 0);
 
-it("fails when too few points are left, keeps the full text ready, and redoes the step on resume", async () => {
+it("leaves a section answered badly twice without notes and keeps the others", async () => {
   const e = await fixture();
   try {
-    e.setLayers((input) => {
-      e.layersInputs.push(input);
-      const base = defaultLayersReply(input);
-      return {
-        ...base,
-        points: base.points.map((p, i) =>
-          i < 2 ? p : { ...p, evidence: ["p999.1"] },
-        ),
-      };
+    e.answer((call) =>
+      call.kind === "section" && inSection(call, "Results")
+        ? { section: { statement: "", label: "" }, units: "nothing" }
+        : undefined,
+    );
+    await e.submit("layers-bad-section");
+    const receipt = (await step(e))!;
+    expect(receipt).toMatchObject({ status: "done" });
+    expect(e.count("section", "Results")).toBe(2);
+    // Seven of nine paragraphs have notes: at least two thirds.
+    expect(receipt.output.layers).toMatchObject({
+      annotatable: 9,
+      points: 7,
+      sections: 4,
+      dropped: { unanswered: 2 },
     });
+    const document_version_id = (await main(e)).document_version_id!;
+    const overview = await layers(e, { document_version_id, part: "overview" });
+    expect(overview.sections.map((s: Loose) => s.title)).toEqual([
+      "Abstract",
+      "Introduction",
+      "Methods",
+      "Conclusion",
+    ]);
+  } finally {
+    await e.close();
+  }
+}, 0);
+
+it("fails below two thirds of the paragraphs, keeps the full text ready, and redoes the step on resume", async () => {
+  const e = await fixture();
+  try {
+    e.answer((call) =>
+      call.kind === "section" &&
+      ["Methods", "Results", "Conclusion"].some((s) => inSection(call, s))
+        ? { section: { statement: "", label: "" }, units: [] }
+        : undefined,
+    );
     await e.submit("layers-too-few");
     const state = await e.app.archive.status(e.id);
     expect(state.status).toBe("READY");
@@ -471,7 +623,14 @@ it("fails when too few points are left, keeps the full text ready, and redoes th
       status: "failed",
       reason: "layers-incomplete",
     });
-    expect(failed.output.layers).toMatchObject({ given: 6, points: 2 });
+    expect(failed.output.layers).toMatchObject({
+      annotatable: 9,
+      annotated: 3,
+      primary: 0,
+      summary_missing: true,
+    });
+    // The whole-document call is not made for notes that cover too little.
+    expect(e.count("document")).toBe(0);
     expect(state.issues).toContainEqual(
       expect.objectContaining({
         step: "layers",
@@ -498,22 +657,96 @@ it("fails when too few points are left, keeps the full text ready, and redoes th
       code: "layers-unavailable",
       details: { state: "none", reason: null },
     });
-    // Resume: the step runs again; a cut-off answer is asked once more for half the points.
-    let asked = 0;
-    e.setLayers((input) => {
-      e.layersInputs.push(input);
-      return asked++ ? defaultLayersReply(input) : { truncated: true };
-    });
+    // Resume: the step runs again.
+    e.answer(() => undefined);
     await e.submit("layers-resume");
-    expect(e.layersInputs.slice(-2).map((i) => i.split("\n")[0])).toEqual([
-      "Maximum number of points: 40",
-      "Maximum number of points: 20",
-    ]);
-    expect(await step(e)).toMatchObject({ status: "done", calls: 3 });
+    expect(await step(e)).toMatchObject({ status: "done" });
     expect(
       (await e.app.archive.status(e.id)).issues.find((i) => i.step === "layers")
         ?.resolution,
     ).toBe("continue");
+  } finally {
+    await e.close();
+  }
+}, 0);
+
+it("splits a cut-off section in halves and writes its line from their notes; a cut-off digest is asked again", async () => {
+  const e = await fixture();
+  try {
+    let digest = 0;
+    e.answer((call) => {
+      if (
+        call.kind === "section" &&
+        inSection(call, "Introduction") &&
+        !/^This is part /mu.test(call.input as string)
+      )
+        return { truncated: true };
+      if (call.kind === "document" && !digest++) return { truncated: true };
+      return undefined;
+    });
+    await e.submit("layers-truncated");
+    const receipt = (await step(e))!;
+    expect(receipt).toMatchObject({ status: "done" });
+    // The whole section, then each half with one paragraph; then its line.
+    const intro = e.calls.filter(
+      (c) => c.kind === "section" && inSection(c, "Introduction"),
+    );
+    expect(intro).toHaveLength(3);
+    expect(
+      intro
+        .slice(1)
+        .map(
+          (c) =>
+            /^This is part \d of 2 of this section: paragraphs (p\d+) to \1\.$/mu.exec(
+              c.input as string,
+            )?.[1],
+        )
+        .sort(),
+    ).toEqual(["p2", "p3"]);
+    expect(e.count("line")).toBe(1);
+    expect(e.calls.find((c) => c.kind === "line")!.input).toContain(
+      "Notes of its paragraphs:\n[p2] The introduction sample 10",
+    );
+    expect(e.count("document")).toBe(2);
+    expect(receipt.output.layers).toMatchObject({ points: 9, sections: 5 });
+    const document_version_id = (await main(e)).document_version_id!;
+    const overview = await layers(e, { document_version_id, part: "overview" });
+    expect(overview.sections[1]).toMatchObject({
+      title: "Introduction",
+      statement: "The section establishes stable spectra.",
+    });
+  } finally {
+    await e.close();
+  }
+}, 0);
+
+it("fails when the digest is invalid twice or the trunk has fewer than three notes", async () => {
+  const e = await fixture();
+  try {
+    e.answer((call) =>
+      call.kind === "document" ? { digest: "nothing" } : undefined,
+    );
+    await e.submit("layers-bad-digest");
+    expect((await e.app.archive.status(e.id)).status).toBe("READY");
+    expect(e.count("document")).toBe(2);
+    expect(await step(e)).toMatchObject({
+      status: "failed",
+      reason: "layers-incomplete",
+      output: { layers: { annotated: 9, summary_missing: true } },
+    });
+    e.answer((call) =>
+      call.kind === "document"
+        ? { ...(defaultLayersReply(call) as Loose), primary: ["p1", "p99"] }
+        : undefined,
+    );
+    await e.submit("layers-few-primary");
+    expect(await step(e)).toMatchObject({
+      status: "failed",
+      reason: "layers-incomplete",
+      output: {
+        layers: { primary: 1, summary_missing: false, dropped: { primary: 1 } },
+      },
+    });
   } finally {
     await e.close();
   }
@@ -531,7 +764,7 @@ it("records a short paper as not applicable without asking the model", async () 
       status: "not-applicable",
       reason: "too-short",
     });
-    expect(e.layersInputs).toEqual([]);
+    expect(e.calls).toEqual([]);
     const document_version_id = (await main(e)).document_version_id!;
     expect(await describe(e, document_version_id)).toEqual({
       state: "not-applicable",
@@ -589,9 +822,6 @@ it("records a short paper as not applicable without asking the model", async () 
         },
       });
       expect(result.isError).toBe(true);
-      expect(JSON.stringify(result.structuredContent)).toContain(
-        '"code":"layers-unavailable"',
-      );
       expect(result.structuredContent).toMatchObject({
         result: {
           failure: {
@@ -626,13 +856,13 @@ it("records a long document as not applicable", async () => {
       status: "not-applicable",
       reason: "long-document",
     });
-    expect(e.layersInputs).toEqual([]);
+    expect(e.calls).toEqual([]);
   } finally {
     await e.close();
   }
 }, 0);
 
-it("redoes only the translation part when only the translation changed", async () => {
+it("writes the translation part per section; a paragraph missing in the translation has no version; only a changed translation is redone", async () => {
   const e = await fixture();
   try {
     // First the translation misses the second Methods paragraph.
@@ -647,18 +877,32 @@ it("redoes only the translation part when only the translation changed", async (
     ).toMatchObject({ status: "failed", reason: "translation-incomplete" });
     const before = (await step(e))!;
     expect(before).toMatchObject({ status: "done" });
+    expect(before.output.layers).toMatchObject({
+      translation: { status: "done", translated_points: 8 },
+    });
+    // The Methods call was asked for the translated paragraph only.
+    const methods = e.calls.find(
+      (c) => c.kind === "translation-section" && inSection(c, "Methods"),
+    )!.input as Loose;
+    expect(methods.paragraphs.map((p: Loose) => p.id)).toEqual(["p4"]);
     const document_version_id = (await main(e)).document_version_id!;
     const partial = await layers(e, {
       document_version_id,
       part: "outline",
       text: "translation",
     });
-    // Evidence on the untranslated unit keeps the original.
+    // The note keeps the original; its evidence too.
+    expect(partial.points[4]).toMatchObject({
+      paragraph: 8,
+      translated: false,
+      statement: expect.stringContaining("The methods second sample 25"),
+    });
+    expect(partial.untranslated).toBe(1);
     expect(partial.points[4].evidence[0]).toMatchObject({
       translated: false,
       aligned: false,
-      text: expect.stringContaining("The methods second sample 25"),
     });
+    const asked = e.calls.length;
     e.setTranslation((input) => ({
       translations: input.units.map((u) => ({
         id: u.id,
@@ -669,72 +913,54 @@ it("redoes only the translation part when only the translation changed", async (
     const after = (await step(e))!;
     expect(after.output.layers).toMatchObject({
       redone: "translation",
-      translation: { status: "done" },
+      translation: { status: "done", translated_points: 9 },
     });
     expect(after.output.layers.sha256).not.toBe(before.output.layers.sha256);
-    // One more translation call; the layers themselves were not asked again.
-    expect(e.layersInputs).toHaveLength(1);
-    expect(e.translationInputs).toHaveLength(2);
-    expect(after.calls).toBe(1);
+    // Only the translation part's calls: one per section and one for the digest.
+    expect(e.calls.slice(asked).map((c) => c.kind)).toEqual([
+      ...Array(5).fill("translation-section"),
+      "translation-document",
+    ]);
+    expect(after.calls).toBe(6);
     const full = await layers(e, {
       document_version_id,
       part: "outline",
       text: "translation",
     });
+    expect(full.points[4]).toMatchObject({ translated: true });
     expect(full.points[4].evidence[0]).toMatchObject({
       translated: true,
       aligned: true,
-    });
-    expect(await describe(e, document_version_id)).toMatchObject({
-      target_language: "zh-Hans",
     });
   } finally {
     await e.close();
   }
 }, 0);
 
-it("drops renderings not found in the translation and leaves unaligned evidence without a position", async () => {
+it("leaves unconfirmed translated evidence without a position and drops what fails the checks", async () => {
   const e = await fixture();
   try {
-    e.setLayersTranslation((input) => {
-      e.translationInputs.push(input);
-      const reply = defaultLayersTranslationReply(input);
+    e.answer((call) => {
+      if (call.kind !== "translation-section" || !inSection(call, "Abstract"))
+        return;
+      const base = defaultLayersTranslationReply(call) as Loose;
       return {
-        items: reply.items.map((item) =>
-          item.id === "k1"
-            ? {
-                ...item,
-                key_terms: item.key_terms.map((k) => ({
-                  ...k,
-                  translation: "不存在的词",
-                })),
-                evidence: item.evidence.map((x) => ({ ...x, sentences: [7] })),
-              }
-            : item.id === "k2"
-              ? {
-                  ...item,
-                  evidence: item.evidence.map((x) => ({
-                    ...x,
-                    sentences: [1, 3],
-                  })),
-                }
-              : item,
-        ),
+        ...base,
+        units: base.units.map((u: Loose) => ({
+          ...u,
+          evidence: [{ id: "e1", sentences: [7] }],
+          key_terms: ["不存在的词"],
+          label: "不在批语里",
+        })),
       };
     });
     await e.submit("layers-translation-checks");
     const receipt = (await step(e))!;
     expect(receipt.output.layers.translation).toMatchObject({
       status: "done",
-      key_terms_dropped: 1,
-      evidence_dropped: 2,
-      aligned: 4,
-    });
-    // The second call got each evidence with its unit's translation in numbered sentences.
-    const sent = e.translationInputs[0]!;
-    expect(sent.units[0]!.sentences[0]).toEqual({
-      n: 1,
-      text: "译文：The abstract sample 1 showed a stable synthetic spectrum near 401 nm in water.",
+      evidence: 9,
+      aligned: 8,
+      dropped: { evidence: 1, key_terms: 1, labels: 1 },
     });
     const document_version_id = (await main(e)).document_version_id!;
     const outline = await layers(e, {
@@ -742,7 +968,12 @@ it("drops renderings not found in the translation and leaves unaligned evidence 
       part: "outline",
       text: "translation",
     });
-    expect(outline.points[0].key_terms).toEqual([]);
+    expect(outline.points[0]).toMatchObject({
+      translated: true,
+      key_terms: [],
+      // The original label stands in for a dropped one.
+      label: "abstract sample 1",
+    });
     // Without a confirmed position the whole unit's translation is given.
     expect(outline.points[0].evidence[0]).toMatchObject({
       translated: true,
@@ -751,8 +982,7 @@ it("drops renderings not found in the translation and leaves unaligned evidence 
         /^译文：The abstract sample 1 .* sample 5 .*water\.$/u,
       ),
     });
-    expect(outline.points[1].evidence[0]).toMatchObject({ aligned: false });
-    expect(outline.points[2].evidence[0]).toMatchObject({ aligned: true });
+    expect(outline.points[1].evidence[0]).toMatchObject({ aligned: true });
   } finally {
     await e.close();
   }
@@ -768,7 +998,8 @@ it("has no translation part for a paper already in the target language", async (
       status: "complete",
       translation: { status: "not-needed" },
     });
-    expect(e.translationInputs).toEqual([]);
+    expect(e.count("translation-section")).toBe(0);
+    expect(e.count("translation-document")).toBe(0);
     const document_version_id = (await main(e)).document_version_id!;
     expect(await describe(e, document_version_id)).toMatchObject({
       state: "complete",
@@ -846,11 +1077,11 @@ it("has none for a draft, reads stale after the text changes, and redoes everyth
     });
     // A new content version redoes the layers as a whole.
     await e.submit("layers-after-edit");
-    expect(e.layersInputs).toHaveLength(2);
+    expect(e.count("document")).toBe(2);
     expect((await step(e))!.output.layers).toMatchObject({ redone: "all" });
     // from_step layers redoes them although nothing changed.
     await e.submit("layers-from-step", undefined, "layers");
-    expect(e.layersInputs).toHaveLength(3);
+    expect(e.count("document")).toBe(3);
     expect((await step(e))!.output.layers).toMatchObject({ redone: "all" });
   } finally {
     await e.close();
@@ -888,31 +1119,7 @@ function pagesPdf(count: number) {
   );
 }
 
-it("fails the step when fewer than three primary points are left, the full text staying ready", async () => {
-  const e = await fixture();
-  try {
-    e.setLayers((input) => {
-      e.layersInputs.push(input);
-      const base = defaultLayersReply(input);
-      return {
-        ...base,
-        points: base.points.map((p, i) => ({ ...p, primary: i < 2 })),
-      };
-    });
-    await e.submit("layers-few-primary");
-    expect((await e.app.archive.status(e.id)).status).toBe("READY");
-    const failed = (await step(e))!;
-    expect(failed).toMatchObject({
-      status: "failed",
-      reason: "layers-incomplete",
-    });
-    expect(failed.output.layers).toMatchObject({ primary: 2, points: 6 });
-  } finally {
-    await e.close();
-  }
-}, 0);
-
-it("reads layers of an earlier file version as stale and redoes them on the next archive", async () => {
+it("reads a version 2 file as stale and redoes the layers on the next archive", async () => {
   const e = await fixture();
   try {
     await e.submit("layers-current");
@@ -926,7 +1133,7 @@ it("reads layers of an earlier file version as stale and redoes them on the next
     };
     const row = (await store.row(key))!;
     // A file as the earlier release wrote it: only its version differs here.
-    const old = { ...(await store.load(row)), schema_version: 1 };
+    const old = { ...(await store.load(row)), schema_version: 2 };
     const bytes = canonicalJsonBytes(old);
     const ref = parseArtifactRef({
       sha256: createHash("sha256").update(bytes).digest("hex"),
@@ -966,8 +1173,8 @@ it("reads layers of an earlier file version as stale and redoes them on the next
       code: "layers-unavailable",
       details: { state: "stale" },
     });
-    // A receipt of the earlier release has an input key without the file
-    // version, so archiving again redoes the layers as a whole.
+    // A receipt of the earlier release has an input key of file version 2,
+    // so archiving again redoes the layers as a whole.
     await e.app.close();
     const db = new DatabaseSync(join(e.home, "catalog.sqlite"));
     try {
@@ -979,7 +1186,7 @@ it("reads layers of an earlier file version as stale and redoes them on the next
     }
     await e.reopen();
     await e.submit("layers-after-upgrade");
-    expect(e.layersInputs).toHaveLength(2);
+    expect(e.count("document")).toBe(2);
     expect((await step(e))!.output.layers).toMatchObject({ redone: "all" });
     expect(await describe(e, key.document_version_id)).toMatchObject({
       state: "complete",

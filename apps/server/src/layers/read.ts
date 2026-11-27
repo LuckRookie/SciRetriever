@@ -15,6 +15,7 @@ import {
   type LayersReadEvidence,
   type LayersReadLimit,
   type LayersReadPoint,
+  type LayersReadSection,
   type LayersReadSummary,
   type LayersReadUnitRef,
   type LayersRelationWord,
@@ -246,11 +247,14 @@ export class LayersReader {
   }
   point(index: number): LayersReadPoint {
     const p = this.c.file.points[index]!;
-    const t = this.part?.points[index];
+    const t = this.part?.points[index] ?? null;
     return this.mode(
       {
         number: p.number,
+        unit_id: p.unit_id,
+        paragraph: this.paragraph(p.unit_id),
         statement: p.statement,
+        reason: p.reason,
         key_terms: [...p.key_terms],
         section_id: p.section_id,
         section_title: this.sectionTitle(p.section_id),
@@ -260,20 +264,30 @@ export class LayersReader {
         relations: p.relations.map((r) => ({
           word: r.word,
           targets: r.targets.map((x) =>
-            x.kind === "point" ? x : this.block(x.segment_id),
+            x.kind === "point"
+              ? {
+                  kind: "point" as const,
+                  number: x.number,
+                  paragraph: this.paragraph(
+                    this.c.file.points[x.number - 1]?.unit_id ?? "",
+                  ),
+                }
+              : this.block(x.segment_id),
           ),
         })),
       },
-      t?.text
+      t
         ? {
-            statement: t.text,
-            key_terms: this.terms(t.key_terms),
+            statement: t.statement,
+            reason: t.reason,
+            key_terms: [...t.key_terms],
             label: t.label ?? p.label,
           }
         : null,
       {
-        statement: t?.text ?? null,
-        key_terms: this.terms(t?.key_terms),
+        statement: t?.statement ?? null,
+        reason: t?.reason ?? null,
+        key_terms: [...(t?.key_terms ?? [])],
         label: t?.label ?? null,
       },
     ) as LayersReadPoint;
@@ -309,7 +323,7 @@ export class LayersReader {
       text: this.text(e.start_utf8, e.end_utf8),
     };
   }
-  /** What a primary point rests on; its first evidence when it has no basis. */
+  /** What a primary note rests on: its first evidence (spec 10.2). */
   basis(index: number): LayersReadBasis {
     const p = this.c.file.points[index]!;
     return {
@@ -319,7 +333,7 @@ export class LayersReader {
   }
   evidence(index: number): LayersReadEvidence[] {
     const p = this.c.file.points[index]!;
-    const part = this.part?.points[index];
+    const part = this.part?.points[index] ?? null;
     return p.evidence.map((e, i): LayersReadEvidence => {
       const original = this.original(e);
       if (original.kind === "block" || this.c.mode === "original")
@@ -352,8 +366,8 @@ export class LayersReader {
     });
   }
   /**
-   * The 3 to 5 primary points with their basis, for the overview. They are
-   * also among the points, so their untranslated texts are counted there.
+   * The 3 to 5 primary notes with their basis, for the overview. They are
+   * also among the sections' notes, so their untranslated texts are counted there.
    */
   primary() {
     const counted = this.untranslated;
@@ -363,25 +377,68 @@ export class LayersReader {
     this.untranslated = counted;
     return out;
   }
-  /** Points of the overview grouped by their section, in order. */
+  /** Where a section stands in the document: its heading, else its first note. */
+  private sectionOrder() {
+    const at = new Map<string | null, number>();
+    for (const s of this.c.structure.segments)
+      if (s.kind === "heading" && s.section_id && !at.has(s.section_id))
+        at.set(s.section_id, this.paragraph(s.segment_id));
+    const first = new Map<string | null, number>();
+    for (const p of this.c.file.points)
+      if (!first.has(p.section_id))
+        first.set(p.section_id, this.paragraph(p.unit_id));
+    const ids = [
+      ...new Set([
+        ...this.c.file.sections.map((s) => s.section_id),
+        ...this.c.file.points.map((p) => p.section_id),
+      ]),
+    ];
+    const position = (id: string | null) =>
+      Math.min(at.get(id) ?? Infinity, first.get(id) ?? Infinity);
+    return ids.sort((a, b) => position(a) - position(b));
+  }
+  /** A section's line (节旨) and title; `statement` null when it has none. */
+  sectionLine(section_id: string | null): LayersReadSection {
+    const index = this.c.file.sections.findIndex(
+      (s) => s.section_id === section_id,
+    );
+    const s = index < 0 ? null : this.c.file.sections[index]!;
+    const original = {
+      section_id,
+      title: this.sectionTitle(section_id),
+      statement: s?.statement ?? null,
+      label: s?.label ?? null,
+    };
+    // A section without a line has nothing to translate.
+    if (!s)
+      return (
+        this.c.mode === "original"
+          ? original
+          : this.c.mode === "translation"
+            ? { ...original, translated: false }
+            : { ...original, translation: { statement: null, label: null } }
+      ) as LayersReadSection;
+    const t = this.part?.sections[index] ?? null;
+    return this.mode(
+      original,
+      t ? { statement: t.statement, label: t.label ?? s.label } : null,
+      { statement: t?.statement ?? null, label: t?.label ?? null },
+    ) as LayersReadSection;
+  }
+  /** The lines of the given sections, in the document's order. */
+  sectionLines(ids: ReadonlySet<string | null>): LayersReadSection[] {
+    return this.sectionOrder()
+      .filter((id) => ids.has(id))
+      .map((id) => this.sectionLine(id));
+  }
+  /** Every section in order with its line and all its notes (the overview). */
   sections() {
-    const groups: {
-      section_id: string | null;
-      title: string | null;
-      points: LayersReadPoint[];
-    }[] = [];
-    this.c.file.points.forEach((p, i) => {
-      const last = groups.at(-1);
-      const point = this.point(i);
-      if (last && last.section_id === p.section_id) last.points.push(point);
-      else
-        groups.push({
-          section_id: p.section_id,
-          title: this.sectionTitle(p.section_id),
-          points: [point],
-        });
-    });
-    return groups;
+    return this.sectionOrder().map((section_id) => ({
+      ...this.sectionLine(section_id),
+      points: this.c.file.points.flatMap((p, i) =>
+        p.section_id === section_id ? [this.point(i)] : [],
+      ),
+    }));
   }
 }
 
@@ -405,8 +462,8 @@ const cell = (text: string) =>
   text.replace(/\|/gu, "\\|").replace(/\s+/gu, " ");
 
 /**
- * The Markdown header: the machine note, the title and the digest (summary,
- * the trunk with what each rests on, data, limits, advice).
+ * The Markdown header (spec 10.7): the machine note, the title and the
+ * digest (summary, limits, advice) with the key data.
  */
 export function layersMarkdownHeader(
   title: string | null,
@@ -421,22 +478,6 @@ export function layersMarkdownHeader(
   const summary = reader.summary();
   out.push("## 提要", "", `${summary.text}${units(summary.units)}`, "");
   if (summary.translation?.text) out.push(summary.translation.text, "");
-  out.push("## 主干", "");
-  for (const p of reader.primary()) {
-    out.push(`**${p.number}.** ${p.statement}`);
-    if (p.translation?.statement) out.push("", p.translation.statement);
-    const b = p.basis;
-    out.push(
-      "",
-      quote(
-        b.kind === "block"
-          ? `［${BLOCK_LABELS[b.block_kind]}］${b.caption ?? ""}`
-          : flat(b.text),
-      ),
-      `> — ${location(b)}`,
-      "",
-    );
-  }
   const data = reader.data();
   if (data.length) {
     out.push("## 数据", "", "| 量 | 数值 | 出处 |", "| --- | --- | --- |");
@@ -466,24 +507,33 @@ export function layersMarkdownHeader(
     if (places) out.push(`去处：${places}`, "");
     if (advice.translation?.text) out.push(advice.translation.text, "");
   }
-  // A blank line before the first section heading.
   return out.join("\n") + "\n";
 }
-/** One point: its kind and relations, then its evidence as quotes when given. */
+const join = (statement: string | null, reason: string | null) =>
+  [statement, reason].filter(Boolean).join(" ");
+/**
+ * One paragraph's note: its paragraph number, the trunk mark, its kind, the
+ * note and its reason, its relations, then its evidence as quotes when given.
+ */
 export function layersMarkdownPoint(
   point: LayersReadPoint,
   evidence: readonly LayersReadEvidence[] | null,
 ): string {
   const out = [
-    `**${point.number}.** ${point.kind ? `〔${LAYERS_KIND_LABELS[point.kind]}〕` : ""}${point.statement}`,
+    `**¶${point.paragraph}**${point.primary ? " ●" : ""} ${point.kind ? `〔${LAYERS_KIND_LABELS[point.kind]}〕` : ""}${join(point.statement, point.reason)}`,
     "",
   ];
-  if (point.translation?.statement) out.push(point.translation.statement, "");
+  if (point.translation?.statement)
+    out.push(join(point.translation.statement, point.translation.reason), "");
   const relations = point.relations
     .map(
       (r) =>
         `${LAYERS_RELATION_LABELS[r.word]} ${r.targets
-          .map((t) => (t.kind === "point" ? `${t.number}` : `¶${t.paragraph}`))
+          .map((t) =>
+            t.kind === "point"
+              ? `¶${t.paragraph}`
+              : `${BLOCK_LABELS[t.block_kind]} ¶${t.paragraph}`,
+          )
           .join("、")}`,
     )
     .join("；");
@@ -503,7 +553,12 @@ export function layersMarkdownPoint(
   }
   return out.join("\n");
 }
-/** A section heading line when the section changes; untitled sections get none. */
-export function layersMarkdownSection(title: string | null): string {
-  return title ? `## ${flat(title)}\n\n` : "";
+/** A section's heading (untitled sections get none) and its line. */
+export function layersMarkdownSection(section: LayersReadSection): string {
+  const out: string[] = [];
+  if (section.title) out.push(`## ${flat(section.title)}`, "");
+  if (section.statement) out.push(`*节旨：${section.statement}*`, "");
+  if (section.translation?.statement)
+    out.push(`*${section.translation.statement}*`, "");
+  return out.length ? out.join("\n") + "\n" : "";
 }

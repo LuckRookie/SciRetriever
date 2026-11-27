@@ -33,7 +33,7 @@ export const LAYERS_OUTLINE_MAX_LIMIT = 50;
 export const LAYERS_OUTLINE_DEFAULT_LIMIT = 20;
 /** The first line of every Markdown export (spec 10.7). */
 export const LAYERS_MACHINE_NOTE =
-  "要点与提要由机器写成，不是证据；依据是原文里的句子与图表。";
+  "批语与提要由机器写成，不是证据；依据是原文里的句子与图表。";
 export const LAYERS_MACHINE_TRANSLATION_NOTE = "译文为机器翻译。";
 
 export interface DocumentLayersRequest {
@@ -121,11 +121,22 @@ export interface LayersReadDataRow {
   readonly translation?: { readonly quantity: string | null };
 }
 export type LayersReadRelationTarget =
-  | { readonly kind: "point"; readonly number: number }
+  | {
+      readonly kind: "point";
+      readonly number: number;
+      /** The target note's paragraph (spec 10.7). */
+      readonly paragraph: number;
+    }
   | LayersReadBlockRef;
+/** One paragraph's note (批语, ADR 0073). */
 export interface LayersReadPoint {
   readonly number: number;
+  /** The paragraph it annotates and its number in this version. */
+  readonly unit_id: string;
+  readonly paragraph: number;
   readonly statement: string;
+  /** In `text: translation`, the version's reason when the note has one. */
+  readonly reason: string | null;
   readonly key_terms: readonly string[];
   readonly section_id: string | null;
   readonly section_title: string | null;
@@ -140,7 +151,20 @@ export interface LayersReadPoint {
   readonly translated?: boolean;
   readonly translation?: {
     readonly statement: string | null;
+    readonly reason: string | null;
     readonly key_terms: readonly string[];
+    readonly label: string | null;
+  };
+}
+/** A section's line (节旨) with its title; `statement` null when it has none. */
+export interface LayersReadSection {
+  readonly section_id: string | null;
+  readonly title: string | null;
+  readonly statement: string | null;
+  readonly label: string | null;
+  readonly translated?: boolean;
+  readonly translation?: {
+    readonly statement: string | null;
     readonly label: string | null;
   };
 }
@@ -225,11 +249,10 @@ export interface DocumentLayersOverviewResult extends LayersReadCommon {
   readonly data: readonly LayersReadDataRow[];
   readonly limits: readonly LayersReadLimit[];
   readonly advice: LayersReadAdvice;
-  readonly sections: readonly {
-    readonly section_id: string | null;
-    readonly title: string | null;
+  /** Every section in order: its line and all its notes, without evidence. */
+  readonly sections: readonly (LayersReadSection & {
     readonly points: readonly LayersReadPoint[];
-  }[];
+  })[];
 }
 export interface DocumentLayersOutlineResult extends LayersReadCommon {
   readonly part: "outline";
@@ -237,6 +260,8 @@ export interface DocumentLayersOutlineResult extends LayersReadCommon {
   readonly points: readonly (LayersReadPoint & {
     readonly evidence: readonly LayersReadEvidence[];
   })[];
+  /** The lines of the sections this page's notes belong to, in order. */
+  readonly sections: readonly LayersReadSection[];
   /** Evidence references of the page's evidence, as `slice` returns them. */
   readonly evidence: readonly EvidenceRef[];
   readonly total: number;
@@ -434,7 +459,10 @@ function modeFields<T>(
 function point(v: unknown, mode: DocumentSliceText, extra: readonly string[]) {
   const r = exact(v, [
     "number",
+    "unit_id",
+    "paragraph",
     "statement",
+    "reason",
     "key_terms",
     "section_id",
     "section_title",
@@ -452,7 +480,10 @@ function point(v: unknown, mode: DocumentSliceText, extra: readonly string[]) {
     fail();
   return {
     number: count(r.number, 1, LAYERS_POINTS_MAX),
+    unit_id: id(r.unit_id),
+    paragraph: count(r.paragraph, 1),
     statement: string(r.statement),
+    reason: nullableString(r.reason),
     key_terms: strings(r.key_terms),
     section_id: nullableId(r.section_id),
     section_title: nullableString(r.section_title),
@@ -467,17 +498,22 @@ function point(v: unknown, mode: DocumentSliceText, extra: readonly string[]) {
         word: rel.word as LayersRelationWord,
         targets: list(rel.targets, (t): LayersReadRelationTarget => {
           if (record(t).kind === "point") {
-            const o = exact(t, ["kind", "number"]);
-            return { kind: "point", number: count(o.number, 1) };
+            const o = exact(t, ["kind", "number", "paragraph"]);
+            return {
+              kind: "point",
+              number: count(o.number, 1),
+              paragraph: count(o.paragraph, 1),
+            };
           }
           return blockRef(t);
         }),
       };
     }),
     ...modeFields(r, mode, (t) => {
-      const x = exact(t, ["statement", "key_terms", "label"]);
+      const x = exact(t, ["statement", "reason", "key_terms", "label"]);
       return {
         statement: nullableString(x.statement),
+        reason: nullableString(x.reason),
         key_terms: strings(x.key_terms),
         label: nullableString(x.label),
       };
@@ -491,6 +527,28 @@ function point(v: unknown, mode: DocumentSliceText, extra: readonly string[]) {
         }
       : {}),
     ...(extra.includes("basis") ? { basis: readBasis(r.basis) } : {}),
+  };
+}
+function sectionLine(v: unknown, mode: DocumentSliceText): LayersReadSection {
+  const r = exact(v, [
+    "section_id",
+    "title",
+    "statement",
+    "label",
+    ...modeKeys(mode, ["translation"]),
+  ]);
+  return {
+    section_id: nullableId(r.section_id),
+    title: nullableString(r.title),
+    statement: nullableString(r.statement),
+    label: nullableString(r.label),
+    ...modeFields(r, mode, (t) => {
+      const x = exact(t, ["statement", "label"]);
+      return {
+        statement: nullableString(x.statement),
+        label: nullableString(x.label),
+      };
+    }),
   };
 }
 function readBasis(v: unknown): LayersReadBasis {
@@ -708,12 +766,11 @@ export function parseDocumentLayersResult(
     const parts = overviewParts(r, request.text);
     if (!Array.isArray(r.sections)) fail();
     const sections = r.sections.map((s) => {
-      const x = exact(s, ["section_id", "title", "points"]);
-      if (!Array.isArray(x.points) || !x.points.length) fail();
+      const { points, ...rest } = record(s);
+      if (!Array.isArray(points)) fail();
       return {
-        section_id: nullableId(x.section_id),
-        title: nullableString(x.title),
-        points: x.points.map((p) => point(p, request.text, [])),
+        ...sectionLine(rest, request.text),
+        points: points.map((p) => point(p, request.text, [])),
       };
     });
     return Object.freeze({
@@ -728,6 +785,7 @@ export function parseDocumentLayersResult(
   const r = exact(value, [
     ...keys,
     "points",
+    "sections",
     "evidence",
     "total",
     "next_cursor",
@@ -753,6 +811,7 @@ export function parseDocumentLayersResult(
           evidence: LayersReadEvidence[];
         },
     ),
+    sections: list(r.sections, (x) => sectionLine(x, request.text)),
     evidence: r.evidence.map((e) => {
       const ref = parseEvidenceRef(e);
       if (

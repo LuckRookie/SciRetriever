@@ -34,113 +34,246 @@ export interface ModelInput {
   readonly purpose?: string;
   readonly [key: string]: unknown;
 }
-export interface LayersTranslationInput {
-  readonly items: readonly {
+/** A call of the reading layers (ADR 0073) as the fake model sees it. */
+export type LayersCall =
+  | { readonly kind: "section" | "line" | "document"; readonly input: string }
+  | {
+      readonly kind: "translation-section";
+      readonly input: LayersTranslationSectionInput;
+    }
+  | {
+      readonly kind: "translation-document";
+      readonly input: LayersTranslationDocumentInput;
+    };
+export interface LayersTranslationSectionInput {
+  readonly title: string | null;
+  readonly section: string | null;
+  readonly part: { readonly index: number; readonly of: number } | null;
+  readonly paragraphs: readonly {
     readonly id: string;
-    readonly text: string;
-    readonly key_terms?: readonly string[];
-    readonly label?: string;
-    readonly places?: readonly string[];
-    readonly evidence?: readonly {
-      readonly id: string;
-      readonly unit: string;
-      readonly original: string;
-    }[];
-  }[];
-  readonly units: readonly {
-    readonly id: string;
+    readonly kind: string | null;
     readonly sentences: readonly {
       readonly n: number;
       readonly text: string;
     }[];
+    readonly evidence: readonly {
+      readonly id: string;
+      readonly original: string;
+    }[];
   }[];
 }
-/** The paragraphs of a layers input: short id and sentence texts. */
+export interface LayersTranslationDocumentInput {
+  readonly title: string | null;
+  readonly sections: readonly {
+    readonly heading: string | null;
+    readonly line: string | null;
+    readonly notes: readonly { readonly id: string; readonly note: string }[];
+  }[];
+  readonly write: {
+    readonly summary: string;
+    readonly limits: readonly { readonly id: string; readonly text: string }[];
+    readonly advice: {
+      readonly text: string;
+      readonly places: readonly {
+        readonly id: string;
+        readonly text: string;
+      }[];
+    } | null;
+    readonly data: readonly {
+      readonly id: string;
+      readonly quantity: string;
+    }[];
+  };
+}
+/** The paragraphs of a section call's input: short id, kind and sentence texts. */
 export function layersParagraphs(input: string) {
-  return [...input.matchAll(/^\[(p\d+)\] (.*)$/gmu)].map((m) => ({
+  const out: { id: string; kind: string; sentences: string[] }[] = [];
+  for (const line of input.split("\n")) {
+    const head = /^\[(p\d+)\] (.+)$/u.exec(line);
+    if (head) {
+      out.push({ id: head[1]!, kind: head[2]!, sentences: [] });
+      continue;
+    }
+    const sentence = /^<\d+> (.*)$/u.exec(line);
+    if (sentence && out.length) out.at(-1)!.sentences.push(sentence[1]!);
+  }
+  return out;
+}
+/** The notes of a whole-document input: short id, kind and note. */
+export function layersNotes(input: string) {
+  return [...input.matchAll(/^\[(p\d+)\] ([a-z]+): (.*)$/gmu)].map((m) => ({
     id: m[1]!,
-    sentences: m[2]!
-      .split(/<\d+> /u)
-      .map((s) => s.trim())
-      .filter(Boolean),
+    kind: m[2]!,
+    note: m[3]!,
   }));
 }
+const words = (s: string, n: number) =>
+  s
+    .replace(/[.!?]$/u, "")
+    .split(/\s+/u)
+    .slice(0, n)
+    .join(" ");
 /**
- * A valid layers answer (spec 10.2.1): one point per paragraph (up to six)
- * resting on its first sentence, whose statement repeats that sentence's
- * first words, so its key term is found in it. The first three are the
- * trunk, each with a basis quoting the sentence's first four words; each
- * later point follows the one before it. One data row quotes paragraph 1's
- * wavelength; the advice names the heading `s4`.
+ * Valid answers to the layers calls (ADR 0073, spec 10.3). A section call:
+ * every paragraph's note is its first sentence (cut to 20 words) and its
+ * reason the second; its label the note's second to fourth words, its key
+ * term the first long word; the first paragraph of the whole document is
+ * context, the rest results. A section line names the section. The
+ * whole-document call: the first three notes are the trunk, each later note
+ * follows the one before it, one data row quotes the first note's
+ * wavelength, the advice names the heading `s4`.
  */
-export function defaultLayersReply(input: string) {
-  const paragraphs = layersParagraphs(input).slice(0, 6);
-  const first = paragraphs[0]?.sentences[0] ?? "";
-  const value = /\d+ nm/u.exec(first)?.[0] ?? "1 nm";
-  return {
-    digest: {
+export function defaultLayersReply(call: LayersCall): unknown {
+  if (call.kind === "section") {
+    const paragraphs = layersParagraphs(call.input);
+    const heading = /^This section: (?:\[s\d+\] )?(.*)$/mu.exec(
+      call.input,
+    )?.[1];
+    const part = /^This is part /mu.test(call.input);
+    return {
+      section: part
+        ? { statement: "", label: "" }
+        : {
+            statement: `The ${heading ?? "section"} section establishes stable spectra.`,
+            label: "stable spectra",
+          },
+      units: paragraphs.map((p) => {
+        const statement = `${words(p.sentences[0] ?? "", 20)}.`;
+        const tokens = statement.split(/\s+/u);
+        return {
+          id: p.id,
+          kind: p.id === "p1" ? "context" : "result",
+          statement,
+          reason: p.sentences[1] ? words(p.sentences[1], 25) + "." : "",
+          label: tokens.slice(1, 4).join(" "),
+          evidence: [1],
+          key_terms: [
+            tokens.find((w) => /^[A-Za-z]{5,}$/u.test(w)) ?? tokens[0]!,
+          ],
+          see: [],
+        };
+      }),
+    };
+  }
+  if (call.kind === "line")
+    return {
+      section: {
+        statement: "The section establishes stable spectra.",
+        label: "stable spectra",
+      },
+    };
+  if (call.kind === "document") {
+    const notes = layersNotes(call.input);
+    const first = notes[0]?.id ?? "p1";
+    const value = /\d+ nm/u.exec(notes[0]?.note ?? "")?.[0] ?? "1 nm";
+    return {
+      digest: {
+        summary: {
+          text: "A synthetic study of spectra measured in water. It records each sample and concludes that the spectra are stable.",
+          units: [first],
+          key_terms: ["synthetic study"],
+        },
+        limits: [
+          { text: "Only water was used as the medium.", units: [first] },
+        ],
+        advice: {
+          text: "Read Results for the spectra.",
+          not_given: null,
+          units: [],
+          key_terms: ["spectra"],
+          places: [{ text: "Results", target: "s4" }],
+        },
+      },
+      primary: notes.slice(0, 3).map((n) => n.id),
+      relations: notes
+        .slice(1)
+        .map((n, i) => ({
+          from: n.id,
+          word: "follows",
+          targets: [notes[i]!.id],
+        })),
+      data: [
+        { quantity: "Spectrum of the first sample", value, source: first },
+      ],
+    };
+  }
+  return defaultLayersTranslationReply(call);
+}
+/**
+ * The translation part written from the stored translation: a note is its
+ * paragraph's first translated sentence, its reason the second, its label
+ * the note's first three tokens; every evidence on sentence 1. The digest is
+ * the original's prefixed, its places' words kept.
+ */
+export function defaultLayersTranslationReply(call: LayersCall): unknown {
+  if (call.kind === "translation-section") {
+    const { input } = call;
+    return {
+      section: input.part
+        ? { statement: "", label: "" }
+        : {
+            statement: `译文：${input.section ?? ""}一节确立了稳定的光谱。`,
+            label: "稳定的光谱",
+          },
+      units: input.paragraphs.map((p) => {
+        const statement = p.sentences[0]?.text ?? "";
+        const tokens = statement.split(/\s+/u);
+        return {
+          id: p.id,
+          statement,
+          reason: p.sentences[1]?.text ?? "",
+          label: tokens.slice(0, 3).join(" "),
+          key_terms: tokens[1] ? [tokens[1]] : [],
+          evidence: p.evidence.map((e) => ({ id: e.id, sentences: [1] })),
+        };
+      }),
+    };
+  }
+  if (call.kind === "translation-document") {
+    const { write } = call.input;
+    return {
       summary: {
-        text: "A synthetic study of spectra measured in water. It records each sample and concludes that the spectra are stable.",
-        units: [paragraphs[0]?.id ?? "p1"],
+        text: `译文：${write.summary}`,
         key_terms: ["synthetic study"],
       },
-      limits: [
-        {
-          text: "Only water was used as the medium.",
-          units: [paragraphs[0]?.id ?? "p1"],
-        },
-      ],
-      advice: {
-        text: "Read Results for the spectra.",
-        not_given: null,
-        units: [],
-        key_terms: ["spectra"],
-        places: [{ text: "Results", target: "s4" }],
-      },
-    },
-    data: [
-      {
-        quantity: "Spectrum of the first sample",
-        value,
-        source: paragraphs[0]?.id ?? "p1",
-      },
-    ],
-    points: paragraphs.map((p, i) => {
-      const words = p.sentences[0]!.replace(/[.!?]$/u, "").split(/\s+/u);
-      return {
-        statement: `The paper states that ${words.slice(0, 6).join(" ")}.`,
-        evidence: [`${p.id}.1`],
-        key_terms: [
-          words.slice(0, 6).find((w) => /^[A-Za-z]{5,}$/u.test(w)) ?? words[0]!,
-        ],
-        primary: i < 3,
-        label: words.slice(1, 4).join(" "),
-        kind: i === 0 ? "context" : "result",
-        relations: i ? [{ word: "follows", targets: [`k${i}`] }] : [],
-        basis:
-          i < 3
-            ? { evidence: `${p.id}.1`, quote: words.slice(0, 4).join(" ") }
-            : null,
-      };
-    }),
-  };
-}
-/** Every item translated with a prefix, key terms, labels and places kept, evidence on sentence 1. */
-export function defaultLayersTranslationReply(input: LayersTranslationInput) {
-  return {
-    items: input.items.map((item) => ({
-      id: item.id,
-      translation: `译文：${item.text}`,
-      key_terms:
-        item.key_terms?.map((term) => ({ term, translation: term })) ?? [],
-      label: item.label ? `译文：${item.label}` : null,
-      places: (item.places ?? []).map((text) => ({ text, translation: text })),
-      evidence: (item.evidence ?? []).map((e) => ({
-        id: e.id,
-        sentences: [1],
+      limits: write.limits.map((l) => ({ id: l.id, text: `译文：${l.text}` })),
+      advice: write.advice
+        ? {
+            text: `译文：${write.advice.text}`,
+            key_terms: ["spectra"],
+            places: write.advice.places.map((p) => ({
+              id: p.id,
+              text: p.text,
+            })),
+          }
+        : { text: null, key_terms: [], places: [] },
+      data: write.data.map((d) => ({
+        id: d.id,
+        quantity: `译文：${d.quantity}`,
       })),
-    })),
-  };
+    };
+  }
+  return defaultLayersReply(call);
+}
+/** Which layers call a system prompt starts, or null for other calls. */
+export function layersCallOf(system: string, user: string): LayersCall | null {
+  if (system.startsWith("You write the reading notes of one section"))
+    return { kind: "section", input: user };
+  if (system.startsWith("You write the line of one section"))
+    return { kind: "line", input: user };
+  if (system.startsWith("You write the digest of a whole document"))
+    return { kind: "document", input: user };
+  if (/^You rewrite in .+ the reading notes of one section/u.test(system))
+    return {
+      kind: "translation-section",
+      input: JSON.parse(user) as LayersTranslationSectionInput,
+    };
+  if (/^You rewrite in .+ the digest of a whole document/u.test(system))
+    return {
+      kind: "translation-document",
+      input: JSON.parse(user) as LayersTranslationDocumentInput,
+    };
+  return null;
 }
 const baseConfiguration =
   '[providers.fixture]\napi="openai-chat-completions"\nbase_url="http://127.0.0.1:9/v1"\n[models."fixture/model"]\nreasoning="medium"\nimage=true\nstream=false\n[analyze]\nmodel="fixture/model"\n';
@@ -198,10 +331,10 @@ export async function coreProcessingFixture(
       translation: `译文：${u.text}`,
     })),
   });
-  /** Reading layers (ADR 0069): the first call gets the plain-text input. */
-  let layersReply: (input: string) => unknown = defaultLayersReply;
-  /** The layers translation part (spec 10.5): JSON items and units. */
-  let layersTranslationReply: (input: LayersTranslationInput) => unknown =
+  /** Reading layers (ADR 0073): the section, section-line and whole-document calls. */
+  let layersReply: (call: LayersCall) => unknown = defaultLayersReply;
+  /** The layers translation part (spec 10.5): its section and whole-document calls. */
+  let layersTranslationReply: (call: LayersCall) => unknown =
     defaultLayersTranslationReply;
   let modelReply: (
     input: ModelInput,
@@ -378,20 +511,19 @@ export async function coreProcessingFixture(
       const systemText =
         typeof system === "string" ? system : (system?.[0]?.text ?? "");
       const userText = wire.messages[1]!.content[0]!.text;
-      const value = systemText.startsWith("You write the reading layers")
-        ? layersReply(userText)
-        : systemText.startsWith("You translate the reading notes")
-          ? layersTranslationReply(
-              JSON.parse(userText) as LayersTranslationInput,
+      const layers = layersCallOf(systemText, userText);
+      const value = layers
+        ? layers.kind.startsWith("translation-")
+          ? layersTranslationReply(layers)
+          : layersReply(layers)
+        : systemText.startsWith("You translate the paragraphs")
+          ? translationReply(
+              JSON.parse(userText) as Parameters<typeof translationReply>[0],
             )
-          : systemText.startsWith("You translate the paragraphs")
-            ? translationReply(
-                JSON.parse(userText) as Parameters<typeof translationReply>[0],
-              )
-            : await modelReply(
-                JSON.parse(userText) as ModelInput,
-                request.signal,
-              );
+          : await modelReply(
+              JSON.parse(userText) as ModelInput,
+              request.signal,
+            );
       return {
         status: 200,
         headers: [],

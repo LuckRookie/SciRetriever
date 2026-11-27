@@ -1,98 +1,279 @@
 import { expect, it } from "vitest";
+import { layersTextFits } from "@sciretriever/contracts";
 import {
-  checkLayersAnswer,
+  LayersAnswerError,
+  checkDocumentAnswer,
+  checkLineAnswer,
+  checkSectionAnswer,
+  checkTranslationSectionAnswer,
+  emptyDropped,
+  layersParts,
+  numberedPoints,
   unitSentences,
-  type LayersInput,
-  type LayersUnit,
+  type LayersFigure,
+  type LayersGroup,
+  type LayersParagraph,
+  type LayersPlan,
 } from "../src/layers/check.js";
 
-// Spec 10.2.1: each check of ADR 0070's content, on a synthetic input.
+// Spec 10.3 and ADR 0073 §7: each check of the paragraph-by-paragraph layers, on a synthetic input.
 const PARAGRAPHS = [
   "The first sample showed a peak near 401 nm in water. It was stable for 12 days.",
   "The second sample showed a peak near 402 nm. Its yield was 85 %.",
-  "The third sample was prepared the same way. No change was seen.",
-  "The fourth sample confirms the trend. The method is general.",
+  "One. Two. Three. Four. Five. Six. Seven.",
+  "Figure 1. Spectra of the samples.",
 ];
-function input(): LayersInput {
-  const units = new Map<string, LayersUnit>();
+const figure = (
+  short: string,
+  segment_id: string,
+  kind: LayersFigure["kind"] = "figure",
+): LayersFigure => ({
+  short,
+  segment_id,
+  kind,
+  start_utf8: 900,
+  caption: `${short} caption.`,
+  text:
+    kind === "table" ? "| sample | yield |\n| 1 | 85 % |\n| 2 | 3.12 g |" : "",
+  section_id: "sec1",
+});
+const F1 = figure("f1", "fig1"),
+  F2 = figure("f2", "tab1", "table"),
+  F3 = figure("f3", "fig3");
+function paragraphs(): LayersParagraph[] {
   let at = 0;
-  PARAGRAPHS.forEach((source, i) => {
-    units.set(`p${i + 1}`, {
+  return PARAGRAPHS.map((source, i) => {
+    const caption = i === 3;
+    const p: LayersParagraph = {
       short: `p${i + 1}`,
       unit_id: `u${i + 1}`,
       source,
       start_utf8: at,
-      sentences: unitSentences(source, "text"),
-    });
+      kind: caption ? "caption" : "paragraph",
+      figure: caption ? F1 : null,
+      sentences: unitSentences(source, caption ? "caption" : "text"),
+      section_id: "sec1",
+      annotatable: true,
+    };
     at += Buffer.byteLength(source) + 2;
+    return p;
   });
-  return {
-    text: "",
-    units,
-    figures: new Map([
-      [
-        "f1",
-        {
-          short: "f1",
-          segment_id: "fig1",
-          kind: "figure",
-          start_utf8: at,
-          caption: "Spectra.",
-          text: "Spectra.",
-        },
-      ],
-      [
-        "f2",
-        {
-          short: "f2",
-          segment_id: "tab1",
-          kind: "table",
-          start_utf8: at + 20,
-          caption: "Yields.",
-          text: "| sample | yield |\n| 1 | 85 % |\n| 2 | 3.12 g | Yields.",
-        },
-      ],
-    ]),
-    headings: new Map([["s1", { short: "s1", segment_id: "head1" }]]),
-    body_code_points: 4000,
-  };
 }
-const SEGMENTS = [
-  {
-    segment_id: "u1",
-    kind: "text",
-    start_utf8: 0,
-    end_utf8: 10,
+const PS = paragraphs();
+const GROUP: LayersGroup = {
+  section_id: "sec1",
+  heading: {
+    short: "s1",
+    segment_id: "head1",
     section_id: "sec1",
+    line: "Results",
+    level: 1,
   },
-];
-const point = (n: number, extra: Record<string, unknown> = {}) => ({
-  statement: `Sample ${n} showed a peak.`,
-  evidence: [`p${n}.1`],
-  key_terms: [],
-  primary: n <= 3,
-  label: `Sample ${n}`,
+  paragraphs: PS,
+  figures: [F1, F2],
+  parts: [PS],
+};
+const PLAN: LayersPlan = {
+  title: "Synthetic",
+  abstract: "",
+  headings: new Map([["s1", GROUP.heading!]]),
+  paragraphs: new Map(PS.map((p) => [p.short, p])),
+  units: new Map(PS.map((p) => [p.unit_id, p])),
+  figures: new Map([
+    ["f1", F1],
+    ["f2", F2],
+    ["f3", F3],
+  ]),
+  groups: [GROUP],
+  body_code_points: 4000,
+  annotatable: 4,
+};
+const unit = (n: number, extra: Record<string, unknown> = {}) => ({
+  id: `p${n}`,
   kind: "result",
-  relations: [],
-  basis: null,
+  statement: `Sample ${n} showed a peak.`,
+  reason: "",
+  label: `Sample ${n}`,
+  evidence: [1],
+  key_terms: [],
+  see: [],
   ...extra,
 });
-const answer = (
-  points: unknown[],
-  extra: {
-    data?: unknown[];
-    advice?: Record<string, unknown>;
-    limits?: unknown[];
-  } = {},
-) => ({
+const section = (units: unknown[], line: Record<string, unknown> = {}) => ({
+  section: {
+    statement: "The section measures four samples.",
+    label: "four samples",
+    ...line,
+  },
+  units,
+});
+const check = (value: unknown, part = false) => {
+  const dropped = emptyDropped();
+  return { ...checkSectionAnswer(value, GROUP, PS, part, dropped), dropped };
+};
+const all = (extra: Record<number, Record<string, unknown>> = {}) =>
+  [1, 2, 3, 4].map((n) => unit(n, extra[n]));
+
+it("keeps existing sentences, joins consecutive ones, at most two (three from seven sentences)", () => {
+  const out = check(
+    section(
+      all({
+        1: { evidence: [2, 9, 2, 0] },
+        3: { evidence: [7, 1, 2, 4] },
+        4: { evidence: [1] },
+      }),
+    ),
+  );
+  // 9 and 0 name no sentence; 2 twice is once.
+  expect(out.notes[0]!.evidence).toEqual([
+    { kind: "sentence", unit_id: "u1", start_utf8: 53, end_utf8: 79 },
+  ]);
+  // Seven sentences allow three: 1 and 2 join, 4 stands apart, 7 is one too many.
+  expect(
+    out.notes[2]!.evidence.map(
+      (e) => e.kind === "sentence" && [e.start_utf8, e.end_utf8],
+    ),
+  ).toEqual([
+    [PS[2]!.start_utf8, PS[2]!.start_utf8 + 9],
+    [PS[2]!.start_utf8 + 17, PS[2]!.start_utf8 + 22],
+  ]);
+  // A caption also rests on its own figure, last.
+  expect(out.notes[3]!.evidence.at(-1)).toEqual({
+    kind: "block",
+    segment_id: "fig1",
+  });
+  expect(out.dropped.evidence).toBe(4);
+});
+
+it("drops a note with an overlong statement or no evidence left; an empty statement is no note and no drop", () => {
+  const out = check(
+    section(
+      all({
+        1: { statement: Array(21).fill("word").join(" ") },
+        2: { evidence: [5] },
+        3: { statement: "" },
+        4: { statement: "图".repeat(41) },
+      }),
+    ),
+  );
+  expect(out.notes).toEqual([]);
+  expect(out.dropped).toMatchObject({ points: 3, evidence: 1 });
+  // Forty CJK characters fit; twenty words fit.
+  expect(layersTextFits("图".repeat(40), 40, 20, 300)).toBe(true);
+  expect(layersTextFits(Array(20).fill("w").join(" "), 40, 20, 300)).toBe(true);
+});
+
+it("drops a kind outside the seven, an overlong reason, and a label that is too long or not in the statement", () => {
+  const out = check(
+    section(
+      all({
+        1: { kind: "finding" },
+        2: { reason: Array(31).fill("because").join(" ") },
+        3: { label: "Sample 3 showed a" },
+        4: { label: "a peak elsewhere" },
+      }),
+    ),
+  );
+  expect(out.notes.map((n) => [n.kind, n.reason, n.label])).toEqual([
+    [null, null, "Sample 1"],
+    ["result", null, "Sample 2"],
+    ["result", null, null],
+    ["result", null, null],
+  ]);
+  expect(out.dropped).toMatchObject({ kinds: 1, reasons: 1, labels: 2 });
+  // A label is found whatever its case.
+  expect(
+    check(section(all({ 1: { label: "sample 1 SHOWED" } }))).notes[0]!.label,
+  ).toBe("sample 1 SHOWED");
+});
+
+it("keeps at most two key terms found in the statement", () => {
+  const out = check(
+    section(
+      all({
+        1: {
+          statement: "Raman spectra of crystals showed a peak.",
+          key_terms: ["crystal", "absent", "Raman spectra", "peak"],
+        },
+      }),
+    ),
+  );
+  expect(out.notes[0]!.key_terms).toEqual(["crystal", "Raman spectra"]);
+  expect(out.dropped.key_terms).toBe(2);
+});
+
+it("keeps `see` only for figures of this section, not the caption's own, at most three", () => {
+  const out = check(
+    section(
+      all({ 1: { see: ["f2", "f3", "f9", "f2"] }, 4: { see: ["f1", "f2"] } }),
+    ),
+  );
+  expect(out.notes[0]!.see).toEqual(["tab1"]);
+  expect(out.notes[3]!.see).toEqual(["tab1"]);
+  expect(out.dropped.see).toBe(4);
+  const points = numberedPoints(out.notes, null);
+  expect(points[0]!.relations).toEqual([
+    { word: "see", targets: [{ kind: "block", segment_id: "tab1" }] },
+  ]);
+});
+
+it("asks again when the answer is not the structure or names fewer than half the paragraphs", () => {
+  expect(() => check({ units: "none" })).toThrow(LayersAnswerError);
+  expect(() => check({ units: [{ id: "p1" }] })).toThrow(LayersAnswerError);
+  expect(() => check(section([unit(1)]))).toThrow(LayersAnswerError);
+  // Half is enough; the others count as unanswered.
+  const out = check(section([unit(1), unit(3), unit(9)]));
+  expect(out.notes.map((n) => n.paragraph.short)).toEqual(["p1", "p3"]);
+  expect(out.dropped.unanswered).toBe(2);
+});
+
+it("keeps a section line that fits, none for a part; a line call checks the same", () => {
+  expect(check(section(all())).line).toEqual({
+    statement: "The section measures four samples.",
+    label: "four samples",
+  });
+  expect(check(section(all()), true).line).toBeNull();
+  const overlong = check(
+    section(all(), { statement: Array(21).fill("w").join(" ") }),
+  );
+  expect(overlong.line).toBeNull();
+  expect(overlong.dropped.sections).toBe(1);
+  const dropped = { sections: 0, labels: 0 };
+  expect(
+    checkLineAnswer(
+      { section: { statement: "A line.", label: "missing" } },
+      dropped,
+    ),
+  ).toEqual({
+    statement: "A line.",
+    label: null,
+  });
+  expect(dropped).toEqual({ sections: 0, labels: 1 });
+  expect(() => checkLineAnswer({ line: "x" }, dropped)).toThrow(
+    LayersAnswerError,
+  );
+});
+
+it("splits a long section into runs of about equal size", () => {
+  const many = Array.from({ length: 41 }, (_, i) => `p${i}`);
+  expect(layersParts(many, () => "x").map((r) => r.length)).toEqual([21, 20]);
+  expect(
+    layersParts(["a", "b", "c"], () => "x".repeat(6001)).map((r) => r.length),
+  ).toEqual([2, 1]);
+  expect(layersParts(["a"], () => "x".repeat(30_000))).toEqual([["a"]]);
+});
+
+const notes = check(section(all())).notes;
+const NUMBERS = new Map(notes.map((n, i) => [n.paragraph.short, i + 1]));
+const digest = (extra: Record<string, unknown> = {}) => ({
   digest: {
     summary: {
       text: "Four samples were measured; the trend is stable.",
-      units: ["p1"],
+      units: ["p1", "p9"],
       key_terms: [],
     },
-    limits: extra.limits ?? [],
-    advice: extra.advice ?? {
+    limits: [],
+    advice: {
       text: null,
       not_given: "Nothing to add.",
       units: [],
@@ -100,202 +281,162 @@ const answer = (
       places: [],
     },
   },
-  data: extra.data ?? [],
-  points,
+  primary: ["p1", "p2", "p3"],
+  relations: [],
+  data: [],
+  ...extra,
 });
-const check = (value: unknown) =>
-  checkLayersAnswer(value, input(), SEGMENTS, true);
+const document = (value: unknown, see = new Map<number, number>()) => {
+  const dropped = emptyDropped();
+  return {
+    ...checkDocumentAnswer(value, PLAN, NUMBERS, see, dropped),
+    dropped,
+  };
+};
 
-it("drops a kind or relation word outside the fixed values; the point stays without a kind", () => {
-  const out = check(
-    answer([
-      point(1, { kind: "speculation" }),
-      point(2, { relations: [{ word: "contradicts", targets: ["k1"] }] }),
-      point(3, { relations: [{ word: "follows", targets: ["k2"] }] }),
-    ]),
+it("keeps the first five of the trunk by number and drops what names no note", () => {
+  const out = document(
+    digest({ primary: ["p4", "p9", "p3", "p1", "p2", "p3", "f1"] }),
   );
-  expect(out.points).toHaveLength(3);
-  expect(out.points[0]!.kind).toBeNull();
-  expect(out.points[1]!.relations).toEqual([]);
-  expect(out.points[2]!.relations).toEqual([
-    { word: "follows", targets: [{ kind: "point", number: 2 }] },
-  ]);
-  expect(out.dropped).toMatchObject({ kinds: 1, relations: 1 });
+  expect([...out.primary]).toEqual([1, 2, 3, 4]);
+  expect(out.dropped.primary).toBe(3);
+  expect(out.dropped.digest_units).toBe(1);
+  const points = numberedPoints(notes, out);
+  expect(points.filter((p) => p.primary).map((p) => p.basis)).toEqual(
+    points.filter((p) => p.primary).map((p) => p.evidence[0]),
+  );
+  expect(points.find((p) => !p.primary)).toBeUndefined();
 });
 
-it("drops a relation whose target is missing or the point itself, and a see pointing at a point", () => {
-  const out = check(
-    answer([
-      point(1, { relations: [{ word: "see", targets: ["f9"] }] }),
-      point(2, { relations: [{ word: "based_on", targets: ["k2"] }] }),
-      point(3, {
-        relations: [
-          { word: "see", targets: ["k1"] },
-          { word: "explains", targets: ["k7"] },
-          { word: "see", targets: ["f1"] },
+it("drops a relation with a fixed word missing, a target that is no note or itself, or beyond three", () => {
+  const out = document(
+    digest({
+      relations: [
+        { from: "p2", word: "follows", targets: ["p1"] },
+        { from: "p2", word: "see", targets: ["p1"] },
+        { from: "p2", word: "supports", targets: ["p1"] },
+        { from: "p3", word: "explains", targets: ["p3"] },
+        { from: "p3", word: "explains", targets: ["p1", "p9"] },
+        { from: "p9", word: "follows", targets: ["p1"] },
+        { from: "p4", word: "sums_up", targets: ["p1", "p2"] },
+        { from: "p4", word: "based_on", targets: ["p1"] },
+        { from: "p4", word: "extends", targets: ["p3"] },
+      ],
+    }),
+    // Note 4 already has a `see`: two more fit.
+    new Map([[4, 1]]),
+  );
+  expect(out.relations.get(2)).toEqual([
+    { word: "follows", targets: [{ kind: "point", number: 1 }] },
+  ]);
+  expect(out.relations.get(3)).toBeUndefined();
+  expect(out.relations.get(4)!.map((r) => r.word)).toEqual([
+    "sums_up",
+    "based_on",
+  ]);
+  expect(out.dropped.relations).toBe(6);
+});
+
+it("drops a data row whose digits are not in its source, a place not in the advice, an overlong limitation and summary", () => {
+  const out = document(
+    digest({
+      digest: {
+        summary: { text: "x".repeat(401), units: [], key_terms: [] },
+        limits: [
+          { text: "Only water.", units: ["p1"] },
+          { text: "y".repeat(201), units: [] },
         ],
-      }),
-    ]),
-  );
-  expect(out.points.map((p) => p.relations)).toEqual([
-    [],
-    [],
-    [{ word: "see", targets: [{ kind: "block", segment_id: "fig1" }] }],
-  ]);
-  expect(out.dropped.relations).toBe(4);
-});
-
-it("renumbers relation targets with the points, and drops one aimed at a dropped point", () => {
-  const out = check(
-    answer([
-      point(3),
-      point(1, { relations: [{ word: "sums_up", targets: ["k1", "k3"] }] }),
-      { statement: "", evidence: ["p2.1"], key_terms: [] },
-      point(2, { primary: true }),
-      point(4, { relations: [{ word: "extends", targets: ["k3"] }] }),
-    ]),
-  );
-  // Answer k1 (paragraph 3) becomes number 3, k4 (paragraph 2) number 2.
-  expect(out.points.map((p) => p.statement)).toEqual([
-    "Sample 1 showed a peak.",
-    "Sample 2 showed a peak.",
-    "Sample 3 showed a peak.",
-    "Sample 4 showed a peak.",
-  ]);
-  expect(out.points[0]!.relations).toEqual([]);
-  expect(out.points[3]!.relations).toEqual([]);
-  expect(out.dropped.relations).toBe(2);
-});
-
-it("keeps a basis inside one of the point's evidence and drops one outside it", () => {
-  const out = check(
-    answer([
-      point(1, {
-        evidence: ["p1.1-2"],
-        basis: { evidence: "p1.2", quote: "stable for 12 days" },
-      }),
-      point(2, { basis: { evidence: "p2.2", quote: null } }),
-      point(3, { basis: { evidence: "p3.1", quote: "words not there" } }),
-      point(4, { primary: false, basis: { evidence: "p4.1", quote: null } }),
-    ]),
-  );
-  const first = out.points[0]!.basis!;
-  expect(first).toMatchObject({ kind: "sentence", unit_id: "u1" });
-  if (first.kind !== "sentence") throw new Error("sentence basis expected");
-  expect(
-    Buffer.from(PARAGRAPHS[0]!)
-      .subarray(first.start_utf8, first.end_utf8)
-      .toString(),
-  ).toBe("stable for 12 days");
-  // p2.2 is not inside its evidence p2.1; the quote of point 3 is not in its sentence.
-  expect(out.points.slice(1).map((p) => p.basis)).toEqual([null, null, null]);
-  expect(out.dropped.basis).toBe(3);
-});
-
-it("drops a data row whose value's digits are not in its source", () => {
-  const out = check(
-    answer([point(1), point(2), point(3)], {
+        advice: {
+          text: "Read Results and f2.",
+          not_given: null,
+          units: [],
+          key_terms: [],
+          places: [
+            { text: "Results", target: "s1" },
+            { text: "f2", target: "f2" },
+            { text: "Methods", target: "s1" },
+            { text: "Results", target: "s9" },
+          ],
+        },
+      },
       data: [
         { quantity: "Peak", value: "401 nm", source: "p1" },
-        { quantity: "Stability", value: "12 days", source: "p1" },
-        { quantity: "Peak", value: "40 nm", source: "p1" },
         { quantity: "Yield", value: "85 %", source: "f2" },
         { quantity: "Mass", value: "3.1 g", source: "f2" },
-        { quantity: "Peak", value: "401 nm", source: "f1" },
-        { quantity: "Peak", value: "about four hundred", source: "p1" },
-        { quantity: "Peak", value: "402 nm", source: "p9" },
+        { quantity: "Peak", value: "40 nm", source: "p1" },
+        { quantity: "Figure value", value: "1", source: "f1" },
       ],
     }),
   );
-  expect(out.data).toEqual([
-    {
-      quantity: "Peak",
-      value: "401 nm",
-      source: { kind: "unit", unit_id: "u1" },
-    },
-    {
-      quantity: "Stability",
-      value: "12 days",
-      source: { kind: "unit", unit_id: "u1" },
-    },
-    {
-      quantity: "Yield",
-      value: "85 %",
-      source: { kind: "block", segment_id: "tab1" },
-    },
+  expect(out.summary_missing).toBe(true);
+  expect(out.digest.limits.map((l) => l.text)).toEqual(["Only water."]);
+  expect(out.digest.advice.places.map((p) => p.text)).toEqual([
+    "Results",
+    "f2",
   ]);
-  // 40 is inside 401, 3.1 inside 3.12, a figure is not a table, no digits, no paragraph 9.
-  expect(out.dropped.data).toBe(5);
-});
-
-it("drops a place whose words are not in the advice or whose target does not exist", () => {
-  const out = check(
-    answer([point(1), point(2), point(3)], {
-      advice: {
-        text: "Read Section 2 and Figure 1 first.",
-        not_given: null,
-        units: [],
-        key_terms: [],
-        places: [
-          { text: "Section 2", target: "s1" },
-          { text: "Figure 1", target: "f1" },
-          { text: "Table 4", target: "f2" },
-          { text: "Section 2", target: "s9" },
-        ],
-      },
-    }),
+  expect(out.data.map((d) => d.value)).toEqual(["401 nm", "85 %"]);
+  expect(out.dropped).toMatchObject({ limits: 1, places: 2, data: 3 });
+  expect(() => document({ digest: { summary: "none" } })).toThrow(
+    LayersAnswerError,
   );
-  expect(out.digest.advice.places).toEqual([
-    { text: "Section 2", target: { kind: "section", segment_id: "head1" } },
-    { text: "Figure 1", target: { kind: "block", segment_id: "fig1" } },
-  ]);
-  expect(out.dropped.places).toBe(2);
 });
 
-it("keeps the first five primary points by number and reports fewer than three", () => {
-  const many = check(
-    answer(
-      [1, 2, 3, 4].flatMap((n) => [
-        point(n, { primary: true }),
-        point(n, { primary: true, statement: `Sample ${n} again.` }),
-      ]),
-    ),
-  );
-  expect(many.points.filter((p) => p.primary).map((p) => p.number)).toEqual([
-    1, 2, 3, 4, 5,
-  ]);
-  expect(many.dropped.primary).toBe(3);
-  expect(many.primary).toBe(5);
-  const few = check(answer([point(1), point(2, { primary: false }), point(3)]));
-  // The step fails on this count (spec 10.3); see the step test.
-  expect(few.primary).toBe(2);
-});
-
-it("drops an overlong label, limitation and summary, the last failing the step", () => {
-  const out = check({
-    ...answer(
-      [
-        point(1, { label: "one two three four five six seven" }),
-        point(2, { label: "含能材料的热稳定性与分解机理研究" }),
-        point(3, { label: "热稳定性" }),
+it("keeps translated evidence only for existing consecutive sentences", () => {
+  const points = numberedPoints(notes, document(digest()));
+  const translation = "首句。第二句。第三句。";
+  const asked = [0, 1].map((i) => ({
+    paragraph: PS[i]!,
+    point: points[i]!,
+    translation,
+    sentences: unitSentences(translation, "text"),
+    evidence: [0],
+  }));
+  const dropped = {
+    points: 0,
+    sections: 0,
+    reasons: 0,
+    labels: 0,
+    key_terms: 0,
+    evidence: 0,
+    places: 0,
+  };
+  const out = checkTranslationSectionAnswer(
+    {
+      section: { statement: "本节测量了四个样品。", label: "四个样品" },
+      units: [
+        {
+          id: "p1",
+          statement: "样品一出现峰。",
+          reason: "",
+          label: "样品一",
+          key_terms: ["样品"],
+          evidence: [{ id: "e1", sentences: [2, 3] }],
+        },
+        {
+          id: "p2",
+          statement: "样品二出现峰。",
+          reason: "",
+          label: "样品三",
+          key_terms: [],
+          evidence: [{ id: "e1", sentences: [1, 3] }],
+        },
       ],
-      {
-        limits: [
-          { text: "x".repeat(201), units: [] },
-          ...Array.from({ length: 6 }, (_, i) => ({
-            text: `Limit ${i}.`,
-            units: ["p1"],
-          })),
-        ],
-      },
-    ),
+    },
+    asked,
+    false,
+    dropped,
+  );
+  expect(out.points.get("u1")).toEqual({
+    statement: "样品一出现峰。",
+    reason: null,
+    label: "样品一",
+    key_terms: ["样品"],
+    evidence: [{ start_utf8: 9, end_utf8: 33 }],
   });
-  expect(out.points.map((p) => p.label)).toEqual([null, null, "热稳定性"]);
-  expect(out.dropped.labels).toBe(2);
-  expect(out.digest.limits).toHaveLength(5);
-  expect(out.dropped.limits).toBe(2);
-  expect(out.summary_missing).toBe(false);
-  const long = answer([point(1), point(2), point(3)]);
-  long.digest.summary.text = "y".repeat(401);
-  expect(check(long).summary_missing).toBe(true);
+  expect(out.points.get("u2")).toMatchObject({ label: null, evidence: [null] });
+  expect(out.line).toEqual({
+    statement: "本节测量了四个样品。",
+    label: "四个样品",
+  });
+  expect(dropped).toMatchObject({ evidence: 1, labels: 1 });
 });

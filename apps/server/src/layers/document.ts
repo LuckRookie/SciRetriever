@@ -1,21 +1,15 @@
 import { createHash } from "node:crypto";
 import {
   LAYERS_FILE_SCHEMA_VERSION,
-  LAYERS_LABEL_MAX,
-  LAYERS_PLACE_TEXT_MAX,
-  LAYERS_PRIMARY_MIN,
-  documentLayersFileVersion,
-  LAYERS_KEY_TERM_MAX,
   LAYERS_MIN_CODE_POINTS,
-  LAYERS_POINTS_MAX,
-  LAYERS_POINTS_MIN,
-  LAYERS_TRANSLATION_TEXT_MAX,
+  LAYERS_PRIMARY_MIN,
   READING_LAYERS_PROMPT_VERSION,
+  READING_LAYERS_SECTION_PROMPT_VERSION,
   READING_LAYERS_TRANSLATION_PROMPT_VERSION,
   SENTENCE_SPLIT_RULE,
   archiveContentVersion,
   canonicalJsonBytes,
-  matchKeyTerm,
+  documentLayersFileVersion,
   parseArtifactRef,
   parseDocumentLayersFile,
   type DocumentLayersFile,
@@ -24,6 +18,8 @@ import {
   type DocumentRef,
   type DocumentTranslationFile,
   type LayersNotApplicableReason,
+  type LayersTranslatedLine,
+  type LayersTranslatedPoint,
   type LayersTranslationPart,
   type TranslationLanguage,
 } from "@sciretriever/contracts";
@@ -49,39 +45,56 @@ import {
 } from "../translation/service.js";
 import {
   LayersAnswerError,
-  checkLayersAnswer,
-  layersInput,
+  checkDocumentAnswer,
+  checkLineAnswer,
+  checkSectionAnswer,
+  checkTranslationDocumentAnswer,
+  checkTranslationSectionAnswer,
+  documentInput,
+  emptyDropped,
+  layersParts,
+  layersPlan,
+  numberedPoints,
+  sectionInput,
+  sectionLineInput,
+  translationDocumentInput,
+  translationSectionInput,
   unitSentences,
-  type CheckedLayers,
-  type LayersInput,
+  type CheckedDocument,
+  type Dropped,
+  type LayersGroup,
+  type LayersNote,
+  type LayersParagraph,
+  type LayersPlan,
   type LayersStructure,
+  type TranslatedParagraph,
 } from "./check.js";
 import {
-  LAYERS_SCHEMA,
-  LAYERS_SYSTEM,
-  LAYERS_TRANSLATION_SCHEMA,
-  layersTranslationSystem,
+  LAYERS_DOCUMENT_SCHEMA,
+  LAYERS_DOCUMENT_SYSTEM,
+  LAYERS_SECTION_LINE_SCHEMA,
+  LAYERS_SECTION_LINE_SYSTEM,
+  LAYERS_SECTION_SCHEMA,
+  LAYERS_SECTION_SYSTEM,
+  LAYERS_TRANSLATION_DOCUMENT_SCHEMA,
+  LAYERS_TRANSLATION_SECTION_SCHEMA,
+  layersTranslationDocumentSystem,
+  layersTranslationSectionSystem,
 } from "./prompt.js";
 
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const sha = (bytes: Uint8Array | string) =>
   createHash("sha256").update(bytes).digest("hex");
-const codePoints = (s: string) => [...s].length;
-const flat = (s: string) => s.replace(/\s+/gu, " ").trim();
 
 type Structure = LayersStructure;
-const isRecord = (v: unknown): v is Record<string, unknown> =>
-  !!v && typeof v === "object" && !Array.isArray(v);
-const records = (v: unknown): Record<string, unknown>[] =>
-  Array.isArray(v) ? v.filter(isRecord) : [];
 export {
   LayersAnswerError,
-  checkLayersAnswer,
+  checkDocumentAnswer,
+  checkSectionAnswer,
   figureCaption,
-  layersInput,
+  layersPlan,
   unitSentences,
-  type CheckedLayers,
-  type LayersInput,
+  type LayersPlan,
 } from "./check.js";
 
 export class LayersStepError extends Error {
@@ -360,8 +373,43 @@ const addUsage = (a: Usage, b: UnitTranslationUsage) => {
       ? null
       : a.output_tokens + b.output_tokens;
 };
+/** The model is not configured: no call can be made (spec 10.3). */
+class ModelUnavailable extends Error {
+  constructor(options: ErrorOptions) {
+    super("translation-model-unavailable", options);
+  }
+}
+/** The calls of one build: usage, the model that answered, answers received. */
+interface Calls {
+  readonly usage: Usage;
+  model: string | null;
+  answered: number;
+}
+type Reply = Awaited<ReturnType<TranslationService["structured"]>>;
+const halves = <T>(items: readonly T[]) => {
+  const n = Math.ceil(items.length / 2);
+  return [items.slice(0, n), items.slice(n)] as const;
+};
+type Part = { readonly index: number; readonly of: number } | null;
+type Line = { statement: string; label: string | null };
+type PartDropped = LayersTranslationPart["dropped"] extends infer D
+  ? { -readonly [K in keyof D]: number }
+  : never;
 
-/** The archive step `layers` (ADR 0069, spec 10.3 to 10.5). */
+/** What the original calls made (spec 10.3), before the file is written. */
+interface Original {
+  readonly notes: readonly LayersNote[];
+  readonly lines: ReadonlyMap<string | null, Line>;
+  readonly document: CheckedDocument | null;
+  readonly dropped: Dropped;
+  readonly annotated: number;
+  readonly primary: number;
+  readonly summary_missing: boolean;
+  readonly failed: boolean;
+  readonly unavailable: boolean;
+}
+
+/** The archive step `layers` (ADR 0073, spec 10.3 to 10.5). */
 export class DocumentLayersService {
   constructor(
     private readonly options: {
@@ -461,13 +509,7 @@ export class DocumentLayersService {
       roles,
     );
     const metadata = await this.options.metadata(input.literature_id, signal);
-    const prepared = layersInput(
-      units,
-      structure,
-      markdown,
-      metadata.title,
-      LAYERS_POINTS_MAX,
-    );
+    const plan = layersPlan(units, structure, markdown, roles, metadata.title);
     const base = {
       document_version_id: version.document_version_id,
       annotation_id: annotation.annotation_id,
@@ -475,9 +517,11 @@ export class DocumentLayersService {
     };
     const stats = {
       pages: text.bundle.page_count,
-      units: prepared.units.size,
-      figures: prepared.figures.size,
-      body_code_points: prepared.body_code_points,
+      units: plan.paragraphs.size,
+      annotatable: plan.annotatable,
+      sections: plan.groups.length,
+      figures: plan.figures.size,
+      body_code_points: plan.body_code_points,
     };
     const result = (layers: Record<string, unknown>) => ({
       ...base,
@@ -492,7 +536,7 @@ export class DocumentLayersService {
     // Not applicable (spec 10.1): long documents first, then short papers.
     const reason: LayersNotApplicableReason | null = structure.long_document
       ? "long-document"
-      : prepared.body_code_points < LAYERS_MIN_CODE_POINTS
+      : plan.body_code_points < LAYERS_MIN_CODE_POINTS
         ? "too-short"
         : null;
     if (reason) {
@@ -532,8 +576,7 @@ export class DocumentLayersService {
       }
     }
     let redone: "all" | "translation" | "none" = "all";
-    let checked: CheckedLayers | null = null,
-      model = "unknown";
+    const calls: Calls = { usage, model: null, answered: 0 };
     if (file) {
       const wanted = translationFile ? translationRow!.sha256 : null;
       if (
@@ -543,47 +586,39 @@ export class DocumentLayersService {
         redone = "none";
       else redone = "translation";
     } else {
-      const first = await this.firstCall(prepared, structure, usage, signal);
-      checked = first.checked;
-      model = first.model ?? model;
-      if (first.unavailable)
-        throw new LayersStepError(
-          "layers-unavailable",
-          result({
-            status: "failed",
-            reason: null,
-            redone,
-            given: 0,
-            points: 0,
-            sha256: null,
-            translation: null,
-          }),
-        );
-      // The summary is required, and the trunk is 3 to 5 points (spec 10.2.1).
-      const failed =
-        checked.summary_missing ||
-        checked.primary < LAYERS_PRIMARY_MIN ||
-        checked.valid < LAYERS_POINTS_MIN ||
-        checked.valid * 2 < checked.given;
-      const counts = {
-        given: checked.given,
-        points: checked.points.length,
-        dropped: checked.dropped,
-      };
-      if (failed)
-        throw new LayersStepError(
-          "layers-incomplete",
-          result({
-            status: "failed",
-            reason: null,
-            redone,
-            ...counts,
-            summary_missing: checked.summary_missing,
-            primary: checked.primary,
-            sha256: null,
-            translation: null,
-          }),
-        );
+      const failure = (made: Original | null) =>
+        result({
+          status: "failed",
+          reason: null,
+          redone,
+          annotatable: plan.annotatable,
+          annotated: made?.annotated ?? 0,
+          points: made?.notes.length ?? 0,
+          primary: made?.primary ?? 0,
+          summary_missing: made?.summary_missing ?? true,
+          ...(made ? { dropped: made.dropped } : {}),
+          sha256: null,
+          translation: null,
+        });
+      let made: Original;
+      try {
+        made = await this.original(plan, calls, signal);
+      } catch (error) {
+        if (error instanceof ModelUnavailable)
+          throw new LayersStepError(
+            "layers-unavailable",
+            {
+              ...failure(null),
+              failure_code: "translation-model-unavailable",
+            },
+            { cause: error.cause },
+          );
+        throw error;
+      }
+      if (made.unavailable)
+        throw new LayersStepError("layers-unavailable", failure(made));
+      if (made.failed)
+        throw new LayersStepError("layers-incomplete", failure(made));
       file = {
         schema_version: LAYERS_FILE_SCHEMA_VERSION,
         literature_id: input.literature_id,
@@ -592,12 +627,16 @@ export class DocumentLayersService {
         annotation_id: annotation.annotation_id,
         content_version,
         sentence_rule: SENTENCE_SPLIT_RULE,
-        digest: checked.digest,
-        points: checked.points,
-        data: checked.data,
-        model,
+        digest: made.document!.digest,
+        sections: plan.groups.flatMap((g) => {
+          const line = made.lines.get(g.section_id);
+          return line ? [{ section_id: g.section_id, ...line }] : [];
+        }),
+        points: numberedPoints(made.notes, made.document),
+        data: made.document!.data,
+        model: calls.model ?? "unknown",
         prompt_version: READING_LAYERS_PROMPT_VERSION,
-        dropped: checked.dropped,
+        dropped: made.dropped,
         translation: null,
       };
     }
@@ -605,11 +644,19 @@ export class DocumentLayersService {
       status: "not-needed",
       target_language: null,
     };
+    const counts = (f: DocumentLayersFile) => ({
+      annotatable: plan.annotatable,
+      points: f.points.length,
+      sections: f.sections.length,
+      primary: f.points.filter((p) => p.primary).length,
+      dropped: f.dropped,
+    });
     if (redone !== "none") {
       let part: LayersTranslationPart | null = null;
       if (translationFile) {
         const made = await this.translationPart(
           file,
+          plan,
           translationFile,
           translationRow!.sha256,
           markdown,
@@ -625,9 +672,7 @@ export class DocumentLayersService {
         status: "complete",
         reason: null,
         redone,
-        given: checked?.given ?? file.points.length,
-        points: file.points.length,
-        dropped: file.dropped,
+        ...counts(file),
         sha256: row.sha256,
         translation: translationSummary,
       });
@@ -639,9 +684,7 @@ export class DocumentLayersService {
       status: "complete",
       reason: null,
       redone,
-      given: file.points.length,
-      points: file.points.length,
-      dropped: file.dropped,
+      ...counts(file),
       sha256: existing!.sha256,
       translation: file.translation
         ? {
@@ -651,125 +694,271 @@ export class DocumentLayersService {
         : translationSummary,
     });
   }
-  /**
-   * Two attempts at most: an invalid structure or a cut-off answer is asked
-   * once more, a cut-off one for half the points. `unavailable` when no
-   * attempt got any answer at all.
-   */
-  private async firstCall(
-    prepared: LayersInput,
-    structure: Structure,
-    usage: Usage,
+  /** One request; `ModelUnavailable` when no model can be asked at all. */
+  private async call(
+    request: {
+      readonly system: string;
+      readonly user: string;
+      readonly media_type: "text/plain" | "application/json";
+      readonly schema: Record<string, unknown>;
+      readonly version: string;
+      readonly language?: TranslationLanguage;
+    },
+    calls: Calls,
     signal?: AbortSignal,
-  ): Promise<{
-    checked: CheckedLayers;
-    model: string | null;
-    unavailable: boolean;
-  }> {
-    let max = LAYERS_POINTS_MAX,
-      input = prepared.text,
-      model: string | null = null,
-      answered = false;
-    const titled = structure.sections.some((s) => s.title !== null);
+  ): Promise<Reply> {
+    let reply: Reply;
+    try {
+      reply = await this.options.model.structured(
+        {
+          system: request.system,
+          user: request.user,
+          media_type: request.media_type,
+          schema: request.schema,
+          input_sha256: sha(
+            JSON.stringify([
+              request.version,
+              request.language ?? null,
+              request.user,
+            ]),
+          ),
+        },
+        signal,
+      );
+    } catch (error) {
+      if (
+        error instanceof TranslationError &&
+        error.code === "translation-model-unavailable"
+      )
+        throw new ModelUnavailable({ cause: error });
+      throw error;
+    }
+    addUsage(calls.usage, reply.usage);
+    calls.model = reply.model;
+    if (reply.kind !== "failed") calls.answered++;
+    return reply;
+  }
+  /** A section line from the notes of a section asked in parts: two attempts. */
+  private async line(
+    user: string,
+    version: string,
+    language: TranslationLanguage | undefined,
+    dropped: { sections: number; labels: number },
+    calls: Calls,
+    signal?: AbortSignal,
+  ): Promise<Line | null> {
     for (let attempt = 0; attempt < 2; attempt++) {
-      let answer;
+      const reply = await this.call(
+        {
+          system: LAYERS_SECTION_LINE_SYSTEM,
+          user,
+          media_type: "text/plain",
+          schema: LAYERS_SECTION_LINE_SCHEMA,
+          version,
+          ...(language ? { language } : {}),
+        },
+        calls,
+        signal,
+      );
+      if (reply.kind !== "answer") continue;
       try {
-        answer = await this.options.model.structured(
-          {
-            system: LAYERS_SYSTEM,
-            user: input,
-            media_type: "text/plain",
-            schema: LAYERS_SCHEMA,
-            input_sha256: sha(
-              JSON.stringify([READING_LAYERS_PROMPT_VERSION, input]),
-            ),
-          },
-          signal,
-        );
+        return checkLineAnswer(reply.value, dropped);
       } catch (error) {
-        if (
-          error instanceof TranslationError &&
-          error.code === "translation-model-unavailable"
-        )
-          throw new LayersStepError(
-            "layers-unavailable",
-            { usage: { ...usage } },
-            { cause: error },
-          );
-        throw error;
-      }
-      addUsage(usage, answer.usage);
-      model = answer.model;
-      if (answer.kind !== "failed") answered = true;
-      if (answer.kind === "answer") {
-        try {
-          return {
-            checked: checkLayersAnswer(
-              answer.value,
-              prepared,
-              structure.segments,
-              titled,
-            ),
-            model,
-            unavailable: false,
-          };
-        } catch (error) {
-          if (!(error instanceof LayersAnswerError)) throw error;
-        }
-      } else if (answer.kind === "truncated" && attempt === 0) {
-        // Asked once more for half the points (spec 10.3).
-        max = Math.max(LAYERS_POINTS_MIN, Math.floor(max / 2));
-        input = input.replace(
-          /^Maximum number of points: \d+/u,
-          `Maximum number of points: ${max}`,
-        );
+        if (!(error instanceof LayersAnswerError)) throw error;
       }
     }
-    return {
-      checked: {
-        digest: {
-          summary: { text: "", units: [], key_terms: [] },
-          limits: [],
-          advice: {
-            text: null,
-            not_given: null,
-            units: [],
-            key_terms: [],
-            places: [],
-          },
-        },
-        points: [],
-        data: [],
-        given: 0,
-        valid: 0,
-        dropped: {
-          evidence: 0,
-          points: 0,
-          key_terms: 0,
-          digest_units: 0,
-          kinds: 0,
-          labels: 0,
-          relations: 0,
-          basis: 0,
-          data: 0,
-          places: 0,
-          limits: 0,
-          primary: 0,
-        },
-        summary_missing: true,
-        primary: 0,
-      },
-      model,
-      unavailable: !answered,
-    };
+    dropped.sections++;
+    return null;
   }
   /**
-   * The second call (spec 10.5): the machine-written texts translated,
-   * their key terms' renderings found in the translation, and each sentence
-   * evidence aligned with sentences of its unit's stored translation.
+   * One run of a section (spec 10.3): an invalid answer is asked once more;
+   * a cut-off one is split in halves, each asked as a part. A run that gets
+   * no valid answer leaves its paragraphs without notes.
+   */
+  private async sectionRun(
+    plan: LayersPlan,
+    group: LayersGroup,
+    paragraphs: readonly LayersParagraph[],
+    part: Part,
+    retries: number,
+    dropped: Dropped,
+    calls: Calls,
+    signal?: AbortSignal,
+  ): Promise<{ notes: LayersNote[]; line: Line | null; split: boolean }> {
+    const reply = await this.call(
+      {
+        system: LAYERS_SECTION_SYSTEM,
+        user: sectionInput(plan, group, paragraphs, part),
+        media_type: "text/plain",
+        schema: LAYERS_SECTION_SCHEMA,
+        version: READING_LAYERS_SECTION_PROMPT_VERSION,
+      },
+      calls,
+      signal,
+    );
+    if (reply.kind === "answer") {
+      try {
+        const checked = checkSectionAnswer(
+          reply.value,
+          group,
+          paragraphs,
+          part !== null,
+          dropped,
+        );
+        return { notes: [...checked.notes], line: checked.line, split: false };
+      } catch (error) {
+        if (!(error instanceof LayersAnswerError)) throw error;
+      }
+    } else if (reply.kind === "truncated" && paragraphs.length > 1) {
+      const runs = await Promise.all(
+        halves(paragraphs).map((half, i) =>
+          this.sectionRun(
+            plan,
+            group,
+            half,
+            part ?? { index: i + 1, of: 2 },
+            1,
+            dropped,
+            calls,
+            signal,
+          ),
+        ),
+      );
+      return { notes: runs.flatMap((r) => r.notes), line: null, split: true };
+    }
+    if (retries > 0)
+      return this.sectionRun(
+        plan,
+        group,
+        paragraphs,
+        part,
+        retries - 1,
+        dropped,
+        calls,
+        signal,
+      );
+    dropped.unanswered += paragraphs.length;
+    return { notes: [], line: null, split: false };
+  }
+  /**
+   * The original version (spec 10.3): every section in parallel, then the
+   * whole-document call over titles, lines and notes. The document call is
+   * not made when the notes already cover less than two thirds.
+   */
+  private async original(
+    plan: LayersPlan,
+    calls: Calls,
+    signal?: AbortSignal,
+  ): Promise<Original> {
+    const dropped = emptyDropped();
+    const groups = await Promise.all(
+      plan.groups.map(async (group) => {
+        const split = group.parts.length > 1;
+        const runs = await Promise.all(
+          group.parts.map((paragraphs, i) =>
+            this.sectionRun(
+              plan,
+              group,
+              paragraphs,
+              split ? { index: i + 1, of: group.parts.length } : null,
+              1,
+              dropped,
+              calls,
+              signal,
+            ),
+          ),
+        );
+        const notes = runs.flatMap((r) => r.notes);
+        let line = !split && !runs[0]!.split ? runs[0]!.line : null;
+        if ((split || runs[0]!.split) && notes.length)
+          line = await this.line(
+            sectionLineInput(
+              plan,
+              group,
+              notes.map((n) => ({
+                short: n.paragraph.short,
+                statement: n.statement,
+              })),
+            ),
+            READING_LAYERS_SECTION_PROMPT_VERSION,
+            undefined,
+            dropped,
+            calls,
+            signal,
+          );
+        return { section_id: group.section_id, notes, line };
+      }),
+    );
+    const notes = groups
+      .flatMap((g) => g.notes)
+      .sort((a, b) => a.paragraph.start_utf8 - b.paragraph.start_utf8);
+    const lines = new Map<string | null, Line>();
+    for (const g of groups) if (g.line) lines.set(g.section_id, g.line);
+    const annotated = notes.filter((n) => n.paragraph.annotatable).length;
+    const covered = annotated * 3 >= plan.annotatable * 2 && notes.length > 0;
+    const outcome = (
+      document: CheckedDocument | null,
+      unavailable: boolean,
+    ): Original => {
+      const primary = document?.primary.size ?? 0;
+      const summary_missing = document?.summary_missing ?? true;
+      return {
+        notes,
+        lines,
+        document,
+        dropped,
+        annotated,
+        primary,
+        summary_missing,
+        failed: !covered || summary_missing || primary < LAYERS_PRIMARY_MIN,
+        unavailable,
+      };
+    };
+    // No section call got any answer at all: the model is not reachable.
+    if (!calls.answered) return outcome(null, true);
+    if (!covered) return outcome(null, false);
+    const numbers = new Map(notes.map((n, i) => [n.paragraph.short, i + 1]));
+    const see = new Map(notes.map((n, i) => [i + 1, n.see.length ? 1 : 0]));
+    const user = documentInput(
+      plan,
+      lines,
+      new Map(notes.map((n) => [n.paragraph.unit_id, n])),
+    );
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const reply = await this.call(
+        {
+          system: LAYERS_DOCUMENT_SYSTEM,
+          user,
+          media_type: "text/plain",
+          schema: LAYERS_DOCUMENT_SCHEMA,
+          version: READING_LAYERS_PROMPT_VERSION,
+        },
+        calls,
+        signal,
+      );
+      if (reply.kind !== "answer") continue;
+      try {
+        return outcome(
+          checkDocumentAnswer(reply.value, plan, numbers, see, dropped),
+          false,
+        );
+      } catch (error) {
+        if (!(error instanceof LayersAnswerError)) throw error;
+      }
+    }
+    // The sections were answered: a digest that fails twice is incomplete.
+    return outcome(null, false);
+  }
+  /**
+   * The translation part (spec 10.5): each section's notes written directly
+   * in the target language from the stored translation of its paragraphs,
+   * then the digest from those notes. Kinds, the trunk, relations and data
+   * values stay the original's. Evidence is aligned with sentences of the
+   * unit's stored translation.
    */
   private async translationPart(
     file: DocumentLayersFile,
+    plan: LayersPlan,
     stored: DocumentTranslationFile,
     storedSha256: string,
     markdown: Uint8Array,
@@ -780,261 +969,240 @@ export class DocumentLayersService {
     summary: Record<string, unknown>;
   }> {
     const language = stored.target_language;
+    const calls: Calls = { usage, model: null, answered: 0 };
+    const dropped: PartDropped = {
+      points: 0,
+      sections: 0,
+      reasons: 0,
+      labels: 0,
+      key_terms: 0,
+      evidence: 0,
+      places: 0,
+    };
     const unitText = new Map(
       stored.units
         .filter((u) => u.translation !== null)
         .map((u) => [u.unit_id, u.translation!]),
     );
-    const shortUnits = new Map<string, string>();
-    const unitSentenceCache = new Map<
-      string,
-      ReturnType<typeof unitSentences>
-    >();
-    const sentencesOf = (unit_id: string) => {
-      let s = unitSentenceCache.get(unit_id);
-      if (!s) {
-        s = unitSentences(unitText.get(unit_id)!, "text");
-        unitSentenceCache.set(unit_id, s);
-      }
-      return s;
-    };
-    // Every text to translate is an item; labels, places and data
-    // quantities travel with their items (spec 10.2.1). Values are not sent.
-    const { summary: digestSummary, limits, advice } = file.digest;
-    const items: Record<string, unknown>[] = [
-      {
-        id: "d-summary",
-        text: digestSummary.text,
-        key_terms: digestSummary.key_terms,
-      },
-      ...limits.map((l, i) => ({ id: `d-limit-${i + 1}`, text: l.text })),
-      ...(advice.text !== null
-        ? [
-            {
-              id: "d-advice",
-              text: advice.text,
-              key_terms: advice.key_terms,
-              places: advice.places.map((p) => p.text),
-            },
-          ]
-        : []),
-      ...file.data.map((d, i) => ({ id: `q-${i + 1}`, text: d.quantity })),
-    ];
-    let evidenceTotal = 0;
-    for (const p of file.points) {
-      const evidence: Record<string, unknown>[] = [];
-      p.evidence.forEach((e, i) => {
-        if (e.kind !== "sentence") return;
-        evidenceTotal++;
-        if (!unitText.has(e.unit_id)) return;
-        let short = shortUnits.get(e.unit_id);
-        if (!short) {
-          short = `u${shortUnits.size + 1}`;
-          shortUnits.set(e.unit_id, short);
-        }
-        evidence.push({
-          id: `e${p.number}-${i + 1}`,
-          unit: short,
-          original: flat(
-            decoder.decode(markdown.subarray(e.start_utf8, e.end_utf8)),
-          ),
-        });
-      });
-      items.push({
-        id: `k${p.number}`,
-        text: p.statement,
-        key_terms: p.key_terms,
-        ...(p.label !== null ? { label: p.label } : {}),
-        evidence,
-      });
-    }
-    const body = {
-      items,
-      units: [...shortUnits].map(([unit_id, short]) => ({
-        id: short,
-        sentences: sentencesOf(unit_id).map((s, i) => ({
-          n: i + 1,
-          text: flat(unitText.get(unit_id)!.slice(s.start, s.end)),
-        })),
-      })),
-    };
-    const user = JSON.stringify(body);
-    let answer: Map<string, Record<string, unknown>> | null = null;
-    let model: string | null = null;
-    for (let attempt = 0; attempt < 2 && !answer; attempt++) {
-      let reply;
+    const pointOf = new Map(file.points.map((p) => [p.unit_id, p]));
+    const notes = new Map<string, LayersTranslatedPoint>();
+    const lines = new Map<string | null, LayersTranslatedLine>();
+    const headings = new Map<string | null, string | null>();
+    let unavailable = false;
+    const ask = async (
+      request: Parameters<DocumentLayersService["call"]>[0],
+    ): Promise<Reply | null> => {
+      if (unavailable) return null;
       try {
-        reply = await this.options.model.structured(
-          {
-            system: layersTranslationSystem(language),
-            user,
-            media_type: "application/json",
-            schema: LAYERS_TRANSLATION_SCHEMA,
-            input_sha256: sha(
-              JSON.stringify([
+        return await this.call(request, calls, signal);
+      } catch (error) {
+        if (!(error instanceof ModelUnavailable)) throw error;
+        unavailable = true;
+        return null;
+      }
+    };
+    const system = layersTranslationSectionSystem(language);
+    const run = async (
+      heading: string | null,
+      asked: readonly TranslatedParagraph[],
+      part: Part,
+      retries: number,
+    ): Promise<{ line: Line | null; split: boolean }> => {
+      const reply = await ask({
+        system,
+        user: translationSectionInput(plan, heading, asked, markdown, part),
+        media_type: "application/json",
+        schema: LAYERS_TRANSLATION_SECTION_SCHEMA,
+        version: READING_LAYERS_TRANSLATION_PROMPT_VERSION,
+        language,
+      });
+      if (reply?.kind === "answer") {
+        try {
+          const checked = checkTranslationSectionAnswer(
+            reply.value,
+            asked,
+            part !== null,
+            dropped,
+          );
+          for (const [unit, point] of checked.points) notes.set(unit, point);
+          return { line: checked.line, split: false };
+        } catch (error) {
+          if (!(error instanceof LayersAnswerError)) throw error;
+        }
+      } else if (reply?.kind === "truncated" && asked.length > 1) {
+        await Promise.all(
+          halves(asked).map((half, i) =>
+            run(heading, half, part ?? { index: i + 1, of: 2 }, 1),
+          ),
+        );
+        return { line: null, split: true };
+      }
+      if (reply && retries > 0) return run(heading, asked, part, retries - 1);
+      dropped.points += asked.length;
+      return { line: null, split: false };
+    };
+    await Promise.all(
+      plan.groups.map(async (group) => {
+        const heading = group.heading
+          ? (unitText.get(group.heading.segment_id) ?? group.heading.line)
+          : null;
+        headings.set(group.section_id, heading);
+        // A paragraph without a note, or missing in the stored translation, has none here.
+        const asked: TranslatedParagraph[] = group.paragraphs.flatMap((p) => {
+          const point = pointOf.get(p.unit_id),
+            translation = unitText.get(p.unit_id);
+          if (!point || !translation) return [];
+          return [
+            {
+              paragraph: p,
+              point,
+              translation,
+              sentences: unitSentences(
+                translation,
+                p.kind === "caption" ? "caption" : "text",
+              ),
+              evidence: point.evidence.flatMap((e, i) =>
+                e.kind === "sentence" ? [i] : [],
+              ),
+            },
+          ];
+        });
+        if (!asked.length) return;
+        const parts = layersParts(asked, (t) => t.translation);
+        const split = parts.length > 1;
+        const runs = await Promise.all(
+          parts.map((p, i) =>
+            run(
+              heading,
+              p,
+              split ? { index: i + 1, of: parts.length } : null,
+              1,
+            ),
+          ),
+        );
+        let line = !split && !runs[0]!.split ? runs[0]!.line : null;
+        if (split || runs[0]!.split) {
+          const written = asked.flatMap((t) => {
+            const n = notes.get(t.paragraph.unit_id);
+            return n
+              ? [{ short: t.paragraph.short, statement: n.statement }]
+              : [];
+          });
+          if (written.length && !unavailable)
+            try {
+              line = await this.line(
+                sectionLineInput(plan, group, written, heading),
                 READING_LAYERS_TRANSLATION_PROMPT_VERSION,
                 language,
-                user,
-              ]),
-            ),
-          },
-          signal,
-        );
+                dropped,
+                calls,
+                signal,
+              );
+            } catch (error) {
+              if (!(error instanceof ModelUnavailable)) throw error;
+              unavailable = true;
+            }
+        }
+        if (line) lines.set(group.section_id, line);
+      }),
+    );
+    let document: ReturnType<typeof checkTranslationDocumentAnswer> | null =
+      null;
+    const user = translationDocumentInput(
+      plan,
+      file,
+      plan.groups.flatMap((g) => {
+        const written = g.paragraphs.flatMap((p) => {
+          const n = notes.get(p.unit_id);
+          return n ? [{ id: p.short, note: n.statement }] : [];
+        });
+        const line = lines.get(g.section_id)?.statement ?? null;
+        return written.length || line
+          ? [
+              {
+                heading: headings.get(g.section_id) ?? null,
+                line,
+                notes: written,
+              },
+            ]
+          : [];
+      }),
+    );
+    for (let attempt = 0; attempt < 2 && !document; attempt++) {
+      const reply = await ask({
+        system: layersTranslationDocumentSystem(language),
+        user,
+        media_type: "application/json",
+        schema: LAYERS_TRANSLATION_DOCUMENT_SCHEMA,
+        version: READING_LAYERS_TRANSLATION_PROMPT_VERSION,
+        language,
+      });
+      if (reply?.kind !== "answer") continue;
+      try {
+        document = checkTranslationDocumentAnswer(reply.value, file, dropped);
       } catch (error) {
-        if (
-          error instanceof TranslationError &&
-          error.code === "translation-model-unavailable"
-        )
-          break;
-        throw error;
-      }
-      addUsage(usage, reply.usage);
-      model = reply.model;
-      if (
-        reply.kind === "answer" &&
-        isRecord(reply.value) &&
-        Array.isArray(reply.value.items)
-      ) {
-        answer = new Map();
-        for (const item of reply.value.items)
-          if (
-            isRecord(item) &&
-            typeof item.id === "string" &&
-            !answer.has(item.id)
-          )
-            answer.set(item.id, item);
+        if (!(error instanceof LayersAnswerError)) throw error;
       }
     }
-    let droppedTerms = 0,
-      droppedPlaces = 0,
-      droppedEvidence = 0,
-      aligned = 0,
-      translated = 0;
-    const translate = (
-      id: string,
-      terms: readonly string[],
-    ): { text: string | null; key_terms: (string | null)[] } => {
-      const item = answer?.get(id);
-      const raw =
-        typeof item?.translation === "string" ? item.translation.trim() : "";
-      const text =
-        raw && codePoints(raw) <= LAYERS_TRANSLATION_TEXT_MAX ? raw : null;
-      if (text) translated++;
-      const given = Array.isArray(item?.key_terms) ? item.key_terms : [];
-      const key_terms = terms.map((term) => {
-        const hit = given.find(
-          (g): g is Record<string, unknown> =>
-            isRecord(g) &&
-            typeof g.term === "string" &&
-            g.term.trim().toLowerCase() === term.toLowerCase(),
-        );
-        const target =
-          typeof hit?.translation === "string" ? hit.translation.trim() : "";
-        if (
-          text &&
-          target &&
-          codePoints(target) <= LAYERS_KEY_TERM_MAX &&
-          matchKeyTerm(text, target).length
-        )
-          return target;
-        droppedTerms++;
-        return null;
-      });
-      return { text, key_terms };
-    };
-    /** A short text of an item (a label): translated, not longer than the cap. */
-    const side = (value: unknown, max: number) => {
-      const raw = typeof value === "string" ? value.trim() : "";
-      return raw && codePoints(raw) <= max ? raw : null;
-    };
-    const adviceText =
-      advice.text === null
-        ? { text: null, key_terms: [] }
-        : translate("d-advice", advice.key_terms);
-    const answeredPlaces = records(answer?.get("d-advice")?.places);
-    const digest: LayersTranslationPart["digest"] = {
-      summary: translate("d-summary", digestSummary.key_terms),
-      limits: limits.map((_, i) => translate(`d-limit-${i + 1}`, []).text),
+    const digest: LayersTranslationPart["digest"] = document?.digest ?? {
+      summary: { text: null, key_terms: [] },
+      limits: file.digest.limits.map(() => null),
       advice: {
-        ...adviceText,
-        // A place's rendering counts only when it is in the advice's translation.
-        places: advice.places.map((p) => {
-          const hit = answeredPlaces.find(
-            (g) => typeof g.text === "string" && g.text.trim() === p.text,
-          );
-          const target = side(hit?.translation, LAYERS_PLACE_TEXT_MAX * 2);
-          if (adviceText.text && target && adviceText.text.includes(target))
-            return target;
-          droppedPlaces++;
-          return null;
-        }),
+        text: null,
+        key_terms: [],
+        places: file.digest.advice.places.map(() => null),
       },
     };
-    const data = file.data.map((_, i) => translate(`q-${i + 1}`, []).text);
-    const points = file.points.map((p) => {
-      const t = translate(`k${p.number}`, p.key_terms);
-      const item = answer?.get(`k${p.number}`);
-      const label =
-        p.label === null ? null : side(item?.label, LAYERS_LABEL_MAX);
-      const given = Array.isArray(item?.evidence) ? item.evidence : [];
-      const evidence = p.evidence.map((e, i) => {
-        if (e.kind !== "sentence" || !unitText.has(e.unit_id)) return null;
-        const hit = given.find(
-          (g): g is Record<string, unknown> =>
-            isRecord(g) && g.id === `e${p.number}-${i + 1}`,
-        );
-        const numbers = Array.isArray(hit?.sentences)
-          ? hit.sentences.filter((n): n is number => Number.isSafeInteger(n))
-          : [];
-        const sentences = sentencesOf(e.unit_id);
-        const ok =
-          numbers.length >= 1 &&
-          numbers.length ===
-            (Array.isArray(hit?.sentences) ? hit.sentences.length : 0) &&
-          numbers.every((n, k) => k === 0 || n === numbers[k - 1]! + 1) &&
-          numbers[0]! >= 1 &&
-          numbers.at(-1)! <= sentences.length;
-        if (!ok) {
-          droppedEvidence++;
-          return null;
-        }
-        aligned++;
-        return {
-          start_utf8: sentences[numbers[0]! - 1]!.start_utf8,
-          end_utf8: sentences[numbers.at(-1)! - 1]!.end_utf8,
-        };
-      });
-      return { ...t, label, evidence };
-    });
-    const total = items.length;
+    const data = document?.data ?? file.data.map(() => null);
+    const points = file.points.map((p) => notes.get(p.unit_id) ?? null);
+    const sections = file.sections.map((s) => lines.get(s.section_id) ?? null);
+    const digestTexts = [
+      digest.summary.text,
+      ...digest.limits,
+      ...(file.digest.advice.text === null ? [] : [digest.advice.text]),
+      ...data,
+    ];
+    const translatedPoints = points.filter((p) => p !== null).length,
+      translatedSections = sections.filter((s) => s !== null).length,
+      translatedDigest = digestTexts.filter((t) => t !== null).length;
+    const evidence = file.points.reduce(
+      (n, p) => n + p.evidence.filter((e) => e.kind === "sentence").length,
+      0,
+    );
+    const aligned = points.reduce(
+      (n, p) => n + (p?.evidence.filter((e) => e !== null).length ?? 0),
+      0,
+    );
+    const done =
+      translatedPoints + translatedSections + translatedDigest > 0 &&
+      calls.model !== null;
     const summary = {
-      status: translated ? "done" : "incomplete",
+      status: done ? "done" : "incomplete",
       target_language: language,
       translation_sha256: storedSha256,
-      items: total,
-      translated,
-      key_terms_dropped: droppedTerms,
-      places_dropped: droppedPlaces,
-      evidence: evidenceTotal,
+      points: file.points.length,
+      translated_points: translatedPoints,
+      sections: file.sections.length,
+      translated_sections: translatedSections,
+      digest: digestTexts.length,
+      translated_digest: translatedDigest,
+      evidence,
       aligned,
-      evidence_dropped: droppedEvidence,
+      dropped,
     };
-    // A part where nothing was translated is not made (spec 10.5).
-    if (!translated || !model) return { part: null, summary };
+    // A part where nothing was written is not made (spec 10.5).
+    if (!done) return { part: null, summary };
     return {
       part: {
         target_language: language,
         translation_sha256: storedSha256,
-        model,
+        model: calls.model!,
         prompt_version: READING_LAYERS_TRANSLATION_PROMPT_VERSION,
         digest,
+        sections,
         points,
         data,
-        dropped: {
-          key_terms: droppedTerms,
-          evidence: droppedEvidence,
-          places: droppedPlaces,
-        },
+        dropped,
       },
       summary,
     };

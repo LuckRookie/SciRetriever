@@ -927,7 +927,7 @@ export class DocumentReadService {
             if (r.format === "markdown") {
               let markdown = layersMarkdownHeader(title, reader, r.text);
               for (const section of sections) {
-                markdown += layersMarkdownSection(section.title);
+                markdown += layersMarkdownSection(section);
                 for (const p of section.points)
                   markdown += layersMarkdownPoint(p, null) + "\n";
               }
@@ -988,7 +988,9 @@ export class DocumentReadService {
             const piece =
               r.format === "markdown"
                 ? (section !== point.section_id
-                    ? layersMarkdownSection(point.section_title)
+                    ? layersMarkdownSection(
+                        reader.sectionLine(point.section_id),
+                      )
                     : "") +
                   layersMarkdownPoint(point, evidence) +
                   "\n"
@@ -1058,6 +1060,10 @@ export class DocumentReadService {
             ...common,
             format: "json" as const,
             points,
+            // The lines of the sections this page's notes belong to.
+            sections: reader.sectionLines(
+              new Set(points.map((p) => p.section_id)),
+            ),
             evidence,
             total: file.points.length,
             next_cursor,
