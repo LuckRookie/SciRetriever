@@ -1515,6 +1515,7 @@ export async function renderDocument(
       for (const object of group.objects)
         figures.set(object.segment_id, {
           segment_id: object.segment_id,
+          panels: group.objects.map((o) => o.segment_id),
           kind: group.kind,
           label:
             lead ??

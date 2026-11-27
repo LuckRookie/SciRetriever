@@ -125,9 +125,12 @@ export function attachLayers(
       "img[data-image]:not([src])",
     )) {
       const figure = port.figure(img.dataset.image!);
+      // A picture not kept leaves its figure's other pictures; a figure
+      // with none left is taken away.
       const drop = () => {
         const plate = img.closest(".rl-plate, .rl-oplate");
-        plate?.remove();
+        img.remove();
+        if (plate && !plate.querySelector("img")) plate.remove();
         place();
       };
       if (!figure) {
@@ -438,8 +441,14 @@ export function attachLayers(
     if (link) {
       if (link.dataset.fig) {
         const figure = port.figure(link.dataset.fig);
+        // 全文: the figure in the text; 脉络: its plate under the first note
+        // that names it; otherwise the picture enlarged.
         const block =
-          layer === "full" && figure ? port.blockAt(figure.start) : null;
+          layer === "full" && figure
+            ? port.blockAt(figure.start)
+            : column.querySelector<HTMLElement>(
+                `.rl-plate[data-fig="${CSS.escape(link.dataset.fig)}"]`,
+              );
         if (block) reveal(block, true);
         else enlarge(link.dataset.fig);
       } else if (link.dataset.point) {

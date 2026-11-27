@@ -48,6 +48,8 @@ export interface LayerFigure {
   readonly kind: "figure" | "scheme" | "table";
   /** “图 3”, “Table 1”: the caption's own lead, else a name by kind. */
   readonly label: string;
+  /** Every picture of its figure group in text order, itself among them: “Fig. 8” is (a) and (b). */
+  readonly panels: readonly string[];
   /** The caption without its lead, in the reading's language when it has one. */
   caption(mode: DocumentTextMode): string | null;
   /** UTF-8 start of the object in the text. */

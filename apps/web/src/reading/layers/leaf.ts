@@ -132,8 +132,18 @@ function figureHTML(
   const id = escape(segmentId);
   if (!plate || kind === "table")
     return `<p class="rl-mu-s rl-fig"><a data-fig="${id}">${escape(name)}</a><span>${richHTML(parts.rest)}</span></p>`;
+  // The whole figure: every picture of its group side by side.
+  const panels = f?.panels.length ? f.panels : [segmentId];
+  const images = panels
+    .map((panel) => {
+      const p = escape(panel);
+      return `<img alt="${escape(name)}" data-image="${p}" data-zoom="${p}"${
+        panel === segmentId ? ` data-f="fig:${id}"` : ""
+      }>`;
+    })
+    .join("");
   return (
-    `<figure class="rl-plate" data-fig="${id}"><img alt="${escape(name)}" data-image="${id}" data-zoom="${id}" data-f="fig:${id}">` +
+    `<figure class="rl-plate" data-fig="${id}"><div class="rl-panels">${images}</div>` +
     `<p class="rl-cap">${captionHTML(name, parts.rest)}</p></figure>`
   );
 }
@@ -166,18 +176,35 @@ export function outlineLeaf(
         if (e.kind === "sentence")
           body += sentenceHTML(e, `${p.number}:${i}`, termsOf(p), port, mode);
       });
-      for (const e of p.evidence)
-        if (e.kind === "block") {
-          figures.add(e.segment_id);
-          body += figureHTML(
-            port.figure(e.segment_id),
-            e.segment_id,
-            e.block_kind,
-            e.caption,
-            mode,
-            true,
-          );
-        }
+      // The figures a note stands on and the ones it points to (“见 图 8”)
+      // are set under its sentences; each figure once, under the first note
+      // that names it. A later note's margin link goes to that plate.
+      const named = [
+        ...p.evidence.flatMap((e) =>
+          e.kind === "block"
+            ? [{ id: e.segment_id, kind: e.block_kind, caption: e.caption }]
+            : [],
+        ),
+        ...p.relations.flatMap((r) =>
+          r.targets.flatMap((t) =>
+            t.kind === "point"
+              ? []
+              : [{ id: t.segment_id, kind: t.block_kind, caption: null }],
+          ),
+        ),
+      ];
+      for (const f of named) {
+        if (figures.has(f.id)) continue;
+        figures.add(f.id);
+        body += figureHTML(
+          port.figure(f.id),
+          f.id,
+          f.kind,
+          f.caption,
+          mode,
+          true,
+        );
+      }
       column += gangHTML(p, mode, body);
       const rel = relationsHTML(p, port, mode);
       side +=

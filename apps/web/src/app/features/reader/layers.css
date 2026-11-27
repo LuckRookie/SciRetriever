@@ -404,8 +404,15 @@
   .rl-plate {
     margin: 0.9em 0 0.4em;
   }
+  /* A figure's pictures side by side, bottoms aligned, sharing the column. */
+  .rl-panels {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.8em;
+  }
   .rl-plate img {
     display: block;
+    min-width: 0;
     max-width: min(100%, 420px);
     height: auto;
     cursor: zoom-in;
