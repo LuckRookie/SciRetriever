@@ -7,7 +7,12 @@ const math = (text: string, displayMode: boolean) =>
   katex.renderToString(text, {
     displayMode,
     trust: false,
-    strict: "error",
+    // Parsed text puts plain Unicode in formulas (“177–178^{\circ}C”): drawn
+    // as it is rather than as a red error; anything else stays strict.
+    strict: (code: string) =>
+      code === "unknownSymbol" || code === "unicodeTextInMathMode"
+        ? "ignore"
+        : "error",
     throwOnError: false,
     maxExpand: 1000,
     maxSize: 20,
@@ -34,9 +39,18 @@ function createMarkdown(allowFragments: boolean) {
       {
         name: "displayMath",
         level: "block",
-        start: (s) => s.indexOf("$$"),
+        // A display formula stands on its own lines: `$$` opens one only at
+        // the start of a line, and it never runs across a blank line. Glued
+        // inline formulas (`…C.$${}^{1}H$ NMR`) stay inline instead of
+        // swallowing the text up to the next `$$`.
+        start: (s) => {
+          const m = /\n[ \t]*\$\$/.exec(s);
+          return m ? m.index + 1 : undefined;
+        },
         tokenizer(s) {
-          const m = /^\$\$\s*\n?([\s\S]+?)\$\$(?:\n|$)/.exec(s);
+          const m = /^\$\$\s*\n?((?:(?!\n[ \t]*\n)[\s\S])+?)\$\$(?:\n|$)/.exec(
+            s,
+          );
           return m ? { type: "displayMath", raw: m[0], text: m[1] } : undefined;
         },
         renderer: (t) => math(String(t.text), true),

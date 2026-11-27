@@ -204,16 +204,41 @@ export const numberHTML = (
   `<span class="${cls}${p.primary ? " rl-ring" : ""}" data-point="${p.number}"${
     piece ? ` data-f="${piece}"` : ""
   }>${p.number}</span>`;
+const LEAD = String.raw`(?:表|图|式|方案|Table|Fig\.?|Figure|Scheme|Chart)\s*S?\d+[a-z]?`;
+const AT_START = new RegExp(
+  String.raw`^\s*(${LEAD})\s*[.:：。]?\s*([\s\S]*)$`,
+  "iu",
+);
+// A parser sometimes runs the labels inside a picture into its caption
+// (“C1 C3Fig. 1. Molecular structures…”): the lead after a few such short
+// labels, with its own stop after it, is still the caption's lead.
+const AFTER_LABELS = new RegExp(
+  String.raw`^(?:\s*[A-Z0-9(][\w+()\-]{0,5}){1,6}?\s*(${LEAD})\s*[.:：。]\s*([\s\S]*)$`,
+  "u",
+);
 /** A caption's lead (“图 3.”, “Table 1”) apart from the rest. */
 export function captionParts(caption: string | null): {
   lead: string | null;
   rest: string;
 } {
-  const m =
-    /^\s*((?:表|图|式|方案|Table|Fig\.?|Figure|Scheme|Chart)\s*S?\d+[a-z]?)\s*[.:：。]?\s*([\s\S]*)$/iu.exec(
-      caption ?? "",
-    );
+  const m = AT_START.exec(caption ?? "") ?? AFTER_LABELS.exec(caption ?? "");
   return m ? { lead: m[1]!, rest: m[2]! } : { lead: null, rest: caption ?? "" };
+}
+/**
+ * A figure's name as the reading shows it: its caption's own lead in the
+ * reading's language (“图 8” beside a translation, “Fig. 8” beside the
+ * original), else the engine's label, else a name by kind.
+ */
+export function figureName(
+  f: LayerFigure | null,
+  kind: string,
+  mode: DocumentTextMode,
+): string {
+  return (
+    (f ? captionParts(f.caption(mode)).lead : null) ??
+    f?.label ??
+    (kind === "table" ? "表" : kind === "scheme" ? "方案" : "图")
+  );
 }
 export const captionHTML = (lead: string, rest: string) =>
   `<b>${escape(lead)}</b>${richHTML(rest)}`;

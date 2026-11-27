@@ -11,6 +11,7 @@ import {
   captionHTML,
   captionParts,
   escape,
+  figureName,
   headingHTML,
   langOf,
   numberHTML,
@@ -37,8 +38,6 @@ export interface Leaf {
   readonly side: string;
 }
 
-const figureName = (f: LayerFigure | null, kind: string) =>
-  f?.label ?? (kind === "table" ? "表" : kind === "scheme" ? "方案" : "图");
 /** The paragraph number the full text shows beside a place. */
 export function paragraphOf(
   port: LayersPort,
@@ -49,7 +48,11 @@ export function paragraphOf(
     start === null ? undefined : port.blockAt(start)?.dataset.paragraph;
   return shown ? Number(shown) : fallback;
 }
-export const relationsHTML = (p: LayersReadPoint, port: LayersPort) =>
+export const relationsHTML = (
+  p: LayersReadPoint,
+  port: LayersPort,
+  mode: DocumentTextMode,
+) =>
   p.relations
     .map(
       (r) =>
@@ -58,7 +61,7 @@ export const relationsHTML = (p: LayersReadPoint, port: LayersPort) =>
             t.kind === "point"
               ? `<a data-point="${t.number}">${t.number}</a>`
               : `<a data-fig="${escape(t.segment_id)}">${escape(
-                  figureName(port.figure(t.segment_id), t.block_kind),
+                  figureName(port.figure(t.segment_id), t.block_kind, mode),
                 )}</a>`,
           )
           .join("、")}</span>`,
@@ -125,7 +128,7 @@ function figureHTML(
   plate: boolean,
 ): string {
   const parts = captionParts(f?.caption(mode) ?? caption);
-  const name = parts.lead ?? figureName(f, kind);
+  const name = parts.lead ?? figureName(f, kind, mode);
   const id = escape(segmentId);
   if (!plate || kind === "table")
     return `<p class="rl-mu-s rl-fig"><a data-fig="${id}">${escape(name)}</a><span>${richHTML(parts.rest)}</span></p>`;
@@ -176,7 +179,7 @@ export function outlineLeaf(
           );
         }
       column += gangHTML(p, mode, body);
-      const rel = relationsHTML(p, port);
+      const rel = relationsHTML(p, port, mode);
       side +=
         `<aside class="rl-pi rl-rel" data-point="${p.number}"><div class="rl-pi-h">` +
         (p.kind
@@ -287,7 +290,7 @@ export function overviewLeaf(
       );
       if (basis.block_kind !== "table") {
         const parts = captionParts(f?.caption(mode) ?? basis.caption);
-        const name = parts.lead ?? figureName(f, basis.block_kind);
+        const name = parts.lead ?? figureName(f, basis.block_kind, mode);
         const id = escape(basis.segment_id);
         side +=
           `<figure class="rl-oplate" data-point="${p.number}" data-fig="${id}"><img alt="${escape(name)}" data-image="${id}" data-zoom="${id}" data-f="fig:${id}">` +
@@ -315,6 +318,7 @@ export function overviewLeaf(
                     figureName(
                       port.figure(row.source.segment_id),
                       row.source.block_kind,
+                      mode,
                     ),
                   )}</a>`;
             return `<tr><td lang="${langOf(quantity)}">${richHTML(quantity)}</td><td class="rl-v">${richHTML(row.value)}</td><td class="rl-s">${source}</td></tr>`;

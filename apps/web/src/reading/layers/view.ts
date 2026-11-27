@@ -149,7 +149,7 @@ export function attachLayers(
   // ── 全文: the sentences, the strokes on the rule, the notes in the margin ──
   const relations = (number: number) => {
     const p = model.byNumber.get(number);
-    return p ? relationsHTML(p, port) : "";
+    return p ? relationsHTML(p, port, mode) : "";
   };
   const renderFull = (notify = true) => {
     placed = wrapNotes(model, port, mode);

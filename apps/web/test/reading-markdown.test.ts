@@ -27,6 +27,29 @@ it("maps normalized Markdown blocks back to original UTF-8 boundaries including 
   expect(pending).not.toContain("图片：images/");
 });
 
+it("keeps glued inline formulas inline and draws plain Unicode in a formula", () => {
+  // A real paper's text: one formula's closing `$` runs into the next's
+  // opening `$`. It once opened a display formula that swallowed 15 KB of
+  // text, figures and tables up to the next `$$`.
+  const text =
+    "MP: $177–178^{\\circ}C.$${}^{1}\\mathbf{H}$ NMR $(300\\,\\mathrm{MHz}$, DMSO).\n\n" +
+    "![](images/figure.jpg)\n\nFig. 2. Absorption spectra $(3\\times$$10^{-5}\\,\\mathrm{M})$.\n\n" +
+    "Then a formula on its own lines:\n$$\nE = h \\nu\n$$\n\nAnd the end.";
+  const blocks = markdownBlocks(text).filter((b) => b.token.type !== "space");
+  expect(blocks.map((b) => b.token.type)).toEqual([
+    "paragraph",
+    "paragraph",
+    "paragraph",
+    "paragraph",
+    "displayMath",
+    "paragraph",
+  ]);
+  const html = markdown.parse(text, { async: false });
+  expect(html).not.toContain("katex-error");
+  expect(html).toContain('data-resource="images/figure.jpg"');
+  expect(html.match(/class="katex-display"/g)).toHaveLength(1);
+});
+
 // Real Chromium work reached 1.8 s under Full (36/12) load, too close to the 5 s default.
 it("renders corrected HTML tables with spans and math while refusing active markup and remote resources", async () => {
   const { build } = await import("esbuild");

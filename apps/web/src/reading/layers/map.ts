@@ -5,6 +5,7 @@ import {
   captionHTML,
   captionParts,
   escape,
+  figureName,
   headingHTML,
   langOf,
   numberHTML,
@@ -190,8 +191,7 @@ export function createMap(
               t.kind === "point"
                 ? `<a data-side="${t.number}">${t.number}</a>`
                 : `<a data-zoom="${escape(t.segment_id)}">${escape(
-                    port.figure(t.segment_id)?.label ??
-                      (t.block_kind === "table" ? "表" : "图"),
+                    figureName(port.figure(t.segment_id), t.block_kind, mode),
                   )}</a>`,
             )
             .join("、")}</span>`,
@@ -265,7 +265,7 @@ export function createMap(
           if (e.kind !== "block" || e.block_kind === "table") return "";
           const f = port.figure(e.segment_id);
           const parts = captionParts(f?.caption(mode) ?? e.caption);
-          const name = parts.lead ?? f?.label ?? "图";
+          const name = parts.lead ?? figureName(f, e.block_kind, mode);
           const id = escape(e.segment_id);
           return `<figure class="rl-ms-plate"><img alt="${escape(name)}" data-image="${id}" data-zoom="${id}"><figcaption>${captionHTML(name, parts.rest)}</figcaption></figure>`;
         })
