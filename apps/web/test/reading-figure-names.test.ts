@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { outlineLeaf } from "../src/reading/layers/leaf.js";
+import { outlineLeaf, overviewLeaf } from "../src/reading/layers/leaf.js";
 import {
   captionParts,
   figureName,
@@ -8,65 +8,80 @@ import {
   type LayersPort,
 } from "../src/reading/layers/model.js";
 
-// 脉络 sets a note's figures under its sentences (reading-experience 3.3.2):
+// A note that points to figures and a table, and a port that knows them.
+const point = (
+  number: number,
+  relations: { id: string; kind: "figure" | "table" }[],
+) => ({
+  number,
+  primary: true,
+  kind: "result",
+  statement: `Note ${number}.`,
+  label: null,
+  key_terms: [],
+  translation: null,
+  evidence: [],
+  basis: {
+    kind: "sentence",
+    text: `Sentence ${number}.`,
+    start_utf8: null,
+    paragraph: number,
+  },
+  relations: relations.length
+    ? [
+        {
+          word: "see",
+          targets: relations.map((r) => ({
+            kind: "block",
+            segment_id: r.id,
+            block_kind: r.kind,
+            paragraph: 1,
+          })),
+        },
+      ]
+    : [],
+});
+const points = [
+  point(1, [{ id: "fig-8", kind: "figure" }]),
+  point(2, [
+    { id: "fig-8", kind: "figure" },
+    { id: "table-3", kind: "table" },
+  ]),
+];
+const model = {
+  points,
+  primary: points,
+  byNumber: new Map(points.map((p) => [p.number, p])),
+  sections: [{ section_id: null, title: null, numbers: [1, 2] }],
+  overview: {
+    summary: { text: "Summary.", key_terms: [], translation: null },
+    data: [],
+    limits: [],
+    advice: { text: null, not_given: "", places: [], translation: null },
+  },
+} as unknown as LayersModel;
+const figure = (id: string, kind: "figure" | "table", lead: string) => ({
+  segment_id: id,
+  kind,
+  label: lead,
+  panels: id === "fig-8" ? ["fig-8", "fig-8b"] : [id],
+  caption: () => `${lead}. Its caption.`,
+  start: 0,
+  image: async () => null,
+});
+const port = {
+  title: null,
+  section: () => null,
+  blockAt: () => undefined,
+  figure: (id: string) =>
+    id === "fig-8"
+      ? figure(id, "figure", "Fig. 8")
+      : figure(id, "table", "Table 3"),
+} as unknown as LayersPort;
+
+// 脉络 sets a note's figures under its sentences (reading-experience 3.3):
 // the ones it stands on and the ones it points to, each figure once.
 it("sets the figures a note points to under it in 脉络, each once", () => {
-  const point = (
-    number: number,
-    relations: { id: string; kind: "figure" | "table" }[],
-  ) => ({
-    number,
-    primary: false,
-    kind: "result",
-    statement: `Note ${number}.`,
-    label: null,
-    key_terms: [],
-    translation: null,
-    evidence: [],
-    relations: relations.length
-      ? [
-          {
-            word: "see",
-            targets: relations.map((r) => ({
-              kind: "block",
-              segment_id: r.id,
-              block_kind: r.kind,
-              paragraph: 1,
-            })),
-          },
-        ]
-      : [],
-  });
-  const points = [
-    point(1, [{ id: "fig-8", kind: "figure" }]),
-    point(2, [
-      { id: "fig-8", kind: "figure" },
-      { id: "table-3", kind: "table" },
-    ]),
-  ];
-  const model = {
-    points,
-    byNumber: new Map(points.map((p) => [p.number, p])),
-    sections: [{ section_id: null, title: null, numbers: [1, 2] }],
-  } as unknown as LayersModel;
-  const figure = (id: string, kind: "figure" | "table", lead: string) => ({
-    segment_id: id,
-    kind,
-    label: lead,
-    panels: id === "fig-8" ? ["fig-8", "fig-8b"] : [id],
-    caption: () => `${lead}. Its caption.`,
-    start: 0,
-    image: async () => null,
-  });
-  const port = {
-    title: null,
-    section: () => null,
-    blockAt: () => undefined,
-    figure: (id: string) =>
-      id === "fig-8"
-        ? figure(id, "figure", "Fig. 8")
-        : figure(id, "table", "Table 3"),
-  } as unknown as LayersPort;
   const { column } = outlineLeaf(model, port, "original");
   const gangs = column.split('<section class="rl-gang').slice(1);
   expect(gangs[0]).toContain('<figure class="rl-plate" data-fig="fig-8"');
@@ -79,6 +94,18 @@ it("sets the figures a note points to under it in 脉络, each once", () => {
   );
   expect(gangs[0]).toContain('data-image="fig-8b"');
   expect(column).toContain("图表 2 件");
+});
+
+// 概览 sets a main note's figures in the margin beside it (reading-experience 3.2).
+it("sets the figures a main note points to in the margin in 概览, each once", () => {
+  const { column, side } = overviewLeaf(model, port, "original", () => null);
+  expect(column).not.toContain("rl-plate");
+  const plates = side.split('<figure class="rl-oplate"').slice(1);
+  expect(plates).toHaveLength(1);
+  expect(plates[0]).toContain('data-point="1" data-fig="fig-8"');
+  expect(plates[0]).toContain('data-image="fig-8b"');
+  expect(plates[0]).toContain("<b>Fig. 8</b>");
+  expect(side).not.toContain("table-3");
 });
 
 // The layers name a figure by its caption's own lead (reading-experience 3.3:

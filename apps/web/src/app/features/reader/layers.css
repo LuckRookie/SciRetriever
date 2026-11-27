@@ -602,10 +602,21 @@
     right: 0;
     margin: 0;
   }
+  /* In the narrow margin a figure is a small plate beside its note: its
+     pictures side by side, none taller than 200 px, each drawn whole
+     inside its box (a tall structure drawing stays narrow). Click enlarges. */
+  .rl-oplate .rl-panels {
+    gap: 6px;
+  }
   .rl-oplate img {
     display: block;
+    flex: 1 1 0;
+    min-width: 0;
     width: 100%;
     height: auto;
+    max-height: 200px;
+    object-fit: contain;
+    object-position: left bottom;
     cursor: zoom-in;
   }
   .rl-oplate figcaption,

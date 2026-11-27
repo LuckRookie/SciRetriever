@@ -292,6 +292,7 @@ export function overviewLeaf(
     "提要",
     `<p class="rl-ti" lang="${langOf(summary.text)}">${richHTML(summary.text, summary.terms)}</p>`,
   );
+  const plates = new Set<string>();
   let notes = `<p class="rl-onote">全文共 ${model.points.length} 条批语，这里是其中 ${model.primary.length} 条主干。<a data-layer-go="outline">看全部</a></p>`;
   for (const p of model.primary) {
     let body = "";
@@ -315,14 +316,45 @@ export function overviewLeaf(
         mode,
         false,
       );
-      if (basis.block_kind !== "table") {
-        const parts = captionParts(f?.caption(mode) ?? basis.caption);
-        const name = parts.lead ?? figureName(f, basis.block_kind, mode);
-        const id = escape(basis.segment_id);
-        side +=
-          `<figure class="rl-oplate" data-point="${p.number}" data-fig="${id}"><img alt="${escape(name)}" data-image="${id}" data-zoom="${id}" data-f="fig:${id}">` +
-          `<figcaption>${numberHTML(p, "rl-gang-no")}${captionHTML(name, parts.rest)}</figcaption></figure>`;
-      }
+    }
+    // The figures the note stands on and the ones it points to (“见 图 8”)
+    // stand in the margin beside it, each figure once, whole.
+    const named = [
+      ...(basis.kind === "sentence"
+        ? []
+        : [
+            {
+              id: basis.segment_id,
+              kind: basis.block_kind,
+              caption: basis.caption,
+            },
+          ]),
+      ...p.relations.flatMap((r) =>
+        r.targets.flatMap((t) =>
+          t.kind === "point"
+            ? []
+            : [{ id: t.segment_id, kind: t.block_kind, caption: null }],
+        ),
+      ),
+    ];
+    for (const n of named) {
+      if (n.kind === "table" || plates.has(n.id)) continue;
+      plates.add(n.id);
+      const f = port.figure(n.id);
+      const parts = captionParts(f?.caption(mode) ?? n.caption);
+      const name = parts.lead ?? figureName(f, n.kind, mode);
+      const id = escape(n.id);
+      const images = (f?.panels.length ? f.panels : [n.id])
+        .map((panel) => {
+          const at = escape(panel);
+          return `<img alt="${escape(name)}" data-image="${at}" data-zoom="${at}"${
+            panel === n.id ? ` data-f="fig:${id}"` : ""
+          }>`;
+        })
+        .join("");
+      side +=
+        `<figure class="rl-oplate" data-point="${p.number}" data-fig="${id}"><div class="rl-panels">${images}</div>` +
+        `<figcaption>${numberHTML(p, "rl-gang-no")}${captionHTML(name, parts.rest)}</figcaption></figure>`;
     }
     notes += gangHTML(p, mode, body);
   }
