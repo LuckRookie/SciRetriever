@@ -285,11 +285,17 @@ export type OutlineItem =
 const own = (b: HTMLElement, tags: string) =>
   b.querySelector(`:scope > :is(${tags})`);
 /** A block that is a paragraph of the author's text: a paragraph, a list, a caption. */
+/**
+ * A block 脉络 sets as it is when it has no note: a paragraph or a list.
+ * Figures, tables and their captions are not set in the column: a figure
+ * stands as a plate in the margin beside the note that names it (3.3).
+ */
 const isParagraph = (b: HTMLElement) =>
-  !b.matches(".reading-article-info, .reading-footnote") &&
-  (b.dataset.paragraph !== undefined ||
-    !!own(b, "ul, ol") ||
-    b.matches(".reading-figure-caption"));
+  !b.matches(
+    ".reading-article-info, .reading-footnote, .reading-figure-caption, .reading-figure-cell",
+  ) &&
+  !b.querySelector("[data-resource], table") &&
+  (b.dataset.paragraph !== undefined || !!own(b, "ul, ol"));
 /**
  * Walks the full text's blocks (reading-experience 3.3): each listed
  * section's heading, each note at its paragraph, and the paragraphs without
