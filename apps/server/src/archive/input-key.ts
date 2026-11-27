@@ -1,4 +1,5 @@
 import {
+  ARCHIVE_STEPS,
   LAYERS_FILE_SCHEMA_VERSION,
   canonicalJsonBytes,
   sha256,
@@ -62,5 +63,27 @@ export function archiveStepKey(
         : null,
       assignment,
     }),
+  );
+}
+
+/**
+ * Whether `from_step` forces a step to run again although its input is
+ * unchanged. Only `from_step: translate` translates every unit again and
+ * only `from_step: layers` redoes the layers (an earlier from_step keeps
+ * reusing unchanged units, spec 9.3). The later steps are forced by what
+ * they rest on: metadata, references and tags rest on the text, not on its
+ * translation or its layers, so redoing `translate` or `layers` leaves them
+ * (and the providers they may ask) alone.
+ */
+export function archiveStepForced(
+  step: ArchiveStep,
+  fromStep: ArchiveStep | null,
+): boolean {
+  if (step === "translate" || step === "layers") return fromStep === step;
+  return (
+    fromStep !== null &&
+    fromStep !== "translate" &&
+    fromStep !== "layers" &&
+    ARCHIVE_STEPS.indexOf(step) >= ARCHIVE_STEPS.indexOf(fromStep)
   );
 }

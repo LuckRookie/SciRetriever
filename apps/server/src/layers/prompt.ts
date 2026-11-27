@@ -51,6 +51,9 @@ const NOTE_FIELDS = `- statement: ONE sentence stating what the paragraph establ
 - reason: ONE more sentence that reads on from the statement and gives its main reason, mechanism, condition or consequence, without restating it; ${REASON}. An empty string for a paragraph of one short sentence.
 - label: the paragraph's topic, a bare noun phrase copied verbatim from inside the statement; ${LABEL}.
 - key_terms: 0 to ${LAYERS_KEY_TERMS_PER_ITEM} words or short phrases, each at most ${LAYERS_KEY_TERM_MAX} characters, copied exactly from the statement: what is particular to this paragraph, its finding, quantity, object or method; never general words such as "study", "method" or "results".`;
+/** Captions and data-heavy sentences (Owner 2026-11-27, after the first real paper). */
+const CAPTION = `A caption's note says what the figure or table shows: its result, comparison or trend, with the numbers it gives ("the yield rises from 40% to 85% as the temperature goes from 20 to 80 °C"), never that it "shows", "gives" or "presents" something ("Figure 6 shows the J-V curves" is no note). A caption that only names what is plotted or listed, with no result, keeps an empty entry.`;
+const EVIDENCE_RULE = `Prefer sentences that state a result, a definition or a decision over sentences that only set up or list. Never choose a sentence that is mostly a list of measured values (spectroscopic data, peak lists, yields, melting points, elemental analysis, measurement conditions) when another sentence of the paragraph states what was found or obtained; a paragraph that is only such a list takes its shortest sentence.`;
 const SECTION_LINE = `The section: statement, ONE sentence stating what this section establishes in the document, not what it covers; ${STATEMENT}. label: its topic, copied verbatim from that statement; ${LABEL}.`;
 const EMPTY_UNIT = `A paragraph that is not a passage of text (a lone label, a word, a date, an address), or that is already as short as its note would be, keeps its entry with statement, reason and label as empty strings and the lists empty.`;
 
@@ -66,7 +69,8 @@ A reader zooms out of the document: the full text, then the evidence sentences, 
 For every paragraph, one entry with its id, in order:
 - kind: the paragraph's job in the argument, one of: context (background, prior work), question (what is asked, or what earlier work lacks), method (what was done or built and how, data and setup), result (a measured or observed finding), analysis (an interpretation, mechanism or comparison), claim (a conclusion the document draws), limit (a limitation or open question the authors state).
 ${NOTE_FIELDS}
-- evidence: the numbers of the ${EVIDENCE} that best back the statement, ascending. Prefer sentences that state a result, a definition or a decision over sentences that only set up or list. A caption's evidence is [1].
+- evidence: the numbers of the ${EVIDENCE} that best back the statement, ascending. ${EVIDENCE_RULE} A caption's evidence is [1].
+${CAPTION}
 - see: the short ids of this section's figures, schemes and tables the paragraph discusses, 0 to ${LAYERS_SEE_MAX}, such as ["f2"]. A caption does not name its own figure.
 ${EMPTY_UNIT}
 
@@ -130,6 +134,7 @@ Write in ${name}, whatever language the title or the evidence is in. Write each 
 For every paragraph, one entry with its id, in order:
 ${NOTE_FIELDS}
 - evidence: for every evidence of the paragraph, its id and the numbers of the consecutive ${name} sentences that render those original sentences, or an empty list when none do.
+${CAPTION}
 
 ${WRITING}
 

@@ -15,9 +15,9 @@ import { SENTENCE_SPLIT_RULE } from "./sentence-split.js";
  */
 export const READING_LAYERS_PROMPT_VERSION = "reading-layers-v3";
 export const READING_LAYERS_SECTION_PROMPT_VERSION =
-  "reading-layers-section-v3";
+  "reading-layers-section-v4";
 export const READING_LAYERS_TRANSLATION_PROMPT_VERSION =
-  "reading-layers-translation-v3";
+  "reading-layers-translation-v4";
 /**
  * The file layout. Version 3 is ADR 0073's (spec 10.2); a stored file of
  * another version reads as stale (spec 10.6) and is redone.

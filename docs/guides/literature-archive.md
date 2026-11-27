@@ -37,7 +37,7 @@ CLI 等待所提交的持久任务结束；MCP 和 Web 应用边界返回任务�
 }
 ```
 
-`selector` 也可为 `{ "kind": "query", "query": LibraryQuery }`。`from_step` 可选择 `arrange`、`proofread`、`render`、`translate`、`layers`、`metadata`、`references`、`tags`，用于从该步骤重新检查并执行后续步骤（取 `translate` 时整篇重翻，取更早的步骤时文字没变的段沿用原来的译文）；固定输入、方法和人工决定均未变的成功检查点仍可复用。正常恢复不填此项，由当前输入和已保存回执决定复用。
+`selector` 也可为 `{ "kind": "query", "query": LibraryQuery }`。`from_step` 可选择 `arrange`、`proofread`、`render`、`translate`、`layers`、`metadata`、`references`、`tags`，用于从该步骤重新检查并执行后续步骤（取 `translate` 时整篇重翻，取更早的步骤时文字没变的段沿用原来的译文）；取 `translate` 或 `layers` 时只强制这一步，元数据、参考文献与标签不依赖译文和阅读层，照常按输入复用，不会因此请求外部服务；固定输入、方法和人工决定均未变的成功检查点仍可复用。正常恢复不填此项，由当前输入和已保存回执决定复用。
 
 `full` 要求正文已有部署 profile 的原始解析或可定位的已登记旧 Markdown。旧材料使用 `--mode legacy-vlm-markdown`，只要求已登记的 VLM Markdown，不要求 pipeline。页归属无法确定时报告 needs-parse。缺少这些材料时，成员回执是 `needs-parse`，不会代为解析。
 

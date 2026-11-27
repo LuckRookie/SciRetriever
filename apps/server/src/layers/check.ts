@@ -189,6 +189,11 @@ export function layersParts<T>(
   return out;
 }
 
+/** The section roles whose paragraphs the layers leave out (spec 10.2). */
+export const LAYERS_SKIPPED_ROLES: ReadonlySet<string> = new Set([
+  "keywords",
+  "end-matter",
+]);
 /**
  * What the calls are given (spec 10.3): the paragraphs in reading order with
  * short ids `pN` and numbered sentences, the headings `sN`, the figures,
@@ -245,6 +250,14 @@ export function layersPlan(
   for (const u of units) {
     const found = u.segment_ids.map((id) => segments.get(id)!);
     const first = found[0]!;
+    // Keywords and end matter (acknowledgements, declarations, funding,
+    // supplementary notices) are no part of the argument: no notes, no line.
+    if (
+      LAYERS_SKIPPED_ROLES.has(
+        roles.get(u.unit_id) ?? roles.get(first.segment_id) ?? "",
+      )
+    )
+      continue;
     const span = unitSpan(markdown, found, u.source_sha256);
     if (!span) continue;
     if (first.kind === "heading") {
@@ -273,12 +286,16 @@ export function layersPlan(
         figure: figureOf.get(u.unit_id) ?? null,
         sentences: unitSentences(u.source, first.kind),
         section_id: titled ? (first.section_id ?? null) : null,
-        annotatable: !layersTextFits(
-          flat(u.source),
-          LAYERS_STATEMENT_MAX_CJK,
-          LAYERS_STATEMENT_MAX_WORDS,
-          Number.MAX_SAFE_INTEGER,
-        ),
+        // A caption is noted only when it shows a result (prompt), so it
+        // does not count toward the coverage a document must reach.
+        annotatable:
+          kind !== "caption" &&
+          !layersTextFits(
+            flat(u.source),
+            LAYERS_STATEMENT_MAX_CJK,
+            LAYERS_STATEMENT_MAX_WORDS,
+            Number.MAX_SAFE_INTEGER,
+          ),
       },
     });
   }

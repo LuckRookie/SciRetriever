@@ -1,4 +1,4 @@
-import { archiveStepKey } from "./input-key.js";
+import { archiveStepForced, archiveStepKey } from "./input-key.js";
 import { activityContext, withActivity } from "../logging/activity.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -463,14 +463,7 @@ export class ArchiveOrchestrator {
           ? archiveTranslationStep(language, this.runtime.translate.language)
           : step,
       prior = input.current.steps.find((s) => s.step === record),
-      // Only `from_step: translate` translates every unit again; an earlier
-      // from_step keeps reusing unchanged units (spec 9.3).
-      force =
-        step === "translate" || step === "layers"
-          ? request.from_step === step
-          : request.from_step !== null &&
-            ARCHIVE_STEPS.indexOf(step) >=
-              ARCHIVE_STEPS.indexOf(request.from_step);
+      force = archiveStepForced(step, request.from_step);
     // Early stages validate their method/manual inputs in the existing publication services.
     if (
       !force &&
