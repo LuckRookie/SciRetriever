@@ -23,6 +23,7 @@ import {
   type LayersModel,
   type LayersPort,
 } from "./model.js";
+import type { ReadLayersPoint } from "./read.js";
 
 /**
  * The two leaves that are not the full text (reading-experience 3.2, 3.3):
@@ -219,6 +220,19 @@ const termsOf = (p: LayersReadPoint) => ({
   original: p.key_terms,
   translation: p.translation?.key_terms ?? [],
 });
+/** A note's sentences as 脉络 sets them: what a main note opens to in place in 概览. */
+export function noteSentencesHTML(
+  p: ReadLayersPoint,
+  port: LayersPort,
+  mode: DocumentTextMode,
+): string {
+  let out = "";
+  p.evidence.forEach((e, i) => {
+    if (e.kind === "sentence")
+      out += sentenceHTML(e, `${p.number}:${i}`, termsOf(p), port, mode);
+  });
+  return out;
+}
 
 /**
  * 脉络: every note as a 纲, the author's sentences it stands on as its 目.

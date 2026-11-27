@@ -263,6 +263,12 @@ export interface ReaderFrame {
     },
   ) => void;
   /**
+   * Set by the full-text engine once the layers are on the sheet: closes what
+   * clicks opened in 概览 or 脉络 (Esc, the depth bar's current layer); false
+   * when nothing was open.
+   */
+  foldLayers?: () => boolean;
+  /**
    * Set by the full-text engine: the reading anchor of the block holding a
    * UTF-8 offset, as `anchor()` gives it for the reading line (its PDF page
    * and region with it), so that a PDF beside the text can show it.

@@ -103,6 +103,98 @@ export interface PlacedEvidence {
   readonly block: HTMLElement | null;
 }
 
+/** A sentence as marked in a block: its words, and the translation when it has one. */
+export type MarkedSentence = Pick<Sentence, "start_utf8" | "text"> & {
+  readonly translation?: Sentence["translation"];
+};
+/** Puts the note's marks around one sentence's words under `root`; empty when not found word for word. */
+function wrap(
+  p: ReadLayersPoint,
+  i: number | string,
+  e: MarkedSentence,
+  root: HTMLElement,
+  text: string,
+  terms: readonly string[],
+  skip: string,
+): HTMLElement[] {
+  const index = indexText(root, (node) => !!node.parentElement?.closest(skip));
+  const found = locate(canon(text), index.text);
+  if (!found || found.sim < PLACE) return [];
+  const range = rangeOf(index, found.start, found.end);
+  if (!range) return [];
+  const spans: HTMLElement[] = [];
+  for (const piece of pieces(range, skip)) {
+    const span = document.createElement("span");
+    span.className = "rl-ev";
+    span.dataset.point = String(p.number);
+    span.dataset.ev = `${p.number}:${i}`;
+    if (piece instanceof HTMLElement) {
+      // Already inside another note's sentence: leave it there.
+      if (piece.parentElement?.closest(".rl-ev")) continue;
+      piece.replaceWith(span);
+      span.append(piece);
+    } else {
+      if (piece.startContainer.parentElement?.closest(".rl-ev")) continue;
+      piece.surroundContents(span);
+    }
+    spans.push(span);
+  }
+  for (const span of spans) markTerms(span, terms);
+  const first = spans[0],
+    last = spans.at(-1);
+  if (first) {
+    first.dataset.f = `ev:${p.number}:${i}`;
+    first.dataset.startUtf8 = String(e.start_utf8);
+    touched(first);
+  }
+  if (last) {
+    last.classList.add("rl-ev-end");
+    last.dataset.no = String(p.number);
+    if (p.primary) last.classList.add("rl-ring");
+  }
+  return spans;
+}
+
+/**
+ * Marks one sentence of a note in a block of the full text, or in a copy of
+ * one, as the reading shows it: the original's words, the translation's, or
+ * both (the number at the original's end only).
+ */
+export function markSentence(
+  block: HTMLElement,
+  p: ReadLayersPoint,
+  i: number | string,
+  e: MarkedSentence,
+  mode: DocumentTextMode,
+): HTMLElement[] {
+  const translation = block.querySelector<HTMLElement>(
+    ":scope > .reading-translation",
+  );
+  let spans: HTMLElement[] = [];
+  if (mode !== "translation" || !translation)
+    spans = wrap(p, i, e, block, e.text, p.key_terms, SKIP);
+  if (mode !== "original" && translation && e.translation?.text) {
+    const more = wrap(
+      p,
+      i,
+      e,
+      translation,
+      e.translation.text,
+      p.translation?.key_terms ?? [],
+      SKIP_TRANSLATED,
+    );
+    // 对照: both are marked; the number stands at the original's end only.
+    if (spans.length)
+      for (const span of more) {
+        span.classList.remove("rl-ev-end", "rl-ring");
+        delete span.dataset.no;
+        delete span.dataset.f;
+      }
+    else spans = more;
+  }
+  return spans;
+}
+
 /**
  * Wraps every sentence evidence in the text shown. A sentence that cannot be
  * found word for word (a formula written another way) is left unwrapped; its
@@ -115,64 +207,6 @@ export function wrapNotes(
 ): PlacedEvidence[] {
   clearNotes(port.article);
   const placed: PlacedEvidence[] = [];
-  const indexes = new Map<HTMLElement, ReturnType<typeof indexText>>();
-  const indexOf = (root: HTMLElement, skip: string) => {
-    let index = indexes.get(root);
-    if (!index) {
-      index = indexText(root, (node) => !!node.parentElement?.closest(skip));
-      indexes.set(root, index);
-    }
-    return index;
-  };
-  const wrap = (
-    p: ReadLayersPoint,
-    i: number,
-    e: Sentence,
-    root: HTMLElement,
-    text: string,
-    terms: readonly string[],
-    skip: string,
-  ): HTMLElement[] => {
-    const index = indexOf(root, skip);
-    const needle = canon(text);
-    const found = locate(needle, index.text);
-    if (!found || found.sim < PLACE) return [];
-    const range = rangeOf(index, found.start, found.end);
-    if (!range) return [];
-    const spans: HTMLElement[] = [];
-    for (const piece of pieces(range, skip)) {
-      const span = document.createElement("span");
-      span.className = "rl-ev";
-      span.dataset.point = String(p.number);
-      span.dataset.ev = `${p.number}:${i}`;
-      if (piece instanceof HTMLElement) {
-        // Already inside another note's sentence: leave it there.
-        if (piece.parentElement?.closest(".rl-ev")) continue;
-        piece.replaceWith(span);
-        span.append(piece);
-      } else {
-        if (piece.startContainer.parentElement?.closest(".rl-ev")) continue;
-        piece.surroundContents(span);
-      }
-      spans.push(span);
-    }
-    // The text nodes were split: this root's index no longer holds.
-    indexes.delete(root);
-    for (const span of spans) markTerms(span, terms);
-    const first = spans[0],
-      last = spans.at(-1);
-    if (first) {
-      first.dataset.f = `ev:${p.number}:${i}`;
-      first.dataset.startUtf8 = String(e.start_utf8);
-      touched(first);
-    }
-    if (last) {
-      last.classList.add("rl-ev-end");
-      last.dataset.no = String(p.number);
-      if (p.primary) last.classList.add("rl-ring");
-    }
-    return spans;
-  };
   for (const p of model.points)
     p.evidence.forEach((e, i) => {
       if (e.kind !== "sentence") return;
@@ -184,33 +218,7 @@ export function wrapNotes(
               Number(b.dataset.byteStart) < e.end_utf8 &&
               Number(b.dataset.byteEnd) > e.start_utf8,
           ) ?? null;
-      let spans: HTMLElement[] = [];
-      if (block) {
-        const translation = block.querySelector<HTMLElement>(
-          ":scope > .reading-translation",
-        );
-        if (mode !== "translation" || !translation)
-          spans = wrap(p, i, e, block, e.text, p.key_terms, SKIP);
-        if (mode !== "original" && translation && e.translation?.text) {
-          const more = wrap(
-            p,
-            i,
-            e,
-            translation,
-            e.translation.text,
-            p.translation?.key_terms ?? [],
-            SKIP_TRANSLATED,
-          );
-          // 对照: both are marked; the number stands at the original's end only.
-          if (spans.length)
-            for (const span of more) {
-              span.classList.remove("rl-ev-end", "rl-ring");
-              delete span.dataset.no;
-              delete span.dataset.f;
-            }
-          else spans = more;
-        }
-      }
+      const spans = block ? markSentence(block, p, i, e, mode) : [];
       placed.push({ point: p.number, index: i, spans, block });
     });
   return placed;

@@ -378,6 +378,54 @@
     content: "…";
     color: var(--fg3);
   }
+  /* 概览, 脉络: a click opens in place (reading-experience 3.2, 3.3). A
+     sentence becomes its whole paragraph: what the ellipses held is filled
+     in, in a lighter ink, the sentence itself in ink with its number. */
+  .rl-leaf .rl-mu-s[data-start] {
+    cursor: pointer;
+  }
+  .rl-mu-s.rl-open,
+  .rl-mu-s.rl-hid {
+    display: none;
+  }
+  .rl-para {
+    position: relative;
+    margin: 0.3em 0 0;
+    line-height: 1.7;
+    text-align: justify;
+    color: var(--fg2);
+    overflow-wrap: break-word;
+    cursor: pointer;
+  }
+  /* The paragraph's own parts (its translation's too) sit tight: no browser
+     margins, so it opens where its sentence stood. */
+  .rl-para-t :is(p, ul, ol, h1, h2, h3, h4, h5, h6) {
+    margin: 0;
+    text-indent: 0;
+    font-size: inherit;
+  }
+  .rl-para-t > * + *,
+  .rl-para-t :is(p, ul, ol) + :is(p, ul, ol) {
+    margin-top: 0.3em;
+  }
+  .rl-para .rl-ev {
+    color: var(--fg);
+  }
+  /* Chinese keeps the 目 line's own leading. */
+  .rl-para:lang(zh),
+  .rl-para:has(:lang(zh)),
+  .rl-para:has(.reading-translation) {
+    line-height: 1.85;
+    letter-spacing: 0.01em;
+  }
+  .rl-para-row > td {
+    padding: 0.2em 0 0.7em;
+    border: 0;
+  }
+  /* Under a datum or a limit its ¶n is already written. */
+  :is(.rl-para-row, li) .rl-para .rl-pn {
+    display: none;
+  }
   .rl-mu-s.rl-fig {
     display: flex;
     gap: 0.7em;

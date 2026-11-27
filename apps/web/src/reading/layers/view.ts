@@ -1,9 +1,16 @@
 import type { DocumentTextMode } from "../contract.js";
 import { changeLayer, type LayerChange } from "./change.js";
-import { outlineLeaf, overviewLeaf, relationsHTML, rulesHTML } from "./leaf.js";
+import {
+  noteSentencesHTML,
+  outlineLeaf,
+  overviewLeaf,
+  relationsHTML,
+  rulesHTML,
+} from "./leaf.js";
 import { createMap, type LayersMap } from "./map.js";
 import {
   READING_LAYERS,
+  escape,
   layersModel,
   type LayersModel,
   type LayersPort,
@@ -11,11 +18,13 @@ import {
 } from "./model.js";
 import {
   clearNotes,
+  markSentence,
   notesSide,
   wrapNotes,
+  type MarkedSentence,
   type PlacedEvidence,
 } from "./notes.js";
-import type { ReadLayers } from "./read.js";
+import type { ReadLayers, ReadLayersPoint } from "./read.js";
 
 /**
  * The reading layers on the sheet (reading-experience 3, ADR 0070): 全文 is
@@ -44,6 +53,8 @@ export interface LayersView {
   setKeyTerms(on: boolean): void;
   /** While 概览 or 脉络 shows: the first evidence of the note being read; else null. */
   readingStart(): number | null;
+  /** Closes what clicks opened in 概览 or 脉络; false when nothing was open. */
+  fold(): boolean;
   destroy(): void;
 }
 export interface LayersViewOptions {
@@ -350,6 +361,234 @@ export function attachLayers(
     });
   };
 
+  // ── 概览 and 脉络: a click opens more in place (reading-experience 3.2,
+  //    3.3). A sentence opens to its whole paragraph, a main note of 概览 to
+  //    its sentences; a click on what opened closes it. The reader stays on
+  //    the layer: only relations and the depth bar go elsewhere. ──
+  type Opened = { p: ReadLayersPoint; i: number | string; e: MarkedSentence };
+  /** The sentence a 目 line stands for: one of its note's, or a main note's ground in 概览. */
+  const lineSentence = (line: Element): Opened | null => {
+    const [n, which] = (line.getAttribute("data-ev") ?? "").split(":");
+    const p = model.byNumber.get(Number(n));
+    if (!p) return null;
+    if (which === "basis") {
+      const basis = model.primary.find((q) => q.number === p.number)?.basis;
+      if (basis?.kind !== "sentence") return null;
+      // The same sentence among the note's own carries its translation.
+      const i = p.evidence.findIndex(
+        (e) => e.kind === "sentence" && e.start_utf8 === basis.start_utf8,
+      );
+      const same = p.evidence[i];
+      return same?.kind === "sentence"
+        ? { p, i, e: same }
+        : { p, i: "basis", e: basis };
+    }
+    const e = p.evidence[Number(which)];
+    return e?.kind === "sentence" ? { p, i: Number(which), e } : null;
+  };
+  /** The author's paragraph at a place, as the reading shows it, with these sentences marked. */
+  const paragraph = (
+    start: number,
+    marks: readonly Opened[],
+  ): HTMLElement | null => {
+    const block = port.blockAt(start);
+    if (!block || block.closest(".rl-leaf")) return null;
+    const copy = block.cloneNode(true) as HTMLElement;
+    clearNotes(copy);
+    for (const x of copy.querySelectorAll(
+      ".reading-block-source, .reading-doubt, .reading-margin-note-below, .reading-untranslated, .reading-translation-marks",
+    ))
+      x.remove();
+    for (const m of marks) markSentence(copy, m.p, m.i, m.e, mode);
+    const translation = copy.querySelector(":scope > .reading-translation");
+    if (mode === "original") translation?.remove();
+    else if (mode === "translation" && translation)
+      for (const child of [...copy.children])
+        if (child !== translation) child.remove();
+    const para = el("div", "rl-para");
+    para.dataset.start = block.dataset.byteStart ?? String(start);
+    const number = el("span", "rl-pn");
+    number.innerHTML = `<i>¶${escape(block.dataset.paragraph ?? "")}</i>`;
+    const text = el("div", "rl-para-t");
+    text.append(...copy.childNodes);
+    para.append(number, text);
+    return para;
+  };
+  /** Opens a 目 line to its paragraph; the note's other lines in that paragraph open with it. */
+  const openLine = (line: HTMLElement): HTMLElement | null => {
+    const s = lineSentence(line);
+    const block = s ? port.blockAt(s.e.start_utf8) : undefined;
+    const box = line.parentElement;
+    if (!s || !block || !box) return null;
+    const from = Number(block.dataset.byteStart),
+      to = Number(block.dataset.byteEnd);
+    const lines = [
+      ...box.querySelectorAll<HTMLElement>(
+        ":scope > .rl-mu-s[data-ev]:not(.rl-open, .rl-hid)",
+      ),
+    ].filter((l) => {
+      const x = lineSentence(l);
+      return (
+        !!x && x.p === s.p && x.e.start_utf8 >= from && x.e.start_utf8 < to
+      );
+    });
+    if (!lines.includes(line)) lines.unshift(line);
+    const para = paragraph(
+      s.e.start_utf8,
+      lines.map(lineSentence).filter((x): x is Opened => !!x),
+    );
+    if (!para) return null;
+    para.dataset.lines = lines.map((l) => l.dataset.ev).join(" ");
+    lines[0]!.before(para);
+    for (const l of lines) l.classList.add("rl-open");
+    fillImages(para);
+    return para;
+  };
+  /** Closes an opened paragraph; gives back the first line it stood for, if any. */
+  const closePara = (para: HTMLElement): Element | null => {
+    const box = para.parentElement;
+    let first: Element | null = null;
+    for (const key of (para.dataset.lines ?? "").split(" ").filter(Boolean)) {
+      const line = box?.querySelector(
+        `:scope > .rl-mu-s[data-ev="${CSS.escape(key)}"]`,
+      );
+      line?.classList.remove("rl-open");
+      first ??= line ?? null;
+    }
+    const row = para.closest(".rl-para-row");
+    const host = row?.previousElementSibling ?? null;
+    (row ?? para).remove();
+    return first ?? host;
+  };
+  /** 概览: a ¶n after a datum or a limit opens that paragraph under it. */
+  const toggleSource = (a: HTMLElement): Element | null => {
+    const start = Number(a.dataset.start);
+    const row = a.closest("tr"),
+      item = row ?? a.closest("li, p");
+    if (!item || !Number.isFinite(start)) return null;
+    const open = row
+      ? row.nextElementSibling?.matches(`.rl-para-row[data-from="${start}"]`)
+        ? row.nextElementSibling
+        : null
+      : item.querySelector(`:scope > .rl-para[data-from="${start}"]`);
+    if (open) {
+      open.remove();
+      return item;
+    }
+    const para = paragraph(start, []);
+    if (!para) return null;
+    if (row) {
+      const tr = el("tr", "rl-para-row");
+      tr.dataset.from = String(start);
+      const td = el("td", "") as HTMLTableCellElement;
+      td.colSpan = row.children.length;
+      td.append(para);
+      tr.append(td);
+      row.after(tr);
+    } else {
+      para.dataset.from = String(start);
+      item.append(para);
+    }
+    fillImages(para);
+    return item;
+  };
+  /** A note pressed: 脉络 opens (or closes) all its sentences; 概览 opens it to its sentences. */
+  const toggleNote = (gang: HTMLElement): void => {
+    const box = gang.querySelector<HTMLElement>(":scope > .rl-mu");
+    if (!box) return;
+    if (layer === "outline") {
+      const shut = [
+        ...box.querySelectorAll<HTMLElement>(
+          ":scope > .rl-mu-s[data-ev]:not(.rl-open)",
+        ),
+      ];
+      if (!shut.length)
+        for (const para of box.querySelectorAll<HTMLElement>(
+          ":scope > .rl-para",
+        ))
+          closePara(para);
+      else
+        for (const line of shut)
+          if (line.isConnected && !line.classList.contains("rl-open"))
+            openLine(line);
+      return;
+    }
+    // Anything open under the note: this click closes it all.
+    const more = box.querySelector(":scope > .rl-more");
+    const paras = box.querySelectorAll<HTMLElement>(":scope > .rl-para");
+    const ground = box.querySelector<HTMLElement>(":scope > .rl-mu-s.rl-cut");
+    if (more || paras.length) {
+      for (const para of paras) closePara(para);
+      more?.remove();
+      ground?.classList.remove("rl-hid");
+      return;
+    }
+    const p = model.byNumber.get(Number(gang.dataset.point));
+    if (!p) return;
+    const sentences = p.evidence.filter((e) => e.kind === "sentence").length;
+    // One sentence: the note opens straight to its paragraph.
+    if (sentences <= 1 && ground) {
+      openLine(ground);
+      return;
+    }
+    const div = el("div", "rl-more");
+    div.innerHTML = noteSentencesHTML(p, port, mode);
+    if (ground) {
+      ground.after(div);
+      ground.classList.add("rl-hid");
+    } else box.prepend(div);
+  };
+  /**
+   * Changes what is open while the place pressed stays where it was on the
+   * screen. The browser's own scroll anchoring is held off meanwhile: it
+   * would move the desk by its own choice of anchor (spec 4.2).
+   */
+  const keepPlace = (at: Element, change: () => Element | null | void) => {
+    const before = at.getBoundingClientRect().top;
+    const anchoring = port.body.style.overflowAnchor;
+    port.body.style.overflowAnchor = "none";
+    const after = change() || at;
+    if (after.isConnected)
+      port.body.scrollTop += after.getBoundingClientRect().top - before;
+    port.body.style.overflowAnchor = anchoring;
+    place();
+  };
+  /** The opened paragraph nearest the reading line: where 全文 opens from here. */
+  const openedStart = (): number | null => {
+    const y = third();
+    let best: number | null = null,
+      distance = Infinity;
+    for (const para of column.querySelectorAll<HTMLElement>(".rl-para")) {
+      const r = para.getBoundingClientRect();
+      const d = y < r.top ? r.top - y : y > r.bottom ? y - r.bottom : 0;
+      if (d < distance && Number.isFinite(Number(para.dataset.start))) {
+        distance = d;
+        best = Number(para.dataset.start);
+      }
+    }
+    return best;
+  };
+  const fold = (): boolean => {
+    if (layer !== "overview" && layer !== "outline") return false;
+    const opened = column.querySelectorAll(".rl-para, .rl-more, .rl-para-row");
+    if (!opened.length) return false;
+    const point = reading();
+    const at =
+      (point != null &&
+        column.querySelector(`.rl-gang[data-point="${point}"]`)) ||
+      opened[0]!.closest(".rl-gang") ||
+      column;
+    keepPlace(at, () => {
+      for (const x of column.querySelectorAll(
+        ".rl-para-row, .rl-more, .rl-para",
+      ))
+        x.remove();
+      for (const x of column.querySelectorAll(".rl-open, .rl-hid"))
+        x.classList.remove("rl-open", "rl-hid");
+    });
+    return true;
+  };
+
   function setLayer(
     next: ReadingLayer,
     target?: {
@@ -361,7 +600,13 @@ export function attachLayers(
     if (destroyed) return;
     change?.finish();
     const point = target?.point === undefined ? reading() : target.point;
-    const goal = { point, start: target?.start ?? null };
+    // From 概览 or 脉络 with a paragraph open, 全文 opens at that paragraph.
+    const start =
+      target?.start ??
+      (!target && next === "full" && layer !== "full" && layer !== "map"
+        ? openedStart()
+        : null);
+    const goal = { point, start };
     if (next === layer && !target) return;
     const from = layer;
     const animated =
@@ -424,18 +669,28 @@ export function attachLayers(
     if (go) return setLayer(go.dataset.layerGo as ReadingLayer);
     const zoom = t.closest<HTMLElement>("[data-zoom]");
     if (zoom) return enlarge(zoom.dataset.zoom!);
+    const selecting = !!getSelection()?.toString();
+    // What a click opened: a click on it closes it (a link inside still works).
+    const para = t.closest<HTMLElement>(".rl-leaf .rl-para");
+    if (para && !t.closest("a")) {
+      if (!selecting) keepPlace(para, () => closePara(para));
+      return;
+    }
+    // 精读建议: a figure enlarges; a section is where to begin reading, in 全文.
     const where = t.closest<HTMLElement>("[data-place]");
     if (where) {
       const [, id] = where.dataset.place!.split(/:(.*)/su) as [string, string];
-      const start = port.figure(id)?.start ?? options.offsetOf(id);
-      return setLayer("full", { point: null, start });
+      if (port.figure(id)) return enlarge(id);
+      return setLayer("full", { point: null, start: options.offsetOf(id) });
     }
+    // 概览: a datum's or a limit's ¶n opens its paragraph under it.
     const source = t.closest<HTMLElement>("a[data-start]");
     if (source) {
       const start = Number(source.dataset.start);
-      if (source.dataset.start && Number.isFinite(start))
-        setLayer("full", { point: null, start });
-      return;
+      if (!source.dataset.start || !Number.isFinite(start)) return;
+      options.onPick?.(start);
+      if (layer === "full") return;
+      return keepPlace(source, () => toggleSource(source));
     }
     const link = t.closest<HTMLElement>(".rl-pi-x a, .rl-mu-s.rl-fig a");
     if (link) {
@@ -471,28 +726,26 @@ export function attachLayers(
       if (start !== null) options.onPick?.(start);
       return;
     }
+    if (layer === "full" || selecting) return;
+    // 概览, 脉络: a sentence opens to its paragraph; a note to its sentences.
+    // Beside a PDF, the PDF shows the place as well.
     const sentence = t.closest<HTMLElement>(".rl-mu-s[data-start]");
-    if (sentence && options.onPick?.(Number(sentence.dataset.start))) return;
-    const pressed = t.closest<HTMLElement>(".rl-gang, .rl-pi[data-point]");
-    if (pressed && !getSelection()?.toString()) {
-      const start = firstStart(Number(pressed.dataset.point));
-      if (start !== null && options.onPick?.(start)) {
-        light(pressed.dataset.point ?? null);
-        return;
-      }
-    }
     if (sentence) {
-      const gang = sentence.closest<HTMLElement>(".rl-gang");
-      return setLayer("full", {
-        point: gang ? Number(gang.dataset.point) : null,
-        start: Number(sentence.dataset.start),
-      });
+      options.onPick?.(Number(sentence.dataset.start));
+      return keepPlace(sentence, () => openLine(sentence));
     }
-    const gang = t.closest<HTMLElement>(".rl-gang");
-    if (gang && !getSelection()?.toString())
-      setLayer(layer === "overview" ? "outline" : "full", {
-        point: Number(gang.dataset.point),
-      });
+    const pressed = t.closest<HTMLElement>(".rl-gang, .rl-pi[data-point]");
+    if (!pressed) return;
+    const number = Number(pressed.dataset.point);
+    const start = firstStart(number);
+    if (start !== null) options.onPick?.(start);
+    const gang = column.querySelector<HTMLElement>(
+      `.rl-gang[data-point="${number}"]`,
+    );
+    if (gang) {
+      keepPlace(gang, () => toggleNote(gang));
+      light(String(number));
+    }
   };
   sheet.addEventListener("mouseover", over);
   sheet.addEventListener("click", click);
@@ -574,6 +827,7 @@ export function attachLayers(
       const point = reading() ?? model.points[0]?.number ?? null;
       return point === null ? null : firstStart(point);
     },
+    fold,
     destroy() {
       destroyed = true;
       change?.finish();

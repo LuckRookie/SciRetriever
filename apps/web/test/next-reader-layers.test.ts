@@ -87,11 +87,47 @@ it("shows the notes beside the full text and the other layers of an annotated co
     expect(await page.locator(`${sheet} .rl-gang`).count()).toBe(primary);
     expect(await page.locator(`${sheet} .rl-dt tbody tr`).count()).toBe(3);
     await shot(page, "03-overview");
-    // A main note goes to 脉络, a sentence there to 全文.
+    // A click opens more in place (reading-experience 3.2, 3.3): a main note
+    // to its sentences or its paragraph, and the reader stays on 概览.
+    const opened = `${sheet} :is(.rl-para, .rl-more)`;
     await page.locator(`${sheet} .rl-gang-t`).nth(1).click();
+    await page.locator(opened).first().waitFor();
+    expect(page.url()).toContain("layer=overview");
+    await page.locator(`${sheet} .rl-gang-t`).nth(1).click();
+    expect(await page.locator(opened).count()).toBe(0);
+    // 脉络: a sentence opens to its whole paragraph, marked; a click on it
+    // closes it; Esc closes everything opened.
+    await view(page, "脉络").click();
     await shows(page, "outline");
     await settled(page);
-    await page.locator(`${sheet} .rl-mu-s`).nth(3).click();
+    const line = page.locator(`${sheet} .rl-mu-s[data-start]`).nth(3);
+    const top = await line.evaluate((n) => n.getBoundingClientRect().top);
+    await line.click();
+    const para = page.locator(`${sheet} .rl-para`);
+    await para.first().waitFor();
+    expect(page.url()).toContain("layer=outline");
+    expect(await para.locator(".rl-ev").count()).toBeGreaterThan(0);
+    expect(
+      Math.abs(
+        (await para.first().evaluate((n) => n.getBoundingClientRect().top)) -
+          top,
+      ),
+    ).toBeLessThan(2);
+    await shot(page, "04-opened-in-place");
+    await para.first().click();
+    expect(await para.count()).toBe(0);
+    await line.click();
+    await para.first().waitFor();
+    await page.keyboard.press("Escape");
+    expect(await para.count()).toBe(0);
+    // Opened, then 全文 by the bar: the full text at that paragraph.
+    await line.click();
+    await para.first().waitFor();
+    await view(page, "脉络").click();
+    expect(await para.count()).toBe(0);
+    await line.click();
+    await para.first().waitFor();
+    await view(page, "全文").click();
     await shows(page, "full");
     await settled(page);
     await shot(page, "04-back-to-full");

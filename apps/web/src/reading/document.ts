@@ -1584,6 +1584,7 @@ export async function renderDocument(
     frame.layerWheel = (deltaY) => view.wheel(deltaY);
     frame.setKeyTerms = (on) => view.setKeyTerms(on);
     frame.layerStart = () => view.readingStart();
+    frame.foldLayers = () => view.fold();
     ctx.signal.addEventListener("abort", () => view.destroy(), { once: true });
     frame.onLayers?.(true);
     frame.onLayer?.(view.layer());

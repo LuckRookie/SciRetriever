@@ -2531,6 +2531,8 @@ export default function Reader() {
       if (documentLink) return (void setDocumentLink(null), true);
       if (doubt) return (void setDoubt(null), true);
       if (zoomImage) return (void setZoomImage(null), true);
+      // What clicks opened in 概览 or 脉络 (reading-experience 3.2, 3.3).
+      if (mode === "doc" && frame.current?.foldLayers?.()) return true;
       if (layoutPosition.outline && mode !== "results" && mode !== "edit") {
         toggleOutline();
         return true;
@@ -2868,6 +2870,15 @@ export default function Reader() {
                 onWheel={(event) => {
                   if (frame.current?.layerWheel?.(event.deltaY))
                     event.stopPropagation();
+                }}
+                // The layer already shown, pressed again: what clicks opened
+                // in it closes (reading-experience 3.2, 3.3). Captured: the
+                // tab's own press handling keeps the click to itself.
+                onClickCapture={(event) => {
+                  if (
+                    (event.target as Element).closest(".ui-tab[data-selected]")
+                  )
+                    frame.current?.foldLayers?.();
                 }}
               >
                 <SegmentedControl
