@@ -355,6 +355,10 @@ export default function Reader() {
     ],
     enabled: !!documentRef,
     retry: false,
+    // Asked anew on every opening, as the engines ask: what is published
+    // after the version (translation, layers) may have come meanwhile.
+    staleTime: 0,
+    refetchOnMount: "always",
     queryFn: async ({ signal }) => {
       const request = {
         document_version_id: documentRef!.document_version_id,
@@ -424,6 +428,31 @@ export default function Reader() {
     languageSeen.current = chosenLanguage;
     retry((value) => value + 1);
   }, [chosenLanguage]);
+  // Building the paper publishes its translation and reading layers after
+  // the version (technical 04 §9.3): when they come while it is open, the
+  // engines read the version again so the notes and layers are there, not
+  // only the depth bar.
+  const publishedKey = translationQuery.data
+    ? [
+        documentRef?.document_version_id,
+        translationQuery.data.translation?.state,
+        translationQuery.data.layers?.state,
+        translationQuery.data.layers?.points,
+      ].join("|")
+    : null;
+  const publishedSeen = useRef<string | null>(null);
+  useEffect(() => {
+    if (publishedKey === null) return;
+    const before = publishedSeen.current;
+    publishedSeen.current = publishedKey;
+    // The same version, something new published: read it again.
+    if (
+      before !== null &&
+      before !== publishedKey &&
+      before.split("|")[0] === publishedKey.split("|")[0]
+    )
+      retry((value) => value + 1);
+  }, [publishedKey]);
   useEffect(() => {
     if (!translating) return;
     const timer = setInterval(() => void translationQuery.refetch(), 5000);

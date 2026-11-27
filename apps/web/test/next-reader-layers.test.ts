@@ -2,6 +2,7 @@ import { join } from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { nextWorkspace } from "./next-workspace-fixture.js";
+import { readerToLibrary, reopenPaper } from "./reader-controls.js";
 import { LAYERS_POINTS, LAYERS_TEXT, storedLayers } from "./stored-layers.js";
 
 /**
@@ -355,6 +356,44 @@ it("puts the PDF beside the reading copy with a double click on 读, each page f
     await expect.poll(() => page.url()).toContain("reader=pdf");
     await expect.poll(() => left.count()).toBe(0);
     expect(errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 180_000);
+
+it("reads layers published after the paper was first opened in the session (reading-experience 3.9)", async () => {
+  const w = await nextWorkspace({
+    ready: "body",
+    setup: async (env) => env.setText(LAYERS_TEXT),
+  });
+  try {
+    const page = w.page,
+      id = w.env.parseRequest.literature_id;
+    await page.setViewportSize({ width: 1440, height: 900 });
+    // Opened while the paper is being parsed: the text is there, its layers
+    // come a step later on the same version (technical 04 §9.3).
+    const fake = await storedLayers(page, { state: "none", translated: false });
+    await page.goto(`${w.origin}/?literature=${id}&reader=doc`);
+    await page.locator('.react-reader[data-reading-ready="true"]').waitFor();
+    await page.locator(`${sheet} article`).waitFor();
+    expect(await page.getByRole("tablist", { name: "读到多细" }).count()).toBe(
+      0,
+    );
+    fake.state = "complete";
+    // Back to the paper in the same session: the notes are there and the
+    // depth bar and 导图 work, not only shown.
+    await readerToLibrary(page);
+    await reopenPaper(page, "Synthetic literature workbench");
+    await expect
+      .poll(() => page.locator(`${sheet} .rl-side .rl-pi`).count(), {
+        timeout: 20_000,
+      })
+      .toBe(LAYERS_POINTS.length);
+    await view(page, "概览").click();
+    await shows(page, "overview");
+    await settled(page);
+    await mapButton(page).click();
+    await shows(page, "map");
   } finally {
     await w.close();
   }

@@ -37,13 +37,15 @@ const operations: Record<DocumentReadOperation, string> = {
 /**
  * Session memory (spec 5.1), cleared when the page closes. A document version
  * never changes, so its reads are kept by version, least recently used out
- * first; verified PDF bytes are kept by `pdf-bytes.ts`.
+ * first; verified PDF bytes are kept by `pdf-bytes.ts`. `describe` is not
+ * kept: it also says whether the version has a translation and reading
+ * layers, which building the paper publishes after the version (technical 04
+ * §9.3), so a paper opened while it was being built would never show them.
  */
 const versionReads = new Map<string, { value: unknown; size: number }>();
 let versionReadSize = 0;
 const VERSION_READ_LIMIT = 64 * 1024 * 1024;
 const versionBound = new Set<DocumentReadOperation>([
-  "describe",
   "outline",
   "segments",
   "resources",
