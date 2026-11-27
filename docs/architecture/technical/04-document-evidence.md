@@ -1035,7 +1035,7 @@ HTTP 使用 `protocol_version: 1` 封套与现有维护认证；任务进度与�
 
 ## 10. 阅读层：概览与脉络
 
-依据 [ADR 0069](../decisions/0069-reading-layers-as-one-folded-page.md)、[ADR 0070](../decisions/0070-book-style-annotated-copy.md) 与 [ADR 0073](../decisions/0073-reading-layers-written-paragraph-by-paragraph.md)；决定的理由见这几份 ADR。版本 3（按段写）是目标，尚未实现（计划 28 的 09 块）。阅读页上三层的样子与换层见[阅读体验第 3 节](../web/reading-experience.md#3-视图)。
+依据 [ADR 0069](../decisions/0069-reading-layers-as-one-folded-page.md)、[ADR 0070](../decisions/0070-book-style-annotated-copy.md) 与 [ADR 0073](../decisions/0073-reading-layers-written-paragraph-by-paragraph.md)；决定的理由见这几份 ADR。版本 3（按段写）已实现（计划 28 的 09 块 A），只用假模型验证过；真实文献上的质量与花费见计划 28 的 09 块。阅读页上三层的样子与换层见[阅读体验第 3 节](../web/reading-experience.md#3-视图)。
 
 ### 10.1 范围
 
@@ -1049,7 +1049,9 @@ HTTP 使用 `protocol_version: 1` 封套与现有维护认证；任务进度与�
 
 一份阅读层是下面这些，别的都由它与全文算出，不另存。
 
-- **段**：这一步的单位是 9.2 的单元里正文的那些：段落、列表项、图注、表题，不含标题、作者行、参考文献与首页的文章信息。下文“段”都指这样的单元，`pN` 是它在这次输入里的短编号。
+- **段**：这一步的单位是 9.2 的单元里正文的那些：段落、列表项、图注、表题，不含标题、作者行、参考文献与首页的文章信息。下文“段”都指这样的单元，`pN` 是它在这次输入里的短编号。脚注单元也是段（输入里记 `footnote`）；图注既是段，又随它的图表出现在图表一行里。
+- **可批的段**：比一句批语长的段，即含中日韩文字时这些字多于 40 个、否则多于 20 个词。10.3 的三分之二按可批的段算；更短的段模型可以不写，写了照存，不计入分子。
+- **节**：段按它第一个片段的 `section_id` 归节，节的次序是节里第一段的位置；有标题的文献里落在任何章节之外的段归 `section_id` 为 null 的一节。没有段的章节不调用、没有节旨，只在目录里出现。
 - **批语** `points`：按全文顺序，每一段至多一条；不是一段文字的单元（只有一个标签、一个词、日期或地址）和本身已经和一句批语一样短的段没有批语。每条：
   - `number`：从 1 起连续，只作内部编号；界面与 Markdown 用段号（`paragraph`，读取时算出）。
   - `unit_id`：它所批的段。
@@ -1069,7 +1071,9 @@ HTTP 使用 `protocol_version: 1` 封套与现有维护认证；任务进度与�
   - `limits`：0 到 5 条，每条 `text`（不超过 200 个码点）与 `units`；只写作者自己写出的局限与未决之处。没有就是“原文未给出”。
   - `advice`：一段，不超过 300 个码点；资料没有给出时 `text` 为 null，并记 `not_given`。另给它提到的去处 `places`，至多 6 个：每个是文字里逐字出现的一段（不超过 40 个码点）与它指向的章节标题或图表的片段编号。逐字找不到或所指不存在的丢掉。
 - **关键数据** `data`：0 到 8 行，每行 `quantity`（不超过 60 个码点）、`value`（带单位，不超过 60 个码点）、`source`（一个段的单元编号，或一张表的片段编号）。`value` 里的每个数字都要在 `source` 的文字里找到并且前后不连着别的数字，否则这一行丢掉。
-- 丢掉了多少，按项记入步骤输出与阅读层文件的 `dropped`。
+- 丢掉了多少，按项记入步骤输出与阅读层文件的 `dropped`：`unanswered`（所在的一份两次都没有合格回答，或回答漏了它）、`points`（批语超长或没有依据留下，整条丢掉）、`evidence`、`key_terms`、`kinds`、`labels`、`reasons`、`see`、`sections`、`relations`、`primary`、`digest_units`、`data`、`places`、`limits`。
+- 题在批语里“逐字找得到”：连续空白算一个、拉丁字母不分大小写，其余逐字。
+- 文件里 `sections` 只存留下的节旨；`basis` 照存（主干为第一条依据，其余为 null）。一份文件至多 2,000 条批语（`LAYERS_POINTS_MAX`；长文档不做阅读层）。
 
 ### 10.3 作为建档的一步
 
@@ -1080,12 +1084,20 @@ HTTP 使用 `protocol_version: 1` 封套与现有维护认证；任务进度与�
   - 送出：题名；摘要（文档结构里摘要一节的各段，作背景；没有时为空）；全文的目录，各章节标题前写 `sN`，这一节前加 `▶`；这一节的各段，每段一行 `[pN] 段落|列表项|图注`，其下每句前写句号；这一节的图表，每件一行 `[fN] figure|scheme|table: 图注`。`pN`、`fN`、`sN` 在全篇里唯一。
   - 回答：`{section: {statement, label}, units: [{id, kind, statement, reason, label, evidence, key_terms, see}]}`，每段恰好一项、按顺序；`evidence` 是句号的列表，`see` 是 `fN` 的列表。没有批语的段 `statement` 为空字符串。
   - 一节超过 40 段或 12,000 个码点时分成几份，每份段数大致相等，各份并行；这一节的节旨另用一次调用，只送这一节各段的批语（`reading-layers-section-v3` 的“节旨”写法）。
+- 分节调用与节旨调用的输入是纯文本；目录各标题按级别相对最高一级缩进。摘要取角色为 `abstract` 的段，没有时取标题为 Abstract、Summary、摘要、要旨、초록 的那一节的段。一份的输入首行之后写 `This is part i of n of this section: paragraphs pA to pB.`，这时回答的节旨留空。
+- 分节回答的核对：句号不存在或重复的逐个丢掉，余下的按大小排好；超过上限（2 句，段有 7 句以上时 3 句）的丢掉靠后的；不连续的句号各成一条依据，一条批语至多 3 段句子依据，另加图注自己的图表一条。`see` 只认这一节的图表、不认图注自己的那件，重复的与第 4 件起丢掉。
 - **全篇的调用**（`reading-layers-v3`），在各节之后一次：
   - 送出：题名；摘要；按章节排出各节的 `sN`、标题与节旨，其下每段一行 `[pN] 批语`；图表各一行 `[fN]` 与图注。不送全文。
   - 回答：`{digest: {summary, limits, advice}, primary: [pN…], relations: [{from: pN, word, targets: [pN…]}], data: [{quantity, value, source}]}`；`source` 写 `pN` 或表的 `fN`，`places` 的去处写 `sN` 或 `fN`。
 - **核对**全部由程序做，不改写模型写的文字（ADR 0073 第 7 节）：短编号、句号存在；句号连续的合成一条依据；长度、题与重点词按 10.2 的规则；关系与主干指向存在的批语；`data` 的数字在出处里逐字找得到。不过的那一项丢掉，计入 `dropped`。
 - **重试**：每次调用的回答先按固定的 schema 检查。不合法的再请求一次；被输出上限截断的，分节调用把这一份对半拆开再请求，全篇调用再请求一次。分节调用两次都不合法的，这一份的段没有批语；全篇调用两次都不合法的，这一步失败。
+  - “不合法”：不是所要的结构，或回答里认得出的段不到这一份的一半。
+  - 对半拆开的两半各作一份请求（各有一次重试），再被截断的继续对半拆，直到一段；一段被截断再请求一次。拆开过的节与本来就分份的节一样，节旨另用一次调用（两次不合格时这一节没有节旨，计入 `sections`）。
+  - 主干：不是批语的段号与重复的丢掉，多于 5 条时按号数留前 5 条。关系：`see` 算在每段 3 条之内，全篇的关系填满为止；`word` 不在五种里（`see` 不由全篇给出）、`from` 或任一目标不是批语、指向自己、目标重复或超过 5 个的，整条丢掉。
 - **结果**：有批语的段不少于可批的段的三分之二，主干不少于 3 条，`summary` 不为空：`done`，写出文件并登记。否则 `failed`，原因 `layers-incomplete`（带可批的段数、有批语的段数、主干数、`summary` 是否为空）；模型不可用为 `layers-unavailable`。失败时不发布阅读层。
+  - 各节写完后有批语的段已不足三分之二时，不再做全篇的调用，直接 `layers-incomplete`。
+  - 没有配置模型，或分节调用一次合乎 schema 的回答也没有得到（请求失败与不合 schema 的回答在模型层同为失败），为 `layers-unavailable`；各节有了回答而全篇调用两次都不合格，为 `layers-incomplete`。
+  - 回执 `output.layers`：完成时 `{status, reason, redone, annotatable, points, sections, primary, dropped, sha256, translation}`，失败时另有 `annotated` 与 `summary_missing`；`stats` 记 `pages`、`units`（段数）、`annotatable`、`sections`、`figures`、`body_code_points` 与 `requested`。
 - **失败不挡全文**：这一步失败不中断后面的步骤，产生的问题不影响文献是否就绪，与翻译一步相同。问题进入需处理；恢复建档时重做这一步。
 - **用量**：各次调用的调用数与 token 记入这一步的尝试记录；用量估算多出 `layers` 一项。它与其他步骤共用全进程的模型名额，不另加名额。
 
@@ -1107,6 +1119,11 @@ HTTP 使用 `protocol_version: 1` 封套与现有维护认证；任务进度与�
 - 段与原文版本一一对应，类别取原文版本的。
 - 译文位置绑定译文文件的 sha256。译文重新发布之后，旧的位置不再使用，读取时按“没有确认”处理（10.7），再次建档时只重做这一部分。
 - 库里的译文缺译的段，它的译文版本批语为空。
+- 实现时定下的细节：
+  - 两次调用的输入都是 JSON。分节调用送 `{title, section, part, paragraphs: [{id, kind, sentences: [{n, text}], evidence: [{id, original}]}]}`：`section` 是标题在库里的译文（缺译时用原文），只送原文版本有批语、库里有译文的段；依据按原文版本的句子依据编为 `e1`、`e2`…，回答按这些编号给句号。分份与对半拆开同原文版本，按译文的码点数分；拆开过的节，节旨用 10.3 的节旨调用从译文版本的批语写出，只附题名与这一节标题的译文。图注的译文整段算一句。
+  - 全篇调用送 `{title, sections: [{heading, line, notes: [{id, note}]}], write}`；`write` 是原文版本的提要、各条局限（`L1`…）、精读建议与它的各个去处（`P1`…）、各行数据的 `quantity`（`Q1`…），回答按这些编号逐项写，以保持与原文版本按下标对齐。
+  - 译文版本的重点词是它自己的（在它的批语里按 `key-term-match-v1` 找得到，至多 2 个），不与原文的重点词一一对应。题不合格丢掉时，读取用原文版本的题。
+  - 回执 `output.layers.translation`：`{status: done|incomplete|not-needed, target_language, translation_sha256, points, translated_points, sections, translated_sections, digest, translated_digest, evidence, aligned, dropped}`，`dropped` 计 `points`、`sections`、`reasons`、`labels`、`key_terms`、`evidence`、`places`。
 
 ### 10.6 全文改动之后
 
@@ -1132,6 +1149,9 @@ HTTP 使用 `protocol_version: 1` 封套与现有维护认证；任务进度与�
 - 没有阅读层（`none`、`stale`、`not-applicable`）时，`layers` 操作返回 `layers-unavailable`（HTTP 409），带 `state` 与 `reason`。
 - 结果都带 `machine_written: true`、`model` 与 `prompt_version`。
 - 导出：`layers` 操作加 `format: "markdown"` 时返回一份 Markdown（`outline` 与 JSON 用同一组 `limit` 与 `cursor`，第一页带题名与提要）：题名、提要、各章节标题与节旨、每段的批语与理由（前写段号）与其下以引用块排出的依据。文首一行写明批语与提要是机器写的。`text` 三种取值同样适用。
+- 实现时定下的细节：
+  - `overview.sections` 列出有批语或有节旨的每一节，次序取它标题片段的位置（没有标题时取它第一段的位置）；没有节旨的节 `statement` 与 `label` 为 null。`outline` 每页的 `sections` 是这一页的批语所属各节的节旨，形状相同。节旨在 `translation` 下换成译文、在 `bilingual` 下另给 `translation: {statement, label}`，没有译文的计入 `untranslated`。
+  - Markdown 文首依次是机器说明、题名、`## 提要`、`## 数据`、`## 局限`、`## 精读建议`，不另列主干；各节是 `## 标题` 与一行 `*节旨：…*`；每条批语一段 `**¶段号** ● 〔类别〕批语 理由`（● 只在主干上），关系写成 `（承接 ¶41；见 图 ¶12）`，图表以它的类别与段号指出。机器说明为“批语与提要由机器写成，不是证据；依据是原文里的句子与图表。”
 - 重点词标在哪几个字上，由规则 `key-term-match-v1` 在显示时算出，这条规则只有一份实现，放在 contracts 包里供服务端与网页共用：拉丁文字不分大小写、从词的开头匹配，词尾允许多一个 `s` 或 `es`；中日韩文字逐字匹配。
 
 ### 10.8 验证
