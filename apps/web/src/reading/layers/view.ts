@@ -128,7 +128,7 @@ export function attachLayers(
       // A picture not kept leaves its figure's other pictures; a figure
       // with none left is taken away.
       const drop = () => {
-        const plate = img.closest(".rl-plate, .rl-oplate");
+        const plate = img.closest(".rl-plate, .rl-oplate, .rl-mplate");
         img.remove();
         if (plate && !plate.querySelector("img")) plate.remove();
         place();
@@ -181,7 +181,7 @@ export function attachLayers(
   const renderLeaf = () => {
     const made =
       layer === "outline"
-        ? outlineLeaf(model, port, mode)
+        ? outlineLeaf(model, port, mode, margin())
         : overviewLeaf(model, port, mode, options.offsetOf);
     column.innerHTML = made.column;
     side.innerHTML = margin() ? made.side : "";
@@ -441,14 +441,17 @@ export function attachLayers(
     if (link) {
       if (link.dataset.fig) {
         const figure = port.figure(link.dataset.fig);
-        // 全文: the figure in the text; 脉络: its plate under the first note
-        // that names it; otherwise the picture enlarged.
+        // 全文: the figure in the text; 脉络: its plate beside (or under) the
+        // first note that names it; otherwise the picture enlarged.
         const block =
           layer === "full" && figure
             ? port.blockAt(figure.start)
-            : column.querySelector<HTMLElement>(
+            : (column.querySelector<HTMLElement>(
                 `.rl-plate[data-fig="${CSS.escape(link.dataset.fig)}"]`,
-              );
+              ) ??
+              side.querySelector<HTMLElement>(
+                `.rl-mplate[data-fig="${CSS.escape(link.dataset.fig)}"]`,
+              ));
         if (block) reveal(block, true);
         else enlarge(link.dataset.fig);
       } else if (link.dataset.point) {

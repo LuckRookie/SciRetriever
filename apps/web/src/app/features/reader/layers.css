@@ -419,6 +419,7 @@
   }
   .rl-plate img:not([src]),
   .rl-oplate img:not([src]),
+  .rl-mplate img:not([src]),
   .rl-ms-plate img:not([src]) {
     min-height: 80px;
     background: var(--reader-skeleton);
@@ -435,6 +436,7 @@
   }
   .rl-cap b,
   .rl-oplate figcaption b,
+  .rl-mplate figcaption b,
   .rl-ms-plate figcaption b {
     font-weight: 650;
     color: var(--fg);
@@ -442,12 +444,12 @@
   }
   /* A plate is printed on the same paper: its white takes the paper's colour. */
   :root:not([data-theme="dark"], [data-theme="candle"])
-    :is(.rl-plate, .rl-oplate, .rl-ms-plate)
+    :is(.rl-plate, .rl-oplate, .rl-mplate, .rl-ms-plate)
     img {
     mix-blend-mode: multiply;
   }
   :root:is([data-theme="dark"], [data-theme="candle"])
-    :is(.rl-plate, .rl-oplate, .rl-ms-plate)
+    :is(.rl-plate, .rl-oplate, .rl-mplate, .rl-ms-plate)
     img {
     filter: brightness(0.86) contrast(1.04);
   }
@@ -605,10 +607,17 @@
   /* In the narrow margin a figure is a small plate beside its note: its
      pictures side by side, none taller than 200 px, each drawn whole
      inside its box (a tall structure drawing stays narrow). Click enlarges. */
-  .rl-oplate .rl-panels {
+  /* 脉络: a note's figure in its margin, under its kind and relations. */
+  .rl-mplate {
+    margin: 8px 0 0;
+  }
+  .rl-mword {
+    margin-right: 0.3em;
+  }
+  :is(.rl-oplate, .rl-mplate) .rl-panels {
     gap: 6px;
   }
-  .rl-oplate img {
+  :is(.rl-oplate, .rl-mplate) img {
     display: block;
     flex: 1 1 0;
     min-width: 0;
@@ -620,6 +629,7 @@
     cursor: zoom-in;
   }
   .rl-oplate figcaption,
+  .rl-mplate figcaption,
   .rl-ms-plate figcaption {
     margin: 6px 0 0;
     font-size: 13px;

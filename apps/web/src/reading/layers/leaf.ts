@@ -52,8 +52,16 @@ export const relationsHTML = (
   p: LayersReadPoint,
   port: LayersPort,
   mode: DocumentTextMode,
+  drawn: ReadonlySet<string> = new Set(),
 ) =>
   p.relations
+    .map((r) => ({
+      word: r.word,
+      targets: r.targets.filter(
+        (t) => t.kind === "point" || !drawn.has(t.segment_id),
+      ),
+    }))
+    .filter((r) => r.targets.length > 0)
     .map(
       (r) =>
         `<span>${RELATION_NAMES[r.word]} ${r.targets
@@ -147,16 +155,82 @@ function figureHTML(
     `<p class="rl-cap">${captionHTML(name, parts.rest)}</p></figure>`
   );
 }
+/** The figures a note stands on and points to, each with the word that points (none for its ground). */
+function namedFigures(
+  p: LayersReadPoint,
+  ground: readonly {
+    segment_id: string;
+    block_kind: string;
+    caption: string | null;
+  }[],
+): { id: string; kind: string; caption: string | null; word: string | null }[] {
+  return [
+    ...ground.map((g) => ({
+      id: g.segment_id,
+      kind: g.block_kind,
+      caption: g.caption,
+      word: null,
+    })),
+    ...p.relations.flatMap((r) =>
+      r.targets.flatMap((t) =>
+        t.kind === "point"
+          ? []
+          : [
+              {
+                id: t.segment_id,
+                kind: t.block_kind,
+                caption: null,
+                word: RELATION_NAMES[r.word],
+              },
+            ],
+      ),
+    ),
+  ];
+}
+/**
+ * A figure as a small plate in the margin: its pictures side by side, its
+ * name and caption under them, after the word that points to it (“见”).
+ */
+function marginPlateHTML(
+  f: LayerFigure | null,
+  n: { id: string; kind: string; caption: string | null; word: string | null },
+  mode: DocumentTextMode,
+  cls: string,
+  attrs: string,
+  lead: string,
+): string {
+  const parts = captionParts(f?.caption(mode) ?? n.caption);
+  const name = parts.lead ?? figureName(f, n.kind, mode);
+  const id = escape(n.id);
+  const images = (f?.panels.length ? f.panels : [n.id])
+    .map((panel) => {
+      const at = escape(panel);
+      return `<img alt="${escape(name)}" data-image="${at}" data-zoom="${at}"${
+        panel === n.id ? ` data-f="fig:${id}"` : ""
+      }>`;
+    })
+    .join("");
+  return (
+    `<figure class="${cls}"${attrs} data-fig="${id}"><div class="rl-panels">${images}</div>` +
+    `<figcaption>${lead}${n.word ? `<span class="rl-mword">${n.word}</span>` : ""}${captionHTML(name, parts.rest)}</figcaption></figure>`
+  );
+}
 const termsOf = (p: LayersReadPoint) => ({
   original: p.key_terms,
   translation: p.translation?.key_terms ?? [],
 });
 
-/** 脉络: every note as a 纲, the author's sentences it stands on as its 目, its figures beneath. */
+/**
+ * 脉络: every note as a 纲, the author's sentences it stands on as its 目.
+ * Its figures stand in the margin beside it, in place of their names among
+ * its relations (“见 图 8”); a sheet without a margin sets them under the
+ * sentences. Each figure once, beside the first note that names it.
+ */
 export function outlineLeaf(
   model: LayersModel,
   port: LayersPort,
   mode: DocumentTextMode,
+  inMargin = false,
 ): Leaf {
   let column = titleHTML(port),
     side = rulesHTML();
@@ -171,48 +245,37 @@ export function outlineLeaf(
     for (const number of section.numbers) {
       const p = model.byNumber.get(number);
       if (!p) continue;
-      let body = "";
+      let body = "",
+        plates = "";
       p.evidence.forEach((e, i) => {
         if (e.kind === "sentence")
           body += sentenceHTML(e, `${p.number}:${i}`, termsOf(p), port, mode);
       });
-      // The figures a note stands on and the ones it points to (“见 图 8”)
-      // are set under its sentences; each figure once, under the first note
-      // that names it. A later note's margin link goes to that plate.
-      const named = [
-        ...p.evidence.flatMap((e) =>
-          e.kind === "block"
-            ? [{ id: e.segment_id, kind: e.block_kind, caption: e.caption }]
-            : [],
-        ),
-        ...p.relations.flatMap((r) =>
-          r.targets.flatMap((t) =>
-            t.kind === "point"
-              ? []
-              : [{ id: t.segment_id, kind: t.block_kind, caption: null }],
-          ),
-        ),
-      ];
-      for (const f of named) {
-        if (figures.has(f.id)) continue;
-        figures.add(f.id);
-        body += figureHTML(
-          port.figure(f.id),
-          f.id,
-          f.kind,
-          f.caption,
-          mode,
-          true,
-        );
+      const drawn = new Set<string>();
+      for (const n of namedFigures(
+        p,
+        p.evidence.flatMap((e) => (e.kind === "block" ? [e] : [])),
+      )) {
+        if (figures.has(n.id)) continue;
+        const f = port.figure(n.id);
+        if (inMargin && n.kind !== "table") {
+          plates += marginPlateHTML(f, n, mode, "rl-mplate", "", "");
+          drawn.add(n.id);
+        } else if (n.word === null || !inMargin)
+          // A table the note stands on keeps its line under the sentences;
+          // one it only points to stays a name among its relations.
+          body += figureHTML(f, n.id, n.kind, n.caption, mode, true);
+        else continue;
+        figures.add(n.id);
       }
       column += gangHTML(p, mode, body);
-      const rel = relationsHTML(p, port, mode);
+      const rel = relationsHTML(p, port, mode, drawn);
       side +=
         `<aside class="rl-pi rl-rel" data-point="${p.number}"><div class="rl-pi-h">` +
         (p.kind
           ? `<span class="rl-pi-kind" data-f="kind:${p.number}">${KIND_NAMES[p.kind]}</span>`
           : "") +
-        `</div>${rel ? `<p class="rl-pi-x" data-f="rel:${p.number}">${rel}</p>` : ""}</aside>`;
+        `</div>${rel ? `<p class="rl-pi-x" data-f="rel:${p.number}">${rel}</p>` : ""}${plates}</aside>`;
     }
   }
   return { column: column + endHTML(model, figures.size), side };
@@ -319,42 +382,17 @@ export function overviewLeaf(
     }
     // The figures the note stands on and the ones it points to (“见 图 8”)
     // stand in the margin beside it, each figure once, whole.
-    const named = [
-      ...(basis.kind === "sentence"
-        ? []
-        : [
-            {
-              id: basis.segment_id,
-              kind: basis.block_kind,
-              caption: basis.caption,
-            },
-          ]),
-      ...p.relations.flatMap((r) =>
-        r.targets.flatMap((t) =>
-          t.kind === "point"
-            ? []
-            : [{ id: t.segment_id, kind: t.block_kind, caption: null }],
-        ),
-      ),
-    ];
-    for (const n of named) {
+    for (const n of namedFigures(p, basis.kind === "sentence" ? [] : [basis])) {
       if (n.kind === "table" || plates.has(n.id)) continue;
       plates.add(n.id);
-      const f = port.figure(n.id);
-      const parts = captionParts(f?.caption(mode) ?? n.caption);
-      const name = parts.lead ?? figureName(f, n.kind, mode);
-      const id = escape(n.id);
-      const images = (f?.panels.length ? f.panels : [n.id])
-        .map((panel) => {
-          const at = escape(panel);
-          return `<img alt="${escape(name)}" data-image="${at}" data-zoom="${at}"${
-            panel === n.id ? ` data-f="fig:${id}"` : ""
-          }>`;
-        })
-        .join("");
-      side +=
-        `<figure class="rl-oplate" data-point="${p.number}" data-fig="${id}"><div class="rl-panels">${images}</div>` +
-        `<figcaption>${numberHTML(p, "rl-gang-no")}${captionHTML(name, parts.rest)}</figcaption></figure>`;
+      side += marginPlateHTML(
+        port.figure(n.id),
+        { ...n, word: null },
+        mode,
+        "rl-oplate",
+        ` data-point="${p.number}"`,
+        numberHTML(p, "rl-gang-no"),
+      );
     }
     notes += gangHTML(p, mode, body);
   }

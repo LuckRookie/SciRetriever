@@ -79,7 +79,27 @@ const port = {
       : figure(id, "table", "Table 3"),
 } as unknown as LayersPort;
 
-// 脉络 sets a note's figures under its sentences (reading-experience 3.3):
+// 脉络 on a wide sheet (reading-experience 3.3): a note's figure stands in its
+// margin in place of its name among the relations; each figure once.
+it("puts the figure a note points to in its margin in 脉络, in place of its name", () => {
+  const { column, side } = outlineLeaf(model, port, "original", true);
+  expect(column).not.toContain("rl-plate");
+  const notes = side.split('<aside class="rl-pi rl-rel"').slice(1);
+  // Note 1: “见” and the figure itself, its name no longer a link.
+  expect(notes[0]).toContain('<figure class="rl-mplate" data-fig="fig-8">');
+  expect(notes[0]).toContain('data-image="fig-8b"');
+  expect(notes[0]).toContain(
+    '<span class="rl-mword">见</span><b>Fig. 8</b>Its caption.',
+  );
+  expect(notes[0]).not.toContain('<a data-fig="fig-8">');
+  // Note 2: the figure is already beside note 1; a link goes there. A table
+  // stays a name.
+  expect(notes[1]).not.toContain("rl-mplate");
+  expect(notes[1]).toContain('<a data-fig="fig-8">Fig. 8</a>');
+  expect(notes[1]).toContain('<a data-fig="table-3">Table 3</a>');
+});
+
+// 脉络 on a sheet without a margin sets a note's figures under its sentences:
 // the ones it stands on and the ones it points to, each figure once.
 it("sets the figures a note points to under it in 脉络, each once", () => {
   const { column } = outlineLeaf(model, port, "original");
