@@ -155,7 +155,7 @@ function figureHTML(
     `<p class="rl-cap">${captionHTML(name, parts.rest)}</p></figure>`
   );
 }
-/** The figures a note stands on and points to, each with the word that points (none for its ground). */
+/** The figures a note stands on and the ones it points to (“见 图 8”), in that order. */
 function namedFigures(
   p: LayersReadPoint,
   ground: readonly {
@@ -163,13 +163,13 @@ function namedFigures(
     block_kind: string;
     caption: string | null;
   }[],
-): { id: string; kind: string; caption: string | null; word: string | null }[] {
+): { id: string; kind: string; caption: string | null; pointed: boolean }[] {
   return [
     ...ground.map((g) => ({
       id: g.segment_id,
       kind: g.block_kind,
       caption: g.caption,
-      word: null,
+      pointed: false,
     })),
     ...p.relations.flatMap((r) =>
       r.targets.flatMap((t) =>
@@ -180,7 +180,7 @@ function namedFigures(
                 id: t.segment_id,
                 kind: t.block_kind,
                 caption: null,
-                word: RELATION_NAMES[r.word],
+                pointed: true,
               },
             ],
       ),
@@ -189,11 +189,11 @@ function namedFigures(
 }
 /**
  * A figure as a small plate in the margin: its pictures side by side, its
- * name and caption under them, after the word that points to it (“见”).
+ * name and caption under them (“图 8 …”).
  */
 function marginPlateHTML(
   f: LayerFigure | null,
-  n: { id: string; kind: string; caption: string | null; word: string | null },
+  n: { id: string; kind: string; caption: string | null },
   mode: DocumentTextMode,
   cls: string,
   attrs: string,
@@ -212,7 +212,7 @@ function marginPlateHTML(
     .join("");
   return (
     `<figure class="${cls}"${attrs} data-fig="${id}"><div class="rl-panels">${images}</div>` +
-    `<figcaption>${lead}${n.word ? `<span class="rl-mword">${n.word}</span>` : ""}${captionHTML(name, parts.rest)}</figcaption></figure>`
+    `<figcaption>${lead}${captionHTML(name, parts.rest)}</figcaption></figure>`
   );
 }
 const termsOf = (p: LayersReadPoint) => ({
@@ -261,7 +261,7 @@ export function outlineLeaf(
         if (inMargin && n.kind !== "table") {
           plates += marginPlateHTML(f, n, mode, "rl-mplate", "", "");
           drawn.add(n.id);
-        } else if (n.word === null || !inMargin)
+        } else if (!n.pointed || !inMargin)
           // A table the note stands on keeps its line under the sentences;
           // one it only points to stays a name among its relations.
           body += figureHTML(f, n.id, n.kind, n.caption, mode, true);
@@ -387,7 +387,7 @@ export function overviewLeaf(
       plates.add(n.id);
       side += marginPlateHTML(
         port.figure(n.id),
-        { ...n, word: null },
+        n,
         mode,
         "rl-oplate",
         ` data-point="${p.number}"`,

@@ -611,9 +611,6 @@
   .rl-mplate {
     margin: 8px 0 0;
   }
-  .rl-mword {
-    margin-right: 0.3em;
-  }
   :is(.rl-oplate, .rl-mplate) .rl-panels {
     gap: 6px;
   }

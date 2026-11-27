@@ -85,11 +85,11 @@ it("puts the figure a note points to in its margin in 脉络, in place of its na
   const { column, side } = outlineLeaf(model, port, "original", true);
   expect(column).not.toContain("rl-plate");
   const notes = side.split('<aside class="rl-pi rl-rel"').slice(1);
-  // Note 1: “见” and the figure itself, its name no longer a link.
+  // Note 1: the figure itself, “Fig. 8” under it, its name no longer a link.
   expect(notes[0]).toContain('<figure class="rl-mplate" data-fig="fig-8">');
   expect(notes[0]).toContain('data-image="fig-8b"');
   expect(notes[0]).toContain(
-    '<span class="rl-mword">见</span><b>Fig. 8</b>Its caption.',
+    "<figcaption><b>Fig. 8</b>Its caption.</figcaption>",
   );
   expect(notes[0]).not.toContain('<a data-fig="fig-8">');
   // Note 2: the figure is already beside note 1; a link goes there. A table
