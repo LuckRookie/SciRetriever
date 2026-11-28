@@ -1775,7 +1775,12 @@
   .react-reader .reading-article :is(li, td, th, figcaption) p,
   .react-reader
     .reading-article
-    :is(.reading-figure-caption, .reading-footnote, .reading-article-info)
+    :is(
+      .reading-figure-caption,
+      .reading-figure-note,
+      .reading-footnote,
+      .reading-article-info
+    )
     p {
     text-indent: 0;
   }
@@ -1861,6 +1866,15 @@
   }
   .react-reader .reading-figure-caption p {
     margin: 0.4em 0 1.2em;
+  }
+  /* A table's note (ADR 0074 §2): caption-sized, close under its table. */
+  .react-reader .reading-figure-note {
+    font-size: 0.775em;
+    line-height: 1.6;
+    color: var(--fg);
+  }
+  .react-reader .reading-figure-note p {
+    margin: 0 0 1.2em;
   }
   .react-reader .reading-article .reading-caption-label {
     font-weight: 600;
@@ -2152,6 +2166,7 @@
     )
     section[data-translation]:not(
       .reading-figure-caption,
+      .reading-figure-note,
       .reading-footnote,
       .reading-article-info
     )
@@ -2160,6 +2175,7 @@
     .reading-article[data-text-mode="translation"]
     section[data-translation]:not(
       .reading-figure-caption,
+      .reading-figure-note,
       .reading-footnote,
       .reading-article-info
     )
@@ -2187,7 +2203,7 @@
     + :is(p, ul, ol) {
     margin-top: 0.25em;
   }
-  /* A caption's translation keeps the caption's own room. */
+  /* A caption's translation keeps the caption's own room; so does a table note's. */
   .react-reader
     .reading-article[data-text-mode="translation"]
     .reading-figure-caption
@@ -2196,15 +2212,20 @@
     margin: 0.4em 0 1.2em;
   }
   .react-reader
+    .reading-article[data-text-mode="translation"]
+    .reading-figure-note
+    .reading-translation
+    p,
+  .react-reader
     .reading-article[data-text-mode="bilingual"]
-    .reading-figure-caption
+    :is(.reading-figure-caption, .reading-figure-note)
     .reading-translation
     p {
     margin: 0 0 1.2em;
   }
   .react-reader
     .reading-article[data-text-mode="bilingual"]
-    .reading-figure-caption[data-translation]
+    :is(.reading-figure-caption, .reading-figure-note)[data-translation]
     > p {
     margin-bottom: 0;
   }

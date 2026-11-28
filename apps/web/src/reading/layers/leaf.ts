@@ -14,6 +14,8 @@ import {
   cutClass,
   escape,
   evidenceCut,
+  WHOLE,
+  type QuoteCut,
   figureName,
   headingHTML,
   langOf,
@@ -176,6 +178,37 @@ const follows = (
   before?.kind === "sentence" &&
   before.unit_id === e.unit_id &&
   (e.sentences[0] ?? 0) === (before.sentences.at(-1) ?? -1) + 1;
+/**
+ * The “…” a sentence evidence shows at its ends in a reading: the
+ * original's (ADR 0074), which a translated quote shares; none on a whole
+ * paragraph's translation standing in for it.
+ */
+function shownCut(
+  port: LayersPort,
+  e: Extract<LayersReadEvidence, { kind: "sentence" }>,
+  mode: DocumentTextMode,
+): QuoteCut {
+  const translatedOnly =
+    mode === "translation" && sentenceWords(e, mode).translated;
+  return translatedOnly && !alignedTranslation(e)
+    ? WHOLE
+    : evidenceCut(port, e);
+}
+/**
+ * Whether a faint “…” line stands between a sentence evidence and the one
+ * before it: they do not follow one another, and neither shows a “…” at
+ * the end that meets the other (one “…” between two places).
+ */
+const gapBefore = (
+  port: LayersPort,
+  before: LayersReadEvidence | undefined,
+  e: Extract<LayersReadEvidence, { kind: "sentence" }>,
+  mode: DocumentTextMode,
+) =>
+  !!before &&
+  !follows(before, e) &&
+  !shownCut(port, e, mode).before &&
+  !(before.kind === "sentence" && shownCut(port, before, mode).after);
 /** A figure a note stands on: a plate under the sentences; a table as its name and one line. */
 function figureHTML(
   f: LayerFigure | null,
@@ -295,12 +328,13 @@ const own = (b: HTMLElement, tags: string) =>
 /** A block that is a paragraph of the author's text: a paragraph, a list, a caption. */
 /**
  * A block 脉络 sets as it is when it has no note: a paragraph or a list.
- * Figures, tables and their captions are not set in the column: a figure
- * stands as a plate in the margin beside the note that names it (3.3).
+ * Figures, tables, their captions and a table's notes are not set in the
+ * column: a figure stands as a plate in the margin beside the note that
+ * names it (3.3).
  */
 const isParagraph = (b: HTMLElement) =>
   !b.matches(
-    ".reading-article-info, .reading-footnote, .reading-figure-caption, .reading-figure-cell",
+    ".reading-article-info, .reading-footnote, .reading-figure-caption, .reading-figure-note, .reading-figure-cell",
   ) &&
   !b.querySelector("[data-resource], table") &&
   (b.dataset.paragraph !== undefined || !!own(b, "ul, ol"));
@@ -468,7 +502,7 @@ export function outlineLeaf(
           port,
           mode,
           own,
-          i > 0 && !follows(p.evidence[i - 1], e),
+          gapBefore(port, p.evidence[i - 1], e, mode),
         );
     });
     const drawn = new Set<string>();

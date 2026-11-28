@@ -522,6 +522,9 @@ export async function renderDocument(
       }
       if (group.captions.some((c) => overlaps(c, start, end)))
         el.classList.add("reading-figure-caption");
+      // A table's note, set right under it (ADR 0074 §2): not a paragraph.
+      if (group.notes?.some((c) => overlaps(c, start, end)))
+        el.classList.add("reading-figure-note");
     }
   };
   /** Spec 4.1: 28% down the visible desk, below the page header. */

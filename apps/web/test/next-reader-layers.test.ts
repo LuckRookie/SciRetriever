@@ -7,6 +7,7 @@ import {
   LAYERS_PARAGRAPHS,
   LAYERS_POINTS,
   LAYERS_SECTIONS,
+  LAYERS_TABLE_NOTE,
   LAYERS_TEXT,
   storedLayers,
 } from "./stored-layers.js";
@@ -149,6 +150,20 @@ it("shows the notes beside the full text and the other layers of an annotated co
       return [r.top - head.top, tail.bottom - r.bottom];
     }, sheet);
     expect(pen.every((d) => Math.abs(d - 6) < 2)).toBe(true);
+    // A table's note (ADR 0074 §2) is set under its table as a note, not
+    // as a paragraph with a ¶ number.
+    const tableNote = page.locator(`${sheet} article > section`, {
+      hasText: LAYERS_TABLE_NOTE,
+    });
+    expect(await tableNote.getAttribute("class")).toContain(
+      "reading-figure-note",
+    );
+    expect(await tableNote.getAttribute("data-paragraph")).toBeNull();
+    expect(
+      await tableNote.evaluate(
+        (n) => n.previousElementSibling?.querySelector("table") !== null,
+      ),
+    ).toBe(true);
     await shot(page, "01-full");
     // 脉络: every body paragraph, as its 纲 (with its reason) and 目, or as
     // it is; every section's line under its heading.
@@ -178,16 +193,18 @@ it("shows the notes beside the full text and the other layers of an annotated co
       lines.length,
     );
     expect(await page.locator(`${sheet} .rl-mu-s`).count()).toBe(evidence);
-    // Sentences that do not follow one another have a “…” between them.
-    expect(await page.locator(`${sheet} .rl-mu-s.rl-gap`).count()).toBe(
-      LAYERS_POINTS.reduce(
-        (n, p) =>
-          n +
-          p.evidence.filter((e, i) => i > 0 && e.n !== p.evidence[i - 1]!.n + 1)
-            .length,
-        0,
-      ),
-    );
+    // Places that do not follow one another have one “…” between them:
+    // the line's own when the quote before ends inside its sentence (¶7),
+    // else a faint line of its own (¶8, ¶10).
+    expect(
+      await page
+        .locator(`${sheet} .rl-mu-s.rl-gap`)
+        .evaluateAll((ls) => ls.map((l) => (l as HTMLElement).dataset.ev)),
+    ).toEqual(["5:1", "6:1"]);
+    // The table's note is not a paragraph: not set in 脉络's column.
+    expect(
+      (await page.locator(`${sheet} .rl-col`).textContent()) ?? "",
+    ).not.toContain(LAYERS_TABLE_NOTE);
     // A quote that begins or ends inside its sentence (ADR 0074) has the
     // same faint “…” there: before and after, before only, after only.
     const cut = (line: string) =>

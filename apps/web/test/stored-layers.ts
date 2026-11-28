@@ -47,11 +47,26 @@ const ORDER: readonly (readonly [Heading, readonly Body[]])[] = [
   [HEADINGS[1], ["b0", "b1", "b2", "b3"]],
   [HEADINGS[2], ["c1"]],
 ];
+/**
+ * A table at the end of “2. Thermal behaviour” with its note right under it
+ * (ADR 0074 §2): the layout lists the note with its table, so it is not a
+ * paragraph of the text.
+ */
+export const LAYERS_TABLE =
+  "| Salt | Onset / °C |\n| --- | --- |\n| 1 | 196 |\n| 6 | 248 |";
+export const LAYERS_TABLE_NOTE =
+  "Measured at 5 K·min⁻¹ after drying under vacuum.";
 /** The paper's text, as the test workspace is given it. */
 export const LAYERS_TEXT = ORDER.flatMap(([heading, bodies]) => [
   `# ${heading}`,
   ...bodies.map((b) => PARAGRAPHS[b]),
+  ...(heading === HEADINGS[1] ? [LAYERS_TABLE, LAYERS_TABLE_NOTE] : []),
 ]).join("\n\n");
+/** The text blocks the translation is read for, in text order: the paragraphs and the table's note. */
+const TEXTS: readonly string[] = ORDER.flatMap(([heading, bodies]) => [
+  ...bodies.map((b) => PARAGRAPHS[b]),
+  ...(heading === HEADINGS[1] ? [LAYERS_TABLE_NOTE] : []),
+]);
 /** The body paragraphs in text order. */
 export const LAYERS_PARAGRAPHS: readonly string[] = ORDER.flatMap(
   ([, bodies]) => bodies.map((b) => PARAGRAPHS[b]),
@@ -70,6 +85,7 @@ const ZH: Record<string, string> = {
     "用落锤测定的撞击感度在 8 J 到 40 J 以上。最稳定的两种盐都形成三维氢键网络。在这些盐中，每个阳离子向相邻阴离子提供四个氢键。具有层状网络的盐明显更敏感，尽管它们的密度相近。",
   [PARAGRAPHS.c1]:
     "决定这些盐稳定性的是氢键网络，而不仅是密度。三维网络使起始温度升高约 40 °C，并使撞击感度降低为五分之一。计算焓高估了实际放出的能量，后续设计应采用实测值。长期老化没有研究，仍是未决问题。",
+  [LAYERS_TABLE_NOTE]: "在 5 K·min⁻¹ 下、真空干燥后测定。",
   [HEADINGS[0]]: "1. 盐及其结构",
   [HEADINGS[1]]: "2. 热行为",
   [HEADINGS[2]]: "3. 结论",
@@ -471,6 +487,54 @@ export async function storedLayers(page: Page, options: LayersOptions = {}) {
           fake.translated && fake.state === "complete" ? "zh-Hans" : null,
         reason: fake.state === "not-applicable" ? fake.reason : null,
       };
+      // The layout lists the table and its note (ADR 0074 §2): the table
+      // is the version's table segment, the note the segment after it.
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      const listed = await route.fetch({
+        url: route
+          .request()
+          .url()
+          .replace("document-describe", "document-segments"),
+        postData: JSON.stringify({
+          ...body,
+          request: {
+            document_version_id: value.result.document.document_version_id,
+            section_id: null,
+            limit: 200,
+            cursor: null,
+          },
+        }),
+      });
+      const segments = ((await listed.json()).result?.segments ??
+        []) as Segment[];
+      const at = segments.findIndex((s) => s.kind === "table");
+      const table = segments[at],
+        note = segments[at + 1];
+      if (table && note) {
+        const layout = value.result.layout ?? {
+          schema_version: 1,
+          article_info: [],
+          figure_groups: [],
+          footnotes: [],
+        };
+        const range = (s: Segment) => ({
+          segment_id: s.segment_id,
+          start_utf8: s.start_utf8,
+          end_utf8: s.end_utf8,
+        });
+        layout.figure_groups = [
+          ...layout.figure_groups,
+          {
+            group_id: "fixture-table",
+            kind: "table",
+            objects: [{ ...range(table), row: 0, column: 0 }],
+            captions: [],
+            notes: [range(note)],
+            rows: [1],
+          },
+        ];
+        value.result.layout = layout;
+      }
       await route.fulfill({ response, json: value });
     }),
   );
@@ -480,7 +544,7 @@ export async function storedLayers(page: Page, options: LayersOptions = {}) {
       // Asked before the text is read: the units follow the paper's order.
       for (let i = 0; i < 200 && !seen.segments.size; i++)
         await new Promise((done) => setTimeout(done, 50));
-      const paragraphs = LAYERS_PARAGRAPHS;
+      const paragraphs = TEXTS;
       let heading = 0,
         text = 0;
       const list = [...seen.segments.values()]
