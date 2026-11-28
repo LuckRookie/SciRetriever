@@ -13,7 +13,10 @@ import { PAGE_REVIEW_METHOD } from "../proofread/page-review.js";
 import { textHash } from "./text-source.js";
 import { archiveTextModelIdentity } from "./text-session.js";
 import { PDF_PAGES_METHOD } from "../proofread/pdf-pages.js";
-import { archiveStepKey } from "./input-key.js";
+import {
+  archiveLayersKeyBeforeTranslateLast,
+  archiveStepKey,
+} from "./input-key.js";
 
 /** Counts only fully reusable papers; partial step reuse remains in execution's authority. */
 export class ArchiveReusePreview {
@@ -34,7 +37,7 @@ export class ArchiveReusePreview {
     /** Reading layers (ADR 0069); null leaves the layers step out. */
     private readonly layers: Pick<
       import("../layers/document.js").DocumentLayersService,
-      "translationSha256"
+      "translationSha256" | "originalSha256" | "translationCurrent"
     > | null = null,
   ) {}
   /** The main PDF still needs the layers step for its current content (spec 10.3). */
@@ -51,40 +54,72 @@ export class ArchiveReusePreview {
       !part.content_version
     )
       return true;
+    // A receipt under the key written before ADR 0074 section 5 still counts.
     return (
-      before.input_sha256 !==
-      (await archiveStepKey(
-        this.method,
-        "full",
-        part,
-        "layers",
-        null,
-        null,
-        this.language,
-        await this.layers.translationSha256(
-          part.document_version_id,
-          part.content_version,
-          signal,
-        ),
-      ))
-    );
-  }
-  /** The main PDF still needs the translate step for its current content (spec 9.3). */
-  async translationPending(part: ArchivePart): Promise<boolean> {
-    if (this.language === null || part.part !== "main") return false;
-    const before = part.steps.find((s) => s.step === "translate");
-    return (
-      before?.status !== "done" ||
       before.input_sha256 !==
         (await archiveStepKey(
           this.method,
           "full",
           part,
-          "translate",
+          "layers",
           null,
           null,
+        )) &&
+      before.input_sha256 !==
+        (await archiveLayersKeyBeforeTranslateLast(
+          part,
           this.language,
+          await this.layers.translationSha256(
+            part.document_version_id,
+            part.content_version,
+            signal,
+          ),
         ))
+    );
+  }
+  /**
+   * The main PDF still needs the translate step for its current content and
+   * its current original-language layers (spec 9.3).
+   */
+  async translationPending(
+    literatureId: string,
+    part: ArchivePart,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    if (this.language === null || part.part !== "main") return false;
+    const before = part.steps.find((s) => s.step === "translate");
+    if (before?.status !== "done") return true;
+    const key =
+      this.layers && part.document_version_id && part.content_version
+        ? {
+            literature_id: literatureId,
+            asset_id: part.asset_id,
+            document_version_id: part.document_version_id,
+            content_version: part.content_version,
+          }
+        : null;
+    const layers =
+      this.layers && key ? await this.layers.originalSha256(key, signal) : null;
+    const translate = (sha: string | null) =>
+      archiveStepKey(
+        this.method,
+        "full",
+        part,
+        "translate",
+        null,
+        null,
+        this.language,
+        sha,
+      );
+    if (before.input_sha256 === (await translate(layers))) return false;
+    // A receipt under the key written before ADR 0074 section 5 still
+    // counts when the layers' translation part is current.
+    return !(
+      layers !== null &&
+      this.layers &&
+      key &&
+      before.input_sha256 === (await translate(null)) &&
+      (await this.layers.translationCurrent(key, signal))
     );
   }
   private textMethod() {
@@ -192,8 +227,9 @@ export class ArchiveReusePreview {
           )
             return false;
         }
-        if (await this.translationPending(part)) return false;
         if (await this.layersPending(part, signal)) return false;
+        if (await this.translationPending(state.literature_id, part, signal))
+          return false;
       }
     }
     return true;

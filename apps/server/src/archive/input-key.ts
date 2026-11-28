@@ -15,26 +15,31 @@ export function archiveStepKey(
   metadata: { metadata_revision: number; metadata_sha256: string } | null,
   assignment: string | null,
   language: string | null = null,
-  /** `layers`: sha256 of the current content version's translation file, or null. */
-  translation: string | null = null,
+  /**
+   * `translate` into the library language: the identity of the current
+   * original-language reading layers (`DocumentLayersStore.originalSha256`),
+   * or null when there are none.
+   */
+  layers: string | null = null,
 ) {
-  // Reading layers depend on the content version, the language and the
-  // translation file only (spec 10.3); prompt and model changes do not redo them.
+  // Reading layers depend on the content version and the file layout only
+  // (spec 10.3): prompt and model changes do not redo them, and the
+  // translation is no longer part of them (ADR 0074 section 5).
   if (step === "layers")
     return sha256(
       canonicalJsonBytes({
         step,
         asset: part.asset_id,
         content: part.content_version,
-        language,
-        translation,
         // A new file layout (spec 10.2.1) redoes layers written by an
         // earlier one; prompt or model changes alone still do not.
         layout: LAYERS_FILE_SCHEMA_VERSION,
       }),
     );
-  // Translation depends on the content version and the language only (spec
-  // 9.3): a prompt or model change does not translate a paper again.
+  // Translation depends on the content version, the language and the
+  // original-language reading layers it also translates (spec 9.3): a prompt
+  // or model change does not translate a paper again. Without layers the key
+  // is the one written before the layers were part of it.
   if (step === "translate")
     return sha256(
       canonicalJsonBytes({
@@ -42,6 +47,7 @@ export function archiveStepKey(
         asset: part.asset_id,
         content: part.content_version,
         language,
+        ...(layers === null ? {} : { layers }),
       }),
     );
   return sha256(
@@ -67,19 +73,65 @@ export function archiveStepKey(
 }
 
 /**
+ * The key a `layers` step recorded before ADR 0074 section 5, when the step
+ * also wrote the translation part and its key named the language and the
+ * translation file. A receipt with this key, for the current content
+ * version, file layout, language and translation file, stands for the same
+ * original-language layers: it is not redone, and the step records the
+ * current key in its place.
+ */
+export function archiveLayersKeyBeforeTranslateLast(
+  part: ArchivePart,
+  language: string | null,
+  translation: string | null,
+) {
+  return sha256(
+    canonicalJsonBytes({
+      step: "layers",
+      asset: part.asset_id,
+      content: part.content_version,
+      language,
+      translation,
+      layout: LAYERS_FILE_SCHEMA_VERSION,
+    }),
+  );
+}
+
+/**
+ * What `from_step` forces in the `translate` step (spec 9.3, 10.3): the
+ * full-text translation only for `from_step: translate`; the reading
+ * layers' translation part for `translate` and for `layers`, whose new
+ * original it translates while the full-text translation is reused.
+ */
+export function archiveTranslationForced(fromStep: ArchiveStep | null): {
+  readonly text: boolean;
+  readonly layers: boolean;
+} {
+  return {
+    text: fromStep === "translate",
+    layers: fromStep === "translate" || fromStep === "layers",
+  };
+}
+
+/**
  * Whether `from_step` forces a step to run again although its input is
- * unchanged. Only `from_step: translate` translates every unit again and
- * only `from_step: layers` redoes the layers (an earlier from_step keeps
- * reusing unchanged units, spec 9.3). The later steps are forced by what
- * they rest on: metadata, references and tags rest on the text, not on its
- * translation or its layers, so redoing `translate` or `layers` leaves them
+ * unchanged. Only `from_step: layers` redoes the layers; `translate` runs
+ * for `from_step: translate` or `layers`, redoing what
+ * `archiveTranslationForced` says. An earlier from_step keeps reusing
+ * unchanged units (spec 9.3). The other later steps are forced by what they
+ * rest on: metadata, references and tags rest on the text, not on its
+ * layers or its translation, so redoing `layers` or `translate` leaves them
  * (and the providers they may ask) alone.
  */
 export function archiveStepForced(
   step: ArchiveStep,
   fromStep: ArchiveStep | null,
 ): boolean {
-  if (step === "translate" || step === "layers") return fromStep === step;
+  if (step === "translate") {
+    const forced = archiveTranslationForced(fromStep);
+    return forced.text || forced.layers;
+  }
+  if (step === "layers") return fromStep === "layers";
   return (
     fromStep !== null &&
     fromStep !== "translate" &&

@@ -85,7 +85,9 @@ export class UsageEstimator {
     }>,
     /** The main PDF still needs the translate step (ADR 0068). */
     private readonly archiveTranslationPending?: (
+      literatureId: string,
       part: import("@sciretriever/contracts").ArchivePart,
+      signal: AbortSignal,
     ) => Promise<boolean>,
     /** The main PDF still needs the layers step (ADR 0069). */
     private readonly archiveLayersPending?: (
@@ -424,7 +426,7 @@ export class UsageEstimator {
             if (work.total_pdf_pages === null) totalUnknown++;
             else totalPages += work.total_pdf_pages;
             // Translation is counted by the main PDF's pages, reused or not.
-            if (await this.archiveTranslationPending?.(part)) {
+            if (await this.archiveTranslationPending?.(id, part, stop)) {
               if (work.total_pdf_pages === null) translateUnknown++;
               else translatePages += work.total_pdf_pages;
             }

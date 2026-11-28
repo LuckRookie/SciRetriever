@@ -1,4 +1,9 @@
-import { archiveStepForced, archiveStepKey } from "./input-key.js";
+import {
+  archiveLayersKeyBeforeTranslateLast,
+  archiveStepForced,
+  archiveStepKey,
+  archiveTranslationForced,
+} from "./input-key.js";
 import { activityContext, withActivity } from "../logging/activity.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -44,20 +49,25 @@ export interface ArchiveRuntime {
   >;
   readonly metadataFields: Pick<LiteratureMetadataService, "read">;
   /**
-   * The `translate` step (ADR 0068). A runtime without it, as in focused
-   * tests of other steps, leaves the step out.
+   * The `translate` step (ADR 0068), the last one: the full text, then the
+   * reading layers' translation part (ADR 0074 section 5). A runtime without
+   * it, as in focused tests of other steps, leaves the step out.
    */
   readonly translate?: Pick<
     import("../translation/document.js").DocumentTranslationService,
     "build" | "language" | "existing"
   >;
   /**
-   * The `layers` step (ADR 0069). A runtime without it, as in focused tests
-   * of other steps, leaves the step out.
+   * The `layers` step (ADR 0069), original language only. A runtime
+   * without it, as in focused tests of other steps, leaves the step out.
    */
   readonly layers?: Pick<
     import("../layers/document.js").DocumentLayersService,
-    "build" | "language" | "translationSha256"
+    | "build"
+    | "language"
+    | "translationSha256"
+    | "originalSha256"
+    | "translationCurrent"
   >;
   readonly method_sha256: string;
   readonly archiveProfile?: "pipeline" | "vlm-engine";
@@ -233,6 +243,10 @@ export class ArchiveOrchestrator {
           );
           continue;
         }
+        // After the text is rendered, an excluded paper or a stopped later
+        // step skips the remaining steps but `translate`: it rests on the
+        // text and its layers only, as when it ran before metadata.
+        let stopped = false;
         for (const step of ARCHIVE_STEPS) {
           if (
             part.part !== "main" &&
@@ -243,6 +257,7 @@ export class ArchiveOrchestrator {
             continue;
           if (step === "translate" && !this.runtime.translate) continue;
           if (step === "layers" && !this.runtime.layers) continue;
+          if (stopped && step !== "translate") continue;
           try {
             await withActivity(
               { operation: `archive-${step}`, literature_id: id },
@@ -254,7 +269,7 @@ export class ArchiveOrchestrator {
                 (await this.status(id, signal)).article_kind ?? "",
               )
             )
-              break;
+              stopped = true;
           } catch (error) {
             if (signal?.aborted) throw error;
             const state = await this.status(id);
@@ -288,7 +303,10 @@ export class ArchiveOrchestrator {
             }
             // Missing references, translation or reading layers are visible
             // but block neither the later steps nor readiness (spec 9.3, 10.3).
-            if (!["references", "translate", "layers"].includes(step)) break;
+            if (["references", "translate", "layers"].includes(step)) continue;
+            // Without a rendered text nothing later can run.
+            if (["arrange", "proofread", "render"].includes(step)) break;
+            stopped = true;
           }
         }
       }
@@ -416,33 +434,73 @@ export class ArchiveOrchestrator {
       step === "tags"
         ? await this.runtime.tags.assignment(request.literature_id, signal)
         : null;
-    return {
-      state,
-      current,
-      metadata,
-      sha256: await archiveStepKey(
+    const layers = this.runtime.layers ?? null,
+      library = this.runtime.translate?.language ?? null,
+      translateLanguage = step === "translate" ? (language ?? library) : null,
+      fixed =
+        current.document_version_id && current.content_version
+          ? {
+              document_version_id: current.document_version_id,
+              content_version: current.content_version,
+            }
+          : null;
+    const key = (layersSha256: string | null) =>
+      archiveStepKey(
         this.runtime.method_sha256,
         request.mode,
         current,
         step,
         metadata,
         assignment?.assignment_sha256 ?? null,
-        step === "translate"
-          ? (language ?? this.runtime.translate?.language ?? null)
-          : step === "layers"
-            ? (this.runtime.layers?.language ?? null)
-            : null,
-        step === "layers" &&
-          this.runtime.layers &&
-          current.document_version_id &&
-          current.content_version
-          ? await this.runtime.layers.translationSha256(
-              current.document_version_id,
-              current.content_version,
-              signal,
+        translateLanguage,
+        layersSha256,
+      );
+    const layersKey =
+      layers && fixed
+        ? {
+            literature_id: request.literature_id,
+            asset_id: current.asset_id,
+            ...fixed,
+          }
+        : null;
+    // Only the library language writes the layers' translation part
+    // (spec 9.6.1, 10.5).
+    const original =
+      step === "translate" &&
+      layers &&
+      layersKey &&
+      translateLanguage === library
+        ? await layers.originalSha256(layersKey, signal)
+        : null;
+    return {
+      state,
+      current,
+      metadata,
+      sha256: await key(original),
+      /**
+       * The key a done step recorded before ADR 0074 section 5 that still
+       * stands for the same result, or null: layers of the same content and
+       * file version, or a translation whose layers part, written by the
+       * layers step then, was made from the current translation.
+       */
+      before: async (): Promise<string | null> =>
+        step === "layers" && layers && layersKey
+          ? archiveLayersKeyBeforeTranslateLast(
+              current,
+              layers.language,
+              await layers.translationSha256(
+                layersKey.document_version_id,
+                layersKey.content_version,
+                signal,
+              ),
             )
-          : null,
-      ),
+          : step === "translate" &&
+              original !== null &&
+              layers &&
+              layersKey &&
+              (await layers.translationCurrent(layersKey, signal))
+            ? key(null)
+            : null,
     };
   }
   private async step(
@@ -471,7 +529,10 @@ export class ArchiveOrchestrator {
         step,
       ) &&
       prior?.status === "done" &&
-      prior.input_sha256 === input.sha256
+      (prior.input_sha256 === input.sha256 ||
+        // A result recorded under the earlier key is kept and recorded
+        // under the current key.
+        prior.input_sha256 === (await input.before()))
     ) {
       await this.save(
         runId,
@@ -570,6 +631,7 @@ export class ArchiveOrchestrator {
         if (!reference.document_version_id || !reference.annotation_id)
           throw new ArchiveError("structure-unsatisfied");
         if (step === "translate") {
+          const forced = archiveTranslationForced(request.from_step);
           output = {
             ...(await this.runtime.translate!.build(
               {
@@ -577,7 +639,8 @@ export class ArchiveOrchestrator {
                 asset_id: part.asset_id,
                 document_version_id: reference.document_version_id,
                 annotation_id: reference.annotation_id,
-                force,
+                force: forced.text,
+                force_layers: forced.layers,
                 ...(language ? { target_language: language } : {}),
               },
               signal,
@@ -665,12 +728,13 @@ export class ArchiveOrchestrator {
           ? "references-missing"
           : step === "translate" &&
               !signal?.aborted &&
-              originalCode !== "translation-incomplete"
+              originalCode !== "translation-incomplete" &&
+              // The layers' translation part is the translate step's (ADR 0074 section 5).
+              originalCode !== "layers-translation-incomplete"
             ? "translation-unavailable"
             : step === "layers" &&
                 !signal?.aborted &&
-                originalCode !== "layers-incomplete" &&
-                originalCode !== "layers-translation-incomplete"
+                originalCode !== "layers-incomplete"
               ? "layers-unavailable"
               : originalCode;
       if (!output.stop)

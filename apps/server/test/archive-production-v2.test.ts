@@ -161,11 +161,11 @@ it("publishes the six-step X workflow, excludes dropped text from fixed document
       arrange: "done",
       proofread: "done",
       render: "done",
-      translate: "done",
       layers: "done",
       metadata: "done",
       references: "done",
       tags: "done",
+      translate: "done",
     });
     expect(steps.some((s) => s.source_map !== undefined)).toBe(false);
   } finally {

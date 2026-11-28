@@ -245,7 +245,10 @@ export function alreadyInLanguage(
 
 export class TranslationStepError extends Error {
   constructor(
-    readonly code: "translation-incomplete" | "translation-unavailable",
+    readonly code:
+      | "translation-incomplete"
+      | "translation-unavailable"
+      | "layers-translation-incomplete",
     readonly output: Record<string, unknown>,
     options?: ErrorOptions,
   ) {
@@ -459,11 +462,40 @@ export interface TranslateStepInput {
   readonly annotation_id: string;
   /** `from_step: translate`: translate every unit again, cache included. */
   readonly force: boolean;
+  /**
+   * `from_step: translate` or `layers`: write the reading layers'
+   * translation part again (spec 9.3, 10.3). Absent is `force`.
+   */
+  readonly force_layers?: boolean;
   /** The language to translate into; absent is the library default (ADR 0072). */
   readonly target_language?: TranslationLanguage;
 }
+type StepUsage = {
+  readonly calls: number;
+  readonly input_tokens: number | null;
+  readonly output_tokens: number | null;
+};
+const sumUsage = (a: StepUsage, b: StepUsage) => {
+  const input_tokens =
+      a.input_tokens === null || b.input_tokens === null
+        ? null
+        : a.input_tokens + b.input_tokens,
+    output_tokens =
+      a.output_tokens === null || b.output_tokens === null
+        ? null
+        : a.output_tokens + b.output_tokens;
+  return {
+    calls: a.calls + b.calls,
+    input_tokens,
+    output_tokens,
+    usage_complete: input_tokens !== null && output_tokens !== null,
+  };
+};
 
-/** The archive step `translate` (ADR 0068, spec 9.3). */
+/**
+ * The archive step `translate` (ADR 0068, ADR 0074 section 5, spec 9.3):
+ * the full text, then the reading layers' translation part (spec 10.5).
+ */
 export class DocumentTranslationService {
   constructor(
     private readonly options: {
@@ -471,6 +503,15 @@ export class DocumentTranslationService {
       readonly files: FileStore;
       readonly store: DocumentTranslationStore;
       readonly translation: Pick<TranslationService, "translateUnits">;
+      /**
+       * Writes the reading layers' translation part in the library language
+       * after the full text. Absent, as in focused tests, the step translates
+       * the full text only.
+       */
+      readonly layers?: Pick<
+        import("../layers/document.js").DocumentLayersService,
+        "translate"
+      >;
       /** `[proofread].max_concurrent_pages`: requests in flight at once. */
       readonly concurrency: number;
       readonly metadata: (
@@ -507,7 +548,72 @@ export class DocumentTranslationService {
       )?.status ?? null
     );
   }
+  /**
+   * The step: the full text first (spec 9.3), then, in the library language,
+   * the translation part of the current original-language reading layers
+   * (spec 10.5). An on-request translation into another language (spec
+   * 9.6.1) has no layers part. A full text left partial still gets its part
+   * from the units translated; the full text's problem is the step's.
+   */
   async build(input: TranslateStepInput, signal?: AbortSignal) {
+    const layers = this.options.layers,
+      language = input.target_language ?? this.options.store.language;
+    if (!layers || language !== this.options.store.language)
+      return this.text(input, signal);
+    let text: Record<string, unknown>,
+      failure: TranslationStepError | null = null;
+    try {
+      text = await this.text(input, signal);
+    } catch (error) {
+      if (
+        !(error instanceof TranslationStepError) ||
+        error.code !== "translation-incomplete"
+      )
+        throw error;
+      failure = error;
+      text = error.output;
+    }
+    let part: { layers: Record<string, unknown>; usage: StepUsage },
+      incomplete = false;
+    try {
+      part = await layers.translate(
+        {
+          literature_id: input.literature_id,
+          asset_id: input.asset_id,
+          document_version_id: input.document_version_id,
+          annotation_id: input.annotation_id,
+          force: input.force_layers ?? input.force,
+        },
+        signal,
+      );
+    } catch (error) {
+      const output = (error as { output?: unknown }).output;
+      if (
+        !(error instanceof Error) ||
+        (error as { code?: unknown }).code !==
+          "layers-translation-incomplete" ||
+        !output ||
+        typeof output !== "object"
+      )
+        throw error;
+      part = output as typeof part;
+      incomplete = true;
+    }
+    const output = {
+      ...text,
+      layers: part.layers,
+      usage: sumUsage(text.usage as StepUsage, part.usage),
+    };
+    if (failure)
+      throw new TranslationStepError(failure.code, output, {
+        cause: failure.cause,
+      });
+    if (incomplete)
+      throw new TranslationStepError("layers-translation-incomplete", output);
+    return output;
+  }
+  /** The full-text translation (spec 9.3). */
+  private async text(input: TranslateStepInput, signal?: AbortSignal) {
     const { database, files, store } = this.options,
       language = input.target_language ?? store.language;
     const fixed = await new SqliteDocumentStorage(
@@ -625,6 +731,38 @@ export class DocumentTranslationService {
       };
     };
     const none = { calls: 0, input_tokens: 0, output_tokens: 0 };
+    // A complete (or same-language) translation of this content version is
+    // kept untouched: the step runs again when only the reading layers
+    // changed (spec 9.3), and only `from_step: translate` translates again.
+    if (!input.force) {
+      const stored = await store.row(
+        version.document_version_id,
+        content_version,
+        language,
+        signal,
+      );
+      if (stored?.status === "complete" || stored?.status === "same-language") {
+        let kept: DocumentTranslationFile | null = null;
+        try {
+          kept = await store.load(stored, signal);
+        } catch {
+          // An unreadable file is translated again below.
+          signal?.throwIfAborted();
+        }
+        if (kept)
+          return summary(kept.status, kept.units, {
+            reused:
+              kept.status === "same-language"
+                ? 0
+                : kept.units.filter((u) => u.translation !== null).length,
+            requested: 0,
+            batches: 0,
+            truncated: 0,
+            usage: none,
+            sha256: stored.sha256,
+          });
+      }
+    }
     if (
       alreadyInLanguage(
         language,

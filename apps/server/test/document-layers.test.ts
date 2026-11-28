@@ -4,6 +4,10 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { canonicalJsonBytes, parseArtifactRef } from "@sciretriever/contracts";
 import { DocumentLayersStore } from "../src/layers/document.js";
+import {
+  archiveLayersKeyBeforeTranslateLast,
+  archiveStepKey,
+} from "../src/archive/input-key.js";
 import { artifactReference } from "../src/storage/artifact-layout.js";
 import type { ArchiveStepReceipt } from "@sciretriever/contracts";
 import { createQueryApplication } from "../src/bootstrap/application.js";
@@ -96,6 +100,25 @@ const step = async (e: Fixture) =>
   (await main(e)).steps.find((s) => s.step === "layers") as
     | (ArchiveStepReceipt & { output: { layers: Record<string, unknown> } })
     | undefined;
+/** The translate step: its `output.layers` is the layers' translation part (ADR 0074 section 5). */
+const translateStep = async (e: Fixture) =>
+  (await main(e)).steps.find((s) => s.step === "translate") as
+    | (ArchiveStepReceipt & {
+        output: {
+          layers: Record<string, unknown>;
+          translation: Record<string, unknown>;
+        };
+      })
+    | undefined;
+const layersRow = async (e: Fixture) => {
+  const part = await main(e);
+  return new DocumentLayersStore(e.app.database, e.app.files).row({
+    literature_id: e.id,
+    asset_id: part.asset_id,
+    document_version_id: part.document_version_id!,
+    content_version: part.content_version!,
+  });
+};
 async function read<T = Record<string, unknown>>(
   e: Fixture,
   operation: string,
@@ -137,13 +160,21 @@ it("writes a note per paragraph, a line per section and the digest once; reads o
       points: 9,
       sections: 5,
       primary: 3,
-      translation: {
-        status: "done",
-        target_language: "zh-Hans",
-        translated_points: 9,
-        translated_sections: 5,
-        aligned: 9,
-      },
+    });
+    // The layers step writes the original only; the translate step writes
+    // the translation part and its receipt (ADR 0074 section 5).
+    expect(receipt.output.layers).not.toHaveProperty("translation");
+    const translated_receipt = (await translateStep(e))!;
+    expect(translated_receipt).toMatchObject({ status: "done", reason: null });
+    expect(translated_receipt.output.translation).toMatchObject({
+      status: "complete",
+    });
+    expect(translated_receipt.output.layers).toMatchObject({
+      status: "done",
+      target_language: "zh-Hans",
+      translated_points: 9,
+      translated_sections: 5,
+      aligned: 9,
     });
     // One call per section, one for the whole document, the same for the translation part.
     expect(
@@ -155,7 +186,9 @@ it("writes a note per paragraph, a line per section and the digest once; reads o
         "translation-document",
       ].map((k) => e.count(k as LayersCall["kind"])),
     ).toEqual([5, 0, 1, 5, 1]);
-    expect(receipt.calls).toBe(12);
+    expect(receipt.calls).toBe(6);
+    // The full text in one batch, then the six calls of the translation part.
+    expect(translated_receipt.calls).toBe(1 + 6);
     // A section call: title, abstract, outline with this section marked, its paragraphs as their text.
     const methods = e.calls.find(
       (c) => c.kind === "section" && inSection(c, "Methods"),
@@ -884,14 +917,19 @@ it("writes the translation part per section; a paragraph missing in the translat
         .map((u) => ({ id: u.id, translation: `译文：${u.text}` })),
     }));
     await e.submit("layers-partial-translation");
-    expect(
-      (await main(e)).steps.find((s) => s.step === "translate"),
-    ).toMatchObject({ status: "failed", reason: "translation-incomplete" });
-    const before = (await step(e))!;
-    expect(before).toMatchObject({ status: "done" });
-    expect(before.output.layers).toMatchObject({
-      translation: { status: "done", translated_points: 8 },
+    // A partial full text is the translate step's problem; its layers part
+    // is still written from the units translated.
+    const before = (await translateStep(e))!;
+    expect(before).toMatchObject({
+      status: "failed",
+      reason: "translation-incomplete",
     });
+    expect(before.output.layers).toMatchObject({
+      status: "done",
+      translated_points: 8,
+    });
+    expect(await step(e)).toMatchObject({ status: "done" });
+    const beforeSha = (await layersRow(e))!.sha256;
     // The Methods call was asked for the translated paragraph only.
     const methods = e.calls.find(
       (c) => c.kind === "translation-section" && inSection(c, "Methods"),
@@ -922,18 +960,25 @@ it("writes the translation part per section; a paragraph missing in the translat
       })),
     }));
     await e.submit("layers-full-translation");
-    const after = (await step(e))!;
-    expect(after.output.layers).toMatchObject({
-      redone: "translation",
-      translation: { status: "done", translated_points: 9 },
+    const after = (await translateStep(e))!;
+    expect(after).toMatchObject({ status: "done", reason: null });
+    expect(after.output.translation).toMatchObject({
+      status: "complete",
+      requested: 1,
     });
-    expect(after.output.layers.sha256).not.toBe(before.output.layers.sha256);
-    // Only the translation part's calls: one per section and one for the digest.
+    expect(after.output.layers).toMatchObject({
+      status: "done",
+      translated_points: 9,
+    });
+    expect((await layersRow(e))!.sha256).not.toBe(beforeSha);
+    // The layers step is kept; only the translation part's calls: one per
+    // section and one for the digest, after the missing unit's batch.
+    expect(await step(e)).toMatchObject({ status: "done", calls: 0 });
     expect(e.calls.slice(asked).map((c) => c.kind)).toEqual([
       ...Array(5).fill("translation-section"),
       "translation-document",
     ]);
-    expect(after.calls).toBe(6);
+    expect(after.calls).toBe(1 + 6);
     const full = await layers(e, {
       document_version_id,
       part: "outline",
@@ -969,8 +1014,8 @@ it("leaves unconfirmed translated evidence without a position and drops what fai
       };
     });
     await e.submit("layers-translation-checks");
-    const receipt = (await step(e))!;
-    expect(receipt.output.layers.translation).toMatchObject({
+    const receipt = (await translateStep(e))!;
+    expect(receipt.output.layers).toMatchObject({
       status: "done",
       evidence: 9,
       aligned: 8,
@@ -1010,7 +1055,10 @@ it("has no translation part for a paper already in the target language", async (
     await e.submit("layers-same-language");
     expect((await step(e))!.output.layers).toMatchObject({
       status: "complete",
-      translation: { status: "not-needed" },
+    });
+    expect((await translateStep(e))!.output).toMatchObject({
+      translation: { status: "same-language" },
+      layers: { status: "not-needed" },
     });
     expect(e.count("translation-section")).toBe(0);
     expect(e.count("translation-document")).toBe(0);
@@ -1204,6 +1252,218 @@ it("reads a version 3 file as stale and redoes the layers on the next archive", 
     expect((await step(e))!.output.layers).toMatchObject({ redone: "all" });
     expect(await describe(e, key.document_version_id)).toMatchObject({
       state: "complete",
+    });
+  } finally {
+    await e.close();
+  }
+}, 0);
+
+/** Every model call in order: the layers calls by kind, the full text as `text`. */
+function track(e: Awaited<ReturnType<typeof fixture>>) {
+  const order: string[] = [];
+  e.answer((call) => {
+    order.push(call.kind);
+    return undefined;
+  });
+  e.setTranslation((input) => {
+    order.push("text");
+    return {
+      translations: input.units.map((u) => ({
+        id: u.id,
+        translation: `译文：${u.text}`,
+      })),
+    };
+  });
+  return order;
+}
+const ORIGINAL = ["section", "line", "document"];
+const PART = ["translation-section", "translation-document"];
+
+// ADR 0074 section 5: translation last, then the layers' translation part.
+it("translates last: the full text after the original layers, then the layers' translation part", async () => {
+  const e = await fixture();
+  try {
+    const order = track(e);
+    const run = await e.submit("translate-last");
+    const text = order.indexOf("text");
+    expect(text).toBeGreaterThan(0);
+    expect(order.slice(0, text).every((k) => ORIGINAL.includes(k))).toBe(true);
+    expect(order.slice(text + 1).every((k) => PART.includes(k))).toBe(true);
+    expect(order.filter((k) => PART.includes(k))).toHaveLength(6);
+    // The steps completed in the order of ADR 0074.
+    const events = await e.app.jobs!.listEvents(run.job.job_id, -1, 1000);
+    expect(
+      events
+        .filter(
+          (v) =>
+            v.kind === "archive-progress" &&
+            (v.payload as { phase: string }).phase === "completed",
+        )
+        .map((v) => (v.payload as { step: string }).step),
+    ).toEqual([
+      "parse",
+      "arrange",
+      "proofread",
+      "render",
+      "layers",
+      "metadata",
+      "references",
+      "tags",
+      "translate",
+    ]);
+  } finally {
+    await e.close();
+  }
+}, 0);
+
+it("from_step layers redoes the layers and their translation part only; the full text and the later steps are kept", async () => {
+  const e = await fixture();
+  try {
+    await e.submit("layers-first");
+    const first = (await translateStep(e))!;
+    const order = track(e);
+    await e.submit("layers-again-from-step", undefined, "layers");
+    expect(order.filter((k) => k === "text")).toEqual([]);
+    expect(order.filter((k) => ORIGINAL.includes(k))).toHaveLength(6);
+    expect(order.filter((k) => PART.includes(k))).toHaveLength(6);
+    const after = (await translateStep(e))!;
+    expect(after).toMatchObject({ status: "done", calls: 6 });
+    // The full text is reused untouched: the same file, nothing asked.
+    expect(after.output.translation).toMatchObject({
+      status: "complete",
+      requested: 0,
+      sha256: first.output.translation.sha256,
+    });
+    expect(after.output.layers).toMatchObject({
+      status: "done",
+      translated_points: 9,
+    });
+    for (const name of ["metadata", "references", "tags"])
+      expect((await main(e)).steps.find((s) => s.step === name)).toMatchObject({
+        status: "done",
+        calls: 0,
+      });
+  } finally {
+    await e.close();
+  }
+}, 0);
+
+it("when only the original layers changed, keeps the full-text translation and redoes only the translation part", async () => {
+  const e = await fixture();
+  try {
+    await e.submit("layers-before-change");
+    const first = (await translateStep(e))!;
+    // New original-language layers of the same content version, without a
+    // translation part, as a redone layers step leaves them.
+    const store = new DocumentLayersStore(e.app.database, e.app.files);
+    const file = await store.load((await layersRow(e))!);
+    await store.publish({
+      ...file,
+      digest: {
+        ...file.digest,
+        summary: { ...file.digest.summary, text: "A changed summary." },
+      },
+      translation: null,
+    });
+    const order = track(e);
+    await e.submit("layers-after-change");
+    expect(order).toEqual([
+      ...Array(5).fill("translation-section"),
+      "translation-document",
+    ]);
+    expect(await step(e)).toMatchObject({ status: "done", calls: 0 });
+    const after = (await translateStep(e))!;
+    expect(after.output.translation).toMatchObject({
+      requested: 0,
+      sha256: first.output.translation.sha256,
+    });
+    expect(after.output.layers).toMatchObject({ status: "done" });
+    expect((await layersRow(e))!.translation_sha256).toBe(
+      first.output.translation.sha256,
+    );
+  } finally {
+    await e.close();
+  }
+}, 0);
+
+it("resumes a complete document without asking any model, also under the input keys written before translation came last", async () => {
+  const e = await fixture();
+  try {
+    await e.submit("complete");
+    const calls = e.modelCalls;
+    await e.submit("resume");
+    expect(e.modelCalls).toBe(calls);
+    // A document completed before ADR 0074 section 5: the layers key named
+    // the language and the translation file, the translate key no layers.
+    const part = await main(e);
+    const translation = String(
+      (await translateStep(e))!.output.translation.sha256,
+    );
+    const layersSha = (await layersRow(e))!.sha256;
+    const legacyLayers = await archiveLayersKeyBeforeTranslateLast(
+      part,
+      "zh-Hans",
+      translation,
+    );
+    const legacyTranslate = await archiveStepKey(
+      "",
+      "full",
+      part,
+      "translate",
+      null,
+      null,
+      "zh-Hans",
+    );
+    await e.app.close();
+    const db = new DatabaseSync(join(e.home, "catalog.sqlite"));
+    try {
+      const set = db.prepare(
+        "UPDATE archive_steps SET input_sha256=? WHERE step=?",
+      );
+      set.run(legacyLayers, "layers");
+      set.run(legacyTranslate, "translate");
+    } finally {
+      db.close();
+    }
+    await e.reopen();
+    await e.submit("resume-after-reorder");
+    expect(e.modelCalls).toBe(calls);
+    // Both steps were skipped, not run again: they keep their first output.
+    expect((await step(e))!.output.layers).toMatchObject({ redone: "all" });
+    expect((await translateStep(e))!.output.translation).toMatchObject({
+      requested: expect.any(Number),
+      reused: 0,
+    });
+    expect(
+      Number((await translateStep(e))!.output.translation.requested),
+    ).toBeGreaterThan(0);
+    // Nothing was written again; the receipts now carry the current keys.
+    expect((await layersRow(e))!.sha256).toBe(layersSha);
+    const store = new DocumentLayersStore(e.app.database, e.app.files);
+    const now = await main(e);
+    expect(now.steps.find((s) => s.step === "layers")).toMatchObject({
+      status: "done",
+      calls: 0,
+      input_sha256: await archiveStepKey("", "full", now, "layers", null, null),
+    });
+    expect(now.steps.find((s) => s.step === "translate")).toMatchObject({
+      status: "done",
+      calls: 0,
+      input_sha256: await archiveStepKey(
+        "",
+        "full",
+        now,
+        "translate",
+        null,
+        null,
+        "zh-Hans",
+        await store.originalSha256({
+          literature_id: e.id,
+          asset_id: now.asset_id,
+          document_version_id: now.document_version_id!,
+          content_version: now.content_version!,
+        }),
+      ),
     });
   } finally {
     await e.close();

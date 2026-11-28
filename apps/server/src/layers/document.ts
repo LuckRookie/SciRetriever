@@ -207,6 +207,31 @@ export class DocumentLayersStore {
       throw new Error("layers-integrity");
     return file;
   }
+  /**
+   * The identity of a content version's current original-language layers:
+   * the sha256 of the file without its translation part, so writing that
+   * part leaves it unchanged. null without complete layers of the current
+   * file version (none, not applicable, failed, stale or unreadable).
+   */
+  async originalSha256(
+    key: {
+      readonly literature_id: string;
+      readonly asset_id: string;
+      readonly document_version_id: string;
+      readonly content_version: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<string | null> {
+    const row = await this.row(key, signal);
+    if (row?.status !== "complete") return null;
+    try {
+      const file = await this.load(row, signal);
+      return sha(canonicalJsonBytes({ ...file, translation: null }));
+    } catch {
+      signal?.throwIfAborted();
+      return null;
+    }
+  }
   /** Write the file, then register it; one row per combination, replaced. */
   async publish(
     file: DocumentLayersFile,
@@ -348,12 +373,34 @@ export class DocumentLayersStore {
   }
 }
 
+/**
+ * Whether the `translate` step has nothing to write into a content
+ * version's layers (spec 10.5): they are not complete, there is no
+ * translation in the library language, the paper is already in it, or the
+ * translation part was made from the current translation file.
+ */
+export function layersTranslationCurrent(
+  layers: DocumentLayersRow | null,
+  translation: { readonly status: string; readonly sha256: string } | null,
+  language: TranslationLanguage,
+): boolean {
+  if (layers?.status !== "complete") return true;
+  if (!translation || translation.status === "same-language") return true;
+  return (
+    layers.translation_sha256 === translation.sha256 &&
+    layers.target_language === language
+  );
+}
+
 export interface LayersStepInput {
   readonly literature_id: string;
   readonly asset_id: string;
   readonly document_version_id: string;
   readonly annotation_id: string;
-  /** `from_step: layers`: redo everything. */
+  /**
+   * `build`: `from_step: layers`, redo the original. `translate`: redo the
+   * translation part although it was made from the current translation.
+   */
   readonly force: boolean;
 }
 type Usage = {
@@ -408,7 +455,11 @@ interface Original {
   readonly unavailable: boolean;
 }
 
-/** The archive step `layers` (ADR 0073, spec 10.3 to 10.5). */
+/**
+ * The archive step `layers` (ADR 0073, spec 10.3, 10.4): the original-language
+ * version only. Its translation part (10.5) is written by the `translate`
+ * step through `translate` (ADR 0074 section 5).
+ */
 export class DocumentLayersService {
   constructor(
     private readonly options: {
@@ -426,7 +477,11 @@ export class DocumentLayersService {
   get language() {
     return this.options.translations.language;
   }
-  /** The current translation file of a content version, as the step's input key sees it. */
+  /**
+   * The current translation file of a content version: the input key the
+   * `layers` step recorded before ADR 0074 section 5 named it
+   * (`archiveLayersKeyBeforeTranslateLast`).
+   */
   async translationSha256(
     document_version_id: string,
     content_version: string,
@@ -443,9 +498,222 @@ export class DocumentLayersService {
       )?.sha256 ?? null
     );
   }
+  /** The current original-language layers, as the `translate` step's input key sees them. */
+  originalSha256(
+    key: Parameters<DocumentLayersStore["originalSha256"]>[0],
+    signal?: AbortSignal,
+  ): Promise<string | null> {
+    return this.options.store.originalSha256(key, signal);
+  }
+  /** Whether `translate` has nothing to write into these layers (`layersTranslationCurrent`). */
+  async translationCurrent(
+    key: Parameters<DocumentLayersStore["originalSha256"]>[0],
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    return layersTranslationCurrent(
+      await this.options.store.row(key, signal),
+      await this.options.translations.row(
+        key.document_version_id,
+        key.content_version,
+        this.language,
+        signal,
+      ),
+      this.language,
+    );
+  }
   async build(input: LayersStepInput, signal?: AbortSignal) {
-    const { database, files, store, translations } = this.options;
+    const { store } = this.options;
+    const { plan, key, structure, result, usage } = await this.prepare(
+      input,
+      signal,
+    );
+    // Not applicable (spec 10.1): long documents first, then short papers.
+    const reason: LayersNotApplicableReason | null = structure.long_document
+      ? "long-document"
+      : plan.body_code_points < LAYERS_MIN_CODE_POINTS
+        ? "too-short"
+        : null;
+    if (reason) {
+      await store.publishNotApplicable(key, reason, signal);
+      return result({
+        status: "not-applicable",
+        reason,
+        redone: "all",
+        points: 0,
+        sha256: null,
+      });
+    }
+    const counts = (f: DocumentLayersFile) => ({
+      annotatable: plan.annotatable,
+      points: f.points.length,
+      sections: f.sections.length,
+      primary: f.points.filter((p) => p.primary).length,
+      dropped: f.dropped,
+    });
+    // Complete layers of this content version and file version are kept,
+    // with their translation part (the translate step's, spec 10.5).
+    const existing = input.force ? null : await store.row(key, signal);
+    if (existing?.status === "complete") {
+      let file: DocumentLayersFile | null = null;
+      try {
+        file = await store.load(existing, signal);
+      } catch {
+        signal?.throwIfAborted();
+      }
+      if (file)
+        return result({
+          status: "complete",
+          reason: null,
+          redone: "none",
+          ...counts(file),
+          sha256: existing.sha256,
+        });
+    }
+    const redone = "all";
+    const calls: Calls = { usage, model: null, answered: 0 };
+    const failure = (made: Original | null) =>
+      result({
+        status: "failed",
+        reason: null,
+        redone,
+        annotatable: plan.annotatable,
+        annotated: made?.annotated ?? 0,
+        points: made?.notes.length ?? 0,
+        primary: made?.primary ?? 0,
+        summary_missing: made?.summary_missing ?? true,
+        ...(made ? { dropped: made.dropped } : {}),
+        sha256: null,
+      });
+    let made: Original;
+    try {
+      made = await this.original(plan, calls, signal);
+    } catch (error) {
+      if (error instanceof ModelUnavailable)
+        throw new LayersStepError(
+          "layers-unavailable",
+          {
+            ...failure(null),
+            failure_code: "translation-model-unavailable",
+          },
+          { cause: error.cause },
+        );
+      throw error;
+    }
+    if (made.unavailable)
+      throw new LayersStepError("layers-unavailable", failure(made));
+    if (made.failed)
+      throw new LayersStepError("layers-incomplete", failure(made));
+    // Only the original language: the translate step writes the
+    // translation part afterwards (ADR 0074 section 5).
+    const file: DocumentLayersFile = {
+      schema_version: LAYERS_FILE_SCHEMA_VERSION,
+      literature_id: input.literature_id,
+      asset_id: input.asset_id,
+      document_version_id: key.document_version_id,
+      annotation_id: key.annotation_id,
+      content_version: key.content_version,
+      sentence_rule: SENTENCE_SPLIT_RULE,
+      digest: made.document!.digest,
+      sections: plan.groups.flatMap((g) => {
+        const line = made.lines.get(g.section_id);
+        return line ? [{ section_id: g.section_id, ...line }] : [];
+      }),
+      points: numberedPoints(made.notes, made.document),
+      data: made.document!.data,
+      model: calls.model ?? "unknown",
+      prompt_version: READING_LAYERS_PROMPT_VERSION,
+      dropped: made.dropped,
+      translation: null,
+    };
+    const row = await store.publish(file, signal);
+    return result({
+      status: "complete",
+      reason: null,
+      redone,
+      ...counts(file),
+      sha256: row.sha256,
+    });
+  }
+  /**
+   * The translation part of the current original-language layers (spec
+   * 10.5), written by the `translate` step after the full text is translated
+   * (ADR 0074 section 5). Nothing to write without complete layers of the
+   * current file version, without a translation in the library language, or
+   * for a paper already in that language. A part made from the current
+   * translation file is kept unless `force`. A part where nothing could be
+   * written is `layers-translation-incomplete`; the layers stay published.
+   */
+  async translate(input: LayersStepInput, signal?: AbortSignal) {
+    const { store, translations } = this.options;
     const language = translations.language;
+    const usage: Usage = { calls: 0, input_tokens: 0, output_tokens: 0 };
+    const result = (layers: Record<string, unknown>) => ({
+      layers,
+      usage: {
+        ...usage,
+        usage_complete:
+          usage.input_tokens !== null && usage.output_tokens !== null,
+      },
+    });
+    const notNeeded = () =>
+      result({ status: "not-needed", target_language: null });
+    const content_version = await archiveContentVersion(
+      input.document_version_id,
+      input.annotation_id,
+    );
+    const key = {
+      literature_id: input.literature_id,
+      asset_id: input.asset_id,
+      document_version_id: input.document_version_id,
+      content_version,
+    };
+    const row = await store.row(key, signal);
+    if (row?.status !== "complete") return notNeeded();
+    let file: DocumentLayersFile;
+    try {
+      file = await store.load(row, signal);
+    } catch {
+      signal?.throwIfAborted();
+      return notNeeded();
+    }
+    // The part needs the current translation of this content version in
+    // another language than the paper's (spec 10.5).
+    const translationRow = await translations.row(
+      input.document_version_id,
+      content_version,
+      language,
+      signal,
+    );
+    if (!translationRow || translationRow.status === "same-language")
+      return notNeeded();
+    if (!input.force && layersTranslationCurrent(row, translationRow, language))
+      return result({ status: "done", target_language: language });
+    let translationFile: DocumentTranslationFile;
+    try {
+      translationFile = await translations.load(translationRow, signal);
+    } catch {
+      signal?.throwIfAborted();
+      return notNeeded();
+    }
+    const { plan, markdown } = await this.prepare(input, signal);
+    const made = await this.translationPart(
+      file,
+      plan,
+      translationFile,
+      translationRow.sha256,
+      markdown,
+      usage,
+      signal,
+    );
+    await store.publish({ ...file, translation: made.part }, signal);
+    const output = result(made.summary);
+    if (made.summary.status === "incomplete")
+      throw new LayersStepError("layers-translation-incomplete", output);
+    return output;
+  }
+  /** The fixed version, its proofread text and annotation, and the plan of its layers. */
+  private async prepare(input: LayersStepInput, signal?: AbortSignal) {
+    const { database, files } = this.options;
     const fixed = await new SqliteDocumentStorage(
       database,
       files,
@@ -532,166 +800,7 @@ export class DocumentLayersService {
       },
       stats: { ...stats, requested: usage.calls > 0 },
     });
-    // Not applicable (spec 10.1): long documents first, then short papers.
-    const reason: LayersNotApplicableReason | null = structure.long_document
-      ? "long-document"
-      : plan.body_code_points < LAYERS_MIN_CODE_POINTS
-        ? "too-short"
-        : null;
-    if (reason) {
-      await store.publishNotApplicable(key, reason, signal);
-      return result({
-        status: "not-applicable",
-        reason,
-        redone: "all",
-        points: 0,
-        sha256: null,
-        translation: null,
-      });
-    }
-    // The translation part needs the current translation of this content
-    // version in another language than the paper's (spec 10.5).
-    const translationRow = await translations.row(
-      version.document_version_id,
-      content_version,
-      language,
-      signal,
-    );
-    let translationFile: DocumentTranslationFile | null = null;
-    if (translationRow && translationRow.status !== "same-language") {
-      try {
-        translationFile = await translations.load(translationRow, signal);
-      } catch {
-        translationFile = null;
-      }
-    }
-    const existing = input.force ? null : await store.row(key, signal);
-    let file: DocumentLayersFile | null = null;
-    if (existing?.status === "complete") {
-      try {
-        file = await store.load(existing, signal);
-      } catch {
-        file = null;
-      }
-    }
-    let redone: "all" | "translation" | "none" = "all";
-    const calls: Calls = { usage, model: null, answered: 0 };
-    if (file) {
-      const wanted = translationFile ? translationRow!.sha256 : null;
-      if (
-        (file.translation?.translation_sha256 ?? null) === wanted &&
-        (wanted === null || file.translation?.target_language === language)
-      )
-        redone = "none";
-      else redone = "translation";
-    } else {
-      const failure = (made: Original | null) =>
-        result({
-          status: "failed",
-          reason: null,
-          redone,
-          annotatable: plan.annotatable,
-          annotated: made?.annotated ?? 0,
-          points: made?.notes.length ?? 0,
-          primary: made?.primary ?? 0,
-          summary_missing: made?.summary_missing ?? true,
-          ...(made ? { dropped: made.dropped } : {}),
-          sha256: null,
-          translation: null,
-        });
-      let made: Original;
-      try {
-        made = await this.original(plan, calls, signal);
-      } catch (error) {
-        if (error instanceof ModelUnavailable)
-          throw new LayersStepError(
-            "layers-unavailable",
-            {
-              ...failure(null),
-              failure_code: "translation-model-unavailable",
-            },
-            { cause: error.cause },
-          );
-        throw error;
-      }
-      if (made.unavailable)
-        throw new LayersStepError("layers-unavailable", failure(made));
-      if (made.failed)
-        throw new LayersStepError("layers-incomplete", failure(made));
-      file = {
-        schema_version: LAYERS_FILE_SCHEMA_VERSION,
-        literature_id: input.literature_id,
-        asset_id: input.asset_id,
-        document_version_id: version.document_version_id,
-        annotation_id: annotation.annotation_id,
-        content_version,
-        sentence_rule: SENTENCE_SPLIT_RULE,
-        digest: made.document!.digest,
-        sections: plan.groups.flatMap((g) => {
-          const line = made.lines.get(g.section_id);
-          return line ? [{ section_id: g.section_id, ...line }] : [];
-        }),
-        points: numberedPoints(made.notes, made.document),
-        data: made.document!.data,
-        model: calls.model ?? "unknown",
-        prompt_version: READING_LAYERS_PROMPT_VERSION,
-        dropped: made.dropped,
-        translation: null,
-      };
-    }
-    let translationSummary: Record<string, unknown> = {
-      status: "not-needed",
-      target_language: null,
-    };
-    const counts = (f: DocumentLayersFile) => ({
-      annotatable: plan.annotatable,
-      points: f.points.length,
-      sections: f.sections.length,
-      primary: f.points.filter((p) => p.primary).length,
-      dropped: f.dropped,
-    });
-    if (redone !== "none") {
-      let part: LayersTranslationPart | null = null;
-      if (translationFile) {
-        const made = await this.translationPart(
-          file,
-          plan,
-          translationFile,
-          translationRow!.sha256,
-          markdown,
-          usage,
-          signal,
-        );
-        part = made.part;
-        translationSummary = made.summary;
-      }
-      file = { ...file, translation: part };
-      const row = await store.publish(file, signal);
-      const output = result({
-        status: "complete",
-        reason: null,
-        redone,
-        ...counts(file),
-        sha256: row.sha256,
-        translation: translationSummary,
-      });
-      if (translationSummary.status === "incomplete")
-        throw new LayersStepError("layers-translation-incomplete", output);
-      return output;
-    }
-    return result({
-      status: "complete",
-      reason: null,
-      redone,
-      ...counts(file),
-      sha256: existing!.sha256,
-      translation: file.translation
-        ? {
-            status: "done",
-            target_language: file.translation.target_language,
-          }
-        : translationSummary,
-    });
+    return { plan, key, structure, markdown, usage, result };
   }
   /** One request; `ModelUnavailable` when no model can be asked at all. */
   private async call(

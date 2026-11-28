@@ -14,15 +14,20 @@ import {
   type TranslationLanguage,
 } from "./translation.js";
 
+/**
+ * The archive steps in the order they run (ADR 0074 section 5): the steps
+ * before `translate` read only the original; `translate` comes last, after
+ * the original-language reading layers it also translates.
+ */
 export const ARCHIVE_STEPS = [
   "arrange",
   "proofread",
   "render",
-  "translate",
   "layers",
   "metadata",
   "references",
   "tags",
+  "translate",
 ] as const;
 export type ArchiveStep = (typeof ARCHIVE_STEPS)[number];
 /**

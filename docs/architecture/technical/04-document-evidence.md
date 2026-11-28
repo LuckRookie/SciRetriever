@@ -450,7 +450,7 @@ EvidenceRef 固定材料或文档表示和片段 hash；定位必须在固定版
 
 ### 6.5 生产编排、发布与历史读取
 
-新建档固定执行 `arrange → proofread → render → layers → metadata → references → tags → translate`（[ADR 0074](../decisions/0074-archive-steps-own-their-format-problems.md) 第 5 节，尚未实现；现行代码是 `render → translate → layers → metadata → references → tags`）；`layers` 与 `translate` 只在主 PDF 上执行，规则见[第 10 节](#10-阅读层概览与脉络)与[第 9 节](#9-全文的译文)。整理和逐页校订都绑定 `proofreading` 角色。`archive/text-pipeline.ts` 组装 source、整理、逐页校订与接纳清单；检查点和页缓存继续使用现有不可变 artifact、校订版本和 raw pin，不另建业务库。新的写入请求为 schema 2；旧步骤与旧写请求返回 `archive-contract-obsolete`，不把 document/structure 当作新步骤别名。
+新建档固定执行 `arrange → proofread → render → layers → metadata → references → tags → translate`（[ADR 0074](../decisions/0074-archive-steps-own-their-format-problems.md) 第 5 节）；整理、校订或渲染没有完成时整篇停下，后面的步骤因文章性质被排除或没有完成而停下时，`translate` 仍执行，它只依赖全文与阅读层。`layers` 与 `translate` 只在主 PDF 上执行，规则见[第 10 节](#10-阅读层概览与脉络)与[第 9 节](#9-全文的译文)。整理和逐页校订都绑定 `proofreading` 角色。`archive/text-pipeline.ts` 组装 source、整理、逐页校订与接纳清单；检查点和页缓存继续使用现有不可变 artifact、校订版本和 raw pin，不另建业务库。新的写入请求为 schema 2；旧步骤与旧写请求返回 `archive-contract-obsolete`，不把 document/structure 当作新步骤别名。
 
 render 从保留叶块及已记录 correct 确定性生成普通 Markdown、DocumentStructureV2 和叶块 UTF-8 source map。新建档及显式重新发布采用 `source-order-leaves-v4`：公式叶块有非空 LaTeX 时只输出 LaTeX，不再同时输出该叶块截图或将未使用截图加入资源闭包；LaTeX 为空时保留截图兜底。有表注的整理采用 `source-order-leaves-v6`（普通与长文档共用，其余排版同 v4/v5）。历史 `source-order-leaves-v3` 保留公式图片与文字并列的原行为，`arranged-leaves-v2` 保留原骨架渲染算法；固定旧版本读取与 hash 校验按记录的 builder 逐字节重建。同一 proofread 的派生 Markdown 按 builder 与内容 hash 分别登记，文档发布核对实际资源 hash/path，不覆盖旧排版资源。保留 payload 恰好出现一次，标题标记、公式分隔符、合并接缝、资源语法和段落分隔单独记录；不插自定义指令、HTML 注释或固定角色标题。原文顺序决定章节顺序，同角色可分多段，原文没有标题的章节 title=null。
 
@@ -962,8 +962,8 @@ HTTP 使用 `protocol_version: 1` 封套与现有维护认证；任务进度与�
 
 ### 9.3 作为建档的一步
 
-- 建档的步骤见 6.5：`translate` 排在最后，只在主 PDF 上执行（[ADR 0074](../decisions/0074-archive-steps-own-their-format-problems.md) 第 5 节，尚未实现）。它先逐段译全文（本节），再写阅读层的译文语言版本（10.5）；这篇没有阅读层时只译全文。
-- **输入**：这篇文献当前的校订稿内容版本与译文语言，以及当前的原文语言阅读层文件（没有时为空）。上次完成时都相同，这一步跳过；只有阅读层一项变了时，全文的译文照旧，只重做 10.5 的部分。`from_step` 取 `translate` 时强制重翻全部单元，不沿用旧译文也不读翻译缓存；取更早的步骤时照常沿用。提示词版本和模型的变化不触发重翻。
+- 建档的步骤见 6.5：`translate` 排在最后，只在主 PDF 上执行（[ADR 0074](../decisions/0074-archive-steps-own-their-format-problems.md) 第 5 节）。它先逐段译全文（本节），再写阅读层的译文语言版本（10.5）；这篇没有当前的阅读层时（短文、长文档、分层失败）只译全文。全文有缺译时，译文语言的版本照样按已译的段写。
+- **输入**：这篇文献当前的校订稿内容版本与译文语言，以及当前的原文语言阅读层（阅读层文件去掉译文部分后的 sha256，写译文部分不改变它；没有时为空）。上次完成时都相同，这一步跳过；只有阅读层一项变了时，这一内容版本完整的全文译文原样保留、不请求模型，只重做 10.5 的部分。`from_step` 取 `translate` 时强制重翻全部单元，不沿用旧译文也不读翻译缓存，并重做 10.5 的部分；取 `layers` 时只重做 10.5 的部分；取更早的步骤时照常沿用。提示词版本和模型的变化不触发重翻。本决定之前记下的输入键不含阅读层；阅读层的译文部分已按当前的译文写成时，它照样算相同，这一步跳过并改记新键。
 - **已经是译文语言的不翻译**，这一步直接完成，结果记 `same-language`。判断顺序：
   1. 书目的语言字段有值并且认得出时，比较语言（只比主语言，`zh`、`zh-CN`、`zh-Hans`、`zh-Hant` 算同一种；`English`、`eng` 这类写法按别名表认）。认不出的当作没有值。
   2. 没有值时看文字：统计可译单元里各文字系统的字符数，定出占多数的文字系统。它与译文语言所用的文字不同，就翻译；相同，就不翻译。汉字与假名并存时，假名不少于两者合计的一成算日文。同一种文字的不同语言（如德文资料、译文语言是英文）因此不会被翻译，补上书目的语言字段再建档即可。
@@ -1085,8 +1085,8 @@ HTTP 使用 `protocol_version: 1` 封套与现有维护认证；任务进度与�
 
 ### 10.3 作为建档的一步
 
-- 建档的步骤见 6.5。`layers` 只在主 PDF 上执行，排在 `render` 之后、`translate` 之前；它只写原文语言的版本，译文语言的版本在 `translate` 一步里写（10.5，[ADR 0074](../decisions/0074-archive-steps-own-their-format-problems.md) 第 5 节，尚未实现）。
-- **输入**：这篇文献当前的校订稿内容版本与阅读层文件的版本。上次完成时都相同，这一步跳过。`from_step` 取 `layers` 时强制重做，并使 `translate` 重做 10.5 的部分（全文的译文照旧）。提示词版本和模型的变化不触发重做。
+- 建档的步骤见 6.5。`layers` 只在主 PDF 上执行，排在 `render` 之后、`metadata` 之前；它只写原文语言的版本，译文语言的版本在 `translate` 一步里写（10.5，[ADR 0074](../decisions/0074-archive-steps-own-their-format-problems.md) 第 5 节）。
+- **输入**：这篇文献当前的校订稿内容版本与阅读层文件的版本。上次完成时都相同，这一步跳过。本决定之前记下的输入键另含译文语言与当前内容版本的译文文件；按当前的这两项算出相同时，它照样算相同，这一步跳过并改记新键。`from_step` 取 `layers` 时强制重做，并使 `translate` 重做 10.5 的部分（全文的译文照旧）。提示词版本和模型的变化不触发重做。
 - **模型**沿用翻译一步的选择，不新增配置键。提示词是固定的核心，带版本号，没有按资料类型的补丁（ADR 0061 第 5 节第 5 条）。写法的规则见 ADR 0073 第 2 节，写进分节的提示词。
 - **分节的调用**（`reading-layers-section-v5`），一节一次，各节并行：
   - 送出：题名；摘要（文档结构里摘要一节的各段，作背景；没有时为空）；全文的目录，各章节标题前写 `sN`，这一节前加 `▶`；这一节的各段，每段一行 `[pN] 段落|列表项|图注`，其下是这一段的原文，不分句、不编号；这一节的图表，每件一行 `[fN] figure|scheme|table: 图注`。`pN`、`fN`、`sN` 在全篇里唯一。
@@ -1105,7 +1105,7 @@ HTTP 使用 `protocol_version: 1` 封套与现有维护认证；任务进度与�
 - **结果**：有批语的段不少于可批的段的三分之二，主干不少于 3 条，`summary` 不为空：`done`，写出文件并登记。否则 `failed`，原因 `layers-incomplete`（带可批的段数、有批语的段数、主干数、`summary` 是否为空）；模型不可用为 `layers-unavailable`。失败时不发布阅读层。
   - 各节写完后有批语的段已不足三分之二时，不再做全篇的调用，直接 `layers-incomplete`。
   - 没有配置模型，或分节调用一次合乎 schema 的回答也没有得到（请求失败与不合 schema 的回答在模型层同为失败），为 `layers-unavailable`；各节有了回答而全篇调用两次都不合格，为 `layers-incomplete`。
-  - 回执 `output.layers`：完成时 `{status, reason, redone, annotatable, points, sections, primary, dropped, sha256, translation}`，失败时另有 `annotated` 与 `summary_missing`；`stats` 记 `pages`、`units`（段数）、`annotatable`、`sections`、`figures`、`body_code_points` 与 `requested`。
+  - 回执 `output.layers`：完成时 `{status, reason, redone, annotatable, points, sections, primary, dropped, sha256}`（`redone` 为 `all`，或这一内容版本已有当前文件版本的完整阅读层、照样保留时为 `none`；译文部分的回执在 `translate` 一步，10.5），失败时另有 `annotated` 与 `summary_missing`；`stats` 记 `pages`、`units`（段数）、`annotatable`、`sections`、`figures`、`body_code_points` 与 `requested`。
 - **失败不挡全文**：这一步失败不中断后面的步骤，产生的问题不影响文献是否就绪，与翻译一步相同。问题进入需处理；恢复建档时重做这一步。
 - **用量**：各次调用的调用数与 token 记入这一步的尝试记录；用量估算多出 `layers` 一项。它与其他步骤共用全进程的模型名额，不另加名额。
 
@@ -1119,11 +1119,11 @@ HTTP 使用 `protocol_version: 1` 封套与现有维护认证；任务进度与�
 
 ### 10.5 译文部分
 
-按 [ADR 0074](../decisions/0074-archive-steps-own-their-format-problems.md) 第 5 节（尚未实现），这一部分在 `translate` 一步里、全文译完之后写，写入阅读层文件的译文部分；现行代码在 `layers` 一步里写。全文已经是译文语言（9.3 的 `same-language`）或当前内容版本没有译文时，没有这一部分，阅读层只有文献自己的语言。否则译文语言的版本也逐节直接写，不从原文语言的版本翻过去（ADR 0073 第 5 节）：
+按 [ADR 0074](../decisions/0074-archive-steps-own-their-format-problems.md) 第 5 节，这一部分在 `translate` 一步里、全文译完之后写，只在库的默认语言里写（当场翻译成别的语言时没有这一部分，9.6.1），带着它把阅读层文件再发布一次并更新登记。这一内容版本没有当前文件版本的完整阅读层、全文已经是译文语言（9.3 的 `same-language`）或当前内容版本没有译文时，没有这一部分，阅读层只有文献自己的语言。否则译文语言的版本也逐节直接写，不从原文语言的版本翻过去（ADR 0073 第 5 节）：
 
 - **分节的调用**（`reading-layers-translation-v5`），一节一次，各节并行，在原文语言的各节与全篇调用之后：送出题名、这一节各段在库里的译文（不分句），以及每段原文版本的类别与它的依据原文。模型用译文语言为每段写 `statement`、`reason`、`label`、`key_terms`，并从这一段的译文里逐字摘出与各条依据对应的文字；为这一节写节旨与题。写法规则与原文版本相同。
 - **全篇的调用**：送出题名与各节、各段的译文版本批语，模型用译文语言写 `summary`、`limits` 各条的 `text`、`advice` 与它的 `places` 的文字、`data` 各行的 `quantity`（按原文版本的行序）。主干、关系、`value` 与出处沿用原文版本，不另给。
-- **核对**：批语、理由、题、重点词按 10.2 的规则；依据的摘录按 10.3 的规则在单元译文里定位，找到的换成单元译文里的 UTF-8 字节范围，否则这条依据的译文位置为空；去处的文字在 `advice` 的译文里逐字找得到才保留。某项没有得到译文时它的译文为空；全部为空时这一部分算没有做成，原因 `layers-translation-incomplete` 进入需处理，阅读层本身照常发布。
+- **核对**：批语、理由、题、重点词按 10.2 的规则；依据的摘录按 10.3 的规则在单元译文里定位，找到的换成单元译文里的 UTF-8 字节范围，否则这条依据的译文位置为空；去处的文字在 `advice` 的译文里逐字找得到才保留。某项没有得到译文时它的译文为空；全部为空时这一部分算没有做成，原因 `layers-translation-incomplete` 作为 `translate` 一步的问题进入需处理，不影响就绪，阅读层本身照常发布；恢复建档时再写这一部分。
 - 段与原文版本一一对应，类别取原文版本的。
 - 译文位置绑定译文文件的 sha256。译文重新发布之后，旧的位置不再使用，读取时按“没有确认”处理（10.7），再次建档时 `translate` 只重做这一部分。
 - 库里的译文缺译的段，它的译文版本批语为空。
@@ -1131,7 +1131,7 @@ HTTP 使用 `protocol_version: 1` 封套与现有维护认证；任务进度与�
   - 两次调用的输入都是 JSON。分节调用送 `{title, section, part, paragraphs: [{id, kind, text, evidence: [{id, original}]}]}`：`section` 是标题在库里的译文（缺译时用原文），只送原文版本有批语、库里有译文的段；依据按原文版本的依据编为 `e1`、`e2`…，回答的每段带 `evidence: [{id, quote}]`，按这些编号给译文里的逐字摘录，没有对应的给空字符串；摘录按 10.3 的规则定位，长度上限用译文文字的上限 1,200 个码点（译文可能比原文长），不合并。分份与对半拆开同原文版本，按译文的码点数分；拆开过的节，节旨用 10.3 的节旨调用从译文版本的批语写出，只附题名与这一节标题的译文。
   - 全篇调用送 `{title, sections: [{heading, line, notes: [{id, note}]}], write}`；`write` 是原文版本的提要、各条局限（`L1`…）、精读建议与它的各个去处（`P1`…）、各行数据的 `quantity`（`Q1`…），回答按这些编号逐项写，以保持与原文版本按下标对齐。
   - 译文版本的重点词是它自己的（在它的批语里按 `key-term-match-v1` 找得到，至多 2 个），不与原文的重点词一一对应。题不合格丢掉时，读取用原文版本的题。
-  - 回执 `output.layers.translation`：`{status: done|incomplete|not-needed, target_language, translation_sha256, points, translated_points, sections, translated_sections, digest, translated_digest, evidence, aligned, dropped}`，`dropped` 计 `points`、`sections`、`reasons`、`labels`、`key_terms`、`evidence`、`places`。
+  - 回执是 `translate` 一步的 `output.layers`：`{status: done|incomplete|not-needed, target_language, translation_sha256, points, translated_points, sections, translated_sections, digest, translated_digest, evidence, aligned, dropped}`，`dropped` 计 `points`、`sections`、`reasons`、`labels`、`key_terms`、`evidence`、`places`。译文部分已按当前的译文文件写成、这次没有重写时只有 `{status: done, target_language}`；没有可写的时为 `{status: not-needed, target_language: null}`。这一步的 `usage` 是全文与这一部分之和。
 
 ### 10.6 全文改动之后
 

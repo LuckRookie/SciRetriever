@@ -5,7 +5,7 @@
 - `service.ts`：内置提示词与 `TranslationService`。划词翻译用 `translationSystem`（版本 `TRANSLATION_PROMPT_VERSION`）、`normalizeTranslationText` 与 `translationKey`，每次一次结构化请求，返回 `{translation}`；模型取请求所带的、服务启动时已登记的模型，未指定时用 `analyze.model`。全文译文用 `documentTranslationSystem`（版本 `DOCUMENT_TRANSLATION_PROMPT_VERSION`，v2 起规定图、表、方案编号按合同包 `TRANSLATION_FIGURE_WORDS` 的写法）、`normalizeUnitText` 与 `documentUnitKey`，由 `translateUnits` 一批一次请求。
 - `TranslationService.structured`：用全文译文的模型选择（默认模型、角色 `translation`）发一次结构化请求，不读写缓存；模型不可用在请求前抛 `translation-model-unavailable`，取消抛 `translation-cancelled`，其余失败作为 `truncated` 或 `failed` 返回，调用计一次、token 未知。阅读层一步（`layers/`）用它，不另设模型配置。
 - `cache.ts`：`TranslationCache`，一个独立的 SQLite 文件 `~/.sciretriever/cache/translations.sqlite`，最多 `TRANSLATION_CACHE_LIMIT`（20,000）条，满了删除最久没有用到的一条。键为“提示词版本、目标语言、规范化原文”的 SHA-256，不含模型；每条记录所用模型。划词与全文共用这一个文件，提示词版本不同，键互不相交。
-- `document.ts`：建档的 `translate` 一步（`DocumentTranslationService`）与译文的登记和文件（`DocumentTranslationStore`）。
+- `document.ts`：建档的 `translate` 一步（`DocumentTranslationService`）与译文的登记和文件（`DocumentTranslationStore`）。这一步先译全文，再交给 `layers/` 的 `DocumentLayersService.translate` 写阅读层的译文部分。
 - `fulltext.ts`、`source.ts`：PDF 视图的对照翻译，读库里的译文，不请求模型。
 
 ## 划词翻译
@@ -16,14 +16,16 @@ HTTP 由 `workbench/http.ts` 提供：`GET /api/translation` 返回可选模型�
 
 ## 全文的译文（建档的 `translate` 一步）
 
+- **位置**：建档的最后一步，排在 `tags` 之后（ADR 0074 第 5 节）。先译全文（下面各条），再在库的默认语言里写阅读层的译文部分（规格 10.5，`layers/README.md`）；这篇没有当前的阅读层、全文已是译文语言，或当场翻译成别的语言时，只有全文。全文缺译时，译文部分仍按已译的单元写，这一步的问题是 `translation-incomplete`；只有译文部分什么也没写成时是 `layers-translation-incomplete`。
 - **单元**（`documentUnits`）：校订稿按 `arrangeSourceLayout` 排出的一段，合并段是一个单元，原文是各叶块校订后的文字按渲染 joiner 接起来；`unit_id` 是第一个叶块的编号，`segment_ids` 是全部叶块。只译首叶块类型为 `text`、`title`、`caption`、`list`、`footnote` 的段；章节角色为作者或参考文献的、以及首页文章信息（`layout.article_info`：单位、通讯作者与作者注释、收稿与发表日期）不译；其余文末信息（end-matter，含致谢、资助、文末的作者信息）照常翻译。每个单元的原文必须与固定 Markdown 中从首叶块到末叶块的字节一致（标题段允许前面的 `#` 标记），对不上的不译，计入 `stats.unmatched_units`。`source_sha256` 对未规范化的原文计算。
 - **同语言**（`alreadyInLanguage`）：书目语言字段能认出时只比主语言（`zh`、`zh-CN`、`zh-Hans`、`zh-Hant` 同为 `zh`，也认 `English`、`eng` 一类写法）；认不出或为空时，按可译单元的文字（公式除外）统计占多数的文字系统：拉丁、西里尔、谚文、汉字与假名（假名不少于汉字加假名的一成算日文，否则算中文）。与译文语言的文字相同就不译，结果为 `same-language`。
+- **原样保留**：这一内容版本这种语言已有 `complete` 或 `same-language` 的译文、且不是 `from_step: translate` 时，不请求模型、不重新发布，回执照这份文件写（`requested` 为 0）。这一步只因阅读层变了或 `from_step: layers` 而执行时就是这样。
 - **沿用**：取这篇文献这种语言最近一份译文，原文摘要相同的已译单元直接沿用；`from_step: translate` 不沿用、不读缓存，全部重译。更早的 `from_step` 照常沿用。
 - **分批与请求**：剩下的单元按文中顺序分批，每批不超过 `TRANSLATION_BATCH_MAX_CODE_POINTS`（6,000 码点）与 `TRANSLATION_BATCH_MAX_UNITS`（60 个），单个超长单元单独一批。请求体为 `{title, sections, units: [{id: "u1", text}…]}`，`title` 取书目标题，`sections` 是这批单元所在章节的标题，两者只作上下文；结构化返回 `{translations: [{id, translation}]}`。送出的文字在公式（`$…$`、`$$…$$`）之外做 NFKC、把空格与制表符合为一个，保留换行；公式内一字不改。
 - **校验与重试**：返回的译文里公式（排序后的 `$…$` 列表）与原文不同的单元算没翻好；没翻好或缺失的单元再请求一次，仍没有的记为缺译。回答因输出上限被截断（`agent-truncated`）的一批不原样重试，而是按单元对半拆成两批分别请求，拆出的批再被截断就继续对半；只剩一个单元仍被截断时，它记为缺译、不再请求，计入 `output.translation.truncated` 与 `stats.truncated_units`。截断的那次调用照常计一次，token 记为未知。每个通过的单元立刻写进翻译缓存，进程中断后重跑从缓存取回，不再请求模型。
 - **并发与用量**：同时进行的批数取 `[proofread].max_concurrent_pages`，模型名额与其他步骤共用。每次请求计一次调用，token 取模型回报的用量；失败的请求 token 记为未知（null），不填 0。
-- **结果**：全部有译文或同语言为 `done`；有缺译为 `failed`、`translation-incomplete`，模型不可用为 `failed`、`translation-unavailable`。已翻好的单元总是先发布（全部缺译时不发布）。失败不中断后面的步骤，问题不影响就绪；恢复建档时只请求缺译的单元。回执的 `output.translation` 为 `{status, units, translated, missing, reused, requested, batches, truncated, sha256}`，`stats` 另有 `pages`（用量估算按页的分母）。
-- **步骤的输入键**：`archiveStepKey(…, "translate", …, language)` 只由主 PDF、校订稿内容版本与译文语言决定，提示词与模型变化不触发重翻。
+- **结果**：全部有译文或同语言为 `done`；有缺译为 `failed`、`translation-incomplete`，模型不可用为 `failed`、`translation-unavailable`。已翻好的单元总是先发布（全部缺译时不发布）。失败不影响就绪；恢复建档时只请求缺译的单元。回执的 `output.translation` 为 `{status, units, translated, missing, reused, requested, batches, truncated, sha256}`，`output.layers` 是阅读层的译文部分（规格 10.5），`usage` 是两部分之和，`stats` 另有 `pages`（用量估算按页的分母）。
+- **步骤的输入键**：`archiveStepKey(…, "translate", …, language, layers)` 由主 PDF、校订稿内容版本、译文语言与当前原文语言阅读层的标识（没有时不写进键）决定，提示词与模型变化不触发重翻。`from_step: translate` 强制全文与阅读层部分，`from_step: layers` 只强制阅读层部分（`archive/input-key.ts` 的 `archiveTranslationForced`）。
 
 **存放**：一份译文是 ArtifactStore 里的一个不可变 JSON 文件（`parsed/translations/`），内容为 `DocumentTranslationFile`：`schema_version`、`literature_id`、`asset_id`、`document_version_id`、`annotation_id`、`content_version`、`target_language`、`status` 与按文中顺序的 `units`（`unit_id`、`segment_ids`、`source_sha256`、`translation`、`model`、`prompt_version`，缺译时后三项为 null）。库表 `document_translations` 每个“文献、主 PDF、内容版本、语言”一行，只记文件的引用、sha256、大小、单元数、已译数、状态与时间；同一组合再次发布时换成新的一份，旧文件仍登记为不可变对象。
 

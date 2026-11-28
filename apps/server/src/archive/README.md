@@ -12,9 +12,15 @@
 
 `input-key.ts` 统一步骤复用键；`reuse.ts` 只读检查当前原稿、人工决定、方法、模型及各步缓存，供启动前预估完整可复用篇数，不把部分复用计作整篇复用。
 
-建档步骤为 `arrange → proofread → render → translate → layers → metadata → references → tags`。`translate`（ADR 0068，实现在 `translation/document.ts`）只在主 PDF 上执行，输入键为“主 PDF、校订稿内容版本、译文语言”，相同且上次完成时跳过；只有 `from_step: translate` 强制重译全部单元。它与 `references` 一样失败不中断后面的步骤，问题的 `affects_readiness` 为 false；原因只有 `translation-incomplete` 与 `translation-unavailable`，后者的原始失败码记在 `output.failure_code`。运行时没有接上 `translate` 时（只测其他步骤的测试）这一步不出现。已有全文、没有译文的文献再次建档时，前三步靠各自的复用不调用模型，后三步按输入键跳过，只有这一步调用模型。
+建档步骤为 `arrange → proofread → render → layers → metadata → references → tags → translate`（ADR 0074 第 5 节）：翻译之前的各步只用原文。`translate` 之外的步骤停下时（被排除的文章性质，或元数据、标签没有完成），后面的步骤不再执行，`translate` 仍执行：它只依赖全文与阅读层。整理、校订或渲染没有完成时整篇停下。
 
-`layers`（ADR 0069，实现在 `layers/document.ts`）同样只在主 PDF 上执行，输入键为“主 PDF、校订稿内容版本、译文语言、当前内容版本的译文文件 sha256”；只有 `from_step: layers` 强制全部重做（它不强制后面的 `metadata`、`references`、`tags`：它们不依赖译文与阅读层，规则在 `input-key.ts` 的 `archiveStepForced`），只有译文文件变了时这一步只重做译文部分。失败不中断后面的步骤、不影响就绪；原因为 `layers-incomplete`、`layers-translation-incomplete` 与 `layers-unavailable`（原始失败码记在 `output.failure_code`）。运行时没有接上 `layers` 时这一步不出现。`reuse.ts` 的 `layersPending` 判断主 PDF 是否还要这一步，供整篇复用与用量估算。
+`layers`（ADR 0069，实现在 `layers/document.ts`）只在主 PDF 上执行，只写原文语言的版本，输入键为“主 PDF、校订稿内容版本、阅读层文件版本”；只有 `from_step: layers` 强制重做。失败不中断后面的步骤、不影响就绪；原因为 `layers-incomplete` 与 `layers-unavailable`（原始失败码记在 `output.failure_code`）。运行时没有接上 `layers` 时这一步不出现。
+
+`translate`（ADR 0068，实现在 `translation/document.ts`）只在主 PDF 上执行：先译全文，再写阅读层的译文部分（`DocumentLayersService.translate`，只在库的默认语言里写；当场翻译成别的语言时只译全文）。输入键为“主 PDF、校订稿内容版本、译文语言、当前原文语言阅读层的标识（`DocumentLayersStore.originalSha256`，阅读层文件去掉译文部分后的 sha256；没有时不写进键）”，相同且上次完成时跳过。只有阅读层变了时，这一内容版本完整的全文译文原样保留、不请求模型，只重做阅读层的译文部分。它与 `references` 一样失败不中断后面的步骤，问题的 `affects_readiness` 为 false；原因为 `translation-incomplete`、`translation-unavailable`（原始失败码记在 `output.failure_code`）与 `layers-translation-incomplete`（阅读层的译文部分什么也没写成）。回执的 `output.translation` 是全文，`output.layers` 是阅读层的译文部分。运行时没有接上 `translate` 时（只测其他步骤的测试）这一步不出现。
+
+`from_step` 的含义都在 `input-key.ts`：`archiveStepForced` 说一步是否强制执行，`archiveTranslationForced` 说 `translate` 里强制哪一部分。`from_step: layers` 强制 `layers` 与 `translate` 的阅读层部分（全文的译文复用）；`from_step: translate` 强制全文与阅读层部分；两者都不强制 `metadata`、`references`、`tags`。
+
+本决定之前记下的输入键照常有效：`layers` 的旧键另含译文语言与译文文件的 sha256（`archiveLayersKeyBeforeTranslateLast`），与当前内容版本、文件版本、语言和译文文件算出的相同时，这一步跳过并改记新键；`translate` 的旧键不含阅读层，阅读层的译文部分已按当前译文文件写成（`layersTranslationCurrent`）时同样跳过并改记新键。已完成的文献因此恢复建档时不调用模型、不重写文件。`reuse.ts` 的 `layersPending`、`translationPending` 按同样的规则判断主 PDF 是否还要这两步，供整篇复用与用量估算。
 
 `text-pipeline.ts` 是生产六步前半段的组装：中性 source、整理、逐页校订、文本清单 CAS、文档/注释发布和索引刷新。`render.ts` 只生成确定性 Markdown、结构、source map 与派生注释；`arrangement-access.ts` 提供固定版本查询、人工恢复/重归属与锁，`markdown-edit.ts` 校验整份 Markdown 的唯一叶块映射。
 

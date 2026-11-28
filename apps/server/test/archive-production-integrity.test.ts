@@ -354,15 +354,16 @@ it("estimates no-history and partial text reuse without running a model or creat
       total: { calls: null, input_tokens: null, output_tokens: null },
     });
     // Translation is estimated by the primary PDF's pages (ADR 0068).
+    // In the order the steps run (ADR 0074 section 5).
     expect(initial.components.map((c) => c.step)).toEqual([
       "arrange",
       "proofread",
       "render",
-      "translate",
       "layers",
       "metadata",
       "references",
       "tags",
+      "translate",
     ]);
     expect(
       initial.components.find((c) => c.step === "translate"),

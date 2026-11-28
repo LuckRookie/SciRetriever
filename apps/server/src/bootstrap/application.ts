@@ -69,6 +69,7 @@ import { fullTextSource } from "../translation/source.js";
 import {
   DocumentLayersService,
   DocumentLayersStore,
+  layersTranslationCurrent,
 } from "../layers/document.js";
 import { OpenAIChatAdapter, OpenAIResponsesAdapter } from "../agents/openai.js";
 import type { AgentTransport } from "../agents/protocol.js";
@@ -1903,18 +1904,6 @@ async function createApplicationOwned(
       new SqliteArchiveTextStorage(database, files),
     );
     const parser = documentProcessing;
-    const archiveTranslation = new DocumentTranslationService({
-      database,
-      files,
-      store: translationStore,
-      translation,
-      concurrency: configuration.proofread.max_concurrent_pages,
-      metadata: async (literatureId, signal) => {
-        const { metadata } = (await metadataFields.read(literatureId, signal))
-          .literature;
-        return { title: metadata.title, language: metadata.language };
-      },
-    });
     const archiveLayers = new DocumentLayersService({
       database,
       files,
@@ -1925,6 +1914,20 @@ async function createApplicationOwned(
         title: (await metadataFields.read(literatureId, signal)).literature
           .metadata.title,
       }),
+    });
+    // The translate step also writes the layers' translation part (ADR 0074 section 5).
+    const archiveTranslation = new DocumentTranslationService({
+      database,
+      files,
+      store: translationStore,
+      translation,
+      layers: archiveLayers,
+      concurrency: configuration.proofread.max_concurrent_pages,
+      metadata: async (literatureId, signal) => {
+        const { metadata } = (await metadataFields.read(literatureId, signal))
+          .literature;
+        return { title: metadata.title, language: metadata.language };
+      },
     });
     const archiveOrchestrator = new ArchiveOrchestrator(database, {
       translate: archiveTranslation,
@@ -2737,6 +2740,19 @@ export async function createQueryApplication(
               signal,
             )
           )?.sha256 ?? null,
+        originalSha256: (key, signal) =>
+          queryLayers.originalSha256(key, signal),
+        translationCurrent: async (key, signal) =>
+          layersTranslationCurrent(
+            await queryLayers.row(key, signal),
+            await queryTranslations.row(
+              key.document_version_id,
+              key.content_version,
+              configuration.translation.target_language,
+              signal,
+            ),
+            configuration.translation.target_language,
+          ),
       },
     );
     const estimating = new UsageEstimator(
@@ -2770,7 +2786,8 @@ export async function createQueryApplication(
         }),
       ),
       (part, signal) => archiveReuse.textWork(part, signal),
-      (part) => archiveReuse.translationPending(part),
+      (literatureId, part, signal) =>
+        archiveReuse.translationPending(literatureId, part, signal),
       (part, signal) => archiveReuse.layersPending(part, signal),
     );
     return {
