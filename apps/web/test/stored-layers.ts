@@ -122,10 +122,12 @@ interface FixturePoint {
   kind: Kind;
   primary?: boolean;
   terms: readonly (readonly [string, string])[];
-  /** Its sentences, with their numbers in the paragraph (technical 04 §3.5). */
+  /**
+   * Its quotes (ADR 0074: a sentence, or the part of one that carries the
+   * point), with the numbers of the sentences they lie in (technical 04
+   * §3.5). A primary note's basis is its first.
+   */
   evidence: readonly { text: string; zh: string; n: number }[];
-  /** A part of the first evidence the overview shows (primary points). */
-  basis?: string;
   relations?: readonly { word: string; points: readonly number[] }[];
 }
 /** One note for every paragraph long enough for one (all but `b0`). */
@@ -182,7 +184,6 @@ export const LAYERS_POINTS: readonly FixturePoint[] = [
         n: 4,
       },
     ],
-    basis: "density and stability can be raised together",
   },
   {
     unit: "b1",
@@ -221,9 +222,10 @@ export const LAYERS_POINTS: readonly FixturePoint[] = [
       ["cation", "阳离子"],
     ],
     evidence: [
+      // Inside its sentence at both ends.
       {
-        text: "The measured values are on average 12 % below the computed ones, and the gap grows with the cation's size.",
-        zh: "实测值平均比计算值低 12 %，且差距随阳离子增大而增大。",
+        text: "on average 12 % below the computed ones",
+        zh: "平均比计算值低 12 %",
         n: 2,
       },
       // Mostly formula: found by its TeX, not by KaTeX's glyphs.
@@ -233,7 +235,6 @@ export const LAYERS_POINTS: readonly FixturePoint[] = [
         n: 4,
       },
     ],
-    basis: "on average 12 % below the computed ones",
     relations: [{ word: "based_on", points: [1] }],
   },
   {
@@ -251,9 +252,10 @@ export const LAYERS_POINTS: readonly FixturePoint[] = [
     primary: true,
     terms: [["hydrogen-bond network", "氢键网络"]],
     evidence: [
+      // Inside its sentence at the start; the stop after it is not more words.
       {
-        text: "The two most stable salts both form a three-dimensional hydrogen-bond network.",
-        zh: "最稳定的两种盐都形成三维氢键网络。",
+        text: "both form a three-dimensional hydrogen-bond network",
+        zh: "都形成三维氢键网络",
         n: 2,
       },
       {
@@ -262,7 +264,6 @@ export const LAYERS_POINTS: readonly FixturePoint[] = [
         n: 4,
       },
     ],
-    basis: "both form a three-dimensional hydrogen-bond network",
     relations: [{ word: "follows", points: [3] }],
   },
   {
@@ -288,9 +289,10 @@ export const LAYERS_POINTS: readonly FixturePoint[] = [
         zh: "决定这些盐稳定性的是氢键网络，而不仅是密度。",
         n: 1,
       },
+      // Inside its sentence at the end.
       {
-        text: "Long-term ageing was not studied and remains open.",
-        zh: "长期老化没有研究，仍是未决问题。",
+        text: "Long-term ageing was not studied",
+        zh: "长期老化没有研究",
         n: 4,
       },
     ],
@@ -719,22 +721,11 @@ export async function storedLayers(page: Page, options: LayersOptions = {}) {
               },
               primary: LAYERS_POINTS.flatMap((p, i) => {
                 if (!p.primary) return [];
-                const first = sentence(p.evidence[0]!);
-                const at = p.basis ? where(p.basis) : null;
+                // The basis is the first evidence (technical 04 §10.2).
                 return [
                   {
                     ...head(p, i),
-                    basis: {
-                      ...first,
-                      ...(at
-                        ? {
-                            start_utf8: at.start,
-                            end_utf8: at.end,
-                            text: p.basis!,
-                          }
-                        : {}),
-                      fallback: !at,
-                    },
+                    basis: { ...sentence(p.evidence[0]!), fallback: false },
                   },
                 ];
               }),

@@ -4,6 +4,7 @@ import {
   captionParts,
   figureName,
   figureNameIn,
+  quoteCut,
   type LayersModel,
   type LayersPort,
 } from "../src/reading/layers/model.js";
@@ -86,6 +87,7 @@ const port = {
   section: () => null,
   blocks: () => [],
   blockAt: () => undefined,
+  unit: () => null,
   figure: (id: string) =>
     id === "fig-8"
       ? figure(id, "figure", "Fig. 8")
@@ -215,3 +217,36 @@ it("reads a block's own words without the source control it carries", async () =
     await browser.close();
   }
 }, 30_000);
+
+// A quote is cut where it begins or ends inside a sentence (ADR 0074); a
+// sentence's edge is space, punctuation and a citation, not more words.
+it("finds where a quote begins or ends inside its sentence", () => {
+  const text =
+    "密度较大的盐放能更多。Densities range from 1.71 to 1.86. The measured values are on average 12 % below the computed ones.$^{3}$ “Networks decide.”";
+  const at = (quote: string) => {
+    const i = text.indexOf(quote);
+    const bytes = (s: string) => new TextEncoder().encode(s).length;
+    const start = bytes(text.slice(0, i));
+    return quoteCut(text, false, start, start + bytes(quote));
+  };
+  expect(at("on average 12 % below")).toEqual({ before: true, after: true });
+  expect(at("on average 12 % below the computed ones")).toEqual({
+    before: true,
+    after: false,
+  });
+  expect(at("The measured values are")).toEqual({
+    before: false,
+    after: true,
+  });
+  expect(at("Densities range from 1.71 to 1.86")).toEqual({
+    before: false,
+    after: false,
+  });
+  expect(at("Networks decide")).toEqual({ before: false, after: false });
+  expect(at("盐放能更多")).toEqual({ before: true, after: false });
+  // A caption is one sentence whole.
+  expect(quoteCut("Fig. 2. Curves. More.", true, 8, 14)).toEqual({
+    before: true,
+    after: true,
+  });
+});

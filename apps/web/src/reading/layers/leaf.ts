@@ -8,9 +8,12 @@ import type { DocumentTextMode } from "../contract.js";
 import {
   KIND_NAMES,
   RELATION_NAMES,
+  alignedTranslation,
   captionHTML,
   captionParts,
+  cutClass,
   escape,
+  evidenceCut,
   figureName,
   headingHTML,
   langOf,
@@ -128,7 +131,10 @@ const gangHTML = (
 /**
  * A sentence evidence as a 目: the author's words. Its paragraph's number
  * stands in the left margin when it is not the note's own; `gap` puts a
- * faint “…” before it (not the sentence after the one before).
+ * faint “…” before it (not the sentence after the one before). A quote
+ * that begins or ends inside a sentence (ADR 0074) has the same faint “…”
+ * there; so has its translated quote, while a whole paragraph's
+ * translation standing in for one has none.
  */
 function sentenceHTML(
   e: Extract<LayersReadEvidence | LayersReadBasis, { kind: "sentence" }>,
@@ -136,27 +142,29 @@ function sentenceHTML(
   terms: { original: readonly string[]; translation: readonly string[] },
   port: LayersPort,
   mode: DocumentTextMode,
-  cut = false,
   own: number | null = null,
   gap = false,
 ): string {
   const n = paragraphOf(port, e.start_utf8, e.paragraph);
-  const original = `<span lang="${langOf(e.text)}">${richHTML(e.text, terms.original)}</span>`;
-  const t =
-    "translation" in e && mode !== "original"
-      ? sentenceWords(
-          e as Extract<LayersReadEvidence, { kind: "sentence" }>,
-          mode,
-        )
+  const cut = cutClass(evidenceCut(port, e));
+  const span = (text: string, cls: string, words: readonly string[]) =>
+    `<span${cls ? ` class="${cls}"` : ""} lang="${langOf(text)}">${richHTML(text, words)}</span>`;
+  const original = span(e.text, cut, terms.original);
+  const sentence =
+    "translation" in e || "translated" in e
+      ? (e as Extract<LayersReadEvidence, { kind: "sentence" }>)
       : null;
+  const t =
+    sentence && mode !== "original" ? sentenceWords(sentence, mode) : null;
+  const trCut = sentence && alignedTranslation(sentence) ? cut : "";
   const body =
     t?.translated && mode === "translation"
-      ? `<span lang="${langOf(t.text)}">${richHTML(t.text, terms.translation)}</span>`
+      ? span(t.text, trCut, terms.translation)
       : t?.translated && mode === "bilingual"
-        ? `${original}<span class="rl-mu-tr" lang="${langOf(t.text)}">${richHTML(t.text, terms.translation)}</span>`
+        ? `${original}${span(t.text, `rl-mu-tr${trCut ? ` ${trCut}` : ""}`, terms.translation)}`
         : original;
   return (
-    `<p class="rl-mu-s${cut ? " rl-cut" : ""}${gap ? " rl-gap" : ""}" data-ev="${key}" data-f="ev:${key}" ` +
+    `<p class="rl-mu-s${gap ? " rl-gap" : ""}" data-ev="${key}" data-f="ev:${key}" ` +
     `data-start="${e.start_utf8}">${n === own ? "" : `<span class="rl-pn"><i>¶${n}</i></span>`}${body}</p>`
   );
 }
@@ -459,7 +467,6 @@ export function outlineLeaf(
           termsOf(p),
           port,
           mode,
-          false,
           own,
           i > 0 && !follows(p.evidence[i - 1], e),
         );
@@ -573,29 +580,28 @@ export function overviewLeaf(
     let body = "";
     const own = paragraphNo(model, p.number);
     const basis = p.basis;
-    // In a translated reading the line is the translation of the sentence
-    // the excerpt lies in (cut from the full text's own translation); the
-    // original keeps the excerpt.
+    // The line is the note's first evidence (ADR 0074): in a translated
+    // reading its translated quote, the same evidence among the note's own
+    // carrying it; without a translation, the original's quote.
     const evidence = model.byNumber.get(p.number)?.evidence ?? [];
-    const whole =
+    const same =
       basis.kind === "sentence" && mode !== "original"
         ? evidence.findIndex(
             (e) =>
               e.kind === "sentence" &&
-              e.start_utf8 <= basis.start_utf8 &&
-              e.end_utf8 >= basis.end_utf8 &&
+              e.start_utf8 === basis.start_utf8 &&
+              e.end_utf8 === basis.end_utf8 &&
               ("translation" in e ? !!e.translation?.text : !!e.translated),
           )
         : -1;
-    const sentence = evidence[whole];
+    const sentence = evidence[same];
     if (sentence?.kind === "sentence")
       body = sentenceHTML(
         sentence,
-        `${p.number}:${whole}`,
+        `${p.number}:${same}`,
         termsOf(p),
         port,
         mode,
-        false,
         own,
       );
     else if (basis.kind === "sentence")
@@ -605,7 +611,6 @@ export function overviewLeaf(
         termsOf(p),
         port,
         "original",
-        true,
         own,
       );
     else {

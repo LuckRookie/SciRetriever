@@ -127,6 +127,28 @@ it("shows the notes beside the full text and the other layers of an annotated co
       "Earlier reports measured only the onset temperature.",
     );
     expect(first).not.toMatch(/\d\s*$/u);
+    // A quote that is part of its sentence (ADR 0074): the marks and the
+    // pen on the rule are the quote's, not the whole sentence's.
+    const part = LAYERS_POINTS[3]!.evidence[0]!;
+    expect(
+      (
+        await page
+          .locator(`${sheet} article .rl-ev[data-ev="4:0"]`)
+          .allTextContents()
+      ).join(""),
+    ).toBe(part.text);
+    const pen = await page.evaluate((root) => {
+      const at = document.querySelector(root)!;
+      const spans = [
+        ...at.querySelectorAll<HTMLElement>('article .rl-ev[data-ev="4:0"]'),
+      ];
+      const stroke = at.querySelector('.rl-stroke[data-point="4"]')!;
+      const head = spans[0]!.getClientRects()[0]!,
+        tail = [...spans.at(-1)!.getClientRects()].at(-1)!;
+      const r = stroke.getBoundingClientRect();
+      return [r.top - head.top, tail.bottom - r.bottom];
+    }, sheet);
+    expect(pen.every((d) => Math.abs(d - 6) < 2)).toBe(true);
     await shot(page, "01-full");
     // 脉络: every body paragraph, as its 纲 (with its reason) and 目, or as
     // it is; every section's line under its heading.
@@ -166,6 +188,27 @@ it("shows the notes beside the full text and the other layers of an annotated co
         0,
       ),
     );
+    // A quote that begins or ends inside its sentence (ADR 0074) has the
+    // same faint “…” there: before and after, before only, after only.
+    const cut = (line: string) =>
+      page
+        .locator(`${sheet} ${line} > span:not(.rl-pn)`)
+        .first()
+        .evaluate((s) => [
+          getComputedStyle(s, "::before").content,
+          getComputedStyle(s, "::after").content,
+        ]);
+    const both = ['"…"', '"…"'],
+      before = ['"…"', "none"],
+      after = ["none", '"…"'],
+      none = ["none", "none"];
+    expect(await cut('.rl-mu-s[data-ev="4:0"]')).toEqual(both);
+    expect(await cut('.rl-mu-s[data-ev="5:0"]')).toEqual(before);
+    expect(await cut('.rl-mu-s[data-ev="6:1"]')).toEqual(after);
+    expect(await cut('.rl-mu-s[data-ev="1:0"]')).toEqual(none);
+    expect(
+      await page.locator(`${sheet} .rl-mu-s[data-ev="4:0"]`).textContent(),
+    ).toBe(part.text);
     const numbers = await page
       .locator(`${sheet} .rl-gang > .rl-gang-no`)
       .allTextContents();
@@ -217,11 +260,22 @@ it("shows the notes beside the full text and the other layers of an annotated co
         )
           if (n.matches(".rl-gang"))
             out.push(
-              n.querySelectorAll(".rl-mu-s").length + ":" + n.dataset.point,
+              n.querySelectorAll(".rl-mu-s").length +
+                ":" +
+                (n as HTMLElement).dataset.point,
             );
         return out;
       });
     expect(second).toEqual(["1:4", "1:5"]);
+    // The line a main note rests on is its first quote, cut the same way.
+    expect(await cut('.rl-gang[data-point="4"] .rl-mu-s')).toEqual(both);
+    expect(await cut('.rl-gang[data-point="5"] .rl-mu-s')).toEqual(before);
+    expect(await cut('.rl-gang[data-point="2"] .rl-mu-s')).toEqual(none);
+    expect(
+      await page
+        .locator(`${sheet} .rl-gang[data-point="4"] .rl-mu-s`)
+        .textContent(),
+    ).toBe(part.text);
     expect(await page.locator(`${sheet} .rl-dt tbody tr`).count()).toBe(3);
     await shot(page, "03-overview");
     // A click opens more in place (reading-experience 3.2, 3.3): a main note
@@ -259,6 +313,23 @@ it("shows the notes beside the full text and the other layers of an annotated co
     await para.first().waitFor();
     await page.keyboard.press("Escape");
     await expect.poll(() => para.count()).toBe(0);
+    // A quote that is part of its sentence opens to its paragraph with the
+    // quote marked, not the sentence around it.
+    const partLine = page.locator(`${sheet} .rl-mu-s[data-ev="4:0"]`);
+    await partLine.scrollIntoViewIfNeeded();
+    await partLine.click();
+    await para.first().waitFor();
+    await settled(page);
+    expect(
+      (
+        await para.first().locator('.rl-ev[data-ev="4:0"]').allTextContents()
+      ).join(""),
+    ).toBe(part.text);
+    expect(await para.first().textContent()).toContain(
+      "The measured values are on average 12 % below the computed ones, and the gap grows",
+    );
+    await page.keyboard.press("Escape");
+    await expect.poll(() => para.count()).toBe(0);
     // Opened, then 全文 by the bar: the full text at that paragraph.
     await line.click();
     await para.first().waitFor();
@@ -294,6 +365,16 @@ it("shows the notes beside the full text and the other layers of an annotated co
       .poll(() => page.locator(`${sheet} .rl-ms-sl`).textContent())
       .toBe(LAYERS_SECTIONS["2. Thermal behaviour"].statement);
     expect(await page.locator(`${sheet} .rl-ms-t .rl-reason`).count()).toBe(1);
+    // A quote inside its sentence has its “…” in the panel too.
+    await page.locator(`${sheet} .rl-mn-leaf[data-leaf="4"]`).hover();
+    await expect
+      .poll(() =>
+        page
+          .locator(`${sheet} .rl-ms-h .rl-gang-no`)
+          .getAttribute("data-point"),
+      )
+      .toBe("4");
+    expect(await cut(".rl-ms-mu p")).toEqual(both);
     expect(
       await page.locator(`${sheet} .rl-ms-h .rl-gang-no`).textContent(),
     ).toMatch(/^¶\d+$/u);
@@ -353,6 +434,21 @@ it("reads an annotated copy in translation (reading-experience 3.3.2, 9)", async
     expect(
       await page.locator(`${sheet} .rl-plain`).first().textContent(),
     ).toContain("所有测量都重复了三次。");
+    // The evidence is the translated quote, not its sentence's translation
+    // (ADR 0074), cut where the original is.
+    const part = LAYERS_POINTS[3]!.evidence[0]!;
+    const quoteCut = (line: string) =>
+      page
+        .locator(`${sheet} ${line} > span:not(.rl-pn)`)
+        .first()
+        .evaluate((s) => [
+          getComputedStyle(s, "::before").content,
+          getComputedStyle(s, "::after").content,
+        ]);
+    expect(
+      await page.locator(`${sheet} .rl-mu-s[data-ev="4:0"]`).textContent(),
+    ).toBe(part.zh);
+    expect(await quoteCut('.rl-mu-s[data-ev="4:0"]')).toEqual(['"…"', '"…"']);
     await shot(page, "06-outline-translation");
     await view(page, "概览").click();
     await shows(page, "overview");
@@ -360,6 +456,11 @@ it("reads an annotated copy in translation (reading-experience 3.3.2, 9)", async
     expect(
       await page.locator(`${sheet} .rl-osl`).first().textContent(),
     ).toContain(LAYERS_SECTIONS["1. Salts and their structures"].zh);
+    expect(
+      await page
+        .locator(`${sheet} .rl-gang[data-point="4"] .rl-mu-s`)
+        .textContent(),
+    ).toBe(part.zh);
     await shot(page, "07-overview-translation");
     await view(page, "全文").click();
     await shows(page, "full");
@@ -369,6 +470,13 @@ it("reads an annotated copy in translation (reading-experience 3.3.2, 9)", async
         page.locator(`${sheet} .rl-side .rl-pi-t`).first().textContent(),
       )
       .toContain("六种三唑盐");
+    expect(
+      (
+        await page
+          .locator(`${sheet} article .rl-ev[data-ev="4:0"]`)
+          .allTextContents()
+      ).join(""),
+    ).toBe(part.zh);
     await shot(page, "08-full-translation");
   } finally {
     await w.close();

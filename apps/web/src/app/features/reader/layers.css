@@ -444,8 +444,10 @@
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
-  .rl-mu-s.rl-cut > span:not(.rl-pn)::before,
-  .rl-mu-s.rl-cut > span:not(.rl-pn)::after {
+  /* A quote that begins or ends inside its sentence (ADR 0074): the same
+     faint “…” there, outside the author's words. */
+  .rl-cut-s::before,
+  .rl-cut-e::after {
     content: "…";
     color: var(--fg3);
   }

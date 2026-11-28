@@ -398,9 +398,13 @@ export function attachLayers(
     if (which === "basis") {
       const basis = model.primary.find((q) => q.number === p.number)?.basis;
       if (basis?.kind !== "sentence") return null;
-      // The same sentence among the note's own carries its translation.
+      // The same quote among the note's own (its first, ADR 0074) carries
+      // its translation.
       const i = p.evidence.findIndex(
-        (e) => e.kind === "sentence" && e.start_utf8 === basis.start_utf8,
+        (e) =>
+          e.kind === "sentence" &&
+          e.start_utf8 === basis.start_utf8 &&
+          e.end_utf8 === basis.end_utf8,
       );
       const same = p.evidence[i];
       return same?.kind === "sentence"

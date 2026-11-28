@@ -1498,6 +1498,9 @@ export async function renderDocument(
     ctx.signal.throwIfAborted();
     if (data.text !== "original") await ensureUnits();
     const starts = new Map(segments.map((s) => [s.segment_id, s.start_utf8]));
+    const segmentsById = new Map(segments.map((s) => [s.segment_id, s]));
+    let encoded = new Uint8Array(0),
+      encodedFor = -1;
     const figures = new Map<string, LayerFigure>();
     for (const group of layout?.figure_groups ?? []) {
       const captionText = group.captions
@@ -1570,6 +1573,22 @@ export async function renderDocument(
         };
       },
       figure: (id) => figures.get(id) ?? null,
+      unit: (id) => {
+        const s = segmentsById.get(id);
+        if (!s) return null;
+        // The whole text is read by now; it is encoded once for its bytes.
+        if (encodedFor !== text.length) {
+          encoded = new TextEncoder().encode(text);
+          encodedFor = text.length;
+        }
+        return {
+          start_utf8: s.start_utf8,
+          text: new TextDecoder().decode(
+            encoded.subarray(s.start_utf8, s.end_utf8),
+          ),
+          whole: s.kind === "caption",
+        };
+      },
       away: (on) => {
         if (layerAway === on) return;
         layerAway = on;

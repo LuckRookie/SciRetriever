@@ -2,9 +2,12 @@ import type { DocumentTextMode } from "../contract.js";
 import {
   KIND_NAMES,
   RELATION_NAMES,
+  alignedTranslation,
   captionHTML,
   captionParts,
+  cutClass,
   escape,
+  evidenceCut,
   figureName,
   headingHTML,
   langOf,
@@ -279,7 +282,12 @@ export function createMap(
             ? (p.translation?.key_terms ?? [])
             : p.key_terms;
           const n = paragraphOf(port, e.start_utf8, e.paragraph);
-          return `<p lang="${langOf(s.text)}">${richHTML(s.text, terms)}${n === own ? "" : `<span class="rl-src">¶${n}</span>`}</p>`;
+          // A quote inside its sentence: a faint “…” where it is cut (ADR 0074).
+          const cut =
+            !s.translated || alignedTranslation(e)
+              ? cutClass(evidenceCut(port, e))
+              : "";
+          return `<p lang="${langOf(s.text)}"><span${cut ? ` class="${cut}"` : ""}>${richHTML(s.text, terms)}</span>${n === own ? "" : `<span class="rl-src">¶${n}</span>`}</p>`;
         })
         .join("")}</div>` +
       p.evidence

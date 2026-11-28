@@ -1,5 +1,6 @@
 import {
   markKeyTerms,
+  splitSentences,
   type DocumentLayersOverviewResult,
   type LayersPointKind,
   type LayersReadBasis,
@@ -81,6 +82,14 @@ export interface LayersPort {
     id: string,
   ): { start: number; level: number; translation: string | null } | null;
   figure(segmentId: string): LayerFigure | null;
+  /**
+   * A unit's Markdown as the full text has it, where it starts, and whether
+   * it is one sentence whole (a caption): where a quote falls in its
+   * sentences is read from it.
+   */
+  unit(
+    unitId: string,
+  ): { start_utf8: number; text: string; whole: boolean } | null;
   /** While another layer shows, the full text keeps no reading place. */
   away(on: boolean): void;
   /** The reading place of the full text: the UTF-8 start of its anchor block. */
@@ -214,6 +223,94 @@ export function sentenceWords(
     ? { text: t, translated: true }
     : { text: e.text, translated: false };
 }
+/** Whether a quote begins or ends inside a sentence: a faint “…” stands there (ADR 0074). */
+export interface QuoteCut {
+  readonly before: boolean;
+  readonly after: boolean;
+}
+export const WHOLE: QuoteCut = { before: false, after: false };
+/** Before a quote, what is not yet the sentence's words: space, an opening quote or bracket. */
+const HEAD_EDGE = /^[\s"“'‘«「『(（[【《]*$/u;
+/**
+ * After a quote, what is not more of the sentence's words: space, the
+ * closing punctuation and brackets, and a citation (`$^{3}$`, `[3]`,
+ * `<sup>3</sup>`, which the quote's locating leaves out too).
+ */
+const TAIL_EDGE =
+  /^(?:[\s.!?。！？…,，;；:："'”’»）)\]」』】》]|\$\s*\^\{?[\d,\s‐-―−-]*\}?\s*\$|\[[\d,\s‐-―−-]*\]|<sup>[\d,\s‐-―−-]*<\/sup>)*$/u;
+/** The string index of a UTF-8 offset into `text` (an offset inside a character counts it). */
+function indexAt(text: string, bytes: number): number {
+  let n = 0,
+    i = 0;
+  for (; i < text.length && n < bytes; i++) {
+    const code = text.charCodeAt(i);
+    if (code < 0x80) n += 1;
+    else if (code < 0x800) n += 2;
+    else if (code >= 0xd800 && code <= 0xdbff && i + 1 < text.length) {
+      n += 4;
+      i++;
+    } else n += 3;
+  }
+  return i;
+}
+/**
+ * Where a quote's ends fall among its unit's sentences (`sentence-split-v2`,
+ * a caption one sentence): `before` when it begins inside a sentence,
+ * `after` when it ends inside one. `start` and `end` are UTF-8 offsets into
+ * `source`, the unit's Markdown. Space, opening and closing punctuation and
+ * a citation at a sentence's edge do not count as inside.
+ */
+export function quoteCut(
+  source: string,
+  whole: boolean,
+  start: number,
+  end: number,
+): QuoteCut {
+  const s = indexAt(source, start),
+    e = indexAt(source, end);
+  if (e <= s) return WHOLE;
+  const sentences = splitSentences(source, { whole });
+  const head = sentences.find((x) => x.end > s);
+  let tail: (typeof sentences)[number] | undefined;
+  for (const x of sentences) if (x.start < e) tail = x;
+  return {
+    before:
+      !!head && head.start < s && !HEAD_EDGE.test(source.slice(head.start, s)),
+    after: !!tail && e < tail.end && !TAIL_EDGE.test(source.slice(e, tail.end)),
+  };
+}
+/** Where a sentence evidence's ends fall in its paragraph, as the full text has it. */
+export function evidenceCut(
+  port: Pick<LayersPort, "unit">,
+  e: {
+    readonly unit_id?: string;
+    readonly start_utf8: number | null;
+    readonly end_utf8?: number | null;
+  },
+): QuoteCut {
+  if (!e.unit_id || e.start_utf8 == null || e.end_utf8 == null) return WHOLE;
+  const unit = port.unit(e.unit_id);
+  if (!unit) return WHOLE;
+  return quoteCut(
+    unit.text,
+    unit.whole,
+    e.start_utf8 - unit.start_utf8,
+    e.end_utf8 - unit.start_utf8,
+  );
+}
+/** The classes that put the faint “…” before or after a quote's words. */
+export const cutClass = (c: QuoteCut) =>
+  [c.before ? "rl-cut-s" : "", c.after ? "rl-cut-e" : ""]
+    .filter(Boolean)
+    .join(" ");
+/**
+ * Whether a sentence evidence's translation is its translated quote: a
+ * confirmed position in the unit's translation (technical 04 §10.5), not
+ * the whole unit's translation standing in.
+ */
+export const alignedTranslation = (
+  e: Extract<LayersReadEvidence, { kind: "sentence" }>,
+) => (e.translation ? e.translation.aligned : !!e.aligned);
 export const langOf = (text: string) =>
   /[㐀-鿿]/u.test(text) ? "zh-Hans" : "en";
 
