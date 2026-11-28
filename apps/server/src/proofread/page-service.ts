@@ -24,12 +24,17 @@ import {
 } from "./leaf-corrections.js";
 import { FORMAT_RULE, formatCorrections } from "../archive/format-normalize.js";
 import {
+  SENTENCE_SPACE_RULE,
+  sentenceSpaceCorrections,
+} from "./sentence-space.js";
+import {
   PAGE_REVIEW_METHOD,
   PAGE_REVIEW_SYSTEM,
   editOperations,
   guardEdit,
   identifierFixes,
   pageReviewPlan,
+  type PageReviewPlan,
   type PageReviewRule,
 } from "./page-review.js";
 import {
@@ -267,14 +272,28 @@ export class ArchivePageProofreadService {
           retained.some((l) => l.leaf_id === t.leaf_id),
         ),
         lockedIds = new Set(manual.map((t) => t.leaf_id));
-      // ADR 0074 §2: an arrangement made with the notation rule carries its program
-      // corrections into every page; a person's locked text wins over them.
-      const program =
-        snapshot.format_rule === FORMAT_RULE
-          ? retained
-              .filter((l) => !lockedIds.has(l.leaf_id))
-              .flatMap((l) => formatCorrections(l, page.page))
-          : [];
+      let reviewPlan: PageReviewPlan | null = null;
+      const planOf = () => (reviewPlan ??= pageReviewPlan(page, retained));
+      // ADR 0074 §2–3: an arrangement made with the notation rule carries its program
+      // corrections into every page; a person's locked text wins over them. Older
+      // arrangements get none, so their page inputs and cached pages stay the same.
+      const ruled = snapshot.format_rule === FORMAT_RULE,
+        open = retained.filter((l) => !lockedIds.has(l.leaf_id));
+      const format = ruled
+          ? open.flatMap((l) => formatCorrections(l, page.page))
+          : [],
+        space = ruled
+          ? sentenceSpaceCorrections(page, planOf(), open).filter(
+              (s) =>
+                !format.some(
+                  (f) =>
+                    f.leaf_id === s.leaf_id &&
+                    f.start < s.end &&
+                    s.start < f.end,
+                ),
+            )
+          : [],
+        program = [...format, ...space];
       const key = pageProofreadInputKey(
         source,
         retained,
@@ -284,7 +303,8 @@ export class ArchivePageProofreadService {
           ? textHash({
               method,
               manual,
-              ...(program.length ? { program: FORMAT_RULE } : {}),
+              ...(format.length ? { program: FORMAT_RULE } : {}),
+              ...(space.length ? { sentence_space: SENTENCE_SPACE_RULE } : {}),
             })
           : method,
       );
@@ -518,7 +538,7 @@ export class ArchivePageProofreadService {
         await reportPage(record, false);
         return record;
       }
-      const plan = pageReviewPlan(page, retained),
+      const plan = planOf(),
         leafNames = new PageHandles("b");
       // Leaves are named in reading order, so b1 is the first leaf of the page.
       for (const l of retained) leafNames.handle(l.leaf_id);
