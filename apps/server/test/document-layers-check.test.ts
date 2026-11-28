@@ -9,18 +9,25 @@ import {
   emptyDropped,
   layersParts,
   numberedPoints,
-  unitSentences,
   type LayersFigure,
   type LayersGroup,
   type LayersParagraph,
   type LayersPlan,
 } from "../src/layers/check.js";
+import { locateQuote, locateQuotes } from "../src/layers/locate.js";
 
-// Spec 10.3 and ADR 0073 §7: each check of the paragraph-by-paragraph layers, on a synthetic input.
+// Spec 10.3, ADR 0073 §7 and ADR 0074 §4: each check of the paragraph-by-paragraph layers, on a synthetic input.
 const PARAGRAPHS = [
   "The first sample showed a peak near 401 nm in water. It was stable for 12 days.",
   "The second sample showed a peak near 402 nm. Its yield was 85 %.",
   "One. Two. Three. Four. Five. Six. Seven.",
+  "Figure 1. Spectra of the samples.",
+];
+/** What each paragraph's note quotes by default: its first sentence, a caption whole. */
+const FIRST = [
+  "The first sample showed a peak near 401 nm in water.",
+  "The second sample showed a peak near 402 nm.",
+  "One.",
   "Figure 1. Spectra of the samples.",
 ];
 const figure = (
@@ -51,7 +58,6 @@ function paragraphs(): LayersParagraph[] {
       start_utf8: at,
       kind: caption ? "caption" : "paragraph",
       figure: caption ? F1 : null,
-      sentences: unitSentences(source, caption ? "caption" : "text"),
       section_id: "sec1",
       annotatable: true,
     };
@@ -94,7 +100,7 @@ const unit = (n: number, extra: Record<string, unknown> = {}) => ({
   statement: `Sample ${n} showed a peak.`,
   reason: "",
   label: `Sample ${n}`,
-  evidence: [1],
+  evidence: [FIRST[n - 1] ?? "none"],
   key_terms: [],
   see: [],
   ...extra,
@@ -114,35 +120,135 @@ const check = (value: unknown, part = false) => {
 const all = (extra: Record<number, Record<string, unknown>> = {}) =>
   [1, 2, 3, 4].map((n) => unit(n, extra[n]));
 
-it("keeps existing sentences, joins consecutive ones, at most two (three from seven sentences)", () => {
+const range = (e: unknown) => {
+  const s = e as { kind: string; start_utf8: number; end_utf8: number };
+  return s.kind === "sentence" ? [s.start_utf8, s.end_utf8] : s.kind;
+};
+it("locates the first two quotes in their own paragraph; overlapping and touching ones become one evidence", () => {
   const out = check(
     section(
       all({
-        1: { evidence: [2, 9, 2, 0] },
-        3: { evidence: [7, 1, 2, 4] },
-        4: { evidence: [1] },
+        // A stretch of another paragraph is not found here; one inside another is one place.
+        1: {
+          evidence: [
+            "It was stable for 12 days.",
+            "The second sample showed a peak",
+          ],
+        },
+        4: {
+          evidence: ["Spectra of the samples.", "Spectra of the"],
+        },
+        // Two sentences with only a space between them are one evidence.
+        2: {
+          evidence: [
+            "Its yield was 85 %.",
+            "The second sample showed a peak near 402 nm.",
+          ],
+        },
+        // Overlapping quotes merge; a third quote is dropped.
+        3: { evidence: ["Two. Three.", "Three. Four.", "Seven."] },
       }),
     ),
   );
-  // 9 and 0 name no sentence; 2 twice is once.
   expect(out.notes[0]!.evidence).toEqual([
     { kind: "sentence", unit_id: "u1", start_utf8: 53, end_utf8: 79 },
   ]);
-  // Seven sentences allow three: 1 and 2 join, 4 stands apart, 7 is one too many.
-  expect(
-    out.notes[2]!.evidence.map(
-      (e) => e.kind === "sentence" && [e.start_utf8, e.end_utf8],
-    ),
-  ).toEqual([
-    [PS[2]!.start_utf8, PS[2]!.start_utf8 + 9],
-    [PS[2]!.start_utf8 + 17, PS[2]!.start_utf8 + 22],
-  ]);
+  const p2 = PS[1]!.start_utf8,
+    p3 = PS[2]!.start_utf8;
+  expect(out.notes[1]!.evidence.map(range)).toEqual([[p2, p2 + 64]]);
+  expect(out.notes[2]!.evidence.map(range)).toEqual([[p3 + 5, p3 + 22]]);
   // A caption also rests on its own figure, last.
+  expect(out.notes[3]!.evidence.map(range)).toEqual([
+    [PS[3]!.start_utf8 + 10, PS[3]!.start_utf8 + 33],
+    "block",
+  ]);
   expect(out.notes[3]!.evidence.at(-1)).toEqual({
     kind: "block",
     segment_id: "fig1",
   });
-  expect(out.dropped.evidence).toBe(4);
+  // Note 1: the one not found; note 3: its third.
+  expect(out.dropped.evidence).toBe(2);
+});
+
+it("finds a quote exactly, across whitespace and TeX, with symbol commands as shown, and without citation marks", () => {
+  const at = (text: string, quote: string) => {
+    const r = locateQuote(text, quote, 300);
+    return "miss" in r ? r.miss : text.slice(r.start, r.end);
+  };
+  expect(at("It rose. It fell.", "It fell.")).toBe("It fell.");
+  // Whitespace and TeX markup do not count; the place maps back to the original.
+  expect(
+    at(
+      "We find that the yield of $\\mathrm{NH_{3}}$ rose  to 85\\% at\nroom temperature.",
+      "the yield of NH3 rose to 85% at room temperature",
+    ),
+  ).toBe("the yield of $\\mathrm{NH_{3}}$ rose  to 85\\% at\nroom temperature");
+  // \circ is the degree sign it shows, also KaTeX's ∘; a place never cuts a formula.
+  const melting = "The salt melts at $177 - 178^{\\circ}C$. It is stable.";
+  expect(at(melting, "melts at 177–178 °C")).toBe(
+    "melts at $177 - 178^{\\circ}C$",
+  );
+  expect(at(melting, "melts at 177−178∘C")).toBe(
+    "melts at $177 - 178^{\\circ}C$",
+  );
+  expect(at("A shift of $\\Delta\\alpha$ was seen.", "shift of Δα was")).toBe(
+    "shift of $\\Delta\\alpha$ was",
+  );
+  // Citation marks are skipped on both sides; dashes and quotes are unified.
+  expect(
+    at(
+      "Pd is best for hydrogenation.[48] Among them, Ru is cheap.",
+      "Pd is best for hydrogenation. Among them",
+    ),
+  ).toBe("Pd is best for hydrogenation.[48] Among them");
+  expect(
+    at(
+      "It binds metals. $^{4,5}$ The salts — “dry” ones — were used.",
+      'binds metals. The salts - "dry" ones',
+    ),
+  ).toBe("binds metals. $^{4,5}$ The salts — “dry” ones");
+});
+
+it("accepts a place two characters away only when it is the only one; drops ambiguous, overlong and missing quotes", () => {
+  const at = (text: string, quote: string, max = 300) => {
+    const r = locateQuote(text, quote, max);
+    return "miss" in r ? r.miss : text.slice(r.start, r.end);
+  };
+  // The model corrected the author's misspelling.
+  expect(
+    at(
+      "The photaredox catalyst gave the product in 85% yield.",
+      "The photoredox catalyst gave the product",
+    ),
+  ).toBe("The photaredox catalyst gave the product");
+  // Three characters away is too far; a short quote is never matched loosely.
+  expect(
+    at("The photaredox catalyst gave it.", "The phitoredix catalist gave it"),
+  ).toBe("missing");
+  expect(at("A peak at 401 nm.", "A peek at")).toBe("missing");
+  // Twice in the paragraph: no place, exactly or loosely.
+  expect(
+    at("The value rose. The value rose. Then it fell.", "The value rose."),
+  ).toBe("ambiguous");
+  expect(
+    at(
+      "Sample A gave 85 percent yield and sample B gave 86 percent yield.",
+      "sample C gave 87 percent yield",
+    ),
+  ).toBe("ambiguous");
+  // Longer than 300 code points, or empty.
+  const long = "word ".repeat(70).trim();
+  expect(at(long, long.slice(0, 301))).toBe("long");
+  expect(at("Text.", "  ")).toBe("empty");
+  // Counted: a third quote and every quote not found.
+  expect(
+    locateQuotes(
+      "It rose. It fell. Then more.",
+      ["It fell.", "It rose.", "Then more."],
+      2,
+      300,
+    ),
+  ).toEqual({ ranges: [{ start: 0, end: 17 }], dropped: 1 });
 });
 
 it("drops a note with an overlong statement or no evidence left; an empty statement is no note and no drop", () => {
@@ -381,14 +487,13 @@ it("drops a data row whose digits are not in its source, a place not in the advi
   );
 });
 
-it("keeps translated evidence only for existing consecutive sentences", () => {
+it("locates translated evidence in the unit's translation, or leaves its position empty", () => {
   const points = numberedPoints(notes, document(digest()));
   const translation = "首句。第二句。第三句。";
   const asked = [0, 1].map((i) => ({
     paragraph: PS[i]!,
     point: points[i]!,
     translation,
-    sentences: unitSentences(translation, "text"),
     evidence: [0],
   }));
   const dropped = {
@@ -410,7 +515,7 @@ it("keeps translated evidence only for existing consecutive sentences", () => {
           reason: "",
           label: "样品一",
           key_terms: ["样品"],
-          evidence: [{ id: "e1", sentences: [2, 3] }],
+          evidence: [{ id: "e1", quote: "第二句。 第三句。" }],
         },
         {
           id: "p2",
@@ -418,7 +523,7 @@ it("keeps translated evidence only for existing consecutive sentences", () => {
           reason: "",
           label: "样品三",
           key_terms: [],
-          evidence: [{ id: "e1", sentences: [1, 3] }],
+          evidence: [{ id: "e1", quote: "第四句。" }],
         },
       ],
     },

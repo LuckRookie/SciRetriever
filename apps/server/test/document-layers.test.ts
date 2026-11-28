@@ -156,7 +156,7 @@ it("writes a note per paragraph, a line per section and the digest once; reads o
       ].map((k) => e.count(k as LayersCall["kind"])),
     ).toEqual([5, 0, 1, 5, 1]);
     expect(receipt.calls).toBe(12);
-    // A section call: title, abstract, outline with this section marked, its paragraphs with numbered sentences.
+    // A section call: title, abstract, outline with this section marked, its paragraphs as their text.
     const methods = e.calls.find(
       (c) => c.kind === "section" && inSection(c, "Methods"),
     )!.input as string;
@@ -166,8 +166,9 @@ it("writes a note per paragraph, a line per section and the digest once; reads o
     expect(methods).toContain("▶ [s3] Methods");
     expect(methods).toContain("\n[s2] Introduction\n");
     expect(methods).toMatch(
-      /^\[p4\] paragraph\n<1> The methods sample 20 showed a stable synthetic spectrum near 420 nm in water\.\n<2> The methods sample 21/mu,
+      /^\[p4\] paragraph\nThe methods sample 20 showed a stable synthetic spectrum near 420 nm in water\. The methods sample 21 .* 424 nm in water\.$/mu,
     );
+    expect(methods).not.toContain("<1>");
     expect(methods).not.toContain("[p2]");
     expect(methods).not.toContain("Example synthetic reference");
     // The whole-document call sees titles, lines and notes, never the full text.
@@ -190,12 +191,10 @@ it("writes a note per paragraph, a line per section and the digest once; reads o
         {
           id: "p4",
           kind: "result",
-          sentences: expect.arrayContaining([
-            {
-              n: 1,
-              text: "译文：The methods sample 20 showed a stable synthetic spectrum near 420 nm in water.",
-            },
-          ]),
+          // The stored translation unsplit.
+          text: expect.stringMatching(
+            /^译文：The methods sample 20 showed a stable synthetic spectrum near 420 nm in water\. .*424 nm in water\.$/u,
+          ),
           evidence: [
             {
               id: "e1",
@@ -525,16 +524,26 @@ it("drops what fails the checks and counts it; a note without evidence is no not
         units: [
           {
             ...p4,
-            // 9 names no sentence; 1 twice is once; 3 and 4 join, 1 stands apart.
-            evidence: [9, 1, 3, 4, 1],
+            // The first and third sentences are two evidence; a third quote is dropped.
+            evidence: [
+              "The methods sample 22 showed a stable synthetic spectrum near 422 nm in water.",
+              "The methods sample 20 showed a stable synthetic spectrum",
+              "The methods sample 21 showed",
+            ],
             key_terms: ["absent term", "methods"],
             label: "not in the note",
             kind: "bogus",
             reason: "x ".repeat(40).trim(),
             see: ["f9"],
           },
-          // Every sentence number is out of range: no evidence, no note.
-          { ...p5, evidence: [0, 7] },
+          // Not in the paragraph, and too long: no evidence, no note.
+          {
+            ...p5,
+            evidence: [
+              "The methods sample 99 showed nothing at all.",
+              "x".repeat(301),
+            ],
+          },
         ],
       };
     });
@@ -545,7 +554,7 @@ it("drops what fails the checks and counts it; a note without evidence is no not
       points: 8,
       dropped: {
         points: 1,
-        evidence: 5,
+        evidence: 3,
         key_terms: 1,
         labels: 1,
         kinds: 1,
@@ -564,8 +573,11 @@ it("drops what fails the checks and counts it; a note without evidence is no not
       key_terms: ["methods"],
       relations: [{ word: "follows" }],
     });
-    // Up to two sentences in a paragraph of five: 1 and 3; non-consecutive ones are two evidence.
+    // Sorted by position, shown with their display sentence numbers; apart, they are two evidence.
     expect(p4.evidence.map((x: Loose) => x.sentences)).toEqual([[1], [3]]);
+    expect(p4.evidence[0].text).toBe(
+      "The methods sample 20 showed a stable synthetic spectrum",
+    );
     // The Methods section's second paragraph has no note.
     expect(outline.points.some((p: Loose) => p.paragraph === 8)).toBe(false);
     expect(numbers(outline.points)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
@@ -948,7 +960,9 @@ it("leaves unconfirmed translated evidence without a position and drops what fai
         ...base,
         units: base.units.map((u: Loose) => ({
           ...u,
-          evidence: [{ id: "e1", sentences: [7] }],
+          evidence: [
+            { id: "e1", quote: "这一段不在译文里，也找不到相近的地方。" },
+          ],
           key_terms: ["不存在的词"],
           label: "不在批语里",
         })),
@@ -1119,7 +1133,7 @@ function pagesPdf(count: number) {
   );
 }
 
-it("reads a version 2 file as stale and redoes the layers on the next archive", async () => {
+it("reads a version 3 file as stale and redoes the layers on the next archive", async () => {
   const e = await fixture();
   try {
     await e.submit("layers-current");
@@ -1133,7 +1147,7 @@ it("reads a version 2 file as stale and redoes the layers on the next archive", 
     };
     const row = (await store.row(key))!;
     // A file as the earlier release wrote it: only its version differs here.
-    const old = { ...(await store.load(row)), schema_version: 2 };
+    const old = { ...(await store.load(row)), schema_version: 3 };
     const bytes = canonicalJsonBytes(old);
     const ref = parseArtifactRef({
       sha256: createHash("sha256").update(bytes).digest("hex"),
@@ -1173,7 +1187,7 @@ it("reads a version 2 file as stale and redoes the layers on the next archive", 
       code: "layers-unavailable",
       details: { state: "stale" },
     });
-    // A receipt of the earlier release has an input key of file version 2,
+    // A receipt of the earlier release has an input key of file version 3,
     // so archiving again redoes the layers as a whole.
     await e.app.close();
     const db = new DatabaseSync(join(e.home, "catalog.sqlite"));

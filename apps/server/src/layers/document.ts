@@ -59,7 +59,6 @@ import {
   sectionLineInput,
   translationDocumentInput,
   translationSectionInput,
-  unitSentences,
   type CheckedDocument,
   type Dropped,
   type LayersGroup,
@@ -953,8 +952,8 @@ export class DocumentLayersService {
    * The translation part (spec 10.5): each section's notes written directly
    * in the target language from the stored translation of its paragraphs,
    * then the digest from those notes. Kinds, the trunk, relations and data
-   * values stay the original's. Evidence is aligned with sentences of the
-   * unit's stored translation.
+   * values stay the original's. Evidence is aligned by a quote located in
+   * the unit's stored translation.
    */
   private async translationPart(
     file: DocumentLayersFile,
@@ -1057,10 +1056,6 @@ export class DocumentLayersService {
               paragraph: p,
               point,
               translation,
-              sentences: unitSentences(
-                translation,
-                p.kind === "caption" ? "caption" : "text",
-              ),
               evidence: point.evidence.flatMap((e, i) =>
                 e.kind === "sentence" ? [i] : [],
               ),

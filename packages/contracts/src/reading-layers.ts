@@ -3,7 +3,10 @@ import {
   isTranslationLanguage,
   type TranslationLanguage,
 } from "./translation.js";
-import { SENTENCE_SPLIT_RULE } from "./sentence-split.js";
+import {
+  SENTENCE_SPLIT_RULES,
+  type SentenceSplitRule,
+} from "./sentence-split.js";
 
 /**
  * Reading layers written paragraph by paragraph (ADR 0073, document spec 10):
@@ -15,14 +18,15 @@ import { SENTENCE_SPLIT_RULE } from "./sentence-split.js";
  */
 export const READING_LAYERS_PROMPT_VERSION = "reading-layers-v3";
 export const READING_LAYERS_SECTION_PROMPT_VERSION =
-  "reading-layers-section-v4";
+  "reading-layers-section-v5";
 export const READING_LAYERS_TRANSLATION_PROMPT_VERSION =
-  "reading-layers-translation-v4";
+  "reading-layers-translation-v5";
 /**
- * The file layout. Version 3 is ADR 0073's (spec 10.2); a stored file of
- * another version reads as stale (spec 10.6) and is redone.
+ * The file layout. Version 4 is ADR 0074's (spec 10.2): evidence is quoted
+ * by the model and located by the program. A stored file of another version
+ * reads as stale (spec 10.6) and is redone.
  */
-export const LAYERS_FILE_SCHEMA_VERSION = 3;
+export const LAYERS_FILE_SCHEMA_VERSION = 4;
 /**
  * At most one note per paragraph; long documents (more than 50 pages) have
  * no layers, so a file holds far fewer.
@@ -45,12 +49,14 @@ export const LAYERS_LABEL_MAX_WORDS = 3;
 export const LAYERS_NOT_GIVEN_MAX = 300;
 export const LAYERS_KEY_TERM_MAX = 40;
 export const LAYERS_KEY_TERMS_PER_ITEM = 2;
-/** Evidence sentences of a note: 1 to 2, up to 3 in a paragraph of 7 or more. */
-export const LAYERS_EVIDENCE_SENTENCES = 2;
-export const LAYERS_EVIDENCE_SENTENCES_LONG = 3;
-export const LAYERS_LONG_PARAGRAPH_SENTENCES = 7;
-/** Up to three sentence ranges, and a caption's own figure or table. */
-export const LAYERS_EVIDENCE_PER_POINT = 4;
+/**
+ * Evidence quotes of a note (ADR 0074 §4): 1 to 2 stretches copied from its
+ * paragraph, each at most 300 code points; a third and later are dropped.
+ */
+export const LAYERS_EVIDENCE_QUOTES = 2;
+export const LAYERS_EVIDENCE_QUOTE_MAX = 300;
+/** Up to two located ranges, and a caption's own figure or table. */
+export const LAYERS_EVIDENCE_PER_POINT = 3;
 /** Figures and tables of its section a note may name (`see`). */
 export const LAYERS_SEE_MAX = 3;
 export const LAYERS_DIGEST_UNITS = 6;
@@ -107,9 +113,9 @@ export type DocumentLayersState = "none" | "stale" | DocumentLayersStatus;
 export type LayersEvidence =
   | {
       readonly kind: "sentence";
-      /** The translation unit (spec 9.2) the sentences belong to. */
+      /** The translation unit (spec 9.2) the quoted stretch belongs to. */
       readonly unit_id: string;
-      /** Consecutive sentences, UTF-8 half-open in the fixed Markdown. */
+      /** A located quote (or merged quotes), UTF-8 half-open in the fixed Markdown. */
       readonly start_utf8: number;
       readonly end_utf8: number;
     }
@@ -280,7 +286,8 @@ export interface DocumentLayersFile {
   readonly annotation_id: string;
   /** archiveContentVersion(document_version_id, annotation_id). */
   readonly content_version: string;
-  readonly sentence_rule: typeof SENTENCE_SPLIT_RULE;
+  /** The split rule current when written; display numbers always use the current rule. */
+  readonly sentence_rule: SentenceSplitRule;
   readonly digest: LayersDigest;
   readonly sections: readonly LayersSectionLine[];
   readonly points: readonly LayersPoint[];
@@ -506,7 +513,7 @@ export function parseDocumentLayersFile(value: unknown): DocumentLayersFile {
   ]);
   if (
     r.schema_version !== LAYERS_FILE_SCHEMA_VERSION ||
-    r.sentence_rule !== SENTENCE_SPLIT_RULE
+    !SENTENCE_SPLIT_RULES.includes(r.sentence_rule as SentenceSplitRule)
   )
     fail();
   const d = exact(r.digest, ["summary", "limits", "advice"]);
@@ -588,7 +595,7 @@ export function parseDocumentLayersFile(value: unknown): DocumentLayersFile {
     // Sentence evidence lies in the note's own paragraph; a block is last.
     if (
       !sentences.length ||
-      sentences.length > LAYERS_EVIDENCE_SENTENCES_LONG ||
+      sentences.length > LAYERS_EVIDENCE_QUOTES ||
       sentences.some((e) => e.unit_id !== unit_id) ||
       ev.length - sentences.length > 1 ||
       (ev.length > sentences.length && ev.at(-1)!.kind !== "block") ||
@@ -807,7 +814,7 @@ export function parseDocumentLayersFile(value: unknown): DocumentLayersFile {
     document_version_id: id(r.document_version_id),
     annotation_id: digest(r.annotation_id),
     content_version: digest(r.content_version),
-    sentence_rule: SENTENCE_SPLIT_RULE,
+    sentence_rule: r.sentence_rule as SentenceSplitRule,
     digest: digestValue,
     sections: Object.freeze(sections),
     points: Object.freeze(points),

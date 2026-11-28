@@ -18,7 +18,7 @@ const sentences = (text: string, whole = false) =>
 const marked = (text: string, term: string) =>
   matchKeyTerm(text, term).map((r) => text.slice(r.start, r.end));
 
-it("splits sentences at sentence ends only (sentence-split-v1)", () => {
+it("splits sentences at sentence ends only (the rules of sentence-split-v1, kept in v2)", () => {
   expect(sentences("First result. Second result! Third? Last.")).toEqual([
     "First result.",
     "Second result!",
@@ -85,6 +85,68 @@ it("splits sentences at sentence ends only (sentence-split-v1)", () => {
   // Headings and captions are one sentence.
   expect(sentences("Figure 1. Spectra. Of samples.", true)).toEqual([
     "Figure 1. Spectra. Of samples.",
+  ]);
+});
+
+it("splits after a citation that follows a period and before a formula that opens a sentence (sentence-split-v2)", () => {
+  // A bracket citation right after the period belongs to the sentence before.
+  expect(
+    sentences("Pd allows hydrogenation.[48] Among them, Ru is cheap."),
+  ).toEqual(["Pd allows hydrogenation.[48]", "Among them, Ru is cheap."]);
+  expect(sentences("It was shown.[9, 11–12] 3 groups agree.")).toEqual([
+    "It was shown.[9, 11–12]",
+    "3 groups agree.",
+  ]);
+  // A superscript citation, right after the period or after a space.
+  expect(sentences("It binds metals.$^{4,5}$ The salts were dried.")).toEqual([
+    "It binds metals.$^{4,5}$",
+    "The salts were dried.",
+  ]);
+  expect(sentences("It binds metals. $^{4}$ The salts were dried.")).toEqual([
+    "It binds metals. $^{4}$",
+    "The salts were dried.",
+  ]);
+  expect(sentences("It was heated to 120 °C. $^{12}$ It melted.")).toEqual([
+    "It was heated to 120 °C. $^{12}$",
+    "It melted.",
+  ]);
+  // A formula opens the next sentence.
+  expect(sentences("The yield was high. $T_g$ rose to 120 °C.")).toEqual([
+    "The yield was high.",
+    "$T_g$ rose to 120 °C.",
+  ]);
+  // No split where the period has no whitespace after it, or the citation
+  // is not followed by the start of a sentence.
+  expect(sentences("The product (88% yield).MP 120 °C.")).toEqual([
+    "The product (88% yield).MP 120 °C.",
+  ]);
+  expect(sentences("It was shown.[4] and confirmed.")).toEqual([
+    "It was shown.[4] and confirmed.",
+  ]);
+  expect(sentences("Ends with a citation.[48]")).toEqual([
+    "Ends with a citation.[48]",
+  ]);
+  // A bracket citation after a space is not taken for one.
+  expect(sentences("It was shown. [4] The rest.")).toEqual([
+    "It was shown. [4] The rest.",
+  ]);
+  // Abbreviations, initials, decimals, ellipses and URLs stay as in v1.
+  expect(
+    sentences(
+      "Smith et al.[4] Reported it. See Fig. $2$ here. By J. $x$ again. A ratio of 3.[4] is odd. Wait... [5] More. See https://doi.org/10.1/x.[3] The end.",
+    ),
+  ).toEqual([
+    "Smith et al.[4] Reported it.",
+    "See Fig. $2$ here.",
+    "By J. $x$ again.",
+    "A ratio of 3.[4] is odd.",
+    "Wait... [5] More.",
+    "See https://doi.org/10.1/x.[3] The end.",
+  ]);
+  // A period inside a formula is no sentence end.
+  expect(sentences("We set $a = 1. [2] B$ and go. End.")).toEqual([
+    "We set $a = 1. [2] B$ and go.",
+    "End.",
   ]);
 });
 
@@ -170,13 +232,13 @@ const DROPPED = [
   "limits",
 ];
 const file = (extra: Record<string, unknown> = {}) => ({
-  schema_version: 3,
+  schema_version: 4,
   literature_id: "lit-1",
   asset_id: "asset-1",
   document_version_id: "doc-1",
   annotation_id: D,
   content_version: D,
-  sentence_rule: "sentence-split-v1",
+  sentence_rule: "sentence-split-v2",
   digest: {
     summary: { text: "Four samples.", units: [], key_terms: [] },
     limits: [],
@@ -204,14 +266,48 @@ const file = (extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
-it("parses a version 3 layers file: one note per paragraph, its basis its first evidence", () => {
+it("parses a version 4 layers file: one note per paragraph, its basis its first evidence", () => {
   expect(parseDocumentLayersFile(file()).points).toHaveLength(4);
-  expect(documentLayersFileVersion(file({ schema_version: 2 }))).toBe(2);
-  // Version 2 is not the current layout: it reads as stale, never parsed.
-  expect(() => parseDocumentLayersFile(file({ schema_version: 2 }))).toThrow();
+  expect(documentLayersFileVersion(file({ schema_version: 3 }))).toBe(3);
+  // Version 3 (evidence by sentence numbers) is not the current layout: it reads as stale, never parsed.
+  expect(() => parseDocumentLayersFile(file({ schema_version: 3 }))).toThrow();
+  // The split rule only numbers sentences for display: an earlier known rule
+  // does not make a file unreadable, an unknown one is not a file of ours.
+  expect(
+    parseDocumentLayersFile(file({ sentence_rule: "sentence-split-v1" }))
+      .sentence_rule,
+  ).toBe("sentence-split-v1");
+  expect(() =>
+    parseDocumentLayersFile(file({ sentence_rule: "sentence-split-v9" })),
+  ).toThrow();
   const four = [1, 2, 3, 4].map((n) => note(n));
   const bad = (points: unknown[]) => () =>
     parseDocumentLayersFile(file({ points }));
+  // At most two located ranges, besides a caption's own figure.
+  const range = (start: number) => ({
+    kind: "sentence",
+    unit_id: "u4",
+    start_utf8: start,
+    end_utf8: start + 5,
+  });
+  expect(
+    parseDocumentLayersFile(
+      file({
+        points: [
+          ...four.slice(0, 3),
+          note(4, {
+            evidence: [range(0), range(10), { kind: "block", segment_id: "f" }],
+          }),
+        ],
+      }),
+    ).points[3]!.evidence,
+  ).toHaveLength(3);
+  expect(
+    bad([
+      ...four.slice(0, 3),
+      note(4, { evidence: [range(0), range(10), range(20)] }),
+    ]),
+  ).toThrow();
   // A note's sentence evidence lies in its own paragraph.
   const elsewhere = {
     kind: "sentence",

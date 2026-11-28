@@ -1,6 +1,6 @@
 # 阅读层
 
-有阅读层的文献在阅读页上的四个视图（阅读体验第 3 节，ADR 0070、0073）：全文上的批语、脉络、概览、导图，以及层与层之间的过渡。阅读层按段写（文件版本 3）：每一段一条批语（带理由），每一节一句节旨；批语以它的段号为名（“¶41”，取全文左页边显示的段号，`model.ts` 的 `paragraphNo`），主干段的段号在实心朱圈里。框架无关：只生成 DOM、处理指针与滚动，由全文引擎 `../document.ts` 在正文排好之后挂上，React 一侧只经 `ReaderFrame` 的 `setLayer`、`layerWheel`、`setKeyTerms`、`foldLayers`、`onLayer`、`onLayers` 与它来往。界面上把要点叫“批语”，代码里沿用合同的名字 point。
+有阅读层的文献在阅读页上的四个视图（阅读体验第 3 节，ADR 0070、0073）：全文上的批语、脉络、概览、导图，以及层与层之间的过渡。阅读层按段写（文件版本 4）：每一段一条批语（带理由），每一节一句节旨；批语以它的段号为名（“¶41”，取全文左页边显示的段号，`model.ts` 的 `paragraphNo`），主干段的段号在实心朱圈里。框架无关：只生成 DOM、处理指针与滚动，由全文引擎 `../document.ts` 在正文排好之后挂上，React 一侧只经 `ReaderFrame` 的 `setLayer`、`layerWheel`、`setKeyTerms`、`foldLayers`、`onLayer`、`onLayers` 与它来往。界面上把要点叫“批语”，代码里沿用合同的名字 point。
 
 - [read.ts](read.ts)：读一个版本的阅读层（`overview` 一次，`outline` 分页读完），用合同包的解析器；有译文部分时读 `bilingual`，换读法不再请求。[contract.ts](contract.ts) 只剩 409 拒绝的解析。
 - [model.ts](model.ts)：四个视图共用的数据（各节带节旨）、各种文字取原文还是译文（批语、理由、节旨及其题的译文取读取结果的译文部分）、类别与关系的名字、段号、安全的行内渲染与重点词的标出（合同包的 `key-term-match-v1`），以及全文引擎要提供的 `LayersPort`。

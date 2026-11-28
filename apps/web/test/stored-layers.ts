@@ -2,7 +2,7 @@ import type { Page } from "playwright";
 
 /**
  * A paper with reading layers (technical 04 §10.7, ADR 0073: one note for
- * every paragraph, one line for every section; layers file version 3) on
+ * every paragraph, one line for every section; layers file version 4) on
  * served replies, the way `stored-translation.ts` serves a stored
  * translation: `describe` says the layers' state, `document-layers` gives the
  * overview and the notes with their evidence, and `document-translation` the

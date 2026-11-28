@@ -2,13 +2,12 @@ import {
   LAYERS_ADVICE_MAX,
   LAYERS_DATA_MAX,
   LAYERS_DIGEST_UNITS,
-  LAYERS_EVIDENCE_SENTENCES,
-  LAYERS_EVIDENCE_SENTENCES_LONG,
+  LAYERS_EVIDENCE_QUOTE_MAX,
+  LAYERS_EVIDENCE_QUOTES,
   LAYERS_KEY_TERM_MAX,
   LAYERS_KEY_TERMS_PER_ITEM,
   LAYERS_LIMIT_TEXT_MAX,
   LAYERS_LIMITS_MAX,
-  LAYERS_LONG_PARAGRAPH_SENTENCES,
   LAYERS_NOT_GIVEN_MAX,
   LAYERS_PART_CODE_POINTS,
   LAYERS_PART_UNITS,
@@ -47,6 +46,7 @@ import {
   type LayersTranslatedPoint,
 } from "@sciretriever/contracts";
 import { unitSpan, type documentUnits } from "../translation/document.js";
+import { locateQuote, locateQuotes } from "./locate.js";
 
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const codePoints = (s: string) => [...s].length;
@@ -71,25 +71,18 @@ export interface LayersStructure {
   readonly long_document?: unknown;
 }
 
-type Sentence = {
-  readonly start: number;
-  readonly end: number;
-  readonly start_utf8: number;
-  readonly end_utf8: number;
-};
 /** A paragraph (spec 10.2): a translation unit of the body that is not a heading. */
 export interface LayersParagraph {
   /** `pN`, unique in the document. */
   readonly short: string;
   readonly unit_id: string;
+  /** The unit's text, in which its evidence quotes are located. */
   readonly source: string;
   /** UTF-8 position of the unit's text in the fixed Markdown. */
   readonly start_utf8: number;
   readonly kind: "paragraph" | "list item" | "caption" | "footnote";
   /** The figure group a caption belongs to. */
   readonly figure: LayersFigure | null;
-  /** Sentences as JavaScript indices of `source` and UTF-8 offsets from `start_utf8`. */
-  readonly sentences: readonly Sentence[];
   /** Its section; null when the paper has no titled section. */
   readonly section_id: string | null;
   /** Longer than a note: counted for coverage (spec 10.3). */
@@ -155,7 +148,7 @@ function rangesText(
     })
     .join(" ");
 }
-/** Sentences of a unit (spec 3.5); captions are one sentence. */
+/** Sentences of a unit (spec 3.5), for display numbers only; captions are one sentence. */
 export function unitSentences(source: string, kind: string) {
   return splitSentences(source, { whole: kind === "caption" }).map((s) => ({
     ...s,
@@ -196,7 +189,7 @@ export const LAYERS_SKIPPED_ROLES: ReadonlySet<string> = new Set([
 ]);
 /**
  * What the calls are given (spec 10.3): the paragraphs in reading order with
- * short ids `pN` and numbered sentences, the headings `sN`, the figures,
+ * short ids `pN` and their text, the headings `sN`, the figures,
  * schemes and tables `fN`, grouped by section. Units are those of the
  * translation (spec 9.2); a caption is a paragraph of its own and also names
  * its figure.
@@ -284,7 +277,6 @@ export function layersPlan(
         start_utf8: span.payload,
         kind,
         figure: figureOf.get(u.unit_id) ?? null,
-        sentences: unitSentences(u.source, first.kind),
         section_id: titled ? (first.section_id ?? null) : null,
         // A caption is noted only when it shows a result (prompt), so it
         // does not count toward the coverage a document must reach.
@@ -394,10 +386,8 @@ export function sectionInput(
     );
   lines.push("", "Paragraphs:");
   for (const p of paragraphs) {
-    lines.push("", `[${p.short}] ${kindLine(p)}`);
-    p.sentences.forEach((s, i) =>
-      lines.push(`<${i + 1}> ${flat(p.source.slice(s.start, s.end))}`),
-    );
+    // The text as it is, neither split nor numbered (ADR 0074 §4).
+    lines.push("", `[${p.short}] ${kindLine(p)}`, flat(p.source));
   }
   if (group.figures.length)
     lines.push(
@@ -498,49 +488,30 @@ export interface LayersNote {
   /** Segment ids of the figures it names (`see`). */
   readonly see: readonly string[];
 }
-/** The evidence sentence numbers kept: existing, ascending, 1 to 2 (3 in a long paragraph). */
-function sentenceNumbers(
+/**
+ * A note's evidence quotes located in its paragraph (spec 10.3): 1 to 2,
+ * each at most 300 code points, as UTF-8 ranges in the fixed Markdown. A
+ * quote that is not a string, too long, not found or found more than once,
+ * and a third and later one, are dropped and counted.
+ */
+function quotedEvidence(
   v: unknown,
-  count: number,
+  p: LayersParagraph,
   dropped: { evidence: number },
-) {
+): { start_utf8: number; end_utf8: number }[] {
   const asked = Array.isArray(v) ? v : [];
-  const kept: number[] = [];
-  for (const n of asked)
-    if (
-      Number.isSafeInteger(n) &&
-      (n as number) >= 1 &&
-      (n as number) <= count &&
-      !kept.includes(n as number)
-    )
-      kept.push(n as number);
-    else dropped.evidence++;
-  kept.sort((a, b) => a - b);
-  const max =
-    count >= LAYERS_LONG_PARAGRAPH_SENTENCES
-      ? LAYERS_EVIDENCE_SENTENCES_LONG
-      : LAYERS_EVIDENCE_SENTENCES;
-  dropped.evidence += Math.max(0, kept.length - max);
-  return kept.slice(0, max);
-}
-/** Consecutive sentence numbers as UTF-8 ranges in `base + sentences`. */
-function ranges(numbers: readonly number[], sentences: readonly Sentence[]) {
-  const out: { start_utf8: number; end_utf8: number }[] = [];
-  let run: number[] = [];
-  const flush = () => {
-    if (!run.length) return;
-    out.push({
-      start_utf8: sentences[run[0]! - 1]!.start_utf8,
-      end_utf8: sentences[run.at(-1)! - 1]!.end_utf8,
-    });
-    run = [];
-  };
-  for (const n of numbers) {
-    if (run.length && n !== run.at(-1)! + 1) flush();
-    run.push(n);
-  }
-  flush();
-  return out;
+  const quotes = asked.map((q) => (typeof q === "string" ? q : ""));
+  const found = locateQuotes(
+    p.source,
+    quotes,
+    LAYERS_EVIDENCE_QUOTES,
+    LAYERS_EVIDENCE_QUOTE_MAX,
+  );
+  dropped.evidence += found.dropped;
+  return found.ranges.map((r) => ({
+    start_utf8: p.start_utf8 + utf8Offset(p.source, r.start),
+    end_utf8: p.start_utf8 + utf8Offset(p.source, r.end),
+  }));
 }
 function lineOf(v: unknown, dropped: { sections: number; labels: number }) {
   const r = isRecord(v) ? v : {};
@@ -601,9 +572,10 @@ export interface CheckedSection {
   readonly line: { statement: string; label: string | null } | null;
 }
 /**
- * The check of one section call's answer (spec 10.3, ADR 0073 §7): ids and
- * sentence numbers exist, consecutive sentences become one evidence, lengths
- * fit, label and key terms are found in the statement, `see` names figures of
+ * The check of one section call's answer (spec 10.3, ADR 0073 §7, ADR 0074
+ * §4): ids exist, evidence quotes are found in their paragraph and touching
+ * ones become one evidence, lengths fit, label and key terms are found in
+ * the statement, `see` names figures of
  * this section. A failing item is dropped and counted; the text is never
  * rewritten. An empty statement means the paragraph has no note.
  */
@@ -629,19 +601,16 @@ export function checkSectionAnswer(
       dropped.points++;
       continue;
     }
-    const numbers = sentenceNumbers(raw.evidence, p.sentences.length, dropped);
-    if (!numbers.length) {
+    const located = quotedEvidence(raw.evidence, p, dropped);
+    if (!located.length) {
       dropped.points++;
       continue;
     }
-    const evidence: LayersEvidence[] = ranges(numbers, p.sentences).map(
-      (r) => ({
-        kind: "sentence",
-        unit_id: p.unit_id,
-        start_utf8: p.start_utf8 + r.start_utf8,
-        end_utf8: p.start_utf8 + r.end_utf8,
-      }),
-    );
+    const evidence: LayersEvidence[] = located.map((r) => ({
+      kind: "sentence",
+      unit_id: p.unit_id,
+      ...r,
+    }));
     // A caption's note also rests on its own figure or table (spec 10.2).
     if (p.figure)
       evidence.push({ kind: "block", segment_id: p.figure.segment_id });
@@ -969,12 +938,12 @@ export function numberedPoints(
   });
 }
 
-/** A paragraph of the translation part: its stored translation in numbered sentences. */
+/** A paragraph of the translation part: its stored translation, unsplit. */
 export interface TranslatedParagraph {
   readonly paragraph: LayersParagraph;
   readonly point: LayersPoint;
+  /** The unit's stored translation, in which the translated quotes are located. */
   readonly translation: string;
-  readonly sentences: readonly Sentence[];
   /** Indices of the point's sentence evidence, named `e1`, `e2`… in the input. */
   readonly evidence: readonly number[];
 }
@@ -993,10 +962,7 @@ export function translationSectionInput(
     paragraphs: paragraphs.map((t) => ({
       id: t.paragraph.short,
       kind: t.point.kind,
-      sentences: t.sentences.map((s, i) => ({
-        n: i + 1,
-        text: flat(t.translation.slice(s.start, s.end)),
-      })),
+      text: flat(t.translation),
       evidence: t.evidence.map((index, k) => {
         const e = t.point.evidence[index]!;
         return {
@@ -1023,9 +989,10 @@ type PartDropped = {
 };
 /**
  * The check of a translation section answer (spec 10.5): the same rules as
- * the original's; evidence sentence numbers exist and are consecutive, or
- * that evidence's translated position is null. Throws LayersAnswerError when
- * it is not the structure or names fewer than half the paragraphs.
+ * the original's; each evidence's quote is located in the unit's stored
+ * translation by the original's locator, or that evidence's translated
+ * position is null. Throws LayersAnswerError when it is not the structure or
+ * names fewer than half the paragraphs.
  */
 export function checkTranslationSectionAnswer(
   value: unknown,
@@ -1053,23 +1020,18 @@ export function checkTranslationSectionAnswer(
       const k = t.evidence.indexOf(index);
       if (k < 0) return null;
       const hit = given.find((g) => trimmed(g.id) === `e${k + 1}`);
-      const numbers = Array.isArray(hit?.sentences) ? hit.sentences : [];
-      const ok =
-        numbers.length >= 1 &&
-        numbers.every(
-          (n, i) =>
-            Number.isSafeInteger(n) &&
-            (i === 0 || n === (numbers[i - 1] as number) + 1),
-        ) &&
-        (numbers[0] as number) >= 1 &&
-        (numbers.at(-1) as number) <= t.sentences.length;
-      if (!ok) {
+      const at = locateQuote(
+        t.translation,
+        typeof hit?.quote === "string" ? hit.quote : "",
+        LAYERS_TRANSLATION_TEXT_MAX,
+      );
+      if ("miss" in at) {
         dropped.evidence++;
         return null;
       }
       return {
-        start_utf8: t.sentences[(numbers[0] as number) - 1]!.start_utf8,
-        end_utf8: t.sentences[(numbers.at(-1) as number) - 1]!.end_utf8,
+        start_utf8: utf8Offset(t.translation, at.start),
+        end_utf8: utf8Offset(t.translation, at.end),
       };
     });
     const terms = keepTerms(statement, strings(raw.key_terms));

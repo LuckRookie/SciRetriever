@@ -1,10 +1,17 @@
 /**
- * Sentence split `sentence-split-v1` (document spec 3.5): a fixed program
+ * Sentence split `sentence-split-v2` (document spec 3.5): a fixed program
  * rule, never a model. One implementation for the server and the Web reader.
- * Sentence numbers are display numbers computed from text positions; a later
- * rule changes the numbers shown, never the positions stored.
+ * It gives display numbers only (¶13·2), computed from text positions on
+ * read; a later rule changes the numbers shown, never the positions stored,
+ * and never makes a stored result stale.
  */
-export const SENTENCE_SPLIT_RULE = "sentence-split-v1" as const;
+export const SENTENCE_SPLIT_RULE = "sentence-split-v2" as const;
+/** Every rule a stored file may name; the numbers shown always use the current one. */
+export const SENTENCE_SPLIT_RULES = [
+  "sentence-split-v1",
+  SENTENCE_SPLIT_RULE,
+] as const;
+export type SentenceSplitRule = (typeof SENTENCE_SPLIT_RULES)[number];
 
 /** A sentence as a half-open range of JavaScript string indices. */
 export interface SentenceRange {
@@ -79,6 +86,81 @@ function inlineMathEnd(text: string, at: number): number {
 }
 
 /**
+ * v2 on top of v1 (ADR 0074 §1). A citation right after a period, then
+ * whitespace and the start of a sentence (an upper-case letter, a digit, a
+ * quote or a formula), ends the sentence after the citation; a period, then
+ * whitespace and an inline formula, ends it at the period. A citation is
+ * `$^{…}$` (right after the period or after whitespace) or `[…]` right after
+ * the period, holding only digits, commas, whitespace and dashes. A period
+ * with no whitespace after it never ends a sentence here.
+ */
+const CITE_MATH = /^\$\s*\^\{?\s*[\d,\s‐-―−-]+\}?\s*\$/u;
+const CITE_BRACKET = /^\[[\d,\s‐-―−-]+\]/u;
+const URLISH = /(?:https?:\/\/|www\.|doi\.org)\S*$/u;
+/** What may stand before a period these cuts read as a sentence end. */
+const BEFORE_PERIOD = /[\p{L}\p{N})\]%$°]/u;
+/** An initial such as the "J" of "J. Smith". */
+const INITIAL = /(?:^|[\s(["“'‘])\p{Lu}$/u;
+const AFTER_CITATION = /[\p{Lu}\p{Lt}\p{N}$"“'‘«「『]/u;
+
+/** Inline `$…$` spans of `text` in [from, to), as [start, end). */
+function mathSpans(text: string, from: number, to: number) {
+  const spans: [number, number][] = [];
+  for (let i = from; i < to; i++) {
+    if (text[i] === "\\") {
+      i++;
+      continue;
+    }
+    if (text[i] !== "$") continue;
+    const end = inlineMathEnd(text, i);
+    if (end < 0 || end > to) continue;
+    spans.push([i, end]);
+    i = end - 1;
+  }
+  return spans;
+}
+/** Extra sentence ends inside one v1 sentence [from, to), as string indices. */
+function extraCuts(text: string, from: number, to: number): number[] {
+  // Display math is a sentence of its own (v1).
+  if (text.startsWith("$$", from)) return [];
+  const spans = mathSpans(text, from, to);
+  const inMath = (k: number) => spans.some(([a, b]) => k > a && k < b);
+  const formulaAt = (k: number) => spans.some(([a]) => a === k);
+  const cuts: number[] = [];
+  for (let k = from; k < to; k++) {
+    if (text[k] !== "." || inMath(k)) continue;
+    const head = text.slice(Math.max(from, k - 60), k);
+    if (
+      !BEFORE_PERIOD.test(text[k - 1] ?? "") ||
+      INITIAL.test(head) ||
+      abbreviationBefore(text, k) ||
+      URLISH.test(head)
+    )
+      continue;
+    let after = k + 1;
+    while (after < to && SPACE.test(text[after]!)) after++;
+    const spaced = after > k + 1;
+    const at = spaced ? after : k + 1;
+    const rest = text.slice(at, to);
+    const cite =
+      CITE_MATH.exec(rest) ?? (spaced ? null : CITE_BRACKET.exec(rest));
+    if (cite) {
+      // The citation belongs to the sentence before it.
+      const cut = at + cite[0].length;
+      let next = cut;
+      while (next < to && SPACE.test(text[next]!)) next++;
+      if (next > cut && next < to && AFTER_CITATION.test(text[next]!)) {
+        cuts.push(cut);
+        k = cut - 1;
+      }
+      continue;
+    }
+    if (spaced && after < to && formulaAt(after)) cuts.push(k + 1);
+  }
+  return cuts;
+}
+
+/**
  * Split one segment's text into sentences. Ends are `。！？` always and
  * `! ?` before whitespace or the end; a period ends a sentence only before
  * whitespace and an upper-case letter, a digit or a quote, or at the end of
@@ -87,7 +169,9 @@ function inlineMathEnd(text: string, at: number): number {
  * Semicolons, colons and line breaks never split. Inline math belongs to its
  * sentence; display math (`$$…$$`) is a sentence of its own. With `whole`
  * (a heading, a caption, a table title, a display formula) the text is one
- * sentence. Whitespace between sentences belongs to neither.
+ * sentence. Whitespace between sentences belongs to neither. v2 then cuts
+ * after a citation that follows a period and before a formula that opens a
+ * sentence (see `extraCuts`).
  */
 export function splitSentences(
   text: string,
@@ -167,7 +251,22 @@ export function splitSentences(
     i++;
   }
   push(start, text.length);
-  return out;
+  // v2: citations after a period and formulas opening a sentence.
+  return out.flatMap((r) => {
+    const cuts = extraCuts(text, r.start, r.end);
+    if (!cuts.length) return [r];
+    const pieces: SentenceRange[] = [];
+    let from = r.start;
+    for (const cut of [...cuts, r.end]) {
+      let a = from,
+        b = cut;
+      while (a < b && SPACE.test(text[a]!)) a++;
+      while (b > a && SPACE.test(text[b - 1]!)) b--;
+      if (b > a) pieces.push({ start: a, end: b });
+      from = cut;
+    }
+    return pieces;
+  });
 }
 
 /** UTF-8 byte offset of a JavaScript string index. */

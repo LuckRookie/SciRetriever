@@ -13,6 +13,7 @@ import { join } from "node:path";
 import {
   parseProvenance,
   sha256,
+  splitSentences,
   type ArticleIdentityRequest,
   type ArtifactRef,
 } from "@sciretriever/contracts";
@@ -52,10 +53,7 @@ export interface LayersTranslationSectionInput {
   readonly paragraphs: readonly {
     readonly id: string;
     readonly kind: string | null;
-    readonly sentences: readonly {
-      readonly n: number;
-      readonly text: string;
-    }[];
+    readonly text: string;
     readonly evidence: readonly {
       readonly id: string;
       readonly original: string;
@@ -85,17 +83,29 @@ export interface LayersTranslationDocumentInput {
     }[];
   };
 }
-/** The paragraphs of a section call's input: short id, kind and sentence texts. */
+/** A text's sentences by the contracts' rule, as strings. */
+export const sentencesOf = (text: string) =>
+  splitSentences(text).map((s) => text.slice(s.start, s.end));
+/**
+ * The paragraphs of a section call's input: short id, kind, the text on the
+ * line after the head, and that text's sentences.
+ */
 export function layersParagraphs(input: string) {
-  const out: { id: string; kind: string; sentences: string[] }[] = [];
+  const out: { id: string; kind: string; text: string; sentences: string[] }[] =
+    [];
+  let open = false;
   for (const line of input.split("\n")) {
     const head = /^\[(p\d+)\] (.+)$/u.exec(line);
     if (head) {
-      out.push({ id: head[1]!, kind: head[2]!, sentences: [] });
+      out.push({ id: head[1]!, kind: head[2]!, text: "", sentences: [] });
+      open = true;
       continue;
     }
-    const sentence = /^<\d+> (.*)$/u.exec(line);
-    if (sentence && out.length) out.at(-1)!.sentences.push(sentence[1]!);
+    if (open && out.length) {
+      const p = out.at(-1)!;
+      out[out.length - 1] = { ...p, text: line, sentences: sentencesOf(line) };
+    }
+    open = false;
   }
   return out;
 }
@@ -116,8 +126,9 @@ const words = (s: string, n: number) =>
 /**
  * Valid answers to the layers calls (ADR 0073, spec 10.3). A section call:
  * every paragraph's note is its first sentence (cut to 20 words) and its
- * reason the second; its label the note's second to fourth words, its key
- * term the first long word; the first paragraph of the whole document is
+ * reason the second, its evidence the first sentence quoted; its label the
+ * note's second to fourth words, its key term the first long word; the
+ * first paragraph of the whole document is
  * context, the rest results. A section line names the section. The
  * whole-document call: the first three notes are the trunk, each later note
  * follows the one before it, one data row quotes the first note's
@@ -146,7 +157,7 @@ export function defaultLayersReply(call: LayersCall): unknown {
           statement,
           reason: p.sentences[1] ? words(p.sentences[1], 25) + "." : "",
           label: tokens.slice(1, 4).join(" "),
-          evidence: [1],
+          evidence: p.sentences.slice(0, 1),
           key_terms: [
             tokens.find((w) => /^[A-Za-z]{5,}$/u.test(w)) ?? tokens[0]!,
           ],
@@ -185,13 +196,11 @@ export function defaultLayersReply(call: LayersCall): unknown {
         },
       },
       primary: notes.slice(0, 3).map((n) => n.id),
-      relations: notes
-        .slice(1)
-        .map((n, i) => ({
-          from: n.id,
-          word: "follows",
-          targets: [notes[i]!.id],
-        })),
+      relations: notes.slice(1).map((n, i) => ({
+        from: n.id,
+        word: "follows",
+        targets: [notes[i]!.id],
+      })),
       data: [
         { quantity: "Spectrum of the first sample", value, source: first },
       ],
@@ -202,7 +211,7 @@ export function defaultLayersReply(call: LayersCall): unknown {
 /**
  * The translation part written from the stored translation: a note is its
  * paragraph's first translated sentence, its reason the second, its label
- * the note's first three tokens; every evidence on sentence 1. The digest is
+ * the note's first three tokens; every evidence quotes the note. The digest is
  * the original's prefixed, its places' words kept.
  */
 export function defaultLayersTranslationReply(call: LayersCall): unknown {
@@ -216,15 +225,16 @@ export function defaultLayersTranslationReply(call: LayersCall): unknown {
             label: "稳定的光谱",
           },
       units: input.paragraphs.map((p) => {
-        const statement = p.sentences[0]?.text ?? "";
+        const sentences = sentencesOf(p.text);
+        const statement = sentences[0] ?? "";
         const tokens = statement.split(/\s+/u);
         return {
           id: p.id,
           statement,
-          reason: p.sentences[1]?.text ?? "",
+          reason: sentences[1] ?? "",
           label: tokens.slice(0, 3).join(" "),
           key_terms: tokens[1] ? [tokens[1]] : [],
-          evidence: p.evidence.map((e) => ({ id: e.id, sentences: [1] })),
+          evidence: p.evidence.map((e) => ({ id: e.id, quote: statement })),
         };
       }),
     };
