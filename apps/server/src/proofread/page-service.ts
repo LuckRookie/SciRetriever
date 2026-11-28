@@ -20,7 +20,9 @@ import type { PdfPages, ProofreadCache } from "./contract.js";
 import {
   LEAF_CORRECTION_METHOD,
   applyLeafCorrections,
+  correctRecordId,
 } from "./leaf-corrections.js";
+import { FORMAT_RULE, formatCorrections } from "../archive/format-normalize.js";
 import {
   PAGE_REVIEW_METHOD,
   PAGE_REVIEW_SYSTEM,
@@ -265,12 +267,26 @@ export class ArchivePageProofreadService {
           retained.some((l) => l.leaf_id === t.leaf_id),
         ),
         lockedIds = new Set(manual.map((t) => t.leaf_id));
+      // ADR 0074 §2: an arrangement made with the notation rule carries its program
+      // corrections into every page; a person's locked text wins over them.
+      const program =
+        snapshot.format_rule === FORMAT_RULE
+          ? retained
+              .filter((l) => !lockedIds.has(l.leaf_id))
+              .flatMap((l) => formatCorrections(l, page.page))
+          : [];
       const key = pageProofreadInputKey(
         source,
         retained,
         deleted,
         page,
-        manual.length ? textHash({ method, manual }) : method,
+        manual.length || program.length
+          ? textHash({
+              method,
+              manual,
+              ...(program.length ? { program: FORMAT_RULE } : {}),
+            })
+          : method,
       );
       const manualOperations: CorrectOperation[] = manual.flatMap((t) => {
         const leaf = retained.find((l) => l.leaf_id === t.leaf_id)!;
@@ -289,11 +305,24 @@ export class ArchivePageProofreadService {
               },
             ];
       });
+      const programOperations: CorrectOperation[] = program.map(
+          ({ rule, ...op }) => {
+            void rule;
+            return op;
+          },
+        ),
+        programRules = new Map(
+          program.map(({ rule, ...op }) => [correctRecordId(op, key), rule]),
+        );
+      const baseOperations = [...manualOperations, ...programOperations];
       const withManual = (c: CorrectRecord): CorrectRecord => {
-        const lock = manual.find((t) => t.leaf_id === c.operation.leaf_id);
+        const lock = manual.find((t) => t.leaf_id === c.operation.leaf_id),
+          rule = programRules.get(c.correction_id);
         return lock
           ? { ...c, source: "manual", decision_id: lock.decision_id }
-          : c;
+          : rule
+            ? { ...c, source: "program", rule }
+            : c;
       };
       if (!retained.length) {
         if (
@@ -410,7 +439,7 @@ export class ArchivePageProofreadService {
       const cancelled = async () => {
         const corrections = applyLeafCorrections(
           retained,
-          manualOperations,
+          baseOperations,
           page.page,
           key,
         ).records.map(withManual);
@@ -457,7 +486,7 @@ export class ArchivePageProofreadService {
           throw new ArchiveTextError("source-integrity");
         const corrections = applyLeafCorrections(
           retained,
-          manualOperations,
+          baseOperations,
           page.page,
           key,
         ).records.map(withManual);
@@ -615,7 +644,7 @@ export class ArchivePageProofreadService {
         if (signal?.aborted) return cancelled();
         const corrections = applyLeafCorrections(
           retained,
-          manualOperations,
+          baseOperations,
           page.page,
           key,
         ).records.map(withManual);
@@ -651,7 +680,7 @@ export class ArchivePageProofreadService {
         );
       } else {
         // Every edit passes the program checks one by one; a refused edit leaves the parse.
-        const operations: CorrectOperation[] = [...manualOperations],
+        const operations: CorrectOperation[] = [...baseOperations],
           refused: PageReviewNotes["refused"][number][] = [],
           uncertain: PageReviewNotes["uncertain"][number][] = [];
         const consider = (
@@ -667,13 +696,14 @@ export class ArchivePageProofreadService {
               ? guardEdit(page, plan, leaf, original, replacement)
               : null;
           if (!rule) {
+            // An edit the program already made is not made twice.
             const next = editOperations(
               leaf,
               original,
               replacement,
               page.page,
               reason,
-            );
+            ).filter((op) => !programRules.has(correctRecordId(op, key)));
             try {
               applyLeafCorrections(
                 retained,

@@ -224,3 +224,86 @@ it("requires layout ranges to match existing image, caption and footnote segment
     ),
   ).toThrow();
 });
+it("accepts table notes only on a table group, as footnote segments outside the page footnotes", () => {
+  const segment = (segment_id: string, kind: string, start: number) => ({
+    segment_id,
+    block_id: segment_id,
+    kind,
+    start_utf8: start,
+    end_utf8: start + 5,
+    section_id: "s1",
+    page: 0,
+    region: null,
+    continuation_regions: [],
+    locate: "page",
+    source: "parser",
+    basis: "text-layer",
+  });
+  const group = {
+    group_id: "g-table1",
+    kind: "table",
+    rows: [1],
+    objects: [
+      { segment_id: "table1", row: 0, column: 0, start_utf8: 0, end_utf8: 5 },
+    ],
+    captions: [{ segment_id: "caption1", start_utf8: 5, end_utf8: 10 }],
+    notes: [{ segment_id: "note1", start_utf8: 10, end_utf8: 15 }],
+  };
+  const tableLayout = {
+    schema_version: 1,
+    article_info: [],
+    figure_groups: [group],
+    footnotes: [],
+  };
+  const structure = {
+    schema_version: 2,
+    text_encoding: "utf8",
+    page_count: 1,
+    sections: [
+      {
+        section_id: "s1",
+        title: null,
+        level: 2,
+        start_utf8: 0,
+        end_utf8: 15,
+        role: null,
+        role_source: null,
+      },
+    ],
+    segments: [
+      segment("table1", "table", 0),
+      segment("caption1", "caption", 5),
+      segment("note1", "footnote", 10),
+    ],
+    layout: tableLayout,
+  };
+  expect(parseDocumentStructureV2(structure, 15)).toEqual(structure);
+  for (const figure_groups of [
+    [{ ...group, notes: [] }],
+    [{ ...group, kind: "figure" }],
+    [{ ...group, notes: [{ ...group.notes[0], extra: 1 }] }],
+  ])
+    expect(() =>
+      parseDocumentLayout({ ...tableLayout, figure_groups }),
+    ).toThrow();
+  // A note is a footnote segment, and it is never also a page footnote.
+  expect(() =>
+    parseDocumentStructureV2(
+      {
+        ...structure,
+        segments: structure.segments.map((s) =>
+          s.segment_id === "note1" ? { ...s, kind: "text" } : s,
+        ),
+      },
+      15,
+    ),
+  ).toThrow();
+  expect(() =>
+    parseDocumentLayout({
+      ...tableLayout,
+      footnotes: [
+        { segment_id: "note1", page_index: 0, start_utf8: 10, end_utf8: 15 },
+      ],
+    }),
+  ).toThrow();
+});

@@ -114,6 +114,29 @@ it("parses positive split, merge, page and multi-caption operations without acce
   ])
     expect(parseArrangementOperation(op)).toEqual(op);
 });
+it("accepts a table note only as a program attachment to a table", () => {
+  const note = {
+    kind: "caption",
+    object_leaf_id: id,
+    caption_leaf_ids: [id2],
+    object_kind: "table",
+    relation: "table-note",
+    source: "program",
+    rule: "format-normalize-v1/table-note",
+  };
+  expect(parseArrangementOperation(note)).toEqual(note);
+  for (const change of [
+    { object_kind: "figure" },
+    { relation: "footnote" },
+    { source: undefined, rule: undefined },
+    { relation: undefined },
+  ])
+    expect(() =>
+      parseArrangementOperation(
+        JSON.parse(JSON.stringify({ ...note, ...change })),
+      ),
+    ).toThrow();
+});
 it("rejects forged page records with missing, duplicated or unrelated suspect dispositions", () => {
   const q = {
       suspect_id: id2,
@@ -167,6 +190,32 @@ it("rejects fake correction ownership and mismatching raw ranges in a page recor
   expect(
     parsePageProofreadRecord(record, 1).corrections[0]!.source_span.start,
   ).toBe(8);
+  // A program correction names its rule (ADR 0074 §2); nothing else carries one.
+  const program = {
+    ...correction,
+    source: "program",
+    rule: "format-normalize-v1/superscript",
+  };
+  expect(
+    parsePageProofreadRecord({ ...record, corrections: [program] }, 1)
+      .corrections[0],
+  ).toEqual(program);
+  for (const change of [
+    { source: "program", rule: undefined },
+    { source: "program", decision_id: id2 },
+    { rule: "format-normalize-v1/superscript" },
+  ])
+    expect(() =>
+      parsePageProofreadRecord(
+        {
+          ...record,
+          corrections: [
+            JSON.parse(JSON.stringify({ ...correction, ...change })),
+          ],
+        },
+        1,
+      ),
+    ).toThrow();
   for (const change of [
     { source: "manual" },
     { decision_id: id2 },
@@ -276,6 +325,13 @@ it("rejects invalid page counts, leaf spans, duplicate destinations and dangling
       { ...bundle, leaves: [{ ...row, basis: { toString: () => basis } }] },
     ])
       expect(() => parseArchiveTextBundleV2(changed)).toThrow();
+    // Program corrections (ADR 0074 §2) change draft text; the storage owner checks their source.
+    expect(
+      parseArchiveTextBundleV2({
+        ...bundle,
+        leaves: [{ ...row, corrected_text: "y", correction_ids: [id3] }],
+      }).leaves[0]!.corrected_text,
+    ).toBe("y");
   }
   for (const change of [
     { destinations: [...snapshot.destinations, ...snapshot.destinations] },

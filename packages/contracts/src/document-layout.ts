@@ -18,6 +18,10 @@ export interface DocumentLayout {
     readonly captions: readonly (DocumentUtf8Range & {
       readonly segment_id: string;
     })[];
+    /** Table notes set right below the table (ADR 0074 §2); absent when there are none. */
+    readonly notes?: readonly (DocumentUtf8Range & {
+      readonly segment_id: string;
+    })[];
     readonly rows: readonly number[];
   }[];
   readonly footnotes: readonly (DocumentUtf8Range & {
@@ -87,7 +91,14 @@ export function parseDocumentLayout(
   const figure_groups = list(
     v.figure_groups,
     (x): DocumentLayout["figure_groups"][number] => {
-      const g = obj(x, ["group_id", "kind", "objects", "captions", "rows"]),
+      const g = obj(x, [
+          "group_id",
+          "kind",
+          "objects",
+          "captions",
+          "rows",
+          ...(x && typeof x === "object" && "notes" in x ? ["notes"] : []),
+        ]),
         group_id = id(g.group_id);
       if (
         groupIds.has(group_id) ||
@@ -114,13 +125,23 @@ export function parseDocumentLayout(
       });
       if (!objects.length || rows.reduce((a, b) => a + b, 0) !== objects.length)
         fail();
+      const captions = list(g.captions, (x) =>
+        segment(obj(x, ["segment_id", "start_utf8", "end_utf8"])),
+      );
+      // Only a table has notes, and a present list is never empty.
+      const notes =
+        g.notes === undefined
+          ? undefined
+          : list(g.notes, (x) =>
+              segment(obj(x, ["segment_id", "start_utf8", "end_utf8"])),
+            );
+      if (notes && (!notes.length || g.kind !== "table")) fail();
       return {
         group_id,
         kind: g.kind as "figure" | "scheme" | "table",
         objects,
-        captions: list(g.captions, (x) =>
-          segment(obj(x, ["segment_id", "start_utf8", "end_utf8"])),
-        ),
+        captions,
+        ...(notes ? { notes } : {}),
         rows,
       };
     },

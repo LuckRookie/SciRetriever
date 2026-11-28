@@ -37,7 +37,8 @@ export function arrangementOperationKey(op: ArrangementOperation): string {
     return `destination:${op.leaf_id}`;
   if (op.kind === "split") return `split:${op.root_block_id}`;
   if (op.kind === "merge") return `merge:${op.leaf_ids[0]}`;
-  if (op.kind === "caption") return `caption:${op.object_leaf_id}`;
+  if (op.kind === "caption")
+    return `${op.relation ?? "caption"}:${op.object_leaf_id}`;
   return `page:${op.leaf_id}`;
 }
 export function arrangementLeafId(
@@ -79,6 +80,8 @@ export interface ArrangementConstraints {
   readonly manual_revision?: number;
   readonly locked_decisions?: ReadonlyMap<string, string>;
   readonly locked_spans?: readonly SourceSpan[];
+  /** The notation rule the arrangement was made with (ADR 0074 §2). */
+  readonly format_rule?: string | undefined;
 }
 export function reviewArrangement(
   source: ArchiveTextSource,
@@ -218,15 +221,30 @@ export function reviewArrangement(
         add("additional-heading-invalid", id);
     }
   }
-  const captions = new Map<string, string>();
+  const captions = new Map<string, string>(),
+    notes = new Set<string>();
   for (const op of ops.filter((o) => o.kind === "caption")) {
-    const object = finalById.get(op.object_leaf_id);
+    const object = finalById.get(op.object_leaf_id),
+      note = op.relation === "table-note";
     if (
       !object ||
-      !["image", "table"].includes(object.type) ||
+      !(note ? ["table"] : ["image", "table"]).includes(object.type) ||
       destinations.get(op.object_leaf_id)?.kind !== "assigned"
     )
       add("caption-object-invalid", op.object_leaf_id);
+    // A table note is a footnote leaf attached to exactly one table (ADR 0074 §2).
+    if (note) {
+      for (const id of op.caption_leaf_ids) {
+        if (
+          finalById.get(id)?.type !== "footnote" ||
+          destinations.get(id)?.kind !== "assigned" ||
+          notes.has(id)
+        )
+          add("table-note-invalid", id);
+        notes.add(id);
+      }
+      continue;
+    }
     for (const id of op.caption_leaf_ids) {
       const leaf = finalById.get(id);
       if (
@@ -384,6 +402,9 @@ export function acceptArrangement(
     break_candidates: review.candidates,
     break_decisions: s.break_decisions,
     manual_revision: constraints.manual_revision ?? 0,
+    ...(constraints.format_rule
+      ? { format_rule: constraints.format_rule }
+      : {}),
   };
   const snapshot = parseArrangementSnapshot(
     { ...body, arrangement_id: textHash(body) },
@@ -435,6 +456,7 @@ export function verifyArrangement(
         ...constraints,
         classification: old.classification,
         manual_revision: old.manual_revision,
+        format_rule: old.format_rule,
       },
     );
   if (textHash(old) !== textHash(fresh))
@@ -501,11 +523,21 @@ export function arrangementPreview(
       .map((o) => [o.leaf_ids[0]!, o.leaf_ids]),
   );
   const tails = new Set([...groups.values()].flatMap((ids) => ids.slice(1)));
-  const captions = new Map(
-    snapshot.operations
-      .filter((o) => o.kind === "caption")
-      .map((o) => [o.object_leaf_id, o.caption_leaf_ids]),
-  );
+  const captions = new Map<string, string[]>();
+  // Captions first, then table notes: a note sits below its table and caption.
+  for (const o of [
+    ...snapshot.operations.filter(
+      (o) => o.kind === "caption" && o.relation !== "table-note",
+    ),
+    ...snapshot.operations.filter(
+      (o) => o.kind === "caption" && o.relation === "table-note",
+    ),
+  ])
+    if (o.kind === "caption")
+      captions.set(o.object_leaf_id, [
+        ...(captions.get(o.object_leaf_id) ?? []),
+        ...o.caption_leaf_ids,
+      ]);
   const captionIds = new Set([...captions.values()].flat());
   const emitted = new Set<string>(),
     nodes: ArrangementPreviewNode[] = [];

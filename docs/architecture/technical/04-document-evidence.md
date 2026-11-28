@@ -380,7 +380,7 @@ EvidenceRef 固定材料或文档表示和片段 hash；定位必须在固定版
 - 删除操作附 `source=program` 与命中的 `rule`，仍参加“每个最终叶块恰好一个去向”的验证。已被程序删除的块不进入整理请求；人工恢复或文字锁所在原块优先，下一次整理会再次提供。书目和版权仍按显式整理决定；首页收稿、接受和发表日期保留为 end-matter。
 - `ArrangementSourceBlock.pdf_geometry` 是可选的文字层度量：行数、PDF 点单位的行高与主字体字号、首行缩进/行高、末行占宽与主字体。使用 PDF 的真实页面宽高换算 0–1000 坐标；与解析页宽高比相差超过 2%、隐藏 OCR、旋转方向不可靠、无可见水平文字层或超过单页 20,000 个文字项时不做度量。不根据 MinerU 的框估计行宽。几何参与整理输入身份，不进入页校订缓存键。
 
-**写法统一与表注**（`format-normalize-v1`，[ADR 0074](../decisions/0074-archive-steps-own-their-format-problems.md) 第 2 节，尚未实现），在整理请求之前：
+**写法统一与表注**（`format-normalize-v1`，[ADR 0074](../decisions/0074-archive-steps-own-their-format-problems.md) 第 2 节），在整理请求之前：
 
 - 正文类区块（表格的 HTML 除外）里的 `<sup>…</sup>`、`<sub>…</sub>` 写成 `$^{…}$`、`$_{…}$`；行内公式以句点结尾、其后是空白、另一个公式或块尾时，句点移到 `$` 之外（`$177 - 178^{\circ}C.$` 写成 `$177 - 178^{\circ}C$.`）。
 - 这是整理里唯一改字符的地方：改动记为程序的改字（`source=program` 与 `rule`），与校订的改字一样按叶块坐标保存，人工可以撤销；整理请求送出的是统一后的文字。
@@ -452,13 +452,13 @@ EvidenceRef 固定材料或文档表示和片段 hash；定位必须在固定版
 
 新建档固定执行 `arrange → proofread → render → layers → metadata → references → tags → translate`（[ADR 0074](../decisions/0074-archive-steps-own-their-format-problems.md) 第 5 节，尚未实现；现行代码是 `render → translate → layers → metadata → references → tags`）；`layers` 与 `translate` 只在主 PDF 上执行，规则见[第 10 节](#10-阅读层概览与脉络)与[第 9 节](#9-全文的译文)。整理和逐页校订都绑定 `proofreading` 角色。`archive/text-pipeline.ts` 组装 source、整理、逐页校订与接纳清单；检查点和页缓存继续使用现有不可变 artifact、校订版本和 raw pin，不另建业务库。新的写入请求为 schema 2；旧步骤与旧写请求返回 `archive-contract-obsolete`，不把 document/structure 当作新步骤别名。
 
-render 从保留叶块及已记录 correct 确定性生成普通 Markdown、DocumentStructureV2 和叶块 UTF-8 source map。新建档及显式重新发布采用 `source-order-leaves-v4`：公式叶块有非空 LaTeX 时只输出 LaTeX，不再同时输出该叶块截图或将未使用截图加入资源闭包；LaTeX 为空时保留截图兜底。历史 `source-order-leaves-v3` 保留公式图片与文字并列的原行为，`arranged-leaves-v2` 保留原骨架渲染算法；固定旧版本读取与 hash 校验按记录的 builder 逐字节重建。同一 proofread 的派生 Markdown 按 builder 与内容 hash 分别登记，文档发布核对实际资源 hash/path，不覆盖旧排版资源。保留 payload 恰好出现一次，标题标记、公式分隔符、合并接缝、资源语法和段落分隔单独记录；不插自定义指令、HTML 注释或固定角色标题。原文顺序决定章节顺序，同角色可分多段，原文没有标题的章节 title=null。
+render 从保留叶块及已记录 correct 确定性生成普通 Markdown、DocumentStructureV2 和叶块 UTF-8 source map。新建档及显式重新发布采用 `source-order-leaves-v4`：公式叶块有非空 LaTeX 时只输出 LaTeX，不再同时输出该叶块截图或将未使用截图加入资源闭包；LaTeX 为空时保留截图兜底。有表注的整理采用 `source-order-leaves-v6`（普通与长文档共用，其余排版同 v4/v5）。历史 `source-order-leaves-v3` 保留公式图片与文字并列的原行为，`arranged-leaves-v2` 保留原骨架渲染算法；固定旧版本读取与 hash 校验按记录的 builder 逐字节重建。同一 proofread 的派生 Markdown 按 builder 与内容 hash 分别登记，文档发布核对实际资源 hash/path，不覆盖旧排版资源。保留 payload 恰好出现一次，标题标记、公式分隔符、合并接缝、资源语法和段落分隔单独记录；不插自定义指令、HTML 注释或固定角色标题。原文顺序决定章节顺序，同角色可分多段，原文没有标题的章节 title=null。
 
 标题层级先依章节编号（1 / 1.1 / 1.1.1），其次依可见 PDF 文字层的重复字号/字体样式；至少 90% 标题有样式且嵌套一致率不少于 90% 才使用样式层级，否则沿用整理给出的层级。文末信息与参考文献标题固定同正文章节层级。首页单位、通讯作者/作者注释及收稿/发表信息仍归 end-matter，排在作者后；正文标题区的期刊、年份与 DOI 继续由 catalog 元数据在阅读层投影，不进入不可变正文。
 
-同一图注的面板图片连续排列、图注紧随其后，结构记录图片行列；关系不明的无图注图片独立保留。紧邻已有标题表格、宽度相近而没有自己标题的续表合成一组。表注排在它的表下面，记进这张表的 `figure_groups`（[ADR 0074](../decisions/0074-archive-steps-own-their-format-problems.md)，尚未实现；现行代码按脚注处理）。脚注有本页引用标记时放在首次引用段落之后；没有标记的留在原位置。独立内容不会插入合并段内部。
+同一图注的面板图片连续排列、图注紧随其后，结构记录图片行列；关系不明的无图注图片独立保留。紧邻已有标题表格、宽度相近而没有自己标题的续表合成一组。表注排在它的表下面，记进这张表的 `figure_groups`（[ADR 0074](../decisions/0074-archive-steps-own-their-format-problems.md)）。脚注有本页引用标记时放在首次引用段落之后；没有标记的留在原位置。独立内容不会插入合并段内部。
 
-`DocumentStructureV2.layout`（可选 schema 1）保存 article_info 字节区间、figure_groups（figure/scheme/table 的对象及图注区间、segment ID、0 起始 row/column 和每行数量 rows）以及 footnotes（每条脚注区间、segment ID、0 起始 page_index）。区间均为固定校订稿 UTF-8 半开区间。文档 describe 原样返回可选 layout；outline 继续分页返回 title（string|null）、role、level 与起止字节。HTTP、CLI 与 MCP 共用同一读取合同，历史无 layout 的结果照旧读取。
+`DocumentStructureV2.layout`（可选 schema 1）保存 article_info 字节区间、figure_groups（figure/scheme/table 的对象及图注区间、segment ID、0 起始 row/column 和每行数量 rows；表的可选 notes 为表注区间与 segment ID，表注不再列入 footnotes）以及 footnotes（每条脚注区间、segment ID、0 起始 page_index）。区间均为固定校订稿 UTF-8 半开区间。文档 describe 原样返回可选 layout；outline 继续分页返回 title（string|null）、role、level 与起止字节。HTTP、CLI 与 MCP 共用同一读取合同，历史无 layout 的结果照旧读取。
 
 结构注释采用独立 schema 2，直接从整理归属和图注挂接派生，role_source 为 arrangement 或 manual，不再调用章节分类模型。11 个新骨架角色与历史角色分别解码，不作名称映射。`body_content_leaf_ids` 记录真正具有保留正文 payload 的正文类叶块；纯标题不满足 READY。正文类角色恰为 introduction、methods、results-discussion、conclusion、additional。主文仍需校订流程 complete（包括长文档的 unreviewed 页）、该校订稿是当前默认文档、派生注释、必需元数据与标签；默认文本是初稿时不成立 READY。READY 表示库整理完成；它不是阅读的门槛，按 ADR 0060 也不再是加工的门槛（目标，见 [8.6](#86-加工读取)；当前实现的算子仍只读取 READY 文献）；补充材料和参考文献缺口不独自阻断主文。没有叶块的页所产生的 page-content-missing 是非阻断问题。
 

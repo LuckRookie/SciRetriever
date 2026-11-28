@@ -800,3 +800,141 @@ it("finds a break where the next block starts with a capital letter or a formula
     reviewArrangement(f.source, assigned(f.source)).candidates,
   ).toHaveLength(2);
 });
+it("sends the unified notation, maps the model's cut back to the parse, and attaches table notes by the program (format-normalize-v1)", async () => {
+  const table = "<table><tr><td>λ</td></tr></table>";
+  const f = await archiveTextFixture(
+    [
+      { text: "Yield 95%, mp $177 - 178^{\\circ}C.$ The H<sup>1</sup> NMR." },
+      { text: "", type: "table", html: table, source_type: "table" },
+      { text: "Table 1 Optical data.", type: "caption", source_type: "table" },
+      {
+        text: "$^{\\mathrm{a}}$$\\lambda_{\\mathrm{max}}$: absorption maximum.",
+        type: "footnote",
+        source_type: "table",
+      },
+      {
+        text: "$^{a}$ A page note.",
+        type: "footnote",
+        source_type: "page_footnote",
+      },
+      // A table note with no table above it on its page stays a footnote.
+      {
+        text: "$^{b}$ Orphan note.",
+        type: "footnote",
+        source_type: "table",
+        page: 1,
+      },
+      { text: "Kept.<sup>2</sup> Read Online", page: 1 },
+    ],
+    { page_count: 2 },
+  );
+  const seen: Record<string, unknown>[] = [];
+  const runtime = fakeTextRuntime(async (request) => {
+    seen.push(requestJson(request));
+    return modelTool("submit_arrangement", {
+      ...wholeAnswer(),
+      sections: [
+        { first: "r1", last: "r7", role: "results-discussion", heading: null },
+      ],
+      // The model's cut counts code points of the unified text it saw.
+      splits: [{ block: "r7", cuts: [[..."Kept.$^{2}$ "].length] }],
+      drops: [{ block: "r7#2", reason: "interface" }],
+      // The model may link the caption only; a footnote is never its caption.
+      captions: [{ object: "r2", captions: ["r3", "r4"], kind: "table" }],
+    });
+  });
+  try {
+    const result = await service(runtime, f).build(f.source);
+    expect(result.stop).toBeNull();
+    const blocks = seen[0]!.blocks as { id: string; text: string }[];
+    expect(blocks.map((b) => b.text)).toEqual([
+      "Yield 95%, mp $177 - 178^{\\circ}C$. The H$^{1}$ NMR.",
+      table,
+      "Table 1 Optical data.",
+      "$^{\\mathrm{a}}$$\\lambda_{\\mathrm{max}}$: absorption maximum.",
+      "$^{a}$ A page note.",
+      "$^{b}$ Orphan note.",
+      "Kept.$^{2}$ Read Online",
+    ]);
+    const value = result.value!,
+      leaves = value.leaves.map((l) => l.leaf_id);
+    expect(value.format_rule).toBe("format-normalize-v1");
+    // The leaves still cut the parser's own text.
+    expect(value.leaves.slice(-2).map((l) => l.original_text)).toEqual([
+      "Kept.<sup>2</sup> ",
+      "Read Online",
+    ]);
+    expect(value.operations).toContainEqual({
+      kind: "caption",
+      object_leaf_id: leaves[1],
+      caption_leaf_ids: [leaves[2]],
+      object_kind: "table",
+    });
+    expect(value.operations).toContainEqual({
+      kind: "caption",
+      object_leaf_id: leaves[1],
+      caption_leaf_ids: [leaves[3]],
+      object_kind: "table",
+      relation: "table-note",
+      source: "program",
+      rule: "format-normalize-v1/table-note",
+    });
+    expect(
+      value.operations.filter(
+        (o) => o.kind === "caption" && o.relation === "table-note",
+      ),
+    ).toHaveLength(1);
+    // The note follows its table and caption in the arrangement order.
+    expect(
+      arrangementPreview(value)
+        .slice(1, 4)
+        .map((n) => n.leaf_ids[0]),
+    ).toEqual([leaves[1], leaves[2], leaves[3]]);
+    expect(verifyArrangement(f.source, value, value.method_sha256)).toEqual(
+      value,
+    );
+    // A dropped table takes no note.
+    expect(() =>
+      reviewArrangement(
+        f.source,
+        value.operations.map((o) =>
+          o.kind === "assign" && o.leaf_id === leaves[1]
+            ? {
+                kind: "drop" as const,
+                leaf_id: o.leaf_id,
+                reason: "decoration" as const,
+              }
+            : o,
+        ),
+      ),
+    ).toThrow(ArchiveTextError);
+  } finally {
+    await runtime.close();
+  }
+});
+it("keeps an arrangement made before the notation rule free of the rule and of table notes", async () => {
+  const f = await archiveTextFixture([
+      {
+        text: "",
+        type: "table",
+        html: "<table></table>",
+        source_type: "table",
+      },
+      { text: "$^{a}$ Note.", type: "footnote", source_type: "table" },
+    ]),
+    snapshot = arranged(f.source);
+  expect([...(f.source.table_notes ?? [])]).toEqual([
+    [f.source.blocks[1]!.root_block_id, f.source.blocks[0]!.root_block_id],
+  ]);
+  expect(snapshot.format_rule).toBeUndefined();
+  expect(snapshot.operations.some((o) => o.kind === "caption")).toBe(false);
+  // The note map stays outside the source identity that reuse compares.
+  const { table_notes, ...rest } = f.source;
+  void table_notes;
+  expect(Object.keys(rest).sort()).toEqual([
+    "blocks",
+    "input_sha256",
+    "pages",
+    "raw",
+  ]);
+});

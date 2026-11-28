@@ -66,7 +66,7 @@
 `source-results.ts` 定义元数据任务请求、安全来源进度、最终 PDF 渠道、任务来源汇总与来源统计；比例显式带分子分母，历史无记录可区分，所有问题沿用 source-configuration 的安全诊断。`parseTaskCitationSourceCooldowns` 解析任务详情的来源冷却状态和有界待补查样本，保留字段的省略语义。
 
 `screencast.ts` 定义人类观看的认证握手、订阅、二进制 JPEG 封套、直接输入及控制/连接状态，包含严格边界解析；它与 Agent 的 WorkbenchObservation 分离。
-\n`document-layout.ts` 定义普通 Markdown 的文章信息、图表分组和逐条页脚注 UTF-8 区间；新文档通过 describe 返回，outline 的无原标题项以 null 表示。\n
+\n`document-layout.ts` 定义普通 Markdown 的文章信息、图表分组（表的分组可带表注区间）和逐条页脚注 UTF-8 区间；新文档通过 describe 返回，outline 的无原标题项以 null 表示。\n
 `device-connections.ts` 定义设备用途、无敏感值的连接投影与管理输入；连接码解析和一次性交付类型只用于认证边界，不进入普通文献事实或日志。
 
 `intake.ts` 定义统一入库批次、文件与报告、显式路由清单，以及获取 PDF/解析任务的范围计数。`library-counts.ts` 提供共用的 FullTextCounts 和关系校验；批次及文献库的 full_text 按论文，批次 estimates 与文献库状态、with_primary_pdf 按版本。LibraryQuery 的 has_primary_pdf 按版本筛选；省略或 null 不增加规范化字段。

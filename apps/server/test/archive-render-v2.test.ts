@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import {
+  parseDocumentLayout,
   parseArchiveBuildRequest,
   parseArchiveTextBundleV2,
   parseProofreadVersionV2,
@@ -11,6 +12,7 @@ import { archiveTextFixture, arranged } from "./archive-text-fixture.js";
 import { byteHash } from "../src/archive/text-source.js";
 import {
   renderArrangement,
+  arrangedBuilderFor,
   arrangementAnnotation,
   arrangedStructureSatisfied,
 } from "../src/archive/render.js";
@@ -103,6 +105,7 @@ it.each([
 function bundle(
   source: Awaited<ReturnType<typeof archiveTextFixture>>["source"],
   operations?: readonly ArrangementOperation[],
+  format_rule?: string,
 ): ArchiveTextBundleV2 {
   const base = operations ?? arranged(source).operations,
     review = reviewArrangement(source, base);
@@ -129,6 +132,7 @@ function bundle(
         ),
       },
       "c".repeat(64),
+      { format_rule },
     ),
     destinations = new Map(
       snapshot.destinations.map((d) => [d.leaf_id, d.destination]),
@@ -367,4 +371,118 @@ it("refuses structural or ambiguous Markdown edits while mapping a unique leaf e
   expect(
     mapMarkdownEdit(r.markdown, "new document", r.source_map),
   ).toMatchObject({ status: "mapping-conflict" });
+});
+it("sets a table note right below its table and caption in v6, records it in the table's group, and keeps moving page footnotes", async () => {
+  const f = await archiveTextFixture([
+      { text: "We report data$^{a}$ and notes$^{b}$." },
+      { text: "", type: "table", html: "<table><tr><td>1</td></tr></table>" },
+      { text: "Table 1 Optical data.", type: "caption" },
+      { text: "$^{a}$ Absorption maximum.", type: "footnote" },
+      { text: "$^{b}$ A page note.", type: "footnote" },
+    ]),
+    leaves = arranged(f.source).leaves.map((l) => l.leaf_id),
+    base: ArrangementOperation[] = [
+      ...leaves.map((id) => assigned(id, "results-discussion")),
+      {
+        kind: "caption",
+        object_leaf_id: leaves[1]!,
+        caption_leaf_ids: [leaves[2]!],
+        object_kind: "table",
+      },
+    ];
+  const order = (r: ReturnType<typeof renderArrangement>) =>
+    r.structure.segments.map((s) => leaves.indexOf(s.segment_id));
+  // Before the rule (v4): the table note is a page footnote and moves to the citing paragraph.
+  const old = bundle(f.source, base),
+    v4 = renderArrangement(old, []);
+  expect(order(v4)).toEqual([0, 3, 4, 1, 2]);
+  const fresh = bundle(
+      f.source,
+      [
+        ...base,
+        {
+          kind: "caption",
+          object_leaf_id: leaves[1]!,
+          caption_leaf_ids: [leaves[3]!],
+          object_kind: "table",
+          relation: "table-note",
+          source: "program",
+          rule: "format-normalize-v1/table-note",
+        },
+      ],
+      "format-normalize-v1",
+    ),
+    v6 = renderArrangement(fresh, []);
+  expect(order(v6)).toEqual([0, 4, 1, 2, 3]);
+  const [group] = v6.structure.layout!.figure_groups;
+  expect(group).toMatchObject({
+    kind: "table",
+    objects: [{ segment_id: leaves[1] }],
+    captions: [{ segment_id: leaves[2] }],
+    notes: [{ segment_id: leaves[3] }],
+  });
+  expect(v6.structure.layout!.footnotes.map((n) => n.segment_id)).toEqual([
+    leaves[4],
+  ]);
+  // The caption stays the table's caption in the annotation; the note is not one.
+  expect(
+    arrangementAnnotation(doc, "main", fresh, v6).figures[0]!
+      .caption_segment_ids,
+  ).toEqual([leaves[2]]);
+  // The builder is chosen by the arrangement; an older one knows no table notes.
+  expect(arrangedBuilderFor(old)).toBe("source-order-leaves-v4");
+  expect(arrangedBuilderFor(fresh)).toBe("source-order-leaves-v6");
+  expect(
+    renderArrangement(fresh, [], "source-order-leaves-v4").structure.layout!
+      .footnotes,
+  ).toHaveLength(2);
+  // A fixed v4 version still rebuilds byte for byte with its recorded builder.
+  const again = renderArrangement(old, [], "source-order-leaves-v4");
+  expect(byteHash(again.markdown)).toBe(byteHash(v4.markdown));
+  expect(again.sha256).toBe(v4.sha256);
+  expect(v4.structure.layout!.figure_groups[0]).not.toHaveProperty("notes");
+});
+it("groups a caption-less table with its note and refuses notes on non-tables in the layout", async () => {
+  const f = await archiveTextFixture([
+      { text: "", type: "table", html: "<table><tr><td>1</td></tr></table>" },
+      { text: "$^{a}$ Note.", type: "footnote" },
+    ]),
+    leaves = arranged(f.source).leaves.map((l) => l.leaf_id),
+    b = bundle(
+      f.source,
+      [
+        ...leaves.map((id) => assigned(id, "results-discussion")),
+        {
+          kind: "caption",
+          object_leaf_id: leaves[0]!,
+          caption_leaf_ids: [leaves[1]!],
+          object_kind: "table",
+          relation: "table-note",
+          source: "program",
+          rule: "format-normalize-v1/table-note",
+        },
+      ],
+      "format-normalize-v1",
+    ),
+    r = renderArrangement(b, []),
+    layout = r.structure.layout!;
+  expect(layout.figure_groups).toEqual([
+    expect.objectContaining({
+      captions: [],
+      notes: [expect.objectContaining({ segment_id: leaves[1] })],
+    }),
+  ]);
+  expect(layout.footnotes).toEqual([]);
+  expect(() =>
+    parseDocumentLayout({
+      ...layout,
+      figure_groups: [{ ...layout.figure_groups[0]!, kind: "figure" }],
+    }),
+  ).toThrow();
+  expect(() =>
+    parseDocumentLayout({
+      ...layout,
+      figure_groups: [{ ...layout.figure_groups[0]!, notes: [] }],
+    }),
+  ).toThrow();
 });

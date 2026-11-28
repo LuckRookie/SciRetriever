@@ -279,7 +279,11 @@ function parseStructure<B extends DocumentBasis>(
   if (layout) {
     const bySegment = new Map(segments.map((s) => [s.segment_id, s]));
     for (const row of [
-      ...layout.figure_groups.flatMap((g) => [...g.objects, ...g.captions]),
+      ...layout.figure_groups.flatMap((g) => [
+        ...g.objects,
+        ...g.captions,
+        ...(g.notes ?? []),
+      ]),
       ...layout.footnotes,
     ]) {
       const s = bySegment.get(row.segment_id);
@@ -298,7 +302,12 @@ function parseStructure<B extends DocumentBasis>(
           (o) =>
             !["image", "table"].includes(bySegment.get(o.segment_id)!.kind),
         ) ||
-        g.captions.some((c) => bySegment.get(c.segment_id)!.kind !== "caption")
+        g.captions.some(
+          (c) => bySegment.get(c.segment_id)!.kind !== "caption",
+        ) ||
+        (g.notes ?? []).some(
+          (c) => bySegment.get(c.segment_id)!.kind !== "footnote",
+        )
       )
         fail();
     }

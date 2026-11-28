@@ -257,15 +257,17 @@ export function parseArchiveTextBundleV2(value: unknown): ArchiveTextBundleV2 {
       throw new ContractValidationError();
     const destination = parseLeafDestination(q.destination);
     // The paired proofread pages are checked by the storage owner. The bundle
-    // alone can only prove that this is unchanged retained long-document text.
+    // alone can only prove that this is retained long-document text no person
+    // or model changed: unchanged, or changed by program corrections only
+    // (ADR 0074 §2), which the storage owner verifies against the pages.
     if (
       DRAFT_BASES.some((basis) => basis === q.basis) &&
       (!longDocumentInfo(arrangement?.classification) ||
         destination.kind !== "assigned" ||
         q.text_source !== "parser" ||
-        q.corrected_text !== leaf.original_text ||
         !Array.isArray(q.correction_ids) ||
-        q.correction_ids.length !== 0)
+        (q.correction_ids.length === 0) !==
+          (q.corrected_text === leaf.original_text))
     )
       throw new ContractValidationError();
     if (

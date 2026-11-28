@@ -778,6 +778,7 @@ export class ArchiveArrangementAccess {
         classification: snapshot.classification,
         manual_revision: state.manual_revision + 1,
         locked_decisions: locks,
+        format_rule: snapshot.format_rule,
       },
     );
     const pending = pendingArchivePages(source, next),

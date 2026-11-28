@@ -25,9 +25,24 @@ const cited = (text: string, mark: string) => {
       return true;
   return false;
 };
-export function arrangeSourceLayout(bundle: ArchiveTextBundleV2) {
+/**
+ * `tableNotes` (builder v6, ADR 0074 §2): a table note stays with its table, after
+ * the caption, and never moves to a citing paragraph. Older builders never see one.
+ */
+export function arrangeSourceLayout(
+  bundle: ArchiveTextBundleV2,
+  tableNotes = false,
+) {
   const snapshot = bundle.arrangement!,
     rows = new Map(bundle.leaves.map((r) => [r.leaf.leaf_id, r]));
+  const noteOps = tableNotes
+      ? snapshot.operations.filter(
+          (o) => o.kind === "caption" && o.relation === "table-note",
+        )
+      : [],
+    noteIds = new Set(
+      noteOps.flatMap((o) => (o.kind === "caption" ? o.caption_leaf_ids : [])),
+    );
   const role = (id: string): ArchiveSectionRole => {
     const d = rows.get(id)!.destination;
     if (d.kind !== "assigned") throw Error("render-dropped");
@@ -103,7 +118,12 @@ export function arrangeSourceLayout(bundle: ArchiveTextBundleV2) {
     moved = new Set<Node>();
   for (const note of ordered) {
     const row = rows.get(note.leaf_ids[0]!)!;
-    if (row.leaf.type !== "footnote" || info.has(row.leaf.leaf_id)) continue;
+    if (
+      row.leaf.type !== "footnote" ||
+      info.has(row.leaf.leaf_id) ||
+      noteIds.has(row.leaf.leaf_id)
+    )
+      continue;
     const match = noteMark(row.corrected_text);
     if (!match) continue;
     const mark = key(match[1] ?? match[2] ?? "");
@@ -132,12 +152,16 @@ export function arrangeSourceLayout(bundle: ArchiveTextBundleV2) {
     kind: "figure" | "table" | "scheme";
     objects: string[];
     captions: string[];
+    notes: string[];
     rows: number[];
     positions: Map<string, { row: number; column: number }>;
   };
   const groups: Group[] = [],
     owner = new Map<string, Group>();
-  const captionOps = snapshot.operations.filter((o) => o.kind === "caption");
+  const captionOps = snapshot.operations.filter(
+    (o): o is Extract<typeof o, { kind: "caption" }> =>
+      o.kind === "caption" && o.relation !== "table-note",
+  );
   const objectCaption = new Map(captionOps.map((o) => [o.object_leaf_id, o]));
   for (const op of captionOps) {
     let group = groups.find(
@@ -150,6 +174,7 @@ export function arrangeSourceLayout(bundle: ArchiveTextBundleV2) {
         kind: op.object_kind,
         objects: [],
         captions: [...op.caption_leaf_ids],
+        notes: [],
         rows: [],
         positions: new Map(),
       };
@@ -157,6 +182,24 @@ export function arrangeSourceLayout(bundle: ArchiveTextBundleV2) {
     }
     group.objects.push(op.object_leaf_id);
     owner.set(op.object_leaf_id, group);
+  }
+  // A table with a note and no caption still forms its own group.
+  for (const op of noteOps) {
+    if (op.kind !== "caption") continue;
+    let group = owner.get(op.object_leaf_id);
+    if (!group) {
+      group = {
+        kind: "table",
+        objects: [op.object_leaf_id],
+        captions: [],
+        notes: [],
+        rows: [],
+        positions: new Map(),
+      };
+      groups.push(group);
+      owner.set(op.object_leaf_id, group);
+    }
+    group.notes.push(...op.caption_leaf_ids);
   }
   const objects = snapshot.leaves.filter(
     (l) =>
@@ -261,10 +304,14 @@ export function arrangeSourceLayout(bundle: ArchiveTextBundleV2) {
   for (const n of ordered) {
     if (claimed.has(n)) continue;
     const g = n.leaf_ids
-      .map((id) => owner.get(id) ?? groups.find((g) => g.captions.includes(id)))
+      .map(
+        (id) =>
+          owner.get(id) ??
+          groups.find((g) => g.captions.includes(id) || g.notes.includes(id)),
+      )
       .find(Boolean);
     if (g) {
-      for (const id of [...g.objects, ...g.captions]) {
+      for (const id of [...g.objects, ...g.captions, ...g.notes]) {
         const item = byId.get(id);
         if (item && !claimed.has(item)) {
           grouped.push(item);

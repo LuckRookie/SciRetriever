@@ -4177,9 +4177,10 @@ function commitDocumentVersion(p: Dynamic): Dynamic {
         )
         .all(v.proofread_id);
       if (
-        // v4 intentionally leaves equation screenshots in the immutable
+        // v4 and v6 intentionally leave equation screenshots in the immutable
         // proofread source while publishing only its rendered resource closure.
         (v.builder_version !== "source-order-leaves-v4" &&
+          v.builder_version !== "source-order-leaves-v6" &&
           images.length !== v.resources.length) ||
         v.resources.some(
           (r: Dynamic) =>

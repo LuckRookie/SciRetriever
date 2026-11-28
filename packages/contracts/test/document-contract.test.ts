@@ -753,6 +753,8 @@ describe("Document and Evidence boundary parsers", () => {
     "arranged-leaves-v2",
     "source-order-leaves-v3",
     "source-order-leaves-v4",
+    "source-order-leaves-v5",
+    "source-order-leaves-v6",
   ])(
     "accepts the published %s builder without changing its identity",
     (builder_version) => {

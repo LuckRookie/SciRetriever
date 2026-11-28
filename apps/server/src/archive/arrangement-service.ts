@@ -43,6 +43,13 @@ import {
   type ArchiveTextSource,
 } from "./text-source.js";
 import {
+  FORMAT_RULE,
+  formatEdits,
+  originalOffset,
+  tableNoteOperations,
+  unifiedText,
+} from "./format-normalize.js";
+import {
   archiveTextModelIdentity,
   TextProgress,
   ARCHIVE_TEXT_STOP_POLICY,
@@ -362,7 +369,8 @@ export class ArchiveArrangementService {
           ...(["image", "table"].includes(b.type) && b.region_hint
             ? { region: b.region_hint }
             : {}),
-          text: cpSlice(b.text, p.start, p.end),
+          // ADR 0074 §2: the request carries the unified notation.
+          text: unifiedText(cpSlice(b.text, p.start, p.end), b.type),
         })),
       ),
     };
@@ -380,6 +388,7 @@ export class ArchiveArrangementService {
       ]),
       breaks: PARAGRAPH_BREAK_RULE,
       chrome: CHROME_RULE,
+      format: FORMAT_RULE,
       stop: ARCHIVE_TEXT_STOP_POLICY,
       pages: this.pages.method,
       model: archiveTextModelIdentity(this.runtime),
@@ -532,11 +541,22 @@ export class ArchiveArrangementService {
         const b = windowNames.get(s.block);
         if (!b || fixedCuts.has(b.root_block_id) || !Array.isArray(s.cuts))
           issues.push({ code: "split-invalid", id: s.block });
-        else
+        else {
+          // The model cut the unified text it saw; leaves cut the original text.
+          const edits = formatEdits(b.text, b.type);
           cuts.set(
             b.root_block_id,
-            [...new Set(s.cuts)].sort((x, y) => x - y),
+            [
+              ...new Set(
+                s.cuts.map((c) =>
+                  Number.isSafeInteger(c) ? originalOffset(edits, c) : c,
+                ),
+              ),
+            ]
+              .filter((c) => c !== 0)
+              .sort((x, y) => x - y),
           );
+        }
       }
       const parts = windowBlocks.flatMap((b) =>
         partsOf(b, cuts.get(b.root_block_id) ?? []),
@@ -868,12 +888,17 @@ export class ArchiveArrangementService {
           stop:
             stop ?? stopFor(new Error("arrangement missing"), "arrange", null),
         };
+      // Table notes go to their tables by the program, not by the model (ADR 0074 §2).
+      ops = [...ops, ...tableNoteOperations(source, ops)];
       const reviewed: ArrangementReview = reviewArrangement(source, ops, {
         ...constraints,
         evidence_pages: evidencePages,
       });
       const text = new Map(
-          reviewed.leaves.map((l) => [l.leaf_id, l.original_text]),
+          reviewed.leaves.map((l) => [
+            l.leaf_id,
+            unifiedText(l.original_text, l.type),
+          ]),
         ),
         types = new Map(
           reviewed.leaves.map((l) => {
@@ -1040,6 +1065,7 @@ export class ArchiveArrangementService {
           ...constraints,
           classification,
           evidence_pages: evidencePages,
+          format_rule: FORMAT_RULE,
         },
         final = reviewArrangement(source, operations, pageConstraints);
       const value = acceptArrangement(

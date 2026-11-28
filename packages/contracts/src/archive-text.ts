@@ -127,12 +127,14 @@ export type ArrangementOperation =
       readonly kind: "merge";
       readonly leaf_ids: readonly string[];
     } & ProgramArrangementRule)
-  | {
+  | ({
       readonly kind: "caption";
       readonly object_leaf_id: string;
       readonly caption_leaf_ids: readonly string[];
       readonly object_kind: "figure" | "table" | "scheme";
-    }
+      /** A table note (ADR 0074 §2): footnote leaves the program attaches to their table. */
+      readonly relation?: "table-note";
+    } & ProgramArrangementRule)
   | {
       readonly kind: "assign-page";
       readonly leaf_id: string;
@@ -183,6 +185,8 @@ export interface ArrangementSnapshot {
   readonly break_candidates: readonly ParagraphBreakCandidate[];
   readonly break_decisions: readonly ParagraphBreakDecision[];
   readonly manual_revision: number;
+  /** The notation rule applied when this arrangement was made (ADR 0074 §2); absent before it. */
+  readonly format_rule?: string;
 }
 export type ManualArrangementChange = {
   readonly kind: "restore" | "assign";
@@ -204,8 +208,10 @@ export interface CorrectRecord {
   readonly correction_id: string;
   readonly operation: CorrectOperation;
   readonly source_span: SourceSpan;
-  readonly source: "agent" | "manual";
+  readonly source: "agent" | "manual" | "program";
   readonly decision_id: string | null;
+  /** Program corrections only: the rule that made the change. */
+  readonly rule?: string;
 }
 export type RetainedSuspectKind = "missing" | "extra" | "token-mismatch";
 export interface RetainedPageSuspect {
@@ -623,23 +629,35 @@ export function parseArrangementOperation(v: unknown): ArrangementOperation {
     return { kind, leaf_ids, ...programRule(r) };
   }
   if (kind === "caption") {
-    const r = record(v, [
-      "kind",
-      "object_leaf_id",
-      "caption_leaf_ids",
-      "object_kind",
-    ]);
+    const r = record(
+      v,
+      ["kind", "object_leaf_id", "caption_leaf_ids", "object_kind"],
+      ["relation", "source", "rule"],
+    );
     const caption_leaf_ids = ids(r.caption_leaf_ids);
     if (!caption_leaf_ids.length) fail();
-    return {
-      kind,
-      object_leaf_id: parseAssetId(r.object_leaf_id),
-      caption_leaf_ids,
-      object_kind: choice(r.object_kind, [
+    const object_kind = choice(r.object_kind, [
         "figure",
         "table",
         "scheme",
       ] as const),
+      program = programRule(r);
+    // A table note is attached by the program only, and only to a table.
+    if (
+      r.relation !== undefined &&
+      (r.relation !== "table-note" ||
+        object_kind !== "table" ||
+        program.source !== "program")
+    )
+      fail();
+    if (r.relation === undefined && program.source !== undefined) fail();
+    return {
+      kind,
+      object_leaf_id: parseAssetId(r.object_leaf_id),
+      caption_leaf_ids,
+      object_kind,
+      ...(r.relation === undefined ? {} : { relation: "table-note" as const }),
+      ...program,
     };
   }
   if (kind === "assign-page") {
@@ -730,7 +748,7 @@ export function parseArrangementSnapshot(
       "break_decisions",
       "manual_revision",
     ],
-    ["classification"],
+    ["classification", "format_rule"],
   );
   if (r.schema_version !== 1) fail();
   if (
@@ -831,6 +849,9 @@ export function parseArrangementSnapshot(
     break_candidates,
     break_decisions,
     manual_revision: number(r.manual_revision),
+    ...(r.format_rule === undefined
+      ? {}
+      : { format_rule: word(r.format_rule) }),
   };
 }
 export function parseCorrectOperation(v: unknown): CorrectOperation {
@@ -1088,17 +1109,22 @@ export function parsePageProofreadRecord(
       "viewed_regions",
     ]);
   const corrections = list(r.corrections, (x) => {
-    const c = record(x, [
-      "correction_id",
-      "operation",
-      "source_span",
-      "source",
-      "decision_id",
-    ]);
-    const source = choice(c.source, ["agent", "manual"] as const),
+    const c = record(
+      x,
+      ["correction_id", "operation", "source_span", "source", "decision_id"],
+      ["rule"],
+    );
+    const source = choice(c.source, ["agent", "manual", "program"] as const),
       decision_id = c.decision_id === null ? null : parseAssetId(c.decision_id);
     const operation = parseCorrectOperation(c.operation),
       source_span = parseSourceSpan(c.source_span);
+    // A program correction names its rule (ADR 0074 §2); others never carry one.
+    const rule =
+      source === "program"
+        ? programRule({ source, rule: c.rule }).rule
+        : c.rule === undefined
+          ? undefined
+          : fail();
     if (
       (source === "manual") !== (decision_id !== null) ||
       source_span.end - source_span.start !== operation.end - operation.start
@@ -1110,6 +1136,7 @@ export function parsePageProofreadRecord(
       source_span,
       source,
       decision_id,
+      ...(rule === undefined ? {} : { rule }),
     };
   });
   const suspects = list(r.suspects, (x) => {
@@ -1216,7 +1243,7 @@ export function parsePageProofreadRecord(
         evidence.viewed_regions.length ||
         suspects.length ||
         dispositions.length ||
-        corrections.some((c) => c.source !== "manual") ||
+        corrections.some((c) => c.source === "agent") ||
         no_change !== (corrections.length === 0) ||
         (review && (review.refused.length || review.uncertain.length)))) ||
     (["failed", "pending"].includes(status) && stop === null)

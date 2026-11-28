@@ -134,7 +134,8 @@ export async function analyzeDocumentSession(
       const scaffold =
         version.builder_version === "arranged-leaves-v2" ||
         version.builder_version === "source-order-leaves-v3" ||
-        version.builder_version === "source-order-leaves-v4";
+        version.builder_version === "source-order-leaves-v4" ||
+        version.builder_version === "source-order-leaves-v6";
       let end = 0;
       const segments = await Promise.all(
         structure.segments.map(async (s) => {

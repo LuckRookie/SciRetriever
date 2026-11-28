@@ -50,12 +50,14 @@ import {
   archiveTextModelIdentity,
   archiveUsageFailure,
 } from "./text-session.js";
+import { FORMAT_RULE } from "./format-normalize.js";
 import {
   renderArrangement,
   arrangementAnnotation,
   arrangedStructureSatisfied,
   ARRANGED_DOCUMENT_BUILDER,
   LONG_DOCUMENT_BUILDER,
+  TABLE_NOTE_DOCUMENT_BUILDER,
   arrangedBuilderFor,
 } from "./render.js";
 
@@ -144,9 +146,10 @@ export async function archiveTextVersion(
           destination: destinations.get(leaf.leaf_id)!,
           corrected_text: texts.get(leaf.leaf_id) ?? leaf.original_text,
           correction_ids: records.map((c) => c.correction_id),
+          // Program corrections (ADR 0074 §2) keep the parser as the text's source.
           text_source: records.some((c) => c.source === "manual")
             ? "manual"
-            : records.length
+            : records.some((c) => c.source === "agent")
               ? "agent"
               : "parser",
           basis: records.some((c) => c.source === "manual")
@@ -303,9 +306,11 @@ export class ArchiveTextPipeline {
     if (
       !fixed ||
       fixed.version.schema_version !== 2 ||
-      ![ARRANGED_DOCUMENT_BUILDER, LONG_DOCUMENT_BUILDER].includes(
-        fixed.version.builder_version,
-      )
+      ![
+        ARRANGED_DOCUMENT_BUILDER,
+        LONG_DOCUMENT_BUILDER,
+        TABLE_NOTE_DOCUMENT_BUILDER,
+      ].includes(fixed.version.builder_version)
     )
       throw new ArchiveTextError("archive-contract-obsolete");
     const output = await this.storage.load(fixed.version.proofread_id, signal);
@@ -353,7 +358,16 @@ export class ArchiveTextPipeline {
       reference_count: annotation.references.length,
     };
   }
-  async arrange(asset: string, mode: string, signal?: AbortSignal) {
+  /**
+   * `force` (from_step: arrange) arranges again when the current arrangement was made
+   * before the notation rule (ADR 0074 §6); a normal resume keeps reusing it.
+   */
+  async arrange(
+    asset: string,
+    mode: string,
+    signal?: AbortSignal,
+    force = false,
+  ) {
     const state = await this.storage.decisions(asset, signal),
       source = await this.source(asset, mode, signal),
       old = state.current
@@ -372,7 +386,8 @@ export class ArchiveTextPipeline {
       old.bundle.arrangement.source_input_sha256 === source.input_sha256 &&
       textHash(old.version.method) === textHash(this.method()) &&
       (source.raw.page_count <= LONG_DOCUMENT_MAX_PAGES ||
-        !!longDocumentInfo(old.bundle.arrangement.classification))
+        !!longDocumentInfo(old.bundle.arrangement.classification)) &&
+      (!force || old.bundle.arrangement.format_rule === FORMAT_RULE)
     )
       return {
         proofread_id: old.version.proofread_id,

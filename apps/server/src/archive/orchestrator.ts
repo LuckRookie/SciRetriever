@@ -514,6 +514,7 @@ export class ArchiveOrchestrator {
                 part.asset_id,
                 request.mode,
                 signal,
+                force,
               )
             : step === "proofread"
               ? await this.runtime.text.proofread(

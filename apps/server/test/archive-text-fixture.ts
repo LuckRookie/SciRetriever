@@ -36,6 +36,8 @@ export async function archiveTextFixture(
     type?: RawBlockType;
     html?: string;
     image?: boolean;
+    /** The parser's own block type (MinerU `table` for table notes). */
+    source_type?: string;
   }[],
   options: { layers?: readonly string[]; page_count?: number } = {},
 ) {
@@ -63,7 +65,7 @@ export async function archiveTextFixture(
       html: v.html ?? null,
       image_ref: v.image ? resource.reference : null,
       bbox: [0, 0, 900, 200],
-      source_type: "synthetic",
+      source_type: v.source_type ?? "synthetic",
     };
   });
   const bytes = canonicalJsonBytes({

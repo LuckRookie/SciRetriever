@@ -91,7 +91,7 @@ function verifyText(version: ProofreadVersionV2, bundle: ArchiveTextBundleV2) {
         ),
         source = records.some((c) => c.source === "manual")
           ? "manual"
-          : records.length
+          : records.some((c) => c.source === "agent")
             ? "agent"
             : "parser";
       if (

@@ -21,15 +21,31 @@ import { arrangeSourceLayout, headingLevels } from "./source-layout.js";
 import { renderLegacyArrangement } from "./render-legacy.js";
 export const ARRANGED_DOCUMENT_BUILDER = "source-order-leaves-v4";
 export const LONG_DOCUMENT_BUILDER = "source-order-leaves-v5";
+/**
+ * ADR 0074 §2: an arrangement with table notes sets each below its table. One builder
+ * for ordinary and long documents; a long one also accepts the unreviewed-page bases,
+ * as v5 does. Without a table note v6 would write the v4/v5 bytes, so those stay.
+ */
+export const TABLE_NOTE_DOCUMENT_BUILDER = "source-order-leaves-v6";
+export const hasTableNotes = (bundle: ArchiveTextBundleV2) =>
+  !!bundle.arrangement?.operations.some(
+    (o) => o.kind === "caption" && o.relation === "table-note",
+  );
 export const arrangedBuilderFor = (
   bundle: ArchiveTextBundleV2,
-): typeof LONG_DOCUMENT_BUILDER | typeof ARRANGED_DOCUMENT_BUILDER =>
-  longDocumentInfo(bundle.arrangement?.classification)
-    ? LONG_DOCUMENT_BUILDER
-    : ARRANGED_DOCUMENT_BUILDER;
+):
+  | typeof TABLE_NOTE_DOCUMENT_BUILDER
+  | typeof LONG_DOCUMENT_BUILDER
+  | typeof ARRANGED_DOCUMENT_BUILDER =>
+  hasTableNotes(bundle)
+    ? TABLE_NOTE_DOCUMENT_BUILDER
+    : longDocumentInfo(bundle.arrangement?.classification)
+      ? LONG_DOCUMENT_BUILDER
+      : ARRANGED_DOCUMENT_BUILDER;
 export const SOURCE_ORDER_DOCUMENT_BUILDER_V3 = "source-order-leaves-v3";
 export const LEGACY_ARRANGED_DOCUMENT_BUILDER = "arranged-leaves-v2";
 export const isArrangedBuilder = (value: string) =>
+  value === TABLE_NOTE_DOCUMENT_BUILDER ||
   value === ARRANGED_DOCUMENT_BUILDER ||
   value === LONG_DOCUMENT_BUILDER ||
   value === SOURCE_ORDER_DOCUMENT_BUILDER_V3 ||
@@ -48,8 +64,10 @@ export function renderArrangement(
   builder: string = arrangedBuilderFor(value),
 ) {
   // Historical builders never accept the unreviewed values, even on long parts.
+  const long = !!longDocumentInfo(value.arrangement?.classification);
   if (
     builder !== LONG_DOCUMENT_BUILDER &&
+    !(builder === TABLE_NOTE_DOCUMENT_BUILDER && long) &&
     value.leaves.some((row) => DRAFT_BASES.some((basis) => basis === row.basis))
   )
     throw Error("render-builder-basis-unsupported");
@@ -59,7 +77,8 @@ export function renderArrangement(
   const bundle = parseArchiveTextBundleV2(value);
   if (!bundle.arrangement) throw Error("arrangement-required");
   const rows = new Map(bundle.leaves.map((r) => [r.leaf.leaf_id, r])),
-    planned = arrangeSourceLayout(bundle),
+    tableNotes = builder === TABLE_NOTE_DOCUMENT_BUILDER,
+    planned = arrangeSourceLayout(bundle, tableNotes),
     levels = headingLevels(bundle);
   type Section = {
     -readonly [K in keyof DocumentStructureV2["sections"][number]]: DocumentStructureV2["sections"][number][K];
@@ -209,15 +228,22 @@ export function renderArrangement(
         ...g.positions.get(id)!,
       })),
       captions: g.captions.map(range),
+      ...(g.notes.length ? { notes: g.notes.map(range) } : {}),
       rows: g.rows,
     })),
+    // A table note belongs to its table's group, not to the page footnotes.
     footnotes: segments
-      .filter((s) => s.kind === "footnote")
+      .filter(
+        (s) =>
+          s.kind === "footnote" &&
+          !planned.groups.some((g) => g.notes.includes(s.segment_id)),
+      )
       .map((s) => ({ ...range(s.segment_id), page_index: s.page })),
   };
   const markdown = Buffer.from(text),
     documentStructure = (
-      builder === LONG_DOCUMENT_BUILDER
+      builder === LONG_DOCUMENT_BUILDER ||
+        (builder === TABLE_NOTE_DOCUMENT_BUILDER && long)
         ? parseLongDocumentStructure
         : parseDocumentStructureV2
     )(
@@ -296,7 +322,10 @@ export function arrangementAnnotation(
     )
     .map((l) => {
       const o = snapshot.operations.find(
-        (o) => o.kind === "caption" && o.object_leaf_id === l.leaf.leaf_id,
+        (o) =>
+          o.kind === "caption" &&
+          o.relation !== "table-note" &&
+          o.object_leaf_id === l.leaf.leaf_id,
       );
       return {
         object_segment_id: l.leaf.leaf_id,
@@ -379,7 +408,8 @@ export function renderLeafPayload(
     leaf.image_ref &&
     !(
       (builder === ARRANGED_DOCUMENT_BUILDER ||
-        builder === LONG_DOCUMENT_BUILDER) &&
+        builder === LONG_DOCUMENT_BUILDER ||
+        builder === TABLE_NOTE_DOCUMENT_BUILDER) &&
       leaf.type === "equation" &&
       text.trim()
     )

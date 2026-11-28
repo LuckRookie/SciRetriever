@@ -29,6 +29,37 @@ export interface ArchiveTextSource {
   readonly blocks: readonly ArrangementSourceBlock[];
   readonly pages: readonly PdfPageInspection[];
   readonly input_sha256: string;
+  /**
+   * Table notes (ADR 0074 §2): footnote root → root of the nearest table above it on
+   * the same page, for parser footnotes whose source is a table. Derived from the raw
+   * blocks the input hash already covers, so it is not part of `input_sha256`.
+   */
+  readonly table_notes?: ReadonlyMap<string, string>;
+}
+/** Footnote root → table root for raw footnotes whose parser source is a table. */
+function tableNoteRoots(
+  blocks: readonly {
+    readonly page: number;
+    readonly index: number;
+    readonly type: string;
+    readonly source_type: string;
+  }[],
+  rootOf: (page: number, index: number) => string | undefined,
+): ReadonlyMap<string, string> {
+  const notes = new Map<string, string>();
+  for (const [i, b] of blocks.entries()) {
+    if (b.type !== "footnote" || b.source_type !== "table") continue;
+    let table: (typeof blocks)[number] | undefined;
+    for (let j = i - 1; j >= 0 && blocks[j]!.page === b.page; j--)
+      if (blocks[j]!.type === "table") {
+        table = blocks[j];
+        break;
+      }
+    const note = rootOf(b.page, b.index),
+      owner = table && rootOf(table.page, table.index);
+    if (note && owner) notes.set(note, owner);
+  }
+  return notes;
 }
 export class ArchiveTextError extends Error {
   constructor(
@@ -73,6 +104,7 @@ export async function prepareArrangementSource(
     throw new ArchiveTextError("source-integrity");
   const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   const sources: ArrangementSourceBlock[] = [];
+  let table_notes: ReadonlyMap<string, string> | undefined;
   const checkpoint = async (index: number) => {
     if (options.cooperative && index % 64 === 0) {
       await yieldSource();
@@ -160,6 +192,19 @@ export async function prepareArrangementSource(
         })(),
       });
     }
+    const roots = new Map(
+      sources.map((b) =>
+        b.locator.kind === "raw-block"
+          ? [
+              `${b.locator.page_index}:${b.locator.block_index}`,
+              b.root_block_id,
+            ]
+          : ["", b.root_block_id],
+      ),
+    );
+    table_notes = tableNoteRoots(parsed.blocks, (page, index) =>
+      roots.get(`${page}:${index}`),
+    );
   } else {
     // Keep exact original substrings; page matching only supplies a locating hint.
     let previous = 0;
@@ -211,5 +256,6 @@ export async function prepareArrangementSource(
       blocks: ordered,
       pages: pages.map(pdfPageText),
     }),
+    ...(table_notes?.size ? { table_notes } : {}),
   };
 }
