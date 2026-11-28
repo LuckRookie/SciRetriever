@@ -2,7 +2,7 @@
 
 类型：决策（ADR）
 负责：阅读层的内容从哪里来、以什么为单位、怎样请求模型、各语言的版本怎样写；脉络、概览、导图与全文页边因此显示什么
-状态：Accepted（2026-11-27，Owner 定方向“照 TextFold 逐段”，细节由总设计师起草；Owner：“接受”）；尚未实现
+状态：Accepted（2026-11-27，Owner 定方向“照 TextFold 逐段”，细节由总设计师起草；Owner：“接受”）；已实现（2026-11-27）；第 2、4、7、8 节里依据的取法（句号）被 [ADR 0074](0074-archive-steps-own-their-format-problems.md) 第 4 节取代（原文摘录），第 5 节译文语言的版本改在翻译一步里写（[ADR 0074](0074-archive-steps-own-their-format-problems.md) 第 5 节）
 
 - Date: 2026-11-27
 - 修订：
