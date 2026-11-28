@@ -797,6 +797,58 @@ it("fails when the digest is invalid twice or the trunk has fewer than three not
   }
 }, 0);
 
+it("writes no note for a table note: it goes with its table and is still translated", async () => {
+  const NOTE =
+    "$^{a}$ Measured in water at room temperature after drying every salt for twelve hours under vacuum, three times for each sample.";
+  const table = `Table 1. Peaks of the samples.\n\n| sample | peak |\n| --- | --- |\n| 1 | 401 nm |\n\n${NOTE}`;
+  const e = await fixture(
+    // MinerU takes a note under a table as a footnote from that table.
+    {
+      rawBlock: (b) =>
+        b.text.startsWith("$^{a}$")
+          ? { type: "footnote", source_type: "table" }
+          : b.text.startsWith("Table 1.")
+            ? { type: "caption", source_type: "table" }
+            : undefined,
+    },
+    LONG_TEXT.replace("\n\n# Conclusion", `\n\n${table}\n\n# Conclusion`),
+  );
+  const translated: string[] = [];
+  e.setTranslation((input) => {
+    translated.push(...input.units.map((u) => u.text));
+    return {
+      translations: input.units.map((u) => ({
+        id: u.id,
+        translation: `译文：${u.text}`,
+      })),
+    };
+  });
+  try {
+    await e.submit("layers-table-note");
+    const receipt = (await step(e))!;
+    expect(receipt).toMatchObject({ status: "done" });
+    // The section has its table; the note under it is no paragraph and is
+    // sent to no call.
+    const results = e.calls.find(
+      (c) => c.kind === "section" && inSection(c, "Results"),
+    )!.input as string;
+    expect(results).toMatch(/^\[f1\] table: /mu);
+    expect(
+      [...results.matchAll(/^\[p\d+\] (.+)$/gmu)].map((m) => m[1]),
+    ).toEqual(["paragraph", "paragraph", "caption"]);
+    expect(
+      e.calls.some((c) =>
+        JSON.stringify(c.input).includes("Measured in water"),
+      ),
+    ).toBe(false);
+    expect(receipt.output.layers).toMatchObject({ annotatable: 9, points: 10 });
+    // The translation still translates it.
+    expect(translated.some((t) => t.includes("Measured in water"))).toBe(true);
+  } finally {
+    await e.close();
+  }
+}, 0);
+
 it("records a short paper as not applicable without asking the model", async () => {
   const e = await fixture(
     {},

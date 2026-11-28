@@ -295,6 +295,7 @@ export async function coreProcessingFixture(
     sourcePdf?: Uint8Array;
     pageCount?: number;
     pageText?: (page: number, text: string) => string;
+    rawBlock?: Parameters<typeof rawParserFixture>[4];
     pageMethod?: string;
     analysisModel?: boolean;
     textLayer?: (text: string) => string;
@@ -473,6 +474,7 @@ export async function coreProcessingFixture(
           optionsInput.headerOnly,
           (optionsInput.pageCount ?? 1) > 1,
           optionsInput.pageText,
+          optionsInput.rawBlock,
         ),
     },
     agentTransportFactory: () => async (request) => {

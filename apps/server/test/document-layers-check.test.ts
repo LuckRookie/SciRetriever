@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { expect, it } from "vitest";
 import { layersTextFits } from "@sciretriever/contracts";
 import {
@@ -8,7 +9,9 @@ import {
   checkTranslationSectionAnswer,
   emptyDropped,
   layersParts,
+  layersPlan,
   numberedPoints,
+  sectionInput,
   type LayersFigure,
   type LayersGroup,
   type LayersParagraph,
@@ -544,4 +547,87 @@ it("locates translated evidence in the unit's translation, or leaves its positio
     label: "四个样品",
   });
   expect(dropped).toMatchObject({ evidence: 1, labels: 1 });
+});
+
+it("leaves a table note out of the paragraphs: not sent, no note, not counted", () => {
+  const texts = [
+    "The salts were dried and weighed before every measurement of the spectra in water at room temperature, and each was measured three times.",
+    "Table 1. Peaks of the salts.",
+    "| salt | peak |\n| --- | --- |\n| 1 | 401 nm |",
+    "$^{a}$ Measured in water at room temperature after drying every salt for twelve hours under vacuum at 80 °C.",
+  ];
+  const kinds = ["paragraph", "caption", "table", "footnote"];
+  let markdown = "";
+  const segments = texts.map((t, i) => {
+    const start_utf8 = Buffer.byteLength(markdown);
+    markdown += t + "\n\n";
+    return {
+      segment_id: `s${i}`,
+      kind: kinds[i]!,
+      start_utf8,
+      end_utf8: start_utf8 + Buffer.byteLength(t),
+      section_id: null,
+    };
+  });
+  const range = (i: number) => ({
+    segment_id: `s${i}`,
+    start_utf8: segments[i]!.start_utf8,
+    end_utf8: segments[i]!.end_utf8,
+  });
+  // A table is no unit of the translation; its note is one.
+  const units = [0, 1, 3].map((i) => ({
+    unit_id: `s${i}`,
+    segment_ids: [`s${i}`],
+    source: texts[i]!,
+    source_sha256: createHash("sha256").update(texts[i]!, "utf8").digest("hex"),
+  }));
+  const plan = layersPlan(
+    units as never,
+    {
+      segments,
+      sections: [],
+      layout: {
+        schema_version: 1,
+        article_info: [],
+        figure_groups: [
+          {
+            group_id: "g1",
+            kind: "table",
+            objects: [{ ...range(2), row: 0, column: 0 }],
+            captions: [range(1)],
+            notes: [range(3)],
+            rows: [0],
+          },
+        ],
+        footnotes: [],
+      },
+    },
+    Buffer.from(markdown),
+    new Map(),
+    "Synthetic",
+  );
+  // The paragraph and the caption are paragraphs; the note is neither sent nor counted.
+  expect([...plan.paragraphs.values()].map((p) => p.unit_id)).toEqual([
+    "s0",
+    "s1",
+  ]);
+  expect(plan.units.has("s3")).toBe(false);
+  expect(plan.annotatable).toBe(1);
+  expect(plan.body_code_points).toBe(
+    [...texts[0]!].length + [...texts[1]!].length,
+  );
+  expect(plan.figures.get("f1")).toMatchObject({ kind: "table" });
+  const group = plan.groups[0]!;
+  const input = sectionInput(plan, group, group.paragraphs, null);
+  expect(input).toContain("[p2] caption of f1");
+  expect(input).not.toContain("Measured in water");
+  // Without the note in the layout it is an ordinary footnote paragraph.
+  const plain = layersPlan(
+    units as never,
+    { segments, sections: [] },
+    Buffer.from(markdown),
+    new Map(),
+    "Synthetic",
+  );
+  expect(plain.units.has("s3")).toBe(true);
 });

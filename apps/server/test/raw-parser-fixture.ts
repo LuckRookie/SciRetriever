@@ -16,6 +16,11 @@ export function rawParserFixture(
   headerOnly = false,
   repeatPages = false,
   pageText?: (page: number, text: string) => string,
+  /** Changes a block's type and source type, e.g. a footnote that MinerU took from a table. */
+  rawBlock?: (block: {
+    readonly type: string;
+    readonly text: string;
+  }) => { readonly type: string; readonly source_type: string } | undefined,
 ): RawParserBackend {
   const identity = async (profile: RawParseProfile) => ({
     parser_version: "fixture-raw-1",
@@ -52,6 +57,7 @@ export function rawParserFixture(
                 image_ref: block.image_ref,
                 bbox: [0, 0, 1000, 1000],
                 source_type: "fixture",
+                ...rawBlock?.({ type: block.type, text: block.text ?? "" }),
               }),
             ),
         ).flat(),

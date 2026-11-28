@@ -192,7 +192,8 @@ export const LAYERS_SKIPPED_ROLES: ReadonlySet<string> = new Set([
  * short ids `pN` and their text, the headings `sN`, the figures,
  * schemes and tables `fN`, grouped by section. Units are those of the
  * translation (spec 9.2); a caption is a paragraph of its own and also names
- * its figure.
+ * its figure. Units of skipped roles and table notes (`figure_groups[].notes`)
+ * are left out: they are not paragraphs and do not count toward coverage.
  */
 export function layersPlan(
   units: ReturnType<typeof documentUnits>["units"],
@@ -234,6 +235,10 @@ export function layersPlan(
     );
     if (f) for (const c of g.captions) figureOf.set(c.segment_id, f);
   }
+  // A table note goes with its table (ADR 0074 §2): it is no paragraph.
+  const tableNotes = new Set(
+    groups.flatMap((g) => (g.notes ?? []).map((n) => n.segment_id)),
+  );
   type Item =
     | { at: number; heading: Omit<LayersHeading, "short"> }
     | { at: number; paragraph: Omit<LayersParagraph, "short"> };
@@ -245,10 +250,12 @@ export function layersPlan(
     const first = found[0]!;
     // Keywords and end matter (acknowledgements, declarations, funding,
     // supplementary notices) are no part of the argument: no notes, no line.
+    // Table notes are shown under their table and get no note either.
     if (
       LAYERS_SKIPPED_ROLES.has(
         roles.get(u.unit_id) ?? roles.get(first.segment_id) ?? "",
-      )
+      ) ||
+      u.segment_ids.some((id) => tableNotes.has(id))
     )
       continue;
     const span = unitSpan(markdown, found, u.source_sha256);
